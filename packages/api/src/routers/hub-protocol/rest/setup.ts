@@ -1170,6 +1170,9 @@ export function registerSetupRoutes(app: HubHono): void {
           .update(apiKeys)
           .set({ isActive: false })
           .where(eq(apiKeys.id, apiKey.id));
+        // The mint's self-verify cached the key as valid; without this drop
+        // the pending key answers for the cache's 30s (seen live 2026-10-11).
+        apiKeyService.invalidateVerificationCache();
         // Approving an AI is a proposal (`agent/connect`): the person decides
         // on Relay's card or on the pod-admin page — one approval either way.
         // A key whose request cannot be filed must not linger: it is revoked.

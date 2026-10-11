@@ -35,13 +35,18 @@ const liveGrantsOfKey = vi.fn();
 const attachGrantsOrRevoke = vi.fn();
 const revokeApiKeys = vi.fn();
 const setActive = vi.fn();
+const invalidateVerificationCache = vi.fn();
 
 vi.mock("../../../services/api-keys.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../../services/api-keys.js")>();
   return {
     ...actual,
-    apiKeyService: { ...actual.apiKeyService, validateApiKey },
+    apiKeyService: {
+      ...actual.apiKeyService,
+      validateApiKey,
+      invalidateVerificationCache,
+    },
   };
 });
 vi.mock("../../../access/key-identity.js", async (importOriginal) => ({
@@ -139,6 +144,7 @@ beforeEach(() => {
     attachGrantsOrRevoke,
     revokeApiKeys,
     setActive,
+    invalidateVerificationCache,
   ])
     m.mockReset();
   // The legacy agent's own grant: no capabilities ⇒ `*`.
@@ -177,6 +183,19 @@ describe("POST /setup/agent — a key never connects a live AI by itself", () =>
       );
     }
   );
+
+  it("a pending key stops answering at once — its cached verification is dropped after it is switched off", async () => {
+    // The mint's self-verify caches the key as valid for 30s; live on
+    // 2026-10-11 a pending key read entities inside that window.
+    callerKey(true);
+    const res = await connect();
+    expect(res.status).toBe(200);
+    expect(setActive).toHaveBeenCalledWith({ isActive: false });
+    expect(invalidateVerificationCache).toHaveBeenCalled();
+    expect(invalidateVerificationCache.mock.invocationCallOrder[0]).toBeGreaterThan(
+      setActive.mock.invocationCallOrder[0]!
+    );
+  });
 
   it("a pending key leaves the agent's working keys alone until approval", async () => {
     callerKey(true);
