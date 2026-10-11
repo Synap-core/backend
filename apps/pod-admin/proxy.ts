@@ -111,6 +111,11 @@ export async function proxy(req: NextRequest) {
     path === "/settings/security" ||
     path === "/oauth/consent" ||
     path.startsWith("/approve-agent") ||
+    // Approving YOUR computer (`synap init`, the device door). The pod's
+    // `apiKeys.getDeviceRequest` / `.decideDeviceRequest` re-check the signed-in
+    // session and make the computer the approver's own; requiring pod_admin
+    // would stop every non-admin member from connecting their own machine.
+    path === "/device" ||
     path.startsWith("/connection-requests/") ||
     // A proposal reviewer is usually a workspace editor, not a pod admin;
     // `proposals.get`/`.approve` re-check editor role server-side, so we only

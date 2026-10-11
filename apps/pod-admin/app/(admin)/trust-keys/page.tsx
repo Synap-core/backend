@@ -20,6 +20,7 @@ import { Tabs, Tab } from "@heroui/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { ApiKeysSection } from "./_lib/api-keys-section";
+import { ComputerKeyLifetime } from "./_lib/computer-key-lifetime";
 import { IssuersSection } from "./_lib/issuers-section";
 import { SecretsSection } from "./_lib/secrets-section";
 
@@ -73,7 +74,8 @@ function TrustKeysInner() {
           </div>
         </Tab>
         <Tab key="api-keys" title="API keys">
-          <div className="pt-5">
+          <div className="flex flex-col gap-5 pt-5">
+            <ComputerKeyLifetime />
             <ApiKeysSection />
           </div>
         </Tab>
