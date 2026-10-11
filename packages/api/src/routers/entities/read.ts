@@ -29,12 +29,11 @@ import {
   eventRepository,
   EntityRepository,
   facetRoleExists,
-  facetVisibilityConditions,
   profileSlugScopeConditionFromRows,
   drizzleSql,
   notProbeEntityWhere,
 } from "@synap/database";
-import { entities, entityFacets, relations } from "@synap/database/schema";
+import { entities, relations } from "@synap/database/schema";
 import { EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
@@ -48,6 +47,10 @@ import {
   facetInWorkspaceLensWhere,
 } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import {
+  groupThingsByStatus,
+  roleVisibilityConditions,
+} from "./status-groups.js";
 import {
   entityReadVisibleWhere,
   entityLensWhere,
@@ -155,10 +158,6 @@ export const readProcs = {
         input.workspaceId !== undefined
           ? input.workspaceId
           : (ctx.workspaceId ?? undefined);
-      const facetVisibilityScope = await resolveFacetVisibilityScope(
-        ctx.userId,
-        input.projectId ? undefined : lensWorkspaceId
-      );
 
       // Resolve the role slug to its profile id(s) — every same-slug row (a
       // facet may sit on a system row OR a workspace-scope twin).
@@ -186,39 +185,29 @@ export const readProcs = {
         });
       }
 
-      const conditions = [
-        inArray(entityFacets.profileId, roleProfileIds),
-        isNull(entityFacets.deletedAt),
-        ...facetVisibilityConditions(facetVisibilityScope),
-        isNull(entities.deletedAt),
-        entityReadVisibleWhere(ctx.userId),
-        ...(input.projectId
-          ? [projectLensWhere(entities.id, input.projectId)]
-          : []),
-      ];
-
-      // firstN is a zod-validated int (0..50) → safe to inline as an array-slice
-      // literal (avoids a parameterised slice bound). array_agg newest-first,
-      // sliced to firstN; 0 yields an empty slice (counts only).
-      const rows = await db
-        .select({
-          status: entityFacets.status,
-          count: drizzleSql<number>`cast(count(*) as integer)`,
-          ids: drizzleSql<
-            string[]
-          >`(array_agg(${entities.id} ORDER BY ${entities.createdAt} DESC))[1:${drizzleSql.raw(String(input.firstN))}]`,
-        })
-        .from(entityFacets)
-        .innerJoin(entities, eq(entities.id, entityFacets.entityId))
-        .where(and(...conditions))
-        .groupBy(entityFacets.status);
+      // THE ONE status grouping (`./status-groups.ts`), shared with the
+      // pipeline board — same lens, same SQL, newest first here.
+      const groups = await groupThingsByStatus({
+        subject: {
+          kind: "role",
+          profileIds: roleProfileIds,
+          roleSlug: input.roleSlug,
+        },
+        conditions: await roleVisibilityConditions({
+          userId: ctx.userId,
+          lensWorkspaceId,
+          projectId: input.projectId,
+        }),
+        firstN: input.firstN,
+        order: "newest",
+      });
 
       return {
         roleSlug: input.roleSlug,
-        groups: rows.map((r) => ({
-          status: r.status ?? null,
-          count: r.count,
-          ids: r.ids ?? [],
+        groups: groups.map((g) => ({
+          status: g.status,
+          count: g.count,
+          ids: g.items.map((i) => i.id),
         })),
       };
     }),
