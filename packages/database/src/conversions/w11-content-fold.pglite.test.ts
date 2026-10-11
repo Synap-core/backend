@@ -133,6 +133,14 @@ CREATE TABLE profile_properties (
   profile_id uuid,
   property_def_id uuid
 );
+-- 0319 lifecycle columns, read by projectLifecycleColumns (the whole
+-- manifest runs here).
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS parent_profile_id uuid;
+ALTER TABLE entities ADD COLUMN IF NOT EXISTS status text;
+ALTER TABLE entities ADD COLUMN IF NOT EXISTS status_category text;
+ALTER TABLE entity_facets ADD COLUMN IF NOT EXISTS status_category text;
+ALTER TABLE property_defs ADD COLUMN IF NOT EXISTS constraints jsonb DEFAULT '{}';
+ALTER TABLE profile_properties ADD COLUMN IF NOT EXISTS is_lifecycle boolean DEFAULT false;
 CREATE TABLE views (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   scope_profile_ids uuid[] DEFAULT '{}'

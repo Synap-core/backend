@@ -19,6 +19,10 @@ import type { CreatePropertyDefInput } from "../repositories/property-def-reposi
 import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
 import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "./facet-visibility.js";
+import {
+  ensureSystemLifecycles,
+  type EnsureSystemLifecyclesResult,
+} from "./ensure-system-lifecycles.js";
 
 /**
  * Profile-property links this seeder must actively REMOVE from pods that were
@@ -515,6 +519,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
 ];
 
 export interface EnsureSystemProfilesResult {
+  /** The core kinds' lifecycle declarations (`ensure-system-lifecycles.ts`). */
+  lifecycles?: EnsureSystemLifecyclesResult | { error: string };
   status: "created" | "exists" | "error";
   message: string;
   profilesCreated: number;
@@ -2048,9 +2054,18 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       }
     }
 
+    // The core kinds' ONE lifecycle each (work model L1) — its own file.
+    let lifecycles: EnsureSystemLifecyclesResult | { error: string };
+    try {
+      lifecycles = await ensureSystemLifecycles(db);
+    } catch (err) {
+      lifecycles = { error: err instanceof Error ? err.message : String(err) };
+    }
+
     const totalCreated = profilesCreated + propertiesCreated + linksCreated;
 
     return {
+      lifecycles,
       status: totalCreated > 0 ? "created" : "exists",
       message:
         totalCreated > 0

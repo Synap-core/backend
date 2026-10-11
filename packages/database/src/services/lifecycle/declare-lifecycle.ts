@@ -22,6 +22,7 @@ import { propertyDefs } from "../../schema/property-defs.js";
 import { ProfileRepository } from "../../repositories/profile-repository.js";
 import { readStoredEnumOptions } from "../../utils/property-enum.js";
 import { parseLifecycleOptions } from "../../utils/lifecycle-model.js";
+import { lifecycleProjectionStatements } from "./project-lifecycle-columns.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -123,7 +124,11 @@ export async function declareLifecycle(
     constraints: link.constraints as Record<string, unknown> | null,
     uiHints: link.uiHints as Record<string, unknown> | null,
   });
-  const { errors } = parseLifecycleOptions(stored ?? []);
+  // Values the pod added WITHOUT a category stay admissible (the resolver
+  // reports them `unclassified`, never guesses); a lifecycle needs at least one
+  // categorized option, and a category that is not one of the five is refused.
+  const categorized = (stored ?? []).filter((o) => o.category !== undefined);
+  const { errors } = parseLifecycleOptions(categorized);
   if (errors.length) {
     return {
       status: "refused",
@@ -183,5 +188,10 @@ export async function declareLifecycle(
         )
       );
   });
+  // Rows that existed before the declaration get their columns from the read
+  // projection they already hold (derivation, never a new value).
+  for (const { statement } of lifecycleProjectionStatements(input.profileId)) {
+    await db.execute(statement);
+  }
   return { status: "declared", propertyDefId: link.propertyDefId };
 }

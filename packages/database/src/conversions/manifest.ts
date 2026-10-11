@@ -35,7 +35,8 @@ export type ConversionOp =
   | RenamePropertyKeyOp
   | RemapFacetPropertyValuesOp
   | FoldRoleIntoStatusOp
-  | RenameProfileOp;
+  | RenameProfileOp
+  | ProjectLifecycleColumnsOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -556,6 +557,20 @@ export const RENAME_PROPERTY_KEY_CONFLICTS = [
 ] as const;
 export type RenamePropertyKeyConflict =
   (typeof RENAME_PROPERTY_KEY_CONFLICTS)[number];
+
+/**
+ * Work model L1/L2 (0319): FILL the lifecycle columns (`entities.status|
+ * status_category`, `entity_facets.status|status_category`) from the read
+ * projection `properties[<lifecycle slug>]` for every declared lifecycle —
+ * DERIVATION, never a new value (an undeclared value keeps its status with no
+ * category; nothing is guessed). Idempotent; the declare door fills a profile
+ * at declaration time, so this is the boot safety net for rows written before
+ * 0319 or by a path that bypassed the door.
+ * (`services/lifecycle/project-lifecycle-columns.ts`)
+ */
+export interface ProjectLifecycleColumnsOp extends BaseOp {
+  op: "projectLifecycleColumns";
+}
 
 /** A versioned manifest — the ordered list the engine walks. */
 export interface ConversionManifest {
@@ -1727,6 +1742,14 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // the catalog; rename the row in place (id kept), then its keys. A pod that
     // somehow already holds a `production-recipe` row beside it is refused
     // (that is a merge), never twinned.
+    // ─── Work model L1/L2: lifecycle columns (0319) ───────────────────────────
+    // Fill status/status_category from the read projection for every declared
+    // lifecycle (derivation only; see ProjectLifecycleColumnsOp).
+    {
+      op: "projectLifecycleColumns",
+      opKey: "w12.lifecycle.project-columns",
+    },
+
     {
       op: "renameProfile",
       opKey: "w12.content.pipeline-kind-to-production-recipe",
@@ -1817,6 +1840,7 @@ export const CONVERSION_OP_TYPES = [
   "remapFacetPropertyValues",
   "foldRoleIntoStatus",
   "renameProfile",
+  "projectLifecycleColumns",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -2096,6 +2120,8 @@ export function validateManifest(manifest: ConversionManifest): void {
           );
         }
         break;
+      case "projectLifecycleColumns":
+        break; // no parameters: every declared lifecycle
       case "renameProfile":
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.toSlug, "toSlug");

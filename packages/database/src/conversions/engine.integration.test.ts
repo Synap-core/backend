@@ -112,6 +112,8 @@ CREATE TABLE profiles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug text NOT NULL,
   display_name text,
+  -- 0319 lifecycle projection walks the hierarchy (projectLifecycleColumns).
+  parent_profile_id uuid,
   profile_kind text DEFAULT 'kind',
   scope text DEFAULT 'system',
   entity_scope text DEFAULT 'pod',
@@ -144,6 +146,9 @@ CREATE TABLE entities (
   workspace_id uuid,
   type text,
   properties jsonb DEFAULT '{}',
+  -- 0319 lifecycle columns (projectLifecycleColumns).
+  status text,
+  status_category text,
   deleted_at timestamptz,
   updated_at timestamptz DEFAULT now()
 );
@@ -154,6 +159,7 @@ CREATE TABLE entity_facets (
   user_id uuid,
   workspace_id uuid,
   status text,
+  status_category text,
   context_entity_id uuid,
   properties jsonb DEFAULT '{}',
   metadata jsonb DEFAULT '{}',
@@ -166,12 +172,14 @@ CREATE TABLE property_defs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   profile_id uuid,
   slug text,
-  workspace_id uuid
+  workspace_id uuid,
+  constraints jsonb DEFAULT '{}'
 );
 CREATE TABLE profile_properties (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   profile_id uuid,
-  property_def_id uuid
+  property_def_id uuid,
+  is_lifecycle boolean DEFAULT false
 );
 CREATE TABLE views (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

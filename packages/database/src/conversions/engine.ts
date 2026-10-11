@@ -46,6 +46,7 @@ import {
   buildValueMapJson,
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
+import { lifecycleProjectionQueries } from "../services/lifecycle/project-lifecycle-columns.js";
 import {
   classifyRelationDefCopies,
   type RelationDefMeaning,
@@ -131,6 +132,10 @@ export interface OpCounts {
   facetsRemapped?: number;
   /** foldRoleIntoStatus: entities whose existing target-role facet(s) received the status. */
   facetsFolded?: number;
+  /** projectLifecycleColumns: rows whose lifecycle columns were filled from the projection. */
+  lifecycleColumnsProjected?: number;
+  /** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
+  lifecycleUncategorized?: number;
   /** renameProfile: entities whose `type` was rewritten to the new slug. */
   entitiesRetyped?: number;
   /** renamePropertyKey: entities whose sourceKey was renamed/stripped. */
@@ -249,6 +254,9 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   // role or a kind under two names.
   foldRoleIntoStatus: "fatal",
   renameProfile: "fatal",
+  // Derivation only: an unfilled column reads as "no status yet"; the declare
+  // door and the next boot fill it.
+  projectLifecycleColumns: "advisory",
   reconcileEntityScope: "advisory",
   reconcileFacetScope: "advisory",
   keep: "advisory",
@@ -598,6 +606,8 @@ async function applyOp(
       return applyFoldRoleIntoStatus(tx, op, options.destructiveTail);
     case "renameProfile":
       return applyRenameProfile(tx, op);
+    case "projectLifecycleColumns":
+      return applyProjectLifecycleColumns(tx);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -2567,10 +2577,51 @@ export async function computeCounts(
       if (row?.skipped) counts.entitiesSkippedNoFacet = row.skipped;
       return counts;
     }
+    case "projectLifecycleColumns": {
+      // Dry run DERIVED from the apply: the same statements, rolled back.
+      try {
+        await sql.begin(async (tx) => {
+          const counts = await applyProjectLifecycleColumns(
+            tx as unknown as Sql
+          );
+          throw new DryRunRollback(counts, []);
+        });
+      } catch (e) {
+        if (e instanceof DryRunRollback) return e.counts;
+        throw e;
+      }
+      return {};
+    }
     case "keep":
     case "extractNonEntity":
       return {};
   }
+}
+
+/** Fill the lifecycle columns from the read projection (one builder, see the op). */
+async function applyProjectLifecycleColumns(tx: Sql): Promise<OpCounts> {
+  let projected = 0;
+  let uncategorized = 0;
+  for (const q of lifecycleProjectionQueries()) {
+    // Re-enter the compiled statement through the TAGGED-template door every
+    // `Sql` here supports (postgres.js and the PGlite shims alike): split on
+    // its `$n` placeholders and pass the params in placeholder order.
+    const parts = q.text.split(/\$\d+/);
+    const strings = Object.assign([...parts], { raw: [...parts] });
+    const values = [...q.text.matchAll(/\$(\d+)/g)].map(
+      (m) => q.params[Number(m[1]) - 1]
+    );
+    const rows = (await tx(
+      strings as unknown as TemplateStringsArray,
+      ...(values as never[])
+    )) as unknown as Array<{ uncategorized: boolean }>;
+    projected += rows.length;
+    uncategorized += rows.filter((r) => r.uncategorized).length;
+  }
+  const counts: OpCounts = {};
+  if (projected) counts.lifecycleColumnsProjected = projected;
+  if (uncategorized) counts.lifecycleUncategorized = uncategorized;
+  return counts;
 }
 
 /**
