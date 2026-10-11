@@ -42,6 +42,7 @@ import { randomUUID, randomBytes } from "crypto";
 import { encryptServiceKey } from "../utils/service-key-crypto.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getServiceEntry } from "../utils/agent-services/index.js";
+import { attachAgentKeyGrant } from "../services/agent-identity-service.js";
 import { scopedProcedure } from "../middleware/api-key-auth.js";
 import {
   setDefaultIntelligenceService,
@@ -738,7 +739,7 @@ export const intelligenceRegistryRouter = router({
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
 
-      await apiKeyRepo.create(
+      const created = await apiKeyRepo.create(
         {
           keyName: `${entry.displayName} — pod-wide`,
           keyPrefix,
@@ -751,6 +752,14 @@ export const intelligenceRegistryRouter = router({
         },
         ctx.userId
       );
+      // An AI's key always carries its limits (its stored capabilities).
+      await attachAgentKeyGrant({
+        apiKeyId: created.id,
+        agentUserId: agentId,
+        onBehalfOf: ctx.userId,
+        expiresAt: null,
+        createdBy: ctx.userId,
+      });
 
       auditLog({
         subjectType: "agent_user",
@@ -999,7 +1008,7 @@ export const intelligenceRegistryRouter = router({
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
 
-      await apiKeyRepo.create(
+      const created = await apiKeyRepo.create(
         {
           keyName: `${entry.displayName} — ${input.serviceType} (rotated)`,
           keyPrefix,
@@ -1012,6 +1021,13 @@ export const intelligenceRegistryRouter = router({
         },
         ctx.userId
       );
+      await attachAgentKeyGrant({
+        apiKeyId: created.id,
+        agentUserId: agentId,
+        onBehalfOf: ctx.userId,
+        expiresAt: null,
+        createdBy: ctx.userId,
+      });
 
       logger.info(
         {

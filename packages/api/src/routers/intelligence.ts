@@ -40,6 +40,7 @@ import { EventRepository, ApiKeyRepository } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
+import { attachAgentKeyGrant } from "../services/agent-identity-service.js";
 import {
   parseCommandTemplate,
   validateArgumentValues,
@@ -1278,7 +1279,7 @@ export const intelligenceRouter = router({
 
         const eventRepo = new EventRepository(sql);
         const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-        await apiKeyRepo.create(
+        const created = await apiKeyRepo.create(
           {
             keyName: `${entry.displayName} — rotated`,
             keyPrefix,
@@ -1290,6 +1291,14 @@ export const intelligenceRouter = router({
           },
           ctx.userId ?? "system"
         );
+        // An AI's key always carries its limits (its stored capabilities).
+        await attachAgentKeyGrant({
+          apiKeyId: created.id,
+          agentUserId: existing.id,
+          onBehalfOf: ctx.userId,
+          expiresAt: null,
+          createdBy: ctx.userId,
+        });
 
         const dockerRunCommand =
           entry.buildDockerCommand?.({
@@ -1353,7 +1362,7 @@ export const intelligenceRouter = router({
 
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-      await apiKeyRepo.create(
+      const created = await apiKeyRepo.create(
         {
           keyName: `${entry.displayName} — pod-wide`,
           keyPrefix,
@@ -1365,6 +1374,13 @@ export const intelligenceRouter = router({
         },
         ctx.userId ?? "system"
       );
+      await attachAgentKeyGrant({
+        apiKeyId: created.id,
+        agentUserId: agentId,
+        onBehalfOf: ctx.userId,
+        expiresAt: null,
+        createdBy: ctx.userId,
+      });
 
       const dockerRunCommand =
         entry.buildDockerCommand?.({

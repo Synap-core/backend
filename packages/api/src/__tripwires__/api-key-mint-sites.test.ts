@@ -133,6 +133,47 @@ describe("API-key mint sites are known", () => {
 });
 
 /**
+ * P2b — an AI's key always carries its limits. Files that mint an AGENT's key
+ * through a raw primitive (not `provisionSurfaceAgentKey` / `createNamedAgent`,
+ * which attach it themselves), with how many such mints they hold. Each must
+ * attach the agent's grant at least that many times (`attachAgentKeyGrant`,
+ * or `attachGrantOrRevoke` inside the agent-identity service).
+ *
+ * NOT COVERED (stated): which mints are agent keys is a review decision made
+ * here; granularity is a COUNT per file, so an attach that guards a different
+ * mint than the one added passes. A file absent from this map mints no agent
+ * key by its own primitive (the `is_internal` IS key in provision.ts is the
+ * IS's service key, owned by "system", not an agent).
+ */
+const AGENT_KEY_MINTS: Partial<Record<keyof typeof MINT_SITES, number>> = {
+  "packages/api/src/services/agent-identity-service.ts": 2,
+  "packages/api/src/routers/intelligence-registry.ts": 2, // provision + rotate
+  "packages/api/src/routers/intelligence.ts": 2, // provision + re-provision
+  "apps/api/src/routers/provision.ts": 1, // activate-addon (OpenClaw)
+  "packages/api/src/scripts/provision-agent.ts": 2,
+};
+const ATTACH_CALL = /\b(?:attachAgentKeyGrant|attachGrantOrRevoke)\(/;
+
+describe("every agent key minted by a raw primitive carries its grant", () => {
+  it("each agent-key mint file attaches the grant as often as it mints", () => {
+    expect(Object.keys(AGENT_KEY_MINTS).length).toBeGreaterThanOrEqual(5);
+    expect(ATTACH_CALL.test("await attachAgentKeyGrant({")).toBe(true);
+    const short: string[] = [];
+    for (const [file, mints] of Object.entries(AGENT_KEY_MINTS)) {
+      const lines = codeLines(readFileSync(join(REPO, file), "utf8"));
+      const attaches = lines.filter((l) => ATTACH_CALL.test(l)).length;
+      expect(minting.has(file), `${file} must still mint`).toBe(true);
+      if (attaches < mints!)
+        short.push(`${file}: ${attaches} attach for ${mints} agent mints`);
+    }
+    expect(
+      short,
+      "Attach the agent's grant after each mint (attachAgentKeyGrant)."
+    ).toEqual([]);
+  });
+});
+
+/**
  * Hard DELETEs of api_keys rows bypass the revoke door and its cache drop: a
  * deleted ACTIVE key keeps validating from the verification cache for up to
  * 30s. Each file that hard-deletes must say why that is safe.

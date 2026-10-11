@@ -28,6 +28,7 @@ import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
 import {
+  attachAgentKeyGrant,
   createAndVerifyHubInboundKey,
   encryptServiceKey,
   describeServingIntelligence,
@@ -1558,6 +1559,14 @@ provisionRouter.post("/activate-addon", async (c) => {
     );
     const registrationTrace = toRegistrationTrace(flowId, registration);
     const { apiKey, plainKey } = registration;
+    // An AI's key always carries its limits (its stored capabilities).
+    await attachAgentKeyGrant({
+      apiKeyId: apiKey.id,
+      agentUserId,
+      onBehalfOf: ownerUserId,
+      expiresAt: null,
+      createdBy: ownerUserId,
+    });
     if (registration.outcome !== "CONNECTED_VERIFIED") {
       logger.error(
         {

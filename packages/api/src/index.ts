@@ -224,6 +224,7 @@ export {
   type RegistrationResult,
   type RegistrationTrace,
 } from "./services/external-registration.js";
+export { attachAgentKeyGrant } from "./services/agent-identity-service.js";
 
 export { consumeLinkToken } from "./utils/consume-link-token.js";
 
