@@ -41278,6 +41278,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					count: number;
 					items: {
 						id: string;
+						facetId: string | null;
 						name: string | null;
 						status: string | null;
 						enteredAt: string | null;
