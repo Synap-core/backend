@@ -55,6 +55,7 @@ import { createLogger } from "@synap-core/core";
 import { resolveStageRef } from "@synap/playbooks";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
+import { mergeEnteredStageSlots } from "./stage-slots.js";
 import {
   writeStageSubjectStatus,
   type StageSubjectStatusOutcome,
@@ -133,6 +134,12 @@ export interface AdvanceSessionStageResult {
   subjectStatus?: StageSubjectStatusOutcome;
   /** Set when a failed check gate returned the run to its `onFail` stage. */
   onFail?: { toStage: string };
+  /**
+   * The entered stage's declared `expectedOutputs` merged into the session's
+   * slots (`stage-slots.ts`): the labels added, or why the merge failed.
+   * Absent when the stage declares none.
+   */
+  stageSlots?: { added: string[] } | { error: string };
 }
 
 const UNCHANGED: AdvanceSessionStageResult = {
@@ -168,6 +175,12 @@ export async function advanceSessionStage(
       .set({ currentStage: toStage, updatedAt: new Date() })
       .where(eq(focusSessions.id, session.id));
   }
+
+  // The stage is ENTERED: what it owes becomes the session's slots, gated or
+  // not (a gate holds the run, not the stage's deliverables). After the stage
+  // write, under the session row lock — the caller's own multi-field UPDATE
+  // has landed. A failed merge never undoes the advance; it is reported.
+  const stageSlots = await mergeStageSlotsOnEntry(session, toStage);
 
   // Fire-and-forget, as all four doors already did — a fan-out failure must not
   // fail the advance that already landed. The `.catch` is this door's only
@@ -220,6 +233,8 @@ export async function advanceSessionStage(
           agentUserId: input.agentUserId ?? null,
         });
 
+  const slots = stageSlots ? { stageSlots } : {};
+
   if (!gate) {
     const subjectStatus = await writeSubject();
     return {
@@ -227,6 +242,7 @@ export async function advanceSessionStage(
       gated: false,
       paused: false,
       ...(subjectStatus ? { subjectStatus } : {}),
+      ...slots,
     };
   }
 
@@ -236,6 +252,7 @@ export async function advanceSessionStage(
       gated: true,
       paused: gate.paused,
       check: { passed: gate.passed, failing: gate.failing },
+      ...slots,
     };
     if (!gate.paused) {
       const subjectStatus = await writeSubject();
@@ -260,7 +277,34 @@ export async function advanceSessionStage(
     paused: gate.paused,
     proposalId: gate.proposalId,
     proposalType: gate.proposalType,
+    ...slots,
   };
+}
+
+/** {@link mergeEnteredStageSlots} over the run's own stages; never throws. */
+async function mergeStageSlotsOnEntry(
+  session: StageAdvanceSession,
+  toStage: string
+): Promise<AdvanceSessionStageResult["stageSlots"]> {
+  try {
+    const proc = await loadSessionProcess({
+      sessionId: session.id,
+      playbookId: session.playbookId,
+    });
+    if (!proc) return undefined;
+    const r = await mergeEnteredStageSlots({
+      sessionId: session.id,
+      stageKey: toStage,
+      stages: proc.stages,
+    });
+    return r.added.length > 0 ? r : undefined;
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: session.id, toStage },
+      "stage slots merge failed (the advance stands)"
+    );
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /**
