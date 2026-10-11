@@ -829,6 +829,17 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      */
     goalOverride?: string;
     /**
+     * FILING — the PROJECT / TRACK the spawned session is born into
+     * (`focus_sessions.project_id` / `track_id`). Forwarded to `runPlaybook`,
+     * which validates it on its one door (`resolveTrackFiling`: visible,
+     * not archived, `projectId` must be the track's project; an absent
+     * `projectId` is derived from the track). Absent ⇒ an unfiled session, as
+     * before. Honoured on the run and propose modes, top level and inside a
+     * loop; an `appointment` node does not carry filing yet.
+     */
+    projectId?: string;
+    trackId?: string;
+    /**
      * WHAT this node materializes (read through `readPlaybookRunMode`,
      * `@synap-core/types/automations`, which keeps this union and its runtime
      * list in sync both ways):

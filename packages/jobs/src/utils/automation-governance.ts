@@ -913,6 +913,9 @@ export async function proposeRulePlaybookRun(opts: {
   goalOverride?: string;
   /** The rule's agent selector (`agents.slug`). */
   agentType?: string;
+  /** Filing the approved run is born into (replayed by the approval executor). */
+  projectId?: string;
+  trackId?: string;
   sessionId?: string;
   stepRunId?: string;
   nodeId?: string;
@@ -965,6 +968,8 @@ export async function proposeRulePlaybookRun(opts: {
     // Replayed by the `playbook/run` approval executor into `playbooks.run`.
     ...(opts.goalOverride ? { goalOverride: opts.goalOverride } : {}),
     ...(opts.agentType ? { agentType: opts.agentType } : {}),
+    ...(opts.projectId ? { projectId: opts.projectId } : {}),
+    ...(opts.trackId ? { trackId: opts.trackId } : {}),
   };
 
   const { proposal, deduped } = await insertPendingProposal({

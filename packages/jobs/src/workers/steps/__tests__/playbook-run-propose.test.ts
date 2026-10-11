@@ -157,6 +157,27 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
     expect(row.nodeId).toBe("n-1");
   });
 
+  it("the node's project/track ride with the proposal (replayed by the approval executor)", async () => {
+    h.selectResults.push([], [{ userType: "human" }]);
+    await executePlaybookRun(
+      {
+        playbookId: "pb-1",
+        mode: "propose",
+        projectId: "proj-1",
+        trackId: "trk-1",
+      },
+      context({ subjectId: "ent-1" }),
+      "ws-1",
+      "user-1",
+      AUTOMATION as never
+    );
+    const row = (
+      h.insertPendingProposalMock.mock.calls as unknown[][]
+    )[0][0] as { data: { data: Record<string, unknown> } };
+    expect(row.data.data.projectId).toBe("proj-1");
+    expect(row.data.data.trackId).toBe("trk-1");
+  });
+
   it("a second fire on the same (rule, subject) while one waits → skipped / already_proposed, no insert", async () => {
     h.selectResults.push([{ id: "prop-waiting" }]);
     const out = await executePlaybookRun(

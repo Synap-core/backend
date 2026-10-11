@@ -1296,6 +1296,8 @@ async function executeAutomationFlow(params: {
                             paramsMapping?: Record<string, string>;
                             agentType?: string;
                             goalOverride?: string;
+                            projectId?: string;
+                            trackId?: string;
                             mode?: PlaybookRunMode;
                           },
                           context,
@@ -1827,6 +1829,9 @@ async function executeAutomationFlow(params: {
                 agentType?: string;
                 /** The rule's own goal for the spawned session; absent ⇒ the playbook's. */
                 goalOverride?: string;
+                /** Filing: the project / track the session is born into. */
+                projectId?: string;
+                trackId?: string;
                 /** `"appointment"` ⇒ a `scheduled` session; `"propose"` ⇒ a
                  *  governed proposal only (see `executePlaybookRun`). */
                 mode?: PlaybookRunMode;
@@ -1855,6 +1860,13 @@ async function executeAutomationFlow(params: {
                   // identical node would carry the rule's goal inside a loop and
                   // silently fall back to the playbook's at the top level.
                   goalOverride: data.goalOverride,
+                  // Same hazard, same fix: an unlisted filing field is dropped
+                  // HERE while the loop-child path's wholesale cast keeps it, so
+                  // a worker's session would be project/track-filed inside a loop
+                  // and silently unfiled at the top level. Pinned by
+                  // `steps/__tests__/playbook-run-filing.test.ts`.
+                  projectId: data.projectId,
+                  trackId: data.trackId,
                   // Same hazard, same fix: without this line an `appointment`
                   // node reaching the TOP-LEVEL path would silently execute as a
                   // RUN — dispatching an agent at a session the human was meant

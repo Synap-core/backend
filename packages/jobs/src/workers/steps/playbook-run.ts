@@ -107,6 +107,13 @@ export async function executePlaybookRun(
      */
     goalOverride?: string;
     /**
+     * FILING — the project / track the spawned session is born into. Forwarded
+     * to the spine (which validates it); absent ⇒ unfiled. Declared on
+     * `PlaybookRunNodeDef.data` (schema/automations.ts).
+     */
+    projectId?: string;
+    trackId?: string;
+    /**
      * WHAT this node materializes at its slot.
      *
      * - absent / `"run"` — an unattended RUN: session + channel + `playbook_runs`
@@ -245,6 +252,8 @@ export async function executePlaybookRun(
         ? { goalOverride: resolveTemplate(data.goalOverride, context) }
         : {}),
       ...(data.agentType ? { agentType: data.agentType } : {}),
+      ...(data.projectId ? { projectId: data.projectId } : {}),
+      ...(data.trackId ? { trackId: data.trackId } : {}),
       sessionId: automationContext.focusSessionId,
       stepRunId: attribution?.stepRunId,
       nodeId: attribution?.nodeId,
@@ -406,6 +415,11 @@ export async function executePlaybookRun(
     // files the enable request for the owner (D3).
     unenabledSkillPreflight: true,
     agentType: data.agentType,
+    // Filing: a worker's session lands in its project/track (validated by the
+    // spine's `resolveTrackFiling`). Omitted when absent so an unfiled node is
+    // byte-identical to before.
+    ...(data.projectId ? { projectId: data.projectId } : {}),
+    ...(data.trackId ? { trackId: data.trackId } : {}),
     goalResolver,
     // The `@{arg:...}` half of the goal grammar. `goalResolver` speaks only
     // {{mustache}} and returns undefined for a pure `@{arg:}` template (saying

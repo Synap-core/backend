@@ -122,6 +122,12 @@ export interface PlaybookRunnerInput {
   /** Agent selector (`agents.slug`) — absent ⇒ the default orchestrator. */
   agentType?: string | null;
   /**
+   * Filing: the project / track the session is born into. Validated by the
+   * spine (`resolveTrackFiling`), never here.
+   */
+  projectId?: string | null;
+  trackId?: string | null;
+  /**
    * Unattended run: refuse (throw) when the playbook depends on not-enabled
    * skills, filing the enable request on behalf of the owner. See run-playbook.
    */
