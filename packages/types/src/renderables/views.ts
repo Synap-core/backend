@@ -174,6 +174,42 @@ const kanbanView: ViewCapabilityDef = {
   ],
 };
 
+/**
+ * The PIPELINE (work model L3): the things of ONE kind or role that declares a
+ * lifecycle, in columns of its declared statuses (`lifecycle.board`) — done /
+ * lost windowed, values outside the declaration in one "unclassified" column,
+ * moves compare-and-set through the one mover. Not a query lens: its data is
+ * the lifecycle read, so it stays out of the lens switcher. Kept out of the
+ * creatable catalogue for now (its doors create it — a profile's implicit
+ * pipeline, a project's pipeline door — and the MCP `create_view` enum and the
+ * CP pod-tools mirror are regenerated before agents are offered it).
+ */
+const pipelineView: ViewCapabilityDef = {
+  key: "pipeline",
+  aiHint:
+    "A kind's or role's declared lifecycle as columns (deals by stage, leads by funnel status).",
+  name: "Pipeline",
+  description:
+    "Things of one kind in columns of their declared statuses — move one to another status",
+  icon: "Columns",
+  category: "special",
+  family: "grouped",
+  implemented: true,
+  entityLens: false,
+  requiredConfig: ["profileSlug"],
+  configSchema: [
+    {
+      key: "profileSlug",
+      label: "Kind or role",
+      type: "string",
+      required: true,
+      description: "A kind or role that declares a lifecycle, e.g. 'deal'",
+    },
+    { key: "projectId", label: "Project", type: "string" },
+    { key: "trackId", label: "Track", type: "string" },
+  ],
+};
+
 const matrixView: ViewCapabilityDef = {
   key: "matrix",
   aiHint: "2-axis grid (priority \u00d7 urgency, effort \u00d7 impact).",
@@ -508,6 +544,7 @@ export const VIEW_DEFINITIONS: ViewCapabilityDef[] = [
   gridView,
   galleryView,
   kanbanView,
+  pipelineView,
   matrixView,
   masonryView,
   calendarView,
@@ -540,14 +577,16 @@ export const IMPLEMENTED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
  * which only has meaning inside a conversation, and the workspace Zoom map,
  * retired as a new view once the project map shipped (founder-approved
  * 2026-10-04: the zoom map now lives on the project page). Existing saved
- * instances of all three remain fully renderable.
+ * instances of all three remain fully renderable. The pipeline is created by
+ * its own doors for now (see `pipelineView`).
  */
 export const CREATABLE_VIEW_DEFINITIONS = VIEW_DEFINITIONS.filter(
   (definition) =>
     definition.implemented &&
     definition.key !== "table" &&
     definition.key !== "branch_tree" &&
-    definition.key !== "zoom_map"
+    definition.key !== "zoom_map" &&
+    definition.key !== "pipeline"
 );
 
 /** Structured view types (use entity query + render config). */

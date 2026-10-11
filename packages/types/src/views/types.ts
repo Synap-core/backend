@@ -35,6 +35,8 @@ export const VIEW_TYPE_CATEGORIES: Record<string, ViewCategory> = {
 
   // Composite (views that compose other views)
   bento: "composite",
+  // Reads `lifecycle.board`, not an entity query — never validated as structured.
+  pipeline: "composite",
 
   // Canvas (freeform drawing)
   whiteboard: "canvas",

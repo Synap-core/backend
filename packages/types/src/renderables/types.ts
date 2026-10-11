@@ -159,6 +159,7 @@ export const VIEW_TYPE_KEYS = [
   "grid",
   "gallery",
   "kanban",
+  "pipeline",
   "matrix",
   "masonry",
   "calendar",
@@ -1054,6 +1055,17 @@ export type EmptyViewConfig = Record<string, never>;
 
 // ─── Discriminated union: view type → config ─────────────────────────────────
 
+/**
+ * A pipeline view (work model L3): the lifecycle board of ONE kind or role,
+ * optionally narrowed to a project (or a track's project). Read by
+ * `lifecycle.board`; nothing else to configure.
+ */
+export interface PipelineViewConfig {
+  profileSlug: string;
+  projectId?: string;
+  trackId?: string;
+}
+
 export interface ViewConfigByType {
   sheet: SheetViewConfig;
   table: TableViewConfig;
@@ -1061,6 +1073,7 @@ export interface ViewConfigByType {
   grid: GridViewConfig;
   gallery: GalleryViewConfig;
   kanban: KanbanViewConfig;
+  pipeline: PipelineViewConfig;
   matrix: MatrixViewConfig;
   masonry: MasonryViewConfig;
   calendar: CalendarViewConfig;
