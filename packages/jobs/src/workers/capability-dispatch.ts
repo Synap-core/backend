@@ -11,6 +11,8 @@ import {
   guardProducerEffect,
   PolicyBlockedError,
 } from "../utils/automation-governance.js";
+import type { PlaybookRunWorkerSpec } from "@synap/database";
+import type { WorkerSkipReason } from "@synap-core/types/workers";
 
 /**
  * Discriminated result mirror of `@synap/api`'s `ExecuteCapabilityResult`. jobs
@@ -132,6 +134,12 @@ export interface PlaybookRunnerInput {
    * skills, filing the enable request on behalf of the owner. See run-playbook.
    */
   unenabledSkillPreflight?: boolean;
+  /**
+   * STAGE WORKER — the node's `worker` spec + the enablement's automation.
+   * The spine gates the fire (backlog / ceiling / stale / threshold) and runs
+   * a per_moment batch as ONE session with target edges. See run-playbook.
+   */
+  worker?: PlaybookRunWorkerSpec & { automationId: string | null };
 }
 
 export interface PlaybookRunnerResult {
@@ -140,7 +148,7 @@ export interface PlaybookRunnerResult {
   session: { id: string; channelId: string | null } | null;
   reused?: boolean;
   /** `cooling_down`: the subject's latest run of this playbook failed recently. */
-  skipped?: "no-subject" | "cooling_down";
+  skipped?: "no-subject" | "cooling_down" | WorkerSkipReason;
 }
 
 type PlaybookRunner = (

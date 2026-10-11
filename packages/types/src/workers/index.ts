@@ -70,6 +70,12 @@ export const DEFAULT_WORKER_MODE: WorkerMode = "propose";
 export const DEFAULT_WORKER_MAX_PENDING_APPROVALS = 20;
 export const WORKER_MAX_PENDING_APPROVALS_CEILING = 200;
 
+/**
+ * The most things ONE per_moment run takes on. The rest wait for the next
+ * moment (they are not in flight, so the next run picks them up).
+ */
+export const WORKER_BATCH_LIMIT = 50;
+
 /** A `count` worker's floor: a threshold of one is just `enters_status`. */
 export const WORKER_COUNT_MIN_FLOOR = 2;
 

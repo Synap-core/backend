@@ -263,6 +263,20 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 export const DEFAULT_DAILY_WRITE_CEILING = 500;
 
 /**
+ * The SYSTEM ceiling on irreversible sends (`messaging.external.send`,
+ * `provider.action` — every key {@link isReversibleWrite} answers `false` for)
+ * ONE stage worker enablement may make per UTC day (work model L4). Past it,
+ * the worker starts no new run (`volume_ceiling`, `@synap-core/types/workers`)
+ * — even when the sends would be approved or auto-executed.
+ *
+ * A constant, deliberately NOT a `governance_ceilings` axis a person can widen:
+ * send-volume caps are a platform limit (every sales tool ships one), and a
+ * runaway worker is exactly the case where the person is not watching. Not a
+ * rule the operator edits in wave 3, so it costs no enum migration.
+ */
+export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
+
+/**
  * The three gov-config stores the unified `settings.update` door can target.
  */
 export type GovConfigStore =

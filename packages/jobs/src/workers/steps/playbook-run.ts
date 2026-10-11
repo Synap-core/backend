@@ -2,7 +2,21 @@
  * `playbook_run` step executor — a thin shim over the ONE playbook-run spine
  * reached through the `registerPlaybookRunner` IoC slot.
  */
-import { db, and, eq, isNull, entities, events } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  isNull,
+  entities,
+  events,
+  countWorkerPendingApprovals,
+  type PlaybookRunWorkerSpec,
+} from "@synap/database";
+import {
+  DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+  WORKER_MAX_PENDING_APPROVALS_CEILING,
+  WORKER_SKIP_REASONS,
+} from "@synap-core/types/workers";
 import {
   getPlaybookRunner,
   getSessionScheduler,
@@ -136,6 +150,13 @@ export async function executePlaybookRun(
      * decides what an absent/unknown mode means (`run`).
      */
     mode?: PlaybookRunMode;
+    /**
+     * STAGE WORKER spec (work model L4) — forwarded WHOLE to the spine with
+     * the enablement's automation id; the spine gates the fire and runs a
+     * per_moment batch. A per_thing worker in propose mode is held back here
+     * by its approvals backlog. Absent ⇒ an ordinary node, unchanged.
+     */
+    worker?: PlaybookRunWorkerSpec;
   },
   context: StepContext,
   workspaceId: string,
@@ -232,6 +253,29 @@ export async function executePlaybookRun(
       throw new Error(
         "playbook_run in propose mode needs the automation that owns it (no automationContext) — refusing to file an unattributable proposal"
       );
+    }
+    // A worker's backlog holds its proposals too: past `maxPendingApprovals`
+    // waiting on a person, it files no more (the spine's own gate for runs).
+    if (data.worker) {
+      const declared = data.worker.maxPendingApprovals;
+      const max = Math.min(
+        Math.max(
+          typeof declared === "number" && Number.isInteger(declared)
+            ? declared
+            : DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+          1
+        ),
+        WORKER_MAX_PENDING_APPROVALS_CEILING
+      );
+      if (
+        (await countWorkerPendingApprovals(automationContext.automationId)) >=
+        max
+      ) {
+        return {
+          status: "skipped",
+          reason: WORKER_SKIP_REASONS.approvalsBacklog,
+        };
+      }
     }
     const proposed = await proposeRulePlaybookRun({
       ownerId,
@@ -420,6 +464,16 @@ export async function executePlaybookRun(
     // byte-identical to before.
     ...(data.projectId ? { projectId: data.projectId } : {}),
     ...(data.trackId ? { trackId: data.trackId } : {}),
+    // A worker node: the spine gates the fire and sizes the run. Its
+    // automation is what the backlog / in-flight / ceiling counts key on.
+    ...(data.worker
+      ? {
+          worker: {
+            ...data.worker,
+            automationId: automationContext?.automationId ?? null,
+          },
+        }
+      : {}),
     goalResolver,
     // The `@{arg:...}` half of the goal grammar. `goalResolver` speaks only
     // {{mustache}} and returns undefined for a pure `@{arg:}` template (saying

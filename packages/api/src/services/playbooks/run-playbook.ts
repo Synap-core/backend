@@ -35,6 +35,10 @@ import {
   playbookEnrollments,
   recordSessionSpawn,
   drizzleSql,
+  countWorkerIrreversibleSendsToday,
+  countWorkerPendingApprovals,
+  listWorkerTargetsInFlight,
+  type PlaybookRunWorkerSpec,
 } from "@synap/database";
 import type {
   FocusSession,
@@ -66,7 +70,18 @@ import {
 import {
   resolveGrantedCapabilities,
   getLinksFor,
+  createLinks,
 } from "../links/links-service.js";
+import { listThingsInStatus } from "../../routers/entities/status-groups.js";
+import { WORKER_IRREVERSIBLE_DAILY_CEILING } from "@synap/governance-policy";
+import {
+  DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+  WORKER_BATCH_LIMIT,
+  WORKER_MAX_PENDING_APPROVALS_CEILING,
+  WORKER_SKIP_REASONS,
+  WORKER_TARGET_ROLE,
+  type WorkerSkipReason,
+} from "@synap-core/types/workers";
 import { resolveExecutor } from "./executors/registry.js";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
@@ -249,6 +264,21 @@ export interface RunPlaybookInput {
    * for attended doors, which refuse up front (`playbooks.run` preflight).
    */
   unenabledSkillPreflight?: boolean;
+  /**
+   * STAGE WORKER (work model L4): this run was fired by an enabled worker —
+   * the node's `worker` spec plus the enablement's automation. Decides
+   * whether to start at all (backlog, ceiling, stale transition, threshold)
+   * and how big the run is (`per_moment` = ONE session over the things in
+   * the status, each a `session --targets--> entity` edge). Absent ⇒ an
+   * ordinary run, unchanged. See {@link gateWorkerRun}.
+   */
+  worker?: RunWorker;
+}
+
+/** A worker run's input: the node spec + the enablement's automation. */
+export interface RunWorker extends PlaybookRunWorkerSpec {
+  /** The enablement's automation (null = fired outside one: nothing to count). */
+  automationId: string | null;
 }
 
 type PlaybookRunStarted = {
@@ -283,7 +313,10 @@ export type RunPlaybookResult =
        * latest run of the playbook FAILED within the cooldown window
        * (`AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours`).
        */
-      skipped: "no-subject" | typeof AUTOMATION_SKIP_REASONS.coolingDown;
+      skipped:
+        | "no-subject"
+        | typeof AUTOMATION_SKIP_REASONS.coolingDown
+        | WorkerSkipReason;
       reused?: undefined;
       parentLink?: undefined;
     };
@@ -737,6 +770,17 @@ export async function runPlaybook(
     }
   }
 
+  // STAGE WORKER: decide whether this fire starts anything, before any
+  // session exists. A per_moment worker runs ONE session over its set and
+  // returns here — it never fans out, pins, or binds a subject.
+  if (input.worker) {
+    const skipped = await gateWorkerRun(input, input.worker);
+    if (skipped) return { run: null, session: null, skipped };
+    if (input.worker.size === "per_moment") {
+      return runWorkerBatch(playbook, input, input.worker, filing);
+    }
+  }
+
   // Pinned subject, BEFORE any session and before a rotating cursor could
   // advance (a pinned playbook has no cursor). Caller subject wins. The
   // resolved id is written onto the run input so idempotentBySubject can
@@ -807,7 +851,8 @@ async function executeSingleRun(
   playbook: Playbook,
   input: RunPlaybookInput,
   params: Record<string, unknown>,
-  filing: RunFiling
+  filing: RunFiling,
+  batch?: WorkerBatch
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
 
@@ -873,11 +918,20 @@ async function executeSingleRun(
   // context are stamped onto the session at creation. The write-side gate reads
   // governance.forceProposeWrites (→ every agent write becomes a proposal); the
   // trigger matcher reads automationChainContext (F2 depth floor).
-  const forceProposeWrites = deriveForceProposeWrites(playbook.metadata);
-  const sessionMetadata = buildRunSessionMetadata({
-    chainContext: input.chainContext,
-    forceProposeWrites,
-  });
+  // A per_moment batch whose worker proposes makes EVERY agent write in it a
+  // proposal: the batch card is the session's pending proposals.
+  const forceProposeWrites =
+    deriveForceProposeWrites(playbook.metadata) ||
+    batch?.proposeWrites === true;
+  const sessionMetadata = {
+    ...buildRunSessionMetadata({
+      chainContext: input.chainContext,
+      forceProposeWrites,
+    }),
+    ...(input.worker
+      ? { worker: { key: input.worker.key, size: input.worker.size } }
+      : {}),
+  };
 
   // 1. Instantiate the runtime session (no channel yet — wired below). The goal
   // is resolved by the caller's resolver when provided (scheduled path resolves
@@ -913,6 +967,22 @@ async function executeSingleRun(
         : undefined),
     metadata: sessionMetadata,
   });
+
+  // The batch's TARGETS, born with the session (before any agent can act on
+  // them): one `session --targets--> entity` edge per thing, no result yet.
+  if (session && batch && batch.targetIds.length > 0) {
+    await createLinks(
+      batch.targetIds.map((entityId) => ({
+        workspaceId: input.workspaceId,
+        fromType: "session" as const,
+        fromId: session.id,
+        toType: "entity" as const,
+        toId: entityId,
+        linkType: "targets" as const,
+        metadata: { role: WORKER_TARGET_ROLE },
+      }))
+    );
+  }
 
   // A run born owing the person something (a playbook step declared
   // `owner: "human"`, an unanswered required param on the `owe` path) tells
@@ -1156,6 +1226,113 @@ async function executeSingleRun(
     session: refreshed,
     ...(parentLink ? { parentLink } : {}),
   };
+}
+
+/** What a per_moment run carries into {@link executeSingleRun}. */
+interface WorkerBatch {
+  targetIds: string[];
+  proposeWrites: boolean;
+}
+
+/**
+ * Should this worker fire start anything? Returns the skip reason, or null to
+ * go on. Checked BEFORE any session exists, in this order:
+ *   1. `approvals_backlog` — the enablement already has `maxPendingApprovals`
+ *      waiting on a person (the softer, earlier limit above the per-agent
+ *      pending cap, so a batch never hits that refusal halfway);
+ *   2. `volume_ceiling` — the enablement used today's irreversible-send
+ *      ceiling (`WORKER_IRREVERSIBLE_DAILY_CEILING`, a system constant);
+ *   3. `stale_transition` — a per_thing worker on a status: the subject is no
+ *      longer in it (it moved on between the event and this run).
+ * Both counts need the enablement's automation; a worker fired outside one
+ * (a manual test run) has nothing to count and skips them.
+ */
+export async function gateWorkerRun(
+  input: RunPlaybookInput,
+  worker: RunWorker
+): Promise<WorkerSkipReason | null> {
+  if (worker.automationId) {
+    const max = workerMaxPending(worker.maxPendingApprovals);
+    if ((await countWorkerPendingApprovals(worker.automationId)) >= max) {
+      return WORKER_SKIP_REASONS.approvalsBacklog;
+    }
+    if (
+      (await countWorkerIrreversibleSendsToday(worker.automationId)) >=
+      WORKER_IRREVERSIBLE_DAILY_CEILING
+    ) {
+      return WORKER_SKIP_REASONS.volumeCeiling;
+    }
+  }
+  if (worker.size === "per_thing" && worker.status && input.subjectId) {
+    const still = await listThingsInStatus({
+      profileSlug: worker.profileSlug,
+      status: worker.status,
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      limit: 1,
+      onlyIds: [input.subjectId],
+    });
+    if (still.items.length === 0) return WORKER_SKIP_REASONS.staleTransition;
+  }
+  return null;
+}
+
+function workerMaxPending(declared: number | undefined): number {
+  const n =
+    typeof declared === "number" && Number.isInteger(declared)
+      ? declared
+      : DEFAULT_WORKER_MAX_PENDING_APPROVALS;
+  return Math.min(Math.max(n, 1), WORKER_MAX_PENDING_APPROVALS_CEILING);
+}
+
+/**
+ * A per_moment worker run: the things in the worker's status under its scope
+ * (the board's own set — `listThingsInStatus`), minus those this enablement
+ * is already working, capped at `WORKER_BATCH_LIMIT`. ONE session, no
+ * subject, one target edge per thing. Nothing in the set ⇒ `no-subject` (a
+ * quiet moment, no session); a `count` worker under its threshold ⇒
+ * `below_threshold` — the threshold reads EVERY thing in the status, the
+ * in-flight ones included (they are still there).
+ */
+async function runWorkerBatch(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  worker: RunWorker,
+  filing: RunFiling
+): Promise<RunPlaybookResult> {
+  const inFlight = worker.automationId
+    ? await listWorkerTargetsInFlight(worker.automationId)
+    : [];
+  const set = await listThingsInStatus({
+    profileSlug: worker.profileSlug,
+    status: worker.status ?? null,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    projectId: filing.projectId,
+    limit: WORKER_BATCH_LIMIT,
+    excludeIds: inFlight,
+  });
+  if (typeof worker.minCount === "number" && set.total < worker.minCount) {
+    return {
+      run: null,
+      session: null,
+      skipped: WORKER_SKIP_REASONS.belowThreshold,
+    };
+  }
+  if (set.items.length === 0) {
+    return { run: null, session: null, skipped: "no-subject" };
+  }
+  const targets = set.items.map((i) => ({ id: i.id, name: i.name }));
+  return executeSingleRun(
+    playbook,
+    { ...input, subjectId: undefined, idempotentBySubject: false },
+    { ...((input.params ?? {}) as Record<string, unknown>), targets },
+    filing,
+    {
+      targetIds: targets.map((t) => t.id),
+      proposeWrites: worker.writes === "propose",
+    }
+  );
 }
 
 /**
