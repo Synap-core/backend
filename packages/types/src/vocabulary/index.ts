@@ -285,6 +285,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".
   file_entities: { imperative: "File", past: "Filed" },
+  // Filing a captured record (a capture chip's accept): the proposal it was
+  // becomes the thing. "File" on the button, "Filed" on the chip and receipt.
+  file: { imperative: "File", past: "Filed", progressive: "Filing" },
   unfile_entities: { imperative: "Unfile", past: "Unfiled" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
@@ -1084,6 +1087,40 @@ export function resolveCaptureDoorLabel(
 ): string {
   if (!door) return "";
   return CAPTURE_DOOR_LABELS[door.trim().toLowerCase()] ?? humanizeToken(door);
+}
+
+/**
+ * CAPTURE CHIP states — where one record a capture proposed stands, as the word
+ * beside its mark.
+ *
+ * Its OWN table, not `STATUS_LABELS` rows: these are capture-chip states, and
+ * two of them share a token with a proposal lifecycle state that must keep its
+ * own word elsewhere. `pending` here is a chip HELD BY GOVERNANCE ("Waiting for
+ * approval"); on a proposal row it stays "Pending". `proposed` here is a record
+ * the AI suggested that nobody has filed yet ("Suggested") — not a proposal row.
+ * A refused chip reads "Rejected", the one word for a refusal (`STATUS_LABELS`).
+ * Keys are the client's chip-state tokens plus their spelled-out aliases; any
+ * other state (`failed`) is a plain lifecycle state and reads as one.
+ */
+export const CAPTURE_CHIP_STATE_LABELS: Readonly<Record<string, string>> = {
+  proposed: "Suggested",
+  suggested: "Suggested",
+  filing: "Filing",
+  filed: "Filed",
+  pending: "Waiting for approval",
+  awaiting_approval: "Waiting for approval",
+  refused: "Rejected",
+  rejected: "Rejected",
+};
+
+export function resolveCaptureChipStateLabel(
+  state: string | null | undefined
+): string {
+  if (!state) return "";
+  return (
+    CAPTURE_CHIP_STATE_LABELS[state.trim().toLowerCase()] ??
+    resolveStatusLabel(state)
+  );
 }
 
 /**
