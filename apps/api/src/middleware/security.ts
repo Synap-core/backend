@@ -386,11 +386,11 @@ export const aiRateLimitMiddleware = rateLimiter({
 });
 
 /**
- * Federated Exchange Rate Limiting Middleware
+ * Federation Handshake Rate Limiting Middleware
  *
- * /api/federation/exchange creates Kratos sessions — stricter than the global
- * limit.
- * 20 attempts per 15 minutes per IP prevents brute-force session minting.
+ * The unauthenticated federation doors (`/api/federation/bootstrap`, the
+ * application-connection requests) — stricter than the global limit.
+ * 20 attempts per 15 minutes per IP prevents brute-forcing them.
  */
 export const handshakeRateLimitMiddleware = rateLimiter({
   windowMs: 15 * 60 * 1000,

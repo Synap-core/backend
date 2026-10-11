@@ -47,10 +47,9 @@ export const podEdgeCorsMiddleware: MiddlewareHandler = async (c, next) => {
   if (isPublicDoorPath(c.req.path)) return next();
   const origin = c.req.header("origin");
   const firstPartyOrigin = Boolean(origin) && isAllowedOrigin(origin);
-  const applicationExchangePath = c.req.path === "/api/federation/exchange";
   // Transport admission is ORIGIN-ONLY (application connection allowlist).
   // It is deliberately independent of trusted-issuer / application_id /
-  // issuer_url. Crypto for exchange is checked later on the federation route.
+  // issuer_url. Crypto is checked later on the federation route.
   const approvedApplicationOrigin =
     Boolean(origin) &&
     !firstPartyOrigin &&
@@ -132,8 +131,7 @@ export const podEdgeCorsMiddleware: MiddlewareHandler = async (c, next) => {
   // requiring one is a chicken-and-egg that 401s the very first federated
   // sign-in step. Kratos owns its own CSRF/flow protection and no Pod data is
   // exposed. (Credentials ARE granted here — see the CORS block above — so the
-  // native-OIDC `ory_kratos_continuity` cookie survives the flow.) Exempt it,
-  // exactly as `/api/federation/exchange` is exempt.
+  // native-OIDC `ory_kratos_continuity` cookie survives the flow.) Exempt it.
   // An owner-approved external origin is allowed to use an explicit Pod token
   // for normal (non-bootstrap) APIs. It must never fall back to an ambient
   // Kratos SESSION cookie there:
@@ -143,7 +141,6 @@ export const podEdgeCorsMiddleware: MiddlewareHandler = async (c, next) => {
   const requiresExplicitPodToken =
     approvedApplicationOrigin &&
     !firstPartyOrigin &&
-    !applicationExchangePath &&
     !applicationConnectionPath &&
     !authBootstrapPath &&
     // Pre-sign-in discovery: no credential exists yet (see cors-origin.ts).

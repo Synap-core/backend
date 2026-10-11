@@ -25,18 +25,14 @@ const SRC = readFileSync(
 const EXPECTED = [
   "APPLICATION_IDENTIFIER_REQUIRED",
   "BROWSER_ORIGIN_NOT_APPROVED",
-  "FEDERATED_IDENTITY_NOT_LINKED",
   "ISSUER_APPROVAL_REQUIRED",
   "POD_ADMIN_URL_REQUIRED",
-  // Previously codeless failures. Without a code the client can only render
-  // "the exact reason wasn't reported" — blind for the signer AND the owner.
-  "ASSERTION_MALFORMED",
-  "ASSERTION_SIGNATURE_INVALID",
-  "ASSERTION_CLAIMS_INVALID",
-  "ASSERTION_ISSUER_MISMATCH",
-  "POD_IDENTITY_UNAVAILABLE",
-  "POD_SCOPE_ACCESS_DENIED",
-  "POD_SESSION_MINT_FAILED",
+  // W6 (2026-10-11) deleted `POST /exchange`, and with it the eight codes only
+  // it emitted (ASSERTION_MALFORMED / _SIGNATURE_INVALID / _CLAIMS_INVALID /
+  // _ISSUER_MISMATCH, FEDERATED_IDENTITY_NOT_LINKED, POD_IDENTITY_UNAVAILABLE,
+  // POD_SCOPE_ACCESS_DENIED, POD_SESSION_MINT_FAILED). The Kratos OIDC
+  // outcomes `link_required` / `access_required` replace them.
+  //
   // Replay guard — REPLAY_PROTECTION_UNAVAILABLE is the one that fires on a
   // schema fault (e.g. missing replay_context) and looked like a generic
   // "exchange failed" on every sign-in.

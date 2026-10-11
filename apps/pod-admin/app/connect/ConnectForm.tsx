@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, CardBody, CardHeader, Spinner, addToast } from "@heroui/react";
 import {
-  AlertCircle,
   AlertTriangle,
   Check,
   Copy,
@@ -50,8 +49,7 @@ type Step =
   | { kind: "generating" }
   | { kind: "redirecting"; apiKey: string }
   | { kind: "done"; apiKey: string; podUrl: string; workspaceId: string | null }
-  | { kind: "error"; message: string; flowId: string | null }
-  | { kind: "issuer-assertion-failed"; detail: string };
+  | { kind: "error"; message: string; flowId: string | null };
 
 interface ConnectFormProps {
   /** The pod this key would be minted on. Anchors the page against phishing. */
@@ -60,8 +58,6 @@ interface ConnectFormProps {
   identity?: string;
   integration: IntegrationKind;
   redirectUri: string;
-  /** Read by page.tsx for redirect allowlisting only; never exchanged here (W6 drops it). */
-  issuerAssertion: string;
   /** Agent signal. "claude-web" → CP-MCP consent-code path (no plaintext key). */
   agentType?: string | null;
   /** Extra https redirect prefixes the pod owner allowlisted (CP origin, etc.). */
@@ -105,12 +101,7 @@ export function ConnectForm({
   const [copied, setCopied] = useState(false);
   // This page renders only behind a pod Kratos session (proxy.ts gates
   // `/connect`): that session IS the sign-in. A forwarded `issuer_assertion`
-  // is used only to allowlist the redirect (page.tsx) — it is never exchanged:
-  // `/api/federation/exchange` never minted a session (Kratos OSS has no admin
-  // session-create API). W6 deletes the leftover `issuer-assertion-failed`
-  // step and these constants with the endpoint.
-  const sessionReady = true;
-  const bootstrapping = false;
+  // is read only by page.tsx to allowlist the redirect — never exchanged.
 
   // Validate redirect_uri early — fail fast so the operator doesn't
   // approve a key that we can't deliver.
@@ -128,9 +119,7 @@ export function ConnectForm({
     }
   }, [hasRedirect, redirectIsAllowed]);
 
-  const existingActive = trpc.apiKeys.list.useQuery(undefined, {
-    enabled: sessionReady,
-  });
+  const existingActive = trpc.apiKeys.list.useQuery();
   const existingForIntegration = (existingActive.data ?? []).filter(
     (k) => k.isActive && k.hubId === `integration:${integration}`
   );
@@ -293,12 +282,7 @@ export function ConnectForm({
             strategy={strategy}
             onStrategy={setStrategy}
             onGenerate={handleGenerate}
-            disabled={
-              !sessionReady ||
-              bootstrapping ||
-              (hasRedirect && !redirectIsAllowed)
-            }
-            bootstrapping={bootstrapping}
+            disabled={hasRedirect && !redirectIsAllowed}
           />
         )}
 
@@ -352,22 +336,6 @@ export function ConnectForm({
             onRetry={() => setStep({ kind: "idle" })}
           />
         )}
-
-        {step.kind === "issuer-assertion-failed" && (
-          <IssuerAssertionFailedStep
-            detail={step.detail}
-            connectLabel={connectLabel}
-            // The one-shot SSO assertion is stale (expired — they last 5
-            // minutes — or already consumed). It is NON-FATAL: this page only
-            // renders behind a valid pod session, so we let the operator
-            // PROCEED with that session rather than reload the same dead
-            // assertion (which just fails again — the retry loop).
-            onProceed={() => setStep({ kind: "idle" })}
-            // Escape hatch for the rare genuine no-session case: manual login,
-            // then middleware returns here.
-            onSignIn={() => window.location.assign(window.location.href)}
-          />
-        )}
       </CardBody>
     </ReceiverShell>
   );
@@ -387,7 +355,6 @@ interface IdleStepProps {
   onStrategy: (s: "create_new" | "replace_existing") => void;
   onGenerate: () => void;
   disabled: boolean;
-  bootstrapping: boolean;
 }
 
 function IdleStep({
@@ -400,18 +367,9 @@ function IdleStep({
   onStrategy,
   onGenerate,
   disabled,
-  bootstrapping,
 }: IdleStepProps) {
   return (
     <div className="flex flex-col gap-4">
-      {bootstrapping && (
-        <InlineNotice
-          tone="muted"
-          icon={<Spinner size="sm" />}
-          message="Verifying pod session…"
-        />
-      )}
-
       <p className="text-[13px] leading-relaxed text-foreground/65">
         {isMcpConnect ? (
           <>
@@ -624,105 +582,6 @@ function ErrorStep({ message, flowId, onRetry }: ErrorStepProps) {
           </Button>
         )}
       </div>
-    </div>
-  );
-}
-
-interface IssuerAssertionFailedStepProps {
-  detail: string;
-  connectLabel: string;
-  onProceed: () => void;
-  onSignIn: () => void;
-}
-
-function IssuerAssertionFailedStep({
-  detail,
-  connectLabel,
-  onProceed,
-  onSignIn,
-}: IssuerAssertionFailedStepProps) {
-  // Classify the failure so the message names the real cause instead of a
-  // generic "didn't work". Expiry (assertions live 5 min), replay (already
-  // consumed), and stale-key signature failures all mean the SAME thing: the
-  // one-shot link is spent — but the operator is already signed in here.
-  const d = detail.toLowerCase();
-  const isStaleLink =
-    d.includes("expired") ||
-    d.includes("replay") ||
-    d.includes("signature") ||
-    d.includes("assertion");
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div
-        className="
-          flex items-start gap-2.5
-          rounded-lg
-          bg-warning/10 ring-1 ring-inset ring-warning/30
-          px-3.5 py-3
-        "
-      >
-        <AlertCircle
-          className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning"
-          strokeWidth={2.2}
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-foreground">
-            {isStaleLink
-              ? "This connection link expired"
-              : "The sign-in link didn't work"}
-          </p>
-          <p className="mt-0.5 text-[12.5px] text-foreground/65">
-            {isStaleLink ? (
-              <>
-                Connection links are valid for about 5 minutes. You&apos;re
-                still signed in to this pod — continue to finish connecting{" "}
-                {connectLabel}, or start again from {connectLabel} for a fresh
-                link.
-              </>
-            ) : (
-              <>Sign in manually to finish connecting {connectLabel}.</>
-            )}
-          </p>
-          {detail && (
-            <details className="mt-1.5">
-              <summary className="cursor-pointer text-[11px] text-foreground/45 hover:text-foreground/65">
-                Technical details
-              </summary>
-              <p className="mt-1 font-mono text-[11px] text-foreground/55">
-                {detail}
-              </p>
-            </details>
-          )}
-        </div>
-      </div>
-
-      {isStaleLink ? (
-        <div className="flex flex-col gap-2">
-          <Button
-            color="primary"
-            radius="md"
-            size="md"
-            onPress={onProceed}
-            className="font-medium"
-          >
-            Continue
-          </Button>
-          <Button variant="flat" radius="md" size="sm" onPress={onSignIn}>
-            Sign in manually instead
-          </Button>
-        </div>
-      ) : (
-        <Button
-          color="primary"
-          radius="md"
-          size="md"
-          onPress={onSignIn}
-          className="font-medium"
-        >
-          Sign in
-        </Button>
-      )}
     </div>
   );
 }

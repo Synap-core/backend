@@ -56,7 +56,7 @@ describe("classifyRateLimitPath", () => {
     { path: "/api/hub/calendar/feed/rotate", expected: "crud" },
     { path: "/api/hub/knowledge/ask", expected: "crud" },
     { path: "/trpc/entities.list", expected: "crud" },
-    { path: "/api/federation/exchange", expected: "crud" },
+    { path: "/api/federation/bootstrap", expected: "crud" },
     { path: "/v1/models", expected: "crud" },
     { path: "/api/chat/stream", expected: "crud" },
     { path: "/", expected: "crud" },

@@ -114,12 +114,6 @@ export const hubAuthMiddleware = async (
     "/setup/status",
     "/setup/magic-link",
     "/setup/first-admin",
-    // /auth/exchange is the JWT-Bearer Grant primitive — auth happens via
-    // the assertion JWT signature + the trusted_issuers allowlist, not via
-    // an API key. Gating it behind the API-key middleware would break the
-    // entire flow (callers don't have a key yet — that's why they're
-    // exchanging).
-    "/auth/exchange",
     // Invite acceptance — the invitee has no API key yet; token is the capability
     "/setup/accept-invite",
     // Public projection — an INTENTIONALLY unauthenticated, read-only surface for
@@ -131,7 +125,7 @@ export const hubAuthMiddleware = async (
     PUBLIC_PROJECTION_PATH,
     // CP→pod OIDC federation client push — authenticated by the CP's ISSUER
     // SIGNATURE (verifyIssuerJwt against the pinned trusted issuer), not an API
-    // key, exactly like /auth/exchange. The handler runs its own verification.
+    // key. The handler runs its own verification.
     "/federation/oidc-config",
     // CP-MCP consent-code redeem — CP authenticates with a trusted-issuer JWT
     // (verifyTrustedIssuerJwt), NOT a hub API key: the CP-held pod credential is

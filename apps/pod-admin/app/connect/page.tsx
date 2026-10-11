@@ -26,9 +26,10 @@
  *                       DEFAULT_CONNECT_REDIRECT_PREFIXES — PLUS, for the
  *                       claude-web https callback, an https origin the pod
  *                       owner allowlisted via CONNECT_ALLOWED_HTTPS_ORIGINS.
- *   issuer_assertion  — one-shot assertion from any Pod-approved issuer,
- *                       exchanged directly with this Pod before the key is
- *                       minted. Falls back to inline sign-in on failure.
+ *   issuer_assertion  — one-shot assertion from a Pod-approved issuer. Read
+ *                       ONLY to allowlist the redirect origin (see
+ *                       trustedIssuerRedirectPrefix); never exchanged — the
+ *                       pod Kratos session gating this page is the sign-in.
  */
 
 import { headers } from "next/headers";
@@ -77,14 +78,15 @@ function readAllowedHttpsOrigins(): string[] {
 /**
  * The redirect the flow is allowed to deliver to is, by default, the origin of
  * the TRUSTED ISSUER that signed this connect assertion — NOT a hand-set env.
- * The assertion's `iss` is the control-plane issuer; the Pod cryptographically
- * verifies it against its `trusted_issuers` registry at `/api/federation/exchange`
- * before any code/key is minted, so a redirect back to that same issuer's origin
- * is safe by the trust already established. (A forged `iss` passes this origin
- * check but fails the exchange → nothing is minted; a real assertion can only
- * deliver to its own issuer's origin.) This is why the CP-MCP callback needs no
- * per-pod env: the trust is the assertion. We decode `iss` here (no verify — the
- * exchange is the gate) purely to pick which origin to allow.
+ * The assertion's `iss` is the control-plane issuer. This is why the CP-MCP
+ * callback needs no per-pod env. We decode `iss` here WITHOUT verifying it.
+ *
+ * ⚠️ W6 (2026-10-11): this comment used to say the Pod verified the assertion
+ * at `/api/federation/exchange` before minting, so a forged `iss` could not
+ * deliver. That stopped being true when pod-admin stopped calling the exchange
+ * (c8398873), and the endpoint is now deleted: nothing verifies `iss` before
+ * it widens the redirect allowlist. OPEN — verify the signature against the
+ * pod's approved `trusted_issuers` (or drop this path for the env allowlist).
  */
 function trustedIssuerRedirectPrefix(issuerAssertion: string): string | null {
   if (!issuerAssertion) return null;
@@ -127,7 +129,6 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
       integration={integration}
       agentType={agentType}
       redirectUri={redirectUri}
-      issuerAssertion={issuerAssertion}
       extraRedirectPrefixes={extraRedirectPrefixes}
       podHost={h.get("host") ?? undefined}
       identity={h.get("x-pod-admin-email") ?? undefined}

@@ -5,7 +5,6 @@
  * - tRPC API endpoints
  * - Ory Kratos routes (session-based authentication)
  * - Token Exchange endpoint
- * - Federated trusted-issuer exchange endpoint (/api/federation/exchange)
  * - pg-boss job queue (background jobs)
  */
 
@@ -871,7 +870,6 @@ app.all("/self-service/*", async (c) => {
 
 // The canonical router receives the same rate limit before it is mounted
 // farther below at `/api/federation`.
-app.use("/api/federation/exchange", handshakeRateLimitMiddleware);
 app.use("/api/federation/bootstrap", handshakeRateLimitMiddleware);
 app.use("/api/federation/application-connections/requests/*", (c, next) => {
   if (c.req.path.endsWith("/status")) {
@@ -943,9 +941,6 @@ if (config.server.localMode) {
     "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
   );
 }
-apiLogger.info(
-  "Federated issuer exchange endpoint enabled at /api/federation/exchange"
-);
 
 // Raw pod-wide event fanout (admin dashboard) — pod-admin only; see
 // admin-event-stream.ts.
@@ -1727,7 +1722,7 @@ void (async () => {
 // CONTROL_PLANE_URL transport value. `seedControlPlaneIssuer` now discovers the
 // declared issuer via /federation/metadata so the seed self-corrects, but this
 // probe surfaces the divergence LOUDLY at boot so an operator can see it — the
-// symptom otherwise is silent 401s on every federated /exchange.
+// symptom otherwise is silent 401s on every federated assertion the pod verifies.
 //
 // Read-only diagnostics: it fetches the CP's declared issuer and compares it to
 // the transport-derived origin. It does NOT mutate the trusted-issuer registry.

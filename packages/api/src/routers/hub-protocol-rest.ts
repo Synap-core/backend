@@ -26,7 +26,6 @@ import {
   registerAgentUsersRoutes,
   registerAgentsRoutes,
   registerAuthRoutes,
-  registerExchangeRoutes,
   registerAutomationsRoutes,
   registerCapabilitiesRoutes,
   registerCapabilitiesCatalogRoutes,
@@ -238,10 +237,6 @@ app.use(
       // replay-a-cached-secret hazard as /setup/agent. NEVER cache.
       "/setup/service",
       "/entity-share/deliver",
-      // /auth/exchange returns a Kratos session_token — same one-shot-secret
-      // hazard as /setup/agent. Two replays of the same Idempotency-Key would
-      // otherwise be served the same access_token from cache.
-      "/auth/exchange",
       // ── Unauthenticated setup/auth-bootstrap doors ───────────────────────
       // These fall to `userId = "anonymous"` (they are in `skipAuthPaths`), so
       // the cache key is NOT partitioned by a real user — a replayed
@@ -278,7 +273,6 @@ app.use(
 // The route-file boundaries below are aligned with the original line order in
 // the previous monolithic file so behavior is preserved character-for-character.
 registerAuthRoutes(app); // /auth/status — bearer introspection
-registerExchangeRoutes(app); // /auth/exchange — RFC 7523 JWT-Bearer Grant (no API-key auth)
 registerUsersRoutes(app); // /users/me
 // Static `/workspaces/ensure-template` BEFORE the `/workspaces/:id` family.
 registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Contract B)
