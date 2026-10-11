@@ -9,6 +9,7 @@
  * (the same floor as `notifCenter.pushPrefs`). An agent key is refused on the
  * write: what the person pins and hears is theirs.
  */
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -43,6 +44,10 @@ export const connectionPrefsRouter = router({
           message: "Only the person can change how they follow a connection.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "preference",
+        action: "update",
+      });
       return writeConnectionPref(requireUserId(ctx.userId), input);
     }),
 });

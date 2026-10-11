@@ -111,6 +111,7 @@ import {
 } from "@synap/jobs/utils/post-run-summary.js";
 import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { actingAgentUserId } from "./hub-protocol/utils.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { TRPCError } from "@trpc/server";
 import {
   decodeDefinitionCursor,
@@ -2343,6 +2344,13 @@ export const automationsRouter = router({
       // install would otherwise be gated as AI and routed to a proposal. Approved
       // AI creates are materialized separately with their original provenance;
       // RBAC is still enforced on the operator path, which never proposes.
+      // The grant bounds every key, not only an agent's (the gate below runs
+      // for agents only).
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "create",
+        workspaceId: input.workspaceId ?? null,
+      });
       if (agentUserId) {
         const perm = await checkPermissionOrPropose({
           userId: ctx.userId,
@@ -3076,6 +3084,11 @@ export const automationsRouter = router({
       // (assertWorkspaceWrite above); the agent path additionally runs the gate,
       // which owns the agent's own RBAC + propose/execute decision.
       const agentUserId = actingAgentUserId(ctx, input.agentUserId);
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "execute",
+        workspaceId: existing.workspaceId ?? null,
+      });
 
       // ── An AGENT may not run a lapsed rule's behaviour, even by proposal ──
       // The matcher and the cron scheduler already refuse to FIRE an expired

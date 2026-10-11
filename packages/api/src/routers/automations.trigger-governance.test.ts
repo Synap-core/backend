@@ -76,7 +76,11 @@ vi.mock("@synap/jobs", () => ({
   }),
 }));
 
-import { runWithActingAgent } from "@synap/database";
+import {
+  runWithActingAgent,
+  runWithGrant,
+  type KeyGrant,
+} from "@synap/database";
 import { automationsRouter } from "./automations.js";
 import type { Context } from "../types/context.js";
 
@@ -198,5 +202,32 @@ describe("automations.trigger — operator caller is NOT regressed", () => {
     expect(h.gateCalls).toHaveLength(0);
     expect(h.runInserts).toHaveLength(1);
     expect(h.bossSends).toHaveLength(1);
+  });
+});
+
+describe("automations.trigger — a key that is not an agent is bounded by its grant", () => {
+  const grantOf = (permissions: string[]) =>
+    ({
+      scopes: [
+        { permissions, workspaceIds: null, projectIds: null, entityIds: null },
+      ],
+      clientId: null,
+    }) as KeyGrant;
+
+  it("refuses a human key whose grant does not name automation.execute — nothing runs", async () => {
+    await expect(
+      runWithGrant(grantOf(["automation"]), () =>
+        caller().trigger({ id: h.automation.id as string })
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.runInserts).toHaveLength(0);
+    expect(h.bossSends).toHaveLength(0);
+  });
+
+  it("runs for a Full access (`*`) human key", async () => {
+    const result = await runWithGrant(grantOf(["*"]), () =>
+      caller().trigger({ id: h.automation.id as string })
+    );
+    expect(result).toMatchObject({ status: "triggered" });
   });
 });

@@ -21,9 +21,15 @@ const h = vi.hoisted(() => ({
   gateCalls: [] as Array<Record<string, unknown>>,
   gateResult: { granted: true } as Record<string, unknown>,
   workspaceAccess: true,
+  /** The request's key grant (`getRequestGrant`); undefined = a session. */
+  grant: undefined as
+    { scopes: Array<Record<string, unknown>>; clientId: null } | undefined,
 }));
 
 vi.mock("@synap/database", () => ({
+  // The grant rung (utils/grant-write-check.ts) reads the request's grant.
+  db: {},
+  getRequestGrant: () => h.grant,
   getDb: async () => ({
     query: { widgetDefinitions: { findMany: async () => [] } },
   }),
@@ -130,6 +136,7 @@ beforeEach(() => {
   h.gateCalls.length = 0;
   h.gateResult = { granted: true };
   h.workspaceAccess = true;
+  h.grant = undefined;
 });
 
 describe("POST /cells/define — agent caller is governed", () => {
@@ -247,5 +254,47 @@ describe("POST /cells/define — operator caller is NOT regressed", () => {
 
     expect(res.status).toBe(403);
     expect(h.defineCalls).toHaveLength(0);
+  });
+});
+
+function grantOf(permissions: string[]) {
+  return {
+    scopes: [
+      { permissions, workspaceIds: null, projectIds: null, entityIds: null },
+    ],
+    clientId: null,
+  };
+}
+
+describe("POST /cells/define — a key that is not an agent is bounded by its grant", () => {
+  it("refuses a narrow human key whose grant does not name cell.define — nothing written", async () => {
+    h.grant = grantOf(["entity"]);
+    const app = buildApp({});
+    const res = await app.request("/cells/define", defineBody());
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: expect.stringContaining("cell.define"),
+    });
+    expect(h.defineCalls).toHaveLength(0);
+    expect(h.gateCalls).toHaveLength(0);
+  });
+
+  it("lets a Full access (`*`) human key define directly", async () => {
+    h.grant = grantOf(["*"]);
+    const app = buildApp({});
+    const res = await app.request("/cells/define", defineBody());
+
+    expect(res.status).toBe(201);
+    expect(h.defineCalls).toHaveLength(1);
+  });
+
+  it("lets a key whose grant names cell.define in that space define", async () => {
+    h.grant = grantOf(["cell.define"]);
+    const app = buildApp({});
+    const res = await app.request("/cells/define", defineBody());
+
+    expect(res.status).toBe(201);
+    expect(h.defineCalls).toHaveLength(1);
   });
 });

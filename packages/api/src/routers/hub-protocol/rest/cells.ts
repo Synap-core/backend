@@ -36,6 +36,7 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { uuidQueryParam } from "./_codecs/_openapi.js";
 
 // deps validation now lives INSIDE the defineCell door (security review
@@ -358,6 +359,15 @@ export function registerCellsRoutes(app: HubHono): void {
     ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
+
+    // The grant bounds every key — the governance gate below runs for agents
+    // only, so a non-agent key would otherwise define renderer code unbounded.
+    const grantDenied = await grantWriteDenial({
+      subjectType: "cell",
+      action: "define",
+      workspaceId: workspaceId ?? null,
+    });
+    if (grantDenied) return c.json({ error: grantDenied }, 403);
 
     try {
       // PROVENANCE FLOOR — runs BEFORE the governance gate so a forged

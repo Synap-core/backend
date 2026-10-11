@@ -6,6 +6,7 @@
  * span workspaces and are owned by the authenticated user.
  */
 
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -2801,6 +2802,10 @@ export const focusSessionsRouter = router({
           message: "Only the person can attest — an agent key cannot.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
       // The stamp, then the room receipt + the agent's wake
       // (`attestSessionSlot`, session-answer.ts).
       const result = await attestSessionSlot({
@@ -2833,6 +2838,10 @@ export const focusSessionsRouter = router({
           message: "Only the person can answer — an agent key cannot.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
       const result = await answerSessionSlot({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
@@ -2873,6 +2882,10 @@ export const focusSessionsRouter = router({
             "Only the person can ask about a slot — an agent key cannot.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
       const result = await askAboutSlot({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),

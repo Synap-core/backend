@@ -17,6 +17,7 @@
  * - Complete audit trail.
  */
 
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -558,6 +559,10 @@ export const secretsVaultRouter = router({
             "`POST /vault/secrets` door.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "secret",
+        action: "create",
+      });
 
       const repo = getRepository();
 

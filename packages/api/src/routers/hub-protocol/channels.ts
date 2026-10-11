@@ -57,6 +57,7 @@ import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { assertMayActAs } from "./guard.js";
 import { actingAgentUserId } from "./utils.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -367,6 +368,11 @@ export const channelsRouter = router({
       checkHubRateLimit(ctx.apiKeyId, "sendExternalMessage");
 
       // Verify agentUserId is a member of the workspace (prevents cross-workspace posting)
+      await assertKeyMayWrite({
+        subjectType: "message",
+        action: "create",
+        workspaceId: input.workspaceId,
+      });
       const agentUserId = actingAgentUserId(ctx, input.agentUserId);
       if (agentUserId) {
         await assertAgentInWorkspace(

@@ -13,6 +13,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx §4.3-4.4
  */
 
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -87,6 +88,10 @@ export const playbookRunsRouter = router({
           message: "Only a person can cancel a run — an agent key cannot.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
       // The session-owner floor lives in `cancelRun` (one check, both
       // transports): a run that is not yours reads like a missing one.
       const out = await cancelRun({ runId: input.runId, userId: ctx.userId });

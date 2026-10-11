@@ -42,6 +42,7 @@
  * shapes, so the room's confirm and `describeRerunOutcome` read it unchanged.
  */
 
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -588,6 +589,11 @@ export const capturesRouter = router({
           message: "Only the person can hand their capture to an agent.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "capture",
+        action: "update",
+        data: { id: input.captureId },
+      });
       const { giveCaptureToAgent } =
         await import("../services/captures/give-to-agent.js");
       const result = await giveCaptureToAgent({

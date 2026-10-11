@@ -28,6 +28,7 @@
  * crystallization/patterns wave.
  */
 
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { assertPodAdmin } from "../trpc.js";
@@ -458,6 +459,11 @@ export const guidelinesRouter = router({
         workspaceId: scope.workspaceId,
       });
 
+      await assertKeyMayWrite({
+        subjectType: "guideline",
+        action: "create",
+        workspaceId: scope.workspaceId ?? null,
+      });
       if (ctx.agentUserId) {
         const { proposalId, alreadyProposed } =
           await proposeCorrectionAsGuideline({

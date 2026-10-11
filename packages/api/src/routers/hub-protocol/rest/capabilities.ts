@@ -46,6 +46,7 @@ import { capabilitiesRouter } from "../../capabilities.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -1010,6 +1011,13 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         403
       );
     }
+    if (!parsed.data.dryRun) {
+      const grantDenied = await grantWriteDenial({
+        subjectType: "capability",
+        action: "update",
+      });
+      if (grantDenied) return c.json({ error: grantDenied }, 403);
+    }
     // Resolve a trusted acting identity (not just a bearer scope) — closes the
     // "any write-scoped key" gap; boot-time reconcile is unaffected (it never
     // hits this route).
@@ -1091,6 +1099,13 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         403
       );
     }
+    if (!parsed.data.dryRun) {
+      const grantDenied = await grantWriteDenial({
+        subjectType: "capability",
+        action: "update",
+      });
+      if (grantDenied) return c.json({ error: grantDenied }, 403);
+    }
     // Resolve a trusted acting identity (not just a bearer scope).
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -1164,6 +1179,11 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         403
       );
     }
+    const grantDenied = await grantWriteDenial({
+      subjectType: "capability",
+      action: "update",
+    });
+    if (grantDenied) return c.json({ error: grantDenied }, 403);
 
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);

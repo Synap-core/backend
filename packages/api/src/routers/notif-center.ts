@@ -7,6 +7,7 @@
  * Separate from the legacy notifications router (inbox items from N8N).
  */
 
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
@@ -425,6 +426,10 @@ export const notifCenterRouter = router({
           message: "Only the person can change their notification settings.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "preference",
+        action: "update",
+      });
       const { scope, ...values } = input;
       const targetWorkspaceId = scope === "pod" ? null : ctx.workspaceId;
 
@@ -531,6 +536,10 @@ export const notifCenterRouter = router({
           message: "Only the person can change their push settings.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "preference",
+        action: "update",
+      });
       const prefs = await writePushPrefs(requireUserId(ctx.userId), input);
       return pushPrefsView(prefs);
     }),
@@ -678,6 +687,10 @@ export const notifCenterRouter = router({
             "Only you can send a run to your desktop — an agent can't ask for this on your behalf.",
         });
       }
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
 
       const session = await db.query.focusSessions.findFirst({
         where: and(
