@@ -283,6 +283,48 @@ describe("an agent can only PROPOSE a filing", () => {
     expect(permSpy.mock.calls[0]![0].forcePropose).toBeUndefined();
   });
 
+  // The MCP URL lens (`?projectId=`) is injected into every tool call's args,
+  // so an agent's ordinary update on a project-scoped session arrives carrying
+  // the project it is ALREADY in. That is not a filing and must not propose.
+  it("the session's CURRENT project is a no-op: not forced, not carried", async () => {
+    const projectId = await seedProject(USER);
+    const sessionId = await seedSession(projectId);
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      projectId,
+      progress: 40,
+    });
+    expect(res.status).toBe("updated");
+    const call = permSpy.mock.calls[0]![0];
+    expect(call.forcePropose).toBeUndefined();
+    expect((call.data as Record<string, unknown>).projectId).toBeUndefined();
+    expect(await projectOf(sessionId)).toBe(projectId);
+  });
+
+  it("a DIFFERENT project on a filed session is still a proposed filing", async () => {
+    const current = await seedProject(USER);
+    const next = await seedProject(USER);
+    const sessionId = await seedSession(current);
+    permSpy.mockImplementation(async (args) =>
+      args.forcePropose
+        ? { proposalId: randomUUID(), proposalType: "update" }
+        : {}
+    );
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      projectId: next,
+    });
+    expect(res.status).toBe("proposed");
+    const call = permSpy.mock.calls[0]![0];
+    expect(call.forcePropose).toBe(true);
+    expect((call.data as Record<string, unknown>).projectId).toBe(next);
+    expect(await projectOf(sessionId)).toBe(current);
+  });
+
   it("approval re-floors: a project no longer visible is refused, not written", async () => {
     const sessionId = await seedSession();
     const foreign = await seedProject(OTHER);

@@ -1248,6 +1248,19 @@ export async function updateFocusSession(
     return { status: "not_found" };
   }
 
+  // A `projectId` equal to the one the session already has is NOT a filing:
+  // dropped here, before every floor and the membrane, so it never forces a
+  // proposal. Load-bearing — the MCP URL lens (`?projectId=`) is injected into
+  // EVERY tool call's args (`routers/mcp/index.ts`), so without this every
+  // agent update on a project-scoped session was proposed for nothing. A
+  // different value (or `null` on a filed session) still files, and proposes.
+  if (
+    params.projectId !== undefined &&
+    params.projectId === existing.projectId
+  ) {
+    params = { ...params, projectId: undefined };
+  }
+
   // AUTHORITY FLOOR, BEFORE THE MEMBRANE. The merge enforces this too — it is
   // the one door and it throws — but reaching it via governance would mean an
   // agent's forged receipt becomes a PROPOSAL, sits in the human's queue looking
