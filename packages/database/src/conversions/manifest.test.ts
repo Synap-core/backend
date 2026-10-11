@@ -731,3 +731,21 @@ describe("buildValueMapJson", () => {
     expect(JSON.parse(json)).toEqual({ good: "g" });
   });
 });
+
+describe("w12 — pipeline-ref -> recipe-ref", () => {
+  // Boot must never move the value before the content template re-apply has
+  // added the `recipe-ref` def: the value would land on a key nothing declares.
+  it("is a deferred key rename on content-composition that keeps an existing target", () => {
+    const op = CONVERSION_MANIFEST.ops.find(
+      (o) => o.opKey === "w12.content.pipeline-ref-to-recipe-ref"
+    );
+    expect(op).toMatchObject({
+      op: "renamePropertyKey",
+      slug: "content-composition",
+      sourceKey: "pipeline-ref",
+      targetKey: "recipe-ref",
+      onConflict: "keepTarget",
+      deferAtBoot: true,
+    });
+  });
+});

@@ -1526,6 +1526,27 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "dedupeRelationDefs",
       opKey: "d5.dedupe.relation-defs",
     },
+
+    // ─── Work model wave 0: "pipeline" names only the view ─────────────────────
+    //
+    // The catalog renamed content-composition's free-text `pipeline-ref` to
+    // `recipe-ref` (content-os + content-studio, 2026-10-11): a pipeline is now
+    // the computed view over a kind's lifecycle, never a stored field or kind.
+    // Value carried verbatim. DEFERRED: run it only after the content template
+    // re-apply has added the `recipe-ref` def, or the moved value has no def.
+    // NOT expressible here (see the wave-0 report): renaming content-studio's
+    // stored `content-pipeline` KIND to `production-recipe` — a same-scope
+    // mergeInto needs the canonical row, which nothing creates on a pod since
+    // content-studio is superseded, so it would halt every later run.
+    {
+      op: "renamePropertyKey",
+      opKey: "w12.content.pipeline-ref-to-recipe-ref",
+      deferAtBoot: true,
+      slug: "content-composition",
+      sourceKey: "pipeline-ref",
+      targetKey: "recipe-ref",
+      onConflict: "keepTarget",
+    },
   ],
 };
 
