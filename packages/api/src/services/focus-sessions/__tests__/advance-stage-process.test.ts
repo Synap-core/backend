@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
     status: "written",
     property: "post-status",
     value: "x",
+    via: "status_door",
   } as Record<string, unknown>,
   emits: [] as Array<Record<string, unknown>>,
 }));
@@ -87,7 +88,12 @@ beforeEach(() => {
   h.updates = [];
   h.emits = [];
   h.sessionStatus = "active";
-  h.subjectOutcome = { status: "written", property: "post-status", value: "x" };
+  h.subjectOutcome = {
+    status: "written",
+    property: "post-status",
+    value: "x",
+    via: "status_door",
+  };
   h.proc = {
     stages: [
       { key: "draft", name: "Draft", subjectStatus: "drafting" },
@@ -265,6 +271,7 @@ describe("STEP = STATUS — the subject leads, the follow writes the column", ()
       property: "post-status",
       value: "in-review",
       proposalId: "p-1",
+      via: "status_door",
     };
     const r = await advance();
     expect(stageWrites()).toEqual([]);
@@ -286,6 +293,18 @@ describe("STEP = STATUS — the subject leads, the follow writes the column", ()
       status: "skipped",
       reason: "already_set",
     });
+    expect(r.stageFollowsSubject).toBeUndefined();
+  });
+
+  it("a kind with NO declared lifecycle (legacy entities.update fallback) keeps the direct write", async () => {
+    h.subjectOutcome = {
+      status: "written",
+      property: "post-status",
+      value: "x",
+    };
+    const r = await advance();
+    expect(stageWrites()).toEqual(["review"]);
+    expect(h.writes).toHaveLength(1);
     expect(r.stageFollowsSubject).toBeUndefined();
   });
 

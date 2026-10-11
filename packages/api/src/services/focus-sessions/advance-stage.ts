@@ -52,8 +52,10 @@
  * For a run whose subject carries the process's status, the step IS the
  * subject's status. A `"door"` advance into an UNGATED stage that declares a
  * `subjectStatus` (and is the stage that status maps back to) therefore moves
- * the SUBJECT first — through `writeStageSubjectStatus` (the status door for a
- * declared lifecycle) — and does NOT write `current_stage`: the subject's move
+ * the SUBJECT first — through `writeStageSubjectStatus`, whose `moveStatus`
+ * call is the one status door (R1, kinds and roles) — and, when that door took
+ * it (`via: "status_door"`, a DECLARED lifecycle), does NOT write
+ * `current_stage`: the subject's move
  * fires its event and process-sync's follow advances the run through this same
  * door (`skipSubjectWrite`), which writes the column, merges the slots and
  * emits `stage_changed`. A move that is `proposed` advances the run when the
@@ -62,8 +64,13 @@
  * Still writing `current_stage` directly, stated so nobody mistakes it for
  * done: the `"caller"` doors (their multi-field UPDATE, above), a GATED stage
  * (the gate pauses AFTER the stage stands; its pass writes the status), a
- * subject that already holds the value (no event would follow), and a failed
- * subject write. Those are wave-5 work, with the track stage (L7).
+ * subject that already holds the value (no event would follow), a failed
+ * subject write, and a kind with NO declared lifecycle (its legacy
+ * `entities.update` fallback writes the status property; the column is then
+ * written here as before). The caller doors and the gated path are pinned by
+ * the shrink-only ratchet `__tripwires__/current-stage-direct-writers.ratchet
+ * .test.ts` — wave 5 retires them (gate executor + routers, with L7's
+ * track-stage retirement).
  */
 
 import { db, focusSessions, eq, and } from "@synap/database";
@@ -201,8 +208,9 @@ export async function advanceSessionStage(
   if (input.stageWrite === "door" && !input.skipSubjectWrite) {
     subjectFirst = await moveSubjectFirst(input);
     if (
-      subjectFirst?.status === "written" ||
-      subjectFirst?.status === "proposed"
+      (subjectFirst?.status === "written" ||
+        subjectFirst?.status === "proposed") &&
+      subjectFirst.via === "status_door"
     ) {
       return {
         changed: true,

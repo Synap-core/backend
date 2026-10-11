@@ -124,6 +124,7 @@ describe("writeStageSubjectStatus — the status door (work model L2)", () => {
       status: "written",
       property: "post-status",
       value: "drafting",
+      via: "status_door",
     });
     expect(h.update).not.toHaveBeenCalled();
     expect(h.move.mock.calls[0]![0]).toMatchObject({
@@ -304,6 +305,7 @@ describe("writeStageSubjectStatus — a ROLE subject (R1)", () => {
       status: "written",
       property: "leadStage",
       value: "qualified",
+      via: "status_door",
     });
     expect(subjectProfile.read).toHaveBeenCalledWith("lead", "ws-1");
     expect(h.move).toHaveBeenCalledTimes(1);

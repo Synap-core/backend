@@ -54,9 +54,20 @@ import { readSubjectProfile } from "../playbooks/playbook-activators.js";
 
 const logger = createLogger({ module: "focus-sessions/stage-subject-status" });
 
+/**
+ * `via: "status_door"` — the write went through `moveStatus` (a declared
+ * lifecycle, kind or role), so it emits the transition the follow reads.
+ * Absent — the legacy plain-property `entities.update` fallback.
+ */
 export type StageSubjectStatusOutcome =
-  | { status: "written"; property: string; value: string }
-  | { status: "proposed"; property: string; value: string; proposalId: string }
+  | { status: "written"; property: string; value: string; via?: "status_door" }
+  | {
+      status: "proposed";
+      property: string;
+      value: string;
+      proposalId: string;
+      via?: "status_door";
+    }
   | {
       status: "skipped";
       reason:
@@ -225,7 +236,7 @@ function fromMove(
 ): StageSubjectStatusOutcome {
   switch (move.status) {
     case "moved":
-      return { status: "written", property, value };
+      return { status: "written", property, value, via: "status_door" };
     case "unchanged":
       return { status: "skipped", reason: "already_set" };
     case "proposed":
@@ -234,6 +245,7 @@ function fromMove(
         property,
         value,
         proposalId: move.proposalId,
+        via: "status_door",
       };
     case "conflict":
       return {
