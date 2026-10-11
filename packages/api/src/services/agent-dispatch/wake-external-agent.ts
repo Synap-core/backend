@@ -18,6 +18,8 @@
  */
 
 import { createLogger } from "@synap-core/core";
+import { externalAgentCallFailedReason } from "@synap-core/types/agents";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
   db,
   eq,
@@ -187,7 +189,13 @@ export async function wakeExternalAgent(
     });
     return { status: "proposed", reviewUrl: res.reviewUrl };
   }
-  return failed(res.message);
+  return failed(
+    externalAgentCallFailedReason({
+      providerName: resolveServiceName(binding.provider),
+      errorClass: res.status === "failed" ? res.errorClass : undefined,
+      message: res.message,
+    })
+  );
 }
 
 /**

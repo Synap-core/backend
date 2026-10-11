@@ -61,6 +61,7 @@ import {
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { resolveServiceName } from "@synap-core/types/service-marks";
+import { externalAgentCallFailedReason } from "@synap-core/types/agents";
 import {
   AgentBindingError,
   listDispatchableAgentIds,
@@ -84,6 +85,7 @@ import { paramOwedSlots } from "../../focus-sessions/param-slots.js";
 import { normalizeExpectedLabel } from "../../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../../focus-sessions/delegate-output.js";
 import { notifySessionNeedsYou } from "../../focus-sessions/notify-needs-you.js";
+import { attachSessionAgent } from "../../focus-sessions/attach-session-agent.js";
 import { openTypedLink, podPublicOrigin } from "../../../utils/deep-links.js";
 
 const logger = createLogger({ module: "external-agent-executor" });
@@ -381,6 +383,14 @@ export class ExternalAgentExecutor implements Executor {
       );
     }
     const agentUserId = choice.agentUserId;
+    // The agent the work is handed to is ON the session (roster + room), so
+    // the session reads as staffed by it and a mention in the room routes to
+    // it — whichever way it was chosen (param, roster, the single bound one).
+    await attachSessionAgent({
+      sessionId: ctx.sessionId,
+      agentId: agentUserId,
+      userId: ownerId,
+    });
 
     // 2. Its binding (a broken one is a visible failure, never a skip).
     let binding: AgentBinding | null;
@@ -478,7 +488,14 @@ export class ExternalAgentExecutor implements Executor {
         "external-agent start failed"
       );
       return fail(
-        `the ${service} agent did not accept the task: ${started.message}`,
+        `the ${service} agent did not accept the task: ${externalAgentCallFailedReason(
+          {
+            providerName: service,
+            errorClass:
+              started.status === "failed" ? started.errorClass : undefined,
+            message: started.message,
+          }
+        )}`,
         "start"
       );
     }

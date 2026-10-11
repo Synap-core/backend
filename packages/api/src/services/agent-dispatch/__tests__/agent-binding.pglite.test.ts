@@ -38,13 +38,14 @@ vi.mock("@synap/database", async (importOriginal) => {
         apiKeys: actual.apiKeys as never,
         links: actual.links as never,
         tools: actual.tools as never,
+        playbookRuns: actual.playbookRuns as never,
       },
     }),
   };
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { users, apiKeys, links, tools } from "@synap/database";
+import { users, apiKeys, links, tools, playbookRuns } from "@synap/database";
 import {
   AgentBindingError,
   resolveAgentBinding,
@@ -120,7 +121,7 @@ async function bind(agent: string, tool: string) {
 
 describe("agent binding + reach", () => {
   beforeAll(async () => {
-    for (const t of [users, apiKeys, links, tools]) {
+    for (const t of [users, apiKeys, links, tools, playbookRuns]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await q(
@@ -302,5 +303,45 @@ describe("agent binding + reach", () => {
       await resolveWakeTarget({ agentIds: [PULL_AGENT, BOUND_AGENT] })
     ).toMatchObject({ reach: "dispatch", agentUserId: BOUND_AGENT });
     expect(await resolveWakeTarget({ agentIds: [PULL_AGENT] })).toBeNull();
+  });
+
+  it("resolveWakeTarget: an owner-operated pull asker in a session with a LIVE dispatched run wakes that run's agent", async () => {
+    // A routine reports back through the person's own connector agent (pull),
+    // not as the agent the pod dispatched to — the answer must still reach it.
+    const LIVE = randomUUID();
+    const DONE = randomUUID();
+    await q(
+      `insert into playbook_runs (id, session_id, status, external_agent) values
+        ($1, $2, 'running', $3::jsonb), ($4, $5, 'completed', $3::jsonb)`,
+      [
+        randomUUID(),
+        LIVE,
+        JSON.stringify({ agentUserId: BOUND_AGENT, externalId: "ext-1" }),
+        randomUUID(),
+        DONE,
+      ]
+    );
+    expect(
+      await resolveWakeTarget({
+        askingAgentUserId: PULL_AGENT,
+        session: { id: LIVE, ownerId: OWNER },
+      })
+    ).toMatchObject({ reach: "dispatch", agentUserId: BOUND_AGENT });
+    // Strict without the session; another person's room; no live run.
+    expect(
+      await resolveWakeTarget({ askingAgentUserId: PULL_AGENT })
+    ).toBeNull();
+    expect(
+      await resolveWakeTarget({
+        askingAgentUserId: PULL_AGENT,
+        session: { id: LIVE, ownerId: TEAMMATE },
+      })
+    ).toBeNull();
+    expect(
+      await resolveWakeTarget({
+        askingAgentUserId: PULL_AGENT,
+        session: { id: DONE, ownerId: OWNER },
+      })
+    ).toBeNull();
   });
 });

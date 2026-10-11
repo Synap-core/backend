@@ -600,6 +600,35 @@ export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = [
  */
 export const EXTERNAL_AGENT_UNREACHABLE_AFTER = 3;
 
+/**
+ * How long a working task may stay silent before it reads "No news from
+ * <agent>", for a binding that CANNOT be asked how its task is going (no
+ * `status` verb — a Claude Code routine's fire token reads nothing). Such a
+ * task only ever speaks by reporting into the room, so silence past this is
+ * the one honest signal there is: we no longer know it is working. A binding
+ * that can be polled never goes quiet this way — the poll knows.
+ */
+export const EXTERNAL_AGENT_QUIET_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * Why a call to an external agent (start / send) did not go through, in the
+ * words both the room notice and the run's error use. A TRANSIENT failure
+ * (`classifyDispatchFailure`: a 429 rate limit, a timeout, a 5xx) is named as
+ * such — a Claude Code routine allows ~30 runs an hour, and "callProvider
+ * failed: …429…" reads like a bug rather than "wait and try again". Any other
+ * class keeps the provider's own message.
+ */
+export function externalAgentCallFailedReason(p: {
+  providerName: string;
+  errorClass?: string | null;
+  message: string;
+}): string {
+  if (p.errorClass === "transient") {
+    return `${p.providerName} is busy or at its run limit right now — try again in a few minutes (${p.message})`;
+  }
+  return p.message;
+}
+
 export type ExternalAgentOutputKey = "pull_request" | "branch" | "preview";
 
 /** The slice of `SessionExternalAgent` the view reads. */
@@ -631,6 +660,18 @@ export interface ExternalAgentLike {
   cancelStopsAgent?: boolean | null;
   /** When the agent FIRST reported each output (ISO), by output key. */
   reportedAt?: Partial<Record<ExternalAgentOutputKey, string | null>> | null;
+  /**
+   * The newest sign of life from the task (ISO): the agent's newest post in
+   * the session room, else when it was started. Absent/unparseable ⇒ never
+   * quiet (silence is not inferred from a missing read).
+   */
+  lastNewsAt?: string | null;
+  /**
+   * Silence (ms) after which a RUNNING task reads "No news" — served only for
+   * a binding that cannot be polled. Absent/null ⇒ the task is never marked
+   * quiet.
+   */
+  quietAfterMs?: number | null;
 }
 
 /** One thing the agent reported, as an output card reads it. */
@@ -667,6 +708,13 @@ export interface ExternalAgentView {
   providerName: string;
   /** The last status reads failed {@link EXTERNAL_AGENT_UNREACHABLE_AFTER}+ times in a row. */
   unreachable: boolean;
+  /**
+   * A running task that cannot be polled has been silent past its
+   * `quietAfterMs`: "No news from <agent>" — we no longer know it is working.
+   */
+  quiet: boolean;
+  /** `quiet` only: the last sign of life (ISO), for "since <time>". */
+  quietSince: string | null;
   /** Cancel stops the agent itself (the binding's `supports.cancel`). */
   cancelStopsAgent: boolean;
   /** The cancel confirm's words — both surfaces show exactly these. */
@@ -729,10 +777,18 @@ function hostOf(url: string): string {
  *  - a LIVE task (running / needs_input) whose status reads failed
  *    {@link EXTERNAL_AGENT_UNREACHABLE_AFTER}+ times in a row ⇒ unmeasured,
  *    worded "Can't reach <service>": its last known state is no longer known;
+ *  - a RUNNING task that cannot be polled (`quietAfterMs` served) and has
+ *    been silent past it ⇒ unmeasured, worded "No news from <agent>": the
+ *    room is its only voice, so silence means we no longer know;
  *  - a status this build does not know ⇒ unmeasured — never a guess.
+ *
+ * `now` is a parameter so the view stays pure; a surface re-deriving on its
+ * next render picks up a task that went quiet in between
+ * ({@link externalAgentQuietFlipInMs} says when).
  */
 export function resolveExternalAgentView(
-  agent: ExternalAgentLike
+  agent: ExternalAgentLike,
+  now: number = Date.now()
 ): ExternalAgentView {
   const status = agent.status;
   const known = (EXTERNAL_AGENT_STATUSES as readonly string[]).includes(status);
@@ -741,8 +797,10 @@ export function resolveExternalAgentView(
   const unreachable =
     live && (agent.pollError?.count ?? 0) >= EXTERNAL_AGENT_UNREACHABLE_AFTER;
   const pendingStart = status === "pending_start";
+  const quietIn = unreachable ? null : externalAgentQuietFlipInMs(agent, now);
+  const quiet = quietIn === 0;
   const mark =
-    !known || unreachable
+    !known || unreachable || quiet
       ? resolveUnitState({ unreadable: true })
       : resolveUnitState({
           failed: status === "failed",
@@ -751,12 +809,14 @@ export function resolveExternalAgentView(
           running: status === "running",
           everStarted: true,
         });
+  const agentName = agent.agentName?.trim() || null;
   const label = unreachable
     ? `Can't reach ${providerName}`
-    : status === "cancelled"
-      ? resolveStatusLabel("cancelled")
-      : resolveStatusLabel(mark.state);
-  const agentName = agent.agentName?.trim() || null;
+    : quiet
+      ? `No news from ${agentName ?? providerName}`
+      : status === "cancelled"
+        ? resolveStatusLabel("cancelled")
+        : resolveStatusLabel(mark.state);
   const agentUserId = agent.agentUserId?.trim() || null;
   const proposalId = pendingStart ? agent.proposalId?.trim() || null : null;
   const cancelStopsAgent = agent.cancelStopsAgent === true;
@@ -804,6 +864,8 @@ export function resolveExternalAgentView(
     proposalDoor: proposalId ? { kind: "proposal", id: proposalId } : null,
     providerName,
     unreachable,
+    quiet,
+    quietSince: quiet ? (agent.lastNewsAt ?? null) : null,
     cancelStopsAgent,
     cancelConfirm: {
       title: `${cancelLabel} the agent's task?`,
@@ -827,4 +889,22 @@ export function resolveExternalAgentView(
     openProminent: mark.state === "needs_you" && !pendingStart,
     summaryOpen: mark.state === "failed",
   };
+}
+
+/**
+ * Milliseconds until a RUNNING task that cannot be polled reads "No news"
+ * (`0` = it already does), or `null` when it never will: not running, no
+ * `quietAfterMs` served (the binding can be polled), or no readable last sign
+ * of life. A surface schedules ONE re-render at this delay.
+ */
+export function externalAgentQuietFlipInMs(
+  agent: Pick<ExternalAgentLike, "status" | "lastNewsAt" | "quietAfterMs">,
+  now: number = Date.now()
+): number | null {
+  if (agent.status !== "running") return null;
+  const after = agent.quietAfterMs;
+  if (typeof after !== "number" || !(after > 0)) return null;
+  const at = agent.lastNewsAt ? Date.parse(agent.lastNewsAt) : NaN;
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, at + after - now);
 }

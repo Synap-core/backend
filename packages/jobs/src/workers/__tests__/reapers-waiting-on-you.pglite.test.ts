@@ -38,6 +38,7 @@ import {
   automationRuns,
   automationStepRuns,
   playbookRuns,
+  messages,
 } from "@synap/database/schema";
 import { handleFocusSessionReaper } from "../focus-session-reaper.js";
 import { handleAutomationRunReaper } from "../automation-run-reaper.js";
@@ -85,17 +86,39 @@ async function session(opts: {
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at)
-     values ($1, 'u1', 'g', $2, $3::jsonb, $4::jsonb, now(), now() - ($5::int * interval '1 hour'))`,
+    `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at, channel_id)
+     values ($1, 'u1', 'g', $2, $3::jsonb, $4::jsonb, now(), now() - ($5::int * interval '1 hour'), $6)`,
     [
       id,
       opts.status ?? "active",
       JSON.stringify(opts.metadata ?? {}),
       JSON.stringify(opts.outputs ?? []),
       opts.idleHours,
+      roomOf(id),
     ]
   );
   return id;
+}
+
+/** Each session's room id, derived so a question can be posted into it. */
+const rooms = new Map<string, string>();
+function roomOf(sessionId: string): string {
+  if (!rooms.has(sessionId)) rooms.set(sessionId, randomUUID());
+  return rooms.get(sessionId)!;
+}
+
+/** An agent's question in the session's room (`answered` = the answer door stamped it). */
+async function askInRoom(sessionId: string, answered = false) {
+  await q(
+    `insert into messages (id, channel_id, author_type, metadata) values ($1, $2, 'ai_agent', $3::jsonb)`,
+    [
+      randomUUID(),
+      roomOf(sessionId),
+      JSON.stringify({
+        roomPost: { kind: "question", ...(answered ? { answer: {} } : {}) },
+      }),
+    ]
+  );
 }
 
 const statusOf = async (table: string, id: string) =>
@@ -112,6 +135,7 @@ beforeAll(async () => {
     automationRuns,
     automationStepRuns,
     playbookRuns,
+    messages,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   registerSessionCloser(async ({ sessionId }) => {
@@ -127,7 +151,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   closed.length = 0;
   await h.client!.exec(
-    "delete from focus_sessions; delete from proposals; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs;"
+    "delete from focus_sessions; delete from proposals; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs; delete from messages;"
   );
 });
 
@@ -155,6 +179,38 @@ describe("focus-session reaper", () => {
     await handleFocusSessionReaper();
     expect(closed).toEqual([done]);
     expect(closed).not.toContain(owing);
+  });
+});
+
+describe("an OPEN agent question waits on the person (external agents ask and stop)", () => {
+  it("focus-session reaper: never stales a quiet session with an open question; the answered twin stales", async () => {
+    const asking = await session({ idleHours: 30 });
+    await askInRoom(asking);
+    const answered = await session({ idleHours: 30 });
+    await askInRoom(answered, true);
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", asking)).toBe("active");
+    expect(await statusOf("focus_sessions", answered)).toBe("stale");
+  });
+
+  it("playbook-run reaper: parks the run WAITING and leaves its session open; the answered twin fails", async () => {
+    const make = async (answered: boolean) => {
+      const sess = await session({ idleHours: 30, status: "stale" });
+      await askInRoom(sess, answered);
+      const run = randomUUID();
+      await q(
+        `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input)
+         values ($1, $2, $3, 'external-agent', 'running', now() - interval '30 hours', 'u1', '{}'::jsonb)`,
+        [run, randomUUID(), sess]
+      );
+      return { run, sess };
+    };
+    const asking = await make(false);
+    const answered = await make(true);
+    await handlePlaybookRunReaper();
+    expect(await statusOf("playbook_runs", asking.run)).toBe("waiting_on_you");
+    expect(closed).not.toContain(asking.sess);
+    expect(await statusOf("playbook_runs", answered.run)).toBe("failed");
   });
 });
 

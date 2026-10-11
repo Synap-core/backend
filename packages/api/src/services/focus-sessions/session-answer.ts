@@ -58,12 +58,13 @@ import {
   messages,
   users,
   focusSessions,
-  MessageAuthorType,
   and,
   eq,
   desc,
-  isNull,
   drizzleSql,
+  playbookRuns,
+  liveRunStatusWhere,
+  openRoomQuestionConditions as sharedOpenRoomQuestionConditions,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -93,6 +94,7 @@ import {
 import { findNewestSlotThreadSeed } from "./slot-thread.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { resolveAgentReach } from "../agent-dispatch/agent-binding.js";
+import { agentsOperatedBy } from "../agent-presence.js";
 import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
@@ -137,12 +139,8 @@ export interface OpenQuestion {
  * `question` and carries no `answer` stamp.
  */
 export function openRoomQuestionConditions(): SQL[] {
-  return [
-    eq(messages.authorType, MessageAuthorType.AI_AGENT),
-    isNull(messages.deletedAt),
-    drizzleSql`${messages.metadata}->${ROOM_POST_META_KEY}->>'kind' = 'question'`,
-    drizzleSql`NOT ((${messages.metadata}->${ROOM_POST_META_KEY}) ? 'answer')`,
-  ];
+  // ONE rule, shared with the reapers (`@synap/database` open-room-question).
+  return sharedOpenRoomQuestionConditions(messages);
 }
 
 /**
@@ -253,11 +251,22 @@ export type WakeTarget =
  * woken (never a bystander agent answering someone else's question). Without
  * one: the slot's `delegatedTo` (an agent TYPE the pod runs), then the first
  * staffed agent the pod can reach (pod-run or dispatch; pull agents are skipped).
+ *
+ * ONE exception to "only the asker": a dispatched agent reports back through
+ * its OWN MCP connector, which is a different identity than the agent the pod
+ * dispatched to (a Claude Code routine writes as the person's claude.ai
+ * connector agent, not as the bound agent). So when the asker cannot be woken
+ * itself (reach `pull`), is operated BY the session's owner, and the session
+ * has a LIVE run handed to a dispatch agent, the answer goes to that run's
+ * agent — it is who the work was handed to. Without `session` the rule is the
+ * strict one.
  */
 export async function resolveWakeTarget(p: {
   askingAgentUserId?: string | null;
   slot?: ExpectedOutput | null;
   agentIds?: string[];
+  /** The room's session + its owner — enables the dispatched-run fallback. */
+  session?: { id: string; ownerId: string };
 }): Promise<WakeTarget | null> {
   const targetFor = async (agentUserId: string): Promise<WakeTarget | null> => {
     const reach = await resolveAgentReach(agentUserId);
@@ -279,7 +288,11 @@ export async function resolveWakeTarget(p: {
     }
     return null;
   };
-  if (p.askingAgentUserId) return targetFor(p.askingAgentUserId);
+  if (p.askingAgentUserId) {
+    const asker = await targetFor(p.askingAgentUserId);
+    if (asker || !p.session) return asker;
+    return dispatchedRunWakeTarget(p.askingAgentUserId, p.session, targetFor);
+  }
   const delegated = p.slot?.delegatedTo?.trim();
   if (delegated) return { reach: "pod", agentType: delegated };
   for (const agentId of p.agentIds ?? []) {
@@ -287,6 +300,39 @@ export async function resolveWakeTarget(p: {
     if (target) return target;
   }
   return null;
+}
+
+/**
+ * The dispatched-run fallback of `resolveWakeTarget` (see its docblock): the
+ * newest LIVE run of this session handed to an external agent, when the asker
+ * is an agent the session's owner operates. `null` otherwise.
+ */
+async function dispatchedRunWakeTarget(
+  askingAgentUserId: string,
+  session: { id: string; ownerId: string },
+  targetFor: (agentUserId: string) => Promise<WakeTarget | null>
+): Promise<WakeTarget | null> {
+  const operated = await agentsOperatedBy(session.ownerId, [askingAgentUserId]);
+  if (!operated.has(askingAgentUserId)) return null;
+  const [run] = await db
+    .select({
+      agentUserId: drizzleSql<
+        string | null
+      >`${playbookRuns.externalAgent}->>'agentUserId'`,
+    })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, session.id),
+        liveRunStatusWhere(playbookRuns.status),
+        drizzleSql`${playbookRuns.externalAgent}->>'externalId' IS NOT NULL`
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  if (!run?.agentUserId || run.agentUserId === askingAgentUserId) return null;
+  const target = await targetFor(run.agentUserId);
+  return target?.reach === "dispatch" ? target : null;
 }
 
 /**
@@ -492,6 +538,7 @@ export async function recordOwnerRoomReply(p: {
             sessionId: session.id,
             target: await resolveWakeTarget({
               askingAgentUserId: question.agentUserId,
+              session: { id: session.id, ownerId: p.userId },
             }),
             slotLabel: question.slotLabel,
           })
@@ -558,6 +605,7 @@ export async function recordOwnerRoomReply(p: {
           sessionId: session.id,
           target: await resolveWakeTarget({
             askingAgentUserId: question.agentUserId,
+            session: { id: session.id, ownerId: p.userId },
           }),
           slotLabel: question.slotLabel,
         })
@@ -834,6 +882,7 @@ export async function answerSessionSlot(p: {
         askingAgentUserId: questionId ? question?.agentUserId : null,
         slot: answered.before,
         agentIds: answered.session.agentIds,
+        session: { id: session.id, ownerId: p.userId },
       });
       wokeAgentType = wakeTargetLabel(target);
       triggered = await wake({
@@ -970,6 +1019,7 @@ export async function attestSessionSlot(p: {
         askingAgentUserId: questionId ? question?.agentUserId : null,
         slot: attested.before,
         agentIds: attested.session.agentIds,
+        session: { id: attested.session.id, ownerId: p.userId },
       });
       wokeAgentType = wakeTargetLabel(target);
       triggered = await wake({

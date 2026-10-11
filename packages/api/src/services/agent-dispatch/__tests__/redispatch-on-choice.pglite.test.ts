@@ -71,6 +71,11 @@ vi.mock("../../capabilities/execute-capability.js", () => ({
 vi.mock("../../messaging/post-message.js", () => ({
   postChannelMessage: async () => ({ success: true, messageId: "m" }),
 }));
+// The executor staffs the session with the chosen agent (roster + room);
+// the room roster is not under test here.
+vi.mock("../../messaging/enroll-room-member.js", () => ({
+  enrollRoomMember: async () => undefined,
+}));
 vi.mock("../../focus-sessions/notify-needs-you.js", () => ({
   notifySessionNeedsYou: async () => true,
 }));

@@ -25,7 +25,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, proposals } from "@synap/database/schema";
+import { focusSessions, proposals, messages } from "@synap/database/schema";
 import { closeIdleReceipts } from "./focus-session-reaper.js";
 import { registerSessionCloser } from "../utils/session-close.js";
 
@@ -77,6 +77,7 @@ const RECEIPT = {
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
   await h.client!.exec(ddlFor(proposals as unknown as PgTable));
+  await h.client!.exec(ddlFor(messages as unknown as PgTable));
   registerSessionCloser(async ({ sessionId }) => {
     closed.push(sessionId);
     return {

@@ -19,6 +19,7 @@ import { executeCapability } from "../capabilities/execute-capability.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import type { SlotAsk } from "@synap/playbooks";
 import type { AgentBinding } from "./agent-binding.js";
+import type { FailureErrorClass } from "@synap-core/types/failures";
 
 const logger = createLogger({ module: "agent-dispatch" });
 
@@ -30,8 +31,12 @@ export type BindingCallResult =
   | { status: "proposed"; proposalId: string; reviewUrl: string }
   /** The verb is not declared by this binding. */
   | { status: "unsupported"; message: string }
-  /** Refused, not found, or ran and failed — the message says which. */
-  | { status: "failed"; message: string };
+  /**
+   * Refused, not found, or ran and failed — the message says which.
+   * `errorClass` = the provider failure's class when one was classified
+   * (`transient` for a rate limit / timeout / 5xx).
+   */
+  | { status: "failed"; message: string; errorClass?: FailureErrorClass };
 
 /**
  * Call one of the binding's verbs as the agent user.
@@ -99,6 +104,11 @@ export async function callBindingVerb(p: {
     case "deny":
       return { status: "failed", message: res.reason };
     case "error":
+      return {
+        status: "failed",
+        message: res.message,
+        ...(res.errorClass ? { errorClass: res.errorClass } : {}),
+      };
     case "not_found":
       return { status: "failed", message: res.message };
     default:

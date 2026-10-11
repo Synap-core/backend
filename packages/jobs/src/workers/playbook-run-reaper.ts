@@ -35,7 +35,7 @@ import {
   drizzleSql,
   playbookRuns,
   focusSessions,
-  sessionOwesHumanWhere,
+  sessionWaitsOnPersonWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
@@ -93,7 +93,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       .where(
         and(
           eq(playbookRuns.status, "waiting_on_you"),
-          drizzleSql`NOT ${sessionOwesHumanWhere(playbookRuns.sessionId)}`
+          drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`
         )
       )
       .returning({ id: playbookRuns.id });
@@ -104,7 +104,10 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0. A quiet run whose session owes the person is WAITING ON YOU, not
+    // 0. A quiet run whose session waits on the person (an owed slot, or an
+    //    agent question in its room still unanswered — an external agent
+    //    asks and STOPS until the answer starts its next run) is WAITING ON
+    //    YOU, not
     //    orphaned (W2 calm): a session waiting on the person is quiet by
     //    definition, so `RUN_SESSION_NOT_ACTIVE` alone read it as dead. Marked
     //    first so the fail sweep (status = 'running') can never reach it; its
@@ -112,7 +115,9 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     const waiting = await db
       .update(playbookRuns)
       .set({ status: "waiting_on_you" })
-      .where(and(RUN_IS_STALE, sessionOwesHumanWhere(playbookRuns.sessionId)))
+      .where(
+        and(RUN_IS_STALE, sessionWaitsOnPersonWhere(playbookRuns.sessionId))
+      )
       .returning({ id: playbookRuns.id });
     if (waiting.length > 0) {
       logger.info(

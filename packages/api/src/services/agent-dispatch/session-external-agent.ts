@@ -15,12 +15,17 @@ import {
   and,
   desc,
   eq,
+  gte,
+  isNull,
   drizzleSql,
   playbookRuns,
   proposals,
   users,
+  focusSessions,
+  messages,
 } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import { MessageAuthorType, ProposalStatus } from "@synap/database/schema";
+import { EXTERNAL_AGENT_QUIET_AFTER_MS } from "@synap-core/types/agents";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
 
@@ -60,6 +65,18 @@ export interface SessionExternalAgent {
   /** When the status poll last read the task (ISO), `null` before the first read. */
   polledAt: string | null;
   startedAt: string;
+  /**
+   * The newest sign of life (ISO): the newest AGENT post in the session room
+   * since the start, else the start. Any agent counts — an external agent
+   * reports through its own connector identity, not the bound agent's.
+   */
+  lastNewsAt: string;
+  /**
+   * The silence window after which the task reads "No news" — ONLY for a
+   * binding with no `status` verb (nothing can be asked; the room is its only
+   * voice). `null` = pollable, or no usable binding: never marked quiet.
+   */
+  quietAfterMs: number | null;
 }
 
 /** A start proposal that was called off — the pending start reads `cancelled`. */
@@ -93,7 +110,7 @@ export async function readSessionExternalAgent(
   if (!row || !ext) return null;
   const last = ext.lastState;
 
-  const [agentRow, binding, proposal] = await Promise.all([
+  const [agentRow, binding, proposal, newestPost] = await Promise.all([
     database
       .select({ name: users.name })
       .from(users)
@@ -114,6 +131,22 @@ export async function readSessionExternalAgent(
           .limit(1)
           .then((r) => r[0] ?? null)
       : Promise.resolve(undefined),
+    // The newest agent post in the session's room since the hand-off.
+    database
+      .select({ at: messages.timestamp })
+      .from(messages)
+      .innerJoin(focusSessions, eq(focusSessions.channelId, messages.channelId))
+      .where(
+        and(
+          eq(focusSessions.id, sessionId),
+          eq(messages.authorType, MessageAuthorType.AI_AGENT),
+          isNull(messages.deletedAt),
+          gte(messages.timestamp, new Date(ext.startedAt))
+        )
+      )
+      .orderBy(desc(messages.timestamp))
+      .limit(1)
+      .then((r) => r[0]?.at ?? null),
   ]);
 
   let status: SessionExternalAgent["status"] = ext.status;
@@ -152,5 +185,8 @@ export async function readSessionExternalAgent(
     },
     polledAt: ext.polledAt ?? null,
     startedAt: ext.startedAt,
+    lastNewsAt: newestPost ? newestPost.toISOString() : ext.startedAt,
+    quietAfterMs:
+      binding && !binding.verbs.status ? EXTERNAL_AGENT_QUIET_AFTER_MS : null,
   };
 }

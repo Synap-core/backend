@@ -5,7 +5,12 @@
  * (`waiting_on_you` — cancellable or not), and an unsafe link (door or none).
  */
 import { describe, expect, it } from "vitest";
-import { resolveExternalAgentView, safeExternalUrl } from "./index.js";
+import {
+  EXTERNAL_AGENT_QUIET_AFTER_MS,
+  externalAgentQuietFlipInMs,
+  resolveExternalAgentView,
+  safeExternalUrl,
+} from "./index.js";
 
 const base = {
   runStatus: "running",
@@ -255,5 +260,65 @@ describe("resolveExternalAgentView", () => {
       ["pull_request", "2026-10-08T01:00:00.000Z"],
       ["branch", null],
     ]);
+  });
+
+  it("a running task that cannot be polled and has been silent past its window reads 'No news from <agent>' (unmeasured); inside the window it is working", () => {
+    const NOW = Date.parse("2026-10-11T12:00:00.000Z");
+    const quietTask = {
+      ...base,
+      agentName: "Claude Code",
+      lastNewsAt: new Date(
+        NOW - EXTERNAL_AGENT_QUIET_AFTER_MS - 1
+      ).toISOString(),
+      quietAfterMs: EXTERNAL_AGENT_QUIET_AFTER_MS,
+    };
+    const v = resolveExternalAgentView(quietTask, NOW);
+    expect(v.quiet).toBe(true);
+    expect(v.mark.state).toBe("unmeasured");
+    expect(v.label).toBe("No news from Claude Code");
+    expect(v.quietSince).toBe(quietTask.lastNewsAt);
+    // Cancel is still offered: the run is live, only its news is missing.
+    expect(v.cancellable).toBe(true);
+
+    const fresh = {
+      ...quietTask,
+      lastNewsAt: new Date(NOW - 1000).toISOString(),
+    };
+    const f = resolveExternalAgentView(fresh, NOW);
+    expect(f.quiet).toBe(false);
+    expect(f.mark.state).toBe("working");
+    expect(externalAgentQuietFlipInMs(fresh, NOW)).toBe(
+      EXTERNAL_AGENT_QUIET_AFTER_MS - 1000
+    );
+  });
+
+  it("never quiet: a pollable binding (no quietAfterMs), an unreadable last sign, or a task not running", () => {
+    const NOW = Date.parse("2026-10-11T12:00:00.000Z");
+    const old = new Date(
+      NOW - 10 * EXTERNAL_AGENT_QUIET_AFTER_MS
+    ).toISOString();
+    expect(
+      resolveExternalAgentView({ ...base, lastNewsAt: old }, NOW).quiet
+    ).toBe(false);
+    expect(
+      resolveExternalAgentView(
+        { ...base, lastNewsAt: "not a date", quietAfterMs: 1 },
+        NOW
+      ).quiet
+    ).toBe(false);
+    for (const status of ["needs_input", "done", "failed", "pending_start"]) {
+      expect(
+        resolveExternalAgentView(
+          {
+            ...base,
+            status,
+            lastNewsAt: old,
+            quietAfterMs: EXTERNAL_AGENT_QUIET_AFTER_MS,
+          },
+          NOW
+        ).quiet,
+        status
+      ).toBe(false);
+    }
   });
 });
