@@ -29,7 +29,7 @@ import {
   ProfileResolutionService,
   type EffectiveLifecycle,
 } from "@synap/database";
-import { playbooks } from "@synap/database/schema";
+import { playbooks, profiles } from "@synap/database/schema";
 import {
   LIFECYCLE_CATEGORIES,
   isTerminalLifecycleCategory,
@@ -39,8 +39,10 @@ import {
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { getTrack } from "../services/tracks/tracks-service.js";
 import {
+  countThingsByProfileAndStatus,
   groupThingsByStatus,
   kindVisibilityConditions,
+  pageThingsInColumn,
   roleVisibilityConditions,
 } from "./entities/status-groups.js";
 
@@ -106,10 +108,37 @@ const boardWire = z.object({
   /** W17: `list` below ~10 live things or with no worker. */
   suggestedShape: z.enum(["board", "list"]),
   window: z.object({ days: z.number(), since: z.string() }),
+  /**
+   * A COLUMN read (`column` given): the cursor of the next page of that
+   * column, null when it is the last. Always null on a whole board.
+   */
+  nextCursor: z.string().nullable(),
+});
+
+const lifecycleSummaryWire = z.object({
+  profileSlug: z.string(),
+  profileKind: z.enum(["kind", "role"]),
+  /** The profile's own name (a role or kind's display name). */
+  label: z.string(),
+  /** Open + active + paused + unclassified things in scope (the board's `live`). */
+  live: z.number(),
+  /** Every visible thing in scope, all statuses. */
+  total: z.number(),
 });
 
 export type LifecycleWire = z.infer<typeof lifecycleWire>;
 export type LifecycleBoardWire = z.infer<typeof boardWire>;
+export type LifecycleSummaryWire = z.infer<typeof lifecycleSummaryWire>;
+
+/** A column page cursor is the offset into the column, as a string. */
+function readCursor(cursor: string | undefined): number {
+  if (cursor === undefined) return 0;
+  const n = Number(cursor);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid cursor." });
+  }
+  return n;
+}
 
 interface ResolvedProfile {
   profileKind: "kind" | "role";
@@ -207,6 +236,15 @@ export const lifecycleRouter = router({
           .default({ days: 30 }),
         /** Items per column (capped list; the count is always exact). */
         firstN: z.number().int().min(0).max(50).default(10),
+        /**
+         * "Show all N" on one column: an option key or `__unclassified`.
+         * The answer's `columns` then holds ONLY that column, its items
+         * paged (`limit` from `cursor`), in the board's own order and
+         * window; every count and total stays the whole board's.
+         */
+        column: z.string().min(1).optional(),
+        cursor: z.string().optional(),
+        limit: z.number().int().min(1).max(100).default(25),
       })
     )
     .output(boardWire)
@@ -272,7 +310,8 @@ export const lifecycleRouter = router({
         groupThingsByStatus({
           subject,
           conditions,
-          firstN: input.firstN,
+          // A column read pages that column below; the rest are counts.
+          firstN: input.column ? 0 : input.firstN,
           order: "time_in_column",
           terminal: { statuses: terminalKeys, since },
         }),
@@ -327,9 +366,48 @@ export const lifecycleRouter = router({
       const total = allGroups.reduce((n, g) => n + g.count, 0);
       const hasWorker = await hasActiveWorker(input.profileSlug);
 
+      let shownColumns = columns;
+      let nextCursor: string | null = null;
+      if (input.column) {
+        const col =
+          columns.find((c) => c.key === input.column) ??
+          // An unclassified column with nothing in it is still a column a
+          // caller may ask for (it answers empty).
+          (input.column === UNCLASSIFIED_COLUMN
+            ? {
+                key: UNCLASSIFIED_COLUMN,
+                category: null,
+                count: 0,
+                items: [],
+                windowed: false,
+              }
+            : null);
+        if (!col) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `"${input.column}" is not a status of ${input.profileSlug}.`,
+          });
+        }
+        const offset = readCursor(input.cursor);
+        const page = await pageThingsInColumn({
+          subject,
+          conditions,
+          order: "time_in_column",
+          terminal: { statuses: terminalKeys, since },
+          column:
+            col.key === UNCLASSIFIED_COLUMN
+              ? { outside: [...declared] }
+              : { statuses: [col.key] },
+          offset,
+          limit: input.limit,
+        });
+        shownColumns = [{ ...col, items: page.items }];
+        nextCursor = page.hasMore ? String(offset + input.limit) : null;
+      }
+
       return {
         lifecycle,
-        columns,
+        columns: shownColumns,
         doneWindowed: sumBy("done"),
         lostWindowed: sumBy("lost"),
         total,
@@ -338,7 +416,141 @@ export const lifecycleRouter = router({
         suggestedShape:
           live < BOARD_LIST_THRESHOLD || !hasWorker ? "list" : "board",
         window: { days: input.window.days, since: since.toISOString() },
+        nextCursor,
       };
+    }),
+
+  /**
+   * The pipelines IN SCOPE (a project's pipeline doors): every kind AND role
+   * that declares a lifecycle and has at least one LIVE thing (not in a
+   * done/lost option) under the filter, with its counts. Live first, then by
+   * name. Visibility is the board's (same conditions per kind/role), so a door
+   * never promises a pipeline the board then reads as empty.
+   */
+  list: podProcedure
+    .input(
+      z.object({
+        projectId: z.string().uuid().optional(),
+        /** `undefined` → the active workspace header; `null` → pod-wide only. */
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
+    .output(z.array(lifecycleSummaryWire))
+    .query(async ({ input, ctx }) => {
+      const lensWorkspaceId =
+        input.workspaceId !== undefined
+          ? input.workspaceId
+          : (ctx.workspaceId ?? undefined);
+      const profileRows = await db
+        .select({
+          id: profiles.id,
+          slug: profiles.slug,
+          displayName: profiles.displayName,
+          profileKind: profiles.profileKind,
+          entityScope: profiles.entityScope,
+        })
+        .from(profiles);
+      // A slug with a role row is a role (the board's rule).
+      const roleSlugs = new Set(
+        profileRows.filter((r) => r.profileKind === "role").map((r) => r.slug)
+      );
+      const roleIds = profileRows
+        .filter((r) => r.profileKind === "role")
+        .map((r) => r.id);
+      const kindRows = profileRows.filter((r) => !roleSlugs.has(r.slug));
+      // The board reads a slug as pod-scope when ANY of its rows is.
+      const podSlugs = new Set(
+        kindRows.filter((r) => r.entityScope === "pod").map((r) => r.slug)
+      );
+      const kindConds = (podScopeKind: boolean) =>
+        kindVisibilityConditions({
+          userId: ctx.userId,
+          lensWorkspaceId,
+          explicitWorkspace: input.workspaceId !== undefined,
+          projectId: input.projectId,
+          podScopeKind,
+        });
+      const [podKindCounts, wsKindCounts, roleCounts] = await Promise.all([
+        countThingsByProfileAndStatus({
+          kind: "kind",
+          profileIds: kindRows
+            .filter((r) => podSlugs.has(r.slug))
+            .map((r) => r.id),
+          conditions: kindConds(true),
+        }),
+        countThingsByProfileAndStatus({
+          kind: "kind",
+          profileIds: kindRows
+            .filter((r) => !podSlugs.has(r.slug))
+            .map((r) => r.id),
+          conditions: kindConds(false),
+        }),
+        roleVisibilityConditions({
+          userId: ctx.userId,
+          lensWorkspaceId,
+          projectId: input.projectId,
+        }).then((conditions) =>
+          countThingsByProfileAndStatus({
+            kind: "role",
+            profileIds: roleIds,
+            conditions,
+          })
+        ),
+      ]);
+
+      const rowById = new Map(profileRows.map((r) => [r.id, r]));
+      const bySlug = new Map<
+        string,
+        { statuses: Map<string | null, number>; label: string }
+      >();
+      for (const c of [...podKindCounts, ...wsKindCounts, ...roleCounts]) {
+        const row = rowById.get(c.profileId);
+        if (!row || c.count === 0) continue;
+        let entry = bySlug.get(row.slug);
+        if (!entry) {
+          entry = { statuses: new Map(), label: row.displayName };
+          bySlug.set(row.slug, entry);
+        }
+        entry.statuses.set(
+          c.status,
+          (entry.statuses.get(c.status) ?? 0) + c.count
+        );
+      }
+
+      const out: LifecycleSummaryWire[] = [];
+      for (const [slug, entry] of bySlug) {
+        let p: ResolvedProfile;
+        try {
+          p = await resolveProfileLifecycle(slug, lensWorkspaceId);
+        } catch (err) {
+          // Undeclared = not a pipeline (a fact). Anything else is a failure.
+          if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED")
+            continue;
+          throw err;
+        }
+        const terminal = new Set(
+          p.lifecycle.options
+            .filter((o) => isTerminalLifecycleCategory(o.category))
+            .map((o) => o.key)
+        );
+        let live = 0;
+        let total = 0;
+        for (const [status, n] of entry.statuses) {
+          total += n;
+          if (status === null || !terminal.has(status)) live += n;
+        }
+        if (live === 0) continue;
+        out.push({
+          profileSlug: slug,
+          profileKind: p.profileKind,
+          label: entry.label,
+          live,
+          total,
+        });
+      }
+      return out.sort(
+        (a, b) => b.live - a.live || a.label.localeCompare(b.label)
+      );
     }),
 });
 

@@ -368,3 +368,149 @@ describe("lifecycle.board — a role", () => {
     ]);
   });
 });
+
+describe("lifecycle.board — one column, paged (Show all N)", () => {
+  it("pages ONE column in the board's own order; counts stay the board's", async () => {
+    const client = await freshDb();
+    // Five drafts, created 50..10 days ago: the oldest is longest in column.
+    const drafts: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      drafts.push(
+        await thing(client, {
+          status: "draft",
+          title: `Draft ${i}`,
+          createdDaysAgo: 50 - i * 10,
+        })
+      );
+    }
+    await thing(client, {
+      status: "negotiating",
+      title: "Talks",
+      createdDaysAgo: 3,
+    });
+    const caller = await lifecycleCaller();
+
+    const first = await caller.board({
+      profileSlug: "deal",
+      column: "draft",
+      limit: 2,
+    });
+    expect(first.columns.map((c) => c.key)).toEqual(["draft"]);
+    expect(first.columns[0]!.count).toBe(5);
+    expect(first.columns[0]!.items.map((i) => i.id)).toEqual(
+      drafts.slice(0, 2)
+    );
+    expect(first.columns[0]!.items.every((i) => i.status === "draft")).toBe(
+      true
+    );
+    expect(first.live).toBe(6); // aggregates are the whole board's
+    expect(first.nextCursor).toBe("2");
+
+    const second = await caller.board({
+      profileSlug: "deal",
+      column: "draft",
+      limit: 2,
+      cursor: first.nextCursor!,
+    });
+    expect(second.columns[0]!.items.map((i) => i.id)).toEqual(
+      drafts.slice(2, 4)
+    );
+    const last = await caller.board({
+      profileSlug: "deal",
+      column: "draft",
+      limit: 2,
+      cursor: second.nextCursor!,
+    });
+    expect(last.columns[0]!.items.map((i) => i.id)).toEqual([drafts[4]]);
+    expect(last.nextCursor).toBeNull();
+
+    // A whole board carries no cursor.
+    expect((await caller.board({ profileSlug: "deal" })).nextCursor).toBeNull();
+  });
+
+  it("the unclassified column pages every undeclared value (null included); an unknown column is refused", async () => {
+    const client = await freshDb();
+    await thing(client, { status: "weird", title: "W", createdDaysAgo: 3 });
+    await thing(client, { status: null, title: "N", createdDaysAgo: 2 });
+    await thing(client, { status: "draft", title: "D", createdDaysAgo: 1 });
+    const caller = await lifecycleCaller();
+    const page = await caller.board({
+      profileSlug: "deal",
+      column: "__unclassified",
+    });
+    expect(page.columns[0]!.count).toBe(2);
+    expect(page.columns[0]!.items.map((i) => i.status).sort()).toEqual(
+      ["weird", null].sort()
+    );
+    await expect(
+      caller.board({ profileSlug: "deal", column: "nope" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("a done column pages only what entered within the window", async () => {
+    const client = await freshDb();
+    const recent = await thing(client, {
+      status: "won",
+      title: "R",
+      createdDaysAgo: 50,
+    });
+    await moved(client, recent, { to: "won", daysAgo: 2 });
+    const old = await thing(client, {
+      status: "won",
+      title: "O",
+      createdDaysAgo: 200,
+    });
+    await moved(client, old, { to: "won", daysAgo: 90 });
+    const caller = await lifecycleCaller();
+    const page = await caller.board({ profileSlug: "deal", column: "won" });
+    expect(page.columns[0]!.items.map((i) => i.id)).toEqual([recent]);
+  });
+});
+
+describe("lifecycle.list — the pipelines in scope", () => {
+  it("kinds AND roles with a declared lifecycle and a live thing; undeclared and all-terminal are not pipelines", async () => {
+    const client = await freshDb();
+    const a = await thing(client, {
+      status: "draft",
+      title: "A",
+      createdDaysAgo: 3,
+    });
+    await thing(client, { status: "won", title: "B", createdDaysAgo: 3 });
+    await client.query(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, status, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 'churned', now())`,
+      [a, CLIENT, USER]
+    );
+    // A note has no lifecycle: never a pipeline, however many notes exist.
+    await client.query(
+      `insert into entities (id, user_id, type, profile_id, title, status, properties)
+       values (gen_random_uuid(), $1, 'note', $2, 'N', null, '{}'::jsonb)`,
+      [USER, NOTE]
+    );
+    const caller = await lifecycleCaller();
+    const list = await caller.list({});
+    // The client role's only facet is churned (lost): no live thing ⇒ absent.
+    expect(list).toEqual([
+      {
+        profileSlug: "deal",
+        profileKind: "kind",
+        label: "Deal",
+        live: 1,
+        total: 2,
+      },
+    ]);
+
+    await client.query(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, status, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 'onboarding', now())`,
+      [a, CLIENT, USER]
+    );
+    const withRole = await caller.list({});
+    expect(
+      withRole.map((l) => [l.profileSlug, l.profileKind, l.live, l.total])
+    ).toEqual([
+      ["client", "role", 1, 2],
+      ["deal", "kind", 1, 2],
+    ]);
+  });
+});

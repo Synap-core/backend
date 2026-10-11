@@ -144,8 +144,141 @@ export async function groupThingsByStatus(params: {
   order: "newest" | "time_in_column";
   terminal?: { statuses: string[]; since: Date };
 }): Promise<StatusGroup[]> {
+  if (params.subject.profileIds.length === 0) return [];
+  const { t, since, orderBy, windowFilter } = thingsInColumns(params);
+
+  const ranked = db
+    .select({
+      id: t.id,
+      facetId: t.facetId,
+      name: t.name,
+      createdAt: t.createdAt,
+      status: t.status,
+      enteredAt: t.enteredAt,
+      since: since.as("since"),
+      rn: drizzleSql<number>`row_number() OVER (PARTITION BY ${t.status} ORDER BY ${orderBy})`.as(
+        "rn"
+      ),
+      groupCount:
+        drizzleSql<number>`cast(count(*) OVER (PARTITION BY ${t.status}) as integer)`.as(
+          "group_count"
+        ),
+    })
+    .from(t)
+    .where(windowFilter)
+    .as("r");
+
+  // At least one row per group survives, so a counts-only call (firstN 0)
+  // still sees every group's count.
+  const rows = await db
+    .select()
+    .from(ranked)
+    .where(drizzleSql`${ranked.rn} <= ${Math.max(params.firstN, 1)}`)
+    .orderBy(ranked.status, ranked.rn);
+
+  const groups = new Map<string | null, StatusGroup>();
+  for (const r of rows) {
+    const key = (r.status as string | null) ?? null;
+    let g = groups.get(key);
+    if (!g) {
+      g = { status: key, count: Number(r.groupCount), items: [] };
+      groups.set(key, g);
+    }
+    if (Number(r.rn) <= params.firstN) g.items.push(itemOf(r));
+  }
+  return [...groups.values()];
+}
+
+/**
+ * ONE column of the same set, paged (the pipeline's "Show all N"): the things
+ * whose status is `column.statuses` — or, for the unclassified column, any
+ * status OUTSIDE `column.declared` (NULL included) — in the board's own order
+ * and terminal window, `limit` from `offset`. `hasMore` = a further page exists.
+ */
+export async function pageThingsInColumn(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  order: "newest" | "time_in_column";
+  terminal?: { statuses: string[]; since: Date };
+  column: { statuses: string[] } | { outside: string[] };
+  offset: number;
+  limit: number;
+}): Promise<{
+  items: Array<StatusGroupItem & { status: string | null }>;
+  hasMore: boolean;
+}> {
+  if (params.subject.profileIds.length === 0)
+    return { items: [], hasMore: false };
+  const { t, since, orderBy, windowFilter } = thingsInColumns(params);
+  const list = (keys: string[]) =>
+    drizzleSql.join(
+      keys.map((k) => drizzleSql`${k}`),
+      drizzleSql`, `
+    );
+  const inColumn =
+    "statuses" in params.column
+      ? params.column.statuses.length
+        ? drizzleSql`${t.status} IN (${list(params.column.statuses)})`
+        : drizzleSql`false`
+      : params.column.outside.length
+        ? drizzleSql`(${t.status} IS NULL OR ${t.status} NOT IN (${list(params.column.outside)}))`
+        : drizzleSql`true`;
+  const rows = await db
+    .select({
+      id: t.id,
+      facetId: t.facetId,
+      name: t.name,
+      createdAt: t.createdAt,
+      status: t.status,
+      enteredAt: t.enteredAt,
+      since: since.as("since"),
+    })
+    .from(t)
+    .where(and(windowFilter, inColumn))
+    .orderBy(orderBy)
+    .offset(params.offset)
+    .limit(params.limit + 1);
+  return {
+    items: rows.slice(0, params.limit).map((r) => ({
+      ...itemOf(r),
+      status: (r.status as string | null) ?? null,
+    })),
+    hasMore: rows.length > params.limit,
+  };
+}
+
+function itemOf(r: {
+  id: unknown;
+  facetId: unknown;
+  name: unknown;
+  createdAt: unknown;
+  enteredAt: unknown;
+  since: unknown;
+}): StatusGroupItem {
+  return {
+    id: r.id as string,
+    facetId: (r.facetId as string | null) ?? null,
+    name: (r.name as string | null) ?? null,
+    createdAt: iso(r.createdAt),
+    enteredAt: r.enteredAt == null ? null : iso(r.enteredAt),
+    since: iso(r.since),
+  };
+}
+
+/**
+ * The ONE base set every status read draws from: the visible things of
+ * `subject` (subject + visibility conditions) with their status and time in
+ * column, plus the order and the terminal window. `groupThingsByStatus` ranks
+ * it per status; `pageThingsInColumn` pages one column of it — the same rows
+ * in the same order, never a second read path.
+ */
+function thingsInColumns(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  order: "newest" | "time_in_column";
+  terminal?: { statuses: string[]; since: Date };
+}) {
   const { subject } = params;
-  if (subject.profileIds.length === 0) return [];
   const isRole = subject.kind === "role";
   // Correlated, so every reference is QUALIFIED by hand: drizzle renders a
   // single-table select's columns bare, and a bare "id" inside the subquery
@@ -213,54 +346,61 @@ export async function groupThingsByStatus(params: {
   const windowFilter = terminal
     ? drizzleSql`(NOT ${isTerminal} OR ${since} >= ${terminal.since.toISOString()}::timestamptz)`
     : drizzleSql`true`;
+  return { t, since, orderBy, windowFilter };
+}
 
-  const ranked = db
-    .select({
-      id: t.id,
-      facetId: t.facetId,
-      name: t.name,
-      createdAt: t.createdAt,
-      status: t.status,
-      enteredAt: t.enteredAt,
-      since: since.as("since"),
-      rn: drizzleSql<number>`row_number() OVER (PARTITION BY ${t.status} ORDER BY ${orderBy})`.as(
-        "rn"
-      ),
-      groupCount:
-        drizzleSql<number>`cast(count(*) OVER (PARTITION BY ${t.status}) as integer)`.as(
-          "group_count"
-        ),
-    })
-    .from(t)
-    .where(windowFilter)
-    .as("r");
-
-  // At least one row per group survives, so a counts-only call (firstN 0)
-  // still sees every group's count.
-  const rows = await db
-    .select()
-    .from(ranked)
-    .where(drizzleSql`${ranked.rn} <= ${Math.max(params.firstN, 1)}`)
-    .orderBy(ranked.status, ranked.rn);
-
-  const groups = new Map<string | null, StatusGroup>();
-  for (const r of rows) {
-    const key = (r.status as string | null) ?? null;
-    let g = groups.get(key);
-    if (!g) {
-      g = { status: key, count: Number(r.groupCount), items: [] };
-      groups.set(key, g);
-    }
-    if (Number(r.rn) <= params.firstN) {
-      g.items.push({
-        id: r.id as string,
-        facetId: (r.facetId as string | null) ?? null,
-        name: (r.name as string | null) ?? null,
-        createdAt: iso(r.createdAt),
-        enteredAt: r.enteredAt == null ? null : iso(r.enteredAt),
-        since: iso(r.since),
-      });
-    }
-  }
-  return [...groups.values()];
+/**
+ * Counts only, PER PROFILE and status (a project's pipeline doors,
+ * `lifecycle.list`): the same base rows as the grouping above — `entities` of
+ * a kind, or `entity_facets` of a role joined to a live entity — under the
+ * caller's visibility conditions, without the time-in-column read (a count
+ * needs no order). A failed read THROWS.
+ */
+export async function countThingsByProfileAndStatus(params: {
+  kind: "kind" | "role";
+  profileIds: string[];
+  conditions: SQL[];
+}): Promise<
+  Array<{ profileId: string; status: string | null; count: number }>
+> {
+  if (params.profileIds.length === 0) return [];
+  const rows =
+    params.kind === "role"
+      ? await db
+          .select({
+            profileId: entityFacets.profileId,
+            status: entityFacets.status,
+            count: drizzleSql<number>`cast(count(*) as integer)`,
+          })
+          .from(entityFacets)
+          .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+          .where(
+            and(
+              inArray(entityFacets.profileId, params.profileIds),
+              isNull(entityFacets.deletedAt),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          )
+          .groupBy(entityFacets.profileId, entityFacets.status)
+      : await db
+          .select({
+            profileId: entities.profileId,
+            status: entities.status,
+            count: drizzleSql<number>`cast(count(*) as integer)`,
+          })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.profileId, params.profileIds),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          )
+          .groupBy(entities.profileId, entities.status);
+  return rows.map((r) => ({
+    profileId: r.profileId as string,
+    status: (r.status as string | null) ?? null,
+    count: Number(r.count),
+  }));
 }
