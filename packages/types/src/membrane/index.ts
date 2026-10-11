@@ -252,6 +252,36 @@ export function resolveAppEndConsequence(
   };
 }
 
+/**
+ * What disconnecting an AI agent does (`agentUsers.disconnect`): every key it
+ * holds is revoked. A key still waiting for approval was never a connection,
+ * so it is revoked, not disconnected (`pending`). History stays.
+ */
+export function resolveAgentEndConsequence(input: {
+  pending: boolean;
+}): ConnectionEndConsequence {
+  if (input.pending) {
+    const note =
+      "The key waiting for your approval is revoked: it can never call your pod.";
+    return {
+      note,
+      confirm: `${note} To connect later, run the setup command again.`,
+    };
+  }
+  const note =
+    "Its keys are revoked: it can no longer call your pod. Its past work stays.";
+  return {
+    note,
+    confirm: `${note} To reconnect, run the setup command again.`,
+  };
+}
+
+/** What revoking one key does (`apiKeys.revoke`). */
+export function resolveKeyEndConsequence(): ConnectionEndConsequence {
+  const note = "Anything still using this key stops working at once.";
+  return { note, confirm: `${note} This cannot be undone.` };
+}
+
 // ── Notify levels ───────────────────────────────────────────────────────────
 
 /** What the person hears about one connection (`connectionPrefs`), in the pod's order. */

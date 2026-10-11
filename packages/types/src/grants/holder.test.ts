@@ -12,6 +12,7 @@ import {
   HOLDER_NOTHING,
   KEY_ACCESS_ENDED_SENTENCE,
   KEY_ACCESS_UNGRANTED_SENTENCE,
+  grantsOfRequests,
   narrowRequestsToRead,
   resolveHolderAccess,
   type HolderAccessInput,
@@ -189,7 +190,7 @@ describe("resolveHolderAccess — agents", () => {
     });
     expect(h.state).toBe("limited");
     expect(h.sentence).toBe("Reads everything. Asks you first.");
-    expect(h.posture).toEqual({ mode: "ask", where: "Everywhere" });
+    expect(h.posture).toEqual({ mode: "ask", where: null });
     expect(h.draft).toEqual(agentCapabilitiesToDraft(["entity.read"]));
   });
 
@@ -203,6 +204,27 @@ describe("resolveHolderAccess — agents", () => {
     expect(h.sentence).toBe(
       `Reads everything, changes ${NOTES}. Acts without asking in Sales.`
     );
+  });
+
+  // Rules out: ask-first said for its FIRST space only when it holds in several.
+  it("a posture holding in several spaces names each (or counts them)", () => {
+    const names = { a: "Sales", b: "Finance", c: "Ops" };
+    const two = agent(["entity.read"], {
+      posture: { mode: "ask", workspaceId: ["a", "b"] },
+      workspaceNames: names,
+    });
+    expect(two.posture).toEqual({ mode: "ask", where: "Sales and Finance" });
+    expect(two.sentence).toBe(
+      "Reads everything. Asks you first in Sales and Finance."
+    );
+    const three = agent(["entity.read"], {
+      posture: { mode: "ask", workspaceId: ["a", "b", "c"] },
+      workspaceNames: names,
+    });
+    expect(three.posture).toEqual({
+      mode: "ask",
+      where: `3 ${resolveObjectNounPlural("workspace").toLowerCase()}`,
+    });
   });
 
   // Rules out: a missing posture rendered as the calm default.
@@ -314,5 +336,34 @@ describe("narrowRequestsToRead", () => {
     expect(out.map((x) => x.permission)).toContain("proposal.read");
     expect(out.filter((x) => x.permission === "entity.read")).toHaveLength(1);
     expect(out.every((x) => x.workspaceId === "a")).toBe(true);
+  });
+});
+
+describe("grantsOfRequests", () => {
+  // Rules out: one grant per request (a space asked twice reads as two holders).
+  it("one grant per place, its permissions deduplicated; anywhere is null", () => {
+    expect(
+      grantsOfRequests([
+        { permission: "entity.note.read", workspaceId: "a" },
+        { permission: "entity.note.read", workspaceId: "a" },
+        { permission: "document.create", workspaceId: "a" },
+        { permission: "entity.read", workspaceId: null },
+      ])
+    ).toEqual([
+      {
+        permissions: ["entity.note.read", "document.create"],
+        workspaceIds: ["a"],
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+      },
+      {
+        permissions: ["entity.read"],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+      },
+    ]);
   });
 });

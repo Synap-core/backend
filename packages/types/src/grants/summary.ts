@@ -117,6 +117,13 @@ export interface SummarizeGrantOptions {
 /** The sentence for `*`: the one pattern that approves without naming it. */
 export const GRANT_FULL_ACCESS_SENTENCE = "Full access, approving included";
 
+/**
+ * The ONE mark for `*` (founder rule: always red): the chip's words, and its
+ * accessible name — the sentence, so a screen reader hears "approving".
+ */
+export const FULL_ACCESS_LABEL = "Full access";
+export const FULL_ACCESS_ACCESSIBLE_NAME = GRANT_FULL_ACCESS_SENTENCE;
+
 /** "Read, create, update and delete" — verbs from the vocabulary door. */
 function actionList(actions: readonly string[]): string {
   const words = actions.map((a, i) =>
@@ -369,6 +376,8 @@ export type KeyAccess = "ungranted" | "granted" | "ended";
 /** One live grant on the key-list wire. `expiresAt` null = never. */
 export interface KeyAccessGrant extends GrantDraft {
   readonly expiresAt: Date | string | null;
+  /** The stored role it was built from (lineage), when the wire carries it. */
+  readonly roleId?: string | null;
 }
 
 export interface KeyAccessLine {

@@ -18,9 +18,11 @@ import {
   resolveAgentConnectionState,
   resolveAppConnection,
   resolveAppConnectionState,
+  resolveAgentEndConsequence,
   resolveAppEndConsequence,
   resolveChannelConnectionState,
   resolveConnectionAction,
+  resolveKeyEndConsequence,
   resolveModelConnectionState,
   resolveToolConnectionState,
   resolveWebhookConnectionState,
@@ -679,12 +681,18 @@ describe("resolveAppEndConsequence — what revoking or removing an app does", (
   });
   it("a live key is named only when one was read", () => {
     expect(
-      resolveAppEndConsequence({ state: "ready", action: "revoke", hasKey: true })
-        .confirm
+      resolveAppEndConsequence({
+        state: "ready",
+        action: "revoke",
+        hasKey: true,
+      }).confirm
     ).toMatch(/key stops working/);
     expect(
-      resolveAppEndConsequence({ state: "ready", action: "revoke", hasReach: true })
-        .confirm
+      resolveAppEndConsequence({
+        state: "ready",
+        action: "revoke",
+        hasReach: true,
+      }).confirm
     ).not.toMatch(/key/);
   });
   it("no reach and no key: it can no longer ask", () => {
@@ -714,5 +722,23 @@ describe("notify levels — one ordered list with words", () => {
       "Only problems",
       "Nothing",
     ]);
+  });
+});
+
+describe("resolveAgentEndConsequence / resolveKeyEndConsequence", () => {
+  // Rules out: a pending key worded as a disconnect (it was never connected).
+  it("a pending agent key is revoked, never 'disconnected'; a live one revokes its keys", () => {
+    const pending = resolveAgentEndConsequence({ pending: true });
+    expect(pending.note).toMatch(/waiting for your approval is revoked/);
+    expect(pending.confirm).toMatch(/connect later/);
+    const live = resolveAgentEndConsequence({ pending: false });
+    expect(live.note).toMatch(/^Its keys are revoked/);
+    expect(live.confirm).toMatch(/reconnect/);
+    expect(live.confirm.startsWith(live.note)).toBe(true);
+  });
+  it("a key: stops at once; the confirm adds that it cannot be undone", () => {
+    const k = resolveKeyEndConsequence();
+    expect(k.note).toMatch(/stops working at once/);
+    expect(k.confirm).toMatch(/cannot be undone/);
   });
 });

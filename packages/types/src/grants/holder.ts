@@ -83,10 +83,14 @@ export interface HolderAccessInput {
     readonly proposalId: string;
     readonly requests: readonly AppConnectRequestLike[];
   } | null;
-  /** agentUsers.governance — null = not read (never a calm default). */
+  /**
+   * agentUsers.governance — null = not read (never a calm default).
+   * `workspaceId`: where the mode holds — null = everywhere, one id, or
+   * several (ask-first may hold in more than one space).
+   */
   readonly posture?: {
     readonly mode: "ask" | "auto";
-    readonly workspaceId: string | null;
+    readonly workspaceId: string | readonly string[] | null;
   } | null;
   readonly expiresAt?: Date | string | null;
   readonly lastUsedAt?: Date | string | null;
@@ -123,8 +127,13 @@ export interface HolderAccess {
     readonly expired: boolean;
     readonly expiresAt: Date | null;
   };
-  /** null = the holder has no posture (a person's own key); 'unread' = not read. */
-  readonly posture: { mode: "ask" | "auto"; where: string } | "unread" | null;
+  /**
+   * null = the holder has no posture (a person's own key); 'unread' = not
+   * read. `where` null = everywhere, else the spaces it holds in ("Sales and
+   * Finance", "3 spaces").
+   */
+  readonly posture:
+    { mode: "ask" | "auto"; where: string | null } | "unread" | null;
   /** Patterns no catalog row names (vault.redeem, apiKey.*), for "Tools and secrets". */
   readonly other: readonly string[];
   /** What GrantSelector edits: agent → its capabilities; one grant → it; else null. */
@@ -213,6 +222,13 @@ function and(parts: readonly string[]): string {
     : (parts[0] ?? "");
 }
 
+/** "Sales", "Sales and Finance", "3 spaces". */
+function spacesPhrase(names: readonly string[]): string {
+  return names.length <= 2
+    ? and(names)
+    : `${names.length} ${resolveObjectNounPlural("workspace").toLowerCase()}`;
+}
+
 export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
   const now = input.now ?? Date.now();
   const { limits } = input;
@@ -299,13 +315,19 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
 
   let posture: HolderAccess["posture"];
   if (input.posture) {
-    const id = input.posture.workspaceId;
+    const raw = input.posture.workspaceId;
+    const ids = raw === null ? [] : typeof raw === "string" ? [raw] : raw;
     posture = {
       mode: input.posture.mode,
       where:
-        id === null
-          ? "Everywhere"
-          : (input.workspaceNames?.[id] ?? resolveObjectNoun("workspace")),
+        ids.length === 0
+          ? null
+          : spacesPhrase(
+              ids.map(
+                (id) =>
+                  input.workspaceNames?.[id] ?? resolveObjectNoun("workspace")
+              )
+            ),
     };
   } else posture = input.kind === "key" ? null : "unread";
 
@@ -403,15 +425,11 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     if (approve) verbs.push(`approves ${phrase(approve)}`);
     what = verbs.join(", ");
     if (spaces.length > 0)
-      what += ` in ${
-        spaces.length <= 2
-          ? and(spaces.map((s) => s.name))
-          : `${spaces.length} ${resolveObjectNounPlural("workspace").toLowerCase()}`
-      }`;
+      what += ` in ${spacesPhrase(spaces.map((s) => s.name))}`;
   }
   const parts = [`${what}.`];
   if (posture && posture !== "unread" && state !== "nothing") {
-    const scope = posture.where === "Everywhere" ? "" : ` in ${posture.where}`;
+    const scope = posture.where === null ? "" : ` in ${posture.where}`;
     parts.push(
       posture.mode === "ask"
         ? `Asks you first${scope}.`
@@ -435,6 +453,30 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     other,
     draft,
   };
+}
+
+/**
+ * What approving connect requests attaches: one grant per place, exactly the
+ * permissions asked there (deduplicated). The connect card reads the holder
+ * through these, so it says what approving WILL enable.
+ */
+export function grantsOfRequests(
+  requests: readonly AppConnectRequestLike[]
+): KeyAccessGrant[] {
+  const byPlace = new Map<string | null, string[]>();
+  for (const r of requests) {
+    const place = r.workspaceId || null;
+    const perms = byPlace.get(place) ?? [];
+    if (!perms.includes(r.permission)) perms.push(r.permission);
+    byPlace.set(place, perms);
+  }
+  return [...byPlace].map(([workspaceId, permissions]) => ({
+    permissions,
+    workspaceIds: workspaceId ? [workspaceId] : null,
+    projectIds: null,
+    entityIds: null,
+    expiresAt: null,
+  }));
 }
 
 /**
