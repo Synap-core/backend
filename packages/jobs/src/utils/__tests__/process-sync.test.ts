@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   updates: [] as Array<Record<string, unknown>>,
   /** The subject's CURRENT properties (the follow re-reads them). */
   subject: {} as Record<string, unknown>,
+  /** A role's CURRENT status (the facet row). */
+  facetStatus: null as string | null,
   /** user id → user_type, for the producer's agent-ness. */
   userTypes: {} as Record<string, string>,
   lastUserLookup: null as string | null,
@@ -24,6 +26,7 @@ const h = vi.hoisted(() => ({
     focusSessions: { __t: "fs" },
     proposals: { __t: "p" },
     entities: { __t: "e" },
+    entityFacets: { __t: "f" },
     users: { __t: "u", id: "users.id" },
   },
 }));
@@ -39,11 +42,13 @@ vi.mock("@synap/database", () => ({
               : []
             : t.__t === "e"
               ? [{ properties: h.subject }]
-              : t.__t === "u"
-                ? h.lastUserLookup && h.userTypes[h.lastUserLookup]
-                  ? [{ userType: h.userTypes[h.lastUserLookup] }]
-                  : []
-                : h.sessions;
+              : t.__t === "f"
+                ? [{ status: h.facetStatus }]
+                : t.__t === "u"
+                  ? h.lastUserLookup && h.userTypes[h.lastUserLookup]
+                    ? [{ userType: h.userTypes[h.lastUserLookup] }]
+                    : []
+                  : h.sessions;
         const q = {
           where: () => q,
           limit: async () => rows(),
@@ -63,6 +68,7 @@ vi.mock("@synap/database", () => ({
   focusSessions: h.T.focusSessions,
   proposals: h.T.proposals,
   entities: h.T.entities,
+  entityFacets: h.T.entityFacets,
   users: h.T.users,
   // The users lookup is by id: remember which id was asked for.
   eq: (col: unknown, v: unknown) => {
@@ -72,6 +78,10 @@ vi.mock("@synap/database", () => ({
   and: () => ({}),
   inArray: () => ({}),
   isNotNull: () => ({}),
+}));
+vi.mock("@synap/events", () => ({
+  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS: true,
+  LIFECYCLE_TRANSITION_EVENT_TYPE: "entity.transition.completed",
 }));
 vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -144,6 +154,7 @@ const statusEvent = (value: string, previous: string) => ({
 
 beforeEach(() => {
   h.subject = {};
+  h.facetStatus = null;
   h.subjectWrites = [];
   h.userTypes = { "agent-1": "agent", "human-2": "human" };
   h.lastUserLookup = null;
@@ -323,6 +334,52 @@ describe("rejected human gate → onFail", () => {
       data: {},
     });
     expect(h.updates).toEqual([]);
+    expect(h.advances).toEqual([]);
+  });
+});
+
+describe("the transition event (work model L2) → run stage", () => {
+  const transition = (extra: Record<string, unknown>) => ({
+    eventType: "entity.transition.completed",
+    subjectId: "post-1",
+    userId: "owner-1",
+    workspaceId: "ws-1",
+    data: {
+      entityId: "post-1",
+      property: "post-status",
+      from: "scheduled",
+      to: "published",
+      ...extra,
+    },
+  });
+
+  it("a ROLE's transition follows, reading the role's status from its facet", async () => {
+    h.sessions = [session("schedule")];
+    h.facetStatus = "published";
+    const out = await syncProcessOnEvent(
+      transition({ role: "lead", facetId: "facet-1" })
+    );
+    expect(h.advances).toEqual([
+      expect.objectContaining({ toStage: "publish", skipSubjectWrite: true }),
+    ]);
+    expect(out[0]).toMatchObject({ kind: "followed", toStage: "publish" });
+  });
+
+  it("a stale role transition (the facet moved on) is ignored", async () => {
+    h.sessions = [session("schedule")];
+    h.facetStatus = "drafting";
+    const out = await syncProcessOnEvent(
+      transition({ role: "lead", facetId: "facet-1" })
+    );
+    expect(h.advances).toEqual([]);
+    expect(out[0]).toMatchObject({ kind: "ignored", reason: "stale_event" });
+  });
+
+  it("a KIND's transition is left to the dual-emitted update event (no double follow)", async () => {
+    h.sessions = [session("schedule")];
+    h.subject = { "post-status": "published" };
+    const out = await syncProcessOnEvent(transition({ role: null }));
+    expect(out).toEqual([]);
     expect(h.advances).toEqual([]);
   });
 });

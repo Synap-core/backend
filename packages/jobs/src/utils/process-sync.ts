@@ -47,6 +47,7 @@ import { createLogger } from "@synap-core/core";
 import {
   db,
   entities,
+  entityFacets,
   focusSessions,
   proposals,
   users,
@@ -61,6 +62,10 @@ import {
   stageForSubjectStatus,
   STAGE_GATE_PROPOSAL_TYPES,
 } from "@synap/playbooks";
+import {
+  DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
+  LIFECYCLE_TRANSITION_EVENT_TYPE,
+} from "@synap/events";
 import { advanceSessionStageViaSlot } from "./stage-advance.js";
 import { loadSessionProcess } from "./session-process.js";
 
@@ -109,14 +114,59 @@ export async function syncProcessOnEvent(
   if (ev.eventType === "entity.update.completed") {
     return followSubjectStatus(ev);
   }
+  if (ev.eventType === LIFECYCLE_TRANSITION_EVENT_TYPE) {
+    return followTransition(ev);
+  }
   if (ev.eventType === "proposal.rejected.completed") {
     return applyRejectedGateOnFail(ev);
   }
   return [];
 }
 
-async function followSubjectStatus(
+/**
+ * The ONE transition event (`entity.transition.completed`, work model L2) —
+ * the status door's own fact: property, from, to, role. A ROLE's status lives
+ * on its facet, so its stale check reads the facet row; the entity-update path
+ * could never see it (enters/follow were blind to roles).
+ *
+ * A KIND's transition is followed here only once the status door stops
+ * dual-emitting the legacy `entity.update` (`DUAL_EMIT_ENTITY_UPDATE_FOR_
+ * TRANSITIONS`); until then the update path above follows it, and following
+ * both would advance twice.
+ */
+async function followTransition(
   ev: ProcessSyncEvent
+): Promise<ProcessSyncOutcome[]> {
+  const data = ev.data ?? {};
+  const property = typeof data.property === "string" ? data.property : null;
+  const role = typeof data.role === "string" ? data.role : null;
+  const facetId = typeof data.facetId === "string" ? data.facetId : null;
+  if (!property) return [];
+  if (role === null && DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS) return [];
+  return followSubjectStatus(
+    {
+      ...ev,
+      subjectId:
+        typeof data.entityId === "string" ? data.entityId : ev.subjectId,
+      data: { changedKeys: [property], [property]: data.to },
+    },
+    facetId
+      ? async () => {
+          const [f] = await db
+            .select({ status: entityFacets.status })
+            .from(entityFacets)
+            .where(eq(entityFacets.id, facetId))
+            .limit(1);
+          return { [property]: f?.status ?? null };
+        }
+      : undefined
+  );
+}
+
+async function followSubjectStatus(
+  ev: ProcessSyncEvent,
+  /** Where the CURRENT value is read (default: the entity's properties). */
+  readCurrent?: () => Promise<Record<string, unknown>>
 ): Promise<ProcessSyncOutcome[]> {
   const data = ev.data ?? {};
   const changed = Array.isArray(data.changedKeys)
@@ -151,12 +201,16 @@ async function followSubjectStatus(
 
   // The subject's CURRENT properties, read once: the event's value is only
   // acted on while the subject still holds it (see LOOP GUARD).
-  const [subject] = await db
-    .select({ properties: entities.properties })
-    .from(entities)
-    .where(eq(entities.id, ev.subjectId))
-    .limit(1);
-  const current = (subject?.properties ?? {}) as Record<string, unknown>;
+  const current: Record<string, unknown> = readCurrent
+    ? await readCurrent()
+    : await db
+        .select({ properties: entities.properties })
+        .from(entities)
+        .where(eq(entities.id, ev.subjectId))
+        .limit(1)
+        .then(
+          ([subject]) => (subject?.properties ?? {}) as Record<string, unknown>
+        );
   const agentUserId = await agentProducer(ev.producerAgentUserId);
 
   const out: ProcessSyncOutcome[] = [];
