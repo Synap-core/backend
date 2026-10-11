@@ -80,12 +80,12 @@ describe("describeKeyAccess", () => {
     ...over,
   });
 
-  // Rules out: an ungranted key reading as calm "no grant".
-  it("ungranted is full access, flagged", () => {
+  // P5 — deny by default. Rules out: a never-granted key read as full access.
+  it("ungranted touches nothing, never full", () => {
     const d = describeKeyAccess({ access: "ungranted", grants: [] });
-    expect(d).toMatchObject({ full: true, ended: false, lines: [] });
+    expect(d).toMatchObject({ full: false, ended: true, lines: [] });
     expect(d.sentence).toBe(KEY_ACCESS_UNGRANTED_SENTENCE);
-    expect(d.sentence).toBe("Full access: everything its scopes allow");
+    expect(d.sentence).toBe("Can touch nothing: it was never given access");
   });
   // Rules out: an ended key falling back to "ungranted" (= full access).
   it("ended touches nothing", () => {

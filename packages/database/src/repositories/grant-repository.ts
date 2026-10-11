@@ -46,7 +46,7 @@ const isLive = (
 
 /**
  * What a key may touch, as a key list shows it:
- *   - `ungranted` — it never had a grant (bounded by its scopes only);
+ *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
  *   - `granted`   — `grants` holds every live one (a key holds a SET);
  *   - `ended`     — it had grants and none is live: it may touch NOTHING.
  */
@@ -122,14 +122,14 @@ export class GrantRepository {
   }
 
   /**
-   * What bounds this key:
-   *   - `null`  — the key never had a grant (legacy key: scopes + human floor);
+   * What bounds this key — never "nothing bounds it" (P5, deny by default):
    *   - every active, unexpired grant, one scope each;
-   *   - ONE DENY-ALL scope (no permissions) when none is active any more.
-   *     Falling back to the ungranted behaviour there would turn a revocation
-   *     into a widening.
+   *   - ONE DENY-ALL scope (no permissions) when none is live: it had grants
+   *     and all ended, OR it never had one. Every mint door attaches a grant
+   *     and migration 0318 backfilled an explicit `*` on the keys minted
+   *     before, so a key with no row is a key nobody gave access to.
    */
-  async resolveForKey(apiKeyId: string): Promise<KeyGrant | null> {
+  async resolveForKey(apiKeyId: string): Promise<KeyGrant> {
     const rows = await this.db
       .select({
         permissions: grants.permissions,
@@ -144,10 +144,9 @@ export class GrantRepository {
       .from(grants)
       .where(eq(grants.apiKeyId, apiKeyId))
       .orderBy(desc(grants.createdAt));
-    if (rows.length === 0) return null;
     const now = new Date();
     const live = rows.filter((r) => isLive(r, now));
-    const clientId = (live[0] ?? rows[0]).clientId;
+    const clientId = (live[0] ?? rows[0])?.clientId ?? null;
     if (live.length === 0) return { scopes: [{ permissions: [] }], clientId };
     return {
       scopes: live.map((r) => ({
@@ -163,7 +162,7 @@ export class GrantRepository {
   /**
    * The reach of each key, newest grant first — ONE read for every key list,
    * so they all say the same thing. A key absent from the map never had a
-   * grant (`ungranted`).
+   * grant (`ungranted` — it may touch nothing).
    */
   async reachForKeys(
     apiKeyIds: readonly string[]
@@ -231,12 +230,12 @@ export class GrantRepository {
    * Hand a key's grants to the key that replaces it (rotation). Run inside the
    * rotation's transaction: the new key must never exist without its bound.
    *
-   *   - never had a grant → nothing to carry; the new key stays ungranted too;
+   *   - never had a grant → nothing to carry; the new key is ungranted too,
+   *     i.e. it may touch nothing, like the old one;
    *   - live grants → each is copied (same scope, expiry, label, client, role)
    *     and the old key's are revoked;
    *   - had grants, none live → the newest ended row is copied as it stands,
-   *     so the new key still resolves to deny-all. Carrying nothing would make
-   *     it read as ungranted — a rotation turned into a widening.
+   *     so the new key keeps the old one's ended history (deny-all either way).
    */
   async carryOver(args: {
     fromKeyId: string;

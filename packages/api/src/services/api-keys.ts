@@ -692,8 +692,8 @@ export class ApiKeyService {
       })
       .where(eq(apiKeys.id, newKeyId));
 
-    // 4. The key's grants follow it — an ungranted key may do everything its
-    // scopes allow, so a new key that cannot take them must not survive.
+    // 4. The key's grants follow it — a new key without them may touch
+    // nothing (P5), so a new key that cannot take them must not survive.
     try {
       await new GrantRepository(db).carryOver({
         fromKeyId: keyId,

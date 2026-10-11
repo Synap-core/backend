@@ -1,8 +1,10 @@
 /**
  * What a pending agent key would be allowed to do, as both approval pages
  * read it (`/setup/agent/pending/:keyId/details` and `/pending/lookup`):
- * the key's scopes, EVERY live grant scope (`null` = never granted) and its
- * real expiry. Words come from `@synap-core/types` — nothing named here.
+ * the key's scopes, EVERY live grant scope and its real expiry. A key with no
+ * grant touches nothing (P5, deny by default): the pod sends one deny-all
+ * scope; `null` (never sent since) reads the same. Words come from
+ * `@synap-core/types` — nothing named here.
  */
 import {
   KEY_ACCESS_ENDED_SENTENCE,
@@ -19,7 +21,7 @@ export interface PendingAccess {
 }
 
 export interface PendingAccessView {
-  /** Unbounded: never granted, or an un-narrowed `*` grant. Mark as danger. */
+  /** An un-narrowed `*` grant. Mark as danger. */
   full: boolean;
   /** The danger chip's words, when `full`. */
   fullLabel: string | null;
@@ -45,9 +47,9 @@ export function viewPendingAccess(a: PendingAccess): PendingAccessView {
   const scopeLabels = a.scopes.map(humanizeToken);
   if (a.grants === null)
     return {
-      full: true,
-      fullLabel: KEY_ACCESS_UNGRANTED_SENTENCE,
-      lines: [],
+      full: false,
+      fullLabel: null,
+      lines: [KEY_ACCESS_UNGRANTED_SENTENCE],
       when,
       expired,
       scopeLabels,

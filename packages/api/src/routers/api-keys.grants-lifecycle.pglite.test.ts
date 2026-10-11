@@ -8,8 +8,8 @@
  *   - rotation: the new key resolves to EXACTLY the old key's bound, and the
  *     old key's grants are revoked. An ungranted new key would do everything
  *     its scopes allow — the rotation would be a widening.
- *   - a key whose grants all ended stays deny-all after rotation (never
- *     ungranted), and a never-granted key stays ungranted.
+ *   - a key whose grants all ended stays deny-all after rotation, and a
+ *     never-granted key stays ungranted — which is deny-all too (P5).
  *   - lists: an expired grant is not shown as live; two live grants are both
  *     returned; a key whose grants all ended reads `access: 'ended'`.
  */
@@ -212,10 +212,18 @@ describe("apiKeys.rotate — the grant follows the key", () => {
     ]);
   });
 
-  it("a never-granted key stays ungranted", async () => {
+  // P5 — rotation never turns "no access" into access.
+  it("a never-granted key stays ungranted: deny-all, before and after", async () => {
     const oldId = await addKey();
+    expect(await repo().resolveForKey(oldId)).toEqual({
+      scopes: [{ permissions: [] }],
+      clientId: null,
+    });
     const rotated = await caller().rotate({ keyId: oldId });
-    expect(await repo().resolveForKey(rotated.id)).toBeNull();
+    expect(await repo().resolveForKey(rotated.id)).toEqual({
+      scopes: [{ permissions: [] }],
+      clientId: null,
+    });
   });
 });
 

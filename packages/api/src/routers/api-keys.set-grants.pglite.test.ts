@@ -238,7 +238,11 @@ describe("apiKeys.setGrants", () => {
         grants: [{ permissions: ["entity.note.read"] }],
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(await repo().resolveForKey(id)).toBeNull();
+    // Nothing attached: it still resolves to deny-all (P5).
+    expect(await repo().resolveForKey(id)).toEqual({
+      scopes: [{ permissions: [] }],
+      clientId: null,
+    });
   });
 
   it("the key list names who holds each key — the door to its holder page", async () => {

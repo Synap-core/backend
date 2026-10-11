@@ -358,7 +358,9 @@ export function summarizeGrant(
 /**
  * What a key may touch, as a key list reads it (`apiKeys.list` /
  * `listForWorkspace` → `access` + `grants`):
- *  - `ungranted` — it never had a grant: bounded only by its scopes;
+ *  - `ungranted` — it never had a grant: it may touch NOTHING (deny by
+ *                  default, P5 — every mint attaches one, and 0318 backfilled
+ *                  the keys minted before);
  *  - `granted`   — `grants` holds every live grant (a key holds a SET);
  *  - `ended`     — it had grants and none is live: it may touch NOTHING.
  */
@@ -377,9 +379,9 @@ export interface KeyAccessLine {
 
 export interface KeyAccessDescription {
   readonly access: KeyAccess;
-  /** Unbounded by any grant: `ungranted`, or a live `*` grant. Mark as danger. */
+  /** A live `*` grant. Mark as danger. */
   readonly full: boolean;
-  /** `ended`: the key may touch nothing. */
+  /** `ended` or `ungranted`: the key may touch nothing. */
   readonly ended: boolean;
   /** `granted` only: one per live grant, in wire order. Empty otherwise. */
   readonly lines: readonly KeyAccessLine[];
@@ -389,7 +391,7 @@ export interface KeyAccessDescription {
 
 /** The ONE wording of the two states that are not a grant. */
 export const KEY_ACCESS_UNGRANTED_SENTENCE =
-  "Full access: everything its scopes allow";
+  "Can touch nothing: it was never given access";
 export const KEY_ACCESS_ENDED_SENTENCE = "Can touch nothing: its access ended";
 
 export function describeKeyAccess(
@@ -402,8 +404,8 @@ export function describeKeyAccess(
   if (key.access === "ungranted")
     return {
       access: key.access,
-      full: true,
-      ended: false,
+      full: false,
+      ended: true,
       lines: [],
       sentence: KEY_ACCESS_UNGRANTED_SENTENCE,
     };

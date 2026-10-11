@@ -782,10 +782,12 @@ export function reviewRefusalMessage(
  * decide at all? A decision executes with the human's authority, so a key
  * granted only "read documents" must not approve anything.
  *
- *   - no grant in the request — a human session, or a key never granted
- *     (legacy) — passes; the review ladder above still decides who may;
- *   - a granted key passes only when ONE of its live scopes names the verb:
- *     `*` or `proposal.<verb>` (revoked/expired = a deny-all scope).
+ *   - no grant in the request — a signed-in human session, never a key —
+ *     passes; the review ladder above still decides who may;
+ *   - a key passes only when ONE of its live scopes names the verb: `*` or
+ *     `proposal.<verb>`. A key with no live grant row — never granted (P5,
+ *     deny by default), revoked or expired — carries a deny-all scope and is
+ *     refused.
  *
  * Resource fences (workspaceIds/projectIds/entityIds) are NOT applied: only
  * the verb is checked. `verb` is the right the key needs; `act` is the word

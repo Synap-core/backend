@@ -247,19 +247,15 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
     ];
     draft = d;
   } else {
+    // A never-granted holder touches nothing (P5); it is not "ended" — it
+    // never started — so it reads as `nothing`, in the ungranted wording.
     const described = describeKeyAccess(limits, summaryOpts);
-    accessEnded = described.ended;
+    accessEnded = limits.access === "ended";
     const grants = limits.access === "granted" ? limits.grants : [];
-    ceiling = (req) =>
-      limits.access === "ungranted" ||
-      grants.some((g) => matches(g.permissions, req));
+    ceiling = (req) => grants.some((g) => matches(g.permissions, req));
     ceilingFull = described.full;
     ceilingSpaces =
-      limits.access === "ungranted"
-        ? null
-        : limits.access === "ended"
-          ? new Set()
-          : grantSpaces(grants);
+      limits.access === "granted" ? grantSpaces(grants) : new Set();
     lines = described.lines;
     if (grants.length === 1) {
       const { expiresAt: _expiresAt, ...one } = grants[0];
@@ -268,23 +264,19 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
   }
 
   // ── an agent's live keys narrow it ──────────────────────────────────────
+  // A key that may touch nothing (ended, or never granted) cannot act, so it
+  // narrows nothing.
   const liveKeys = (input.keys ?? []).filter(
-    (k) => !k.revokedAt && !isPast(k.expiresAt, now) && k.access !== "ended"
+    (k) => !k.revokedAt && !isPast(k.expiresAt, now) && k.access === "granted"
   );
   const narrowed = liveKeys.length > 0;
   const keyGate: Gate = (req) =>
     !narrowed ||
-    liveKeys.some(
-      (k) =>
-        k.access === "ungranted" ||
-        k.grants.some((g) => matches(g.permissions, req))
-    );
+    liveKeys.some((k) => k.grants.some((g) => matches(g.permissions, req)));
   const keysFull =
     !narrowed || liveKeys.some((k) => describeKeyAccess(k, summaryOpts).full);
   const keySpaces = narrowed
-    ? liveKeys.some((k) => k.access === "ungranted")
-      ? null
-      : grantSpaces(liveKeys.flatMap((k) => k.grants))
+    ? grantSpaces(liveKeys.flatMap((k) => k.grants))
     : null;
   const keyLines = liveKeys.flatMap(
     (k) => describeKeyAccess(k, summaryOpts).lines
@@ -399,12 +391,12 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
 
   // ── the sentence ────────────────────────────────────────────────────────
   let what: string;
-  if (state === "nothing") what = HOLDER_NO_ACCESS_SENTENCE;
-  else if (full)
+  if (state === "nothing")
     what =
       limits.source === "grants" && limits.access === "ungranted"
         ? KEY_ACCESS_UNGRANTED_SENTENCE
-        : GRANT_FULL_ACCESS_SENTENCE;
+        : HOLDER_NO_ACCESS_SENTENCE;
+  else if (full) what = GRANT_FULL_ACCESS_SENTENCE;
   else {
     const verbs = [`Reads ${phrase(read)}`];
     if (change) verbs.push(`changes ${phrase(change)}`);

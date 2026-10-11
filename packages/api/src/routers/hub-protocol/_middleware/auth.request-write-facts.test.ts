@@ -26,7 +26,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         users: { findFirst: (...a: unknown[]) => findFirstUser(...a) },
       },
-      // W1: these keys carry no grant (GrantRepository.resolveForKey → null).
+      // W1: the key's grant rows (GrantRepository.resolveForKey reads them).
       select: () => ({
         from: () => ({
           where: () => ({ orderBy: async () => grantRows }),
@@ -103,9 +103,32 @@ async function factsSeenDownstream() {
   };
 }
 
+/** Every key holds a grant (P5); by default the explicit full access `*`. */
+const FULL_ROW = {
+  id: "g-full",
+  permissions: ["*"],
+  workspaceIds: null,
+  projectIds: null,
+  entityIds: null,
+  expiresAt: null,
+  revokedAt: null,
+  clientId: null,
+};
+const FULL_GRANT = {
+  scopes: [
+    {
+      permissions: ["*"],
+      workspaceIds: null,
+      projectIds: null,
+      entityIds: null,
+    },
+  ],
+  clientId: null,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  grantRows = [];
+  grantRows = [FULL_ROW];
 });
 
 describe("hub auth door enters the request write facts", () => {
@@ -115,7 +138,7 @@ describe("hub auth door enters the request write facts", () => {
     expect(await factsSeenDownstream()).toEqual({
       actingAgent: AGENT,
       probe: false,
-      grant: null,
+      grant: FULL_GRANT,
     });
   });
 
@@ -128,7 +151,7 @@ describe("hub auth door enters the request write facts", () => {
     expect(await factsSeenDownstream()).toEqual({
       actingAgent: null,
       probe: false,
-      grant: null,
+      grant: FULL_GRANT,
     });
   });
 
@@ -219,9 +242,16 @@ describe("hub auth door enters the request write facts", () => {
     expect(await status("/api/hub/entities/abc")).toBe(200);
   });
 
-  it("an agent key with NO grant (setup/agent, OAuth, synap init) keeps every door — search, ask, memory (W1 regression guard)", async () => {
+  // P5 — deny by default. Was the W1 guard "a key with NO grant keeps every
+  // door"; a never-granted key now touches nothing, so the fence refuses it
+  // (the full-access row below keeps every door — the backfilled keys).
+  it("a key with NO grant row is deny-all downstream and fenced off the aggregate doors", async () => {
     findFirstUser.mockResolvedValue({ userType: "agent" });
     getApiKeyStatus.mockResolvedValue({ status: "valid", record: keyRecord() });
+    grantRows = [];
+    expect((await factsSeenDownstream()).grant?.scopes).toEqual([
+      { permissions: [] },
+    ]);
     const status = await fencedStatus([]);
     for (const path of [
       "/api/hub/search",
@@ -230,13 +260,13 @@ describe("hub auth door enters the request write facts", () => {
       "/api/hub/graph/entity/x",
       "/api/hub/events",
     ])
-      expect(await status("GET", path)).toBe(200);
+      expect(await status("GET", path)).toBe(403);
     for (const path of [
       "/api/hub/knowledge/ask",
       "/api/hub/entities/retrieve",
       "/api/hub/memory/search",
     ])
-      expect(await status("POST", path)).toBe(200);
+      expect(await status("POST", path)).toBe(403);
   });
 
   it("a key granted the explicit full access '*' keeps every door too", async () => {

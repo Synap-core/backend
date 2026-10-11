@@ -13,7 +13,8 @@
  *   expires_at    — NULL = never (an explicit choice; the default is 90 days).
  *
  * ONE write door: `GrantRepository` (repositories/grant-repository.ts).
- * A key with no active grant keeps the legacy behaviour (scopes + human floor).
+ * A key with no live grant may touch NOTHING (P5, deny by default: every mint
+ * attaches one; 0318 backfilled an explicit `*` on keys minted before).
  * Design: CONNECT-RESEARCH/13-w1-grants-design-2026-10-06.md.
  */
 

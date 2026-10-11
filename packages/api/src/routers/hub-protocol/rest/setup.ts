@@ -1600,7 +1600,7 @@ export function registerSetupRoutes(app: HubHono): void {
       const parentGrant = await new GrantRepository(db).resolveForKey(
         keyRecord.id
       );
-      const childGrants = (parentGrant?.scopes ?? [])
+      const childGrants = parentGrant.scopes
         .filter((g) => g.permissions.length > 0)
         .map((g) => ({
           permissions: [...g.permissions],
@@ -2177,8 +2177,9 @@ export function registerSetupRoutes(app: HubHono): void {
 
   /**
    * What a pending key would be allowed to do, as the approval pages show it:
-   * its scopes, EVERY live grant scope (a key holds a set — `null` = never
-   * granted, so only its scopes bound it) and its real expiry.
+   * its scopes, EVERY live grant scope (a key holds a set; one with no live
+   * grant reads as one deny-all scope — it may touch nothing) and its real
+   * expiry.
    */
   async function pendingKeyAccess(key: {
     id: string;
@@ -2189,14 +2190,12 @@ export function registerSetupRoutes(app: HubHono): void {
     return {
       scopes: key.scope,
       expiresAt: key.expiresAt,
-      grants: keyGrant
-        ? keyGrant.scopes.map((g) => ({
-            permissions: [...g.permissions],
-            workspaceIds: g.workspaceIds ?? null,
-            projectIds: g.projectIds ?? null,
-            entityIds: g.entityIds ?? null,
-          }))
-        : null,
+      grants: keyGrant.scopes.map((g) => ({
+        permissions: [...g.permissions],
+        workspaceIds: g.workspaceIds ?? null,
+        projectIds: g.projectIds ?? null,
+        entityIds: g.entityIds ?? null,
+      })),
     };
   }
 

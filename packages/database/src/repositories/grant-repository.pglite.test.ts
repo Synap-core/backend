@@ -5,9 +5,10 @@
  * harness predated 0307 and was red on every insert until this was added.)
  *
  * Pinned: a malformed pattern is never stored; one ACTIVE grant per key; a key
- * that never had a grant resolves to null (legacy), while a key whose grant was
- * replaced, expired or revoked never falls back to "no grant" (that would turn
- * a revocation into a widening) — it resolves to deny-all.
+ * that never had a grant resolves to deny-all (P5, deny by default — never the
+ * legacy `null` = "everything its scopes allow"), and so does a key whose grant
+ * was replaced, expired or revoked (falling back would turn a revocation into a
+ * widening).
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -74,8 +75,12 @@ describe("GrantRepository (0305, PGlite)", () => {
     expect(rows).toEqual([{ n: 0 }]);
   });
 
-  it("a key that never had a grant resolves to null (legacy)", async () => {
-    expect(await repo.resolveForKey(OTHER_KEY)).toBeNull();
+  // Rules out the legacy reading: no row = full access.
+  it("a key that never had a grant resolves to deny-all, never null (P5)", async () => {
+    expect(await repo.resolveForKey(OTHER_KEY)).toEqual({
+      scopes: [{ permissions: [] }],
+      clientId: null,
+    });
   });
 
   it("resolves the active grant with its sets", async () => {
@@ -141,13 +146,17 @@ describe("GrantRepository (0305, PGlite)", () => {
 
   it("an expired grant resolves to deny-all, never to 'no grant'", async () => {
     await attach({ expiresAt: new Date(Date.now() - 1000) });
-    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([{ permissions: [] }]);
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([
+      { permissions: [] },
+    ]);
   });
 
   it("a revoked grant resolves to deny-all", async () => {
     await attach();
     await pg.exec(`UPDATE grants SET revoked_at = now()`);
-    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([{ permissions: [] }]);
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([
+      { permissions: [] },
+    ]);
   });
 
   it("revokeForKeys revokes the given keys' grants and leaves others active", async () => {
@@ -158,7 +167,9 @@ describe("GrantRepository (0305, PGlite)", () => {
 
     expect(n).toBe(1);
     // KEY's grant is now deny-all; OTHER_KEY's grant is untouched.
-    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([{ permissions: [] }]);
+    expect((await repo.resolveForKey(KEY))?.scopes).toEqual([
+      { permissions: [] },
+    ]);
     expect(
       (await repo.resolveForKey(OTHER_KEY))?.scopes.map((s) => s.permissions)
     ).toEqual([["entity.knowledge.read"]]);

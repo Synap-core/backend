@@ -50,9 +50,10 @@ export interface ResolvedKeyIdentity {
   /** True iff the key principal (`keyRecord.userId`) has `userType === 'agent'`. */
   isAgent: boolean;
   /**
-   * W1 — what this key may touch. `null` = a key that never had a grant
-   * (legacy: scopes + the human floor). A revoked/expired grant is DENY-ALL,
-   * never null. A failed grant read THROWS: guessing "no grant" would widen.
+   * W1 — what this key may touch. Never null for a key record with an id: a
+   * key with no live grant — never granted (P5, deny by default), revoked or
+   * expired — is ONE deny-all scope. `null` only when the record carries no
+   * id (unit fixtures). A failed grant read THROWS: guessing would widen.
    *
    * APP ATTRIBUTION: this is also the carrier of the app identity — `KeyGrant
    * .clientId` (the app's `public_id`, i.e. `grants.client_id`) rides WITH the

@@ -98,6 +98,8 @@ const TWO_SCOPES_WIRE = [
   },
 ];
 
+const DENY_ALL = { scopes: [{ permissions: [] }], clientId: null };
+
 beforeEach(() => {
   for (const m of [
     getSession,
@@ -128,10 +130,19 @@ describe("GET /setup/agent/pending/:keyId/details", () => {
     expect(resolveForKey).toHaveBeenCalledWith(KEY);
   });
 
-  it("an ungranted key says grants: null (never a made-up list)", async () => {
+  // P5 — deny by default. Rules out a never-granted key read as "only its
+  // scopes bound it" (grants: null = full access on the approval page).
+  it("a never-granted key shows one deny-all scope, never null", async () => {
     findKey.mockReturnValue(row(HUMAN));
-    resolveForKey.mockResolvedValue(null);
-    expect((await (await get()).json()).grants).toBeNull();
+    resolveForKey.mockResolvedValue(DENY_ALL);
+    expect((await (await get()).json()).grants).toEqual([
+      {
+        permissions: [],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+      },
+    ]);
   });
 
   it("someone else's pending key answers exactly like a missing one", async () => {
@@ -148,7 +159,7 @@ describe("GET /setup/agent/pending/:keyId/details", () => {
   it("a pod admin may read another person's pending key", async () => {
     assertPodAdmin.mockResolvedValue(undefined);
     findKey.mockReturnValue(row(OTHER));
-    resolveForKey.mockResolvedValue(null);
+    resolveForKey.mockResolvedValue(DENY_ALL);
     expect((await get()).status).toBe(200);
   });
 
@@ -188,7 +199,7 @@ describe("POST /setup/agent/pending/lookup", () => {
       },
     ]);
     resolveForKey.mockImplementation(async (id: string) =>
-      id === KEY ? TWO_SCOPES : null
+      id === KEY ? TWO_SCOPES : DENY_ALL
     );
     const res = await lookup([KEY, OTHER_KEY]);
     expect(res.status).toBe(200);
@@ -200,7 +211,10 @@ describe("POST /setup/agent/pending/lookup", () => {
       expiresAt: EXPIRES.toISOString(),
       grants: TWO_SCOPES_WIRE,
     });
-    expect(keys[1]).toMatchObject({ keyId: OTHER_KEY, grants: null });
+    expect(keys[1]).toMatchObject({
+      keyId: OTHER_KEY,
+      grants: [{ permissions: [] }],
+    });
   });
 
   it("a key the caller may not decide carries no access facts", async () => {

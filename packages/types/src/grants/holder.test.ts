@@ -49,17 +49,19 @@ const NOTES = resolveObjectNounPlural("note");
 const PROPOSALS = resolveObjectNounPlural("proposal");
 
 describe("resolveHolderAccess — keys", () => {
-  // Rules out: an ungranted key read as "no grant ⇒ no access".
-  it("an ungranted key is full, in the one ungranted wording", () => {
+  // P5 — deny by default. Rules out: a never-granted key read as full access
+  // (the legacy reading), or folded into "ended" (it never started).
+  it("an ungranted key touches nothing, in the one ungranted wording", () => {
     const h = key({ source: "grants", access: "ungranted", grants: [] });
-    expect(h.state).toBe("full");
-    expect(h.danger.full).toBe(true);
+    expect(h.state).toBe("nothing");
+    expect(h.danger).toEqual({ full: false, approves: false, deletes: false });
     expect(h.sentence).toBe(`${KEY_ACCESS_UNGRANTED_SENTENCE}.`);
     expect(h.tiers).toEqual({
-      read: HOLDER_EVERYTHING,
-      change: HOLDER_EVERYTHING,
-      approve: HOLDER_EVERYTHING,
+      read: HOLDER_NOTHING,
+      change: null,
+      approve: null,
     });
+    expect(h.where).toMatchObject({ anywhere: false, spaces: [] });
     expect(h.posture).toBeNull();
   });
 
@@ -244,6 +246,12 @@ describe("resolveHolderAccess — agents", () => {
       ],
     });
     expect(revoked.danger.full).toBe(true);
+    // A never-granted key cannot act either (P5): it narrows nothing.
+    const ungranted = agent([], {
+      keys: [{ id: "k1", access: "ungranted", grants: [], ...keyBase }],
+    });
+    expect(ungranted.danger.full).toBe(true);
+    expect(ungranted.where.anywhere).toBe(true);
   });
 });
 

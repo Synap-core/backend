@@ -13,12 +13,15 @@ const base = {
 };
 
 describe("viewPendingAccess", () => {
-  it("an ungranted key is full access, danger-flagged, with its real expiry", () => {
+  // P5 — deny by default. Rules out the legacy reading of a never-granted
+  // key as full access (and an "Approve full access" button over nothing).
+  it("an ungranted key touches nothing, with its real expiry", () => {
     const v = viewPendingAccess({ ...base, grants: null });
-    expect(v.full).toBe(true);
-    expect(v.fullLabel).toBe(KEY_ACCESS_UNGRANTED_SENTENCE);
+    expect(v.full).toBe(false);
+    expect(v.fullLabel).toBeNull();
+    expect(v.lines).toEqual([KEY_ACCESS_UNGRANTED_SENTENCE]);
     expect(v.when).toBe("Until 12 Jan 2099");
-    expect(approveLabel(v.full)).toBe("Approve full access");
+    expect(approveLabel(v.full)).toBe("Approve");
   });
 
   it("one sentence per grant scope — every scope, and a bare subject names its four actions", () => {

@@ -31,10 +31,23 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         users: { findFirst: (...a: unknown[]) => findFirstUser(...a) },
       },
-      // W1: these keys carry no grant (GrantRepository.resolveForKey → null).
+      // Every key holds a grant (P5): these carry the explicit full access
+      // `*` (GrantRepository.resolveForKey reads these rows).
       select: () => ({
         from: () => ({
-          where: () => ({ orderBy: async () => [] }),
+          where: () => ({
+            orderBy: async () => [
+              {
+                permissions: ["*"],
+                workspaceIds: null,
+                projectIds: null,
+                entityIds: null,
+                expiresAt: null,
+                revokedAt: null,
+                clientId: null,
+              },
+            ],
+          }),
         }),
       }),
     },
