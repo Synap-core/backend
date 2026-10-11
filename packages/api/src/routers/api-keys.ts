@@ -68,6 +68,27 @@ import {
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
+import {
+  decideDeviceRequest,
+  getDeviceRequest,
+} from "../services/machine-connect.js";
+
+/**
+ * A device decision is a PERSON's, in their own session (cookie or session
+ * token) — never a key's: an agent or computer key cannot approve a computer.
+ */
+function assertSignedInPerson(ctx: {
+  session?: unknown;
+  keyType?: unknown;
+  agentUserId?: unknown;
+  isHubProtocol?: unknown;
+}): void {
+  if (!ctx.session || ctx.keyType || ctx.agentUserId || ctx.isHubProtocol)
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Approve a computer while signed in.",
+    });
+}
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -650,6 +671,45 @@ export const apiKeysRouter = router({
 
       const reach = await loadKeyReach([key.id]);
       return { status: "updated" as const, ...reach(key.id) };
+    }),
+
+  /**
+   * DEVICE DOOR — review (MACHINE-IDENTITY-PLAN W2). pod-admin `/device`
+   * (and Relay, with its session token) reads the waiting computer by the
+   * code the terminal shows. Signed-in session only: a key never approves a
+   * computer. A code that matches nothing counts against the person (5 per
+   * 10 min, then TOO_MANY_REQUESTS).
+   */
+  getDeviceRequest: protectedProcedure
+    .input(z.object({ userCode: z.string().min(4).max(32) }))
+    .query(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx);
+      return getDeviceRequest({
+        userCode: input.userCode,
+        personId: ctx.userId,
+      });
+    }),
+
+  /**
+   * DEVICE DOOR — the ONE decision: approve the computer AND its agents, or
+   * deny ("This wasn't me"). The code must be the one bound to the request;
+   * the fifth wrong code closes it. No key is minted here — the terminal
+   * collects its keys once, at `POST /api/hub/setup/device/token`.
+   */
+  decideDeviceRequest: protectedProcedure
+    .input(
+      z.object({
+        requestId: z.string().uuid(),
+        userCode: z.string().min(4).max(32),
+        decision: z.enum(["approve", "deny"]),
+        agents: z.array(z.string().min(1).max(64)).max(8).optional(),
+        reuseComputerId: z.string().min(1).nullish(),
+        computerName: z.string().trim().min(1).max(80).nullish(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx);
+      return decideDeviceRequest({ ...input, personId: ctx.userId });
     }),
 
   /**

@@ -172,6 +172,37 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
 
+-- device_auth_requests — the device door (mirrors 0321, MACHINE-IDENTITY-PLAN
+-- W2). Hashes only: no code, token or key is ever stored in clear.
+CREATE TABLE IF NOT EXISTS "device_auth_requests" (
+  "id"                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "device_code_hash"      text NOT NULL,
+  "user_code_hash"        text NOT NULL,
+  "status"                text NOT NULL DEFAULT 'pending',
+  "client_name"           text NOT NULL,
+  "hostname"              text NOT NULL,
+  "platform"              text,
+  "requested_agents"      text[] NOT NULL DEFAULT '{}',
+  "requester_ip"          text,
+  "user_agent"            text,
+  "approved_by_user_id"   text REFERENCES "users"("id") ON DELETE SET NULL,
+  "approved_at"           timestamptz,
+  "approved_agents"       text[],
+  "machine_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
+  "machine_name"          text,
+  "minted_key_id"         uuid,
+  "failed_code_attempts"  integer NOT NULL DEFAULT 0,
+  "poll_interval_seconds" integer NOT NULL DEFAULT 5,
+  "last_polled_at"        timestamptz,
+  "consumed_at"           timestamptz,
+  "expires_at"            timestamptz NOT NULL,
+  "created_at"            timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "device_auth_requests_device_code_hash_idx"
+  ON "device_auth_requests" ("device_code_hash");
+CREATE UNIQUE INDEX IF NOT EXISTS "device_auth_requests_pending_user_code_idx"
+  ON "device_auth_requests" ("user_code_hash") WHERE "status" = 'pending';
+
 -- mcp_connect_codes — one-time consent codes for the CP-MCP pod-accept gate
 -- (mirrors 0206_mcp_connect_codes.sql). Only a sha256 HASH of the code is stored;
 -- single-use (consumed_at) + short TTL (expires_at). The claude-web agent key is

@@ -22,6 +22,8 @@ import {
  * - calendar_feed: unauth ICS polls (not crud — calendar clients poll)
  * - public_read: credentialless public-door reads (`/api/hub/public/*` GET)
  * - public_submit: credentialless public-door writes (`/api/hub/public/*` POST)
+ * - device_auth: the unauthenticated device-flow START (`POST /setup/device`),
+ *   IP-keyed — a terminal has no credential yet (MACHINE-IDENTITY-PLAN W2)
  * - crud: everything else
  */
 export type RateLimitClass =
@@ -32,6 +34,7 @@ export type RateLimitClass =
   | "calendar_feed"
   | "public_read"
   | "public_submit"
+  | "device_auth"
   | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -50,7 +53,10 @@ function formatRetryAfter(windowMs: number): string {
 /** Tunable class budgets (env overrides; call at use-site for fresh reads). */
 export function getRateLimitClassConfig(): Record<
   // Public-door classes carry their own nested budgets (getPublicDoorRateConfig).
-  Exclude<RateLimitClass, "free" | "public_read" | "public_submit">,
+  Exclude<
+    RateLimitClass,
+    "free" | "public_read" | "public_submit" | "device_auth"
+  >,
   { max: number; windowMs: number; retryAfter: string }
 > {
   const crudWindow = parsePositiveInt(
@@ -124,6 +130,13 @@ export function classifyRateLimitPath(
     return m === "GET" || m === "HEAD" || m === "OPTIONS"
       ? "public_read"
       : "public_submit";
+  }
+
+  // Device door START — unauthenticated, so its budget is per IP (RFC 8628
+  // §5.1). Only creation: polling `/setup/device/token` is paced by the
+  // protocol (`interval`/`slow_down`) and gated by the device code.
+  if (p === "/api/hub/setup/device" || p === "/api/hub-protocol/setup/device") {
+    return "device_auth";
   }
 
   // free — probes that must never burn budget
@@ -262,6 +275,26 @@ export function getPublicDoorRateConfig(): {
       windowMs: submitShareWindow,
       retryAfter: formatRetryAfter(submitShareWindow),
     },
+  };
+}
+
+/**
+ * Device-flow START budget, per IP: 10 requests / 10 min. Keyed WITHOUT the
+ * Authorization header (a random Bearer must not buy a fresh budget).
+ */
+export function getDeviceAuthRateConfig(): {
+  max: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_DEVICE_AUTH_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_DEVICE_AUTH_MAX, 10),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
   };
 }
 

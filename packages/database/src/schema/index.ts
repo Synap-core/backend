@@ -19,6 +19,7 @@ export * from "./ai-suggestions.js";
 export * from "./api-keys.js";
 export * from "./api-key-external-users.js";
 export * from "./mcp-connect-codes.js";
+export * from "./device-auth-requests.js";
 export * from "./pod-oauth.js";
 export * from "./webhook_subscriptions.js";
 

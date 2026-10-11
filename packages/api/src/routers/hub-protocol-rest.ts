@@ -66,6 +66,7 @@ import {
   registerSessionsRoutes,
   registerPlaybooksRoutes,
   registerSetupRoutes,
+  registerDeviceRoutes,
   registerMcpRedeemRoutes,
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
@@ -256,6 +257,10 @@ app.use(
       "/federation/oidc-config",
       "/mcp/redeem",
       "/mcp/revoke",
+      // Device door: unauthenticated (userId "anonymous") and the token
+      // route returns one-shot keys — never cache either.
+      "/setup/device",
+      "/setup/device/token",
       // Mint/rotate return the plaintext feed URL once — never cache.
       "/calendar/feed",
       "/calendar/feed/rotate",
@@ -327,6 +332,7 @@ registerTerminalRoutes(app); // /terminal/logs
 registerProactiveRoutes(app); // /proactive/post
 registerNotificationsRoutes(app); // /notifications
 registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
+registerDeviceRoutes(app); // /setup/device, /setup/device/token — RFC 8628 device door (unauthenticated, MACHINE-IDENTITY-PLAN W2)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key), /mcp/revoke (disconnect)
 registerAgentsRoutes(app); // /agents/sync

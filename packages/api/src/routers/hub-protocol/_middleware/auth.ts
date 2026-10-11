@@ -141,6 +141,11 @@ export const hubAuthMiddleware = async (
     // CP-MCP disconnect revoke — same CP-trusted-issuer auth as /mcp/redeem,
     // scoped to its own `mcp_revoke` purpose claim (not replayable as a redeem).
     "/mcp/revoke",
+    // The device door (RFC 8628, MACHINE-IDENTITY-PLAN W2): the terminal has
+    // no credential yet — that is what it asks for. Create is IP-budgeted at
+    // the edge (`device_auth`); collection is gated by the device code.
+    "/setup/device",
+    "/setup/device/token",
   ];
   // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
   // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the

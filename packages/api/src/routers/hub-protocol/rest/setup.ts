@@ -136,7 +136,7 @@ function approvalPageUrl(
  * governance decision) — a CLI-only name is refused with
  * SURFACE_AGENT_TYPE_REQUIRED.
  */
-const SURFACE_AGENT_TYPES = [
+export const SURFACE_AGENT_TYPES = [
   "claude-code",
   "claude-desktop",
   "cursor",

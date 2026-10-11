@@ -53,6 +53,8 @@ const MINT_SITES: Record<string, string> = {
     "tRPC apiKeys.* — human session; governed (apiKey/create) for agents; pod-admin system/service keys.",
   "packages/api/src/routers/hub-protocol/rest/setup.ts":
     "/setup/agent, /setup/service (refuses agent keys), /setup/external-user (sub-token subset).",
+  "packages/api/src/services/machine-connect.ts":
+    "the device door (MACHINE-IDENTITY-PLAN W2): mints the computer's user_pat (AI — read & propose grant) ONLY at collection by the device code, after a signed-in person approved (tRPC refuses any key or agent caller); hosted agents mint through provisionSurfaceAgentKey.",
   "packages/api/src/routers/hub-protocol/rest/mcp-redeem.ts":
     "/mcp/redeem — CP-asserted one-time code → provisionSurfaceAgentKey.",
   "packages/api/src/routers/oauth/routes.ts":

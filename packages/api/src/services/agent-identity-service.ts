@@ -487,6 +487,60 @@ interface ProvisionLogger {
 }
 
 /**
+ * The ONE insert shape of a non-personal (service) agent user — no lookup.
+ * `findOrCreateServiceAgentUser` wraps it with the singleton lookup and race
+ * recovery; a COMPUTER (`agent_type = 'machine'`, which the singleton index
+ * deliberately excludes — a person has several) is created through it
+ * directly by `ensureMachineAgent`.
+ */
+export async function insertServiceAgentUser(opts: {
+  creatorId: string;
+  agentType: string;
+  label: string;
+  metadata?: Partial<AgentMetadata>;
+  createdVia?: AgentCreatedVia;
+  hostUserId?: string | null;
+}): Promise<{ agentUserId: string; email: string }> {
+  const { creatorId, agentType, label } = opts;
+  const hostUserId = opts.hostUserId ?? null;
+  const agentUserId = randomUUID();
+  const shortId = agentUserId.slice(0, 8);
+  const email = `agent-${agentType}-${shortId}@synap.agent`;
+  // Defaults first, caller metadata second, identity invariants last (forced).
+  const agentMetadata: AgentMetadata = {
+    capabilities: [],
+    ...opts.metadata,
+    agentType,
+    createdByUserId: creatorId,
+    isPersonalAgent: false,
+    // Non-twin service agents always route writes through proposals.
+    writesRequireProposal: true,
+  };
+
+  await db.insert(users).values({
+    id: agentUserId,
+    email,
+    name: label,
+    emailVerified: true,
+    userType: "agent",
+    // INVARIANT: an agent NEVER carries a Kratos identity. `kratosIdentityId IS
+    // NULL` is the canonical human↔agent discriminator (agents authenticate on
+    // the Hub-key rail, not Kratos). Keep this NULL — the tripwire
+    // agent-kratos-identity-invariant.test.ts locks it.
+    kratosIdentityId: null,
+    agentType,
+    isPersonalAgent: false,
+    createdByUserId: creatorId,
+    createdVia: opts.createdVia ?? "cli",
+    hostUserId,
+    agentMetadata,
+    timezone: "UTC",
+    locale: "en",
+  });
+  return { agentUserId, email };
+}
+
+/**
  * Find-or-create a non-personal (service) agent user for **(creatorId, agentType)**
  * — singleton per **(createdByUserId, agentType)** on ONE computer: with
  * `hostUserId` it is "Claude Code on devbox", a distinct principal from the
@@ -561,40 +615,14 @@ export async function findOrCreateServiceAgentUser(opts: {
     return { agentUserId: existing.id, email: existing.email };
   }
 
-  const agentUserId = randomUUID();
-  const shortId = agentUserId.slice(0, 8);
-  const email = `agent-${agentType}-${shortId}@synap.agent`;
-  // Defaults first, caller metadata second, identity invariants last (forced).
-  const agentMetadata: AgentMetadata = {
-    capabilities: [],
-    ...opts.metadata,
-    agentType,
-    createdByUserId: creatorId,
-    isPersonalAgent: false,
-    // Non-twin service agents always route writes through proposals.
-    writesRequireProposal: true,
-  };
-
   try {
-    await db.insert(users).values({
-      id: agentUserId,
-      email,
-      name: label,
-      emailVerified: true,
-      userType: "agent",
-      // INVARIANT: an agent NEVER carries a Kratos identity. `kratosIdentityId IS
-      // NULL` is the canonical human↔agent discriminator (agents authenticate on
-      // the Hub-key rail, not Kratos). Keep this NULL — the tripwire
-      // agent-kratos-identity-invariant.test.ts locks it.
-      kratosIdentityId: null,
+    const { agentUserId, email } = await insertServiceAgentUser({
+      creatorId,
       agentType,
-      isPersonalAgent: false,
-      createdByUserId: creatorId,
-      createdVia: opts.createdVia ?? "cli",
+      label,
+      metadata: opts.metadata,
+      createdVia: opts.createdVia,
       hostUserId,
-      agentMetadata,
-      timezone: "UTC",
-      locale: "en",
     });
     logger?.info(
       { agentUserId, agentType, createdByUserId: creatorId },

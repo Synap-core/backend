@@ -18,6 +18,7 @@ import {
   getPublicDoorRateConfig,
   buildPublicDoorKey,
   clientIp,
+  getDeviceAuthRateConfig,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -246,6 +247,36 @@ const publicSubmitShareRateLimiter = rateLimiter({
   ),
 });
 
+const deviceAuthRate = getDeviceAuthRateConfig();
+
+/**
+ * Device-flow start (MACHINE-IDENTITY-PLAN W2): IP-ONLY, never the
+ * Authorization header — the caller has no credential, and a random Bearer
+ * must not buy a fresh budget. Loopback keeps the local bypass.
+ */
+const deviceAuthRateLimiter = rateLimiter({
+  windowMs: deviceAuthRate.windowMs,
+  limit: deviceAuthRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: (c: Context): string => {
+    const ip = clientIp(c);
+    if (
+      ip === "127.0.0.1" ||
+      ip === "::1" ||
+      ip === "localhost" ||
+      (process.env.NODE_ENV === "development" && ip === "unknown")
+    ) {
+      return "localhost-bypass-device_auth-" + Math.random();
+    }
+    return `device_auth:ip:${ip}`;
+  },
+  handler: classHandler(
+    "device_auth",
+    deviceAuthRate.max,
+    deviceAuthRate.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -283,6 +314,8 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
         const limited = await publicSubmitShareRateLimiter(c, next);
         if (limited instanceof Response) c.res = limited;
       });
+    case "device_auth":
+      return deviceAuthRateLimiter(c, next);
     case "crud":
     default:
       return crudRateLimiter(c, next);
