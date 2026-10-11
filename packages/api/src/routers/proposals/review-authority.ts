@@ -11,10 +11,13 @@ import {
   and,
   db,
   eq,
+  getRequestGrant,
   getWorkspaceMembership,
   inArray,
   users,
+  type KeyGrant,
 } from "@synap/database";
+import { patternMatches } from "@synap/governance-policy/grants";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { isPodAdmin } from "../../utils/workspace-role.js";
@@ -772,4 +775,36 @@ export function reviewRefusalMessage(
   return reason === "session-only"
     ? `Only people in this session can ${action} this proposal`
     : `Not authorized to ${action} this proposal`;
+}
+
+/**
+ * The KEY half of deciding a proposal: may the calling credential's grant
+ * decide at all? A decision executes with the human's authority, so a key
+ * granted only "read documents" must not approve anything.
+ *
+ *   - no grant in the request — a human session, or a key never granted
+ *     (legacy) — passes; the review ladder above still decides who may;
+ *   - a granted key passes only when ONE of its live scopes names the verb:
+ *     `*` or `proposal.<verb>` (revoked/expired = a deny-all scope).
+ *
+ * Resource fences (workspaceIds/projectIds/entityIds) are NOT applied: only
+ * the verb is checked. `verb` is the right the key needs; `act` is the word
+ * the refusal uses when the door's action differs (revert needs approve).
+ * Every decision door calls this — tripwire `proposal-decision-grant.tripwire`.
+ */
+export function assertMayDecideProposal(
+  verb: "approve" | "reject",
+  act: string = verb,
+  grant: KeyGrant | undefined = getRequestGrant()
+): void {
+  if (!grant) return;
+  const req = { subject: "proposal", action: verb };
+  if (
+    grant.scopes.some((s) => s.permissions.some((p) => patternMatches(p, req)))
+  )
+    return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: `This key may not ${act} changes. Give it the '${verb}' right in its access.`,
+  });
 }

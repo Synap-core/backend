@@ -59,6 +59,7 @@ import type {
 import { makeVaultReference } from "@synap-core/types/vault";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { assertMayDecideProposal } from "./proposals/review-authority.js";
 
 // ============================================================================
 // Validation Schemas
@@ -934,6 +935,7 @@ export const secretsVaultRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertMayDecideProposal("approve");
       // 1. Verify secret exists, belongs to this user/workspace, and isn't
       //    soft-deleted (a deleted secret can't be granted — resolveVaultSecret
       //    would return null for it at redemption anyway).

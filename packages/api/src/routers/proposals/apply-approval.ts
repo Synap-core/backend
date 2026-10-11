@@ -66,6 +66,7 @@ import {
   redactForStorage,
 } from "../../utils/redact-secrets.js";
 import { registerApproveExecutors } from "./approve-executors.js";
+import { assertMayDecideProposal } from "./review-authority.js";
 import {
   applyGovConfigChange,
   type SettingsUpdateProposalData,
@@ -560,6 +561,7 @@ export async function applyProposalApproval(args: {
   };
   ctx: Context;
 }): Promise<ProposalExecutorResult> {
+  assertMayDecideProposal("approve");
   const result = await applyProposalApprovalInner(args);
 
   // HONEST DELIVERABLE SIGNAL. A session-scoped proposal that actually applied

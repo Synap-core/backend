@@ -106,6 +106,7 @@ import {
   resolveViewerReviewVerdicts,
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
+  assertMayDecideProposal,
   reviewRefusalMessage,
 } from "./proposals/review-authority.js";
 export { type ReviewAuthorityReason } from "./proposals/review-authority.js";
@@ -1434,6 +1435,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve");
       const userId = requireUserId(ctx.userId);
 
       const proposal = await db.query.proposals.findFirst({
@@ -1509,6 +1511,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve", "revise");
       const userId = requireUserId(ctx.userId);
 
       const proposal = await db.query.proposals.findFirst({
@@ -1594,6 +1597,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("reject");
       const userId = requireUserId(ctx.userId);
 
       // Fetch first to get sourceMessageId + agentUserId for telemetry + workspaceId for realtime
@@ -1753,6 +1757,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("reject");
       const userId = requireUserId(ctx.userId);
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
@@ -1836,6 +1841,7 @@ export const proposalsRouter = router({
   restoreItem: protectedProcedure
     .input(z.object({ proposalId: z.string(), itemRef: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("reject", "restore");
       const userId = requireUserId(ctx.userId);
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
@@ -1898,6 +1904,7 @@ export const proposalsRouter = router({
   reopen: protectedProcedure
     .input(z.object({ proposalId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("reject", "reopen");
       const userId = requireUserId(ctx.userId);
 
       const proposal = await db.query.proposals.findFirst({
@@ -2157,6 +2164,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve", "undo");
       const userId = requireUserId(ctx.userId);
       // A session revert walks its proposals as ONE pass and hands it over on
       // the SERVER ctx (`revertSession`) — never on the input, so no client can
@@ -2997,6 +3005,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve");
       const userId = requireUserId(ctx.userId);
       /**
        * Per-item outcome. `errorCode` is the tRPC error CODE the failure
@@ -3197,6 +3206,7 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("reject");
       const userId = requireUserId(ctx.userId);
       /** Proposals this call actually moved to REJECTED — see the batched
        *  `markProposalNotificationsActioned` after the loop. */
