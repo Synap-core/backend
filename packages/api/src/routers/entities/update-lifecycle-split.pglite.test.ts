@@ -255,6 +255,43 @@ describe("entities.update — the lifecycle split", () => {
     });
   });
 
+  // E2: the agent doors (hub updateEntity/updateFacet, Hub REST, MCP) turn
+  // the door's CONFLICT into a typed result through `lifecycleConflictOf` —
+  // driven here from the REAL door's thrown error, across the tRPC caller.
+  it("the stale move's error carries the typed conflict an agent door returns", async () => {
+    const { lifecycleConflictOf } =
+      await import("../../services/lifecycle/conflict.js");
+    const { TRPCError } = await import("@trpc/server");
+    const { client, database } = await freshDb();
+    const id = await insertDeal(client);
+    holder.move.mockReset();
+    holder.move.mockResolvedValue({
+      status: "conflict",
+      expectedFrom: "negotiating",
+      actual: "draft",
+    });
+    const caller = await callerFor(database);
+    const err = await caller
+      .update({
+        id,
+        properties: { commercialStage: "won" },
+        expectedStatus: "negotiating",
+      })
+      .catch((e: unknown) => e);
+    expect(lifecycleConflictOf(err)).toMatchObject({
+      status: "conflict",
+      conflict: {
+        reason: "lifecycle_stale",
+        expectedStatus: "negotiating",
+        currentStatus: "draft",
+      },
+    });
+    // Any OTHER conflict stays an error — only a stale status is an answer.
+    expect(
+      lifecycleConflictOf(new TRPCError({ code: "CONFLICT", message: "dup" }))
+    ).toBeNull();
+  });
+
   it("a status-only call returns the move and writes nothing else", async () => {
     const { client, database } = await freshDb();
     const id = await insertDeal(client);

@@ -24,6 +24,7 @@ import {
 } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
+import { lifecycleConflictError } from "../../services/lifecycle/conflict.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -530,10 +531,10 @@ export const facetProcs = {
             workspaceId: governanceWorkspaceId,
           });
           if (statusMove.status === "conflict") {
-            throw new TRPCError({
-              code: "CONFLICT",
-              message: `Stale status: expected "${statusMove.expectedFrom ?? "none"}", it is now "${statusMove.actual ?? "none"}". Nothing was changed.`,
-            });
+            throw lifecycleConflictError(
+              statusMove.expectedFrom,
+              statusMove.actual
+            );
           }
           if (statusMove.status === "refused") {
             throw new TRPCError({

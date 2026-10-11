@@ -228,6 +228,12 @@ export const entityHandlers: McpHandlerMap = {
         Record<string, unknown> | undefined,
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+      // Compare-and-set on the status; a stale move comes back as
+      // `{ status: "conflict" }` (a result to re-plan on, not an error).
+      ...(typeof args.expectedStatus === "string" ||
+      args.expectedStatus === null
+        ? { expectedStatus: args.expectedStatus as string | null }
+        : {}),
     });
     // Two governed writes, two independent outcomes — the entity fields may
     // auto-approve while the body edit is still `proposed`. Report both rather

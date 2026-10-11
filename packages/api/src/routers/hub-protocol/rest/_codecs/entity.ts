@@ -216,8 +216,28 @@ export const UpdateEntityRequestSchema = z
       ),
     sourceMessageId: z.string().optional(),
     sessionId: z.string().optional(),
+    expectedStatus: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Compare-and-set on the status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
+      ),
   })
   .openapi("UpdateEntityRequest");
+
+/** 409 body of a stale status move — `LifecycleConflictResult` (services/lifecycle/conflict.ts). */
+export const LifecycleConflictResponseSchema = z
+  .object({
+    status: z.literal("conflict"),
+    conflict: z.object({
+      reason: z.literal("lifecycle_stale"),
+      expectedStatus: z.string().nullable(),
+      currentStatus: z.string().nullable(),
+    }),
+    message: z.string(),
+  })
+  .openapi("LifecycleConflict");
 
 /** Response shape for POST /entities.
  *

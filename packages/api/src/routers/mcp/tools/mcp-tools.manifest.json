@@ -547,6 +547,10 @@
             "type": "string",
             "description": "Full REPLACEMENT body (markdown) for the entity's linked document — not a patch (for a patch: synap_update_document). Read the current body with synap_get_document first. Its outcome comes back under `body` and is always 'proposed'."
           },
+          "expectedStatus": {
+            "type": ["string", "null"],
+            "description": "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
@@ -6672,6 +6676,7 @@
                           "created",
                           "updated",
                           "deleted",
+                          "transitioned",
                           "received",
                           "completed",
                           "approved",

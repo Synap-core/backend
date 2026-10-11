@@ -15,6 +15,7 @@ import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
+import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
 
 export const entitiesRouter = router({
   /**
@@ -374,6 +375,12 @@ export const entitiesRouter = router({
         agentUserId: z.string().uuid().optional(),
         /** The proposing agent's own rationale, surfaced in the proposal inbox. */
         reasoning: z.string().optional(),
+        /**
+         * Compare-and-set on the status: the status the caller SAW. A thing
+         * that moved meanwhile answers `{ status: "conflict" }` with its
+         * current status, and nothing is written.
+         */
+        expectedStatus: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -390,17 +397,28 @@ export const entitiesRouter = router({
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
-      const result = await caller.update({
-        id: input.entityId,
-        title: input.title,
-        description: input.preview,
-        properties: input.metadata,
-        deleteProperties: input.deleteProperties,
-        reasoning: input.reasoning,
-        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: "intelligence",
-        agentUserId,
-      });
+      let result: Awaited<ReturnType<typeof caller.update>>;
+      try {
+        result = await caller.update({
+          id: input.entityId,
+          title: input.title,
+          description: input.preview,
+          properties: input.metadata,
+          deleteProperties: input.deleteProperties,
+          reasoning: input.reasoning,
+          // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+          source: "intelligence",
+          agentUserId,
+          ...(input.expectedStatus !== undefined
+            ? { expectedStatus: input.expectedStatus }
+            : {}),
+        });
+      } catch (err) {
+        // A stale status move is an answer the agent re-plans on, not a fault.
+        const conflict = lifecycleConflictOf(err);
+        if (conflict) return conflict;
+        throw err;
+      }
 
       if (result.status === "proposed" && result.proposalId) {
         const {
@@ -600,6 +618,8 @@ export const entitiesRouter = router({
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
         source: z.enum(HUB_WRITE_SOURCES).optional(),
+        /** Compare-and-set on the role's status — see `updateEntity`. */
+        expectedStatus: z.string().nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -615,18 +635,28 @@ export const entitiesRouter = router({
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
-      const result = await caller.updateFacet({
-        facetId: input.facetId,
-        status: input.status,
-        properties: input.properties,
-        ...(input.workspaceId !== undefined
-          ? { workspaceId: input.workspaceId }
-          : {}),
-        reasoning: input.reasoning,
-        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: input.source ?? "intelligence",
-        agentUserId,
-      });
+      let result: Awaited<ReturnType<typeof caller.updateFacet>>;
+      try {
+        result = await caller.updateFacet({
+          facetId: input.facetId,
+          status: input.status,
+          properties: input.properties,
+          ...(input.workspaceId !== undefined
+            ? { workspaceId: input.workspaceId }
+            : {}),
+          reasoning: input.reasoning,
+          // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+          source: input.source ?? "intelligence",
+          agentUserId,
+          ...(input.expectedStatus !== undefined
+            ? { expectedStatus: input.expectedStatus }
+            : {}),
+        });
+      } catch (err) {
+        const conflict = lifecycleConflictOf(err);
+        if (conflict) return conflict;
+        throw err;
+      }
 
       return {
         status: result.status,

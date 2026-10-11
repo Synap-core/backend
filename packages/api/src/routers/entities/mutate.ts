@@ -28,6 +28,7 @@ import {
 } from "../../services/lifecycle/move-status.js";
 import { entities, views, workspaces } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
+import { lifecycleConflictError } from "../../services/lifecycle/conflict.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -292,10 +293,10 @@ export const mutateProcs = {
           forcePropose: input.forcePropose,
         });
         if (statusMove.status === "conflict") {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Stale status: expected "${statusMove.expectedFrom ?? "none"}", it is now "${statusMove.actual ?? "none"}". Nothing was changed.`,
-          });
+          throw lifecycleConflictError(
+            statusMove.expectedFrom,
+            statusMove.actual
+          );
         }
         if (statusMove.status === "refused") {
           throw new TRPCError({

@@ -71,6 +71,7 @@ import {
   RawEntityRecordSchema,
   UpdateEntityRequestSchema,
   UpdateEntityResponseSchema,
+  LifecycleConflictResponseSchema,
   WireEntitySchema,
   entityToWire,
 } from "./_codecs/entity.js";
@@ -2283,6 +2284,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
           "application/json": { schema: UpdateEntityResponseSchema },
         },
       },
+      409: {
+        description:
+          "Stale status (`expectedStatus` no longer holds) — nothing written",
+        content: {
+          "application/json": { schema: LifecycleConflictResponseSchema },
+        },
+      },
       400: {
         description: "Bad request",
         content: { "application/json": { schema: ErrorSchema } },
@@ -2404,7 +2412,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
           ? { deleteProperties: body.deleteProperties }
           : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+        ...(body.expectedStatus !== undefined
+          ? { expectedStatus: body.expectedStatus }
+          : {}),
       });
+      if (result.status === "conflict") return c.json(result, 409);
 
       // ── Impact-aware writes (SHALLOW) ─────────────────────────────────────
       // Surface the entity's immediate relation neighbours so the AI sees what
@@ -2812,6 +2824,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
               workspaceId: z.string().uuid().nullable().optional(),
               agentUserId: z.string().uuid().optional(),
               reasoning: z.string().optional(),
+              expectedStatus: z
+                .string()
+                .nullable()
+                .optional()
+                .describe(
+                  "Compare-and-set on the role's status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
+                ),
             }),
           },
         },
@@ -2821,6 +2840,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
       200: {
         description: "Update result (or proposal envelope)",
         content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+      409: {
+        description:
+          "Stale status (`expectedStatus` no longer holds) — nothing written",
+        content: {
+          "application/json": { schema: LifecycleConflictResponseSchema },
+        },
       },
       400: {
         description: "Bad request",
@@ -2869,7 +2895,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
           : {}),
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+        ...(body.expectedStatus !== undefined
+          ? { expectedStatus: body.expectedStatus }
+          : {}),
       });
+      if (result.status === "conflict") return c.json(result, 409);
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, facetId }, "updateFacet failed");
