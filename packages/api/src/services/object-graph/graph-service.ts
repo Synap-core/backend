@@ -964,9 +964,12 @@ export async function getGovernanceNeighbors(
       if (g.grantedTo) {
         const a = agentByUser.get(g.grantedTo);
         if (!a) continue;
+        // The node's id is the agent USER id (the holder key a "What it can do"
+        // page and a proposal carry), never the `agents` catalog id — a catalog
+        // id under `agent` opens a page that cannot find it.
         out.push({
           kind: "agent",
-          id: a.id,
+          id: g.grantedTo,
           name: a.name,
           subtype: null,
           subtypes: [],
@@ -995,7 +998,9 @@ export async function getGovernanceNeighbors(
     const [agentRow] = await db
       .select()
       .from(agents)
-      .where(and(eq(agents.id, id), agentFloor(userId)))
+      .where(
+        and(or(eq(agents.id, id), eq(agents.userId, id)), agentFloor(userId))
+      )
       .limit(1);
     if (!agentRow) return out;
     const agentUserId = agentRow.userId;
@@ -1038,7 +1043,7 @@ export async function getGovernanceNeighbors(
     const assignedRows = await db
       .select({ id: channels.id })
       .from(channels)
-      .where(eq(channels.assignedAgentId, id));
+      .where(eq(channels.assignedAgentId, agentRow.id));
     const assignedIds = new Set(assignedRows.map((r) => r.id));
     let memberChannelIds: string[] = [];
     if (agentUserId) {
