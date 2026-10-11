@@ -3,17 +3,18 @@
  * rows (for marks: a chip per action) plus a short sentence for places with
  * room for one line (a connection list row, a consent screen subtitle).
  *
- * A BARE subject pattern (`proposal`, `entity.note`) grants every action on
- * it, review verbs included — approving a proposal, merging a record — none of
- * which has a checkbox. Such a row never reads like its catalog actions: it
- * reads "Everything on Proposals, approving included".
+ * A BARE subject pattern (`proposal`, `entity.note`) grants read, create,
+ * update and delete — never a gate verb (grammar.ts) — so its row reads
+ * "Read, create, update and delete Proposals" even where the catalog offers
+ * fewer checkboxes. A gate verb is granted only when named (`proposal.approve`)
+ * and reads as its own verb: "Approve Proposals", "Merge Notes". Only `*`
+ * reads "Full access, approving included".
  *
  * Words come from the vocabulary door through `./catalog.ts`; nothing here
  * names a subject or an action by hand.
  */
 
 import {
-  resolveActionProgressive,
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
@@ -46,17 +47,19 @@ export interface GrantSummaryRow {
   readonly label: string;
   /** Catalog actions granted (a kind row lists only what "every kind" does not). */
   readonly actions: readonly GrantAction[];
-  /** A subject/kind pattern grants EVERY action on it, gate verbs included. */
+  /** The bare subject/kind pattern: read, create, update and delete it. */
   readonly all: boolean;
   /**
-   * `all` rows only: what that means, in words — "Everything, approving
-   * included". null when the row grants only the actions it lists.
+   * `all` rows only: what that means, in words — "Read, create, update and
+   * delete". null when the row grants only the actions it lists.
    */
   readonly everything: string | null;
+  /** Gate verbs this row's patterns NAME (`proposal.approve` → `approve`). */
+  readonly gates: readonly string[];
 }
 
 export interface GrantSummary {
-  /** `*` — explicit full access. Rows are empty then. */
+  /** `*` — explicit full access, approving included. Rows are empty then. */
   readonly full: boolean;
   readonly rows: readonly GrantSummaryRow[];
   /** Valid patterns the catalog has no row for (`vault.redeem`), verbatim. */
@@ -71,7 +74,10 @@ export interface GrantSummary {
   readonly entityCount: number | null;
   /** The draft's lifetime — `never` too when `expiresAt` is null. */
   readonly lifetime: GrantLifetime;
-  /** What it may do: "Read Entities, Documents; Create Notes" / "Full access". */
+  /**
+   * What it may do: "Read Entities, Documents; Create Notes; Approve
+   * Proposals" / "Full access, approving included".
+   */
   readonly what: string;
   /** Narrowing, one part each: "1 Space", "2 Projects". Empty = anywhere. */
   readonly where: readonly string[];
@@ -108,24 +114,30 @@ export interface SummarizeGrantOptions {
   readonly expiresAt?: Date | string | null;
 }
 
-/**
- * The review verbs a bare pattern carries that no checkbox offers, named so
- * an "everything" row says what it really hands over. Not every action a
- * subject has — the ones a person would not expect "everything" to include.
- */
-const GATE_ACTIONS: Readonly<Record<string, readonly string[]>> = {
-  proposal: ["approve"],
-  entity: ["merge"],
-};
+/** The sentence for `*`: the one pattern that approves without naming it. */
+export const GRANT_FULL_ACCESS_SENTENCE = "Full access, approving included";
 
-/** "Everything[ on <label>][, approving included]". */
-function everythingText(subject: string, label?: string): string {
-  const head = label ? `Everything on ${label}` : "Everything";
-  const gates = (GATE_ACTIONS[subject] ?? []).map((a) =>
-    resolveActionProgressive(a).toLowerCase()
+/** "Read, create, update and delete" — verbs from the vocabulary door. */
+function actionList(actions: readonly string[]): string {
+  const words = actions.map((a, i) =>
+    i === 0 ? grantActionLabel(a) : grantActionLabel(a).toLowerCase()
   );
-  return gates.length > 0 ? `${head}, ${gates.join(" and ")} included` : head;
+  return words.length > 1
+    ? `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`
+    : (words[0] ?? "");
 }
+
+const isCrud = (action: string) =>
+  (GRANT_ACTIONS as readonly string[]).includes(action);
+
+/** The action segment of a parsed pattern (undefined = bare). */
+function actionOf(segs: readonly string[]): string | undefined {
+  return segs[isQualifiedGrantSubject(segs[0]) ? 2 : 1];
+}
+
+/** Is this a gate verb a pattern names (not CRUD, not a wildcard)? */
+const isGateVerb = (action: string | undefined): action is string =>
+  action !== undefined && action !== "*" && !isCrud(action);
 
 const UNTIL_FORMAT = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
@@ -157,10 +169,11 @@ function isCatalogPattern(
   if (segs[0] === "*") return true;
   const spec = catalog.find((s) => s.subject === segs[0]);
   if (!spec) return false;
-  const action = segs[isQualifiedGrantSubject(segs[0]) ? 2 : 1];
+  const action = actionOf(segs);
   return (
     action === undefined ||
     action === "*" ||
+    isGateVerb(action) ||
     (spec.actions as readonly string[]).includes(action)
   );
 }
@@ -190,61 +203,80 @@ export function summarizeGrant(
   const catalog = opts.catalog ?? GRANT_SUBJECT_CATALOG;
   const alwaysAllowed = opts.alwaysAllowed ?? [];
 
+  const parsed = valid.map((p) => parsePermission(p));
+  /** Gate verbs named by patterns on exactly this subject (+ kind slot). */
+  const gatesFor = (subject: string, kind: string | null) => {
+    const out: string[] = [];
+    for (const segs of parsed) {
+      const verb = actionOf(segs);
+      if (segs[0] !== subject || !isGateVerb(verb)) continue;
+      if (kind !== null && segs[1] !== kind) continue;
+      if (!out.includes(verb)) out.push(verb);
+    }
+    return out;
+  };
+  const allText = actionList(GRANT_ACTIONS);
   const rows: GrantSummaryRow[] = [];
+  const pushRow = (
+    row: Omit<GrantSummaryRow, "everything" | "gates">,
+    gates: string[]
+  ) => {
+    if (row.actions.length > 0 || row.all || gates.length > 0)
+      rows.push({ ...row, everything: row.all ? allText : null, gates });
+  };
   if (!full) {
     for (const spec of catalog) {
       const { subject } = spec;
       if (!isQualifiedGrantSubject(subject)) {
-        const actions = spec.actions.filter((action) =>
-          isGranted(d, { subject, action })
-        );
-        if (actions.length > 0)
-          rows.push({
+        pushRow(
+          {
             key: subject,
             subject,
             kind: null,
             label: grantSubjectLabel(subject),
-            actions,
+            actions: spec.actions.filter((action) =>
+              isGranted(d, { subject, action })
+            ),
             all: has(subject),
-            everything: has(subject) ? everythingText(subject) : null,
-          });
+          },
+          gatesFor(subject, null)
+        );
         continue;
       }
       const every = spec.actions.filter((action) =>
         isGranted(d, { subject, kind: "*", action })
       );
-      if (every.length > 0)
-        rows.push({
+      pushRow(
+        {
           key: subject,
           subject,
           kind: "*",
           label: grantSubjectLabel(subject),
           actions: every,
           all: has(subject),
-          everything: has(subject) ? everythingText(subject) : null,
-        });
+        },
+        gatesFor(subject, "*")
+      );
       const kinds = new Set<string>();
-      for (const p of valid) {
-        const s = p.split(".");
+      for (const s of parsed)
         if (s[0] === subject && s[1] && s[1] !== "*") kinds.add(s[1]);
-      }
       for (const kind of kinds) {
-        const actions = spec.actions.filter(
-          (action) =>
-            !every.includes(action) && isGranted(d, { subject, kind, action })
-        );
-        if (actions.length > 0)
-          rows.push({
-            key: `${subject}.${kind}`,
+        const pattern = `${subject}.${kind}`;
+        pushRow(
+          {
+            key: pattern,
             subject,
             kind,
             label: grantKindLabel(kind, opts.kindNames?.[kind]),
-            actions,
-            all: has(`${subject}.${kind}`),
-            everything: has(`${subject}.${kind}`)
-              ? everythingText(subject)
-              : null,
-          });
+            actions: spec.actions.filter(
+              (action) =>
+                !every.includes(action) &&
+                isGranted(d, { subject, kind, action })
+            ),
+            all: has(pattern),
+          },
+          gatesFor(subject, kind)
+        );
       }
     }
   }
@@ -257,11 +289,14 @@ export function summarizeGrant(
     opts.expiresAt === null ? { kind: "never" } : grantLifetime(draft);
 
   let what: string;
-  if (full) what = "Full access";
+  if (full) what = GRANT_FULL_ACCESS_SENTENCE;
   else {
-    const parts = rows
-      .filter((r) => r.all)
-      .map((r) => everythingText(r.subject, r.label));
+    const bare = actionList(
+      GRANT_ACTIONS.filter((a) => !alwaysAllowed.includes(a))
+    );
+    const parts = bare
+      ? rows.filter((r) => r.all).map((r) => `${bare} ${r.label}`)
+      : [];
     for (const action of GRANT_ACTIONS) {
       if (alwaysAllowed.includes(action)) continue;
       const labels = rows
@@ -269,6 +304,15 @@ export function summarizeGrant(
         .map((r) => r.label);
       if (labels.length > 0)
         parts.push(`${grantActionLabel(action)} ${labels.join(", ")}`);
+    }
+    const verbs: string[] = [];
+    for (const r of rows)
+      for (const g of r.gates) if (!verbs.includes(g)) verbs.push(g);
+    for (const verb of verbs) {
+      const labels = rows
+        .filter((r) => r.gates.includes(verb))
+        .map((r) => r.label);
+      parts.push(`${grantActionLabel(verb)} ${labels.join(", ")}`);
     }
     if (other.length > 0) parts.push(`+${other.length} more`);
     const always = alwaysAllowed.map(grantActionLabel).join(", ");

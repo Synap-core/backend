@@ -10,17 +10,27 @@
  *
  *   <subject>[.<qualifier>].<action>
  *
- *   *                       everything (explicit full access)
- *   entity                  every action on every entity
- *   entity.knowledge        every action on `knowledge` entities
+ *   *                       everything (explicit full access), approving included
+ *   entity                  read/create/update/delete every entity
+ *   entity.knowledge        read/create/update/delete `knowledge` entities
  *   entity.knowledge.read   read `knowledge` entities
  *   entity.*.read           read every kind
  *   entity.read             = entity.*.read (the governance spelling)
+ *   entity.knowledge.merge  merge `knowledge` entities (a gate verb, named)
+ *   entity.merge            = entity.*.merge (a known gate verb, every kind)
+ *   proposal.approve        approve proposals (a gate verb, named)
  *   document.read           a subject with no qualifier
  *
  * Matching is segment-wise and PREFIX-based: a pattern matches a request when
  * each of its segments equals the request's segment or is `*`, and it has no
  * more segments than the request. There is no partial-word globbing.
+ *
+ * ONE exception (founder decision 2026-10-11): a request whose action is not
+ * one of the four GRANT_ACTIONS — approve, reject, merge, archive, run, bind,
+ * … — is matched only by a pattern that NAMES that action. A bare subject
+ * (`proposal`), a bare kind (`entity.note`, `entity.*`) and an action
+ * wildcard (`document.*`) cover read/create/update/delete and nothing else.
+ * Only the lone `*` covers every verb.
  *
  * The REQUEST is always derived server-side (subject/action from the door,
  * qualifier = the entity's profile slug). A credential never names its own
@@ -39,8 +49,31 @@
 /** Subjects whose request key carries a kind qualifier (the profile slug). */
 export const QUALIFIED_GRANT_SUBJECTS = ["entity"] as const;
 
-/** The verbs a grant targets. Governance gate verbs are accepted too. */
+/**
+ * The verbs a bare subject or kind covers. Every other verb (a governance gate
+ * verb) is granted only by a pattern that names it.
+ */
 export const GRANT_ACTIONS = ["read", "create", "update", "delete"] as const;
+
+/**
+ * The gate verbs `entity.<verb>` is read as — `entity.merge` = merge every
+ * kind, never the kind "merge". The set is the entity subject's gate verbs
+ * (governance-policy `DESTRUCTIVE_ACTIONS` and every `entity/<verb>` door,
+ * pinned by `grants-gate-actions.tripwire.test.ts`) plus the review verbs.
+ * A verb that is also a kind slug stays OUT (`grant`, `place` are kinds):
+ * listing it would turn a person's `entity.grant` into "grant every kind".
+ * Any verb still parses in the three-segment spelling (`entity.*.<verb>`).
+ */
+export const GRANT_GATE_ACTIONS = [
+  "approve",
+  "reject",
+  "merge",
+  "unmerge",
+  "archive",
+  "restore",
+  "purge",
+  "move",
+] as const;
 
 const SEGMENT = /^(?:\*|[a-z0-9][a-z0-9_-]*)$/;
 
@@ -79,9 +112,14 @@ function isQualified(subject: string): boolean {
   return (QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(subject);
 }
 
+function isGrantAction(action: string): boolean {
+  return (GRANT_ACTIONS as readonly string[]).includes(action);
+}
+
 /**
  * Parse a pattern into its segments, normalising the governance spelling
- * `entity.read` (a qualified subject + a known action) to `entity.*.read`.
+ * `entity.read` / `entity.merge` (a qualified subject + a GRANT_ACTIONS or
+ * GRANT_GATE_ACTIONS verb) to `entity.*.read` / `entity.*.merge`.
  * Throws InvalidPermissionError on a malformed pattern.
  */
 export function parsePermission(pattern: string): string[] {
@@ -101,7 +139,8 @@ export function parsePermission(pattern: string): string[] {
   if (
     segs.length === 2 &&
     isQualified(segs[0]) &&
-    (GRANT_ACTIONS as readonly string[]).includes(segs[1])
+    (isGrantAction(segs[1]) ||
+      (GRANT_GATE_ACTIONS as readonly string[]).includes(segs[1]))
   ) {
     return [segs[0], "*", segs[1]];
   }
@@ -122,13 +161,17 @@ export function requestSegments(req: GrantRequest): string[] {
 /**
  * Does one pattern cover the request key? A request with an UNKNOWN qualifier
  * (`*`) is only covered by a pattern that accepts any kind there — a
- * kind-specific pattern never matches an object whose kind is unknown.
+ * kind-specific pattern never matches an object whose kind is unknown. A
+ * gate-verb request (not in GRANT_ACTIONS) is covered only by `*` or by a
+ * pattern naming that verb.
  */
 export function patternMatches(pattern: string, req: GrantRequest): boolean {
   const p = parsePermission(pattern);
   if (p.length === 1 && p[0] === "*") return true;
   const r = requestSegments(req);
   if (p.length > r.length) return false;
+  if (!isGrantAction(req.action) && p[r.length - 1] !== req.action)
+    return false;
   return p.every((seg, i) => seg === "*" || seg === r[i]);
 }
 
@@ -167,6 +210,7 @@ export function allowedQualifiers(
     if (p[0] !== "*" && p[0] !== subject) continue;
     const q = p[1];
     const a = p[2];
+    if (!isGrantAction(action) && a !== action) continue;
     if (a !== undefined && a !== "*" && a !== action) continue;
     if (q === undefined || q === "*") return "all";
     kinds.add(q);

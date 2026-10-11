@@ -21,7 +21,7 @@ describe("viewPendingAccess", () => {
     expect(approveLabel(v.full)).toBe("Approve full access");
   });
 
-  it("one sentence per grant scope — every scope, and a bare subject says 'everything'", () => {
+  it("one sentence per grant scope — every scope, and a bare subject names its four actions", () => {
     const v = viewPendingAccess({
       ...base,
       grants: [
@@ -32,8 +32,8 @@ describe("viewPendingAccess", () => {
     expect(v.full).toBe(false);
     expect(v.lines).toHaveLength(2);
     expect(v.lines[0]).toContain("1 ");
-    expect(v.lines[1]).toContain("Everything on");
-    expect(v.lines[1]).toContain("approving included");
+    expect(v.lines[1]).toContain("Read, create, update and delete");
+    expect(v.lines[1]).not.toContain("approving");
     expect(approveLabel(v.full)).toBe("Approve");
   });
 

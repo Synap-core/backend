@@ -4,9 +4,12 @@
  * treats patterns as globs, or skips the resource sets.
  */
 import { describe, expect, it } from "vitest";
+import { OBJECT_KINDS } from "../vocabulary/object-kinds.js";
+import { OBJECT_NOUNS } from "../vocabulary/index.js";
 import {
   allowedQualifiers,
   assertPermissions,
+  GRANT_GATE_ACTIONS,
   InvalidPermissionError,
   parsePermission,
   patternMatches,
@@ -28,10 +31,42 @@ const readTask: GrantRequest = {
 const createKnowledge: GrantRequest = { ...readKnowledge, action: "create" };
 const readUnknownKind: GrantRequest = { subject: "entity", action: "read" };
 const readDocument: GrantRequest = { subject: "document", action: "read" };
+const mergeNote: GrantRequest = {
+  subject: "entity",
+  qualifier: "note",
+  action: "merge",
+};
+const mergeTask: GrantRequest = { ...mergeNote, qualifier: "task" };
+const readProposal: GrantRequest = { subject: "proposal", action: "read" };
+const approveProposal: GrantRequest = {
+  subject: "proposal",
+  action: "approve",
+};
+const runPlaybook: GrantRequest = { subject: "playbook", action: "run" };
 
 describe("parsePermission", () => {
   it("normalises the governance spelling entity.read to entity.*.read", () => {
     expect(parsePermission("entity.read")).toEqual(["entity", "*", "read"]);
+  });
+  // Rules out: `entity.merge` read as the kind "merge" (a grant on nothing).
+  it("reads entity.<gate verb> as that verb on every kind", () => {
+    expect(parsePermission("entity.merge")).toEqual(["entity", "*", "merge"]);
+    expect(parsePermission("entity.archive")).toEqual([
+      "entity",
+      "*",
+      "archive",
+    ]);
+  });
+  // Rules out: a gate-verb list that swallows real kinds (`grant`, `place`).
+  it("keeps a kind whose slug is not a gate verb", () => {
+    expect(parsePermission("entity.grant")).toEqual(["entity", "grant"]);
+    expect(parsePermission("entity.place")).toEqual(["entity", "place"]);
+  });
+  it("no gate verb is a known kind", () => {
+    for (const verb of GRANT_GATE_ACTIONS) {
+      expect(OBJECT_KINDS[verb], verb).toBeUndefined();
+      expect(OBJECT_NOUNS[verb], verb).toBeUndefined();
+    }
   });
   it("keeps a kind segment that is not an action", () => {
     expect(parsePermission("entity.knowledge")).toEqual([
@@ -56,7 +91,7 @@ describe("patternMatches", () => {
   it.each([
     ["*", readKnowledge, true],
     ["entity", readKnowledge, true],
-    ["entity.knowledge", readKnowledge, true], // prefix covers every action
+    ["entity.knowledge", readKnowledge, true], // prefix covers the four actions
     ["entity.knowledge", createKnowledge, true],
     ["entity.knowledge.read", readKnowledge, true],
     ["entity.knowledge.read", createKnowledge, false], // rules out "ignore action"
@@ -69,6 +104,25 @@ describe("patternMatches", () => {
     ["document.read", readDocument, true],
     ["document", readDocument, true],
     ["entity", readDocument, false], // rules out "subject ignored"
+    // A bare subject / kind / action wildcard covers read/create/update/delete
+    // ONLY; a gate verb must be named. Rules out "prefix covers every verb".
+    ["proposal", readProposal, true],
+    ["proposal", approveProposal, false],
+    ["proposal.*", approveProposal, false],
+    ["proposal.approve", approveProposal, true],
+    ["proposal.approve", readProposal, false],
+    ["*", approveProposal, true], // only full access approves unnamed
+    ["playbook", runPlaybook, false],
+    ["playbook.run", runPlaybook, true],
+    ["entity", mergeNote, false],
+    ["entity.*", mergeNote, false],
+    ["entity.note", mergeNote, false],
+    ["entity.note.*", mergeNote, false],
+    ["entity.note.merge", mergeNote, true],
+    ["entity.note.merge", mergeTask, false], // the named verb keeps its kind
+    ["entity.*.merge", mergeTask, true],
+    ["entity.merge", mergeTask, true], // entity.merge = every kind
+    ["*", mergeNote, true],
   ] as const)("%s vs %j → %s", (pattern, req, expected) => {
     expect(patternMatches(pattern, req)).toBe(expected);
   });
@@ -120,6 +174,17 @@ describe("allowedQualifiers — the SQL kind clause", () => {
     [["document.read"], []],
   ] as const)("%j → %j for entity.read", (perms, expected) => {
     const got = allowedQualifiers({ permissions: perms }, "entity", "read");
+    expect(Array.isArray(got) ? [...got].sort() : got).toEqual(expected);
+  });
+  it.each([
+    [["*"], "all"],
+    [["entity.merge"], "all"],
+    [["entity.*.merge"], "all"],
+    [["entity"], []], // a bare subject never merges
+    [["entity.*"], []],
+    [["entity.note", "entity.task.merge"], ["task"]],
+  ] as const)("%j → %j for entity.merge", (perms, expected) => {
+    const got = allowedQualifiers({ permissions: perms }, "entity", "merge");
     expect(Array.isArray(got) ? [...got].sort() : got).toEqual(expected);
   });
 });

@@ -13,8 +13,8 @@
  *  2. Turning a cell OFF removes exactly that cell. When it was covered by a
  *     broader pattern (`entity`, `entity.*.read`, `*`), that pattern is broken
  *     into the catalog cells it covered, minus this one. That is a NARROWING:
- *     the broken pattern's coverage outside the catalog (gate verbs such as
- *     `entity.note.merge`, other subjects under `*`) is dropped, never kept.
+ *     the broken pattern's coverage outside the catalog (gate verbs under `*`,
+ *     other subjects under `*`) is dropped, never kept.
  */
 
 import {
@@ -173,12 +173,25 @@ export function isImpliedByAllKinds(
 
 // ── normalising ────────────────────────────────────────────────────────────
 
-/** Does pattern j cover everything pattern k covers? (both canonical) */
+/**
+ * Does pattern j cover everything pattern k covers? (both canonical) A k that
+ * names a gate verb (`entity.note.merge`) is covered only by a j naming that
+ * verb too — a bare `entity` never merges (grammar.ts).
+ */
 function subsumes(j: string, k: string): boolean {
   const js = j.split(".");
   const ks = k.split(".");
   if (js[0] === "*") return true;
   if (js.length > ks.length) return false;
+  const at = isQualifiedGrantSubject(ks[0]) ? 2 : 1;
+  const verb = ks[at];
+  if (
+    verb !== undefined &&
+    verb !== "*" &&
+    !(GRANT_ACTIONS as readonly string[]).includes(verb) &&
+    js[at] !== verb
+  )
+    return false;
   return js.every((seg, i) => seg === "*" || seg === ks[i]);
 }
 
@@ -215,11 +228,12 @@ function compareRank(a: string, b: string): number {
  * The canonical spelling of a permission list: the governance spelling
  * normalised (`entity.read` → `entity.*.read`), duplicates and patterns
  * covered by a broader one dropped, catalog order. It NEVER compacts ticked
- * actions into a subject pattern: `proposal` (or `entity.note`) grants EVERY
- * action on it — approve, merge, delete — including ones the catalog does not
- * offer, so "every box I can see" is not "everything". Invalid patterns are
- * kept verbatim at the end — validation reports them; normalising never hides
- * one.
+ * actions into a subject pattern: `proposal` grants read, create, update AND
+ * delete, while its catalog offers only Read, so "every box I can see" is not
+ * the bare subject. A pattern naming a gate verb (`entity.note.merge`) is
+ * never dropped under a bare one — only `*` or the same verb covers it.
+ * Invalid patterns are kept verbatim at the end — validation reports them;
+ * normalising never hides one.
  */
 export function normalizeGrantPermissions(
   permissions: readonly string[]

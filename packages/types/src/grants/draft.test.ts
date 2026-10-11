@@ -2,17 +2,15 @@
  * The grant selector model. Each row names the WRONG rule it rules out — a
  * table of representative rows would pass a toggle that drops the whole
  * covering pattern, a normaliser that widens ticked actions into a subject
- * pattern (which grants gate verbs the catalog never shows), or one that
+ * pattern (which grants actions the catalog never shows), or one that
  * promotes to `*`.
  */
 import { describe, expect, it } from "vitest";
-import {
-  resolveActionProgressive,
-  resolveObjectNounPlural,
-} from "../vocabulary/index.js";
+import { resolveObjectNounPlural } from "../vocabulary/index.js";
 import {
   applyGrantRole,
   EMPTY_GRANT_DRAFT,
+  GRANT_FULL_ACCESS_SENTENCE,
   GRANT_PRESETS,
   GRANT_SUBJECT_CATALOG,
   grantMintFromRole,
@@ -82,7 +80,7 @@ describe("toggleGrant ON", () => {
     );
     expect(d.permissions).toEqual(["entity.note.read"]);
   });
-  it("never widens four ticked actions into the kind pattern (entity.knowledge grants merge too)", () => {
+  it("never rewrites four ticked actions into the kind pattern", () => {
     const d = tickAll({ subject: "entity", kind: "knowledge" }, [
       "read",
       "create",
@@ -96,7 +94,7 @@ describe("toggleGrant ON", () => {
       "entity.knowledge.delete",
     ]);
   });
-  it("reading proposals stays proposal.read — never `proposal` (which approves)", () => {
+  it("reading proposals stays proposal.read — never `proposal` (which also creates, updates and deletes)", () => {
     const d = toggleGrant(
       EMPTY_GRANT_DRAFT,
       { subject: "proposal", action: "read" },
@@ -231,6 +229,22 @@ describe("normalizeGrantPermissions", () => {
     expect(normalizeGrantPermissions(["entity.note.read", "entity"])).toEqual([
       "entity",
     ]);
+  });
+  // Rules out: dropping a named gate verb under a bare pattern that no longer
+  // covers it — the person's `merge` would vanish on save.
+  it("keeps a named gate verb beside a bare pattern; only * or the verb covers it", () => {
+    expect(
+      normalizeGrantPermissions([
+        "proposal",
+        "entity.note.merge",
+        "proposal.approve",
+        "entity",
+      ])
+    ).toEqual(["entity", "entity.note.merge", "proposal", "proposal.approve"]);
+    expect(
+      normalizeGrantPermissions(["entity.*.merge", "entity.note.merge"])
+    ).toEqual(["entity.*.merge"]);
+    expect(normalizeGrantPermissions(["*", "proposal.approve"])).toEqual(["*"]);
   });
   it("keeps invalid patterns visible at the end", () => {
     expect(normalizeGrantPermissions(["Bad", "view.read"])).toEqual([
@@ -375,7 +389,8 @@ describe("summarizeGrant", () => {
     const s = summarizeGrant({ permissions: ["*"], expiresInDays: null });
     expect(s.full).toBe(true);
     expect(s.lifetime).toEqual({ kind: "never" });
-    expect(s.sentence).toBe("Full access · Never expires");
+    expect(s.sentence).toBe(`${GRANT_FULL_ACCESS_SENTENCE} · Never expires`);
+    expect(GRANT_FULL_ACCESS_SENTENCE).toBe("Full access, approving included");
   });
   it("a kind row lists only what every-kind does not, with the pod's name", () => {
     const s = summarizeGrant(draft("entity.*.read", "entity.note"), {
@@ -390,6 +405,7 @@ describe("summarizeGrant", () => {
         actions: ["read"],
         all: false,
         everything: null,
+        gates: [],
       },
       {
         key: "entity.note",
@@ -398,25 +414,48 @@ describe("summarizeGrant", () => {
         label: "Notes (mine)",
         actions: ["create", "update", "delete"],
         all: true,
-        everything: `Everything, ${resolveActionProgressive("merge").toLowerCase()} included`,
+        everything: "Read, create, update and delete",
+        gates: [],
       },
     ]);
   });
-  // `proposal` grants approve/merge/delete, not just the one Read checkbox:
-  // reading it as "Read Proposals" hid the most dangerous grant there is.
-  it("a bare subject reads as everything, approving included — never as its catalog actions", () => {
+  // Founder decision 2026-10-11: a bare subject is read/create/update/delete
+  // ONLY. This replaces "Everything on Proposals, approving included" — that
+  // pattern no longer approves, and saying so would overstate the grant.
+  it("a bare subject reads as its four actions — never 'approving included'", () => {
     const proposals = resolveObjectNounPlural("proposal");
     const s = summarizeGrant(draft("proposal", "document.read"));
     const row = (key: string) => s.rows.find((r) => r.key === key);
     expect(row("proposal")).toMatchObject({
       all: true,
-      everything: "Everything, approving included",
+      everything: "Read, create, update and delete",
+      gates: [],
     });
     expect(row("document")).toMatchObject({ all: false, everything: null });
     expect(s.what).toBe(
-      `Everything on ${proposals}, approving included; Read ${resolveObjectNounPlural("document")}`
+      `Read, create, update and delete ${proposals}; Read ${resolveObjectNounPlural("document")}`
     );
-    expect(s.what).not.toContain(`Read ${proposals}`);
+    expect(s.what).not.toContain("approving");
+  });
+  // Rules out: a named gate verb falling into "+1 more", or a bare row
+  // claiming it.
+  it("a named gate verb reads as its own verb, on its own row", () => {
+    const s = summarizeGrant(
+      draft("proposal.approve", "entity.note.merge", "entity.*.read"),
+      { kindNames: { note: "Notes" } }
+    );
+    expect(s.other).toEqual([]);
+    expect(s.rows.find((r) => r.key === "proposal")).toMatchObject({
+      actions: [],
+      all: false,
+      gates: ["approve"],
+    });
+    expect(s.rows.find((r) => r.key === "entity.note")).toMatchObject({
+      gates: ["merge"],
+    });
+    expect(s.what).toBe(
+      `Read ${resolveObjectNounPlural("entity")}; Merge Notes; Approve ${resolveObjectNounPlural("proposal")}`
+    );
   });
   it("only the pattern itself reads as everything — proposal.read stays Read", () => {
     const s = summarizeGrant(draft("proposal.read"));
@@ -424,8 +463,8 @@ describe("summarizeGrant", () => {
     expect(s.what).toBe(`Read ${resolveObjectNounPlural("proposal")}`);
   });
   it("lists outside-catalog and invalid patterns instead of dropping them", () => {
-    const s = summarizeGrant(draft("vault.redeem", "entity.note.merge", "Bad"));
-    expect(s.other).toEqual(["entity.note.merge", "vault.redeem"]);
+    const s = summarizeGrant(draft("vault.redeem", "proposal.delete", "Bad"));
+    expect(s.other).toEqual(["proposal.delete", "vault.redeem"]);
     expect(s.invalid).toEqual(["Bad"]);
   });
 });

@@ -62,7 +62,7 @@ export const GRANT_PRESETS: readonly GrantRole[] = [
     id: "full-access",
     name: "Full access",
     description:
-      "Everything you can do yourself, including deleting. Still bounded by your own access.",
+      "Everything you can do yourself, approving and deleting included. Still bounded by your own access.",
     grant: { permissions: ["*"] },
   },
 ];

@@ -58,7 +58,9 @@ describe("summarizeGrant — always-allowed actions", () => {
     ).toBe(`Read everything; Create ${resolveObjectNounPlural("profile")}`);
   });
   it("full access still reads as full access", () => {
-    expect(summarizeGrant(draft("*"), agent).what).toBe("Full access");
+    expect(summarizeGrant(draft("*"), agent).what).toBe(
+      "Full access, approving included"
+    );
   });
   it("without the option an empty grant is still No access", () => {
     expect(summarizeGrant(draft()).what).toBe("No access");
