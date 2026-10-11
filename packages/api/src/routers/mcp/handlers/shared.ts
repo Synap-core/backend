@@ -194,8 +194,10 @@ const PROPOSAL_DUPLICATE_HINT =
 
 export function ok(data: unknown): CallToolResult {
   // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
-  // ONLY when the result carries an id that resolves to an openable object
-  // (proposal / entity / view / document / channel — see primaryObjectId). Every
+  // whenever the result carries a primary object id (see primaryObjectId). The
+  // public `/open/:id` route bounces a non-web id typeless and the signed-in app
+  // resolves its kind via `GET /api/hub/resolve/:id` (skill, session, playbook,
+  // automation, channel, project, …). Every
   // handler flows through this one shaper, so no per-handler edits are needed;
   // arrays, id-less objects, and non-openable ids simply get no link.
   const id = primaryObjectId(data);

@@ -42,8 +42,15 @@ const { mockDb } = vi.hoisted(() => {
     const chain: {
       where: (...args: unknown[]) => typeof chain;
       orderBy: (...args: unknown[]) => typeof chain;
+      innerJoin: (...args: unknown[]) => typeof chain;
+      leftJoin: (...args: unknown[]) => typeof chain;
       limit: (...args: unknown[]) => Promise<unknown[]>;
     } = {
+      // The channel floor (`channelVisibilityWhere`) builds JOINed SUBQUERIES
+      // through the same `db`; they are only composed into SQL, never awaited,
+      // so a pass-through is enough — `limit` is what consumes a queue.
+      innerJoin: vi.fn(() => chain),
+      leftJoin: vi.fn(() => chain),
       where: vi.fn(() => chain),
       orderBy: vi.fn(() => chain),
       limit: vi.fn(() => {
@@ -69,7 +76,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import {
   automationRuns,
+  automations,
   capabilities,
+  channels,
+  playbooks,
+  projects,
   documents,
   entities,
   events,
@@ -294,12 +305,73 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
       "capability",
       "automation_run",
       "playbook_run",
+      "automation",
+      "playbook",
       "agent",
       "workspace",
+      "project",
+      "channel",
       "view",
       "document",
       "entity",
     ]);
+  });
+});
+
+describe("resolveObjectKind — the definition/container kinds the public /open bounce used to own", () => {
+  beforeEach(reset);
+
+  // Unqueued tables answer [] (a miss), so each case seeds ONLY its own row:
+  // the earlier probes miss on their own and the sequence reaches this one.
+  it("automation: an `automations` definition row resolves to kind 'automation'", async () => {
+    mockDb.__push(automations, [{ name: "Nightly digest", workspaceId: null }]);
+    expect(await resolveObjectKind(ID, USER_ID)).toMatchObject({
+      kind: "automation",
+      id: ID,
+      displayName: "Nightly digest",
+    });
+  });
+
+  it("playbook: a `playbooks` template row resolves to kind 'playbook' (not a run)", async () => {
+    mockDb.__push(playbooks, [{ name: "Produce Content" }]);
+    expect(await resolveObjectKind(ID, USER_ID)).toMatchObject({
+      kind: "playbook",
+      id: ID,
+      displayName: "Produce Content",
+    });
+  });
+
+  it("project: a `projects` row resolves to kind 'project'", async () => {
+    mockDb.__push(projects, [{ name: "Synap" }]);
+    expect(await resolveObjectKind(ID, USER_ID)).toMatchObject({
+      kind: "project",
+      id: ID,
+      displayName: "Synap",
+    });
+  });
+
+  it("channel: a `channels` row resolves to kind 'channel'", async () => {
+    mockDb.__push(channels, [{ title: "Launch room" }]);
+    expect(await resolveObjectKind(ID, USER_ID)).toMatchObject({
+      kind: "channel",
+      id: ID,
+      displayName: "Launch room",
+    });
+  });
+
+  it("project BEFORE entity: an id held by both (migration 0151's stale entity copy) resolves to the PROJECT", async () => {
+    // 0151 copied projects into `projects` preserving ids and left the old
+    // `entities` row live under the same id. Entity-first would open a profile
+    // page that can never load the project.
+    mockDb.__push(projects, [{ name: "Synap" }]);
+    mockDb.__push(entities, [{ title: "Synap (stale)", type: "project" }]);
+    expect(await resolveObjectKind(ID, USER_ID)).toMatchObject({
+      kind: "project",
+      displayName: "Synap",
+    });
+    expect(PROBE_ORDER.indexOf("project")).toBeLessThan(
+      PROBE_ORDER.indexOf("entity")
+    );
   });
 });
 

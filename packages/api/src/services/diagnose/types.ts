@@ -59,6 +59,19 @@ export type ObjectKind =
    */
   | "workspace"
   /**
+   * A PROJECT (`projects` table), a CHANNEL (`channels`), a PLAYBOOK template
+   * (`playbooks` — the definition, not a run) and an AUTOMATION definition
+   * (`automations` — not a run). Added when the public `/open/:id` bounce
+   * stopped keeping its own private probe list (2026-10-12): those ids had a
+   * browser door but no resolver, so a bare `/open/<id>` for a playbook or an
+   * automation dead-ended in the app, and a project/channel could only be
+   * resolved by that unfloored public list.
+   */
+  | "project"
+  | "channel"
+  | "playbook"
+  | "automation"
+  /**
    * A completed external-dispatch send (messaging.external.send / provider
    * proxy call) — resolved ONLY via its `correlationId` (there is no separate
    * row; see resolve-object-kind.ts's correlationId fallback). Wave 2 of the

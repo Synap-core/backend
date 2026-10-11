@@ -25,6 +25,12 @@ export const BOUNCE_TYPES = [
   "workspace",
   "capability",
   "settings",
+  "skill",
+  "tool",
+  "playbook",
+  "automation",
+  "agent",
+  "run",
 ] as const;
 export type BounceType = (typeof BOUNCE_TYPES)[number];
 

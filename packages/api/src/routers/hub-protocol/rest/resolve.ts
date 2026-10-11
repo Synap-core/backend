@@ -55,6 +55,21 @@ const ResolveByNameSchema = z
 /** `unknown` is not a routable label — it is the honest "no match" answer. */
 const UNKNOWN_TYPE = "unknown";
 
+/**
+ * Machine-readable discriminator on the 500 body: the probe FAILED, which is a
+ * different fact from `unknown` (the probe ran and nothing visible matched).
+ */
+export const RESOLVE_FAILED_CODE = "RESOLVE_FAILED";
+
+const ResolveFailedSchema = z
+  .object({
+    error: z.string(),
+    code: z.literal(RESOLVE_FAILED_CODE),
+    /** The queried id, echoed so a caller can retry exactly it. */
+    id: z.string(),
+  })
+  .openapi("ResolveFailed");
+
 const ResolveResponseSchema = z
   .object({
     type: z
@@ -97,7 +112,7 @@ export function registerResolveRoutes(app: HubHono): void {
     tags: ["System"],
     summary: "Universal ID resolver — what type is this ID?",
     description:
-      "Given any UUID, returns what type of thing it is (proposal, entity, view, document, or unknown). " +
+      "Given any UUID, returns the browser-routable type of the thing it names (see `type`), or `unknown` when nothing the caller can see has that id. " +
       "AI agents use this before opening something in the browser — they don't need to know the type upfront.",
     responses: {
       200: {
@@ -105,7 +120,11 @@ export function registerResolveRoutes(app: HubHono): void {
         schema: ResolveResponseSchema,
       },
       403: { description: "Forbidden", schema: ErrorSchema },
-      500: { description: "Internal error", schema: ErrorSchema },
+      500: {
+        description:
+          "The lookup FAILED (distinct from a 200 `type: unknown`, which means it ran and nothing you can see matched)",
+        schema: ResolveFailedSchema,
+      },
     },
   });
 
@@ -184,10 +203,21 @@ export function registerResolveRoutes(app: HubHono): void {
     try {
       resolved = await resolveObjectKind(id, acting.userId);
     } catch (err) {
-      // Same posture as the old per-probe try/catch: a resolver failure is not
-      // an outage for the caller, it is "I could not tell you what this is".
-      logger.warn({ err, id }, "resolve failed (returning unknown)");
-      resolved = null;
+      // A FAILED read is not an EMPTY one. This used to log and answer
+      // `unknown` — i.e. "nothing you can see has this id" — for a probe that
+      // never ran to completion, so a broken lookup rendered in the CLI and the
+      // desktop app as a calm, confident "Nothing to open." Not-found stays the
+      // 200 `unknown` answer below; a failure is a 500 the caller can show as
+      // an error and retry. (`synap open` already throws on `!res.ok`.)
+      logger.error({ err, id }, "resolve failed");
+      return c.json(
+        {
+          error: "Could not resolve this id — the lookup failed. Retry.",
+          code: RESOLVE_FAILED_CODE,
+          id,
+        },
+        500
+      );
     }
 
     if (!resolved) {

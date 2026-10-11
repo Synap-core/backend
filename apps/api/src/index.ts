@@ -645,12 +645,30 @@ app.get("/open/:type/:id", (c) => {
 
 // ── Canonical bare-id deep-link bounce (public, no auth) ─────────────────────
 // The one link shape every create/propose response emits: `${PUBLIC_URL}/open/
-// <id>` (see packages/api/src/utils/deep-links.ts). We resolve the id's type
-// here — probing proposal → entity → view → document (same order as
-// hub-protocol/rest/resolve.ts) — then dispatch. This is a public id→type map
-// ONLY, so it uses a service DB handle (no user API key); the target surface is
-// access-gated inside the app. Unknown ids (incl. the `proposals` keyword)
-// gracefully bounce to `synap://open/<id>`.
+// <id>` (see packages/api/src/utils/deep-links.ts).
+//
+// THIS ROUTE OWNS NO TYPE LIST. It is public and unauthenticated, so it cannot
+// user-floor a lookup — the canonical, USER-floored id→kind resolver is
+// `GET /api/hub/resolve/:id` (`resolveObjectKind`), which the signed-in app
+// calls for a kind-less `synap://open/<id>`. This route probes ONLY the kinds
+// that change the HTTP ANSWER itself:
+//   • proposal      → 302 to the pod-admin review page (humans AND bots);
+//   • entity / view → 302 to the pod-admin web host (humans only).
+// Every other id — skill, session, playbook, automation, channel, document,
+// project, … — bounces as an untyped `synap://open/<id>` and the app resolves
+// it. A private probe list here used to decide those kinds for the app and
+// fell behind the route table (a skill / session / playbook id bounced typeless
+// and landed nowhere).
+//
+// `projects` is still read, but only as a GUARD: migration 0151 copied projects
+// into the first-class `projects` table while preserving ids and left the
+// pre-0151 `entities` row live under the same id, so an entity probe alone
+// would 302 a project id onto the stale entity copy. A project id bounces
+// untyped like every other non-web kind.
+//
+// A probe that FAILS is not a miss: it is logged and the id bounces untyped
+// (never a 302 decided on a guess) so the app's authenticated resolver gives
+// the real answer, error included.
 app.get("/open/:id", async (c) => {
   const id = normalizeOpenId(c.req.param("id"));
   if (!isSafeOpenId(id)) {
@@ -661,94 +679,69 @@ app.get("/open/:id", async (c) => {
     return applyOpenDispatch(c, inferred, id);
   }
   // Keywords such as `proposals` are not UUIDs. Bounce without probing —
-  // uuid `eq` would throw and `exists()` would swallow five queries.
+  // a uuid `eq` would throw 22P02.
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
   ) {
     return applyOpenDispatch(c, undefined, id);
   }
-  const { getDb, eq, and, isNull } = await import("@synap/database");
-  const { proposals, projects, entities, views, documents, channels } =
-    await import("@synap/database/schema");
-  const database = await getDb();
 
-  const exists = async (query: () => Promise<unknown[]>): Promise<boolean> => {
-    try {
-      const [row] = await query();
-      return Boolean(row);
-    } catch {
-      return false;
+  let type: "proposal" | "entity" | "view" | undefined;
+  try {
+    const { getDb, eq, and, isNull } = await import("@synap/database");
+    const { proposals, projects, entities, views } =
+      await import("@synap/database/schema");
+    const database = await getDb();
+    const hit = async (query: Promise<unknown[]>) => (await query).length > 0;
+
+    if (
+      await hit(
+        database
+          .select({ id: proposals.id })
+          .from(proposals)
+          .where(eq(proposals.id, id))
+          .limit(1)
+      )
+    ) {
+      type = "proposal";
+    } else if (
+      // The 0151 guard above: a project id must never reach the entity probe.
+      !(await hit(
+        database
+          .select({ id: projects.id })
+          .from(projects)
+          .where(eq(projects.id, id))
+          .limit(1)
+      ))
+    ) {
+      if (
+        await hit(
+          database
+            .select({ id: entities.id })
+            .from(entities)
+            .where(and(eq(entities.id, id), isNull(entities.deletedAt)))
+            .limit(1)
+        )
+      ) {
+        type = "entity";
+      } else if (
+        await hit(
+          database
+            .select({ id: views.id })
+            .from(views)
+            .where(eq(views.id, id))
+            .limit(1)
+        )
+      ) {
+        type = "view";
+      }
     }
-  };
-
-  let type: string | undefined;
-  if (
-    await exists(() =>
-      database
-        .select({ id: proposals.id })
-        .from(proposals)
-        .where(eq(proposals.id, id))
-        .limit(1)
-    )
-  ) {
-    type = "proposal";
-  } else if (
-    // Migration 0151 copied projects into the first-class `projects` table
-    // while preserving ids, and left the pre-0151 entity row live sharing
-    // that same id. Probing `projects` BEFORE `entities` is load-bearing: an
-    // entity-first check would keep resolving a project id to the stale
-    // `entity` copy this bug served. `projects` has no soft-delete column.
-    await exists(() =>
-      database
-        .select({ id: projects.id })
-        .from(projects)
-        .where(eq(projects.id, id))
-        .limit(1)
-    )
-  ) {
-    type = "project";
-  } else if (
-    await exists(() =>
-      database
-        .select({ id: entities.id })
-        .from(entities)
-        .where(and(eq(entities.id, id), isNull(entities.deletedAt)))
-        .limit(1)
-    )
-  ) {
-    type = "entity";
-  } else if (
-    await exists(() =>
-      database
-        .select({ id: views.id })
-        .from(views)
-        .where(eq(views.id, id))
-        .limit(1)
-    )
-  ) {
-    type = "view";
-  } else if (
-    await exists(() =>
-      database
-        .select({ id: documents.id })
-        .from(documents)
-        .where(eq(documents.id, id))
-        .limit(1)
-    )
-  ) {
-    type = "document";
-  } else if (
-    await exists(() =>
-      database
-        .select({ id: channels.id })
-        .from(channels)
-        .where(eq(channels.id, id))
-        .limit(1)
-    )
-  ) {
-    // Channels back post_message / get_channel links; the browser deep-link
-    // handler opens `synap://open/channel/<id>` in the main panel.
-    type = "channel";
+  } catch (err) {
+    apiLogger.error(
+      { err, id },
+      "/open bare-id web probe failed; bouncing untyped"
+    );
+    type = undefined;
   }
 
   return applyOpenDispatch(c, type, id);

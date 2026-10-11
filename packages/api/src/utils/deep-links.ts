@@ -79,11 +79,13 @@ export function openPath(id: string): string {
 /**
  * Typed deep link: `${PUBLIC_URL}/open/<type>/<id>`.
  *
- * The bare-id `/open/:id` route (apps/api/src/index.ts) probes only
- * proposal → entity → view → document → channel; a capability CONTAINER id is
- * none of those, so `openLink(containerId)` would bounce to a TYPELESS
- * `synap://open/<id>` the renderer cannot route. The typed route
- * `/open/:type/:id` is the one that carries the kind through.
+ * The bare-id `/open/:id` route (apps/api/src/index.ts) is public, so it probes
+ * only what changes its HTTP answer (proposal → review page; entity / view →
+ * web host) and bounces every other id TYPELESS as `synap://open/<id>`; the
+ * signed-in app then resolves the kind through `GET /api/hub/resolve/:id`
+ * (which does know capability containers). A producer that already KNOWS the
+ * kind uses the typed route `/open/:type/:id`, which carries it through with
+ * no resolve round-trip.
  *
  * `type` is deliberately narrow (only what this pod actually emits) and MUST
  * stay a subset of `TYPED_OPEN_KINDS` (apps/api/src/open-dispatch.ts), which is
