@@ -1,10 +1,15 @@
 /**
- * TRACK SPACE GRANT — founder decision 2a (2026-09-28).
+ * TRACK SPACE GRANT — founder decision 2a (2026-09-28), reshaped by work-model
+ * W5 (2026-10-11): agent access comes from the PROJECT'S SPACES, while the
+ * track is ACTIVE.
  *
- * Starting a track admits the agent working it into the track's STEP SPACES
- * (the workspaces its stages' `domain`s resolve to), SCOPED to that track. It
- * exists so an agent working one track across Strategy, Finance and Research
- * is not stopped by a separate workspace-JOIN approval in every one of them.
+ * Starting a track admits the agent working it into the spaces the track's
+ * project runs through (its `project --uses--> workspace` links,
+ * `project_use_workspace`), SCOPED to that track. It exists so an agent
+ * working one lasting track across Strategy, Finance and Research is not
+ * stopped by a separate workspace-JOIN approval in every one of them. A legacy
+ * staged track also keeps its STEP spaces (the workspaces its stages'
+ * `domain`s resolve to) — stages are optional now, never required.
  *
  * ── WHAT IT IS (and what it is deliberately NOT) ────────────────────────────
  * NOT a `workspace_members` row. A membership is honoured by every reader and
@@ -13,19 +18,21 @@
  * (`project_tracks.metadata.spaceGrant`), consulted at ONE place: the join
  * gate's membership-miss branch (`checkPermissionOrPropose`). There it admits
  * a write only when that write belongs to the track:
- *   (a) the stage session's own `focus_session/create`, carrying `trackId` +
- *       `trackStage`; or
+ *   (a) a session of the track being started (`focus_session/create`
+ *       carrying `trackId`); or
  *   (b) a write made from a session (ambient `sessionId`) that is filed into
  *       the track, still open, and sits in THIS workspace;
- * and in both cases the step it belongs to names THIS workspace (its `domain`
- * equals the workspace's template slug), the workspace is one the grant lists,
- * the acting agent is one the grant names, and the track is live.
- * Admission only skips the JOIN — the normal governance ladder still runs.
+ * and in both cases the workspace is one the grant lists, the acting agent is
+ * one the grant names, the track is ACTIVE, and the workspace still belongs
+ * to the track: the project links it NOW (an unlinked space stops admitting),
+ * or — legacy staged tracks — the session's step names it (its `domain` is
+ * the workspace's template slug). Admission only skips the JOIN — the normal
+ * governance ladder still runs.
  *
  * ── CONSENT ─────────────────────────────────────────────────────────────────
  *   - an agent's start, PROPOSED: the approval is the consent. The proposal's
  *     summary names the agent and the spaces; at approval the granted set is
- *     the step spaces re-resolved NOW ∩ the spaces the proposal LISTED (what the
+ *     the spaces re-resolved NOW ∩ the spaces the proposal LISTED (what the
  *     person read — a revised payload can never widen it).
  *   - an agent's start, auto-approved: the person's own governance rule let it
  *     through; the grant names that agent and the resolved spaces.
@@ -33,17 +40,21 @@
  *     so the grant admits any agent acting FOR that person (`agentUserIds:
  *     null`), still only through this track's sessions. A named default — the
  *     narrower alternative is "no agent until one is named".
+ * Only spaces the starting person can WRITE are granted: nobody consents to
+ * a space they could not work in themselves. A space linked AFTER the start
+ * is not admitted (it was never consented to) — start no new grant for it.
  *
  * ── END ─────────────────────────────────────────────────────────────────────
- * Completing or archiving the track stamps `endedAt` (`applyTrackStatus`), so a
- * later reopen does NOT revive it; the gate also refuses any track that is not
- * active/paused, belt and braces.
+ * PAUSING suspends it: the gate admits only an ACTIVE track, so resuming
+ * restores it with nothing to rewrite. Completing or archiving the track
+ * stamps `endedAt` (`applyTrackStatus`), so a later reopen does NOT revive it.
  */
 
 import {
   and,
   eq,
   focusSessions,
+  links,
   hasRolePermission,
   inArray,
   projectTracks,
@@ -58,6 +69,9 @@ import {
   workspacePackageSlug,
 } from "./stage-domain.js";
 import { TRACK_SPACE_GRANT_KEY } from "./track-start-summary.js";
+import { listWorkspacesUsedByProjects } from "../../utils/project-workspace.js";
+import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { TRPCError } from "@trpc/server";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 
@@ -67,15 +81,18 @@ export { TRACK_SPACE_GRANT_KEY };
 /** The role the grant stands in for — what an approved join would have given. */
 const GRANT_ROLE = "editor" as const;
 
-/** The track statuses under which the grant can admit anything. */
-const LIVE_TRACK_STATUSES = ["active", "paused"] as const;
+/**
+ * The track statuses under which the grant can admit anything (W5): ACTIVE
+ * only. A paused track's agents stop at the join gate until it resumes.
+ */
+const GRANT_LIVE_STATUSES = ["active"] as const;
 
 export interface TrackSpaceGrant {
   /** The person the admitted agents act for (the gate's `userId`). */
   operatorUserId: string;
   /** The agents admitted; `null` ⇒ any agent acting for `operatorUserId`. */
   agentUserIds: string[] | null;
-  /** The step spaces admitted — never widened after birth. */
+  /** The spaces admitted — never widened after birth. */
   workspaceIds: string[];
   /** Who consented: the approver, or the person who started it. */
   grantedBy: string;
@@ -88,11 +105,12 @@ export interface TrackSpaceGrant {
   endedReason?: "completed" | "archived";
 }
 
-/** A step space, as a proposal lists it for the person to read. */
+/** A granted space, as a proposal lists it for the person to read. */
 export interface TrackStepSpace {
   workspaceId: string;
   name: string;
-  domain: string;
+  /** The stage domain that named it; `null` for a project-linked space. */
+  domain: string | null;
 }
 
 /** Parse the stored grant; anything malformed reads as "no grant". */
@@ -127,21 +145,39 @@ export function readTrackSpaceGrant(metadata: unknown): TrackSpaceGrant | null {
 }
 
 /**
- * The step spaces a method's stages resolve to FOR `userId` — the same
- * resolver `startStageSession` places each stage session with, so the grant
- * names exactly the spaces the sessions will be started in. A domain with no
- * usable workspace contributes nothing (its sessions fall back to the
+ * The spaces a track's grant names FOR `userId` (W5): the spaces its project
+ * links (`uses`) that `userId` can write, then — legacy staged tracks — the
+ * spaces its stages' domains resolve to (the same resolver `startStageSession`
+ * places each stage session with). Deduped, project spaces first. A domain
+ * with no usable workspace contributes nothing (its sessions fall back to the
  * project's home, which needs no grant).
  */
-export async function resolveTrackStepSpaces(
+export async function resolveTrackGrantSpaces(
   db: Db,
   args: { stages: unknown; projectId: string; userId: string }
 ): Promise<TrackStepSpace[]> {
+  const picked: Array<{ workspaceId: string; domain: string | null }> = [];
+  const linked =
+    (await listWorkspacesUsedByProjects(db, [args.projectId], args.userId)).get(
+      args.projectId
+    ) ?? [];
+  for (const workspaceId of linked) {
+    try {
+      await assertWorkspaceWrite(db, args.userId, { workspaceId });
+    } catch (err) {
+      // FORBIDDEN is the answer "not writable" — the one thing this probe
+      // asks. Anything else is a FAILED read, never folded into "no access".
+      if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
+      continue;
+    }
+    if (!picked.some((p) => p.workspaceId === workspaceId)) {
+      picked.push({ workspaceId, domain: null });
+    }
+  }
   const domains: string[] = [];
   for (const { domain } of deriveTrackStages(args.stages, null)) {
     if (domain && !domains.includes(domain)) domains.push(domain);
   }
-  const picked: Array<{ workspaceId: string; domain: string }> = [];
   for (const slug of domains) {
     const r = await resolveStageDomainWorkspace(db, {
       slug,
@@ -165,7 +201,7 @@ export async function resolveTrackStepSpaces(
   const names = new Map(rows.map((r) => [r.id, r.name]));
   return picked.map((p) => ({
     ...p,
-    name: names.get(p.workspaceId) ?? p.domain,
+    name: names.get(p.workspaceId) ?? p.domain ?? "a space",
   }));
 }
 
@@ -224,18 +260,18 @@ export async function admittedByTrackSpaceGrant(
   // The grant stands in for an editor join — never more.
   if (!hasRolePermission(GRANT_ROLE, input.requiredPermission)) return false;
 
-  // Which track (and step) does this write belong to?
+  // Which track (and step, when it has one) does this write belong to?
   let trackId: string | null = null;
   let stageKey: string | null = null;
   if (
     input.subjectType === "focus_session" &&
     input.action === "create" &&
-    typeof input.data?.trackId === "string" &&
-    typeof input.data?.trackStage === "string"
+    typeof input.data?.trackId === "string"
   ) {
-    // (a) the stage session itself, being started in this space.
+    // (a) a session of the track, being started in this space.
     trackId = input.data.trackId;
-    stageKey = input.data.trackStage;
+    stageKey =
+      typeof input.data.trackStage === "string" ? input.data.trackStage : null;
   } else if (input.sessionId) {
     // (b) a write made from a session filed into a track, in THIS space.
     const [session] = await db
@@ -250,19 +286,19 @@ export async function admittedByTrackSpaceGrant(
       .limit(1);
     if (
       !session?.trackId ||
-      !session.trackStage ||
       session.workspaceId !== workspaceId ||
       !(OPEN_SESSION_STATUSES as readonly string[]).includes(session.status)
     ) {
       return false;
     }
     trackId = session.trackId;
-    stageKey = session.trackStage;
+    stageKey = session.trackStage ?? null;
   }
-  if (!trackId || !stageKey) return false;
+  if (!trackId) return false;
 
   const [track] = await db
     .select({
+      projectId: projectTracks.projectId,
       status: projectTracks.status,
       metadata: projectTracks.metadata,
       definitionSnapshot: projectTracks.definitionSnapshot,
@@ -271,7 +307,7 @@ export async function admittedByTrackSpaceGrant(
     .where(
       and(
         eq(projectTracks.id, trackId),
-        inArray(projectTracks.status, [...LIVE_TRACK_STATUSES])
+        inArray(projectTracks.status, [...GRANT_LIVE_STATUSES])
       )
     )
     .limit(1);
@@ -284,8 +320,40 @@ export async function admittedByTrackSpaceGrant(
     return false;
   if (!grant.workspaceIds.includes(workspaceId)) return false;
 
-  // The STEP names this space: its domain is this workspace's template.
+  // The space still belongs to the track: the project links it NOW (W5)…
+  if (await projectLinksWorkspace(db, track.projectId, workspaceId)) {
+    return true;
+  }
+  // …or (legacy staged track) the STEP names it: its domain is this
+  // workspace's template.
+  if (!stageKey) return false;
   const stage = readTrackStage(track.definitionSnapshot?.stages, stageKey);
   if (!stage?.domain) return false;
   return (await workspacePackageSlug(db, workspaceId)) === stage.domain;
+}
+
+/**
+ * Does `project --uses--> workspace` exist right now? The INDEX edge itself,
+ * unfloored (the grant already floored the space on the operator's write
+ * access at consent time) — an unlink stops admission on the next write.
+ */
+async function projectLinksWorkspace(
+  db: Db,
+  projectId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: links.id })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "project"),
+        eq(links.fromId, projectId),
+        eq(links.toType, "workspace"),
+        eq(links.toId, workspaceId),
+        eq(links.linkType, "uses")
+      )
+    )
+    .limit(1);
+  return !!row;
 }

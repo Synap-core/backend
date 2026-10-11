@@ -212,9 +212,10 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
      * (`trackKpiJustReached`) — a re-statement of a reached value never
      * re-nudges. `sourceId` is the track id.
      *
-     * A NUDGE, never an act: completing a track stays a person's decision
-     * (founder, 2026-10-05). It is an ITEM in needs-you because the decision
-     * is theirs to make; the door opens the track, where "Complete" lives.
+     * A NUDGE, never an act: a track is LASTING (work model W1, 2026-10-11),
+     * so reaching the target asks the person to RE-AIM it (a new target),
+     * never to complete the track. It is an ITEM in needs-you because the
+     * decision is theirs to make; the door opens the track.
      * The KPI value is STATED, so the body says "stated", never "measured".
      */
     type: "track.kpi_reached",
@@ -224,7 +225,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "normal",
     titleTemplate: "{{trackName}} reached its target",
     bodyTemplate:
-      "{{kpiLabel}}: {{kpiValue}} (stated). Complete the track, or raise the target.",
+      "{{kpiLabel}}: {{kpiValue}} (stated). Re-aim the target — the track keeps going.",
     defaultChannels: ["in_app"],
     ttl: 0,
     groupBy: "trackId",

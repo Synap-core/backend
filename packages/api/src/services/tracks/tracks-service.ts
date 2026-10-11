@@ -125,7 +125,7 @@ import {
 import {
   TRACK_SPACE_GRANT_KEY,
   endTrackSpaceGrant,
-  resolveTrackStepSpaces,
+  resolveTrackGrantSpaces,
   type TrackSpaceGrant,
 } from "./track-space-grant.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -584,8 +584,13 @@ export async function countProjectsUsingMethod(
 
 export interface StartTrackInput {
   projectId: string;
-  playbookId: string;
-  /** Display name. Absent ⇒ the method's name. */
+  /**
+   * The METHOD — optional (work model W1, 2026-10-11): a track is a lasting
+   * intent with a goal; stages are optional. Absent/null ⇒ a stage-less track,
+   * and `name` is then required (there is no method name to default to).
+   */
+  playbookId?: string | null;
+  /** Display name. Absent ⇒ the method's name (required with no method). */
   name?: string;
   /**
    * Initial answers to the method's declared params (0274). Validated against
@@ -622,7 +627,8 @@ export type StartTrackResult = (
   | {
       status: "started" | "exists";
       track: ProjectTrack;
-      playbook: { id: string; name: string; version: number };
+      /** `null` for a stage-less track started with no method. */
+      playbook: { id: string; name: string; version: number } | null;
     }
   | ProposedOutcome
 ) & {
@@ -635,13 +641,16 @@ export type StartTrackResult = (
 };
 
 /**
- * Start a method on a project. A LIVE track's identity on its project is its
- * NAME (0317), and the name defaults to the method's: starting the
- * same method again under the same (or no) name returns the live track as
- * `exists`, and nothing is filed or written; under another name it starts a
- * second track. Completed and archived tracks hold no name. A live track of
- * ANOTHER method already holding the name is refused (CONFLICT) — never
- * handed back as if it were this method.
+ * Start a track on a project — a LASTING intent with a goal (W1). The method
+ * (a project-scoped playbook, with stages) is optional; with none, `name` is
+ * required and the track has no stages: work in it is `start_session` +
+ * `trackId`. A LIVE track's identity on its project is its NAME (0317), and
+ * the name defaults to the method's: starting the same method (or no method)
+ * again under the same name returns the live track as `exists`, and nothing
+ * is filed or written; under another name it starts a second track. Completed
+ * and archived tracks hold no name. A live track of ANOTHER method (or of a
+ * method, when none was asked for) already holding the name is refused
+ * (CONFLICT) — never handed back as if it were this one.
  */
 export async function startTrack(
   input: StartTrackInput
@@ -654,48 +663,39 @@ export async function startTrack(
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
 
-  // The method's own visibility floor — `scopedDb` + the `playbooks` rule.
-  const playbook = await scopedDb(
-    AccessContext.from(actor)
-  ).findFirst<Playbook>(playbooks, {
-    where: eq(playbooks.id, input.playbookId),
-  });
-  if (!playbook) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: `Playbook ${input.playbookId} not found`,
-    });
-  }
-
-  // A SESSION playbook is a template for one bounded piece of work; running it
-  // as a months-long track would give the project a vocabulary describing a
-  // work session. Only `scope: "project"` is a method.
-  if (playbook.scope !== "project") {
+  // The method — OPTIONAL (W1): a track is a lasting intent with a goal, and
+  // stages are optional. With one, its own visibility floor applies
+  // (`scopedDb` + the `playbooks` rule) and only `scope: "project"` is a method.
+  const playbook = input.playbookId
+    ? await loadTrackMethod(input.playbookId, actor)
+    : null;
+  if (!playbook && !input.name?.trim()) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        `Playbook "${playbook.name}" is ${playbook.scope ?? "session"}-scoped. ` +
-        "Only a project-scoped playbook can run as a track on a project — a " +
-        "session playbook is started as a focus session instead.",
+        'Name the track — with no method there is no name to default to (e.g. name: "Grow the newsletter").',
+    });
+  }
+  if (!playbook && input.params && Object.keys(input.params).length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "params answer a method's declared questions — a track with no method has none. Omit params.",
     });
   }
 
   await assertProjectWrite(project, actor.userId);
 
   // Advisory, computed from the method AS IT STANDS (what would be pinned).
-  const missingDomains = await listMissingStageDomains(
-    db,
-    playbook.stages,
-    actor.userId
-  );
+  const missingDomains = playbook
+    ? await listMissingStageDomains(db, playbook.stages, actor.userId)
+    : [];
 
-  const playbookRef = {
-    id: playbook.id,
-    name: playbook.name,
-    version: playbook.version,
-  };
+  const playbookRef = playbook
+    ? { id: playbook.id, name: playbook.name, version: playbook.version }
+    : null;
 
-  const trackName = input.name?.trim() || playbook.name;
+  const trackName = input.name?.trim() || playbook!.name;
 
   // IDEMPOTENT before governance: an agent asking for a track that already
   // runs under this name gets it back, rather than a proposal to create what
@@ -713,12 +713,12 @@ export async function startTrack(
   }
   const trackId = input.id ?? randomUUID();
 
-  // DECISION 2a — the step spaces this track will work in (the SAME resolver
-  // `startStageSession` places each stage session with). An agent's start
-  // names them in its proposal, so approving the start IS consenting to let
-  // that agent work there for this track — and nowhere else, and no longer.
-  const stepSpaces = await resolveTrackStepSpaces(db, {
-    stages: playbook.stages,
+  // DECISION 2a / W5 — the spaces this track will work in: the project's
+  // linked spaces (+ a legacy method's step spaces). An agent's start names
+  // them in its proposal, so approving the start IS consenting to let that
+  // agent work there for this track — and nowhere else, and no longer.
+  const stepSpaces = await resolveTrackGrantSpaces(db, {
+    stages: playbook?.stages ?? [],
     projectId: project.id,
     userId: actor.userId,
   });
@@ -735,9 +735,10 @@ export async function startTrack(
       : null;
   // Refused BEFORE governance, so a malformed answer is told to its author
   // rather than filed for a human to approve.
-  const trackParams = input.params
-    ? resolveTrackParams(playbook.params, input.params)
-    : {};
+  const trackParams =
+    input.params && playbook
+      ? resolveTrackParams(playbook.params, input.params)
+      : {};
   const direction = resolveTrackDirection(input.direction);
   // A KPI given at start is a WHOLE one (label + target); the `current`
   // stamp is applied at the write, so a replay stamps the approval moment.
@@ -759,7 +760,7 @@ export async function startTrack(
     data: {
       id: trackId,
       projectId: project.id,
-      playbookId: playbook.id,
+      ...(playbook ? { playbookId: playbook.id } : {}),
       name: trackName,
       // The answers ride the proposal; the replay re-validates them against
       // the method as it stands at approval.
@@ -789,20 +790,21 @@ export async function startTrack(
     };
   }
 
-  const snapshot = buildTrackSnapshot(playbook);
+  const snapshot = playbook ? buildTrackSnapshot(playbook) : null;
   const { track, created } = await (
     await repo()
   ).createOrGet(
     {
       id: trackId,
       projectId: project.id,
-      playbookId: playbook.id,
+      playbookId: playbook?.id ?? null,
       name: trackName,
-      definitionSnapshot: snapshot,
-      methodVersion: String(playbook.version),
+      // A stage-less track pins nothing: the column defaults (`{}` / "1").
+      definitionSnapshot: snapshot ?? {},
+      methodVersion: snapshot ? String(playbook!.version) : "1",
       // Seeded at birth, like a session's first stage: nobody "advanced into"
       // the first stage, so the gate is not consulted here.
-      currentStage: firstStageKey(snapshot.stages),
+      currentStage: snapshot ? firstStageKey(snapshot.stages) : null,
       params: trackParams,
       direction,
       kpi: kpiInput
@@ -816,7 +818,7 @@ export async function startTrack(
   // A concurrent start of ANOTHER method under the same name won the insert.
   if (!created) assertNameHeldBySameMethod(track, playbook);
 
-  if (created) {
+  if (created && playbook) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
     // wrote, so every reader of `project --instantiated_from--> playbook`
     // keeps working. Idempotent on the unique edge.
@@ -830,6 +832,8 @@ export async function startTrack(
         linkType: "instantiated_from",
       },
     ]);
+  }
+  if (created) {
     void emitSideEffects({
       subjectType: "track",
       action: "create",
@@ -839,7 +843,7 @@ export async function startTrack(
       data: {
         trackId: track.id,
         projectId: project.id,
-        playbookId: playbook.id,
+        playbookId: playbook?.id ?? null,
         methodVersion: track.methodVersion,
       },
     }).catch((err) =>
@@ -862,15 +866,52 @@ export async function startTrack(
  */
 function assertNameHeldBySameMethod(
   live: ProjectTrack,
-  playbook: { id: string; name: string }
+  playbook: { id: string; name: string } | null
 ): void {
-  if (live.playbookId === playbook.id) return;
+  // Same method — or both method-less: the live track IS the one asked for.
+  if (live.playbookId === (playbook?.id ?? null)) return;
   throw new TRPCError({
     code: "CONFLICT",
-    message:
-      `A live track on this project is already named "${live.name}" and does ` +
-      `not run "${playbook.name}" — pass another name to start it.`,
+    message: playbook
+      ? `A live track on this project is already named "${live.name}" and does ` +
+        `not run "${playbook.name}" — pass another name to start it.`
+      : `A live track on this project is already named "${live.name}" and ` +
+        `runs a method — pass another name to start a new track.`,
   });
+}
+
+/**
+ * The method a track would run, through its own visibility floor (`scopedDb`
+ * + the `playbooks` rule). Only `scope: "project"` is a method: a SESSION
+ * playbook is a template for one bounded piece of work, started as a session
+ * (in a track, with `trackId`) instead.
+ */
+async function loadTrackMethod(
+  playbookId: string,
+  actor: TrackActor
+): Promise<Playbook> {
+  const playbook = await scopedDb(
+    AccessContext.from(actor)
+  ).findFirst<Playbook>(playbooks, {
+    where: eq(playbooks.id, playbookId),
+  });
+  if (!playbook) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Playbook ${playbookId} not found`,
+    });
+  }
+  if (playbook.scope !== "project") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        `Playbook "${playbook.name}" is ${playbook.scope ?? "session"}-scoped. ` +
+        "Only a project-scoped playbook can run as a track's method — start a " +
+        "session playbook as a session instead (pass trackId to work it inside " +
+        "a track), or start the track with no method.",
+    });
+  }
+  return playbook;
 }
 
 /** The agent's name for the consent sentence — never its id. */
@@ -890,7 +931,8 @@ async function agentDisplayName(
  * The grant stamped on a NEW track (decision 2a; see `track-space-grant.ts`).
  * Approval replay ⇒ the proposing agent, resolved ∩ listed spaces. Direct
  * agent start ⇒ that agent. A person's own start ⇒ any agent acting for them
- * (`agentUserIds: null`). No step space ⇒ nothing stamped.
+ * (`agentUserIds: null`). No space (no project link, no step space) ⇒
+ * nothing stamped.
  */
 function trackSpaceGrantMetadata(
   input: StartTrackInput,
@@ -1029,7 +1071,8 @@ export async function applyTrackStatus(
         to: status,
         dropMetadataKey: CHECK_GATE_METADATA_KEY,
         // Decision 2a: completing/archiving ENDS the track's space grant — a
-        // stamp, so a later reopen does not revive it.
+        // stamp, so a later reopen does not revive it. Pausing needs no stamp:
+        // the gate admits only an ACTIVE track (W5), so resuming restores it.
         ...(status === "completed" || status === "archived"
           ? { metadataPatch: endTrackSpaceGrant(track.metadata, status) }
           : {}),
@@ -1808,7 +1851,8 @@ function kpiWritePatch(
 
 /**
  * The nudge: the KPI just reached its target, so the person may want to
- * COMPLETE the track. Never completes it. Through the ONE notification door
+ * RE-AIM it (a new target) — a track is lasting (W1), it is not completed
+ * for reaching a number. Never changes the track. Through the ONE notification door
  * (`NotificationService.create`), to the person the track belongs to (its
  * starter — for an agent key, its operator). Non-fatal: a failed nudge never
  * fails the write it follows.

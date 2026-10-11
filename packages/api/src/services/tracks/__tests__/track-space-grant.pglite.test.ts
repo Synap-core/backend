@@ -553,3 +553,164 @@ describe("G4 a person's own start", () => {
     expect(proposalTypeOf(await sessionWrite(RES, session.id))).toBe("join");
   });
 });
+
+// ── W5 (work model, 2026-10-11): the grant follows the PROJECT'S spaces, and
+// holds only while the track is ACTIVE ─────────────────────────────────────
+
+const CRM = randomUUID(); // a space the project links; no stage names it
+const READONLY = randomUUID(); // linked, but the person can only read it
+
+async function linkProject(projectId: string, workspaceId: string) {
+  await q(
+    `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata)
+     values ($1, $2::uuid, 'project', $3, 'workspace', $2::text, 'uses', '{}'::jsonb)`,
+    [randomUUID(), workspaceId, projectId]
+  );
+}
+
+async function unlinkProject(projectId: string, workspaceId: string) {
+  await q(
+    `delete from links where from_type = 'project' and from_id = $1 and to_type = 'workspace' and to_id = $2 and link_type = 'uses'`,
+    [projectId, workspaceId]
+  );
+}
+
+/** A session of the track, started by the agent in `workspaceId`. */
+async function agentTrackSession(trackId: string, workspaceId: string) {
+  const res = await createFocusSession({
+    userId: USER,
+    agentUserId: AGENT,
+    workspaceId,
+    trackId,
+    goal: `Work the track in ${workspaceId}`,
+  });
+  if (res.status === "proposed") {
+    // Admitted past the JOIN — the normal ladder may still propose it.
+    expect(res.proposalType).not.toBe("join");
+    await approve(res.proposalId!);
+    const { rows } = await q<{ id: string; workspace_id: string }>(
+      `select id, workspace_id from focus_sessions where track_id = $1 and workspace_id = $2 order by created_at desc limit 1`,
+      [trackId, workspaceId]
+    );
+    return { id: rows[0]!.id, workspaceId: rows[0]!.workspace_id };
+  }
+  return { id: res.session.id, workspaceId: res.session.workspaceId };
+}
+
+describe("W5 a stage-less track's agent works in its project's linked spaces", () => {
+  beforeAll(async () => {
+    for (const [id, name] of [
+      [CRM, "CRM"],
+      [READONLY, "Archive room"],
+    ] as const) {
+      await q(
+        `insert into workspaces (id, name, owner_id, workspace_type, package_slug, settings, created_at)
+         values ($1, $2, $3, 'personal', null, '{}'::jsonb, now())`,
+        [id, name, OTHER_USER]
+      );
+    }
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $5, $3, 'viewer')`,
+      [randomUUID(), CRM, USER, randomUUID(), READONLY]
+    );
+  });
+
+  async function personStartsLinked(): Promise<{
+    trackId: string;
+    projectId: string;
+  }> {
+    const projectId = await newProject();
+    await linkProject(projectId, CRM);
+    await linkProject(projectId, READONLY);
+    const res = await startTrack({
+      projectId,
+      name: "Grow accounts",
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("human start proposed");
+    return { trackId: res.track.id, projectId };
+  }
+
+  it("the grant names the linked spaces the person can WRITE (not a read-only one)", async () => {
+    const { trackId } = await personStartsLinked();
+    expect(await trackGrant(trackId)).toMatchObject({
+      operatorUserId: USER,
+      agentUserIds: null,
+      workspaceIds: [CRM],
+    });
+  });
+
+  it("the agent's track session in a linked space starts with no join, and writes from it are admitted", async () => {
+    const { trackId } = await personStartsLinked();
+    const before = await joinRequests(CRM);
+    const session = await agentTrackSession(trackId, CRM);
+    expect(session.workspaceId).toBe(CRM);
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).not.toBe(
+      "join"
+    );
+    expect(await joinRequests(CRM)).toBe(before);
+    // A space the project does not link stays join-gated.
+    expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).toBe("join");
+  });
+
+  it("PAUSING suspends it and RESUMING restores it; archiving ends it", async () => {
+    const { trackId } = await personStartsLinked();
+    const session = await agentTrackSession(trackId, CRM);
+    await setTrackStatus({ trackId, status: "paused", actor: human });
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).toBe("join");
+    // Nothing was stamped: resume restores it.
+    expect((await trackGrant(trackId)).endedAt).toBeUndefined();
+    await setTrackStatus({ trackId, status: "active", actor: human });
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).not.toBe(
+      "join"
+    );
+    await setTrackStatus({ trackId, status: "archived", actor: human });
+    expect(await trackGrant(trackId)).toMatchObject({
+      endedReason: "archived",
+    });
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).toBe("join");
+  });
+
+  it("unlinking the space from the project stops admission on the next write", async () => {
+    const { trackId, projectId } = await personStartsLinked();
+    const session = await agentTrackSession(trackId, CRM);
+    await unlinkProject(projectId, CRM);
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).toBe("join");
+  });
+
+  it("an agent's stage-less start states the linked spaces as the consent", async () => {
+    const projectId = await newProject();
+    await linkProject(projectId, CRM);
+    const res = await startTrack({
+      projectId,
+      name: "Accounts",
+      actor: agent,
+    });
+    if (res.status !== "proposed") throw new Error(`got ${res.status}`);
+    const { rows } = await q<{ summary: string | null; data: unknown }>(
+      `select data->>'summary' as summary, data from proposals where id = $1`,
+      [res.proposalId]
+    );
+    expect(rows[0]!.summary).toBe(
+      'Create Track "Accounts" and let Scout work in CRM for this track'
+    );
+    await approve(res.proposalId);
+    expect(await trackGrant(trackIdOf(rows[0]!.data))).toMatchObject({
+      agentUserIds: [AGENT],
+      workspaceIds: [CRM],
+    });
+  });
+});
+
+describe("W5 a staged track pauses its grant too", () => {
+  it("pause → join-gated; resume → admitted again", async () => {
+    const { trackId } = await agentStartApproved();
+    const session = await openStageSession(trackId, "frame");
+    await setTrackStatus({ trackId, status: "paused", actor: human });
+    expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).toBe("join");
+    await setTrackStatus({ trackId, status: "active", actor: human });
+    expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).not.toBe(
+      "join"
+    );
+  });
+});

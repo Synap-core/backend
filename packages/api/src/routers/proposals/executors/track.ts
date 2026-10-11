@@ -87,11 +87,13 @@ export function registerTrackExecutors(): void {
     async execute({ proposal, userId, input, deps }) {
       const data = innerData(proposal);
       const projectId = data.projectId as string | undefined;
-      const playbookId = data.playbookId as string | undefined;
-      if (!projectId || !playbookId) {
+      // The method is OPTIONAL (W1): a stage-less track's proposal names none.
+      const playbookId =
+        typeof data.playbookId === "string" ? data.playbookId : null;
+      if (!projectId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Track proposal is missing its project or method",
+          message: "Track proposal is missing its project",
         });
       }
       if (await alreadyApproved(input.proposalId)) {
@@ -111,6 +113,12 @@ export function registerTrackExecutors(): void {
         ...(data.params && typeof data.params === "object"
           ? { params: data.params as Record<string, unknown> }
           : {}),
+        // The goal rides the proposal too — a lasting track's direction and
+        // KPI are what it IS; replaying without them dropped both.
+        ...(typeof data.direction === "string"
+          ? { direction: data.direction }
+          : {}),
+        ...(data.kpi && typeof data.kpi === "object" ? { kpi: data.kpi } : {}),
         // Decision 2a: this approval IS the consent to the spaces the
         // proposal listed, for the agent the proposal's COLUMN names.
         approvedSpaceGrant: {

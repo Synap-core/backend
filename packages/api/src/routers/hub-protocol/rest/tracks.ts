@@ -2,7 +2,7 @@
  * Hub REST — Tracks (`project_tracks`, 0272): a METHOD running inside a project.
  *
  *   GET   /tracks?projectId=…           the project's tracks
- *   POST  /tracks                       start a method { projectId, playbookId, name? }
+ *   POST  /tracks                       start a track { projectId, playbookId?, name? }
  *   GET   /tracks/:id                   one track
  *   POST  /tracks/:id/advance           { toStage } — any declared stage
  *   PATCH /tracks/:id                   { status } — pause/resume/complete/archive
@@ -58,7 +58,8 @@ const Uuid = z.string().uuid();
 const ParamsBag = z.record(z.string(), z.unknown());
 const StartSchema = z.object({
   projectId: Uuid,
-  playbookId: Uuid,
+  // OPTIONAL (W1): a track is a lasting intent; the method is optional.
+  playbookId: Uuid.optional(),
   name: z.string().trim().min(1).max(200).optional(),
   params: ParamsBag.optional(),
   direction: z.string().max(280).optional(),

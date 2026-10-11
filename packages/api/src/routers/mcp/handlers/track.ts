@@ -95,17 +95,25 @@ export const trackHandlers: McpHandlerMap = {
   synap_start_track: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     const projectId = uuid(ctx.args.projectId);
-    const playbookId = uuid(ctx.args.playbookId);
-    if (!projectId || !playbookId) {
+    if (!projectId) {
       return ok({
         error:
-          "projectId and playbookId (uuids) are required — a method is a playbook with scope 'project' (synap_list_playbooks).",
+          "projectId (uuid) is required — find it with synap_list_projects.",
+      });
+    }
+    // OPTIONAL (W1): a track needs no method. A playbookId given but malformed
+    // is refused, never silently dropped into a method-less start.
+    const playbookId = uuid(ctx.args.playbookId);
+    if (ctx.args.playbookId != null && !playbookId) {
+      return ok({
+        error:
+          "playbookId must be a uuid (a project-scoped playbook) — or omit it to start a track with no method.",
       });
     }
     return run(async () => {
       const result = await startTrack({
         projectId,
-        playbookId,
+        ...(playbookId ? { playbookId } : {}),
         ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
         ...(isParams(ctx.args.params) ? { params: ctx.args.params } : {}),
         ...(str(ctx.args.direction)

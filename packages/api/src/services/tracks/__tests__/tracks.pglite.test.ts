@@ -465,6 +465,129 @@ describe("visibility — a track is exactly as visible as its project", () => {
   });
 });
 
+describe("startTrack with NO method — a lasting, stage-less track (W1)", () => {
+  const LASTING = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Lasting', 'active')`,
+      [LASTING, USER]
+    );
+  });
+
+  it("a person starts a named track with no method: no stages, no lineage edge, the goal stored", async () => {
+    const result = await startTrack({
+      projectId: LASTING,
+      name: "Grow the newsletter",
+      direction: "A newsletter people forward",
+      kpi: { label: "Subscribers", target: 1000 },
+      actor: human,
+    });
+    if (result.status === "proposed") throw new Error("human start proposed");
+    expect(result.status).toBe("started");
+    expect(result.playbook).toBeNull();
+    expect(result.missingDomains).toEqual([]);
+    expect(result.track).toMatchObject({
+      projectId: LASTING,
+      playbookId: null,
+      name: "Grow the newsletter",
+      currentStage: null,
+      status: "active",
+      direction: "A newsletter people forward",
+      kpi: expect.objectContaining({ label: "Subscribers", target: 1000 }),
+      stageHistory: [],
+    });
+    expect(h.links).toEqual([]); // no method ⇒ no `instantiated_from` edge
+    expect(h.emits).toContainEqual(
+      expect.objectContaining({ subjectType: "track", action: "create" })
+    );
+  });
+
+  it("is idempotent per name, and a method's track holding the name is a CONFLICT", async () => {
+    const again = await startTrack({
+      projectId: LASTING,
+      name: "grow the newsletter ",
+      actor: human,
+    });
+    expect(again.status).toBe("exists");
+    await startTrack({
+      projectId: LASTING,
+      playbookId: METHOD,
+      actor: human,
+    });
+    await expect(
+      startTrack({ projectId: LASTING, name: "Business model", actor: human })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("refuses a method-less start with no name, or with params (nothing declares them)", async () => {
+    await expect(
+      startTrack({ projectId: LASTING, actor: human })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      startTrack({
+        projectId: LASTING,
+        name: "Hiring",
+        params: { role: "x" },
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("an AGENT start is proposed WITHOUT a method; approval replays it with its goal", async () => {
+    const result = await startTrack({
+      projectId: LASTING,
+      name: "Community",
+      direction: "People who help each other",
+      kpi: { label: "Weekly posts", target: 20 },
+      actor: agent,
+    });
+    expect(result.status).toBe("proposed");
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    expect(data).not.toHaveProperty("playbookId");
+    expect(data).toMatchObject({ projectId: LASTING, name: "Community" });
+
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data) values ($1, 'pending', 'track', $2, 'create', $3::jsonb)`,
+      [proposalId, data.id, JSON.stringify({ data })]
+    );
+    const out = await proposalExecRegistry
+      .resolveExact("track/create")!
+      .execute({
+        proposal: {
+          id: proposalId,
+          targetType: "track",
+          targetId: data.id,
+          proposalType: "create",
+          workspaceId: null,
+          sessionId: null,
+          projectId: LASTING,
+          agentUserId: AGENT,
+          sourceMessageId: null,
+          data: { data },
+        },
+        payload: null,
+        userId: USER,
+        input: { proposalId },
+        ctx: {},
+        deps: {
+          reportProposalOutcome: () => {},
+          emitProposalReviewed: () => {},
+        },
+      } as unknown as ProposalExecutorArgs);
+    expect(out).toMatchObject({ success: true });
+    const track = await getTrack(String(data.id), human);
+    expect(track).toMatchObject({
+      playbookId: null,
+      name: "Community",
+      currentStage: null,
+      // The goal the person approved survives the replay.
+      direction: "People who help each other",
+      kpi: expect.objectContaining({ label: "Weekly posts", target: 20 }),
+    });
+  });
+});
+
 describe("advanceTrackStage — through the SHARED gate core", () => {
   async function gatedTrackId() {
     const rows = (

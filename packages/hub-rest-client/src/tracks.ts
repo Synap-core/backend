@@ -73,10 +73,17 @@ export interface ListTracksOptions {
 
 export interface StartTrackInput {
   projectId: string;
-  /** A project-scoped playbook (the method). */
-  playbookId: string;
+  /**
+   * A project-scoped playbook (the method) — OPTIONAL: a track is a lasting
+   * intent with a goal; omit it for a stage-less track (then `name` is required).
+   */
+  playbookId?: string;
   name?: string;
   params?: Record<string, unknown>;
+  /** Where the track is heading, one line. */
+  direction?: string;
+  /** The number it steers by: `{ label, unit?, target, current? }`. */
+  kpi?: { label: string; unit?: string; target: number; current?: number };
   reasoning?: string;
 }
 

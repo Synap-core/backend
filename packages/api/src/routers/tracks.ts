@@ -82,12 +82,15 @@ export const tracksRouter = router({
       return loadTrackView(track, ctx);
     }),
 
-  /** Start a project-scoped method on a project. Idempotent per method. */
+  /**
+   * Start a track on a project — a lasting intent; the method (a
+   * project-scoped playbook) is optional (W1). Idempotent per live name.
+   */
   start: podProcedure
     .input(
       z.object({
         projectId: z.string().uuid(),
-        playbookId: z.string().uuid(),
+        playbookId: z.string().uuid().optional(),
         name: z.string().trim().min(1).max(200).optional(),
         params: params.optional(),
         /** Where the track is heading, one line (0302). */
