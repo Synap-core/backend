@@ -73,6 +73,7 @@ import {
   pendingAgentConnectProposals,
 } from "../services/agent-connect.js";
 import { links, tools } from "@synap/database/schema";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { createLink } from "../services/links/links-service.js";
 import { redispatchAfterAgentBound } from "../services/agent-dispatch/redispatch-on-choice.js";
 import { createLogger } from "@synap-core/core";
@@ -925,6 +926,8 @@ export const agentUsersRouter = router({
             "Only a person can disconnect an agent — an agent key cannot.",
         });
       }
+      // It revokes keys: a person's key is bounded by its grant too.
+      await assertKeyMayWrite({ subjectType: "apiKey", action: "delete" });
       const callerId = ctx.userId;
 
       const [agent] = await db
@@ -1005,6 +1008,8 @@ export const agentUsersRouter = router({
           message: "Only a person can bind an agent — an agent key cannot.",
         });
       }
+      // It re-points where the agent's work is dispatched: an agent change.
+      await assertKeyMayWrite({ subjectType: "agent", action: "update" });
       const callerId = ctx.userId;
       const [agent] = await db
         .select({ id: users.id, createdByUserId: users.createdByUserId })

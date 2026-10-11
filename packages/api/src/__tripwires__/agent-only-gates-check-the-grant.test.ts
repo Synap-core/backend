@@ -34,11 +34,8 @@ import { join, relative } from "path";
 
 const ROUTERS = join(process.cwd(), "src/routers");
 
-/** Held by another session in this wave (agent-users.ts) — report, not skip silently. */
-const EXEMPT = new Set([
-  "agent-users.ts:disconnect",
-  "agent-users.ts:setBinding",
-]);
+/** A door listed here is reported as a known gap (none today). */
+const EXEMPT = new Set<string>([]);
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {

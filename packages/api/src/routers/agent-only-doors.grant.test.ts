@@ -38,6 +38,7 @@ vi.mock("../services/captures/give-to-agent.js", () => ({
 import { runWithGrant, type KeyGrant } from "@synap/database";
 import { playbookRunsRouter } from "./playbook-runs.js";
 import { capturesRouter } from "./captures.js";
+import { agentUsersRouter } from "./agent-users.js";
 import type { Context } from "../types/context.js";
 
 const RUN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -95,5 +96,32 @@ describe("a human key is bounded by its grant on agent-only doors", () => {
     await give();
     expect(h.cancelCalls).toHaveLength(1);
     expect(h.giveCalls).toHaveLength(1);
+  });
+});
+
+describe("agentUsers.disconnect / setBinding read the key's grant", () => {
+  const AGENT = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const agents = () => agentUsersRouter.createCaller(ctx);
+
+  it("disconnect (revokes keys) needs api_key.delete", async () => {
+    await expect(
+      runWithGrant(grantOf(["entity", "agent.read"]), () =>
+        agents().disconnect({ agentUserId: AGENT })
+      )
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("api_key.delete"),
+    });
+  });
+
+  it("setBinding (re-points dispatch) needs agent.update", async () => {
+    await expect(
+      runWithGrant(grantOf(["entity", "link.create"]), () =>
+        agents().setBinding({ agentUserId: AGENT, toolId: null })
+      )
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("agent.update"),
+    });
   });
 });
