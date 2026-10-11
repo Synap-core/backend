@@ -21,6 +21,7 @@ import { db, eq, playbookRuns } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { applyRunCapture } from "../../../services/runs/apply-run-capture.js";
 import { cancelRun } from "../../../services/agent-dispatch/cancel-run.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { listRuns, getRun } from "../../../services/runs/index.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -277,6 +278,13 @@ export function registerRunsRoutes(app: HubHono): void {
       if (run.workspaceId && run.workspaceId !== acting.workspaceId) {
         return c.json({ error: "Run not found" }, 404);
       }
+      // The same grant rung as the tRPC door (playbookRuns.cancelRun).
+      const denial = await grantWriteDenial({
+        subjectType: "focus_session",
+        action: "update",
+        workspaceId: run.workspaceId ?? null,
+      });
+      if (denial) return c.json({ error: denial }, 403);
       const out = await cancelRun({ runId, userId: acting.userId });
       if (out.status === "not_found")
         return c.json({ error: "Run not found" }, 404);

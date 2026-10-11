@@ -81,4 +81,23 @@ describe("POST /runs/:runId/cancel — callers", () => {
     expect(h.calls).toEqual([{ runId: RUN, userId: USER }]);
     expect(res.status).toBe(404);
   });
+
+  it("a person's key is bounded by its grant: no session.update, no cancel", async () => {
+    const { runWithGrant } = await import("@synap/database");
+    const grant = (permissions: string[]) =>
+      ({ scopes: [{ permissions }] }) as never;
+    const refused = await runWithGrant(grant(["session.read"]), () =>
+      cancel({ keyType: "user_pat", apiKeyId: "k" })
+    );
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({
+      error: expect.stringContaining("session.update"),
+    });
+    expect(h.calls).toHaveLength(0);
+    const allowed = await runWithGrant(grant(["session.update"]), () =>
+      cancel({ keyType: "user_pat", apiKeyId: "k" })
+    );
+    expect(allowed.status).toBe(404);
+    expect(h.calls).toHaveLength(1);
+  });
 });
