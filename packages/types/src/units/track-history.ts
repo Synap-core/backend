@@ -22,9 +22,21 @@
  * PURE and dependency-free (Relay, browser and pod import the same answer).
  */
 
-import type { ActivityActor } from "../activity/index.js";
+import {
+  activityOutcomeForProposal,
+  activityOutcomeForSession,
+  type ActivityActor,
+  type ActivityOutcome,
+} from "../activity/index.js";
+import { CHECK_GATE_UNEVALUATED } from "../focus-sessions/check-gate.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
-import { humanizeToken } from "../vocabulary/index.js";
+import {
+  humanizeToken,
+  resolveActionLabel,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
+import { trackStatusMoves } from "./track.js";
 
 export const TRACK_HISTORY_EVENT_KINDS = [
   "track_started",
@@ -274,4 +286,213 @@ export function trackHistoryGroups(
       lastAt: list[0]!.at,
     };
   });
+}
+
+// ── One event, as a line (U5 surfaces) ──────────────────────────────────────
+//
+// Both surfaces draw an event as their kit's "what happened" row; WHAT the row
+// says (the act, its object, where it opens, how it stands) is decided HERE,
+// once — relay and the browser had each written it and already disagreed.
+
+/**
+ * A door to a STEP: the host opens the track page ON that step
+ * (`track?stage=<key>`, D1a). Not an object kind of its own — a step is a
+ * place inside its track; `id` is the stage key.
+ */
+export const TRACK_STEP_DOOR_KIND = "track_stage";
+
+export interface TrackHistoryContext {
+  trackId: string;
+  trackName: string;
+  stages: ReadonlyArray<{ key: string; name: string }>;
+}
+
+/** What one event's line says and opens. */
+export interface TrackHistoryAct {
+  /** A vocabulary action token — `resolveActionLabel(action, "past")` is its verb. */
+  action: string;
+  /** The object the verb acts on, in words. */
+  title: string;
+  /** Where the line opens: a session, a proposal, a step (`TRACK_STEP_DOOR_KIND`) or the track. */
+  door: { kind: string; id: string };
+  /** Where the act stands — `resolveActivityOutcomeView` gives its mark. */
+  outcome: ActivityOutcome;
+}
+
+function stepName(ctx: TrackHistoryContext, key: string | null): string {
+  if (!key) return resolveObjectNoun("stage");
+  return ctx.stages.find((s) => s.key === key)?.name ?? humanizeToken(key);
+}
+
+function decisionAction(decision: string): string {
+  switch (decision) {
+    case "rejected":
+      return "reject";
+    case "reverted":
+      return "revert";
+    default:
+      // approved / auto-approved / an approval that could not apply (its
+      // outcome mark says it failed).
+      return "approve";
+  }
+}
+
+/** One history event → what its line says and where it opens. */
+export function trackHistoryAct(
+  e: TrackHistoryEvent,
+  ctx: TrackHistoryContext
+): TrackHistoryAct {
+  const track = { kind: "track", id: ctx.trackId };
+  const step = (key: string | null) =>
+    key ? { kind: TRACK_STEP_DOOR_KIND, id: key } : track;
+  const session = e.refs.sessionId
+    ? { kind: "session", id: e.refs.sessionId }
+    : track;
+  const proposal = e.refs.proposalId
+    ? { kind: "proposal", id: e.refs.proposalId }
+    : session;
+  switch (e.kind) {
+    case "track_started":
+      return { action: "start", title: ctx.trackName, door: track, outcome: "succeeded" };
+    case "step_moved":
+      return {
+        action: "move",
+        title: `to ${stepName(ctx, e.stageKey)}`,
+        door: step(e.stageKey),
+        outcome: "succeeded",
+      };
+    case "session_started":
+      return { action: "start", title: e.title, door: session, outcome: "succeeded" };
+    case "session_closed":
+      return {
+        action: "close",
+        title: e.title,
+        door: session,
+        // A closed session whose contract graded failing did not succeed.
+        outcome:
+          e.verdict === "failing"
+            ? "failed"
+            : activityOutcomeForSession(e.sessionStatus),
+      };
+    case "decision_asked":
+      return {
+        action: "ask",
+        title: e.title ?? resolveObjectNoun("proposal"),
+        door: proposal,
+        outcome: "waiting",
+      };
+    case "decision_answered":
+      return {
+        action: decisionAction(e.decision),
+        title: e.title ?? resolveObjectNoun("proposal"),
+        door: proposal,
+        outcome: activityOutcomeForProposal(e.decision),
+      };
+    case "check_passed":
+      return {
+        action: "check",
+        title: stepName(ctx, e.fromStage),
+        door: step(e.fromStage),
+        outcome: "succeeded",
+      };
+    case "check_held":
+      return {
+        action: "check",
+        title: stepName(ctx, e.fromStage),
+        door: step(e.fromStage),
+        outcome: "failed",
+      };
+    case "paused":
+      return { action: "pause", title: ctx.trackName, door: track, outcome: "stopped" };
+    case "resumed":
+      return { action: "resume", title: ctx.trackName, door: track, outcome: "succeeded" };
+    case "status_changed": {
+      // The verb of that move — the shared status table, never a local one.
+      const move = trackStatusMoves(e.fromStatus, { includeArchive: true }).find(
+        (m) => m.to === e.toStatus
+      );
+      return {
+        action: move?.verb ?? "update",
+        title: ctx.trackName,
+        door: track,
+        outcome: "succeeded",
+      };
+    }
+  }
+}
+
+function counted(n: number, kind: string): string {
+  return `${n} ${(n === 1 ? resolveObjectNoun(kind) : resolveObjectNounPlural(kind)).toLowerCase()}`;
+}
+
+/**
+ * A folded group's one line — what is in it, counted ("2 sessions · 1
+ * decision · Moved ×2"). Open asks and failures are never in a folded group
+ * (the grouping keeps such a group open), so they are not counted here.
+ * Nothing counted ⇒ "".
+ */
+export function trackHistorySummaryWords(s: TrackHistorySummary): string {
+  // One session can start AND close inside a step: the larger count, never the sum.
+  const sessions = Math.max(s.sessionsStarted, s.sessionsClosed);
+  const parts = [
+    sessions > 0 ? counted(sessions, "session") : null,
+    s.decisions > 0 ? counted(s.decisions, "decision") : null,
+    s.moves > 0 ? `${resolveActionLabel("move", "past")} \u00d7${s.moves}` : null,
+  ].filter((p): p is string => p !== null);
+  return parts.join(" \u00b7 ");
+}
+
+/** A check's failing keys, as words: the criterion's statement where it has one. */
+export function checkFailingLabels(
+  failing: readonly string[],
+  stage: { criteria?: ReadonlyArray<Record<string, unknown> & { key: string }> } | null | undefined
+): string[] {
+  return failing.map((key) => {
+    if (key === CHECK_GATE_UNEVALUATED) return "The check could not measure this step";
+    const c = stage?.criteria?.find((x) => x.key === key);
+    const statement = c?.statement;
+    return typeof statement === "string" && statement.trim()
+      ? statement.trim()
+      : humanizeToken(key);
+  });
+}
+
+/** What an event's line carries under it — a reviewer's note, a held check's why. */
+export function trackHistoryNote(
+  e: TrackHistoryEvent,
+  stages: ReadonlyArray<{ key: string; criteria?: ReadonlyArray<Record<string, unknown> & { key: string }> }>
+): { reason: string | null; failing: string[] } | null {
+  if (e.kind === "decision_answered") {
+    return e.note ? { reason: e.note, failing: [] } : null;
+  }
+  if (e.kind === "check_held") {
+    return {
+      reason: e.reason,
+      failing: checkFailingLabels(
+        e.failing,
+        stages.find((s) => s.key === e.fromStage)
+      ),
+    };
+  }
+  return null;
+}
+
+/**
+ * WHO moved the track into the step a card shows — the pod's resolved
+ * `enteredBy` on THE history entry the card read (same step, same instant).
+ * `undefined` when the pod did not name it: then nobody is named, never a
+ * guessed "you" (relay's signed-in id is the Control Plane's, not the pod's).
+ */
+export function trackStepMover(
+  history: ReadonlyArray<{ stageKey: string; enteredAt: string; enteredBy?: ActivityActor }>,
+  card: { key: string; enteredBy: { at: string } | null } | null
+): ActivityActor | undefined {
+  if (!card?.enteredBy) return undefined;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i]!;
+    if (h.stageKey === card.key && h.enteredAt === card.enteredBy.at) {
+      return h.enteredBy;
+    }
+  }
+  return undefined;
 }
