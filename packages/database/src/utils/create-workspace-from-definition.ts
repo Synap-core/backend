@@ -20,6 +20,12 @@ import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { SYSTEM_PROFILE_SLUGS } from "./ensure-system-profiles.js";
 import { resolvePropertyTargetProfiles } from "./resolve-property-target-profiles.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
+import {
+  declareLifecycle,
+  withLifecycleOptions,
+  LifecycleDeclarationError,
+  type LifecycleAuthoring,
+} from "../services/lifecycle/declare-lifecycle.js";
 import { buildStoredConstraints } from "./property-enum.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { asPropertyInputType } from "../schema/property-defs.js";
@@ -252,6 +258,12 @@ export interface WorkspaceDefinitionInput {
      * = no category.
      */
     roleCategory?: string | null;
+    /**
+     * The profile's ONE lifecycle (work model L1, 0319): which property it is
+     * and its options, each with a fixed category. Folded onto that property
+     * (`withLifecycleOptions`) and declared (`declareLifecycle`) on apply.
+     */
+    lifecycle?: LifecycleAuthoring;
     // Proposal format: flat property list
     properties?: Array<{
       slug: string;
@@ -260,6 +272,8 @@ export interface WorkspaceDefinitionInput {
       inputType?: string;
       placeholder?: string;
       enumValues?: string[];
+      /** Option objects `{ key, label?, category?, tone?, humanOnly? }` (wins over enumValues). */
+      enumOptions?: unknown[];
       constraints?: Record<string, unknown>;
       /** entity_id properties: which profile slug this field links to */
       targetProfileSlug?: string;
@@ -1283,7 +1297,7 @@ export async function createWorkspaceFromDefinition(
         profile.description ?? profile.uiHints?.description;
 
       // Normalize properties: prefer proposal format, fall back to CP registry format.
-      const resolvedProperties: typeof profile.properties =
+      let resolvedProperties: typeof profile.properties =
         profile.properties ??
         profile.propertyDefs?.map((pd) => ({
           slug: pd.slug,
@@ -1294,6 +1308,18 @@ export async function createWorkspaceFromDefinition(
           enumValues: pd.constraints?.enum,
           constraints: pd.constraints,
         }));
+      // The lifecycle's options are authored ONCE, on the profile; fold them
+      // onto the property so its def is born with `constraints.enumOptions`.
+      if (profile.lifecycle) {
+        try {
+          resolvedProperties = withLifecycleOptions(
+            resolvedProperties,
+            profile.lifecycle
+          );
+        } catch (err) {
+          await handleStepError(`profiles[${profile.slug}].lifecycle`, err);
+        }
+      }
 
       // Resolution via the ONE shared dedup door (identical rule in
       // reconcileWorkspaceFromDefinition):
@@ -1510,6 +1536,21 @@ export async function createWorkspaceFromDefinition(
           await handleStepError(
             `profiles[${profile.slug}].properties[${prop.slug}]`,
             err
+          );
+        }
+      }
+      // Declare the lifecycle on a profile THIS definition owns. A reused
+      // profile (owned elsewhere) keeps its own lifecycle — appending options
+      // to it is the overlay path (deferred, C9).
+      if (profile.lifecycle && !profileIsReused) {
+        const declared = await declareLifecycle(dbConn, {
+          profileId: created!.id,
+          propertySlug: profile.lifecycle.property,
+        });
+        if (declared.status === "refused") {
+          await handleStepError(
+            `profiles[${profile.slug}].lifecycle`,
+            new LifecycleDeclarationError(declared.reason)
           );
         }
       }

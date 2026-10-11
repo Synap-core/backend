@@ -50,10 +50,27 @@
  * not assume it.
  */
 
+/**
+ * An option OBJECT — the richer spelling of one enum value (0319, work model
+ * L1). Stored at `constraints.enumOptions`; `constraints.enum` (the bare key
+ * list every reader and the validator use) is DERIVED from it here and nowhere
+ * else, so the two can never disagree. `category` is what makes a select a
+ * lifecycle (`utils/lifecycle-model.ts`); a plain select may carry labels only.
+ */
+export interface StoredEnumOption {
+  key: string;
+  label?: string;
+  category?: string;
+  tone?: string;
+  humanOnly?: boolean;
+}
+
 /** The authoring shape a template property arrives in. */
 export interface TemplateEnumSource {
   /** The AUTHORING spelling — what template YAML writes. */
   enumValues?: unknown;
+  /** Option OBJECTS (`{ key, label?, category?, tone?, humanOnly? }`). Wins over `enumValues`. */
+  enumOptions?: unknown;
   /** Any constraints the template authored directly (may already carry `enum`). */
   constraints?: Record<string, unknown> | null;
 }
@@ -72,6 +89,42 @@ function asStringArray(value: unknown): string[] | undefined {
 }
 
 /**
+ * Normalise option objects (or bare strings) into `StoredEnumOption[]`.
+ * Lenient on SHAPE (a bare string becomes `{ key }`), strict on IDENTITY (an
+ * entry with no key is dropped, a duplicate key keeps the first). Returns
+ * `undefined` for anything that is not a non-empty array of options.
+ * Category VALIDITY is the lifecycle declaration's job, not this mapper's.
+ */
+export function normalizeEnumOptions(
+  value: unknown
+): StoredEnumOption[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: StoredEnumOption[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const raw =
+      typeof item === "string"
+        ? { key: item }
+        : item && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : null;
+    const key = typeof raw?.key === "string" ? raw.key.trim() : "";
+    if (!raw || !key || seen.has(key)) continue;
+    seen.add(key);
+    const opt: StoredEnumOption = { key };
+    if (typeof raw.label === "string" && raw.label.trim())
+      opt.label = raw.label.trim();
+    if (typeof raw.category === "string" && raw.category.trim())
+      opt.category = raw.category.trim();
+    if (typeof raw.tone === "string" && raw.tone.trim())
+      opt.tone = raw.tone.trim();
+    if (raw.humanOnly === true) opt.humanOnly = true;
+    out.push(opt);
+  }
+  return out.length ? out : undefined;
+}
+
+/**
  * Build the `constraints` object to STORE for a template-authored property.
  *
  * Folds the authoring spelling into `constraints.enum` while preserving every
@@ -84,6 +137,18 @@ export function buildStoredConstraints(
   extra?: Record<string, unknown>
 ): Record<string, unknown> {
   const authored = { ...(prop.constraints ?? {}), ...(extra ?? {}) };
+  // Option OBJECTS win: the key list is DERIVED from them, so `enum` and
+  // `enumOptions` are written together, here, and can never disagree.
+  const options = normalizeEnumOptions(
+    prop.enumOptions ?? authored.enumOptions
+  );
+  if (options) {
+    return {
+      ...authored,
+      enumOptions: options,
+      enum: options.map((o) => o.key),
+    };
+  }
   if (authored.enum !== undefined) return authored;
 
   const fromShorthand = asStringArray(prop.enumValues);
@@ -108,5 +173,20 @@ export function readStoredEnum(def: StoredEnumSource): string[] | undefined {
   return (
     asStringArray(def.constraints?.enum) ??
     asStringArray(def.uiHints?.enumValues)
+  );
+}
+
+/**
+ * Read the enum OPTIONS stored on a property def: the option objects when the
+ * def carries them, else the bare key list lifted to `{ key }`. `undefined`
+ * for a property with no closed set. Same transitional fallback as
+ * {@link readStoredEnum}.
+ */
+export function readStoredEnumOptions(
+  def: StoredEnumSource
+): StoredEnumOption[] | undefined {
+  return (
+    normalizeEnumOptions(def.constraints?.enumOptions) ??
+    readStoredEnum(def)?.map((key) => ({ key }))
   );
 }

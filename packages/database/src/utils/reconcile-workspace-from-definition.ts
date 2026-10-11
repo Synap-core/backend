@@ -59,7 +59,16 @@ import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
-import { buildStoredConstraints, readStoredEnum } from "./property-enum.js";
+import {
+  buildStoredConstraints,
+  normalizeEnumOptions,
+  readStoredEnum,
+  readStoredEnumOptions,
+} from "./property-enum.js";
+import {
+  declareLifecycle,
+  withLifecycleOptions,
+} from "../services/lifecycle/declare-lifecycle.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { asPropertyInputType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
@@ -231,6 +240,16 @@ export interface ReconcileReport {
     skipped: Array<{ profile: string; slug: string }>;
     /** Existing property whose enum options were synced to the template (values added). */
     enumsUpdated: Array<{ profile: string; slug: string }>;
+    /**
+     * Lifecycle declarations (0319, work model L1): `declared` = the profile's
+     * lifecycle link was set (or already was — `unchanged` is not listed);
+     * `refused` = the template's declaration could not be applied, with why.
+     * Optional so pre-0319 report fixtures stay valid.
+     */
+    lifecycles?: {
+      declared: Array<{ profile: string; property: string }>;
+      refused: Array<{ profile: string; reason: string }>;
+    };
     /** Template type differs from the live type — NOT changed; needs a decision. */
     conflicts: Array<{
       profile: string;
@@ -452,6 +471,7 @@ export async function reconcileWorkspaceFromDefinition(
       added: [],
       skipped: [],
       enumsUpdated: [],
+      lifecycles: { declared: [], refused: [] },
       conflicts: [],
       targets: { set: [], unresolved: [] },
     },
@@ -560,7 +580,7 @@ export async function reconcileWorkspaceFromDefinition(
     const resolvedColor = profile.color ?? profile.uiHints?.color;
     const resolvedDescription =
       profile.description ?? profile.uiHints?.description;
-    const resolvedProperties: typeof profile.properties =
+    let resolvedProperties: typeof profile.properties =
       profile.properties ??
       profile.propertyDefs?.map((pd) => ({
         slug: pd.slug,
@@ -571,6 +591,25 @@ export async function reconcileWorkspaceFromDefinition(
         enumValues: pd.constraints?.enum,
         constraints: pd.constraints,
       }));
+
+    // The lifecycle's options are authored ONCE, on the profile — fold them
+    // onto the property (same door as create-from-definition). An authoring
+    // error is REPORTED and the lifecycle skipped; the rest still converges.
+    let lifecycleFolded = false;
+    if (profile.lifecycle) {
+      try {
+        resolvedProperties = withLifecycleOptions(
+          resolvedProperties,
+          profile.lifecycle
+        );
+        lifecycleFolded = true;
+      } catch (err) {
+        report.properties.lifecycles!.refused.push({
+          profile: profile.slug,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // Resolve-or-create the profile via the ONE shared dedup door (same rule as
     // create-from-definition): resolve-and-share an existing profile (grant, or
@@ -715,12 +754,38 @@ export async function reconcileWorkspaceFromDefinition(
           const tplEnum = Array.isArray(prop.enumValues)
             ? (prop.enumValues as string[])
             : undefined;
+          // Option OBJECTS (lifecycle categories, labels) converge the same
+          // non-destructive way: template options first, then any live option
+          // the template does not name (kept as stored). `enum` stays the key
+          // list DERIVED from them — the one mapper's invariant.
+          const tplOptions = normalizeEnumOptions(prop.enumOptions);
+          const liveOptions = readStoredEnumOptions({
+            constraints: liveConstraints,
+            uiHints: live.uiHints as Record<string, unknown> | undefined,
+          });
+          const mergedOptions = tplOptions
+            ? [
+                ...tplOptions,
+                ...(liveOptions ?? []).filter(
+                  (o) => !tplOptions.some((t) => t.key === o.key)
+                ),
+              ]
+            : undefined;
+          const optionsChanged =
+            !!mergedOptions &&
+            JSON.stringify(mergedOptions) !==
+              JSON.stringify(
+                normalizeEnumOptions(liveConstraints?.enumOptions) ?? null
+              );
           if (tplEnum && tplEnum.length) {
-            const merged = [
-              ...tplEnum,
-              ...(liveEnum ?? []).filter((v) => !tplEnum.includes(v)),
-            ];
+            const merged = mergedOptions
+              ? mergedOptions.map((o) => o.key)
+              : [
+                  ...tplEnum,
+                  ...(liveEnum ?? []).filter((v) => !tplEnum.includes(v)),
+                ];
             const changed =
+              optionsChanged ||
               !liveEnum ||
               merged.length !== liveEnum.length ||
               merged.some((v, idx) => v !== liveEnum[idx]);
@@ -731,7 +796,11 @@ export async function reconcileWorkspaceFromDefinition(
                 // reads; writing `uiHints.enumValues` here produced a
                 // property whose options no reader could see.
                 await propDefRepo.update(live.id, {
-                  constraints: { ...(liveConstraints ?? {}), enum: merged },
+                  constraints: {
+                    ...(liveConstraints ?? {}),
+                    enum: merged,
+                    ...(mergedOptions ? { enumOptions: mergedOptions } : {}),
+                  },
                 });
               }
               report.properties.enumsUpdated.push({
@@ -787,6 +856,26 @@ export async function reconcileWorkspaceFromDefinition(
           propertyDefId: propDef.id,
           required: false,
           displayOrder: i,
+        });
+      }
+    }
+
+    // Declare the lifecycle on a profile THIS definition owns (a reused one
+    // keeps its own; appending to it is the overlay path, deferred C9).
+    if (lifecycleFolded && profile.lifecycle && !profileIsReused && !dryRun) {
+      const declared = await declareLifecycle(dbConn, {
+        profileId: resolved.id,
+        propertySlug: profile.lifecycle.property,
+      });
+      if (declared.status === "refused") {
+        report.properties.lifecycles!.refused.push({
+          profile: profile.slug,
+          reason: declared.reason,
+        });
+      } else if (declared.status === "declared") {
+        report.properties.lifecycles!.declared.push({
+          profile: profile.slug,
+          property: profile.lifecycle.property,
         });
       }
     }

@@ -276,6 +276,9 @@ export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
 export {
   buildStoredConstraints,
   readStoredEnum,
+  readStoredEnumOptions,
+  normalizeEnumOptions,
+  type StoredEnumOption,
   type TemplateEnumSource,
   type StoredEnumSource,
 } from "./utils/property-enum.js";
@@ -289,7 +292,15 @@ export {
   type LifecycleCategory,
   type LifecycleOption,
   type LifecycleDeclaration,
+  type EffectiveLifecycle,
 } from "./utils/lifecycle-model.js";
+export {
+  declareLifecycle,
+  withLifecycleOptions,
+  LifecycleDeclarationError,
+  type LifecycleAuthoring,
+  type DeclareLifecycleResult,
+} from "./services/lifecycle/declare-lifecycle.js";
 export {
   resolvePropertyLabel,
   resolvePropertyOptions,

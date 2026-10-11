@@ -21,6 +21,14 @@ import {
   type RendererSurface,
 } from "../schema/renderer-bindings.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
+import { profileProperties } from "../schema/profile-properties.js";
+import { propertyDefs } from "../schema/property-defs.js";
+import { readStoredEnumOptions } from "../utils/property-enum.js";
+import {
+  isLifecycleCategory,
+  parseLifecycleOptions,
+  type EffectiveLifecycle,
+} from "../utils/lifecycle-model.js";
 import type { AiPosture } from "../schema/profiles.js";
 import { DEFAULT_AI_POSTURES } from "../utils/ai-posture-defaults.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -890,6 +898,72 @@ export class ProfileResolutionService {
         p.uiHints = { ...(p.uiHints ?? {}), linkedProfileSlug: slug };
       }
     }
+  }
+
+  /**
+   * THE lifecycle of a kind or role (work model L1) — the ONE reader.
+   *
+   * The lifecycle is the property whose `profile_properties` link carries
+   * `is_lifecycle` (at most one per profile — a partial unique index). The
+   * nearest declaration in the hierarchy wins (leaf first, then ancestors).
+   * Options come from the def's `constraints.enumOptions` through the one
+   * mapper (`readStoredEnumOptions`); an option without a valid category is
+   * reported in `unclassified`, never guessed.
+   *
+   * `null` = the profile declares no lifecycle (NOT a failure — a read error
+   * throws). `workspaceId` is accepted for the overlay-append lens (deferred,
+   * C9); today every lens sees the base declaration.
+   */
+  async getEffectiveLifecycle(
+    profileId: string,
+    _workspaceId?: string | null
+  ): Promise<EffectiveLifecycle | null> {
+    const hierarchy = await this.getProfileHierarchy(profileId);
+    if (hierarchy.length === 0) return null;
+    const links = await this._db
+      .select({
+        profileId: profileProperties.profileId,
+        propertyDefId: profileProperties.propertyDefId,
+      })
+      .from(profileProperties)
+      .where(
+        and(
+          inArray(
+            profileProperties.profileId,
+            hierarchy.map((p) => p.id)
+          ),
+          eq(profileProperties.isLifecycle, true)
+        )
+      );
+    if (links.length === 0) return null;
+    // `getHierarchy` is root → leaf; the nearest declaration wins.
+    let link: (typeof links)[number] | undefined;
+    for (let i = hierarchy.length - 1; i >= 0 && !link; i--) {
+      link = links.find((l) => l.profileId === hierarchy[i].id);
+    }
+    if (!link) return null;
+    const [def] = await this._db
+      .select()
+      .from(propertyDefs)
+      .where(eq(propertyDefs.id, link.propertyDefId))
+      .limit(1);
+    if (!def) return null;
+    const stored =
+      readStoredEnumOptions({
+        constraints: def.constraints as Record<string, unknown> | null,
+        uiHints: def.uiHints as Record<string, unknown> | null,
+      }) ?? [];
+    const categorized = stored.filter((o) => isLifecycleCategory(o.category));
+    const { options } = parseLifecycleOptions(categorized);
+    return {
+      propertySlug: def.slug,
+      propertyDefId: def.id,
+      declaredOnProfileId: link.profileId,
+      options: categorized.length ? options : [],
+      unclassified: stored
+        .filter((o) => !isLifecycleCategory(o.category))
+        .map((o) => o.key),
+    };
   }
 
   /**

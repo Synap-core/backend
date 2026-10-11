@@ -50,6 +50,19 @@ export interface LifecycleDeclaration {
   options: LifecycleOption[];
 }
 
+/**
+ * A profile's lifecycle as RESOLVED for use (`getEffectiveLifecycle`): the
+ * declaration plus where it came from. `unclassified` lists stored option keys
+ * that carry no valid category — they stay admissible values of the select,
+ * but no move may target them and nothing guesses what they mean.
+ */
+export interface EffectiveLifecycle extends LifecycleDeclaration {
+  propertyDefId: string;
+  /** The profile whose link declares it (the leaf, or an ancestor). */
+  declaredOnProfileId: string;
+  unclassified: string[];
+}
+
 export function isLifecycleCategory(v: unknown): v is LifecycleCategory {
   return (
     typeof v === "string" &&
