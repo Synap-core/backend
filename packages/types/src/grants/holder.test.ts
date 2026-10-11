@@ -12,6 +12,8 @@ import {
   HOLDER_NOTHING,
   KEY_ACCESS_ENDED_SENTENCE,
   KEY_ACCESS_UNGRANTED_SENTENCE,
+  askFirstWhere,
+  holderPostureOf,
   grantsOfRequests,
   narrowRequestsToRead,
   resolveHolderAccess,
@@ -380,5 +382,66 @@ describe("where — projects", () => {
       ],
     });
     expect(h.where.projectIds).toEqual(["p1", "p2"]);
+  });
+});
+
+describe("askFirstWhere / holderPostureOf — where it asks first", () => {
+  const spaces = [
+    { workspaceId: "s1", name: "Sales", posture: "ask-first" },
+    { workspaceId: "s2", name: "Finance", posture: "create-with-undo" },
+  ];
+  // Rules out: listing the spaces when the pod already asks everywhere.
+  it("everywhere wins over named spaces", () => {
+    expect(askFirstWhere({ pod: "ask-first", spaces })).toEqual({
+      kind: "pod",
+    });
+    expect(
+      holderPostureOf({
+        askFirst: true,
+        postures: { pod: "ask-first", spaces },
+      })
+    ).toEqual({ posture: { mode: "ask", workspaceId: null }, spaceNames: {} });
+  });
+  // Rules out: reading another preset as ask-first, or "everywhere" for a named space.
+  it("names only the spaces that ask first", () => {
+    expect(askFirstWhere({ pod: null, spaces })).toEqual({
+      kind: "spaces",
+      spaces: [{ id: "s1", name: "Sales" }],
+    });
+    expect(
+      holderPostureOf({ askFirst: false, postures: { pod: null, spaces } })
+    ).toEqual({
+      posture: { mode: "ask", workspaceId: ["s1"] },
+      spaceNames: { s1: "Sales" },
+    });
+  });
+  it("none acts", () => {
+    expect(askFirstWhere({ pod: null, spaces: [] })).toBeNull();
+    expect(
+      holderPostureOf({ askFirst: true, postures: { pod: null, spaces: [] } })
+        .posture
+    ).toEqual({ mode: "auto", workspaceId: null });
+  });
+  // Rules out: a failed read folded into "acts" (the calm wrong answer).
+  it("a failed read stays unread; an older pod reads the pod switch", () => {
+    expect(holderPostureOf(null).posture).toBeNull();
+    expect(
+      resolveHolderAccess({
+        kind: "agent",
+        name: "x",
+        limits: { source: "capabilities", capabilities: null },
+        posture: holderPostureOf(null).posture,
+      }).posture
+    ).toBe("unread");
+    expect(holderPostureOf({ askFirst: true }).posture).toEqual({
+      mode: "ask",
+      workspaceId: null,
+    });
+    expect(
+      holderPostureOf({ askFirst: false, postures: null }).posture
+    ).toEqual({
+      mode: "auto",
+      workspaceId: null,
+    });
   });
 });

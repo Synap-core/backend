@@ -223,6 +223,69 @@ function and(parts: readonly string[]): string {
     : (parts[0] ?? "");
 }
 
+/** `agentUsers.governance().postures` — the posture at the pod and in each space. */
+export interface AskFirstPostures {
+  readonly pod: string | null;
+  readonly spaces: ReadonlyArray<{
+    readonly workspaceId: string;
+    readonly name: string;
+    readonly posture: string | null;
+  }>;
+}
+
+export type AskFirstWhere =
+  | null
+  | { readonly kind: "pod" }
+  | {
+      readonly kind: "spaces";
+      readonly spaces: ReadonlyArray<{
+        readonly id: string;
+        readonly name: string;
+      }>;
+    };
+
+/** Where ask-first holds. Pod-wide wins (it already covers every space). */
+export function askFirstWhere(postures: AskFirstPostures): AskFirstWhere {
+  if (postures.pod === "ask-first") return { kind: "pod" };
+  const spaces = postures.spaces
+    .filter((s) => s.posture === "ask-first")
+    .map((s) => ({ id: s.workspaceId, name: s.name }));
+  return spaces.length > 0 ? { kind: "spaces", spaces } : null;
+}
+
+/**
+ * `agentUsers.governance` as the holder reader's posture. A failed read
+ * (`null`) stays unread — never a calm "acts". An older pod without
+ * `postures` reads the pod-wide switch. The spaces' names ride along.
+ */
+export function holderPostureOf(
+  read: {
+    readonly askFirst: boolean;
+    readonly postures?: AskFirstPostures | null;
+  } | null
+): {
+  posture: HolderAccessInput["posture"];
+  spaceNames: Record<string, string>;
+} {
+  if (!read) return { posture: null, spaceNames: {} };
+  if (!read.postures) {
+    return {
+      posture: { mode: read.askFirst ? "ask" : "auto", workspaceId: null },
+      spaceNames: {},
+    };
+  }
+  const where = askFirstWhere(read.postures);
+  if (!where)
+    return { posture: { mode: "auto", workspaceId: null }, spaceNames: {} };
+  if (where.kind === "pod") {
+    return { posture: { mode: "ask", workspaceId: null }, spaceNames: {} };
+  }
+  return {
+    posture: { mode: "ask", workspaceId: where.spaces.map((s) => s.id) },
+    spaceNames: Object.fromEntries(where.spaces.map((s) => [s.id, s.name])),
+  };
+}
+
 /** "Sales", "Sales and Finance", "3 spaces". */
 function spacesPhrase(names: readonly string[]): string {
   return names.length <= 2
