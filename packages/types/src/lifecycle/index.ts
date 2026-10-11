@@ -130,3 +130,10 @@ export {
   type StepPosition,
   type StepMark,
 } from "./steps.js";
+
+export {
+  moveOutcomeOfResult,
+  moveOutcomeOfError,
+  moveOutcomeMessage,
+  type MoveStatusOutcome,
+} from "./move.js";
