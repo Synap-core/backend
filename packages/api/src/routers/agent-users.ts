@@ -68,7 +68,10 @@ import {
   parsePermission,
 } from "@synap-core/types/grants";
 import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
-import { pendingAgentConnectProposals } from "../services/agent-connect.js";
+import {
+  canDecidePendingConnection,
+  pendingAgentConnectProposals,
+} from "../services/agent-connect.js";
 import { links, tools } from "@synap/database/schema";
 import { createLink } from "../services/links/links-service.js";
 import { redispatchAfterAgentBound } from "../services/agent-dispatch/redispatch-on-choice.js";
@@ -778,6 +781,17 @@ export const agentUsersRouter = router({
           message: "Agent user not found",
         });
       }
+      // The agent's OWNER (or a pod admin) changes it — the same rule as the
+      // agent/update_capabilities executor. `manage` on a caller-chosen
+      // workspace says nothing about whose agent this is.
+      if (
+        !(await canDecidePendingConnection(ctx.userId, agent.createdByUserId))
+      )
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person this agent belongs to, or a pod admin, can change it.",
+        });
 
       // Capabilities are security-sensitive: changing them always goes through
       // the proposal flow (agent.updateCapabilities is in ADMIN_ACTIONS).

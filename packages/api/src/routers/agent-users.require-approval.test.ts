@@ -42,6 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
                 id: AGENT_ID,
                 userType: "agent",
                 agentMetadata: { writesRequireProposal: true },
+                createdByUserId: ADMIN_ID,
               },
             ],
           }),

@@ -55,7 +55,12 @@ vi.mock("@synap/database", async (importOriginal) => {
               limit: () => Promise<unknown[]>;
             };
             p.limit = async () => [
-              { id: AGENT_ID, userType: "agent", agentMetadata: {} },
+              {
+                id: AGENT_ID,
+                userType: "agent",
+                agentMetadata: {},
+                createdByUserId: OWNER_ID,
+              },
             ];
             return p;
           },

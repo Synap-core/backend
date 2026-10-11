@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   reapplied: [] as Array<{ agentUserId: string; createdBy: string }>,
   gated: [] as unknown[],
   verdict: { granted: true } as Record<string, unknown>,
+  owner: "user-admin" as string | null,
+  podAdmins: [] as string[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -32,7 +34,12 @@ vi.mock("@synap/database", async (importOriginal) => {
         from: () => ({
           where: () => ({
             limit: async () => [
-              { id: AGENT_ID, userType: "agent", agentMetadata: {} },
+              {
+                id: AGENT_ID,
+                userType: "agent",
+                agentMetadata: {},
+                createdByUserId: h.owner,
+              },
             ],
           }),
         }),
@@ -69,6 +76,12 @@ vi.mock("../services/agent-identity-service.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../services/agent-connect.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  canDecidePendingConnection: async (approver: string, owner: string | null) =>
+    (owner !== null && owner === approver) || h.podAdmins.includes(approver),
+}));
+
 vi.mock("../middleware/read-only-guard.js", async () => {
   const { t } = await import("../init-trpc.js");
   return { readOnlyGuardMiddleware: t.middleware(({ next }) => next()) };
@@ -102,6 +115,35 @@ beforeEach(() => {
   h.reapplied.length = 0;
   h.gated.length = 0;
   h.verdict = { granted: true };
+  h.owner = ADMIN_ID;
+  h.podAdmins = [];
+});
+
+describe("agentUsers.update — only the agent's owner or a pod admin", () => {
+  it("a workspace manager who does not own the agent is refused, nothing written", async () => {
+    h.owner = "someone-else";
+    await expect(update(["entity.note.create"])).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(
+      caller().update({
+        workspaceId: WORKSPACE_ID,
+        agentUserId: AGENT_ID,
+        name: "renamed",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.gated).toEqual([]);
+    expect(h.userUpdates).toEqual([]);
+    expect(h.reapplied).toEqual([]);
+  });
+
+  it("a pod admin may change someone else's agent", async () => {
+    h.owner = "someone-else";
+    h.podAdmins = [ADMIN_ID];
+    await expect(update(["entity.note.create"])).resolves.toEqual({
+      status: "updated",
+    });
+  });
 });
 
 describe("agentUsers.update — capabilities bind the agent's keys", () => {
