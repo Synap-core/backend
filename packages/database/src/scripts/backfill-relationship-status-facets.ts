@@ -9,13 +9,18 @@
  *   partner   → attach `partner`
  *   client    → attach `client`
  *   lead      → attach `lead`
- *   prospect  → attach `lead`  + { leadStage: "prospect" } overlay
- *   former    → attach `churned` (if that role exists) — else `client` + { clientStatus: "former" }
+ *   prospect  → attach `lead`  + { leadStage: "new" }
+ *   former    → attach `client` + { clientStatus: "former" }
+ *
+ * A state is never a role (work model, 2026-10-11): there is no `churned` role
+ * to attach — an ended relationship is a client STATUS (`former` / `churned`,
+ * both options of foundation's `clientStatus`). `leadStage` uses the lead's
+ * qualification vocabulary, where the first step is `new` (the old `prospect`
+ * value folds to it, conversions `w12.lead.legacy-stage-values`).
  *   idle      → no facet (deliberately)
  *
  * ONE DOOR: every write goes through `FacetRepository.attach()` — never a raw
  * write to the entity_facets table. Role profiles are resolved by SLUG at runtime
- * (`lead` / `churned` are being added in foundation.yaml by a parallel change),
  * so nothing is hardcoded to an id.
  *
  * Idempotent: an already-attached role is skipped (and `attach()` itself returns
@@ -53,12 +58,10 @@ console.log(`Mode: ${dryRun ? "DRY RUN (no writes)" : "APPLY"}\n`);
 /**
  * Map a raw relationshipStatus value to the facet(s) to attach.
  * Returns [] for values that should NOT produce a facet (e.g. `idle`).
- * Slugs are resolved to profiles at runtime; `former` prefers `churned` and
- * falls back to `client` + a status overlay when `churned` is not defined.
+ * Slugs are resolved to profiles at runtime.
  */
 function planForStatus(
-  status: string,
-  churnedExists: boolean
+  status: string
 ): Array<{ slug: string; properties?: Record<string, unknown> }> {
   switch (status.trim().toLowerCase()) {
     case "partner":
@@ -68,11 +71,9 @@ function planForStatus(
     case "lead":
       return [{ slug: "lead" }];
     case "prospect":
-      return [{ slug: "lead", properties: { leadStage: "prospect" } }];
+      return [{ slug: "lead", properties: { leadStage: "new" } }];
     case "former":
-      return churnedExists
-        ? [{ slug: "churned" }]
-        : [{ slug: "client", properties: { clientStatus: "former" } }];
+      return [{ slug: "client", properties: { clientStatus: "former" } }];
     case "idle":
       return [];
     default:
@@ -94,10 +95,6 @@ async function main(): Promise<void> {
   const facetRepo = new FacetRepository(db, eventRepo);
   const profileRepo = new ProfileRepository(db);
 
-  // Does the `churned` role exist yet (parallel foundation.yaml change)?
-  const churnedExists =
-    (await profileRepo.findActiveBySlugAnyScope("churned")).length > 0;
-
   // person / company entities carrying a non-empty relationshipStatus.
   const rows = (await sql`
     SELECT id, type, user_id, workspace_id,
@@ -118,7 +115,7 @@ async function main(): Promise<void> {
   for (const entity of rows) {
     const status = entity.relationship_status;
     if (!status) continue;
-    const plan = planForStatus(status, churnedExists);
+    const plan = planForStatus(status);
     if (plan.length === 0) {
       skippedNoFacet++;
       continue;
