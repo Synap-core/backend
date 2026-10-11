@@ -826,6 +826,34 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
+  synap_retire_workspace: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(
+      apiKeyScopes,
+      args.dryRun === true ? "mcp.read" : "mcp.write",
+      toolName
+    );
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    const { retireIntoGoverned } =
+      await import("../../../services/workspace-retire-into.js");
+    const result = await retireIntoGoverned({
+      workspaceId,
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId ?? null,
+      dryRun: args.dryRun === true,
+      reasoning: readReasoning(args),
+    });
+    return ok(
+      result.status === "refused"
+        ? { ...result, error: result.message }
+        : result
+    );
+  },
   synap_update_workspace: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {

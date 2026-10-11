@@ -7,6 +7,7 @@
  *   POST  /entities/move                     { entityIds[], workspaceId, reason? }
  *   POST  /profiles/grant-access             { profileId, targetWorkspaceId, workspaceId?, reasoning? }
  *   POST  /projects/:projectId/file          { entityIds[], remove?, reasoning? }
+ *   POST  /workspaces/:workspaceId/retire-into { dryRun?, reasoning? }
  *
  * Thin: each route validates the wire shape, resolves the acting user, and
  * forwards to `services/workspace-ops-doors.ts` — which forwards to the
@@ -24,6 +25,7 @@ import {
   renameWorkspaceDoor,
   type WorkspaceOpsActor,
 } from "../../../services/workspace-ops-doors.js";
+import { retireIntoGoverned } from "../../../services/workspace-retire-into.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
   hasScope,
@@ -115,6 +117,50 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
 
   app.post("/workspaces/:workspaceId/archive", archiveOrRestore(false));
   app.post("/workspaces/:workspaceId/restore", archiveOrRestore(true));
+
+  // Move a space off a RETIRED template into the space of its replacement
+  // (`services/workspace-retire-into.ts`). `dryRun` → 200 `{status:"plan"}`;
+  // an agent key → 202 `{status:"proposed", proposalId, reviewUrl, plan}`; a
+  // human → 200 `{status:"applied", plan, result}`; not retired / no
+  // replacement → 409, replacement unreadable → 503, both
+  // `{status:"refused", code, lifecycle, message, error}`.
+  app.post("/workspaces/:workspaceId/retire-into", async (c) => {
+    const a = await actorFor(c);
+    if (!a.ok) return a.res;
+    const workspaceId = c.req.param("workspaceId") ?? "";
+    if (!isUuid(workspaceId)) {
+      return c.json({ error: "workspaceId must be a UUID" }, 400);
+    }
+    const read = await readJsonBody(c);
+    if (!read.ok) return read.res;
+    const parsed = z
+      .object({ dryRun: z.boolean().optional(), reasoning })
+      .safeParse(read.body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+    try {
+      const result = await retireIntoGoverned({
+        workspaceId,
+        userId: a.actor.userId,
+        agentUserId: a.actor.agentUserId,
+        dryRun: parsed.data.dryRun === true,
+        reasoning: parsed.data.reasoning,
+      });
+      if (result.status === "refused") {
+        return c.json(
+          { ...result, error: result.message },
+          result.code === "TEMPLATE_UNREADABLE" ? 503 : 409
+        );
+      }
+      return jsonGoverned(c, result);
+    } catch (err) {
+      return failure(c, err, "workspace retire-into");
+    }
+  });
 
   app.patch("/workspaces/:workspaceId", async (c) => {
     const a = await actorFor(c);

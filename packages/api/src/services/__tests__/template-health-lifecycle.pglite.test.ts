@@ -139,7 +139,10 @@ async function seedCache(row: {
   );
 }
 
-async function setTemplateStamp(status: string | null): Promise<void> {
+async function setTemplateStamp(
+  status: string | null,
+  extra: Record<string, unknown> = {}
+): Promise<void> {
   await h.client!.exec(`delete from pod_settings`);
   const stamps =
     status === null
@@ -149,6 +152,7 @@ async function setTemplateStamp(status: string | null): Promise<void> {
             lastSyncAt: new Date().toISOString(),
             lastStatus: status,
             lastCount: 2,
+            ...extra,
           },
         };
   await h.client!.query(
@@ -237,6 +241,17 @@ describe("template health — lifecycle", () => {
       expect((await healthOf(WS_CURRENT)).lifecycle).toBe("current");
     }
   );
+
+  it("absent after an `ok` sync from a CP that could not report retirements is `unknown`, never `unlisted`", async () => {
+    // An older CP 400s `includeRetired`; the worker syncs live rows only and
+    // stamps `ok` + `retirementsUnreported`. An absent slug may then be a
+    // retirement the pod was never told about.
+    await setTemplateStamp("ok", { retirementsUnreported: true });
+    const row = await healthOf(WS_GONE);
+    expect(row.lifecycle).toBe("unknown");
+    expect(row.lifecycleWarning).toBeNull();
+    expect((await healthOf(WS_CURRENT)).lifecycle).toBe("current");
+  });
 
   it("absent with NO template stamp at all (cold) is `unknown`", async () => {
     await setTemplateStamp(null);

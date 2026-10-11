@@ -175,7 +175,14 @@ function catalogSources(): string[] {
 type SourceFetch<T> =
   | { ok: true; data: T }
   | { ok: false; clientError: false }
-  | { ok: false; clientError: true; status: number };
+  | {
+      ok: false;
+      clientError: true;
+      status: number;
+      /** The 4xx body's `code` / `error`, when it sent JSON (CP convention). */
+      code?: string;
+      message?: string;
+    };
 
 /**
  * List endpoints are limit/offset-paginated with a max page of 100 (see the CP
@@ -199,7 +206,17 @@ async function safeFetchJson(url: string): Promise<SourceFetch<unknown>> {
       // 4xx = the request is malformed/unacceptable — will never self-heal.
       // 5xx (and anything else non-2xx) = server-side, treat as transient.
       if (res.status >= 400 && res.status < 500) {
-        return { ok: false, clientError: true, status: res.status };
+        const body = (await res.json().catch(() => null)) as {
+          code?: unknown;
+          error?: unknown;
+        } | null;
+        return {
+          ok: false,
+          clientError: true,
+          status: res.status,
+          ...(typeof body?.code === "string" ? { code: body.code } : {}),
+          ...(typeof body?.error === "string" ? { message: body.error } : {}),
+        };
       }
       return { ok: false, clientError: false };
     }
@@ -220,6 +237,12 @@ async function safeFetchJson(url: string): Promise<SourceFetch<unknown>> {
 interface CatalogFetch {
   entries: CatalogEntry[];
   complete: boolean;
+  /**
+   * The source could not report retired rows (an older CP refused
+   * `includeRetired`). `complete` then covers LIVE rows only; the stamp says
+   * so, and template health never claims `unlisted` from it.
+   */
+  retirementsUnreported?: true;
 }
 
 /** One page of a limit/offset list endpoint: mapped rows + the whole-filter total. */
@@ -324,11 +347,52 @@ async function fetchPackages(
   category: "workspace" | "workflow" | "skill" | "view",
   /**
    * Ask for retired (tombstoned) rows too — the template kind only, so template
-   * health can say "retired, replaced by X". An older CP ignores the param and
-   * returns no retired rows, which degrades to today's behaviour. The `total`
-   * the CP reports covers the same filter, so completeness still holds.
+   * health can say "retired, replaced by X". The `total` the CP reports covers
+   * the same filter, so completeness still holds. An older CP does NOT ignore
+   * the param: its strict query schema answers 400 `UNKNOWN_QUERY_PARAM`
+   * naming `includeRetired`. On exactly that we fetch again without it
+   * (today's behaviour) and mark the result `retirementsUnreported`.
    */
   includeRetired = false
+): Promise<SourceFetch<CatalogFetch>> {
+  if (includeRetired) {
+    const res = await fetchPackagesPages(source, category, true);
+    if (!res.ok && res.clientError && isIncludeRetiredRefusal(res)) {
+      logger.warn(
+        { source, category },
+        "Catalog source predates retired templates (400 UNKNOWN_QUERY_PARAM includeRetired) — syncing live rows only; retirements are unreported"
+      );
+      const live = await fetchPackagesPages(source, category, false);
+      return live.ok
+        ? { ok: true, data: { ...live.data, retirementsUnreported: true } }
+        : live;
+    }
+    return res;
+  }
+  return fetchPackagesPages(source, category, false);
+}
+
+/**
+ * The older-CP answer to `includeRetired` — and ONLY that: a 400 whose code is
+ * `UNKNOWN_QUERY_PARAM` and whose message names the param. Any other 4xx stays
+ * `misconfigured` (the request vocabulary is wrong and will not self-heal).
+ */
+function isIncludeRetiredRefusal(res: {
+  status: number;
+  code?: string;
+  message?: string;
+}): boolean {
+  return (
+    res.status === 400 &&
+    res.code === "UNKNOWN_QUERY_PARAM" &&
+    (res.message ?? "").includes("includeRetired")
+  );
+}
+
+async function fetchPackagesPages(
+  source: string,
+  category: "workspace" | "workflow" | "skill" | "view",
+  includeRetired: boolean
 ): Promise<SourceFetch<CatalogFetch>> {
   return fetchAllPages(async (limit, offset) => {
     const result = await safeFetchJson(
@@ -616,7 +680,15 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       { source, kind, upserted: dedupedRows.length, pruned: pruned.length },
       "Synced cp_catalog_cache"
     );
-    await recordCatalogSyncStamp(source, kind, "ok", dedupedRows.length);
+    if (result.data.retirementsUnreported) {
+      // Complete for LIVE rows only — template health must not read an absent
+      // slug as `unlisted` from this stamp.
+      await recordCatalogSyncStamp(source, kind, "ok", dedupedRows.length, {
+        retirementsUnreported: true,
+      });
+    } else {
+      await recordCatalogSyncStamp(source, kind, "ok", dedupedRows.length);
+    }
   } catch (err) {
     logger.error(
       { err, source, kind },

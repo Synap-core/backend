@@ -649,3 +649,79 @@ describe("handleCpCatalogSync — retired templates", () => {
     expect(row!.retiredReason).toBeNull();
   });
 });
+
+/**
+ * An OLDER Control Plane does not ignore `includeRetired`: its strict query
+ * schema answers 400 `UNKNOWN_QUERY_PARAM` naming it (lane-cp finding). The
+ * worker must fetch again without the param (today's behaviour) — never stamp
+ * the template kind `misconfigured` — and record that the source could not
+ * report retirements, so template health answers `unknown`, not `unlisted`.
+ */
+describe("handleCpCatalogSync — an older CP refuses includeRetired", () => {
+  /** A CP that predates retired templates: 400s the param, serves the rest. */
+  function serveOlderCp(all: Array<{ slug: string }>, error?: string) {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("includeRetired")) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({
+            error: error ?? "Unrecognized query parameter(s): 'includeRetired'",
+            code: "UNKNOWN_QUERY_PARAM",
+          }),
+        };
+      }
+      if (url.includes("/api/marketplace/capabilities"))
+        return jsonRes({ capabilities: [] });
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      if (url.includes("category=workspace"))
+        return jsonRes({ packages: all, total: all.length });
+      return jsonRes({ packages: [], total: 0 });
+    });
+  }
+  const templateStamps = () =>
+    recordStampMock.mock.calls.filter((c) => c[1] === "template");
+
+  it("retries ONCE without the param, syncs + prunes the live set, stamps `ok` with retirementsUnreported", async () => {
+    serveOlderCp([pkg("crm"), pkg("ecosystem")]);
+    await handleCpCatalogSync();
+
+    const workspaceUrls = fetchedUrls().filter((u) =>
+      u.includes("category=workspace")
+    );
+    expect(workspaceUrls).toEqual([
+      `${CP}/api/packages?category=workspace&limit=100&offset=0&includeRetired=true`,
+      `${CP}/api/packages?category=workspace&limit=100&offset=0`,
+    ]);
+    expect(upsertedRows().map((r) => r.slug)).toEqual(["crm", "ecosystem"]);
+    // The live set is complete, so the prune still runs.
+    expect(deleteWhereMock).toHaveBeenCalled();
+    const stamps = templateStamps();
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0]!.slice(2)).toEqual([
+      "ok",
+      2,
+      { retirementsUnreported: true },
+    ]);
+    expect(loggerMock.error).not.toHaveBeenCalled();
+  });
+
+  it("a CP that serves includeRetired stamps `ok` WITHOUT the flag", async () => {
+    serveWorkspace([pkg("crm")]);
+    await handleCpCatalogSync();
+    const stamps = templateStamps();
+    expect(stamps[0]!.slice(2)).toEqual(["ok", 1]);
+  });
+
+  it("a 400 UNKNOWN_QUERY_PARAM naming ANOTHER param is not retried: `misconfigured`", async () => {
+    serveOlderCp([pkg("crm")], "Unrecognized query parameter(s): 'limit'");
+    await handleCpCatalogSync();
+    expect(
+      fetchedUrls().filter((u) => u.includes("category=workspace"))
+    ).toHaveLength(1);
+    expect(templateStamps().map((c) => c[2])).toEqual(["misconfigured"]);
+    expect(insertValuesMock).not.toHaveBeenCalled();
+  });
+});

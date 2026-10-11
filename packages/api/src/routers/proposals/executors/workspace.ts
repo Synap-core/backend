@@ -658,6 +658,54 @@ export function registerWorkspaceExecutors(): void {
         return { success: true, primaryId: targetWorkspaceId };
       }
 
+      // Retire-into (`services/workspace-retire-into.ts`): move a space off a
+      // retired template. RE-PLANS against the data as it is now and runs the
+      // install / move / archive-if-empty doors as the APPROVER — the plan on
+      // the proposal is what the reviewer saw, never what is replayed.
+      if (inner.operation === "retire_into") {
+        const sourceId =
+          typeof inner.id === "string" ? inner.id : targetWorkspaceId;
+        const { applyRetireInto } =
+          await import("../../../services/workspace-retire-into.js");
+        const { result } = await applyRetireInto({
+          workspaceId: sourceId,
+          userId,
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        // The source is kept when anything is left in it (by contract), and
+        // a per-entity move can fail: both are told to the reviewer.
+        const refusals = [
+          ...(result.keptBecause
+            ? [`The old space was kept: ${result.keptBecause}`]
+            : []),
+          ...result.failed.map(
+            (f) => `Item ${f.entityId} was not moved: ${f.error}`
+          ),
+        ];
+        return {
+          success: true,
+          primaryId: result.targetWorkspaceId,
+          ...(refusals.length > 0 ? { refusals } : {}),
+        };
+      }
+
       // `workspaces.setIntelligenceService` — pin a space to a service, or
       // `null` = remove the pin (follow the pod default). REPLAYED through the
       // procedure as the APPROVER, so the owner/admin floor, the active-service

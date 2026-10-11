@@ -7,7 +7,7 @@ import type { DoorToolNameRow } from "./door-tool-names.build.js";
 export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_add_track_stage: {
     "pod-mcp": "synap_add_track_stage",
-    "cp-connector": null,
+    "cp-connector": "pod__add_track_stage",
     raycast: null,
   },
   synap_advance_track: {
@@ -325,6 +325,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__retire_field",
     raycast: null,
   },
+  synap_retire_workspace: {
+    "pod-mcp": "synap_retire_workspace",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_revert_session: {
     "pod-mcp": "synap_revert_session",
     "cp-connector": "pod__revert_session",
@@ -422,6 +427,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_track: {
     "pod-mcp": "synap_update_track",
+    "cp-connector": "pod__update_track",
+    raycast: null,
+  },
+  synap_update_view_content: {
+    "pod-mcp": "synap_update_view_content",
     "cp-connector": null,
     raycast: null,
   },

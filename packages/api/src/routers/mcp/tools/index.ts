@@ -692,7 +692,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "See which workspaces are behind their template — the pod's template-update radar. Returns, per workspace: `attached` (installed from a template), `stamped` (has a recorded version), `installedVersion`, `latestVersion` (freshest in the catalog), and `drifted` (an update is available). Use it to answer \"do any of my workspaces have template updates?\" then apply one with the `market.install`/update door for that slug. Read-only; scoped to the caller's own workspaces.",
+          "See which workspaces are behind their template — the pod's template-update radar. Returns, per workspace: `attached` (installed from a template), `stamped` (has a recorded version), `installedVersion`, `latestVersion` (freshest in the catalog), and `drifted` (an update is available), plus `lifecycle`: `current`, `retired` (the catalog retired it; `replacedBy` names the replacement, `retiredReason` says why), `unlisted` (no longer in the catalog) or `unknown` (the catalog could not be fully read — never treat it as unlisted). Use it to answer \"do any of my workspaces have template updates?\" then apply one with the `market.install`/update door for that slug; move a retired one with `synap_retire_workspace`. Read-only; scoped to the caller's own workspaces.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3775,6 +3775,36 @@ export const tools = {
             restore: {
               type: "boolean",
               description: "true = un-archive instead. Default false.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
+        name: "synap_retire_workspace",
+        annotations: {
+          title: "Move space off a retired template",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Move a Space (workspace) whose template was RETIRED (`synap_template_health` lifecycle `retired` with `replacedBy`) into the space of its replacement: installs the replacement if missing, moves every item whose kind has a home there, and archives the old space only if nothing is left (never deletes). Call with dryRun:true first to see the plan (what moves, what stays and why). Governed: always a proposal for an agent — `proposed` is success, surface reviewUrl.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description: "The space on the retired template (UUID).",
+            },
+            dryRun: {
+              type: "boolean",
+              description: "true = return the plan only. Default false.",
             },
             reasoning: {
               type: "string",

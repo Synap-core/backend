@@ -61,6 +61,13 @@ export interface CatalogSyncStamp {
   lastStatus: CatalogSyncStatus;
   /** Entry count from the last attempt (0 when empty/unreachable). */
   lastCount: number;
+  /**
+   * Set when the source could not report RETIRED (tombstoned) rows — an older
+   * Control Plane that 400s `includeRetired`. The live set may still be
+   * complete (`ok`), but an absent slug may be a retirement the pod was never
+   * told about, so template health must not call it `unlisted`.
+   */
+  retirementsUnreported?: true;
 }
 
 /**

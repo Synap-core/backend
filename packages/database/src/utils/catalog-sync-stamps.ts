@@ -34,13 +34,15 @@ export async function recordCatalogSyncStamp(
   source: string,
   kind: string,
   status: CatalogSyncStatus,
-  count: number
+  count: number,
+  opts: { retirementsUnreported?: boolean } = {}
 ): Promise<void> {
   const key = catalogSyncStampKey(source, kind);
   const stamp: CatalogSyncStamp = {
     lastSyncAt: new Date().toISOString(),
     lastStatus: status,
     lastCount: count,
+    ...(opts.retirementsUnreported ? { retirementsUnreported: true } : {}),
   };
   const stampObj = JSON.stringify({ [key]: stamp });
 

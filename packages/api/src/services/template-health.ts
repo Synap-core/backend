@@ -116,7 +116,9 @@ export interface TemplateCatalogView {
  * pruned against. `empty`, `partial`, `unreachable`, `misconfigured` or no
  * stamp at all ⇒ not provable. A stamp left by a source that is no longer
  * configured keeps this false (the safe direction: `unknown`, never a false
- * `unlisted`).
+ * `unlisted`). An `ok` stamp from a source that could not report retired rows
+ * (`retirementsUnreported`, an older CP) is complete for LIVE rows only: an
+ * absent slug may be a retirement it never told us about, so it is not proof.
  */
 export function isTemplateCatalogComplete(
   stamps: Record<string, CatalogSyncStamp>
@@ -125,7 +127,10 @@ export function isTemplateCatalogComplete(
     key.endsWith("::template")
   );
   return (
-    template.length > 0 && template.every(([, s]) => s.lastStatus === "ok")
+    template.length > 0 &&
+    template.every(
+      ([, s]) => s.lastStatus === "ok" && s.retirementsUnreported !== true
+    )
   );
 }
 
