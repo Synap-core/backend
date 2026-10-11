@@ -437,6 +437,10 @@ export function mergeReviewRows(
     needs_a_pod_admin_to_approve:
       "Yes: it rewrites every row of this kind across the pod",
     retire_was_refused_because: refusedBecause.join("; "),
+    on_approve:
+      suggestion.op === "dedupeProfileRows"
+        ? "Records move onto the kept row, and the duplicate row is retired: hidden everywhere, nothing deleted, reactivatable."
+        : `Records move into '${suggestion.intoSlug}', and '${suggestion.fromSlug}' is retired: hidden everywhere, nothing deleted, reactivatable.`,
   };
 }
 
@@ -508,7 +512,7 @@ export async function proposeProfileRetire(params: {
                 ? `Collapse the duplicate '${profile.slug}' kind rows into one`
                 : `Merge the '${profile.slug}' kind into '${suggestion.intoSlug}'`,
             reasoning:
-              "Retiring this kind was refused because it is still in use. Merging moves its records onto the suggested kind first; the emptied kind can then be retired.",
+              "Retiring this kind was refused because it is still in use. Approving this merge moves its records onto the suggested kind AND retires the emptied kind in the same step (hidden everywhere, nothing deleted, reactivatable).",
           },
           createdBy: params.userId,
           proposedByUserId: params.userId,
@@ -751,10 +755,14 @@ export function mergeSuggestionToOp(
 
 /**
  * Apply an approved merge suggestion through the conversions ENGINE (ledgered
- * under a proposal-scoped opKey, so a re-approve is a ledger skip). Never the
- * destructive tail: the source rows stay active, emptied, and retiring them is
- * a separate `profile/retire` decision. The op rewrites every row of the slug
- * pod-wide, so the approver must be a pod admin.
+ * under a proposal-scoped opKey, so a re-approve is a ledger skip). WITH the
+ * destructive tail: approving a merge approves retiring the drained source
+ * rows (soft — `is_active=false` + the `ui_hints.retired` tombstone naming the
+ * canonical, reversible with `reactivate`). The engine refuses a real run of a
+ * merge op without it (THE LEDGER TRAP: the repoint would be ledgered and the
+ * deactivation orphaned forever), so repoint and retire are one atomic unit and
+ * no follow-up `profile/retire` is needed. The op rewrites every row of the
+ * slug pod-wide, so the approver must be a pod admin.
  */
 export async function applyProfileMerge(params: {
   proposalId: string;
@@ -768,7 +776,7 @@ export async function applyProfileMerge(params: {
   const summary = await runConversions(
     sql,
     { version: 1, ops: [op] },
-    { dryRun: false, destructiveTail: false }
+    { dryRun: false, destructiveTail: true }
   );
   const result = summary.results[0];
   if (summary.hadError || !result || result.status === "error") {

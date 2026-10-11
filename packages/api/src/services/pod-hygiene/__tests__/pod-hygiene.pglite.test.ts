@@ -21,7 +21,8 @@
  *    and the ONE pause door have their own suites. What is pinned here is that
  *    the pack reaches them for APPROVED items only, with the owner's identity.
  *  - `runConversions` — the engine has its own suite; pinned: a refusal files
- *    a merge proposal whose suggestion names a real row.
+ *    a merge proposal whose suggestion names a real row. The APPROVED merge
+ *    through the REAL engine is `pod-hygiene-merge.pglite.test.ts`.
  *  - audit/events/notifications/blob discard — fan-out.
  *
  * NOT covered here: the per-action item CAP (pure, `pod-hygiene-rules.test.ts`),
@@ -950,6 +951,10 @@ describe("review card data — what the reviewer actually sees", () => {
     });
     expect(rows.map((x) => x.path)).toContain(
       "properties.needs_a_pod_admin_to_approve"
+    );
+    // The reviewer approves what actually happens: the merge retires the twin.
+    expect(rows.find((x) => x.path === "properties.on_approve")?.after).toMatch(
+      /retired/
     );
   });
 
