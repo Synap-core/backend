@@ -120,3 +120,13 @@ export interface LifecycleTransitionPayload {
   staleExpected: boolean;
   proposalId: string | null;
 }
+
+export {
+  STEP_POSITIONS,
+  stepTone,
+  stepsFromLifecycle,
+  stepsFromTrackStages,
+  currentStep,
+  type StepPosition,
+  type StepMark,
+} from "./steps.js";
