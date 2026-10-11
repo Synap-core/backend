@@ -65,6 +65,22 @@ describe("resolveWorkspaceTemplate — cache-first + bundle fallback", () => {
     cacheRows.length = 0;
   });
 
+  it("a RETIRED cache row resolves NOTHING — never the tombstone body, never the bundle copy", async () => {
+    cacheRows.push({
+      source: "https://cp.example",
+      version: "h-old",
+      definition: { workspaceName: "Radar", profiles: [] },
+      retiredAt: new Date("2026-10-11T00:00:00Z"),
+    });
+    // A frozen bundle that still ships the slug must not resurrect it.
+    mockGetWorkspaceTemplate.mockReturnValue({ slug: "radar" });
+    mockToPackageDefinition.mockReturnValue({ workspaceName: "Radar" });
+    mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+
+    expect(await resolveWorkspaceTemplate("radar")).toBeNull();
+    expect(mockGetWorkspaceTemplate).not.toHaveBeenCalled();
+  });
+
   it("resolves from the CP catalog cache when a row exists (source=cache)", async () => {
     // A cache HIT with the full definition inline (workspace-shape fields).
     cacheRows.push({

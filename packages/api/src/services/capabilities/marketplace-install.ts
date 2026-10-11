@@ -116,6 +116,16 @@ export async function lookupCatalogEntry(
     .from(cpCatalogCache)
     .where(and(eq(cpCatalogCache.kind, kind), eq(cpCatalogCache.slug, slug)))
     .limit(1);
+  // A tombstone is never an install target (the CP answers 410 for it too).
+  if (row?.retiredAt) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: row.replacedBySlug
+        ? `The "${slug}" template was retired and replaced by "${row.replacedBySlug}". Install "${row.replacedBySlug}" instead.`
+        : `The "${slug}" template was retired and can no longer be installed.`,
+      cause: { code: "TEMPLATE_RETIRED", replacedBy: row.replacedBySlug },
+    });
+  }
   return row ?? null;
 }
 

@@ -159,10 +159,18 @@ describe("handleCpCatalogSync — request shape", () => {
     await handleCpCatalogSync();
 
     const urls = fetchedUrls();
-    // template kind → CP category=workspace, paginated (limit + offset)
+    // template kind → CP category=workspace, paginated (limit + offset), and
+    // asks for tombstones too (TEMPLATE-LIFECYCLE Contract A)
     expect(urls).toContain(
-      `${CP}/api/packages?category=workspace&limit=100&offset=0`
+      `${CP}/api/packages?category=workspace&limit=100&offset=0&includeRetired=true`
     );
+    // ONLY the template kind asks for retired rows — a retired workflow/skill
+    // must never enter the cache a browse reads.
+    expect(
+      urls
+        .filter((u) => u.includes("includeRetired"))
+        .every((u) => u.includes("category=workspace"))
+    ).toBe(true);
     // automation kind → CP category=workflow
     expect(urls).toContain(
       `${CP}/api/packages?category=workflow&limit=100&offset=0`
@@ -216,10 +224,10 @@ describe("handleCpCatalogSync — pagination + prune-on-complete-only", () => {
     const urls = fetchedUrls();
     // Both pages were fetched (offset 0 and offset 100).
     expect(urls).toContain(
-      `${CP}/api/packages?category=workspace&limit=100&offset=0`
+      `${CP}/api/packages?category=workspace&limit=100&offset=0&includeRetired=true`
     );
     expect(urls).toContain(
-      `${CP}/api/packages?category=workspace&limit=100&offset=100`
+      `${CP}/api/packages?category=workspace&limit=100&offset=100&includeRetired=true`
     );
     // All 150 entries reached the upsert — the top-100 ceiling is gone.
     expect(upsertedRows()).toHaveLength(150);
@@ -587,5 +595,57 @@ describe("handleCpCatalogSync — dedupe by (source, kind, slug) before upsert",
     const rows = upsertedRows() as Array<{ slug: string; name: string }>;
     expect(rows).toHaveLength(1);
     expect(rows[0]!.name).toBe("Official");
+  });
+});
+
+/**
+ * Template tombstones (TEMPLATE-LIFECYCLE Contract A): the CP DTO's
+ * `retired: null | { at, replacedBy, reason }` lands on the three cache
+ * columns, and an older CP that sends no `retired` field degrades to "not
+ * retired" (today's behaviour), never to a guess.
+ */
+describe("handleCpCatalogSync — retired templates", () => {
+  type RetiredRow = {
+    slug: string;
+    retiredAt: Date | null;
+    replacedBySlug: string | null;
+    retiredReason: string | null;
+  };
+
+  it("maps a retired DTO onto retiredAt / replacedBySlug / retiredReason", async () => {
+    serveWorkspace([
+      pkg("ecosystem"),
+      {
+        ...pkg("radar"),
+        retired: {
+          at: "2026-10-11T00:00:00.000Z",
+          replacedBy: "ecosystem",
+          reason: "Radar became the Ecosystem space.",
+        },
+      } as { slug: string },
+    ]);
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as RetiredRow[];
+    const radar = rows.find((r) => r.slug === "radar")!;
+    expect(radar.retiredAt?.toISOString()).toBe("2026-10-11T00:00:00.000Z");
+    expect(radar.replacedBySlug).toBe("ecosystem");
+    expect(radar.retiredReason).toBe("Radar became the Ecosystem space.");
+    const live = rows.find((r) => r.slug === "ecosystem")!;
+    expect(live.retiredAt).toBeNull();
+    expect(live.replacedBySlug).toBeNull();
+    // A retired row is part of the complete set: it must not be pruned, and
+    // the stamp stays `ok` (the completeness template health relies on).
+    expect(recordStampMock.mock.calls.map((c) => c[2])).toContain("ok");
+  });
+
+  it("an older CP (no `retired` field) degrades to not-retired", async () => {
+    serveWorkspace([pkg("crm")]);
+    await handleCpCatalogSync();
+    const [row] = upsertedRows() as RetiredRow[];
+    expect(row!.retiredAt).toBeNull();
+    expect(row!.replacedBySlug).toBeNull();
+    expect(row!.retiredReason).toBeNull();
   });
 });

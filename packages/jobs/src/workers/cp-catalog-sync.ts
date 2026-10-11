@@ -118,6 +118,38 @@ interface CatalogEntry {
   contentHash?: string | null;
   /** Full install payload, when the source route returns it inline. */
   definition?: Record<string, unknown> | null;
+  /** Tombstone fields (template kind only — see fetchPackages `includeRetired`). */
+  retiredAt?: Date | null;
+  replacedBySlug?: string | null;
+  retiredReason?: string | null;
+}
+
+/** The CP package DTO's `retired` field (TEMPLATE-LIFECYCLE Contract A). */
+interface RetiredDto {
+  at?: string | null;
+  replacedBy?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * Map the CP `retired` DTO onto the cache's three tombstone columns. Anything
+ * that is not a well-formed tombstone (absent — an older CP —, null, or an
+ * unparseable `at`) maps to "not retired", which is exactly today's behaviour.
+ */
+export function mapRetired(retired: RetiredDto | null | undefined): {
+  retiredAt: Date | null;
+  replacedBySlug: string | null;
+  retiredReason: string | null;
+} {
+  const at = retired?.at ? new Date(retired.at) : null;
+  if (!at || Number.isNaN(at.getTime())) {
+    return { retiredAt: null, replacedBySlug: null, retiredReason: null };
+  }
+  return {
+    retiredAt: at,
+    replacedBySlug: retired?.replacedBy || null,
+    retiredReason: retired?.reason || null,
+  };
 }
 
 /** Every configured catalog-provider base URL. Today: always just the CP. */
@@ -289,11 +321,18 @@ async function fetchCapabilities(
  */
 async function fetchPackages(
   source: string,
-  category: "workspace" | "workflow" | "skill" | "view"
+  category: "workspace" | "workflow" | "skill" | "view",
+  /**
+   * Ask for retired (tombstoned) rows too — the template kind only, so template
+   * health can say "retired, replaced by X". An older CP ignores the param and
+   * returns no retired rows, which degrades to today's behaviour. The `total`
+   * the CP reports covers the same filter, so completeness still holds.
+   */
+  includeRetired = false
 ): Promise<SourceFetch<CatalogFetch>> {
   return fetchAllPages(async (limit, offset) => {
     const result = await safeFetchJson(
-      `${source}/api/packages?category=${category}&limit=${limit}&offset=${offset}`
+      `${source}/api/packages?category=${category}&limit=${limit}&offset=${offset}${includeRetired ? "&includeRetired=true" : ""}`
     );
     if (!result.ok) return result;
     const body = result.data as {
@@ -305,6 +344,7 @@ async function fetchPackages(
         requiredTier?: string | null;
         vendorId?: string | null;
         tags?: string[];
+        retired?: RetiredDto | null;
       }>;
       total?: number;
     } | null;
@@ -325,6 +365,9 @@ async function fetchPackages(
           // per-slug GET /api/packages/:slug/:version fetch is required at
           // install time (Wave 3b's concern).
           definition: null,
+          ...(includeRetired
+            ? mapRetired(p.retired)
+            : { retiredAt: null, replacedBySlug: null, retiredReason: null }),
         })),
         total,
       },
@@ -409,7 +452,7 @@ async function fetchKind(
     case "automation":
       return fetchPackages(source, "workflow");
     case "template":
-      return fetchPackages(source, "workspace");
+      return fetchPackages(source, "workspace", true);
     // skill/view are FIRST-CLASS CP categories (PACKAGE_TYPES after migration
     // 0049: workspace|capability|skill|workflow|view|cell) — the pod `kind` IS
     // the CP `category` (no alias, unlike automation→workflow / template→
@@ -478,6 +521,9 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
       : (e.tags ?? null),
     contentHash: e.contentHash ?? null,
     definition: e.definition ?? null,
+    retiredAt: e.retiredAt ?? null,
+    replacedBySlug: e.replacedBySlug ?? null,
+    retiredReason: e.retiredReason ?? null,
     syncedAt: now,
   }));
 
@@ -531,6 +577,10 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
           tags: drizzleSql.raw("excluded.tags"),
           contentHash: drizzleSql.raw("excluded.content_hash"),
           definition: drizzleSql.raw("excluded.definition"),
+          // Un-retiring on the CP clears these (excluded.* is NULL then).
+          retiredAt: drizzleSql.raw("excluded.retired_at"),
+          replacedBySlug: drizzleSql.raw("excluded.replaced_by_slug"),
+          retiredReason: drizzleSql.raw("excluded.retired_reason"),
           syncedAt: now,
         },
       });

@@ -25,6 +25,8 @@ import {
   isNull,
   skills,
   workspaces,
+  getCatalogSyncStamps,
+  type CatalogSyncStamp,
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import {
@@ -68,24 +70,112 @@ export function isTemplateDrifted(
  * `cp_catalog_cache` — the remote mirror the drift surfaces trust (NOT the
  * frozen bundle, which could shadow a real CP update). One query for the whole
  * set; a cache-cold slug is simply absent from the map (→ `drifted:false`).
+ * A RETIRED row is not a version to update to, so it is left out too.
  */
 export async function resolveLatestVersionsBySlug(
   slugs: string[]
 ): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+  return (await resolveTemplateCatalog(slugs)).latestBySlug;
+}
+
+/**
+ * Where a workspace's template stands in the catalog (TEMPLATE-LIFECYCLE
+ * Contract A):
+ *   - `current`  — in the catalog cache, not retired;
+ *   - `retired`  — in the cache as a tombstone (`replacedBy` may name the move);
+ *   - `unlisted` — absent from the cache AND the last template sync was a
+ *     provably COMPLETE fetch, so "not in the catalog" is a fact;
+ *   - `unknown`  — absent, and the last sync was not provably complete (failed,
+ *     partial, empty, never ran). An empty result and a failed read are
+ *     different facts: this is the one we cannot call "unlisted".
+ */
+export type TemplateLifecycle = "current" | "retired" | "unlisted" | "unknown";
+
+/** One template's catalog row as health needs it. */
+interface TemplateCatalogEntry {
+  version: string | null;
+  retired: boolean;
+  replacedBy: string | null;
+  retiredReason: string | null;
+}
+
+/** The catalog as template health sees it, resolved ONCE for a set of slugs. */
+export interface TemplateCatalogView {
+  /** Latest version per CURRENT (non-retired) slug — the drift comparand. */
+  latestBySlug: Map<string, string>;
+  /** Every cached row (current AND retired) for the asked slugs. */
+  entryBySlug: Map<string, TemplateCatalogEntry>;
+  /** Was the last template sync provably complete? Gates `unlisted`. */
+  complete: boolean;
+}
+
+/**
+ * Is the template catalog cache provably COMPLETE? Only when at least one
+ * template stamp exists and EVERY template stamp (one per catalog source) last
+ * finished `ok` — the sync worker stamps `ok` only after a complete fetch it
+ * pruned against. `empty`, `partial`, `unreachable`, `misconfigured` or no
+ * stamp at all ⇒ not provable. A stamp left by a source that is no longer
+ * configured keeps this false (the safe direction: `unknown`, never a false
+ * `unlisted`).
+ */
+export function isTemplateCatalogComplete(
+  stamps: Record<string, CatalogSyncStamp>
+): boolean {
+  const template = Object.entries(stamps).filter(([key]) =>
+    key.endsWith("::template")
+  );
+  return (
+    template.length > 0 && template.every(([, s]) => s.lastStatus === "ok")
+  );
+}
+
+/**
+ * Resolve the catalog view for a set of slugs: one cache read + one stamp read.
+ * A stamp read that FAILS yields `complete:false` (→ `unknown`), never a guess.
+ */
+export async function resolveTemplateCatalog(
+  slugs: string[]
+): Promise<TemplateCatalogView> {
+  const latestBySlug = new Map<string, string>();
+  const entryBySlug = new Map<string, TemplateCatalogEntry>();
   const distinct = [...new Set(slugs.filter((s): s is string => !!s))];
-  if (distinct.length === 0) return out;
-  const rows = await db
-    .select({ slug: cpCatalogCache.slug, version: cpCatalogCache.version })
-    .from(cpCatalogCache)
-    .where(
-      and(
-        eq(cpCatalogCache.kind, "template"),
-        inArray(cpCatalogCache.slug, distinct)
-      )
-    );
-  for (const row of rows) if (row.version) out.set(row.slug, row.version);
-  return out;
+  if (distinct.length > 0) {
+    const rows = await db
+      .select({
+        slug: cpCatalogCache.slug,
+        version: cpCatalogCache.version,
+        retiredAt: cpCatalogCache.retiredAt,
+        replacedBySlug: cpCatalogCache.replacedBySlug,
+        retiredReason: cpCatalogCache.retiredReason,
+      })
+      .from(cpCatalogCache)
+      .where(
+        and(
+          eq(cpCatalogCache.kind, "template"),
+          inArray(cpCatalogCache.slug, distinct)
+        )
+      );
+    for (const row of rows) {
+      const retired = row.retiredAt != null;
+      // Two sources could cache the same slug: a live row wins over a tombstone.
+      const prev = entryBySlug.get(row.slug);
+      if (prev && !prev.retired) continue;
+      entryBySlug.set(row.slug, {
+        version: row.version,
+        retired,
+        replacedBy: retired ? row.replacedBySlug : null,
+        retiredReason: retired ? row.retiredReason : null,
+      });
+      if (!retired && row.version) latestBySlug.set(row.slug, row.version);
+    }
+  }
+  let complete = false;
+  try {
+    complete = isTemplateCatalogComplete(await getCatalogSyncStamps());
+  } catch {
+    complete = false; // a failed stamp read proves nothing → `unknown`
+  }
+  return { latestBySlug, entryBySlug, complete };
 }
 
 /** The TemplateHealth axes for one workspace's stamped template identity. */
@@ -95,16 +185,72 @@ export interface TemplateHealth {
   installedVersion: string | null;
   latestVersion: string | null;
   drifted: boolean;
+  /** Catalog standing of the attached template; `null` when not attached. */
+  lifecycle: TemplateLifecycle | null;
+  /** Retired only: the live slug the catalog names as its replacement. */
+  replacedBy: string | null;
+  /** Retired only: the catalog's one-sentence reason. */
+  retiredReason: string | null;
+  /** A plain sentence for `retired` / `unlisted`; `null` otherwise. */
+  lifecycleWarning: string | null;
 }
 
-/** Compose the axes from a workspace's slug/version + a resolved latest map. */
+/** Classify one attached slug against the catalog view. */
+export function classifyTemplateLifecycle(
+  packageSlug: string,
+  catalog: Pick<TemplateCatalogView, "entryBySlug" | "complete">
+): {
+  lifecycle: TemplateLifecycle;
+  replacedBy: string | null;
+  retiredReason: string | null;
+} {
+  const entry = catalog.entryBySlug.get(packageSlug);
+  if (entry && entry.retired) {
+    return {
+      lifecycle: "retired",
+      replacedBy: entry.replacedBy,
+      retiredReason: entry.retiredReason,
+    };
+  }
+  if (entry)
+    return { lifecycle: "current", replacedBy: null, retiredReason: null };
+  return {
+    lifecycle: catalog.complete ? "unlisted" : "unknown",
+    replacedBy: null,
+    retiredReason: null,
+  };
+}
+
+/** The plain sentence a person reads for a retired / unlisted template. */
+export function templateLifecycleWarning(
+  packageSlug: string,
+  lifecycle: TemplateLifecycle,
+  replacedBy: string | null,
+  retiredReason: string | null
+): string | null {
+  if (lifecycle === "retired") {
+    const why = retiredReason ? ` ${retiredReason.trim()}` : "";
+    return replacedBy
+      ? `The "${packageSlug}" template was retired.${why} It is replaced by "${replacedBy}"; you can move this space's data there.`
+      : `The "${packageSlug}" template was retired.${why} It has no replacement; this space keeps working but gets no updates.`;
+  }
+  if (lifecycle === "unlisted") {
+    return `The "${packageSlug}" template is no longer in the catalog. This space keeps working but gets no updates.`;
+  }
+  return null;
+}
+
+/** Compose the axes from a workspace's slug/version + a resolved catalog view. */
 export function templateHealthFor(
   packageSlug: string | null,
   installedVersion: string | null,
-  latestBySlug: Map<string, string>
+  catalog: TemplateCatalogView
 ): TemplateHealth {
   const latestVersion = packageSlug
-    ? (latestBySlug.get(packageSlug) ?? null)
+    ? (catalog.latestBySlug.get(packageSlug) ?? null)
+    : null;
+  const standing = packageSlug
+    ? classifyTemplateLifecycle(packageSlug, catalog)
     : null;
   return {
     attached: packageSlug != null,
@@ -112,6 +258,18 @@ export function templateHealthFor(
     installedVersion,
     latestVersion,
     drifted: isTemplateDrifted(installedVersion, latestVersion),
+    lifecycle: standing?.lifecycle ?? null,
+    replacedBy: standing?.replacedBy ?? null,
+    retiredReason: standing?.retiredReason ?? null,
+    lifecycleWarning:
+      packageSlug && standing
+        ? templateLifecycleWarning(
+            packageSlug,
+            standing.lifecycle,
+            standing.replacedBy,
+            standing.retiredReason
+          )
+        : null,
   };
 }
 
@@ -121,9 +279,9 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
   workspaceName: string;
   packageSlug: string | null;
   /**
-   * Non-fatal template problems in this space — today, an `always` skill whose
-   * body is over the per-skill budget (it loads on demand instead). Empty when
-   * there are none.
+   * Non-fatal template problems in this space — a retired / unlisted template
+   * (`lifecycleWarning`, first), and an `always` skill whose body is over the
+   * per-skill budget (it loads on demand instead). Empty when there are none.
    */
   warnings: string[];
 }
@@ -193,7 +351,7 @@ export async function listWorkspaceTemplateHealth(
     .from(workspaces)
     .where(inArray(workspaces.id, wsIds));
   const active = rows.filter((r) => r.archivedAt == null);
-  const latestBySlug = await resolveLatestVersionsBySlug(
+  const catalog = await resolveTemplateCatalog(
     active.map(
       (r) => (r.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
     )
@@ -207,12 +365,16 @@ export async function listWorkspaceTemplateHealth(
     const pkgSlug = typeof s.packageSlug === "string" ? s.packageSlug : null;
     const installedVersion =
       typeof s.packageVersion === "string" ? s.packageVersion : null;
+    const health = templateHealthFor(pkgSlug, installedVersion, catalog);
     return {
       workspaceId: r.id,
       workspaceName: r.name,
       packageSlug: pkgSlug,
-      ...templateHealthFor(pkgSlug, installedVersion, latestBySlug),
-      warnings: warningsByWs.get(r.id) ?? [],
+      ...health,
+      warnings: [
+        ...(health.lifecycleWarning ? [health.lifecycleWarning] : []),
+        ...(warningsByWs.get(r.id) ?? []),
+      ],
     };
   });
 }

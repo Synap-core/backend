@@ -4374,6 +4374,9 @@ CREATE TABLE IF NOT EXISTS "cp_catalog_cache" (
   "tags"         text[],
   "content_hash" text,
   "definition"   jsonb,
+  "retired_at"   timestamptz,
+  "replaced_by_slug" text,
+  "retired_reason" text,
   "synced_at"    timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "uniq_cp_catalog_cache_source_kind_slug"

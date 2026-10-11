@@ -27,6 +27,7 @@ import {
   db,
   eq,
   and,
+  isNull,
   desc,
   workspaces,
   workspaceMembers,
@@ -1382,7 +1383,13 @@ export const workspaceCatalogRouter = router({
           tags: cpCatalogCache.tags,
         })
         .from(cpCatalogCache)
-        .where(eq(cpCatalogCache.kind, "template"))
+        // Retired templates are known (template health), never installable.
+        .where(
+          and(
+            eq(cpCatalogCache.kind, "template"),
+            isNull(cpCatalogCache.retiredAt)
+          )
+        )
         .orderBy(desc(cpCatalogCache.syncedAt));
 
       const q = input?.query?.trim().toLowerCase();

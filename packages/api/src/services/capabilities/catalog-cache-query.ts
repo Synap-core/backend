@@ -10,7 +10,7 @@
  * engineering bar).
  */
 
-import { getDb, and, eq } from "@synap/database";
+import { getDb, and, eq, isNull } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
 import { rankByTerms } from "../../utils/term-match.js";
@@ -59,7 +59,9 @@ export async function queryCatalogCache(
 ): Promise<CatalogCacheEntry[]> {
   const db = await getDb();
 
-  const conditions = [];
+  // A retired (tombstoned) template is known, never offered: browse/search
+  // never return it. Template health is its only reader.
+  const conditions = [isNull(cpCatalogCache.retiredAt)];
   if (opts?.kind) {
     const kind = opts.kind === "workspace" ? "template" : opts.kind;
     conditions.push(eq(cpCatalogCache.kind, kind));
@@ -69,7 +71,7 @@ export async function queryCatalogCache(
   const rows = await db
     .select()
     .from(cpCatalogCache)
-    .where(conditions.length > 0 ? and(...conditions) : undefined);
+    .where(and(...conditions));
 
   const entries: CatalogCacheEntry[] = rows.map((row) => ({
     source: row.source,

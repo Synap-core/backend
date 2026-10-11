@@ -54,6 +54,18 @@ export const cpCatalogCache = pgTable(
      * time (Wave 3b's concern, not this cache's).
      */
     definition: jsonb("definition").$type<Record<string, unknown>>(),
+    /**
+     * Tombstone (0322, template kind only): set when the catalog RETIRED this
+     * entry. A retired row is KNOWN, not installable — every browse/install
+     * reader filters it out (`isNull(retiredAt)`); only template health reads
+     * it, so a pod can tell "retired, replaced by X" from "never heard of it".
+     * NULL on every row synced from a CP that predates retirement.
+     */
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    /** Live catalog slug of the same kind that replaces a retired entry. */
+    replacedBySlug: text("replaced_by_slug"),
+    /** One plain sentence a person reads: why this entry was retired. */
+    retiredReason: text("retired_reason"),
     syncedAt: timestamp("synced_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

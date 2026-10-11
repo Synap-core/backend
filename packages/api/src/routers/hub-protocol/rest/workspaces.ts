@@ -32,7 +32,7 @@ import { AccessContext } from "../../../access/index.js";
 import { readWorkspaceEntityStats } from "../../../services/workspace-stats.js";
 import {
   templateHealthFor,
-  resolveLatestVersionsBySlug,
+  resolveTemplateCatalog,
 } from "../../../services/template-health.js";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -548,7 +548,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       // TEMPLATE HEALTH — resolve the latest catalog version for every installed
       // slug ONCE, then compute drift via the shared `template-health` authority
       // (so the CLI/MCP/browser all agree). Cache-cold slug → `drifted:false`.
-      const latestBySlug = await resolveLatestVersionsBySlug(
+      const templateCatalog = await resolveTemplateCatalog(
         rows.map(
           (w) =>
             (w.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
@@ -580,7 +580,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         const health = templateHealthFor(
           pkgSlug,
           installedVersion,
-          latestBySlug
+          templateCatalog
         );
         return {
           id: workspace.id,
@@ -608,6 +608,13 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           attached: health.attached,
           stamped: health.stamped,
           drifted: health.drifted,
+          // Catalog standing (TEMPLATE-LIFECYCLE A): current | retired |
+          // unlisted | unknown (null = no template). `unlisted` only after a
+          // provably complete catalog sync; otherwise `unknown`.
+          lifecycle: health.lifecycle,
+          replacedBy: health.replacedBy,
+          retiredReason: health.retiredReason,
+          lifecycleWarning: health.lifecycleWarning,
           // Additive-pack installs (profile/view/bento) never set
           // `packageSlug` — they carry their own identity here instead. The
           // CLI unions this with `packageSlug` to match the browser's

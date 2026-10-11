@@ -76,7 +76,8 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   templateHealthFor,
-  resolveLatestVersionsBySlug,
+  resolveTemplateCatalog,
+  type TemplateLifecycle,
 } from "../../../services/template-health.js";
 import { readMarketSource } from "../../../services/capabilities/market-source.js";
 import { reconcileStandaloneConfigsToTemplates } from "../../../services/capabilities/reconcile-standalone-configs-to-templates.js";
@@ -153,6 +154,14 @@ export interface InstalledRow {
   provisioningStatus: string | null;
   failedStep: string | null;
   /**
+   * TEMPLATE STANDING — workspace rows only (absent on other kinds), through
+   * the same authority as `GET /workspaces` / MCP `template_health`.
+   */
+  lifecycle?: TemplateLifecycle | null;
+  replacedBy?: string | null;
+  retiredReason?: string | null;
+  lifecycleWarning?: string | null;
+  /**
    * Free-text note about WHY a field above is what it is — e.g. why drift is
    * unknown for this row. Never a status; always explanatory.
    */
@@ -198,6 +207,16 @@ const InstalledRowSchema = zOpenapi
     workspaceId: zOpenapi.string().nullable(),
     provisioningStatus: zOpenapi.string().nullable(),
     failedStep: zOpenapi.string().nullable(),
+    lifecycle: zOpenapi
+      .enum(["current", "retired", "unlisted", "unknown"])
+      .nullable()
+      .optional()
+      .describe(
+        "workspace rows only: the template's catalog standing. `unlisted` only after a provably complete catalog sync, else `unknown`."
+      ),
+    replacedBy: zOpenapi.string().nullable().optional(),
+    retiredReason: zOpenapi.string().nullable().optional(),
+    lifecycleWarning: zOpenapi.string().nullable().optional(),
     note: zOpenapi.string().optional(),
   })
   .openapi("InstalledRow");
@@ -307,7 +326,7 @@ export function registerInstalledRoutes(app: HubHono): void {
           .from(workspaces)
           .where(inArray(workspaces.id, wsIds));
         const active = wsRows.filter((w) => w.archivedAt == null);
-        const latestBySlug = await resolveLatestVersionsBySlug(
+        const templateCatalog = await resolveTemplateCatalog(
           active.map(
             (w) =>
               (w.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
@@ -327,7 +346,7 @@ export function registerInstalledRoutes(app: HubHono): void {
           const health = templateHealthFor(
             slug,
             installedVersion,
-            latestBySlug
+            templateCatalog
           );
           rows.push({
             kind: "workspace",
@@ -348,6 +367,10 @@ export function registerInstalledRoutes(app: HubHono): void {
                 ? s.provisioningStatus
                 : null,
             failedStep: typeof s.failedStep === "string" ? s.failedStep : null,
+            lifecycle: health.lifecycle,
+            replacedBy: health.replacedBy,
+            retiredReason: health.retiredReason,
+            lifecycleWarning: health.lifecycleWarning,
             ...(health.attached && !health.stamped
               ? {
                   note: "attached to a package but never version-stamped — drift cannot be computed",

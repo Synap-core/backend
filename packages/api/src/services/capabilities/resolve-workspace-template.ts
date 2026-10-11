@@ -186,6 +186,7 @@ export async function resolveWorkspaceTemplate(
         source: cpCatalogCache.source,
         version: cpCatalogCache.version,
         definition: cpCatalogCache.definition,
+        retiredAt: cpCatalogCache.retiredAt,
       })
       .from(cpCatalogCache)
       .where(
@@ -193,6 +194,11 @@ export async function resolveWorkspaceTemplate(
       )
       .limit(1);
 
+    // A RETIRED template is a known fact, not a miss: resolve nothing (never
+    // the tombstone's empty body, never a stale bundle copy). Install refuses,
+    // and the boot reconcile leaves the workspace as it is — the move to the
+    // replacement is the person's call (retire-into).
+    if (row?.retiredAt) return null;
     if (row) {
       const packageDefinition =
         (row.definition as unknown as PackageDefinitionOutput | null) ??

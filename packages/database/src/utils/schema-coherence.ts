@@ -1234,6 +1234,22 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "definition",
     addedBy: "0184_cp_catalog_cache.sql",
   },
+  // Template tombstones (0322): retired entries stay KNOWN to template health.
+  {
+    table: "cp_catalog_cache",
+    column: "retired_at",
+    addedBy: "0322_cp_catalog_cache_retired.sql",
+  },
+  {
+    table: "cp_catalog_cache",
+    column: "replaced_by_slug",
+    addedBy: "0322_cp_catalog_cache_retired.sql",
+  },
+  {
+    table: "cp_catalog_cache",
+    column: "retired_reason",
+    addedBy: "0322_cp_catalog_cache_retired.sql",
+  },
 
   // playbook_runs — the run ledger / executor spine (0127)
   {
