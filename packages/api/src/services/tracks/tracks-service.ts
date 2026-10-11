@@ -108,6 +108,7 @@ import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
 import { createLinks } from "../links/links-service.js";
+import { requestClientKey } from "../focus-sessions/resolve-work-session.js";
 import { linkProjectToWorkspace } from "../../utils/project-workspace.js";
 import {
   listMissingStageDomains,
@@ -2206,6 +2207,10 @@ export async function startStageSession(input: {
     params: (track.params as Record<string, unknown> | null) ?? {},
     // Check-then-create under ONE lock: the probe above is only a fast path.
     oneOpenPerStage: true,
+    // The CALLING CLIENT, exactly as `start_session` binds it: a step session
+    // started over MCP / Hub REST belongs to that client for write
+    // attribution. A human start (no key-auth client, no agent) binds none.
+    clientKey: requestClientKey(actor.agentUserId ?? undefined) ?? null,
   });
   const domainOutcome = (usesStamped: boolean): StageSessionDomainOutcome =>
     domainWorkspaceId && stage?.domain

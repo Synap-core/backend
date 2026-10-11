@@ -147,6 +147,7 @@ import {
   sessionEvaluations,
   podMembers,
   projectMembers,
+  runWithClientKey,
 } from "@synap/database";
 import {
   addTrackStage,
@@ -1259,5 +1260,53 @@ describe("0302 emergent stages", () => {
     await expect(
       addTrackStage({ trackId: emTrack, stage: { name: "Late" }, actor: human })
     ).rejects.toThrow(/completed — reopen it/);
+  });
+});
+
+describe("P0.3 — a step session belongs to the CLIENT that started it", () => {
+  let clientTrack = "";
+  const sessionMeta = async (id: string) =>
+    (
+      await q<{ metadata: Record<string, unknown> | null }>(
+        `select metadata from focus_sessions where id = $1`,
+        [id]
+      )
+    ).rows[0]!.metadata ?? {};
+
+  beforeAll(async () => {
+    // The same method again under ANOTHER name (0317): a second, fresh track.
+    const res = await startTrack({
+      projectId: STAGE_PROJECT,
+      playbookId: METHOD,
+      name: "Second run",
+      params: { budget: 500 },
+      actor: human,
+    });
+    if (res.status !== "started") throw new Error(`unexpected ${res.status}`);
+    clientTrack = res.track.id;
+  });
+
+  it("a start inside a key-auth request is stamped with that client's key (as start_session is)", async () => {
+    // KEY scope: a conversation-scoped key also probes for an auto-opened
+    // session to adopt (`findClientSession`, the database package's own
+    // handle, not this suite's PGlite) — the stamp is the same either way.
+    const CLIENT = "key:k-1";
+    const res = await runWithClientKey(CLIENT, () =>
+      startStageSession({ trackId: clientTrack, actor: human })
+    );
+    expect(res.status).toBe("created");
+    if (res.status !== "created") return;
+    expect((await sessionMeta(res.session.id)).clientKey).toBe(CLIENT);
+  });
+
+  it("a human start with no client binds none", async () => {
+    const res = await startStageSession({
+      trackId: clientTrack,
+      stageKey: "build",
+      actor: human,
+    });
+    expect(res.status).toBe("created");
+    if (res.status !== "created") return;
+    expect((await sessionMeta(res.session.id)).clientKey ?? null).toBeNull();
   });
 });
