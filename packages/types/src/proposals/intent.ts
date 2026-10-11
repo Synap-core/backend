@@ -570,6 +570,10 @@ export interface AppConnectSummary {
   lines: AppConnectLine[];
   /** "synap.live asks for access: Create People · Sales, Read Notes · Finance". */
   sentence: string;
+  /** The requests as read, for the holder reading (`grantsOfRequests`). */
+  requests: AppConnectRequestLike[];
+  /** Who asks: an app (`app/connect`) or an AI (`agent/connect`). */
+  holderKind: "app" | "agent";
 }
 
 /** Is this an app's request for access? */
@@ -607,6 +611,7 @@ export function summarizeAppConnectRequest(input: {
   appName: string;
   requests: ReadonlyArray<AppConnectRequestLike>;
   workspaceNames?: Readonly<Record<string, string>>;
+  holderKind?: "app" | "agent";
 }): AppConnectSummary {
   const order: Array<string | null> = [];
   const bySpace = new Map<
@@ -647,6 +652,8 @@ export function summarizeAppConnectRequest(input: {
     sentence: lines.length
       ? `${title}: ${lines.map((l) => l.text).join(", ")}`
       : title,
+    requests: [...input.requests],
+    holderKind: input.holderKind ?? "app",
   };
 }
 
@@ -681,5 +688,10 @@ export function describeAppConnectProposal(
         typeof r.workspaceName === "string" ? r.workspaceName : null,
     });
   }
-  return summarizeAppConnectRequest({ appName, requests, workspaceNames });
+  return summarizeAppConnectRequest({
+    appName,
+    requests,
+    workspaceNames,
+    holderKind: p.targetType === "agent" ? "agent" : "app",
+  });
 }

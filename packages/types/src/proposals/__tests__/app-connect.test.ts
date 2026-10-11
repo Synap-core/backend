@@ -115,3 +115,20 @@ describe("app/connect proposal words", () => {
     ).toBe(false);
   });
 });
+
+describe("describeAppConnectProposal carries what the holder reader needs", () => {
+  // Rules out: a card that can only print the asks, never what approving enables.
+  it("the requests as read, and who asks (app vs AI)", () => {
+    const s = describeAppConnectProposal(PROPOSAL, NAMES)!;
+    expect(s.holderKind).toBe("app");
+    expect(s.requests.length).toBeGreaterThan(0);
+    expect(s.requests.every((r) => typeof r.permission === "string")).toBe(
+      true
+    );
+    const ai = describeAppConnectProposal({
+      ...PROPOSAL,
+      targetType: "agent",
+    })!;
+    expect(ai.holderKind).toBe("agent");
+  });
+});
