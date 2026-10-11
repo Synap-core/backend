@@ -28,6 +28,33 @@ vi.mock("../side-effects.js", () => ({
 }));
 
 import { emitLifecycleTransition } from "../lifecycle-transition.js";
+import {
+  playbookActivatorSentence,
+  toBackendTrigger,
+} from "@synap-core/types/automations";
+import { evaluateTriggerFilterValue } from "@synap-core/types/automations/filter-operators";
+
+/** The matcher's rule: every filter key evaluates true against the payload. */
+function firesOn(
+  data: Record<string, unknown>,
+  profileSlug: string,
+  to: string
+) {
+  const s = playbookActivatorSentence({
+    playbookId: "pb",
+    profileSlug,
+    on: "enters_status",
+    statusProperty: "commercialStage",
+    status: to,
+    lifecycle: "declared",
+    mode: "run",
+  });
+  const t = toBackendTrigger(s.trigger!, s.conditions);
+  const filters = t.triggerConfig.filters as Record<string, unknown>;
+  return Object.entries(filters).every(([k, v]) =>
+    evaluateTriggerFilterValue(data[k], v)
+  );
+}
 
 const T = {
   transitionId: "t1",
@@ -83,5 +110,23 @@ describe("emitLifecycleTransition", () => {
     await emitLifecycleTransition({ ...T, role: "lead", agentUserId: null });
     expect(h.emitted).toHaveLength(1);
     expect(h.emitted[0]).toMatchObject({ action: "transition", userId: "u1" });
+  });
+
+  // SEAM (E1): the payload this emits is the one a compiled enters_status
+  // rule filters — driven through the real compiler and the real evaluator.
+  it("an enters_status rule fires on its OWN subject's move — kind or role — and no other", async () => {
+    await emitLifecycleTransition(T);
+    const kindMove = h.emitted[0].data;
+    expect(kindMove.lifecycleProfile).toBe("deal");
+    expect(firesOn(kindMove, "deal", "negotiating")).toBe(true);
+    expect(firesOn(kindMove, "deal", "won")).toBe(false);
+
+    h.emitted = [];
+    await emitLifecycleTransition({ ...T, role: "client" });
+    const roleMove = h.emitted[0].data;
+    expect(roleMove.lifecycleProfile).toBe("client");
+    expect(firesOn(roleMove, "client", "negotiating")).toBe(true);
+    // A role's move on a deal is NOT the deal's own move.
+    expect(firesOn(roleMove, "deal", "negotiating")).toBe(false);
   });
 });

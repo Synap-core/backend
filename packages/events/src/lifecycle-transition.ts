@@ -10,12 +10,24 @@
  *      `subjectType: "entity", action: "transition"`, the transition FLAT so a
  *      rule filters on `to` / `from` / `category` / `role` / `profileSlug`.
  *
- * BACK-COMPAT (founder decision 2026-10-11, remove after the activator
- * recompile conversion lands): for a KIND's lifecycle the fan-out is ALSO
- * emitted as `entity.update.completed` carrying `changed.<slug>`,
- * `previous.<slug>` and `<slug>` — the exact keys rules compiled from the old
- * `enters_status` sentence filter on. The log does not get a second row.
- * Roles never had that shape (enters_status was blind to facets) and get none.
+ * BACK-COMPAT (founder decision 2026-10-11): for a KIND's lifecycle the
+ * fan-out is ALSO emitted as `entity.update.completed` carrying
+ * `changed.<slug>`, `previous.<slug>` and `<slug>` — the exact keys rules
+ * compiled from the old `enters_status` sentence filter on. The log does not
+ * get a second row. Roles never had that shape and get none.
+ *
+ * `enters_status` activators now compile onto the transition (E1, 2026-10-11;
+ * untouched rules recompile through the activator convergence at boot). The
+ * flag STAYS ON because these still read the update for a status move:
+ *   1. process-sync follows a KIND's move on the update path
+ *      (`followTransition` defers to it while this flag is on — flip both
+ *      together, or a process advances twice / never);
+ *   2. realtime: `domain-event-bridge.ts` pushes `entity:updated` from the
+ *      update; nothing bridges the transition, so clients would not refresh;
+ *   3. rules NOT born from an activator — hand-authored "updated" rules with
+ *      `changed.<lifecycle slug>`, and owner-edited activator rules (the
+ *      convergence keeps them) — plus webhook subscriptions to the update.
+ * Turning it off needs 1 + 2 moved to the transition and a conversion for 3.
  */
 import { randomUUID } from "node:crypto";
 import { EventRepository, sql } from "@synap/database";
@@ -58,7 +70,14 @@ export async function emitLifecycleTransition(
     correlationId?: string;
   } = {}
 ): Promise<void> {
-  const data: Record<string, unknown> = { ...t };
+  // `lifecycleProfile` = the kind or role WHOSE lifecycle moved — the one key
+  // an `enters_status` / "transitioned" rule filters its subject on
+  // (`entityKindFilterKey`, @synap-core/types/automations). `profileSlug`
+  // alone cannot say it: a role's move carries the entity's KIND there.
+  const data: Record<string, unknown> = {
+    ...t,
+    lifecycleProfile: t.role ?? t.profileSlug,
+  };
   // The fan-out's `userId` is the event's ACTOR (the trigger hop reads it as
   // the causal-chain producer — `producerAgentUserId`): the agent for an agent
   // move, the person otherwise. The payload keeps both.

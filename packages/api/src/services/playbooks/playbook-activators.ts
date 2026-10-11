@@ -69,6 +69,9 @@ import {
   db,
   skills,
   playbooks,
+  profiles,
+  workspaces,
+  ProfileResolutionService,
   playbookAutomations,
   proposals,
   and,
@@ -147,17 +150,36 @@ export function activatorRuleDecl(input: {
   playbookName: string;
   profileSlug: string;
   statusProperty: string | null;
+  /**
+   * The subject profile as the pod knows it: a kind or a role, and the
+   * property its declared lifecycle lives on (null = none declared). Decides
+   * which event an `enters_status` follows — see `playbookActivatorSentence`.
+   */
+  subject: SubjectLifecycle;
 }): TemplateRuleDecl | { key: string; error: string } {
-  const { activator: a, playbookId, profileSlug } = input;
+  const { activator: a, playbookId, profileSlug, subject } = input;
   const key = activatorKey(a);
   const kind = resolveObjectNoun(profileSlug).toLowerCase();
   const verb = a.mode === "propose" ? "propose running" : "run";
   if (a.on === "enters_status") {
-    if (!input.statusProperty || !a.status) {
+    // The declared lifecycle IS the status a process follows (work model L1):
+    // a playbook that names none follows it.
+    const statusProperty = input.statusProperty ?? subject.lifecycleProperty;
+    if (!statusProperty || !a.status) {
       return {
         key,
         error:
           "an enters_status activator needs subjectProfile.statusProperty — the property whose value the subject enters",
+      };
+    }
+    const declared = subject.lifecycleProperty === statusProperty;
+    if (!declared && subject.profileKind === "role") {
+      // A role's status lives on its facet; only the moveStatus door's
+      // transition event reports it, and only for a DECLARED lifecycle. No
+      // other event fires, so any compile would be a rule that never fires.
+      return {
+        key,
+        error: `the role "${profileSlug}" has no declared lifecycle on "${statusProperty}" — declare it (lifecycle: { property: "${statusProperty}", options }) so its moves emit a transition this activator can follow`,
       };
     }
     return {
@@ -167,8 +189,9 @@ export function activatorRuleDecl(input: {
         playbookId,
         profileSlug,
         on: "enters_status",
-        statusProperty: input.statusProperty,
+        statusProperty,
         status: a.status,
+        lifecycle: declared ? "declared" : "undeclared",
         mode: a.mode,
       }),
     };
@@ -182,6 +205,46 @@ export function activatorRuleDecl(input: {
       on: "created",
       mode: a.mode,
     }),
+  };
+}
+
+/** What an activator needs to know about its subject profile. */
+export interface SubjectLifecycle {
+  profileKind: "kind" | "role";
+  /** The property the profile's lifecycle is declared on; null = none. */
+  lifecycleProperty: string | null;
+}
+
+/**
+ * Read the subject profile's kind/role and declared lifecycle — the profile
+ * the playbook's workspace sees under that slug. A slug the pod does not know
+ * reads as a kind with no lifecycle: the property-change compile, exactly what
+ * this module did before lifecycles existed.
+ */
+async function readSubjectLifecycle(
+  profileSlug: string,
+  workspaceId: string | null
+): Promise<SubjectLifecycle> {
+  const rows = await db
+    .select({
+      id: profiles.id,
+      profileKind: profiles.profileKind,
+      workspaceId: profiles.workspaceId,
+    })
+    .from(profiles)
+    .where(eq(profiles.slug, profileSlug));
+  // The space's own profile wins over the pod-wide one of the same slug.
+  const row =
+    rows.find((r) => workspaceId && r.workspaceId === workspaceId) ??
+    rows.find((r) => r.workspaceId === null) ??
+    rows[0];
+  if (!row) return { profileKind: "kind", lifecycleProperty: null };
+  const lifecycle = await new ProfileResolutionService(
+    db
+  ).getEffectiveLifecycle(row.id, workspaceId);
+  return {
+    profileKind: row.profileKind === "role" ? "role" : "kind",
+    lifecycleProperty: lifecycle?.propertySlug ?? null,
   };
 }
 
@@ -324,6 +387,10 @@ async function applyOnce(input: {
   /** Rules that should be LIVE after this pass — their automations get linked. */
   const liveRuleIds = new Set<string>();
 
+  const subject =
+    process.profileSlug && declared.some((a) => a.on === "enters_status")
+      ? await readSubjectLifecycle(process.profileSlug, pb.workspaceId)
+      : { profileKind: "kind" as const, lifecycleProperty: null };
   for (const activator of declared) {
     const built = process.profileSlug
       ? activatorRuleDecl({
@@ -332,6 +399,7 @@ async function applyOnce(input: {
           playbookName: pb.name,
           profileSlug: process.profileSlug,
           statusProperty: process.statusProperty,
+          subject,
         })
       : {
           key: activatorKey(activator),
@@ -556,6 +624,56 @@ export async function convergePlaybookActivatorsSafely(input: {
       "playbook activators did not converge — the next write or boot reconcile retries"
     );
   }
+}
+
+/**
+ * BOOT: converge every live playbook that declares an `enters_status`
+ * activator — the recompile of rules compiled before `enters_status` followed
+ * the transition event (2026-10-11), and of rules whose subject profile has
+ * since declared (or retired) its lifecycle.
+ *
+ * Not a conversion op: the recompile IS the activator convergence above —
+ * the governed rule door, the three-way seed stamp (an owner-edited rule is
+ * KEPT, never rewritten), the owner's pause and delete respected. A raw SQL
+ * rewrite of `trigger_config` would bypass all three. Template-installed
+ * playbooks already reach this pass on every boot (the installed-playbook
+ * reconcile); this covers pod-local ones (`synap_create_playbook`), which
+ * otherwise converge only on their next write. Idempotent: an unchanged decl
+ * writes nothing. Attributed like the template reconcile: the space owner, or
+ * the playbook's creator for a pod-wide one.
+ */
+export async function convergeEntersStatusActivators(): Promise<{
+  playbooks: number;
+  failed: number;
+}> {
+  const rows = await db
+    .select({
+      id: playbooks.id,
+      createdBy: playbooks.createdBy,
+      ownerId: workspaces.ownerId,
+    })
+    .from(playbooks)
+    .leftJoin(workspaces, eq(workspaces.id, playbooks.workspaceId))
+    .where(
+      and(
+        eq(playbooks.status, "active"),
+        drizzleSql`${playbooks.subjectProfile}->'activators' @> '[{"on":"enters_status"}]'::jsonb`
+      )
+    );
+  let failed = 0;
+  for (const row of rows) {
+    const userId = row.ownerId ?? row.createdBy;
+    try {
+      await applyPlaybookActivators({ playbookId: row.id, userId });
+    } catch (err) {
+      failed++;
+      logger.error(
+        { err, playbookId: row.id },
+        "enters_status activators did not converge at boot — the next write or boot retries"
+      );
+    }
+  }
+  return { playbooks: rows.length, failed };
 }
 
 function toOutcomeStatus(s: string): ActivatorOutcomeStatus {

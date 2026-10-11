@@ -151,6 +151,10 @@ export type ActionVerb =
   | "created"
   | "updated"
   | "deleted"
+  // A thing's lifecycle status MOVED (work model L2) — the one transition
+  // event of the moveStatus door, `entity.transition.completed`. Kinds AND
+  // roles: a role's status lives on its facet, which no "updated" sees.
+  | "transitioned"
   | "received"
   | "completed"
   | "approved"
@@ -270,6 +274,7 @@ const VERB_TO_EVENT_ACTION: Partial<Record<ActionVerb, string>> = {
   created: "create",
   updated: "update",
   deleted: "delete",
+  transitioned: "transition",
 };
 
 /**
@@ -294,7 +299,27 @@ const EVENT_ACTION_TO_VERB: Record<string, ActionVerb> = {
   update: "updated",
   delete: "deleted",
   complete: "completed",
+  transition: "transitioned",
 };
+
+/**
+ * The filter key an ENTITY trigger's chosen profile compiles to.
+ *
+ * Every entity event names the kind under `profileSlug` — except a
+ * TRANSITION, whose subject may be a ROLE: a facet's move carries the
+ * entity's kind in `profileSlug` and the role in `role`. Filtering a role's
+ * transition on `profileSlug` matches nothing; filtering a kind's on it ALSO
+ * matches every role's move on an entity of that kind. So a transition names
+ * the profile WHOSE LIFECYCLE MOVED in one key, `lifecycleProfile` (= `role ??
+ * profileSlug`, written by `emitLifecycleTransition`), and the picker's one
+ * "kind or role" choice compiles there. Both directions of the grammar read
+ * this one function.
+ */
+export function entityKindFilterKey(
+  actionVerb: ActionVerb | undefined
+): "profileSlug" | "lifecycleProfile" {
+  return actionVerb === "transitioned" ? "lifecycleProfile" : "profileSlug";
+}
 
 export function buildEventPattern(trigger: SentenceTrigger): string {
   if (!trigger.subjectCategory) return "";
@@ -603,7 +628,7 @@ export function toBackendTrigger(
     // shape (`profileSlugs`, plural) that `matchFilters` could not evaluate.
     const isEntityTrigger = trigger.subjectCategory === "entity";
     if (trigger.profileSlug && isEntityTrigger) {
-      filters.profileSlug = trigger.profileSlug;
+      filters[entityKindFilterKey(trigger.actionVerb)] = trigger.profileSlug;
     }
 
     return {
@@ -810,20 +835,39 @@ export function proposePlaybookOnKindSentence(input: {
  * The WHEN of a playbook ACTIVATOR (`PlaybookActivator`, @synap/playbooks):
  *
  *   `created`       — WHEN an entity of `profileSlug` is created.
- *   `enters_status` — WHEN an entity of `profileSlug` is UPDATED, its
- *                     `statusProperty` CHANGED, and it now equals `status`.
+ *   `enters_status` — WHEN the subject (a kind OR a role) ENTERS `status`.
  *
- * `enters_status` compiles to `entity.update.completed` with three filters —
- * `profileSlug`, the `changed.<statusProperty>` flag and the new value under
- * `<statusProperty>` — exactly the flat keys `entities.update` emits
- * (`routers/entities/mutate.ts`). The `changed.` flag is what makes it ENTER
- * rather than IS: an unrelated edit to a post already "published" carries no
- * flag, so it does not re-fire. (`previous.<statusProperty>` is on the payload
- * too, for a later "from X".)
+ * `enters_status` follows the event that actually fires for the property:
+ *
+ *   • `statusProperty` IS the profile's declared lifecycle
+ *     (`lifecycle: "declared"`) → `entity.transition.completed` filtered on
+ *     `lifecycleProfile` (the kind or role whose lifecycle moved) and `to`.
+ *     This is the moveStatus door's one event (work model L2): it fires for a
+ *     ROLE too, whose status lives on its facet, and only on a real move — a
+ *     write that leaves the status where it is emits no transition, so it
+ *     ENTERS rather than IS.
+ *
+ *   • the property is NOT a declared lifecycle (`lifecycle: "undeclared"`) —
+ *     a KIND only. No transition is ever emitted for it (the door moves only
+ *     declared lifecycles), so the only event that fires is the entity update:
+ *     `entity.update.completed` with `profileSlug`, the `changed.<prop>` flag
+ *     (ENTER, not IS) and the new value. Compiling it onto a transition would
+ *     be a rule that installs live and never fires. A ROLE with no declared
+ *     lifecycle has no such fallback (a facet write emits no entity update) —
+ *     the caller refuses it at authoring (`activatorRuleDecl`).
+ *
+ * When a lifecycle is later declared on the profile, the decl changes, its
+ * hash moves, and the activator convergence recompiles the rule onto the
+ * transition through the governed rule door (`playbook-activators.ts`).
  */
 export type PlaybookActivatorTrigger =
   | { on: "created" }
-  | { on: "enters_status"; statusProperty: string; status: string };
+  | {
+      on: "enters_status";
+      statusProperty: string;
+      status: string;
+      lifecycle: "declared" | "undeclared";
+    };
 
 export function playbookActivatorSentence(
   input: {
@@ -833,30 +877,15 @@ export function playbookActivatorSentence(
     mode: "run" | "propose";
   } & PlaybookActivatorTrigger
 ): RuleSentenceValue {
-  const entersStatus = input.on === "enters_status";
+  const trigger = activatorTriggerShape(input);
   return {
     trigger: {
       triggerType: "event",
       subjectCategory: "entity",
       profileSlug: input.profileSlug,
-      actionVerb: entersStatus ? "updated" : "created",
+      actionVerb: trigger.actionVerb,
     },
-    conditions: entersStatus
-      ? [
-          {
-            id: "activator-changed",
-            key: `changed.${input.statusProperty}`,
-            operator: "is_true",
-            value: "",
-          },
-          {
-            id: "activator-status",
-            key: input.statusProperty,
-            operator: "is",
-            value: input.status,
-          },
-        ]
-      : [],
+    conditions: trigger.conditions,
     actions: [
       {
         type: null,
@@ -870,6 +899,38 @@ export function playbookActivatorSentence(
             : {}),
           [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
         },
+      },
+    ],
+  };
+}
+
+function activatorTriggerShape(t: PlaybookActivatorTrigger): {
+  actionVerb: ActionVerb;
+  conditions: ConditionRow[];
+} {
+  if (t.on === "created") return { actionVerb: "created", conditions: [] };
+  if (t.lifecycle === "declared") {
+    return {
+      actionVerb: "transitioned",
+      conditions: [
+        { id: "activator-status", key: "to", operator: "is", value: t.status },
+      ],
+    };
+  }
+  return {
+    actionVerb: "updated",
+    conditions: [
+      {
+        id: "activator-changed",
+        key: `changed.${t.statusProperty}`,
+        operator: "is_true",
+        value: "",
+      },
+      {
+        id: "activator-status",
+        key: t.statusProperty,
+        operator: "is",
+        value: t.status,
       },
     ],
   };
@@ -1215,12 +1276,15 @@ export function triggerToSentence(
     // subject. Reading only one would blank the WHEN row for the other.
     const storedFilters = triggerConfig.filters as
       Record<string, unknown> | undefined;
+    const [subjectCategory, action] = pattern.split(".");
+    const kindKey = entityKindFilterKey(
+      action ? EVENT_ACTION_TO_VERB[action] : undefined
+    );
     const profileSlug =
       (triggerConfig.profileSlug as string | undefined) ??
-      (typeof storedFilters?.profileSlug === "string"
-        ? storedFilters.profileSlug
+      (typeof storedFilters?.[kindKey] === "string"
+        ? (storedFilters[kindKey] as string)
         : undefined);
-    const [subjectCategory, action] = pattern.split(".");
     return {
       triggerType: "event",
       subjectCategory: subjectCategory as TriggerSubjectCategory | undefined,

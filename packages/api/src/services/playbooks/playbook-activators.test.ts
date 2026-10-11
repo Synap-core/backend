@@ -18,6 +18,7 @@ const T = vi.hoisted(() => ({
   skills: Symbol("skills"),
   proposals: Symbol("proposals"),
   playbookAutomations: Symbol("playbook_automations"),
+  profiles: Symbol("profiles"),
 }));
 const store = vi.hoisted(() => ({
   playbook: null as Row | null,
@@ -30,6 +31,9 @@ const store = vi.hoisted(() => ({
   }>,
   agentProposes: false,
   seq: 0,
+  /** The subject profile row(s) and its declared lifecycle property. */
+  profileRows: [] as Row[],
+  lifecycleProperty: null as string | null,
 }));
 
 // PARTIAL (importOriginal + spread), never total — the total-mock ratchet.
@@ -46,7 +50,9 @@ vi.mock("@synap/database", async (importOriginal) => {
             ? store.rules.map((r) => ({ id: r.id, metadata: r.metadata }))
             : table === T.proposals
               ? store.offers
-              : [];
+              : table === T.profiles
+                ? store.profileRows
+                : [];
       const q = {
         where: () => q,
         limit: async () => rows(),
@@ -102,6 +108,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       }),
     },
     playbooks: T.playbooks,
+    profiles: T.profiles,
+    ProfileResolutionService: class {
+      async getEffectiveLifecycle() {
+        return store.lifecycleProperty
+          ? { propertySlug: store.lifecycleProperty }
+          : null;
+      }
+    },
     skills: T.skills,
     proposals: T.proposals,
     playbookAutomations: {
@@ -227,6 +241,8 @@ beforeEach(() => {
   store.links = [];
   store.agentProposes = false;
   store.seq = 0;
+  store.profileRows = [];
+  store.lifecycleProperty = null;
   vi.mocked(createRuleGoverned).mockClear();
   vi.mocked(updateRuleGoverned).mockClear();
 });
@@ -466,5 +482,109 @@ describe("concurrency", () => {
     expect(res.outcomes).toContainEqual(
       expect.objectContaining({ ruleId: "rule-dup", status: "retired" })
     );
+  });
+});
+
+/**
+ * E1 (work model L2): `enters_status` follows the event that actually fires.
+ * A DECLARED lifecycle (kind or role) → the transition event, filtered on the
+ * profile whose lifecycle moved; an undeclared KIND property → the property
+ * change; an undeclared ROLE → refused by name (nothing would ever fire).
+ */
+describe("enters_status follows the transition event", () => {
+  const triggerOf = (ruleId: string) => {
+    const sentence = (ruleRow(ruleId).metadata.rule as Row).sentence as {
+      trigger: Row;
+      conditions: Array<Row>;
+    };
+    return sentence;
+  };
+  const ENTERS = [{ on: "enters_status", status: "published", mode: "run" }];
+
+  it("a kind whose statusProperty IS its declared lifecycle compiles onto the transition", async () => {
+    store.profileRows = [
+      { id: "p-post", profileKind: "kind", workspaceId: null },
+    ];
+    store.lifecycleProperty = "post-status";
+    setPlaybook(ENTERS);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
+    const s = triggerOf(res.outcomes[0]!.ruleId!);
+    expect(s.trigger).toMatchObject({
+      actionVerb: "transitioned",
+      profileSlug: "post",
+    });
+    expect(s.conditions).toEqual([
+      { id: "activator-status", key: "to", operator: "is", value: "published" },
+    ]);
+  });
+
+  it("a ROLE with a declared lifecycle compiles onto the transition (roles were blind)", async () => {
+    store.profileRows = [
+      { id: "p-client", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "post-status";
+    setPlaybook(ENTERS);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
+    expect(triggerOf(res.outcomes[0]!.ruleId!).trigger).toMatchObject({
+      actionVerb: "transitioned",
+    });
+  });
+
+  it("a ROLE with NO declared lifecycle is refused by name — nothing would fire", async () => {
+    store.profileRows = [
+      { id: "p-client", profileKind: "role", workspaceId: null },
+    ];
+    setPlaybook(ENTERS);
+    const res = await run();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    expect(res.outcomes[0]).toMatchObject({ status: "denied" });
+    expect(res.outcomes[0]!.reason).toContain("no declared lifecycle");
+  });
+
+  it("an undeclared KIND property keeps the property-change compile (the event that fires)", async () => {
+    store.profileRows = [
+      { id: "p-post", profileKind: "kind", workspaceId: null },
+    ];
+    setPlaybook(ENTERS);
+    const res = await run();
+    expect(triggerOf(res.outcomes[0]!.ruleId!).trigger).toMatchObject({
+      actionVerb: "updated",
+    });
+  });
+
+  it("declaring the lifecycle LATER recompiles the untouched rule in place (the convergence)", async () => {
+    store.profileRows = [
+      { id: "p-post", profileKind: "kind", workspaceId: null },
+    ];
+    setPlaybook(ENTERS);
+    const first = await run();
+    const ruleId = first.outcomes[0]!.ruleId!;
+    expect(triggerOf(ruleId).trigger).toMatchObject({ actionVerb: "updated" });
+    store.lifecycleProperty = "post-status";
+    const second = await run();
+    expect(second.outcomes[0]).toMatchObject({ status: "updated", ruleId });
+    expect(triggerOf(ruleId).trigger).toMatchObject({
+      actionVerb: "transitioned",
+    });
+    expect(createRuleGoverned).toHaveBeenCalledTimes(1);
+  });
+
+  it("a playbook with no statusProperty follows the profile's declared lifecycle", async () => {
+    store.profileRows = [
+      { id: "p-post", profileKind: "kind", workspaceId: null },
+    ];
+    store.lifecycleProperty = "post-status";
+    store.playbook = {
+      id: PB,
+      name: "Repurpose",
+      status: "active",
+      workspaceId: "ws-1",
+      metadata: {},
+      subjectProfile: { profileSlug: "post", activators: ENTERS },
+    };
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
   });
 });

@@ -34,6 +34,7 @@ import {
   ensureCoreRenderers,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
+  convergeEntersStatusActivators,
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
   backfillCapabilityEmits,
@@ -659,6 +660,24 @@ export async function runStartupHooks(): Promise<void> {
     );
   }
 
+  // enters_status activators follow the lifecycle transition event (work
+  // model L2): recompile pod-local playbooks' activator rules through the
+  // governed rule door (installed ones converged in the reconcile above).
+  try {
+    const r = await convergeEntersStatusActivators();
+    if (r.failed > 0) {
+      logger.warn(
+        r,
+        "Some enters_status activators did not converge (non-fatal)"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to converge enters_status activators on startup (non-fatal)"
+    );
+  }
+
   // Trusted issuers other than the Control Plane are established explicitly
   // through the generic federation bootstrap or by a local Pod owner — a fresh
   // Pod starts with no knowledge of any external issuer. The one exception is
@@ -706,7 +725,10 @@ export async function runStartupHooks(): Promise<void> {
     const adopted = await adoptLegacyAppKeys();
     if (adopted > 0) logger.info({ adopted }, "Adopted legacy app keys");
   } catch (err) {
-    logger.warn({ err }, "Failed to adopt legacy app keys on startup (non-fatal)");
+    logger.warn(
+      { err },
+      "Failed to adopt legacy app keys on startup (non-fatal)"
+    );
   }
 
   // Install the first-party MCP-Apps renderers FROM THE CATALOG and bind them

@@ -95,6 +95,10 @@ export const OperationalEventTypes = {
     description:
       "Fires when a thing's lifecycle status moves (the kind's own, or a role's), through the one moveStatus door.",
     filterKeys: [
+      // The kind or role whose lifecycle moved (`role ?? profileSlug`) — what
+      // a rule's subject filters on; `profileSlug` is the entity's kind even
+      // for a role's move.
+      "lifecycleProfile",
       "profileSlug",
       "role",
       "property",

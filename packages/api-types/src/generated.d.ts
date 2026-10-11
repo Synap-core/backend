@@ -7381,7 +7381,7 @@ declare const TRIGGER_SUBJECT_CATEGORIES: readonly [
 	"inbox_item"
 ];
 export type TriggerSubjectCategory = (typeof TRIGGER_SUBJECT_CATEGORIES)[number];
-export type ActionVerb = "created" | "updated" | "deleted" | "received" | "completed" | "approved" | "rejected";
+export type ActionVerb = "created" | "updated" | "deleted" | "transitioned" | "received" | "completed" | "approved" | "rejected";
 export type ConditionOperator = "is" | "is_not" | "contains" | "starts_with" | "greater_than" | "less_than" | "changed_to" | "is_true" | "is_false" | "is_within";
 export interface ConditionRow {
 	id: string;

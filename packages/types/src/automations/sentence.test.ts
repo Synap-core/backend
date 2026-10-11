@@ -1064,13 +1064,46 @@ describe("proposePlaybookOnKindSentence — the 'Always propose this' rule", () 
 describe("playbookActivatorSentence — a declared activator as a rule", () => {
   const PB = "77777777-7777-4777-8777-777777777777";
 
-  it("enters_status compiles to an UPDATE with the changed flag AND the new value", () => {
+  it("a DECLARED lifecycle's enters_status compiles onto the TRANSITION, subject + to", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "client",
+      on: "enters_status",
+      statusProperty: "clientStatus",
+      status: "churned",
+      lifecycle: "declared",
+      mode: "propose",
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerConfig.eventPattern).toBe(
+      "entity.transition.completed"
+    );
+    expect(validateEventPattern("entity.transition.completed")).toBeTruthy();
+    // `lifecycleProfile` (role ?? kind), never `profileSlug`: a role's move
+    // carries the entity's KIND in profileSlug, so that filter would match
+    // nothing for a role and every role's move for a kind.
+    expect(trigger.triggerConfig.filters).toEqual({
+      lifecycleProfile: "client",
+      to: "churned",
+    });
+    // The rule reads back as the sentence it was written from.
+    expect(
+      triggerToSentence(trigger.triggerType, trigger.triggerConfig)
+    ).toMatchObject({
+      subjectCategory: "entity",
+      actionVerb: "transitioned",
+      profileSlug: "client",
+    });
+  });
+
+  it("an UNDECLARED kind property compiles to an UPDATE with the changed flag AND the new value", () => {
     const sentence = playbookActivatorSentence({
       playbookId: PB,
       profileSlug: "post",
       on: "enters_status",
       statusProperty: "post-status",
       status: "published",
+      lifecycle: "undeclared",
       mode: "propose",
     });
     const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);

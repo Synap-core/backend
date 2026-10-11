@@ -56,6 +56,7 @@ const actionVerbSchema = z.enum([
   "created",
   "updated",
   "deleted",
+  "transitioned",
   "received",
   "completed",
   "approved",
