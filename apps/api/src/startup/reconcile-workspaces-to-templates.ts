@@ -53,8 +53,11 @@
 import { createLogger } from "@synap-core/core";
 import {
   getDb,
+  sql,
   workspaces,
   reconcileWorkspaceFromDefinition,
+  pendingTemplateDataChanges,
+  type TemplateDataChange,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import {
@@ -221,6 +224,41 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     lookupTemplate
   );
 
+  // DATA CHANGES (TEMPLATE-LIFECYCLE Contract C): a template whose profiles a
+  // pending conversion op still touches is NOT stamped to its new version —
+  // the reconciler holds the stamp (marker invariant) and health keeps showing
+  // the space drifted, so `synap templates update` is where the person sees
+  // the change and consents. Boot never runs a conversion. Computed ONCE per
+  // template (a dry run per pending op); a failed read is left to the
+  // reconciler, which then holds the stamp rather than guess.
+  const pendingByKey = new Map<string, TemplateDataChange[] | undefined>();
+  const pendingFor = async (
+    key: string,
+    resolved: ResolvedWorkspaceTemplate
+  ): Promise<TemplateDataChange[] | undefined> => {
+    if (pendingByKey.has(key)) return pendingByKey.get(key);
+    let pending: TemplateDataChange[] | undefined;
+    try {
+      const slugs = (
+        (resolved.workspaceDefinition.profiles ?? []) as Array<{
+          slug?: unknown;
+        }>
+      )
+        .map((p) => p.slug)
+        .filter((s): s is string => typeof s === "string" && !!s);
+      pending = await pendingTemplateDataChanges(sql, slugs);
+    } catch (err) {
+      logger.warn(
+        { err, templateKey: key },
+        "Pending template data changes unreadable — the reconciler will hold the stamp"
+      );
+      pending = undefined;
+    }
+    pendingByKey.set(key, pending);
+    return pending;
+  };
+  let versionHeld = 0;
+
   for (const { ws, subtype: templateKey } of ordered) {
     // No subtype (e.g. a bare "personal" workspace) or no template resolves for
     // it (cache miss AND not in the frozen bundle) → nothing to converge to.
@@ -326,7 +364,23 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         packageSlug: templateKey,
         packageVersion:
           playbooksConverged && rulesConverged ? resolved.version : undefined,
+        pendingDataChanges: await pendingFor(templateKey, resolved),
       });
+      if (report.dataChanges?.versionHeld) {
+        versionHeld++;
+        logger.warn(
+          {
+            workspaceId: ws.id,
+            templateKey,
+            version: resolved.version,
+            pending: report.dataChanges.pending.map((c) => ({
+              opKey: c.opKey,
+              affected: c.affected,
+            })),
+          },
+          "Template version stamp held: data changes await consent (synap templates update)"
+        );
+      }
 
       const changed =
         report.profiles.added.length +
@@ -397,7 +451,14 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   }
 
   logger.info(
-    { reconciled, skipped, failed, archivedSkipped, total: rows.length },
+    {
+      reconciled,
+      skipped,
+      failed,
+      archivedSkipped,
+      versionHeld,
+      total: rows.length,
+    },
     "Workspace→template reconcile pass complete"
   );
 }

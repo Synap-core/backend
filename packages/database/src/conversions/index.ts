@@ -48,3 +48,17 @@ export {
   type RetirementBackfillResult,
   type RetirementBackfillOpResult,
 } from "./retirement-backfill.js";
+export {
+  EVERY_PROFILE,
+  opProfileSlugs,
+  opTouchesProfiles,
+  affectedFromCounts,
+  describeConversionOp,
+  pendingTemplateDataChanges,
+  dataChangeConsent,
+  runConsentedDataChanges,
+  holdsTemplateStamp,
+  type OpProfileSlugs,
+  type TemplateDataChange,
+  type DataChangeConsent,
+} from "./data-changes.js";

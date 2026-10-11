@@ -29,6 +29,10 @@ vi.mock("../../../services/preflight-compose-target.js", () => ({
 }));
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
+  // No pending template data change (Contract C gate, proven in
+  // `packages.data-changes.test.ts`); this suite is about something else.
+  pendingTemplateDataChanges: async () => [],
+  findWorkspaceIdentityConflict: async () => null,
   preflightWorkspaceFromDefinition: (...a: unknown[]) => mockPreflight(...a),
 }));
 vi.mock("../../../services/workspace-materialization-service.js", () => ({

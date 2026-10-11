@@ -29,6 +29,11 @@ import {
   eq,
   ProjectRepository,
   EventRepository,
+  findWorkspaceIdentityConflict,
+  pendingTemplateDataChanges,
+  dataChangeConsent,
+  runConsentedDataChanges,
+  type TemplateDataChange,
 } from "@synap/database";
 import {
   preflightWorkspaceFromDefinition,
@@ -43,6 +48,7 @@ import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import { packagePlaybookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 import { appliedPackageVersion } from "../../../services/applied-package-version.js";
+import { isPodAdmin } from "../../../utils/workspace-role.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -171,6 +177,17 @@ export const PackageApplySchema = z.object({
    * live preflight gate below returns 422 regardless of this flag.
    */
   force: z.boolean().optional(),
+  /**
+   * TEMPLATE-LIFECYCLE Contract C: the person's consent to the data changes an
+   * UPDATE of this template is waiting on (`dataChanges[].opKey` from
+   * `/packages/preflight` or from the 409 `DATA_CHANGES_NEED_CONSENT`). Every
+   * non-destructive pending change must be listed or the apply is refused
+   * with nothing written; listed ones run through the conversion engine
+   * BEFORE the template apply. Destructive changes are never consentable here:
+   * they are operator steps, never block the update, and listing one runs
+   * nothing (it is echoed back). Ignored on a fresh install.
+   */
+  acceptDataChanges: z.array(z.string().min(1)).optional(),
   _meta: z
     .object({
       slug: z.string().optional(),
@@ -443,6 +460,48 @@ export const PackageApplySchema = z.object({
     .optional(),
 });
 
+// ─── Template data changes (TEMPLATE-LIFECYCLE Contract C) ──────────────────
+
+/**
+ * The pending data changes this apply is an UPDATE for, or `null` when it is a
+ * fresh install (no space holds the template yet, no `targetWorkspaceId`):
+ * conversions ride `synap templates update`, never a first install. Throws when
+ * the pending set cannot be read — the caller refuses rather than guess "none".
+ */
+async function updateDataChanges(
+  body: z.infer<typeof PackageApplySchema>
+): Promise<TemplateDataChange[] | null> {
+  const packageSlug = body._meta?.slug?.trim() || undefined;
+  let isUpdate = !!body.targetWorkspaceId;
+  if (!isUpdate && packageSlug) {
+    isUpdate = !!(await findWorkspaceIdentityConflict(await getDb(), {
+      packageSlug,
+    }));
+  }
+  if (!isUpdate) return null;
+  const profileSlugs = (body.profiles ?? [])
+    .map((p) => p.slug)
+    .filter((slug): slug is string => typeof slug === "string" && !!slug);
+  return pendingTemplateDataChanges(sql, profileSlugs);
+}
+
+/** The wire shape of the 409 a refused apply answers. */
+function dataChangesNeedConsentBody(
+  pending: TemplateDataChange[],
+  consent: ReturnType<typeof dataChangeConsent>,
+  agent: boolean
+) {
+  return {
+    code: "DATA_CHANGES_NEED_CONSENT" as const,
+    error: agent
+      ? "This template update changes existing data. Only a person can agree to that: run `synap templates update` and review the changes."
+      : "This template update changes existing data. Review the changes and list each one in `acceptDataChanges` to go ahead.",
+    dataChanges: pending,
+    missing: consent.missing.map((c) => c.opKey),
+    destructiveAccepted: consent.destructiveAccepted,
+  };
+}
+
 // ─── Route registration ──────────────────────────────────────────────────────
 
 export function registerPackagesRoutes(app: HubHono): void {
@@ -472,7 +531,22 @@ export function registerPackagesRoutes(app: HubHono): void {
         targetWorkspaceId: body.targetWorkspaceId,
       }),
     });
-    return c.json(report, 200);
+    // The update preview: what data this update would change, counted by the
+    // conversion engine's dry run (`[]` for a fresh install). A failed read is
+    // reported as such, never as "no changes".
+    try {
+      const dataChanges = (await updateDataChanges(body)) ?? [];
+      return c.json({ ...report, dataChanges }, 200);
+    } catch (err) {
+      return c.json(
+        {
+          ...report,
+          dataChanges: null,
+          dataChangesError: err instanceof Error ? err.message : String(err),
+        },
+        200
+      );
+    }
   });
 
   app.post("/packages/apply", async (c) => {
@@ -597,6 +671,50 @@ export function registerPackagesRoutes(app: HubHono): void {
       );
     }
 
+    // ── Data changes need the person's consent (Contract C) ───────────────
+    // BEFORE governance, so nothing is written or proposed while a data change
+    // the update depends on is unagreed. An agent can never consent: it gets
+    // the same 409 (a proposal would apply the template and leave the data
+    // behind, which is exactly the silent path this closes).
+    let consent: ReturnType<typeof dataChangeConsent> | null = null;
+    let pendingDataChanges: TemplateDataChange[] | null;
+    try {
+      pendingDataChanges = await updateDataChanges(body);
+    } catch (err) {
+      return c.json(
+        {
+          code: "DATA_CHANGES_UNREADABLE",
+          error:
+            "Could not read the data changes this update depends on, so it was not applied.",
+          detail: err instanceof Error ? err.message : String(err),
+        },
+        503
+      );
+    }
+    if (pendingDataChanges && pendingDataChanges.length > 0) {
+      consent = dataChangeConsent(pendingDataChanges, body.acceptDataChanges);
+      const agentMustAsk = !!agentUserId && consent.toRun.length > 0;
+      if (agentMustAsk || !consent.ok) {
+        return c.json(
+          dataChangesNeedConsentBody(pendingDataChanges, consent, agentMustAsk),
+          409
+        );
+      }
+      // An op rewrites every row of its kind pod-wide — a pod admin's call,
+      // the same bar as approving a profile merge (retire-profile.ts).
+      if (consent.toRun.length > 0 && !(await isPodAdmin(userId))) {
+        return c.json(
+          {
+            code: "DATA_CHANGES_NEED_POD_ADMIN",
+            error:
+              "These data changes rewrite things across the whole pod, so only a pod owner or admin can agree to them.",
+            dataChanges: pendingDataChanges,
+          },
+          403
+        );
+      }
+    }
+
     // ── Permission check ──────────────────────────────────────────────────
     // Store the FULL package body as `definition` so the workspace/create
     // approve executor can re-run materializeWorkspaceCore on approval.
@@ -641,6 +759,47 @@ export function registerPackagesRoutes(app: HubHono): void {
         status: "proposed",
         proposalId: perm.proposalId,
       });
+
+    // ── Step 0: the consented data changes, BEFORE the template apply ──────
+    // Through the conversion engine: one transaction per op, each ledgered,
+    // halting at the first failure (nothing after it runs, the template is
+    // not applied). Never the destructive tail. If the template apply below
+    // fails afterwards, the ops stay applied and ledgered — idempotent, so a
+    // retry of this update no longer lists them and only re-applies the template.
+    if (consent && consent.toRun.length > 0) {
+      const summary = await runConsentedDataChanges(
+        sql,
+        consent.toRun.map((ch) => ch.opKey)
+      );
+      const ran = summary.results.map((r) => ({
+        opKey: r.opKey,
+        status: r.status,
+        counts: r.counts,
+        ...(r.error ? { error: r.error } : {}),
+      }));
+      if (summary.hadError) {
+        return c.json(
+          {
+            code: "DATA_CHANGES_FAILED",
+            error:
+              "A data change failed, so the template was not applied. The changes listed as applied are done and will not run again.",
+            dataChanges: { ran, operatorSteps: consent.operatorSteps },
+          },
+          409
+        );
+      }
+      result.dataChanges = {
+        ran,
+        operatorSteps: consent.operatorSteps,
+        destructiveAccepted: consent.destructiveAccepted,
+      };
+    } else if (consent && consent.operatorSteps.length > 0) {
+      result.dataChanges = {
+        ran: [],
+        operatorSteps: consent.operatorSteps,
+        destructiveAccepted: consent.destructiveAccepted,
+      };
+    }
 
     // ── Steps 0-1: Resolve dependencies + create-or-compose (shared core) ──
     // The dependency-resolve + compose-overlay logic is the ONE shared door

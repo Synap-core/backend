@@ -98,6 +98,11 @@ import {
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
 import {
+  holdsTemplateStamp,
+  pendingTemplateDataChanges,
+  type TemplateDataChange,
+} from "../conversions/data-changes.js";
+import {
   mergeWorkspacePrimarySurface,
   resolveWorkspacePrimarySurface,
 } from "./workspace-primary-surface.js";
@@ -139,6 +144,12 @@ export interface ReconcileOptions {
    * `automations.rejected`.
    */
   validateFlow?: (flow: unknown) => string | null;
+  /**
+   * The template's pending data changes, when the caller already computed them
+   * (the boot sweep memoizes per template). Absent → computed here, only when a
+   * `packageVersion` stamp is at stake. See `ReconcileReport.dataChanges`.
+   */
+  pendingDataChanges?: readonly TemplateDataChange[];
 }
 
 /**
@@ -337,6 +348,20 @@ export interface ReconcileReport {
    * only channel the caller has back to the installer.
    */
   layers?: InstallLayerReport[];
+  /**
+   * TEMPLATE-LIFECYCLE Contract C: the conversion ops this template's profiles
+   * are still waiting on. Present only when a `packageVersion` stamp was at
+   * stake. `versionHeld` = the stamp was NOT written because a consentable data
+   * change is pending (or could not be measured): the content above converged,
+   * the DATA did not, so the marker may not claim it did. The person consents
+   * through the update door (`/packages/apply` `acceptDataChanges`).
+   */
+  dataChanges?: {
+    pending: TemplateDataChange[];
+    versionHeld: boolean;
+    /** Set when the pending set could not be read — the stamp is held. */
+    error?: string;
+  };
 }
 
 /** A live view row, narrowed to what definition view-reference resolution reads. */
@@ -505,7 +530,45 @@ export async function reconcileWorkspaceFromDefinition(
   // when provided (install-onto-existing), so a re-attach with the same version
   // is a no-op and a natural compose never clobbers the base's own stamp.
   if (opts.packageSlug) settingsPatch.packageSlug = opts.packageSlug;
-  if (opts.packageVersion) settingsPatch.packageVersion = opts.packageVersion;
+  if (opts.packageVersion) {
+    // MARKER INVARIANT: the version stamp claims the template converged. A
+    // pending data change the template depends on means it did not, so the
+    // stamp is held until the person consents at the update door. A read that
+    // fails proves nothing either way: held too (never stamp unearned).
+    const profileSlugs = (definition.profiles ?? [])
+      .map((p) => p.slug)
+      .filter((slug): slug is string => typeof slug === "string" && !!slug);
+    let held = false;
+    try {
+      const pending = [
+        ...(opts.pendingDataChanges ??
+          (await pendingTemplateDataChanges(sql, profileSlugs))),
+      ];
+      held = holdsTemplateStamp(pending);
+      report.dataChanges = { pending, versionHeld: held };
+    } catch (err) {
+      held = true;
+      report.dataChanges = {
+        pending: [],
+        versionHeld: true,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (held) {
+      logger.warn(
+        {
+          workspaceId,
+          packageSlug: opts.packageSlug,
+          packageVersion: opts.packageVersion,
+          pending: report.dataChanges.pending.map((c) => c.opKey),
+          error: report.dataChanges.error,
+        },
+        "reconcile: template version stamp HELD — data changes await consent (synap templates update)"
+      );
+    } else {
+      settingsPatch.packageVersion = opts.packageVersion;
+    }
+  }
   if (Object.keys(settingsPatch).length > 0) {
     report.settings.merged = Object.keys(settingsPatch);
     if (!dryRun)
