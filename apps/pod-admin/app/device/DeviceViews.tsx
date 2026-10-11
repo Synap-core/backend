@@ -34,6 +34,9 @@ import { GRANT_PRESETS } from "@synap-core/types/grants";
 import { Outcome } from "../approve-agent/[keyId]/ApproveForm";
 import {
   COMPUTER_NOUN,
+  DEVICE_RUN_AGAIN_COMMAND,
+  accessLine,
+  canApprove,
   computerLine,
   formatCode,
   hostedAgentName,
@@ -66,8 +69,11 @@ function Header({ eyebrow, title }: { eyebrow: string; title: string }) {
 
 const RUN_AGAIN = (
   <>
-    Run <code className="font-mono text-foreground/85">synap init</code> again
-    in your terminal for a new code.
+    Run{" "}
+    <code className="font-mono text-foreground/85">
+      {DEVICE_RUN_AGAIN_COMMAND}
+    </code>{" "}
+    again in your terminal for a new code.
   </>
 );
 
@@ -243,11 +249,7 @@ export function PendingView(p: PendingViewProps) {
             aria-hidden
             className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground/65"
           />
-          <span>
-            {name} gets its own access: it reads your data and proposes changes
-            — every change waits for your approval. Key valid {r.keyTtlDays}{" "}
-            days.
-          </span>
+          <span>{accessLine(r, name)}</span>
         </p>
 
         {p.error && (
@@ -268,7 +270,7 @@ export function PendingView(p: PendingViewProps) {
             color="primary"
             size="md"
             className="flex-1 font-medium"
-            isDisabled={p.busy !== null || !p.computerName.trim()}
+            isDisabled={p.busy !== null || !canApprove(p.computerName)}
             isLoading={p.busy === "approve"}
             startContent={
               p.busy === "approve" ? undefined : (

@@ -13,12 +13,16 @@ import { ReceiverShell } from "../_lib/receiver-shell";
 import { formatRelative } from "../(admin)/trust-keys/_lib/format";
 import {
   approveDecision,
+  decidedRead,
+  defaultAgents,
   defaultComputerName,
   defaultReuseId,
   denyDecision,
+  deviceReadFromError,
   deviceStage,
   formatCode,
   goneTitle,
+  initialDeviceCode,
   isCompleteCode,
   type DeviceDecision,
   type DeviceRead,
@@ -50,7 +54,7 @@ async function readDevice(code: string): Promise<DeviceRead> {
       cache: "no-store",
     });
   } catch {
-    return { kind: "failed", message: "Could not reach this pod." };
+    return deviceReadFromError({});
   }
   const body = (await res.json().catch(() => ({}))) as {
     request?: DeviceRequest;
@@ -60,15 +64,11 @@ async function readDevice(code: string): Promise<DeviceRead> {
     toLogin();
     return { kind: "loading" };
   }
-  if (res.status === 404) return { kind: "unknown" };
-  if (res.status === 429)
-    return {
-      kind: "locked",
-      message: body.error ?? "Wait a few minutes, then try again.",
-    };
-  if (!res.ok || !body.request)
-    return { kind: "failed", message: body.error ?? `Error (${res.status})` };
-  return { kind: "ok", request: body.request };
+  if (res.ok && body.request) return { kind: "ok", request: body.request };
+  return deviceReadFromError({
+    status: res.ok ? 502 : res.status,
+    message: body.error,
+  });
 }
 
 /** Send the decision. Returns the pod's refusal, or null when it landed. */
@@ -101,7 +101,7 @@ export function DeviceFlow({
 }) {
   const router = useRouter();
   const [code, setCode] = useState<string | null>(
-    initialCode && isCompleteCode(initialCode) ? initialCode : null
+    initialDeviceCode(initialCode)
   );
   const [draft, setDraft] = useState(formatCode(initialCode ?? ""));
   const [read, setRead] = useState<DeviceRead>({ kind: "loading" });
@@ -125,7 +125,7 @@ export function DeviceFlow({
         const reuse = defaultReuseId(r.request);
         setReuseId(reuse);
         setComputerName(defaultComputerName(r.request, reuse));
-        setAgents(r.request.agents.map((a) => a.agentType));
+        setAgents(defaultAgents(r.request));
       }
     });
     return () => {
@@ -162,13 +162,7 @@ export function DeviceFlow({
         setError(refused);
         return;
       }
-      setRead({
-        kind: "ok",
-        request: {
-          ...read.request,
-          status: kind === "approve" ? "approved" : "denied",
-        },
-      });
+      setRead(decidedRead(read.request, kind));
     },
     [read, code, agents, reuseId, computerName]
   );

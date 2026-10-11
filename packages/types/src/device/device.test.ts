@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPUTER_NOUN,
+  accessLine,
   approveDecision,
+  canApprove,
+  decidedRead,
+  defaultAgents,
+  deviceApproveIsHold,
+  deviceReadFromError,
+  initialDeviceCode,
   defaultComputerName,
   defaultReuseId,
   denyDecision,
@@ -12,7 +19,7 @@ import {
   isCompleteCode,
   type DeviceRead,
   type DeviceRequest,
-} from "./device-model";
+} from "./index.js";
 
 const REQUEST: DeviceRequest = {
   requestId: "11111111-1111-4111-8111-111111111111",
@@ -124,5 +131,100 @@ describe("decisions", () => {
       "Claude Code on My devbox"
     );
     expect(COMPUTER_NOUN).toBe("Computer");
+  });
+});
+
+describe("a link's code", () => {
+  it("reads a complete code in any case, with or without a dash", () => {
+    expect(initialDeviceCode("abcd-efgh")).toBe("abcd-efgh");
+    expect(initialDeviceCode(" ABCDEFGH ")).toBe("ABCDEFGH");
+    // A router hands a repeated param as an array: the first value counts.
+    expect(initialDeviceCode(["abcdefgh", "zzzz"])).toBe("abcdefgh");
+  });
+  it("drops an incomplete or absent code — the person types it instead", () => {
+    expect(initialDeviceCode("abcd")).toBeNull();
+    expect(initialDeviceCode("")).toBeNull();
+    expect(initialDeviceCode(undefined)).toBeNull();
+    expect(initialDeviceCode(42)).toBeNull();
+  });
+});
+
+describe("deviceReadFromError — a refusal is an answer, a failure is not", () => {
+  it("a miss is 'unknown' whether the surface saw a status or a tRPC code", () => {
+    expect(deviceReadFromError({ status: 404 })).toEqual({ kind: "unknown" });
+    expect(deviceReadFromError({ code: "NOT_FOUND" })).toEqual({
+      kind: "unknown",
+    });
+  });
+  it("a lock-out is 'locked', with the pod's words or a fallback", () => {
+    expect(
+      deviceReadFromError({
+        code: "TOO_MANY_REQUESTS",
+        message: "Too many wrong codes.",
+      })
+    ).toEqual({ kind: "locked", message: "Too many wrong codes." });
+    expect(deviceReadFromError({ status: 429 })).toEqual({
+      kind: "locked",
+      message: "Wait a few minutes, then try again.",
+    });
+  });
+  it("anything else FAILED — never folded into 'gone'", () => {
+    expect(deviceReadFromError({ status: 502 })).toEqual({
+      kind: "failed",
+      message: "Error (502)",
+    });
+    expect(
+      deviceReadFromError({ code: "INTERNAL_SERVER_ERROR", message: "boom" })
+    ).toEqual({
+      kind: "failed",
+      message: "boom",
+    });
+    expect(deviceReadFromError({})).toEqual({
+      kind: "failed",
+      message: "Could not reach this pod.",
+    });
+  });
+});
+
+describe("after a decision lands", () => {
+  it("the same request reads approved or denied", () => {
+    expect(deviceStage("ABCDEFGH", decidedRead(REQUEST, "approve"))).toBe(
+      "approved"
+    );
+    expect(deviceStage("ABCDEFGH", decidedRead(REQUEST, "deny"))).toBe(
+      "denied"
+    );
+  });
+});
+
+describe("the pending choices", () => {
+  it("every agent the terminal asked for starts checked", () => {
+    expect(defaultAgents(REQUEST)).toEqual(["claude-code", "codex"]);
+  });
+  it("Approve needs a name", () => {
+    expect(canApprove("devbox")).toBe(true);
+    expect(canApprove("   ")).toBe(false);
+  });
+  it("the access sentence names the computer and the key's validity", () => {
+    expect(accessLine(REQUEST, " My devbox ")).toBe(
+      "My devbox gets its own access: it reads your data and proposes changes — every change waits for your approval. Key valid 90 days."
+    );
+    expect(accessLine(REQUEST, "")).toMatch(/^devbox gets/);
+  });
+});
+
+describe("hold to approve — the connect card's rule", () => {
+  it("the AI read & propose preset is a tap (no full access, no approving)", () => {
+    expect(deviceApproveIsHold(REQUEST)).toBe(false);
+  });
+  it("full access is a hold", () => {
+    expect(deviceApproveIsHold({ ...REQUEST, accessName: "Full access" })).toBe(
+      true
+    );
+  });
+  it("an access name this build does not know is a hold", () => {
+    expect(
+      deviceApproveIsHold({ ...REQUEST, accessName: "Something new" })
+    ).toBe(true);
   });
 });

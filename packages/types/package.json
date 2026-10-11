@@ -80,6 +80,10 @@
       "types": "./dist/agents/index.d.ts",
       "import": "./dist/agents/index.js"
     },
+    "./device": {
+      "types": "./dist/device/index.d.ts",
+      "import": "./dist/device/index.js"
+    },
     "./kratos-messages": {
       "types": "./dist/kratos-messages/index.d.ts",
       "import": "./dist/kratos-messages/index.js"
