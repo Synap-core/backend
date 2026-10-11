@@ -299,6 +299,8 @@ const PROTECTED_FIELD_REASON: Record<
     "it is stamped by the connection-sync door and decides automation fan-out and sync governance, not reviewable content",
   sessionSource:
     "it records that the proposal's session was guessed, and decides whether approval places the write into that session's project, not reviewable content",
+  asked:
+    "it is what the access request originally asked for; a revise may narrow the requests, never rewrite what was asked",
 };
 
 export interface ComputeRevisedEnvelopeParams {
