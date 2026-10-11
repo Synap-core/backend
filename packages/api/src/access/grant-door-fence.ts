@@ -82,6 +82,11 @@ export function isFencedGrant(grant: KeyGrant | null | undefined): boolean {
 
 /** Hub REST GET routes that read only through a seam (relative to /api/hub). */
 export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
+  // Self-introspection: the caller's own identity and key, from the request
+  // context — no row a grant bounds. Every key must be able to ask "who am I"
+  // (the CLI's agent installers do, right after a device-flow approval).
+  /^\/users\/me\/?$/,
+  /^\/auth\/status\/?$/,
   /^\/users\/[^/]+\/entities\/?$/,
   /^\/entities\/[^/]+\/?$/,
   /^\/entities\/[^/]+\/connections\/?$/,

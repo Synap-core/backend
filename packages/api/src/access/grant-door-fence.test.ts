@@ -63,6 +63,23 @@ describe("restDoorAllowed", () => {
   });
 });
 
+describe("self-introspection doors", () => {
+  // A computer / agent key from the device flow carries the AI preset; it must
+  // still learn who it is (2026-10-11: Claude Code's installer got 403 here).
+  const denyAll = key({ permissions: [] });
+  it.each(["/users/me", "/auth/status"])(
+    "GET %s is open to every scoped key",
+    (path) => {
+      for (const grant of [AI, DOC_ONLY, denyAll]) {
+        expect(restDoorAllowed("GET", path, grant)).toBe(true);
+      }
+    }
+  );
+  it("is exact: another user's record is not self", () => {
+    expect(restDoorAllowed("GET", "/users/someone-else", AI)).toBe(false);
+  });
+});
+
 describe("mcpToolAllowed / trpcProcedureAllowed", () => {
   it("read tools only when seamed; write tools always", () => {
     expect(mcpToolAllowed("synap_get_entities", true, DOC_ONLY)).toBe(true);
