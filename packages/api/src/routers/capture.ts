@@ -46,6 +46,10 @@ import {
   type PersistedCaptureResult,
 } from "../services/intake/capture-result-part.js";
 import { readRestructureRoom } from "../services/intake/capture-room.js";
+import {
+  buildLinkedProfiles,
+  type LinkableProfile,
+} from "../services/intake/capture-schema-linking.js";
 import { CaptureAnswerSchema } from "@synap-core/types/capture";
 import {
   KNOWN_SOURCE_HASHES_MAX,
@@ -1322,17 +1326,13 @@ const captureBaseRouter = router({
       }
 
       const profileService = new ProfileResolutionService(database);
-      const accessibleProfiles = await profileService.getAccessibleProfiles(
+      // Schema linking (D1): every kind of every space the person can see —
+      // workspace-less is the repository's whole visible floor — ranked for
+      // this note once the space names are known (below).
+      const accessibleProfiles = (await profileService.getAccessibleProfiles(
         userId,
-        workspaceId ?? ""
-      );
-      const availableProfiles = buildAvailableProfiles(
-        await withEffectiveProperties(
-          profileService,
-          accessibleProfiles as unknown as AccessibleProfileLike[],
-          workspaceId ?? null
-        )
-      );
+        ""
+      )) as unknown as LinkableProfile[];
 
       // 1b. Anchor context ("Capture updates on this entity"). When the caller
       // anchors the capture to an existing entity, load its identity + current
@@ -1442,6 +1442,21 @@ const captureBaseRouter = router({
           name: w.name,
           description: w.description ?? undefined,
         }));
+
+      const availableProfiles = await buildLinkedProfiles({
+        profiles: accessibleProfiles,
+        note: inputText,
+        workspaceId: workspaceId ?? null,
+        workspaceNames: new Map(userWorkspaceRows.map((w) => [w.id, w.name])),
+        propertyHintsFor: async (row, hintWorkspaceId) =>
+          buildAvailableProfiles(
+            await withEffectiveProperties(
+              profileService,
+              [row],
+              hintWorkspaceId
+            )
+          )[0]?.propertyHints,
+      });
 
       // 2b. Fetch user's PROJECTS (cross-cutting lenses) for routing hints.
       // Scoping mirrors the Hub `/projects` list: pod-wide projects visible to

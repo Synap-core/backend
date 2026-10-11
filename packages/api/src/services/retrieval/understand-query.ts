@@ -234,10 +234,17 @@ function extractPropertyHints(query: string): PropertyHint[] {
   });
 }
 
-export function understandQuery(
+/**
+ * How strongly a text names each catalog profile: 3 = names it (slug, name,
+ * declared plural or synonym), 2 = a name word or a kind cue, summed. The ONE
+ * catalog ranking — `understandQuery` keeps the top few as the query's types;
+ * capture's schema linking (`capture-schema-linking.ts`) ranks the whole
+ * catalog with it. Profiles that do not score are absent.
+ */
+export function scoreProfileCatalog(
   query: string,
   catalog: ProfileCatalogEntry[]
-): QueryUnderstanding {
+): { scored: Map<string, number>; termsBySlug: Map<string, Set<string>> } {
   const q = query.toLowerCase().trim();
   const tokenSet = new Set(tokenize(q));
 
@@ -330,6 +337,15 @@ export function understandQuery(
     }
   }
 
+  return { scored, termsBySlug };
+}
+
+export function understandQuery(
+  query: string,
+  catalog: ProfileCatalogEntry[]
+): QueryUnderstanding {
+  const q = query.toLowerCase().trim();
+  const { scored, termsBySlug } = scoreProfileCatalog(query, catalog);
   const ranked = [...scored.entries()].sort((a, b) => b[1] - a[1]);
   const topScore = ranked[0]?.[1] ?? 0;
   // Keep types that scored at least a kind-cue's worth (2); cap at 3 to stay focused.

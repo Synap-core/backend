@@ -379,3 +379,34 @@ describe("capture.structure — a re-read takes the room's comments", () => {
     ).toEqual(["mine"]);
   });
 });
+
+describe("capture.structure — schema linking across every visible space (D1)", () => {
+  it("reads kinds pod-wide and offers another space's kind, named with its space", async () => {
+    h.profiles = [
+      { id: "p-note", slug: "note", displayName: "Note" },
+      {
+        id: "p-post",
+        slug: "post",
+        displayName: "Post",
+        workspaceId: "66666666-6666-4666-8666-666666666666",
+        uiHints: { description: "A piece of content to publish" },
+      },
+    ];
+    // Captured FROM another space (Builder): the read must still be pod-wide.
+    await callerFor(
+      `user-${randomUUID()}`,
+      "77777777-7777-4777-8777-777777777777"
+    ).structure({ text: "idea of content for synap" });
+    // Workspace-less = the whole visible floor, never the starting space.
+    expect(h.profileReads).toEqual([""]);
+    const offered = (
+      h.isInputs[0]!.hints as {
+        availableProfiles: Array<{ slug: string; description?: string }>;
+      }
+    ).availableProfiles;
+    expect(offered.map((p) => p.slug)).toContain("post");
+    expect(offered.find((p) => p.slug === "post")?.description).toBe(
+      "A piece of content to publish"
+    );
+  });
+});
