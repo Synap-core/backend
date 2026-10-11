@@ -178,6 +178,15 @@ describe("POST /setup/agent — a key never connects a live AI by itself", () =>
     }
   );
 
+  it("a pending key leaves the agent's working keys alone until approval", async () => {
+    callerKey(true);
+    const res = await connect();
+    expect(res.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalledWith(
+      expect.objectContaining({ pendingApproval: true })
+    );
+  });
+
   it("the new key's `*` is cut down to the caller's grant, ending with it", async () => {
     callerKey(true);
     const res = await connect();

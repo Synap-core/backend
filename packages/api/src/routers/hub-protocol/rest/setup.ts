@@ -1051,6 +1051,9 @@ export function registerSetupRoutes(app: HubHono): void {
         // Idempotent path (Eve's workspace-membership repair): skip revoke+mint
         // if a valid (non-revoked) key already exists for THIS instance.
         idempotent: body.idempotent === true,
+        // A pending key revokes the agent's other live keys only once its
+        // owner approves it (agent/connect), never at filing.
+        pendingApproval: requireApproval,
         logger,
         // Grant workspace membership at the SAME point it ran inline — after the
         // agent user is resolved, before the idempotent short-circuit.
