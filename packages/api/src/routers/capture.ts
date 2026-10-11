@@ -26,6 +26,11 @@ import {
 } from "../services/intake/record-structure-intake.js";
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
 import { stageExecuteSources } from "../services/intake/stage-execute-sources.js";
+import {
+  captureRowAction,
+  persistCaptureFiled,
+  type CaptureFiledOutcomeInput,
+} from "../services/intake/capture-filed-part.js";
 import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
 import { readInstalledPublicUrl } from "../services/capabilities/read-public-url.js";
 import {
@@ -2711,6 +2716,11 @@ const captureBaseRouter = router({
          * Never stored, never written to an entity.
          */
         intentText: z.string().max(4000).optional(),
+        /**
+         * The `capture_result` round the accepted rows came from, recorded on
+         * the room's `capture_filed` receipt. Absent ⇒ the room's newest round.
+         */
+        captureRound: z.number().int().min(1).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2836,6 +2846,34 @@ const captureBaseRouter = router({
         ),
       });
       const runSessionId = runSession.sessionId ?? sessionId;
+      // The room's copy of this accept's receipt (`capture_filed`), written on
+      // EVERY outcome below so another device reads "filed" from the pod rather
+      // than from the accepting device. Never fails the capture.
+      const recordFiledReceipt = async (
+        outcome: CaptureFiledOutcomeInput,
+        projectId: string | null
+      ) => {
+        if (!runSessionId) return;
+        try {
+          await persistCaptureFiled({
+            sessionId: runSessionId,
+            userId,
+            ops: input.entities,
+            outcome,
+            workspaceId: workspaceId ?? null,
+            projectId,
+            ...(input.captureRound ? { round: input.captureRound } : {}),
+            ...(input.idempotencyKey
+              ? { idempotencyKey: input.idempotencyKey }
+              : {}),
+          });
+        } catch (err) {
+          logger.error(
+            { err, userId, sessionId: runSessionId },
+            "capture.execute: filed receipt NOT written to the room (capture preserved)"
+          );
+        }
+      };
       const sessionEcho = {
         sessionId: runSessionId ?? null,
         intakeSession: {
@@ -3156,6 +3194,14 @@ const captureBaseRouter = router({
           stagedCaptureFile = undefined;
         }
 
+        await recordFiledReceipt(
+          {
+            kind: "proposed",
+            proposalId: proposalIds.length === 1 ? proposalIds[0]! : null,
+          },
+          null
+        );
+
         return {
           status: "proposed" as const,
           message:
@@ -3465,6 +3511,14 @@ const captureBaseRouter = router({
       );
 
       if ("proposalId" in perm) {
+        await recordFiledReceipt(
+          {
+            kind: "proposed",
+            proposalId: perm.proposalId,
+            updated: captureUpdates,
+          },
+          null
+        );
         // Nothing was written. Mirrors the "proposed" envelope every other
         // governed door returns (entities.create, mcp synap_create_workspace):
         // `status` + the reviewable handle. `created`/`relations` stay empty
@@ -3948,11 +4002,23 @@ const captureBaseRouter = router({
         )
       );
 
+      const updateByTempId = new Map(
+        captureUpdates.map((u) => [u.tempId, u] as const)
+      );
       const created = result.entities.map((e) => ({
         tempId: e.ref ?? "",
         entityId: e.entityId,
         profileSlug: e.profileSlug,
         linked: e.linked,
+        action: captureRowAction(
+          {
+            linked: e.linked,
+            ...(autoLinkedTempIds.has(e.ref ?? "")
+              ? { deduplicated: true as const }
+              : {}),
+          },
+          updateByTempId.get(e.ref ?? "")
+        ),
         // Additive: original slug when this entity was downgraded to an item.
         ...(e.degradedFrom ? { degradedFrom: e.degradedFrom } : {}),
         // Additive: true when the typed profile was salvaged sans properties.
@@ -4567,6 +4633,11 @@ const captureBaseRouter = router({
           })
           .catch(() => {}); // non-blocking
       }
+
+      await recordFiledReceipt(
+        { kind: "applied", created, updated: captureUpdates },
+        resolvedProjectId ?? null
+      );
 
       // Suggest-and-confirm routing (intake plan §3.5): which playbooks /
       // automations fit what this capture just created, each with its reason.
