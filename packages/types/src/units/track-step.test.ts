@@ -6,6 +6,7 @@ import {
   trackSelectedStepKey,
   trackStepCard,
   trackStepEvidenceSessionId,
+  trackStepGateLabel,
   trackStepRail,
   type TrackStepEvidence,
 } from "./track-step.js";
@@ -177,7 +178,7 @@ describe("trackMoveOn (D6a)", () => {
   it("enabled once every REQUIRED criterion is met — an optional unmet one does not hold it", () => {
     const move = trackMoveOn(stagesAt("decide"), card(ALL_PASS), active);
     expect(move).toEqual({
-      next: { key: "build", name: "Build" },
+      next: { key: "build", name: "Build", gate: null },
       offered: true,
       enabled: true,
       missing: [],
@@ -216,7 +217,7 @@ describe("trackMoveOn (D6a)", () => {
   it("a step with no criteria is met vacuously", () => {
     const move = trackMoveOn(stagesAt("audit"), card(null, "audit"), active);
     expect(move.enabled).toBe(true);
-    expect(move.next).toEqual({ key: "decide", name: "Decide" });
+    expect(move.next).toEqual({ key: "decide", name: "Decide", gate: "check" });
   });
 
   it("last step: `next` null, not offered", () => {
@@ -241,5 +242,22 @@ describe("trackMoveOn (D6a)", () => {
     expect(trackMoveOn(stagesAt("decide"), card(ALL_PASS), { status: "paused" }).enabled).toBe(
       true
     );
+  });
+});
+
+describe("trackStepGateLabel", () => {
+  it("names the ENTRY gate; an ungated step says nothing", () => {
+    expect(trackStepGateLabel("human")).toBe("A person approves entry");
+    expect(trackStepGateLabel("check")).toBe("A check clears entry");
+    expect(trackStepGateLabel(null)).toBeNull();
+    expect(trackStepGateLabel(undefined)).toBeNull();
+  });
+
+  it("the card's gate feeds it: decide is check-gated, audit is not", () => {
+    const stages = stagesAt("decide");
+    expect(trackStepGateLabel(trackStepCard(stages, "decide", [], null)!.gate)).toBe(
+      "A check clears entry"
+    );
+    expect(trackStepGateLabel(trackStepCard(stages, "audit", [], null)!.gate)).toBeNull();
   });
 });

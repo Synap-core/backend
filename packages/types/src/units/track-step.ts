@@ -216,6 +216,12 @@ export interface TrackStepCard {
    * stands now (same rule as `trackStagePath`).
    */
   enteredBy: TrackStepEnteredBy | null;
+  /**
+   * The step's ENTRY gate (`applyStageGate` reads the gate of the step being
+   * ENTERED): `human` pauses the track and files an approval on arrival;
+   * `check` measures the step being LEFT and holds on a miss. Words:
+   * {@link trackStepGateLabel}.
+   */
   gate: "human" | "check" | null;
   /** The pod's `stage.sessionCount`; `null` = not counted (never a local recount). */
   sessionsCount: number | null;
@@ -334,8 +340,12 @@ export type TrackMoveOnBlock =
   | "criteria_unreadable";
 
 export interface TrackMoveOn {
-  /** The step after the selected one; `null` on the last step. */
-  next: { key: string; name: string } | null;
+  /**
+   * The step after the selected one; `null` on the last step. `gate` is ITS
+   * entry gate — the one moving on will meet (a `human` gate makes the move
+   * wait for an approval; a `check` gate measures this step).
+   */
+  next: { key: string; name: string; gate: "human" | "check" | null } | null;
   /** Draw the action at all (the current step of an open track, with a next). */
   offered: boolean;
   enabled: boolean;
@@ -356,7 +366,9 @@ export function trackMoveOn(
 ): TrackMoveOn {
   const index = stages.findIndex((s) => s.key === card.key);
   const after = index >= 0 ? stages[index + 1] : undefined;
-  const next = after ? { key: after.key, name: after.name } : null;
+  const next = after
+    ? { key: after.key, name: after.name, gate: after.gate ?? null }
+    : null;
   const missing = card.criteria
     .filter((c) => c.required && c.state !== "met")
     .map((c) => c.label);
@@ -382,4 +394,18 @@ export function trackMoveOn(
     }
   }
   return { next, offered: true, enabled: true, missing, block: null };
+}
+
+/**
+ * The words for a step's ENTRY gate ({@link TrackStepCard.gate}) — ONE phrase
+ * for every surface, beside {@link trackPausedByLabel}'s pattern. Worded as
+ * ENTRY because that is what the pod gates: the gate on a step holds the move
+ * INTO it, never the work inside it. `null` for an ungated step (omit).
+ */
+export function trackStepGateLabel(
+  gate: "human" | "check" | null | undefined
+): string | null {
+  if (gate === "human") return "A person approves entry";
+  if (gate === "check") return "A check clears entry";
+  return null;
 }
