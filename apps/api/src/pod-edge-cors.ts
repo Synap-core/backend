@@ -33,6 +33,7 @@ import { isPublicDoorPath } from "@synap/api/public-doors";
 import {
   isAllowedOrigin,
   isApprovedApplicationOrigin,
+  isSignInDiscoveryRequest,
   rejectsUnapprovedExternalPodApiRequest,
 } from "./cors-origin.js";
 import { validateExplicitPodSessionToken } from "./explicit-pod-session.js";
@@ -145,6 +146,8 @@ export const podEdgeCorsMiddleware: MiddlewareHandler = async (c, next) => {
     !applicationExchangePath &&
     !applicationConnectionPath &&
     !authBootstrapPath &&
+    // Pre-sign-in discovery: no credential exists yet (see cors-origin.ts).
+    !isSignInDiscoveryRequest(c.req.path, c.req.method) &&
     c.req.method !== "OPTIONS";
   if (requiresExplicitPodToken) {
     const tokenStatus = await validateExplicitPodSessionToken(

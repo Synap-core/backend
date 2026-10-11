@@ -220,6 +220,26 @@ export async function isApprovedApplicationOriginForClient(
 }
 
 /**
+ * `GET /api/federation/discovery` — "does this pod offer Synap Cloud sign-in?"
+ * — is read BEFORE sign-in by every client of the one sign-in door
+ * (`signInToPodWithCloud`), including a web app on an approved origin and the
+ * browser extension (origin `chrome-extension://…`). It takes no credential,
+ * reads no session and exposes only the public OIDC issuer the browser is
+ * redirected to anyway, so it is neither refused for an unapproved origin nor
+ * made to carry an explicit pod token. Read-only methods only.
+ */
+export const SIGN_IN_DISCOVERY_PATH = "/api/federation/discovery";
+
+export function isSignInDiscoveryRequest(
+  path: string,
+  method: string
+): boolean {
+  return (
+    path === SIGN_IN_DISCOVERY_PATH && (method === "GET" || method === "HEAD")
+  );
+}
+
+/**
  * CORS response headers alone cannot stop a browser from sending a request
  * after a cached preflight. Normal Pod APIs therefore reject every currently
  * unapproved external Origin at the server boundary. The opaque connection
@@ -241,6 +261,7 @@ export function rejectsUnapprovedExternalPodApiRequest(input: {
   // middleware already skips them — this clause states the exemption in the
   // pure rule too, so the two cannot disagree.
   if (isPublicDoorPath(input.path)) return false;
+  if (isSignInDiscoveryRequest(input.path, input.method)) return false;
   const podApiPath =
     input.path === "/trpc" ||
     input.path.startsWith("/trpc/") ||

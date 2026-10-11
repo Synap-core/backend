@@ -22,9 +22,6 @@ import {
 } from "@synap-core/external-connect-client";
 import { ReceiverShell } from "../_lib/receiver-shell";
 import { trpc } from "../../lib/trpc";
-import { publicPodUrl } from "../../lib/public-pod-url";
-
-const POD_URL = publicPodUrl();
 
 const INTEGRATION_INFO: Record<
   IntegrationKind,
@@ -63,6 +60,7 @@ interface ConnectFormProps {
   identity?: string;
   integration: IntegrationKind;
   redirectUri: string;
+  /** Read by page.tsx for redirect allowlisting only; never exchanged here (W6 drops it). */
   issuerAssertion: string;
   /** Agent signal. "claude-web" → CP-MCP consent-code path (no plaintext key). */
   agentType?: string | null;
@@ -73,7 +71,6 @@ interface ConnectFormProps {
 export function ConnectForm({
   integration,
   redirectUri,
-  issuerAssertion,
   agentType = null,
   extraRedirectPrefixes = [],
   podHost,
@@ -106,10 +103,14 @@ export function ConnectForm({
     "create_new"
   );
   const [copied, setCopied] = useState(false);
-  const [sessionReady, setSessionReady] = useState(
-    issuerAssertion.length === 0
-  );
-  const [bootstrapping, setBootstrapping] = useState(false);
+  // This page renders only behind a pod Kratos session (proxy.ts gates
+  // `/connect`): that session IS the sign-in. A forwarded `issuer_assertion`
+  // is used only to allowlist the redirect (page.tsx) — it is never exchanged:
+  // `/api/federation/exchange` never minted a session (Kratos OSS has no admin
+  // session-create API). W6 deletes the leftover `issuer-assertion-failed`
+  // step and these constants with the endpoint.
+  const sessionReady = true;
+  const bootstrapping = false;
 
   // Validate redirect_uri early — fail fast so the operator doesn't
   // approve a key that we can't deliver.
@@ -126,58 +127,6 @@ export function ConnectForm({
       });
     }
   }, [hasRedirect, redirectIsAllowed]);
-
-  // An approved issuer may forward a one-shot assertion. Exchange it directly
-  // with this Pod; the Pod resolves the issuer from the assertion itself.
-  useEffect(() => {
-    if (!issuerAssertion || sessionReady || bootstrapping) return;
-    let cancelled = false;
-    setBootstrapping(true);
-    void fetch(`${POD_URL}/api/federation/exchange`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ assertion: issuerAssertion }),
-    })
-      .then(async (res) => {
-        if (cancelled) return;
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          // ASSERTION_REPLAYED (409): the one-shot assertion was already
-          // consumed (page reloaded, or it was exchanged before). This page
-          // only renders behind a valid pod session (middleware), so a replay
-          // is NON-FATAL — proceed and let the authenticated steps below surface
-          // a real 401 if the session is actually gone. Hard-failing here just
-          // strands a signed-in user on a stale link.
-          if (res.status === 409 && text.includes("ASSERTION_REPLAYED")) {
-            setSessionReady(true);
-            return;
-          }
-          throw new Error(
-            text || `Issuer assertion exchange failed (${res.status})`
-          );
-        }
-        setSessionReady(true);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setStep({
-          kind: "issuer-assertion-failed",
-          detail: err instanceof Error ? err.message : "unknown",
-        });
-      })
-      .finally(() => {
-        if (!cancelled) setBootstrapping(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // `bootstrapping` is intentionally NOT a dependency: including it made
-    // setBootstrapping(true) re-run this effect, whose cleanup set cancelled=true
-    // and orphaned the in-flight exchange — freezing the UI on "Verifying pod
-    // session…" forever. The synchronous guard above still prevents a double-fire.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [issuerAssertion, sessionReady]);
 
   const existingActive = trpc.apiKeys.list.useQuery(undefined, {
     enabled: sessionReady,
@@ -413,10 +362,7 @@ export function ConnectForm({
             // renders behind a valid pod session, so we let the operator
             // PROCEED with that session rather than reload the same dead
             // assertion (which just fails again — the retry loop).
-            onProceed={() => {
-              setStep({ kind: "idle" });
-              setSessionReady(true);
-            }}
+            onProceed={() => setStep({ kind: "idle" })}
             // Escape hatch for the rare genuine no-session case: manual login,
             // then middleware returns here.
             onSignIn={() => window.location.assign(window.location.href)}
