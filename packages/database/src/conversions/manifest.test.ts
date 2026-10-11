@@ -749,3 +749,30 @@ describe("w12 — pipeline-ref -> recipe-ref", () => {
     });
   });
 });
+
+describe("w12 — the system deal `stage` folds onto commercialStage", () => {
+  it("maps every value of the retired system enum and never runs at boot", () => {
+    const op = CONVERSION_MANIFEST.ops.find(
+      (o) => o.opKey === "w12.deal.system-stage-commercial-fold"
+    );
+    expect(op).toMatchObject({
+      op: "remapPropertyValues",
+      slug: "deal",
+      deferAtBoot: true,
+    });
+    // Every value the old seed allowed must have a home — an unmapped one
+    // would silently keep its retired key.
+    const legacy = [
+      "lead",
+      "qualified",
+      "proposal",
+      "negotiation",
+      "closed-won",
+      "closed-lost",
+    ];
+    const map = (op as { valueMap: Record<string, string> }).valueMap;
+    for (const v of legacy) expect(map[v], v).toBeDefined();
+    for (const v of Object.values(map))
+      expect(["draft", "proposed", "negotiating", "won", "lost"]).toContain(v);
+  });
+});

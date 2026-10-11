@@ -32,6 +32,22 @@ describe("projectDealsFromConnections", () => {
     ]);
   });
 
+  it("reads commercialStage first — the deal's one lifecycle — over a legacy dealStage", () => {
+    const conns: ConnectionLike[] = [
+      {
+        entity: {
+          id: "d2",
+          type: "deal",
+          title: "Both keys",
+          properties: { commercialStage: "proposed", dealStage: "lead" },
+        },
+      },
+    ];
+    expect(projectDealsFromConnections(conns, openLink)[0]?.stage).toBe(
+      "proposed"
+    );
+  });
+
   it("tolerates the live 3-way stage fork (dealStage ?? stage ?? deal-stage)", () => {
     const conns: ConnectionLike[] = [
       {

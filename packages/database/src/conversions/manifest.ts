@@ -1547,6 +1547,32 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       targetKey: "recipe-ref",
       onConflict: "keepTarget",
     },
+
+    // ─── Work model wave 0: a deal has ONE lifecycle, `commercialStage` ───────
+    //
+    // `crm.deal-stage.commercial-fold` (above) folds the CRM's legacy
+    // `dealStage`. This folds the third fork: the SYSTEM seed's `stage`
+    // (lead/qualified/proposal/negotiation/closed-won/closed-lost), now unlinked
+    // from `deal` (ensure-system-profiles RETIRED_PROFILE_PROPERTIES). Same
+    // posture: a terminal/proposal commercialStage already set wins; an
+    // unmapped value keeps its key for a manual call; operator-run.
+    {
+      op: "remapPropertyValues",
+      opKey: "w12.deal.system-stage-commercial-fold",
+      deferAtBoot: true,
+      slug: "deal",
+      sourceKey: "stage",
+      targetKey: "commercialStage",
+      valueMap: {
+        lead: "draft",
+        qualified: "draft",
+        proposal: "proposed",
+        negotiation: "negotiating",
+        "closed-won": "won",
+        "closed-lost": "lost",
+      },
+      preferTargetValues: ["proposed", "negotiating", "won", "lost"],
+    },
   ],
 };
 

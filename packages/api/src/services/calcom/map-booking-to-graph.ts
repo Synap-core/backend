@@ -5,7 +5,7 @@
  * real thing, relationship state is a `deal` (never a duplicate/status entity).
  * So a BOOKING_CREATED becomes a composite graph:
  *   person(attendee, email→dedup) + company(corporate domain only)
- *   + deal(dealStage:"lead") + event(startDate/endDate/calendarLink)
+ *   + deal(commercialStage:"draft") + event(startDate/endDate/calendarLink)
  * linked person→deal and company→deal via the CRM `linked_to_deal` relation.
  *
  * The `event` entity is shaped for event-sync's `normalizeEntity`
@@ -118,13 +118,14 @@ export function mapBookingToGraph(payload: CalBookingPayload): BookingGraph {
     });
   }
 
-  // deal — the booked call IS the lead (dealStage:"lead", not a status/facet).
+  // deal — the booked call opens a deal at the start of its ONE lifecycle,
+  // `commercialStage: draft` (W15; the retired `dealStage` is never written).
   entities.push({
     ref: "deal",
     profileSlug: "deal",
     title: `Intro call — ${name}`,
     properties: {
-      dealStage: "lead",
+      commercialStage: "draft",
       source: "cal.com",
       ...(uid ? { calBookingUid: uid } : {}),
     },

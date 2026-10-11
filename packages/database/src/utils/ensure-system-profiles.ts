@@ -68,6 +68,16 @@ export const RETIRED_PROFILE_PROPERTIES: ReadonlyArray<{
       "New writes normalise it into the sole knowledgeForm.",
   },
   {
+    profileSlug: "deal",
+    propertySlug: "stage",
+    reason:
+      "A deal has ONE lifecycle, `commercialStage` (draft/proposed/negotiating/" +
+      "won/lost), declared by the CRM template. The seed's `stage` " +
+      "(lead/qualified/proposal/negotiation/closed-won/closed-lost) was a third " +
+      "fork beside the CRM's `dealStage`; qualification belongs to the `lead` " +
+      "role's `leadStage` (work model W15, 2026-10-11).",
+  },
+  {
     profileSlug: "decision",
     propertySlug: "status",
     reason:
@@ -282,12 +292,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
     profileSlug: "deal",
     propertySlugs: [
       { slug: "title", required: true, displayOrder: 0 },
-      {
-        slug: "stage",
-        required: false,
-        defaultValue: "lead",
-        displayOrder: 1,
-      },
+      // No `stage`: a deal's ONE lifecycle is `commercialStage`, declared by
+      // the CRM template (work model W15). Retired below.
       { slug: "value", required: false, displayOrder: 2 },
       { slug: "closeDate", required: false, displayOrder: 3 },
       { slug: "contactId", required: false, displayOrder: 4 },

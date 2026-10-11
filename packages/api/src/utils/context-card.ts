@@ -39,8 +39,10 @@ function propsOf(
 /**
  * Filter a connection set to `deal` neighbours and project each onto the card.
  *
- * `stage` tolerates the live 3-way fork in how a deal's stage is stored:
- * `dealStage` (canonical) ?? `stage` ?? `deal-stage`.
+ * `stage` reads the deal's ONE lifecycle, `commercialStage` (work model W15),
+ * then tolerates the legacy forks still stored on unconverted pods:
+ * `dealStage` ?? `stage` ?? `deal-stage` (folded by conversions
+ * `crm.deal-stage.commercial-fold`).
  *
  * Connections whose `entity` is null (channels / sessions / soft-deleted rows
  * getConnections already dropped) are skipped.
@@ -54,7 +56,11 @@ export function projectDealsFromConnections(
     const e = conn.entity;
     if (!e || e.type !== "deal") continue;
     const props = propsOf(e);
-    const rawStage = props.dealStage ?? props.stage ?? props["deal-stage"];
+    const rawStage =
+      props.commercialStage ??
+      props.dealStage ??
+      props.stage ??
+      props["deal-stage"];
     deals.push({
       id: e.id,
       title: e.title ?? null,

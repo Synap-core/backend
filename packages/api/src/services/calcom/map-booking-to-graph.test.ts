@@ -69,9 +69,10 @@ describe("mapBookingToGraph — corporate attendee", () => {
     expect(byRef.company.properties?.website).toBe("https://acme-corp.io");
   });
 
-  it("models the booked call as a deal at stage 'lead'", () => {
+  it("models the booked call as a deal at commercialStage 'draft' (never the retired dealStage)", () => {
     expect(byRef.deal.profileSlug).toBe("deal");
-    expect(byRef.deal.properties?.dealStage).toBe("lead");
+    expect(byRef.deal.properties?.commercialStage).toBe("draft");
+    expect(byRef.deal.properties).not.toHaveProperty("dealStage");
     expect(byRef.deal.title).toBe("Intro call — Jelle Bets");
   });
 

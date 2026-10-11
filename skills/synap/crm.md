@@ -1,24 +1,21 @@
-## CRM Workspaces — 4-Entity Model
+## CRM Workspaces — identity, roles, deals
 
-Some workspaces use a CRM data structure with four entities: `person` and `company` (identity records), `deal` (pipeline record), and `client` (post-win relationship marker). Understand this pattern when proposing lead captures, deal updates, or campaign membership.
+A CRM workspace holds `person` and `company` (identity records), the `lead` and `client` ROLES those identities wear (facets, not entities), and `deal` (the sale). Understand this pattern when proposing lead captures, deal updates, or campaign membership.
 
-**The model:**
+**The model (one lifecycle per kind or role):**
 
 - **`person` + `company`** — Identity only, no sales state. Persist across deals.
-- **`deal`** — Pipeline record with `dealStage` property (lead, contacted, qualifying, proposal, negotiating, won, lost, inactive). Represents what people often call a "lead" (when stage=lead). Linked to person/company via `linked_to_deal` relation.
-- **`client`** — Post-win relationship marker. Created automatically when deal transitions to stage=won. Status: active, paused, or churned. Linked via `is_client` (party → client) and `produced_by_deal` (deal → client).
-- **`journey`** — Documents anchored to a deal (not a person). Linked via `has_journey`.
+- **`lead` role** — qualification only. Attach it with `attach_facet` to the person/company; its status is `leadStage`: new, researching, outreach, engaged, qualified, nurturing, converted, disqualified.
+- **`deal`** — the sale, and nothing before it. Its one lifecycle is `commercialStage`: draft, proposed, negotiating, won, lost. Linked to person/company via `linked_to_deal`. Open a deal only when a person chose to pursue the lead.
+- **`client` role** — attached to the party when a deal is won. Status `clientStatus`: prospect, active, paused, former, churned. An ended relationship is `clientStatus: churned` — never a separate `churned` role.
 
 **AI behavior — lead capture:**
 
-When the user describes a lead (inbound person, prospect, or company lead), propose the full bundle:
+When the user describes a lead (inbound person, prospect, or company lead):
 
-1. Create `person` entity (if not exists) with email, role, company name
-2. Create `company` entity (if not exists)
-3. Create `deal` entity with `dealStage: "lead"` and `estimatedValue` (if known)
-4. Create `linked_to_deal` relation connecting person/company to deal
-
-Never create a person with a sales-state flag. The deal is the lead container.
+1. Resolve the person/company first (email, domain, url); create only if none matches
+2. `attach_facet` the `lead` role with `leadStage: "new"`
+3. Do NOT open a deal yet — a deal starts when the person decides to pursue
 
 ```json
 POST /api/hub/entities
@@ -27,50 +24,17 @@ POST /api/hub/entities
   "title": "Alice Johnson",
   "properties": { "email": "alice@acme.com", "role": "VP Engineering" }
 }
-
-POST /api/hub/entities
-{ "userId": "{userId}", "workspaceId": "{wsId}",
-  "profileSlug": "deal",
-  "title": "Acme prospect",
-  "properties": { "dealStage": "lead", "estimatedValue": 50000 }
-}
-
-POST /api/hub/relations
-{ "userId": "{userId}",
-  "sourceEntityId": "ent_person_alice",
-  "targetEntityId": "ent_deal_acme",
-  "type": "linked_to_deal"
-}
+// then attach_facet { entityId: "ent_person_alice", facetSlug: "lead", properties: { "leadStage": "new" } }
 ```
 
-**AI behavior — moving deals to won:**
+**AI behavior — pursue, then win:**
 
-When a deal transitions to `dealStage: "won"`, also propose client creation if not yet linked:
+When the person chooses to pursue: create the `deal` at `commercialStage: "draft"`, link the party with `linked_to_deal`, and set the lead's `leadStage: "converted"`. When a person confirms the deal is won: set `commercialStage: "won"` and `attach_facet` the `client` role on the party with `clientStatus: "active"`. Moving a deal to won or lost is a person's call — propose it, never decide it.
 
 ```json
 PATCH /api/hub/entities/ent_deal_acme
-{ "properties": { "dealStage": "won" } }
-
-POST /api/hub/entities
-{ "userId": "{userId}", "workspaceId": "{wsId}",
-  "profileSlug": "client",
-  "title": "Acme (active)",
-  "properties": { "clientStatus": "active" }
-}
-
-POST /api/hub/relations
-{ "userId": "{userId}",
-  "sourceEntityId": "ent_person_alice",
-  "targetEntityId": "ent_client_acme",
-  "type": "is_client"
-}
-
-POST /api/hub/relations
-{ "userId": "{userId}",
-  "sourceEntityId": "ent_deal_acme",
-  "targetEntityId": "ent_client_acme",
-  "type": "produced_by_deal"
-}
+{ "properties": { "commercialStage": "won" } }
+// then attach_facet { entityId: "ent_company_acme", facetSlug: "client", properties: { "clientStatus": "active" } }
 ```
 
 **AI behavior — campaign membership:**
@@ -96,8 +60,9 @@ POST /api/hub/relations
 
 **Property names:**
 
-- `dealStage` (not `crmStatus` or `status`) — values: lead, contacted, qualifying, proposal, negotiating, won, lost, inactive
-- `clientStatus` (post-win only) — values: active, paused, churned
+- `commercialStage` on `deal` (never `dealStage`, `stage`, `crmStatus` or `status` — retired) — draft, proposed, negotiating, won, lost
+- `leadStage` on the `lead` facet — new, researching, outreach, engaged, qualified, nurturing, converted, disqualified
+- `clientStatus` on the `client` facet — prospect, active, paused, former, churned
 - Identities (person, company) carry no sales state
 
 **Why separate identity from state:**
