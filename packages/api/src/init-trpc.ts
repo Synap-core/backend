@@ -45,7 +45,13 @@ export const t = initTRPC.context<Context>().create({
     // A STALE status move (`moveStatus` compare-and-set, `LifecycleConflictError`)
     // names the status the thing is in NOW, so the mover can say "moved
     // meanwhile to X" without parsing the message. Duck-typed on `code`.
-    const lifecycleStale =
+    // Typed flat (all optional) so the error shape stays ONE object type, not
+    // a union repeated in every router's generated errorShape.
+    const lifecycleStale: {
+      reasonCode?: string;
+      expectedStatus?: string | null;
+      currentStatus?: string | null;
+    } =
       cause?.code === "LIFECYCLE_STALE"
         ? {
             reasonCode: "LIFECYCLE_STALE",
