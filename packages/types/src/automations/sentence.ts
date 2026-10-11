@@ -29,6 +29,7 @@
 // label below is COMPOSED ("Run" + "playbook") rather than hand-written.
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
+import type { PlaybookRunNodeDef } from "@synap/database";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 
@@ -769,6 +770,13 @@ const PLAYBOOK_GOAL_KEY = "__goal";
 const PLAYBOOK_PROJECT_KEY = "__projectId";
 const PLAYBOOK_TRACK_KEY = "__trackId";
 /**
+ * STAGE WORKER — the node's `worker` spec (`PlaybookRunWorkerSpec`,
+ * @synap/database): an enabled worker's size, status, threshold and backlog
+ * limit (work model L4). Bookkeeping, so it never leaks into `paramsMapping`;
+ * lands on the node as `data.worker`, forwarded WHOLE to `runPlaybook`.
+ */
+const PLAYBOOK_WORKER_KEY = "__worker";
+/**
  * MODE — what the `playbook_run` node materializes (`run` | `appointment` |
  * `propose`, `readPlaybookRunMode` in `./rule-run-policy`). The rule editor
  * writes `propose` here for "propose a playbook, I decide"; it lands on the
@@ -834,6 +842,7 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_PROJECT_KEY,
   PLAYBOOK_TRACK_KEY,
   PLAYBOOK_RUN_MODE_KEY,
+  PLAYBOOK_WORKER_KEY,
 ];
 
 /**
@@ -897,11 +906,33 @@ export type PlaybookActivatorTrigger =
       profileKind?: "kind" | "role";
     }
   | {
-      on: "enters_status";
+      /** `count` follows the SAME event as `enters_status` (the one that can
+       *  change the count); its threshold rides on the node's worker spec. */
+      on: "enters_status" | "count";
       statusProperty: string;
       status: string;
       lifecycle: "declared" | "undeclared";
+    }
+  | {
+      /** A cron rule (UTC). The cron must be one the grammar can spell —
+       *  {@link isSentenceCron}; the worker spec carries the set. */
+      on: "schedule";
+      cron: string;
     };
+
+/**
+ * Can the rule grammar spell this cron (hourly / daily / weekdays / weekly /
+ * monthly at a time)? A schedule activator whose cron it cannot spell would
+ * compile to a DIFFERENT schedule than the one declared — refused instead.
+ */
+export function isSentenceCron(cron: string): boolean {
+  const normalized = cron.trim().split(/\s+/).join(" ");
+  if (normalized.split(" ").length !== 5) return false;
+  return (
+    buildCronExpression({ triggerType: "cron", ...parseCron(normalized) }) ===
+    normalized
+  );
+}
 
 export function playbookActivatorSentence(
   input: {
@@ -909,22 +940,40 @@ export function playbookActivatorSentence(
     profileSlug: string;
     /** `run` starts the run; `propose` files one proposal per (rule, subject). */
     mode: "run" | "propose";
+    /**
+     * An ENABLED worker's node spec (work model L4) + its filing. Each is
+     * OMITTED when absent, so an activator compiled before workers existed
+     * stays byte-identical (its seed hash does not move).
+     */
+    worker?: PlaybookRunNodeDef["data"]["worker"];
+    projectId?: string;
+    trackId?: string;
   } & PlaybookActivatorTrigger
 ): RuleSentenceValue {
-  const trigger = activatorTriggerShape(input);
+  const trigger =
+    input.on === "schedule"
+      ? { actionVerb: undefined, conditions: [] as ConditionRow[] }
+      : activatorTriggerShape(input);
   return {
-    trigger: {
-      triggerType: "event",
-      subjectCategory: "entity",
-      profileSlug: input.profileSlug,
-      actionVerb: trigger.actionVerb,
-      // Only a role says so: a kind's sentence stays byte-identical to the
-      // one every activator compiled before roles could be subjects (so its
-      // seed hash does not move and no installed rule is rewritten).
-      ...(input.on === "created" && input.profileKind === "role"
-        ? { profileKind: "role" as const }
-        : {}),
-    },
+    trigger:
+      input.on === "schedule"
+        ? {
+            triggerType: "cron",
+            ...parseCron(input.cron.trim().split(/\s+/).join(" ")),
+            cronTimezone: "UTC",
+          }
+        : {
+            triggerType: "event",
+            subjectCategory: "entity",
+            profileSlug: input.profileSlug,
+            actionVerb: trigger.actionVerb,
+            // Only a role says so: a kind's sentence stays byte-identical to the
+            // one every activator compiled before roles could be subjects (so its
+            // seed hash does not move and no installed rule is rewritten).
+            ...(input.on === "created" && input.profileKind === "role"
+              ? { profileKind: "role" as const }
+              : {}),
+          },
     conditions: trigger.conditions,
     actions: [
       {
@@ -937,6 +986,11 @@ export function playbookActivatorSentence(
           ...(input.mode === "propose"
             ? { [PLAYBOOK_RUN_MODE_KEY]: "propose" }
             : {}),
+          ...(input.projectId
+            ? { [PLAYBOOK_PROJECT_KEY]: input.projectId }
+            : {}),
+          ...(input.trackId ? { [PLAYBOOK_TRACK_KEY]: input.trackId } : {}),
+          ...(input.worker ? { [PLAYBOOK_WORKER_KEY]: input.worker } : {}),
           [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
         },
       },
@@ -944,7 +998,9 @@ export function playbookActivatorSentence(
   };
 }
 
-function activatorTriggerShape(t: PlaybookActivatorTrigger): {
+function activatorTriggerShape(
+  t: Exclude<PlaybookActivatorTrigger, { on: "schedule" }>
+): {
   actionVerb: ActionVerb;
   conditions: ConditionRow[];
 } {
@@ -1183,6 +1239,9 @@ function actionToFlowNode(
       data.projectId = cfg[PLAYBOOK_PROJECT_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_TRACK_KEY]))
       data.trackId = cfg[PLAYBOOK_TRACK_KEY];
+    const worker = cfg[PLAYBOOK_WORKER_KEY];
+    if (worker && typeof worker === "object" && !Array.isArray(worker))
+      data.worker = worker;
     // Through the ONE normalizer: an unknown value is `run`, and `run` is
     // omitted, so only a real non-default mode reaches the node.
     const mode = readPlaybookRunMode(cfg[PLAYBOOK_RUN_MODE_KEY]);
@@ -1465,6 +1524,7 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       projectId?: string;
       trackId?: string;
       mode?: unknown;
+      worker?: unknown;
       paramsMapping?: Record<string, unknown>;
     };
     const config: Record<string, unknown> = {
@@ -1483,6 +1543,12 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
     if (nonEmptyStr(pdata.projectId))
       config[PLAYBOOK_PROJECT_KEY] = pdata.projectId;
     if (nonEmptyStr(pdata.trackId)) config[PLAYBOOK_TRACK_KEY] = pdata.trackId;
+    if (
+      pdata.worker &&
+      typeof pdata.worker === "object" &&
+      !Array.isArray(pdata.worker)
+    )
+      config[PLAYBOOK_WORKER_KEY] = pdata.worker;
     config[CAPABILITY_ACTION_KEY] =
       `playbook:${pdata.playbookId ?? pdata.playbookName ?? ""}`;
     return {

@@ -30,7 +30,8 @@
  *   created        — a thing of the subject kind is created (a role: attached).
  *   enters_status  — the subject enters `status`.
  *   schedule       — on `cron` (UTC), over the things currently in `status`
- *                    (or every thing of the subject, without one).
+ *                    (or every thing of the subject, without one); always
+ *                    `per_moment`.
  *   count          — when at least `min` things sit in `status`; always
  *                    `per_moment` (the count IS the moment).
  *   manual         — never by itself: a button that runs the worker over its
@@ -88,7 +89,7 @@ export interface WorkerActivator {
   cron?: string;
   /** Threshold for `count` (≥ {@link WORKER_COUNT_MIN_FLOOR}). */
   min?: number;
-  /** Default {@link DEFAULT_WORKER_SIZE}; `count` forces `per_moment`. */
+  /** Default {@link DEFAULT_WORKER_SIZE}; `count` / `schedule` force `per_moment`. */
   size?: WorkerSize;
   /** Default {@link DEFAULT_WORKER_MODE}. */
   mode?: WorkerMode;
@@ -96,11 +97,16 @@ export interface WorkerActivator {
   maxPendingApprovals?: number;
 }
 
-/** The size a declared activator runs at (`count` is always `per_moment`). */
+/**
+ * The size a declared activator runs at. `count` and `schedule` are always
+ * `per_moment`: the moment (a threshold, a tick) has no single thing, and one
+ * session per thing on a tick would need a fan-out engine the worker does not
+ * have — the set rides as targets instead.
+ */
 export function effectiveWorkerSize(
   a: Pick<WorkerActivator, "on" | "size">
 ): WorkerSize {
-  if (a.on === "count") return "per_moment";
+  if (a.on === "count" || a.on === "schedule") return "per_moment";
   return a.size ?? DEFAULT_WORKER_SIZE;
 }
 

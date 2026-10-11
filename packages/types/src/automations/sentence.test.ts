@@ -24,6 +24,7 @@ import {
   toFlowDefinition,
   proposePlaybookOnKindSentence,
   playbookActivatorSentence,
+  isSentenceCron,
   triggerToSentence,
   type ActionVerb,
   type TriggerSubjectCategory,
@@ -1203,6 +1204,114 @@ describe("playbookActivatorSentence — a declared activator as a rule", () => {
         mode: "propose",
       })
     );
+  });
+});
+
+describe("playbookActivatorSentence — stage workers (work model L4)", () => {
+  const PB = "77777777-7777-4777-8777-777777777777";
+  const SPEC = {
+    key: "count:review",
+    size: "per_moment" as const,
+    profileSlug: "deal",
+    status: "review",
+    minCount: 5,
+  };
+  const nodeOf = (s: ReturnType<typeof playbookActivatorSentence>) =>
+    toFlowDefinition(s.actions).nodes.find((n) => n.type === "playbook_run")!;
+
+  it("a COUNT follows the transition INTO its status; the threshold rides on the node's worker spec", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "deal",
+      on: "count",
+      statusProperty: "commercialStage",
+      status: "review",
+      lifecycle: "declared",
+      mode: "run",
+      worker: SPEC,
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerConfig.eventPattern).toBe(
+      "entity.transition.completed"
+    );
+    expect(trigger.triggerConfig.filters).toEqual({
+      lifecycleProfile: "deal",
+      to: "review",
+    });
+    const node = nodeOf(sentence);
+    expect(node.data).toMatchObject({ playbookId: PB, worker: SPEC });
+    // Bookkeeping: the spec never leaks into the run's params.
+    expect(
+      (node.data as { paramsMapping: Record<string, unknown> }).paramsMapping
+    ).toEqual({});
+  });
+
+  it("a SCHEDULE compiles to a cron rule with the executor-true expression", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "deal",
+      on: "schedule",
+      cron: "0 9 * * 1",
+      mode: "run",
+      worker: { ...SPEC, key: "schedule:0 9 * * 1", minCount: undefined },
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerType).toBe("cron");
+    expect(trigger.triggerConfig).toMatchObject({
+      expression: "0 9 * * 1",
+      timezone: "UTC",
+    });
+  });
+
+  it("a worker enabled for a project carries its filing; the node round-trips", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "deal",
+      on: "enters_status",
+      statusProperty: "commercialStage",
+      status: "review",
+      lifecycle: "declared",
+      mode: "propose",
+      worker: { ...SPEC, size: "per_thing", minCount: undefined },
+      projectId: "proj-1",
+      trackId: "trk-1",
+    });
+    const node = nodeOf(sentence);
+    expect(node.data).toMatchObject({
+      projectId: "proj-1",
+      trackId: "trk-1",
+      mode: "propose",
+      worker: { size: "per_thing", status: "review" },
+    });
+    const again = toFlowDefinition(
+      flowToSentenceActions({ nodes: [node], edges: [] } as never)
+    ).nodes.find((n) => n.type === "playbook_run")!;
+    expect(again.data).toEqual(node.data);
+  });
+
+  it("an activator with no worker spec compiles byte-identically to before (no installed rule rewritten)", () => {
+    const base = {
+      playbookId: PB,
+      profileSlug: "deal",
+      on: "enters_status" as const,
+      statusProperty: "commercialStage",
+      status: "review",
+      lifecycle: "declared" as const,
+      mode: "propose" as const,
+    };
+    const config = playbookActivatorSentence(base).actions[0]!.config;
+    expect(Object.keys(config).sort()).toEqual(
+      ["__actionKey", "__mode", "__nodeType", "__playbookId"].sort()
+    );
+  });
+
+  it("isSentenceCron: only schedules the grammar can spell", () => {
+    expect(isSentenceCron("0 9 * * 1")).toBe(true);
+    expect(isSentenceCron("30 7 * * 1-5")).toBe(true);
+    expect(isSentenceCron("0 * * * *")).toBe(true);
+    expect(isSentenceCron("*/15 * * * *")).toBe(false);
+    expect(isSentenceCron("0 9 * 1 *")).toBe(false);
+    expect(isSentenceCron("nonsense")).toBe(false);
   });
 });
 
