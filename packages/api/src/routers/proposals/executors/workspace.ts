@@ -1484,10 +1484,18 @@ export function registerWorkspaceExecutors(): void {
       const expiresInDays = (
         "expiresInDays" in inner ? inner.expiresInDays : raw.expiresInDays
       ) as number | null | undefined;
-      // The grant the requester asked for — replayed verbatim; minting the key
-      // WITHOUT it would hand the requester a full-access legacy key.
+      // The grant the requester asked for — replayed verbatim. A proposal
+      // filed before a grant was required carries none: refuse, like a
+      // missing scope — guessing one grants access nobody reviewed (P5).
       const grant = (inner.grant ?? raw.grant) as
         { permissions: string[] } | undefined;
+      if (!grant) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "API key create proposal carries no access (grant), so the key it asked for cannot be minted. File the request again.",
+        });
+      }
 
       // The replay must APPLY, never re-propose — see `assertApplied`.
       const minted = await apiKeyCaller.create({
@@ -1495,7 +1503,7 @@ export function registerWorkspaceExecutors(): void {
         scope,
         ...(hubId ? { hubId } : {}),
         ...(expiresInDays !== undefined ? { expiresInDays } : {}),
-        ...(grant ? { grant } : {}),
+        grant,
         ...(keyWorkspaceId ? { workspaceId: keyWorkspaceId } : {}),
       });
       assertApplied(minted);

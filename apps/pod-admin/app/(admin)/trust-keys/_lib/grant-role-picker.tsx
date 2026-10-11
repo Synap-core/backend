@@ -9,8 +9,9 @@
  * (`grantRoles.list`). Same roles, same grant, same words (`summarizeGrant`)
  * as the full editor; editing a role row by row stays in the browser.
  *
- * "No grant" keeps the legacy behaviour (bounded only by the scopes), and is
- * named for what it is.
+ * There is no "No grant": a key with no grant touches nothing (P5 — deny by
+ * default). Its full reach is the "Full access" role — an explicit `*`, shown
+ * in red.
  */
 import { Button, Select, SelectItem } from "@heroui/react";
 import {
@@ -23,15 +24,13 @@ import {
 } from "@synap-core/types/grants";
 import { trpc } from "../../../../lib/trpc";
 
-export const NO_GRANT = "none";
-
 /**
  * The mint input (`apiKeys.create` `grant` + `expiresInDays`) for the picked
  * role: the role's own permissions, narrowing and lifetime. Where the role
  * sets no lifetime, the dialog's `expiresInDays` applies. `workspaceId` given
  * confines the key to that workspace — a key minted on a workspace's page
  * must never reach beyond it, and the mint door does not confine by
- * `input.workspaceId`. undefined = "No grant" (or an unknown role).
+ * `input.workspaceId`. undefined = an unknown role (nothing to mint).
  */
 export function keyMintFromRole(
   roleId: string,
@@ -115,7 +114,6 @@ export function GrantRolePicker({
   scopes,
   rolesFailed,
   onRetryRoles,
-  allowNoGrant = true,
   isDisabled,
 }: {
   value: string;
@@ -127,10 +125,9 @@ export function GrantRolePicker({
   scopes?: readonly string[];
   rolesFailed?: boolean;
   onRetryRoles?: () => void;
-  /** Off where an ungranted key would escape a boundary (a workspace's keys). */
-  allowNoGrant?: boolean;
   isDisabled?: boolean;
 }) {
+  const summary = minted ? summarizeGrant(mintDraft(minted)) : null;
   return (
     <div className="flex flex-col gap-1">
       <Select
@@ -143,26 +140,19 @@ export function GrantRolePicker({
         }}
         isDisabled={isDisabled}
       >
-        {[
-          ...roles.map((r) => (
-            <SelectItem key={r.id} textValue={r.name}>
-              {r.name}
-            </SelectItem>
-          )),
-          ...(allowNoGrant
-            ? [
-                <SelectItem key={NO_GRANT} textValue="No grant">
-                  No grant: everything its scopes allow
-                </SelectItem>,
-              ]
-            : []),
-        ]}
+        {roles.map((r) => (
+          <SelectItem key={r.id} textValue={r.name}>
+            {r.name}
+          </SelectItem>
+        ))}
       </Select>
-      <p className="text-tiny text-foreground/65">
-        {minted
-          ? summarizeGrant(mintDraft(minted)).sentence
-          : "Only its scopes bound it."}
-      </p>
+      {summary ? (
+        <p
+          className={`text-tiny ${summary.full ? "text-danger" : "text-foreground/65"}`}
+        >
+          {summary.sentence}
+        </p>
+      ) : null}
       {scopes && writeScopesIdle(scopes, minted) ? (
         <p className="text-tiny text-warning">
           Its write scopes do nothing here: this role only reads.

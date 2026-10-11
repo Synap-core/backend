@@ -29,6 +29,7 @@ import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
 import {
   attachAgentKeyGrant,
+  attachFullAccessGrant,
   createAndVerifyHubInboundKey,
   encryptServiceKey,
   describeServingIntelligence,
@@ -323,22 +324,33 @@ provisionRouter.post("/register-intelligence", async (c) => {
       });
       await db.delete(apiKeys).where(eq(apiKeys.hubId, isHubId));
 
-      await db.insert(apiKeys).values({
-        userId: "system",
-        keyName: `Intelligence Hub IS Key (${SERVICE_ID})`,
-        keyPrefix,
-        keyHash,
-        // TRUSTED Intelligence-Service pod-read key. keyType "is_internal" is the
-        // ONLY value that activates the X-Delegated-Operator-Id auth gate in
-        // hub-protocol-rest.ts, so the IS orchestrator can read the pod on behalf
-        // of the operator whose turn it is processing (operator-floor delegation).
-        // This is the SINGLE provisioning point for is_internal — gated above by a
-        // CP-signed ES256 JWT (type="provision", JWKS-verified, audience-pinned,
-        // serviceUrl matched to the JWT claim). No public mint path can set it.
-        keyType: "is_internal",
-        hubId: isHubId,
-        scope: ["hub-protocol.read", "hub-protocol.write"],
-        isActive: true,
+      const [isKey] = await db
+        .insert(apiKeys)
+        .values({
+          userId: "system",
+          keyName: `Intelligence Hub IS Key (${SERVICE_ID})`,
+          keyPrefix,
+          keyHash,
+          // TRUSTED Intelligence-Service pod-read key. keyType "is_internal" is the
+          // ONLY value that activates the X-Delegated-Operator-Id auth gate in
+          // hub-protocol-rest.ts, so the IS orchestrator can read the pod on behalf
+          // of the operator whose turn it is processing (operator-floor delegation).
+          // This is the SINGLE provisioning point for is_internal — gated above by a
+          // CP-signed ES256 JWT (type="provision", JWKS-verified, audience-pinned,
+          // serviceUrl matched to the JWT claim). No public mint path can set it.
+          keyType: "is_internal",
+          hubId: isHubId,
+          scope: ["hub-protocol.read", "hub-protocol.write"],
+          isActive: true,
+        })
+        .returning({ id: apiKeys.id });
+      // The IS's own service key: full reach, explicit (deny by default).
+      await attachFullAccessGrant({
+        apiKeyId: isKey.id,
+        principalUserId: "system",
+        onBehalfOf: "system",
+        expiresAt: null,
+        createdBy: "system",
       });
 
       logger.info(

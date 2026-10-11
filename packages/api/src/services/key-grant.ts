@@ -6,7 +6,12 @@
  * `attachGrantOrRevoke` writes the grant through GrantRepository (the one write
  * door) right after the key exists; if that fails, the key is REVOKED before
  * the error propagates — a key minted for a narrow grant must never survive
- * as a legacy, ungranted (i.e. full-access) key.
+ * without one.
+ *
+ * P5 — deny by default: a key with no grant row may touch NOTHING, so every
+ * mint door attaches one. A door whose key is the holder's own full reach (the
+ * person's CLI, a system/service/IS key) attaches `attachFullAccessGrant` —
+ * an explicit `*`, shown and revocable like any other grant.
  */
 
 import { z } from "zod";
@@ -61,6 +66,28 @@ export function assertGrantInput(grant: GrantInput | undefined): void {
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
     throw err;
   }
+}
+
+/** What an explicit full-access grant is called on every key list. */
+export const FULL_ACCESS_GRANT_LABEL = "Full access";
+
+/**
+ * Attach the explicit full-access `*` grant to a key minted as its holder's
+ * own full reach — still bounded by the holder's floor, never wider. Same
+ * revoke-on-failure contract as `attachGrantOrRevoke`.
+ */
+export async function attachFullAccessGrant(args: {
+  apiKeyId: string;
+  principalUserId: string;
+  onBehalfOf: string;
+  /** The key's own expiry (null = never). */
+  expiresAt: Date | null;
+  createdBy: string;
+}): Promise<void> {
+  await attachGrantOrRevoke({
+    ...args,
+    grant: { permissions: ["*"], label: FULL_ACCESS_GRANT_LABEL },
+  });
 }
 
 export async function attachGrantOrRevoke(args: {

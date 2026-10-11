@@ -473,12 +473,12 @@ export function ApiKeysSection() {
                   note: "created",
                 });
               }
-            } else {
+            } else if (input.grant) {
               const res = await create.mutateAsync({
                 keyName: input.keyName,
                 scope: input.scope,
                 expiresInDays: input.expiresInDays,
-                ...(input.grant ? { grant: input.grant } : {}),
+                grant: input.grant,
               });
               if (
                 res &&
@@ -666,7 +666,7 @@ type CreateKeyInput = {
   scope: string[];
   /** null = never; a personal key omitted = 90 days. */
   expiresInDays?: number | null;
-  /** Personal keys only: what it may touch; absent = no grant. */
+  /** Personal keys only (required there): what it may touch. */
   grant?: GrantMintInput["grant"];
 };
 
@@ -833,7 +833,12 @@ function CreateKeyModal({
             color="primary"
             size="sm"
             radius="md"
-            isDisabled={!name.trim() || scopes.length === 0 || isPending}
+            isDisabled={
+              !name.trim() ||
+              scopes.length === 0 ||
+              (kind === "personal" && !minted) ||
+              isPending
+            }
             isLoading={isPending}
             onPress={() =>
               void onConfirm({

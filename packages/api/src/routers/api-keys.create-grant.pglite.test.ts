@@ -45,6 +45,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+vi.mock("../utils/workspace-role.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isPodAdmin: vi.fn(async () => true),
+}));
+
 vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   checkPermissionOrPropose: vi.fn(async () => ({ granted: true })),
@@ -58,6 +63,7 @@ import { apiKeysRouter } from "./api-keys.js";
 
 const HUMAN = "human-mint";
 const DAY = 86_400_000;
+const FULL = { permissions: ["*"] };
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -168,6 +174,7 @@ describe("key lifetime — 90 days by default, custom, or never", () => {
     const res = await caller().create({
       keyName: "d",
       scope: ["hub-protocol.read"],
+      grant: FULL,
     });
     const exp = new Date((await keyRow(res.id)).expires_at!).getTime();
     expect(Math.abs(exp - (Date.now() + 90 * DAY))).toBeLessThan(60_000);
@@ -177,6 +184,7 @@ describe("key lifetime — 90 days by default, custom, or never", () => {
     const res = await caller().create({
       keyName: "c",
       scope: ["hub-protocol.read"],
+      grant: FULL,
       expiresInDays: 7,
     });
     const exp = new Date((await keyRow(res.id)).expires_at!).getTime();
@@ -187,6 +195,7 @@ describe("key lifetime — 90 days by default, custom, or never", () => {
     const res = await caller().create({
       keyName: "n",
       scope: ["hub-protocol.read"],
+      grant: FULL,
       expiresInDays: null,
     });
     expect((await keyRow(res.id)).expires_at).toBeNull();
@@ -194,22 +203,80 @@ describe("key lifetime — 90 days by default, custom, or never", () => {
 });
 
 describe("apiKeys.list shows each key's grant (/my-connections)", () => {
-  it("returns the active grant, and null for an ungranted key", async () => {
+  it("returns the active grant", async () => {
     const granted = await caller().create({
       keyName: "Card site",
       scope: ["hub-protocol.read"],
       grant: { permissions: ["entity.person.read"], label: "Card site" },
-    });
-    const plain = await caller().create({
-      keyName: "plain",
-      scope: ["hub-protocol.read"],
     });
     const keys = await caller().list();
     expect(keys.find((k) => k.id === granted.id)?.grant).toMatchObject({
       permissions: ["entity.person.read"],
       label: "Card site",
     });
-    expect(keys.find((k) => k.id === plain.id)?.grant).toBeNull();
+  });
+});
+
+const keyCount = async () =>
+  (await h.client!.query<{ n: number }>(`select count(*)::int n from api_keys`))
+    .rows[0].n;
+
+// P5 — deny by default: a key with no grant row touches nothing, so no door
+// may mint one. Rules out: a human mint door still accepting "no grant".
+describe("every mint door attaches a grant (P5)", () => {
+  it("apiKeys.create refuses a mint without a grant, and mints nothing", async () => {
+    const before = await keyCount();
+    await expect(
+      caller().create({
+        keyName: "plain",
+        scope: ["hub-protocol.read"],
+      } as never)
+    ).rejects.toThrow();
+    expect(await keyCount()).toBe(before);
+  });
+
+  it("createSystemKey and adminCreateServiceKey attach an explicit Full access `*` with the key's expiry", async () => {
+    const sys = await caller().createSystemKey({
+      keyName: "sys",
+      scope: ["hub-protocol.read"],
+      expiresInDays: 30,
+    });
+    const svc = await caller().adminCreateServiceKey({
+      keyName: "svc",
+      scope: ["hub-protocol.read"],
+      workspaceId: randomUUID(),
+    });
+    for (const id of [sys.id, svc.id]) {
+      const { rows } = await h.client!.query<{
+        permissions: string[];
+        label: string;
+        expires_at: string | null;
+      }>(
+        `select permissions, label, expires_at from grants where api_key_id = $1`,
+        [id]
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        permissions: ["*"],
+        label: "Full access",
+      });
+      expect(rows[0].expires_at === null).toBe(
+        (await keyRow(id)).expires_at === null
+      );
+    }
+    expect(
+      Math.abs(
+        new Date(
+          (
+            await h.client!.query<{ expires_at: string }>(
+              `select expires_at from grants where api_key_id = $1`,
+              [sys.id]
+            )
+          ).rows[0].expires_at
+        ).getTime() -
+          (Date.now() + 30 * DAY)
+      )
+    ).toBeLessThan(60_000);
   });
 });
 
@@ -257,15 +324,17 @@ describe("apiKeys.createForWorkspace with a grant (W1f)", () => {
       scopes: ["hub-protocol.read"],
       grant: { permissions: ["entity.person.create"] },
     });
-    const plain = await wsCaller().createForWorkspace({
-      name: "ws plain",
-      scopes: ["hub-protocol.read"],
-    });
+    await expect(
+      wsCaller().createForWorkspace({
+        name: "ws plain",
+        scopes: ["hub-protocol.read"],
+      } as never)
+    ).rejects.toThrow();
     const keys = await wsCaller().listForWorkspace();
     expect(keys.find((k) => k.id === granted.id)?.grant).toMatchObject({
       permissions: ["entity.person.create"],
       workspaceIds: [WS],
     });
-    expect(keys.find((k) => k.id === plain.id)?.grant).toBeNull();
+    expect(keys.some((k) => k.keyName === "ws plain")).toBe(false);
   });
 });

@@ -270,4 +270,12 @@ describe("(4) payload shape is read defensively", () => {
     expect(b).toContain("scope.length === 0");
     expect(b).toContain("BAD_REQUEST");
   });
+  // P5 — deny by default: a key needs a grant. Rules out an older pending row
+  // (filed before a grant was required) being minted with a guessed one.
+  it("apiKey/create refuses a proposal filed without a grant", () => {
+    const b = block("workspace.ts", "apiKey/create");
+    expect(b).toMatch(/if \(!grant\) \{\s*throw new TRPCError/);
+    expect(b).not.toContain("...(grant ? { grant } : {})");
+    expect(gateDataKeys("create").has("grant")).toBe(true);
+  });
 });

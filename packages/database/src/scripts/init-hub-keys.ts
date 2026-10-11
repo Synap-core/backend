@@ -76,7 +76,10 @@ async function seedHubProtocolKeys() {
       // Constraint exempts hub_inbound type (migration 0028).
       const keyPrefix = plainKey.slice(0, 12) + "...";
 
+      // The IS's inbound key carries its explicit full-access grant in the
+      // same statement: a key with no grant row touches nothing (P5).
       const result = await sql`
+        WITH k AS (
         INSERT INTO api_keys (
           user_id,
           key_name,
@@ -100,6 +103,16 @@ async function seedHubProtocolKeys() {
         )
         ON CONFLICT (key_hash) DO NOTHING
         RETURNING id, key_name, hub_id
+        ), g AS (
+          INSERT INTO grants (
+            api_key_id, principal_user_id, on_behalf_of, permissions,
+            label, created_by
+          )
+          SELECT id, 'system', 'system', ARRAY['*']::text[], 'Full access',
+            'system'
+          FROM k
+        )
+        SELECT id, key_name, hub_id FROM k
       `;
 
       if (result.length > 0) {

@@ -4,7 +4,6 @@ import { GRANT_PRESETS, type GrantRole } from "@synap-core/types/grants";
 import {
   keyMintFromRole,
   mintDraft,
-  NO_GRANT,
   roleFitsWorkspace,
 } from "./grant-role-picker";
 
@@ -70,7 +69,13 @@ describe("keyMintFromRole", () => {
     ).toThrow();
   });
 
-  it("'No grant' mints no grant", () => {
-    expect(keyMintFromRole(NO_GRANT, roles, dialog)).toBeUndefined();
+  // Rules out: a legacy "No grant" choice surviving — such a key now
+  // touches nothing, so an unknown pick mints nothing and Create stays off.
+  it("an unknown role mints nothing; Full access is an explicit `*`", () => {
+    expect(keyMintFromRole("none", roles, dialog)).toBeUndefined();
+    const full = GRANT_PRESETS.find((r) => r.id === "full-access")!;
+    expect(keyMintFromRole(full.id, roles, dialog)?.grant.permissions).toEqual([
+      "*",
+    ]);
   });
 });

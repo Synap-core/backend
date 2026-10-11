@@ -37,6 +37,7 @@ import {
   ExpiresInDaysSchema,
   GrantInputSchema,
   assertGrantInput,
+  attachFullAccessGrant,
   attachGrantOrRevoke,
 } from "../services/key-grant.js";
 import {
@@ -246,8 +247,8 @@ export const apiKeysRouter = router({
         // Omitted → 90 days; a number → that many; null → never (W1f).
         expiresInDays: ExpiresInDaysSchema,
         workspaceId: z.string().uuid().optional(),
-        /** What the key may touch (W1). Omitted = a legacy, ungranted key. */
-        grant: GrantInputSchema.optional(),
+        /** What the key may touch (W1). Required: a key without one touches nothing. */
+        grant: GrantInputSchema,
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -275,7 +276,7 @@ export const apiKeysRouter = router({
           ...(input.expiresInDays !== undefined
             ? { expiresInDays: input.expiresInDays }
             : {}),
-          ...(input.grant ? { grant: input.grant } : {}),
+          grant: input.grant,
         },
       });
 
@@ -324,16 +325,14 @@ export const apiKeysRouter = router({
         ctx.userId
       );
 
-      if (input.grant) {
-        await attachGrantOrRevoke({
-          apiKeyId: apiKey.id,
-          principalUserId: ctx.userId,
-          onBehalfOf: ctx.userId,
-          grant: input.grant,
-          expiresAt,
-          createdBy: ctx.userId,
-        });
-      }
+      await attachGrantOrRevoke({
+        apiKeyId: apiKey.id,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        grant: input.grant,
+        expiresAt,
+        createdBy: ctx.userId,
+      });
 
       // 3. Audit log
       auditLog({
@@ -796,6 +795,13 @@ export const apiKeysRouter = router({
         },
         ctx.userId
       );
+      await attachFullAccessGrant({
+        apiKeyId: apiKey.id,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        expiresAt: expiresAt ?? null,
+        createdBy: ctx.userId,
+      });
 
       auditLog({
         subjectType: "apiKey",
@@ -857,6 +863,13 @@ export const apiKeysRouter = router({
         },
         ctx.userId
       );
+      await attachFullAccessGrant({
+        apiKeyId: apiKey.id,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        expiresAt: expiresAt ?? null,
+        createdBy: ctx.userId,
+      });
 
       auditLog({
         subjectType: "apiKey",
@@ -994,6 +1007,14 @@ export const apiKeysRouter = router({
         ctx.userId
       );
       const { apiKey, plainKey } = registration;
+      // The person's own CLI/integration: their full reach, explicit.
+      await attachFullAccessGrant({
+        apiKeyId: apiKey.id,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        expiresAt: apiKey.expiresAt ?? null,
+        createdBy: ctx.userId,
+      });
       const registrationTrace = toRegistrationTrace(flowId, registration);
       if (registration.outcome !== "CONNECTED_VERIFIED") {
         auditLog({
@@ -1307,8 +1328,8 @@ export const apiKeysRouter = router({
         expiresAt: z.date().optional(),
         // Omitted → 90 days; a number → that many; null → never (W1f).
         expiresInDays: ExpiresInDaysSchema,
-        /** What the key may touch (W1); always held inside this workspace. */
-        grant: GrantInputSchema.omit({ workspaceIds: true }).optional(),
+        /** What the key may touch (W1); always held inside this workspace. Required. */
+        grant: GrantInputSchema.omit({ workspaceIds: true }),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1368,17 +1389,15 @@ export const apiKeysRouter = router({
         ctx.userId
       );
 
-      if (input.grant) {
-        await attachGrantOrRevoke({
-          apiKeyId: apiKey.id,
-          principalUserId: ctx.userId,
-          onBehalfOf: ctx.userId,
-          // A workspace key's grant never reaches beyond its workspace.
-          grant: { ...input.grant, workspaceIds: [ctx.workspaceId] },
-          expiresAt,
-          createdBy: ctx.userId,
-        });
-      }
+      await attachGrantOrRevoke({
+        apiKeyId: apiKey.id,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        // A workspace key's grant never reaches beyond its workspace.
+        grant: { ...input.grant, workspaceIds: [ctx.workspaceId] },
+        expiresAt,
+        createdBy: ctx.userId,
+      });
 
       auditLog({
         subjectType: "apiKey",

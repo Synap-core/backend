@@ -25,6 +25,7 @@ const resolveKeyIdentity = vi.fn();
 const findWorkspace = vi.fn();
 const findMembership = vi.fn();
 const createAndVerifyServiceKey = vi.fn();
+const attachFullAccessGrant = vi.fn();
 
 vi.mock("../../../services/api-keys.js", async (importOriginal) => {
   const actual =
@@ -41,12 +42,21 @@ vi.mock("../../../access/key-identity.js", async (importOriginal) => {
   return { ...actual, resolveKeyIdentity };
 });
 
-vi.mock("../../../services/external-registration.js", async (importOriginal) => {
+vi.mock(
+  "../../../services/external-registration.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../services/external-registration.js")
+      >();
+    return { ...actual, createAndVerifyServiceKey };
+  }
+);
+
+vi.mock("../../../services/key-grant.js", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("../../../services/external-registration.js")
-    >();
-  return { ...actual, createAndVerifyServiceKey };
+    await importOriginal<typeof import("../../../services/key-grant.js")>();
+  return { ...actual, attachFullAccessGrant };
 });
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -156,12 +166,19 @@ describe("POST /setup/service — surface-key minting", () => {
 
     const res = await mint(makeApp());
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ keyType: "service", workspaceId: WS });
+    expect(await res.json()).toMatchObject({
+      keyType: "service",
+      workspaceId: WS,
+    });
     expect(createAndVerifyServiceKey).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ userId: HUMAN, workspaceId: WS }),
       HUMAN,
       HUMAN
+    );
+    // P5: no grant asked for = the owner's full reach, explicit — never none.
+    expect(attachFullAccessGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ principalUserId: HUMAN, onBehalfOf: HUMAN })
     );
   });
 });

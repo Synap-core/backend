@@ -174,6 +174,92 @@ describe("every agent key minted by a raw primitive carries its grant", () => {
 });
 
 /**
+ * P5 — deny by default: a key with NO grant row may touch nothing, so EVERY
+ * mint attaches one. For each minting file (the derived set above) that is not
+ * a PRIMITIVE, the attaches must be at least as many as the mints:
+ *   - mints   = MINT_CALL lines, minus calls to a primitive that attaches
+ *               itself (`provisionSurfaceAgentKey`, `createNamedAgent` — the
+ *               agent door — and `.rotate(`, which carries the old key's grants);
+ *   - attaches = `attach{Grant,Grants}OrRevoke`, `attachFullAccessGrant`,
+ *               `attachAgentKeyGrant`, `carryOver`, or a raw `INSERT INTO
+ *               grants` in the same statement (operator script). NOT
+ *               `.attachMany(`: it also edits a live key's grants, and counting
+ *               it let a removed mint attach pass (negative control, P5).
+ * A PRIMITIVE mints for its callers, which are minting files themselves and
+ * so are held to the rule — the coverage is transitive.
+ *
+ * NOT COVERED (stated): granularity is a COUNT per file, so an attach that
+ * guards a different mint than the one added passes, and an attach on a path
+ * the mint does not reach is counted. Self-attaching primitives are trusted by
+ * name; `agent-identity-service.ts` is itself counted (its two raw mints).
+ */
+const PRIMITIVES = new Set([
+  "packages/database/src/repositories/api-key-repository.ts",
+  "packages/api/src/services/api-keys.ts",
+  "packages/api/src/services/hub-integration-registration.ts",
+  "packages/api/src/services/external-registration.ts",
+]);
+const SELF_ATTACHING_MINT =
+  /\b(?:provisionSurfaceAgentKey|createNamedAgent)\(|apiKeyRepo\w*\.rotate\(/;
+const GRANT_ATTACH =
+  /\b(?:attachGrantOrRevoke|attachGrantsOrRevoke|attachFullAccessGrant|attachAgentKeyGrant|carryOver)\(|INSERT INTO grants/;
+
+/** [mints, attaches] in one file's code lines (definitions excluded). */
+function mintAndAttachCounts(src: string): [number, number] {
+  const lines = codeLines(src).filter((l) => !/\bfunction\s/.test(l));
+  const mints = lines.filter(
+    (l) => MINT_CALL.test(l) && !SELF_ATTACHING_MINT.test(l)
+  ).length;
+  return [mints, lines.filter((l) => GRANT_ATTACH.test(l)).length];
+}
+
+describe("every mint attaches a grant (P5 — deny by default)", () => {
+  it("the rule can see a mint and an attach (non-vacuity)", () => {
+    expect(
+      mintAndAttachCounts(
+        "const k = await apiKeyRepo.create({});\nawait attachFullAccessGrant({});"
+      )
+    ).toEqual([1, 1]);
+    expect(
+      mintAndAttachCounts("const k = await apiKeyRepo.create({});")
+    ).toEqual([1, 0]);
+    expect(
+      mintAndAttachCounts("const k = await provisionSurfaceAgentKey({});")
+    ).toEqual([0, 0]);
+    for (const p of PRIMITIVES) expect(minting.has(p), p).toBe(true);
+  });
+
+  it("each minting file attaches at least as often as it mints", () => {
+    const checked = [...minting].filter((f) => !PRIMITIVES.has(f));
+    expect(checked.length).toBeGreaterThanOrEqual(10);
+    let mintsSeen = 0;
+    const short: string[] = [];
+    for (const file of checked) {
+      const [mints, attaches] = mintAndAttachCounts(
+        readFileSync(join(REPO, file), "utf8")
+      );
+      mintsSeen += mints;
+      if (attaches < mints)
+        short.push(`${file}: ${attaches} attach for ${mints} mints`);
+    }
+    expect(mintsSeen).toBeGreaterThanOrEqual(15);
+    expect(
+      short,
+      "Attach a grant after each mint — a key with no grant touches nothing. Use attachFullAccessGrant for a key that is its holder's own full reach."
+    ).toEqual([]);
+  });
+
+  it("the repository's rotation carries the grants it is trusted for", () => {
+    expect(
+      readFileSync(
+        join(REPO, "packages/database/src/repositories/api-key-repository.ts"),
+        "utf8"
+      )
+    ).toMatch(/carryOver\(/);
+  });
+});
+
+/**
  * Hard DELETEs of api_keys rows bypass the revoke door and its cache drop: a
  * deleted ACTIVE key keeps validating from the verification cache for up to
  * 30s. Each file that hard-deletes must say why that is safe.

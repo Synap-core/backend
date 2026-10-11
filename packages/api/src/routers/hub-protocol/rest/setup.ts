@@ -11,7 +11,9 @@ import {
   ExpiresInDaysSchema,
   GrantInputSchema,
   assertGrantInput,
+  attachFullAccessGrant,
   attachGrantOrRevoke,
+  attachGrantsOrRevoke,
 } from "../../../services/key-grant.js";
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
@@ -1383,13 +1385,22 @@ export function registerSetupRoutes(app: HubHono): void {
       const registrationTrace = toRegistrationTrace(flowId, registration);
       const { apiKey, plainKey } = registration;
 
+      // Attach before the key is handed out; a failure revokes the key. No
+      // grant asked for = the owner's full reach, explicit (deny by default).
       if (grant) {
-        // Attach before the key is handed out; a failure revokes the key.
         await attachGrantOrRevoke({
           apiKeyId: apiKey.id,
           principalUserId: ownerUserId,
           onBehalfOf: ownerUserId,
           grant: { ...grant, workspaceIds: [ws.id] },
+          expiresAt,
+          createdBy: ownerUserId,
+        });
+      } else {
+        await attachFullAccessGrant({
+          apiKeyId: apiKey.id,
+          principalUserId: ownerUserId,
+          onBehalfOf: ownerUserId,
           expiresAt,
           createdBy: ownerUserId,
         });
@@ -1583,7 +1594,30 @@ export function registerSetupRoutes(app: HubHono): void {
         });
       }
 
-      // 3. Mint the child key. Inherits parent's scopes by default, or the
+      // 3. The child's grant is the parent's live grant set — a key never
+      //    hands on more than it may touch. A parent that may touch nothing
+      //    has nothing to hand on.
+      const parentGrant = await new GrantRepository(db).resolveForKey(
+        keyRecord.id
+      );
+      const childGrants = (parentGrant?.scopes ?? [])
+        .filter((g) => g.permissions.length > 0)
+        .map((g) => ({
+          permissions: [...g.permissions],
+          workspaceIds: g.workspaceIds ? [...g.workspaceIds] : undefined,
+          projectIds: g.projectIds ? [...g.projectIds] : undefined,
+          entityIds: g.entityIds ? [...g.entityIds] : undefined,
+        }));
+      if (childGrants.length === 0) {
+        return c.json(
+          {
+            error: "This key may touch nothing, so it cannot mint a sub-token.",
+          },
+          403
+        );
+      }
+
+      // 4. Mint the child key. Inherits parent's scopes by default, or the
       //    caller can request narrower scopes for least-privilege. Wider
       //    scopes than the parent are rejected by generateApiKey().
       let child: { key: string; keyId: string };
@@ -1604,14 +1638,23 @@ export function registerSetupRoutes(app: HubHono): void {
         return c.json({ error: `Sub-token mint failed: ${msg}` }, 400);
       }
 
-      // 4. Link the child key id back onto the mapping row so future
+      await attachGrantsOrRevoke({
+        apiKeyId: child.keyId,
+        principalUserId: mapping.synapUserId,
+        onBehalfOf: mapping.synapUserId,
+        grants: childGrants,
+        expiresAt: null,
+        createdBy: keyRecord.userId,
+      });
+
+      // 5. Link the child key id back onto the mapping row so future
       //    /setup/external-user calls hit the idempotent path above.
       await db
         .update(apiKeyExternalUsers)
         .set({ childApiKeyId: child.keyId })
         .where(eq(apiKeyExternalUsers.id, mapping.mappingId));
 
-      // 5. Return the plaintext ONCE. Caller MUST persist it now — it
+      // 6. Return the plaintext ONCE. Caller MUST persist it now — it
       //    cannot be recovered later.
       return c.json({
         synapUserId: mapping.synapUserId,

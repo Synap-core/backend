@@ -342,8 +342,7 @@ function CreateKeyModal({
     refetch: refetchRoles,
   } = useGrantRoleOptions();
   // A key made here is confined to this workspace, so roles made for other
-  // workspaces are not offered, and neither is "No grant" (an ungranted key
-  // would reach every workspace its owner can).
+  // workspaces are not offered.
   const roles = allRoles.filter((r) => roleFitsWorkspace(r, workspaceId));
   const [roleId, setRoleId] = useState<string>(roles[0].id);
   const offeredScopes = useOfferedKeyScopes("personal");
@@ -419,7 +418,6 @@ function CreateKeyModal({
             scopes={scopes}
             rolesFailed={rolesFailed}
             onRetryRoles={refetchRoles}
-            allowNoGrant={false}
             isDisabled={isPending}
           />
           {/* A role with its own lifetime sets it; the summary line says when. */}
