@@ -11,6 +11,7 @@ import {
   readTrackStageHistory,
   trackStageTone,
   trackStatusMoves,
+  trackStatusVerb,
   trackUnitInput,
   trackPausedBy,
   trackPausedByLabel,
@@ -169,21 +170,33 @@ describe("TRACK_STATUS_TRANSITIONS / trackStatusMoves", () => {
   it("names the move by where it comes FROM: resume a pause, reopen a completion", () => {
     expect(trackStatusMoves("paused")).toEqual([
       { to: "active", verb: "resume" },
-      { to: "completed", verb: "complete" },
     ]);
     expect(trackStatusMoves("completed")).toEqual([
       { to: "active", verb: "reopen" },
     ]);
     expect(trackStatusMoves("active")).toEqual([
       { to: "paused", verb: "pause" },
-      { to: "completed", verb: "complete" },
     ]);
+  });
+
+  it("a lasting track (W1) is never OFFERED completion, from any status", () => {
+    for (const s of TRACK_STATUSES) {
+      for (const includeArchive of [false, true]) {
+        expect(
+          trackStatusMoves(s, { includeArchive }).map((m) => m.to)
+        ).not.toContain("completed");
+      }
+    }
+    // …but a completion that HAPPENED (pre-W1) is still named in history.
+    expect(trackStatusVerb("active", "completed")).toBe("complete");
+    expect(trackStatusVerb("completed", "active")).toBe("reopen");
+    expect(trackStatusVerb("archived", "active")).toBeNull();
   });
 
   it("offers archive only when asked, and nothing from archived/unknown", () => {
     expect(
       trackStatusMoves("active", { includeArchive: true }).map((m) => m.to)
-    ).toEqual(["paused", "completed", "archived"]);
+    ).toEqual(["paused", "archived"]);
     expect(trackStatusMoves("completed", { includeArchive: true })).toEqual([
       { to: "active", verb: "reopen" },
       { to: "archived", verb: "archive" },
@@ -194,8 +207,8 @@ describe("TRACK_STATUS_TRANSITIONS / trackStatusMoves", () => {
 
   it("every verb resolves through ACTION_VERBS (never the humanize fallback)", () => {
     for (const status of TRACK_STATUSES) {
-      for (const move of trackStatusMoves(status, { includeArchive: true })) {
-        expect(ACTION_VERBS[move.verb]).toBeDefined();
+      for (const to of TRACK_STATUS_TRANSITIONS[status]) {
+        expect(ACTION_VERBS[trackStatusVerb(status, to)!]).toBeDefined();
       }
     }
   });

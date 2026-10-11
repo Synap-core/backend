@@ -282,6 +282,19 @@ export interface TrackStatusMove {
   verb: TrackStatusVerb;
 }
 
+/**
+ * The verb of a move that HAPPENED (history, receipts) — named for every move
+ * the table allows, including a completion a surface no longer offers.
+ */
+export function trackStatusVerb(
+  from: string,
+  to: string
+): TrackStatusVerb | null {
+  return canTransitionTrack(from, to)
+    ? verbFor(from as TrackStatus, to as TrackStatus)
+    : null;
+}
+
 function verbFor(from: TrackStatus, to: TrackStatus): TrackStatusVerb {
   if (to === "paused") return "pause";
   if (to === "completed") return "complete";
@@ -295,6 +308,12 @@ function verbFor(from: TrackStatus, to: TrackStatus): TrackStatusVerb {
  * is final and frees the method slot — a workbench act, not a supervising one —
  * so it is offered only with `includeArchive: true` (Relay omits it). An
  * unknown status offers nothing.
+ *
+ * A track is LASTING (work model W1/L7): it is never offered `completed`. Its
+ * goal is met or not; the track goes on, pauses, or is archived. The table
+ * still holds the completed status so a track completed before W1 can be
+ * reopened or archived, and its history still names the move
+ * (`trackStatusVerb`).
  */
 export function trackStatusMoves(
   status: string,
@@ -304,6 +323,7 @@ export function trackStatusMoves(
   const moves = TRACK_STATUS_TRANSITIONS[from];
   if (!moves) return [];
   return moves
+    .filter((to) => to !== "completed")
     .filter((to) => opts.includeArchive === true || to !== "archived")
     .map((to) => ({ to, verb: verbFor(from, to) }));
 }

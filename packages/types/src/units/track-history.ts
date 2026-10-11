@@ -36,7 +36,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "../vocabulary/index.js";
-import { trackStatusMoves } from "./track.js";
+import { trackStatusVerb } from "./track.js";
 
 export const TRACK_HISTORY_EVENT_KINDS = [
   "track_started",
@@ -353,7 +353,12 @@ export function trackHistoryAct(
     : session;
   switch (e.kind) {
     case "track_started":
-      return { action: "start", title: ctx.trackName, door: track, outcome: "succeeded" };
+      return {
+        action: "start",
+        title: ctx.trackName,
+        door: track,
+        outcome: "succeeded",
+      };
     case "step_moved":
       return {
         action: "move",
@@ -362,7 +367,12 @@ export function trackHistoryAct(
         outcome: "succeeded",
       };
     case "session_started":
-      return { action: "start", title: e.title, door: session, outcome: "succeeded" };
+      return {
+        action: "start",
+        title: e.title,
+        door: session,
+        outcome: "succeeded",
+      };
     case "session_closed":
       return {
         action: "close",
@@ -403,16 +413,23 @@ export function trackHistoryAct(
         outcome: "failed",
       };
     case "paused":
-      return { action: "pause", title: ctx.trackName, door: track, outcome: "stopped" };
+      return {
+        action: "pause",
+        title: ctx.trackName,
+        door: track,
+        outcome: "stopped",
+      };
     case "resumed":
-      return { action: "resume", title: ctx.trackName, door: track, outcome: "succeeded" };
+      return {
+        action: "resume",
+        title: ctx.trackName,
+        door: track,
+        outcome: "succeeded",
+      };
     case "status_changed": {
       // The verb of that move — the shared status table, never a local one.
-      const move = trackStatusMoves(e.fromStatus, { includeArchive: true }).find(
-        (m) => m.to === e.toStatus
-      );
       return {
-        action: move?.verb ?? "update",
+        action: trackStatusVerb(e.fromStatus, e.toStatus) ?? "update",
         title: ctx.trackName,
         door: track,
         outcome: "succeeded",
@@ -437,7 +454,9 @@ export function trackHistorySummaryWords(s: TrackHistorySummary): string {
   const parts = [
     sessions > 0 ? counted(sessions, "session") : null,
     s.decisions > 0 ? counted(s.decisions, "decision") : null,
-    s.moves > 0 ? `${resolveActionLabel("move", "past")} \u00d7${s.moves}` : null,
+    s.moves > 0
+      ? `${resolveActionLabel("move", "past")} \u00d7${s.moves}`
+      : null,
   ].filter((p): p is string => p !== null);
   return parts.join(" \u00b7 ");
 }
@@ -445,10 +464,14 @@ export function trackHistorySummaryWords(s: TrackHistorySummary): string {
 /** A check's failing keys, as words: the criterion's statement where it has one. */
 export function checkFailingLabels(
   failing: readonly string[],
-  stage: { criteria?: ReadonlyArray<Record<string, unknown> & { key: string }> } | null | undefined
+  stage:
+    | { criteria?: ReadonlyArray<Record<string, unknown> & { key: string }> }
+    | null
+    | undefined
 ): string[] {
   return failing.map((key) => {
-    if (key === CHECK_GATE_UNEVALUATED) return "The check could not measure this step";
+    if (key === CHECK_GATE_UNEVALUATED)
+      return "The check could not measure this step";
     const c = stage?.criteria?.find((x) => x.key === key);
     const statement = c?.statement;
     return typeof statement === "string" && statement.trim()
@@ -460,7 +483,10 @@ export function checkFailingLabels(
 /** What an event's line carries under it — a reviewer's note, a held check's why. */
 export function trackHistoryNote(
   e: TrackHistoryEvent,
-  stages: ReadonlyArray<{ key: string; criteria?: ReadonlyArray<Record<string, unknown> & { key: string }> }>
+  stages: ReadonlyArray<{
+    key: string;
+    criteria?: ReadonlyArray<Record<string, unknown> & { key: string }>;
+  }>
 ): { reason: string | null; failing: string[] } | null {
   if (e.kind === "decision_answered") {
     return e.note ? { reason: e.note, failing: [] } : null;
@@ -484,7 +510,11 @@ export function trackHistoryNote(
  * guessed "you" (relay's signed-in id is the Control Plane's, not the pod's).
  */
 export function trackStepMover(
-  history: ReadonlyArray<{ stageKey: string; enteredAt: string; enteredBy?: ActivityActor }>,
+  history: ReadonlyArray<{
+    stageKey: string;
+    enteredAt: string;
+    enteredBy?: ActivityActor;
+  }>,
   card: { key: string; enteredBy: { at: string } | null } | null
 ): ActivityActor | undefined {
   if (!card?.enteredBy) return undefined;
