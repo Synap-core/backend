@@ -305,12 +305,23 @@ export function isTrackRetired(track: { status: string }): boolean {
 }
 
 /**
+ * The CLOSED statuses — the complement of the LIVE ones that hold a track's
+ * name on its project (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database). The
+ * pod's tracks service pins live ∪ closed = every status, live ∩ closed = ∅,
+ * at compile time.
+ */
+export const CLOSED_TRACK_STATUSES = [
+  "completed",
+  "archived",
+] as const satisfies readonly TrackStatus[];
+
+/**
  * A CLOSED track — `completed` or `archived`: it stands on no live stage, so
  * no stage session starts on it and its stages offer no move. (Narrower than
  * "not active": a PAUSED track is still open — it resumes where it stands.)
  */
 export function isTrackClosed(track: { status: string }): boolean {
-  return track.status === "completed" || isTrackRetired(track);
+  return (CLOSED_TRACK_STATUSES as readonly string[]).includes(track.status);
 }
 
 /**

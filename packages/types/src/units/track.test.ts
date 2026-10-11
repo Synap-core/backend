@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   canTransitionTrack,
+  CLOSED_TRACK_STATUSES,
   deriveTrackStages,
   filedStageKey,
   isTrackClosed,
@@ -331,6 +332,14 @@ describe("isTrackClosed", () => {
     // Rule ruled out: "not active" — a paused track resumes where it stands.
     expect(isTrackClosed({ status: "paused" })).toBe(false);
     expect(isTrackClosed({ status: "active" })).toBe(false);
+  });
+
+  it("reads CLOSED_TRACK_STATUSES — every status is closed iff it is listed", () => {
+    for (const status of TRACK_STATUSES) {
+      expect(isTrackClosed({ status })).toBe(
+        (CLOSED_TRACK_STATUSES as readonly string[]).includes(status)
+      );
+    }
   });
 });
 
