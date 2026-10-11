@@ -253,6 +253,11 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   // access. A reviser that could clear it would re-arm that placement on its own
   // pending proposal; one that could plant it would strip a real project.
   "sessionSource",
+  // `asked` — the frozen copy of what an `app/connect` / `agent/connect`
+  // request asked for, written at filing. Both executors refuse an approval
+  // wider than it, so a revise that could rewrite it could widen the access
+  // being approved.
+  "asked",
 ] as const;
 
 /**

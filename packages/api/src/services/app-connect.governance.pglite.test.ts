@@ -771,13 +771,11 @@ describe("an app approval can only narrow what was asked", () => {
   });
 
   it("a revise that rewrites asked to match a widening is refused", async () => {
+    // `asked` is a protected envelope field: the revise itself is refused,
+    // before any approval can see a widened request.
     const wide = [...ASKED, { permission: "*", workspaceId: SALES }];
-    const { app, proposalId, data } = await fileAndRevise("asked-rewritten", {
-      requests: wide,
-      asked: wide,
-    });
-    const out = await approve(app, proposalId, data);
-    expect(out.ok).toBe(false);
-    expect(await approvedOf(app.id)).toBeNull();
+    await expect(
+      fileAndRevise("asked-rewritten", { requests: wide, asked: wide })
+    ).rejects.toThrow(/asked/);
   });
 });
