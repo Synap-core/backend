@@ -595,7 +595,14 @@ export async function applyProposalApproval(args: {
   // Deliberately AFTER the inner call and outside its control flow: the inner
   // door returns from ~20 branches, and a provenance stamp must not be able to
   // fail an approval that already succeeded (hence the swallow + log).
-  if (args.proposal.sessionId) {
+  //
+  // Only when it DID apply: an executor that returns `success: false` refused
+  // the approval, and stamping the slot `done` + listing the target as an
+  // output would claim a deliverable that does not exist. `alreadyApproved`
+  // still re-stamps — both writes are idempotent (the slot is already `done`
+  // with this proposal's lineage; the artifact insert is keyed), and a re-run
+  // heals a first stamp that failed and was swallowed below.
+  if (result.success && args.proposal.sessionId) {
     try {
       await satisfyExpectedOutputs({
         sessionId: args.proposal.sessionId,
