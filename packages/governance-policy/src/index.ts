@@ -81,7 +81,7 @@
 // Constants — the policy values (formerly duplicated in both gates)
 // ---------------------------------------------------------------------------
 
-import { patternMatches } from "./grants.js";
+import { GRANT_ACTIONS, patternMatches } from "./grants.js";
 
 /**
  * Default whitelist: agent actions that bypass proposal review.
@@ -972,10 +972,11 @@ export function isAutoApproved(
  * subject wildcard ("entity.*"), "*.*" — or a pattern in the GRANT grammar
  * (`./grants.ts`): `entity.knowledge.create`, `entity.knowledge`, `entity`,
  * `*`. One grammar for keys and agents, so the one grant editor can limit an
- * agent to a kind. Legacy entries keep their exact meaning (they are checked
- * first); a grant pattern can only add what it says. `kind` is the subject's
- * profile slug when the write targets an entity; unknown → only kind-agnostic
- * patterns match.
+ * agent to a kind. `*.*` = `*` (every verb). `subject.*` follows the grant
+ * rule (founder decision 2026-10-11): read/create/update/delete only — a gate
+ * verb (approve, merge, archive, run, …) must be named (`proposal.approve`).
+ * `kind` is the subject's profile slug when the write targets an entity;
+ * unknown → only kind-agnostic patterns match.
  */
 export function agentHasCapability(
   eventKey: string,
@@ -983,10 +984,13 @@ export function agentHasCapability(
   capabilities: readonly string[],
   kind?: string | null
 ): boolean {
+  if (capabilities.includes(eventKey) || capabilities.includes("*.*"))
+    return true;
   if (
-    capabilities.includes(eventKey) ||
-    capabilities.includes(`${subjectType}.*`) ||
-    capabilities.includes("*.*")
+    capabilities.includes(`${subjectType}.*`) &&
+    (GRANT_ACTIONS as readonly string[]).includes(
+      eventKey.slice(subjectType.length + 1)
+    )
   )
     return true;
   if (!eventKey.startsWith(`${subjectType}.`)) return false;
