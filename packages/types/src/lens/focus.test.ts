@@ -325,43 +325,69 @@ describe("the sections and the order", () => {
   });
 });
 
+const ACTIVE = {
+  position: "active" as const,
+  criteria: [
+    {
+      key: "c",
+      label: "Brief approved",
+      required: true,
+      state: "met" as const,
+    },
+  ],
+};
+
 describe("trackStepFocusState — the selected step's state, one derivation", () => {
-  it("a step behind the track is done; one ahead is not started", () => {
-    expect(trackStepFocusState({ position: "done" }, null, "working")).toBe(
-      "done"
-    );
+  it("THE DISCRIMINATING ROW: no criteria + Move on vacuously enabled + working ⇒ working, not done", () => {
     expect(
-      trackStepFocusState({ position: "not_started" }, moveOn(), "needs_you")
+      trackStepFocusState(
+        { position: "active", criteria: [] },
+        moveOn(),
+        "working"
+      )
+    ).toBe("working");
+    const optionalOnly = [
+      { key: "o", label: "Nice", required: false, state: "unmet" as const },
+    ];
+    expect(
+      trackStepFocusState(
+        { position: "active", criteria: optionalOnly },
+        moveOn(),
+        "working"
+      )
+    ).toBe("working");
+  });
+
+  it("a step behind the track is done; one ahead is not started", () => {
+    expect(
+      trackStepFocusState({ position: "done", criteria: [] }, null, "working")
+    ).toBe("done");
+    expect(
+      trackStepFocusState(
+        { position: "not_started", criteria: [] },
+        moveOn(),
+        "needs_you"
+      )
     ).toBe("not_started");
   });
 
   it("the current step with criteria met (Move on enabled) reads done", () => {
-    expect(
-      trackStepFocusState({ position: "active" }, moveOn(), "working")
-    ).toBe("done");
+    expect(trackStepFocusState(ACTIVE, moveOn(), "working")).toBe("done");
   });
 
   it("criteria unmet or not offered ⇒ the track's own state", () => {
     expect(
-      trackStepFocusState(
-        { position: "active" },
-        moveOn({ enabled: false }),
-        "working"
-      )
+      trackStepFocusState(ACTIVE, moveOn({ enabled: false }), "working")
     ).toBe("working");
     expect(
-      trackStepFocusState(
-        { position: "active" },
-        moveOn({ offered: false }),
-        "paused"
-      )
+      trackStepFocusState(ACTIVE, moveOn({ offered: false }), "paused")
     ).toBe("paused");
-    expect(trackStepFocusState({ position: "active" }, null, null)).toBeNull();
+    expect(trackStepFocusState(ACTIVE, null, null)).toBeNull();
   });
 
   it("what you HOLD outranks moving on: needs_you / failed / blocked stay", () => {
     for (const s of ["needs_you", "failed", "blocked"]) {
-      expect(trackStepFocusState({ position: "active" }, moveOn(), s)).toBe(s);
+      expect(trackStepFocusState(ACTIVE, moveOn(), s)).toBe(s);
     }
   });
 });

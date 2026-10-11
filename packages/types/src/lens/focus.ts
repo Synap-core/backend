@@ -252,9 +252,13 @@ export function lensFocusOrder<K extends string>(
  *     (Move on offered AND enabled) reads `done` — the step's work is finished
  *     and the move is the reader's. A live obligation, a failure or a blocker
  *     on the track still outranks that: what you hold comes before moving on.
+ *     "Met" needs at least one REQUIRED criterion: `trackMoveOn` is enabled
+ *     vacuously on a step that declares none, and that says nothing about the
+ *     work — a step with no criteria and an agent mid-run reads `working`,
+ *     never `done` (u4-browser, 2026-10-11).
  */
 export function trackStepFocusState(
-  card: Pick<TrackStepCard, "position">,
+  card: Pick<TrackStepCard, "position" | "criteria">,
   moveOn: TrackMoveOn | null | undefined,
   trackState: string | null | undefined
 ): string | null {
@@ -264,6 +268,7 @@ export function trackStepFocusState(
   if (state === "needs_you" || state === "failed" || state === "blocked") {
     return state;
   }
-  if (moveOn?.offered && moveOn.enabled) return "done";
+  const measuredMet = card.criteria.some((c) => c.required);
+  if (moveOn?.offered && moveOn.enabled && measuredMet) return "done";
   return state;
 }
