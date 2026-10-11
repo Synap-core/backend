@@ -47,6 +47,7 @@ import {
 } from "../utils/materialize-entity.js";
 import { resolveRolePayload } from "./facet-resolution-service.js";
 import { pickUnderlyingKind } from "../utils/role-underlying-kind.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 import { createLogger } from "@synap-core/core";
 import {
   resolveIdentity,
@@ -114,16 +115,6 @@ export interface EntityUpsertResult {
 
 /** nangoConnectionId sentinel for non-OAuth imports */
 const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
-
-/** Postgres unique_violation (23505), also when wrapped as a driver error's cause. */
-function isUniqueViolation(err: unknown): boolean {
-  let current: unknown = err;
-  for (let depth = 0; current && depth < 4; depth++) {
-    if ((current as { code?: unknown }).code === "23505") return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-  return false;
-}
 
 /**
  * The drizzle db handle — the SAME shape `materializeEntity` requires (and that
