@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { db, eq, and, inArray, notAnAppAgent } from "@synap/database";
 import {
   syncAutoApproveRules,
@@ -65,6 +66,12 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         403
       );
     }
+    // It mints a key: a person's key is bounded by its grant too.
+    const denial = await grantWriteDenial({
+      subjectType: "apiKey",
+      action: "create",
+    });
+    if (denial) return c.json({ error: denial }, 403);
 
     const callerId = c.get("userId") as string;
 
@@ -450,6 +457,13 @@ export function registerAgentUsersRoutes(app: HubHono): void {
 
       // Effective user (agent keys: linked human). Creator or pod admin only.
       const callerId = c.get("userId") as string;
+
+      // Governance is the rule store: every key is bounded by its grant.
+      const denial = await grantWriteDenial({
+        subjectType: "rule",
+        action: "update",
+      });
+      if (denial) return c.json({ error: denial }, 403);
 
       // An AGENT key passes the creator check as its human, so it could write
       // its own auto-approve rules. It may TIGHTEN (a named posture, which never

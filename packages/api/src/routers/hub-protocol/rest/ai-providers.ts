@@ -32,6 +32,7 @@ import type { Context as HonoLikeContext } from "hono";
 import { hasScope, type HubHono } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   ProviderUpsertSchema,
   AiProviderProposalPayload,
@@ -189,10 +190,12 @@ function maskSecret(secret: string | null): string | null {
  *  - an AGENT key needs the narrow `providers.write` scope (not in the default
  *    bundle, same treatment as provider CRUD above);
  *  - a workspace-level override needs workspace owner/admin;
- *  - a user-level override is always the caller's OWN row.
+ *  - a user-level override is always the caller's OWN row;
+ *  - every key is bounded by its grant (`ai_provider.update` / `.delete`).
  */
 async function credentialWriteGate(
-  c: HonoLikeContext
+  c: HonoLikeContext,
+  action: "update" | "delete"
 ): Promise<
   | { ok: true; userId: string; workspaceId: string | undefined }
   | { ok: false; status: 401 | 403; error: string }
@@ -208,6 +211,12 @@ async function credentialWriteGate(
     };
   }
   const workspaceId = c.req.query("workspaceId") || undefined;
+  const denial = await grantWriteDenial({
+    subjectType: "aiProvider",
+    action,
+    workspaceId: workspaceId ?? null,
+  });
+  if (denial) return { ok: false, status: 403, error: denial };
   if (workspaceId) {
     const membership = await getWorkspaceMembership(db, workspaceId, userId);
     if (!membership || !["owner", "admin"].includes(String(membership.role))) {
@@ -480,7 +489,7 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // PATCH /ai-providers/credentials — upsert per-user/workspace API key override
   app.patch("/ai-providers/credentials", async (c) => {
-    const gate = await credentialWriteGate(c);
+    const gate = await credentialWriteGate(c, "update");
     if (!gate.ok) return c.json({ error: gate.error }, gate.status);
     const { userId, workspaceId } = gate;
 
@@ -572,7 +581,7 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // DELETE /ai-providers/credentials/:providerId
   app.delete("/ai-providers/credentials/:providerId", async (c) => {
-    const gate = await credentialWriteGate(c);
+    const gate = await credentialWriteGate(c, "delete");
     if (!gate.ok) return c.json({ error: gate.error }, gate.status);
     const { userId, workspaceId } = gate;
     const providerId = c.req.param("providerId");

@@ -22,6 +22,7 @@
  * so getCaller() (which creates a hubProtocolRouter caller) cannot reach it.
  */
 
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   mergeOutcomesForStart,
   outcomeDeclarationsSchema,
@@ -2798,6 +2799,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         403
       );
     }
+    // The tRPC twin's grant rung (focusSessions.answerOutput).
+    const denial = await grantWriteDenial({
+      subjectType: "focus_session",
+      action: "update",
+    });
+    if (denial) return c.json({ error: denial }, 403);
     const id = c.req.param("id");
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);

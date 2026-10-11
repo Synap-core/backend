@@ -45,6 +45,7 @@ function brokerUnavailable(resolved: { reason: string; error: string }) {
       };
 }
 import { createHubProtocolCallerContext } from "../utils.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   ErrorSchema,
   uuidQueryParam,
@@ -1290,11 +1291,20 @@ export function registerConnectorsRoutes(app: HubHono): void {
         sessionId,
       } = c.req.valid("json");
 
-      // Verify a supplied agentUserId is a real agent user before trusting it.
-      // An invalid id is rejected (never silently downgraded to operator — that
+      // An outward call: every key is bounded by its grant, before any branch.
+      const denial = await grantWriteDenial({
+        subjectType: "capability",
+        action: "run",
+        workspaceId: workspaceId ?? null,
+      });
+      if (denial) return c.json({ error: denial }, 403);
+
+      // The AUTHENTICATED agent governs; a body id may only attribute a key
+      // that is not itself an agent, and is verified to be a real agent user
+      // the caller may act as (never silently downgraded to operator — that
       // would let a caller fake operator trust by passing garbage).
-      let resolvedAgentUserId: string | undefined;
-      if (agentUserId) {
+      let resolvedAgentUserId = c.get("agentUserId") as string | undefined;
+      if (agentUserId && !resolvedAgentUserId) {
         const actor = await resolveActorId(agentUserId, userId);
         if ("error" in actor) {
           return c.json({ error: actor.error }, 403);
