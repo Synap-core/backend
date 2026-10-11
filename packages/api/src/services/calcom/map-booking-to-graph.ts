@@ -1,12 +1,18 @@
 /**
  * Cal.com booking → CRM graph mapper (PURE function; no I/O).
  *
- * A booked call is a LEAD. Per the CRM model (crm.md): ONE identity entity per
- * real thing, relationship state is a `deal` (never a duplicate/status entity).
- * So a BOOKING_CREATED becomes a composite graph:
- *   person(attendee, email→dedup) + company(corporate domain only)
- *   + deal(commercialStage:"draft") + event(startDate/endDate/calendarLink)
- * linked person→deal and company→deal via the CRM `linked_to_deal` relation.
+ * A booked call is a LEAD, not a deal (W15, 2026-10-11): a deal is created only
+ * at hand-off, when a lead is won. So a BOOKING_CREATED becomes:
+ *   person(attendee, email→identity) wearing the `lead` role at
+ *   `leadStage: engaged` + company(corporate domain only, person `works_at` it)
+ *   + event(startDate/endDate/calendarLink) `attended_by` the person, so the
+ *   call sits on the lead's agenda.
+ *
+ * The lead role is attached with `advanceExisting`: a person who is not a lead
+ * yet becomes one at `engaged`; a lead at an earlier stage (new, researching,
+ * outreach) moves forward through the facet door; a lead already at or past
+ * `engaged` (qualified, nurturing, converted, disqualified) keeps its stage —
+ * the booking then only records the event.
  *
  * The `event` entity is shaped for event-sync's `normalizeEntity`
  * (startDate/endDate/calendarLink) so the same booking mirrors to a native
@@ -26,6 +32,10 @@ import {
   isCorporateDomain,
   companyNameFromDomain,
 } from "../../utils/email-domain.js";
+import {
+  RELATION_ATTENDED_BY,
+  RELATION_WORKS_AT,
+} from "../event-sync/sync-graph.js";
 
 // ── Cal.com webhook / bookings-list payload (fields we consume) ────────────────
 export interface CalBookingPayload {
@@ -53,9 +63,9 @@ export interface BookingGraph {
   relations: CaptureGraphRelation[];
 }
 
-// The CRM `linked_to_deal` relation def (crmData.ts CRM_RELATION_TYPES.LINKED_TO_DEAL).
-// Workspace-scoped; resolves when the proposal is scoped to the CRM workspace.
-const LINKED_TO_DEAL = "linked_to_deal";
+/** The lead role and the stage a booked call puts it at (foundation `leadStage`). */
+export const BOOKING_LEAD_ROLE = "lead";
+export const BOOKING_LEAD_STAGE = "engaged";
 
 /** Prefer the explicit video link, else a location that is itself a URL. */
 export function meetLink(payload: CalBookingPayload): string | undefined {
@@ -69,8 +79,8 @@ export function meetLink(payload: CalBookingPayload): string | undefined {
 
 /**
  * Map ONE Cal.com booking to a CRM graph. Deterministic + pure. Always yields a
- * `deal` (the lead) and an `event` (the call); a `person` when we have any
- * attendee identity, and a `company` only for corporate email domains.
+ * `person` wearing the `lead` role and an `event` (the call); a `company` only
+ * for corporate email domains. Never a `deal`.
  */
 export function mapBookingToGraph(payload: CalBookingPayload): BookingGraph {
   const attendee = (payload.attendees ?? [])[0] ?? {};
@@ -92,7 +102,8 @@ export function mapBookingToGraph(payload: CalBookingPayload): BookingGraph {
   const entities: CaptureGraphEntity[] = [];
   const relations: CaptureGraphRelation[] = [];
 
-  // person — email drives global identity dedup (resolveIdentity in the door).
+  // person — email drives global identity dedup (resolveIdentity in the door);
+  // the lead role rides on it (attach, or move forward only).
   entities.push({
     ref: "person",
     profileSlug: "person",
@@ -101,6 +112,14 @@ export function mapBookingToGraph(payload: CalBookingPayload): BookingGraph {
       ...(email ? { email } : {}),
       source: "cal.com",
     },
+    facets: [
+      {
+        profileSlug: BOOKING_LEAD_ROLE,
+        status: BOOKING_LEAD_STAGE,
+        properties: { leadStage: BOOKING_LEAD_STAGE },
+        advanceExisting: true,
+      },
+    ],
   });
 
   // company — only for a corporate email domain (website drives its dedup).
@@ -118,19 +137,6 @@ export function mapBookingToGraph(payload: CalBookingPayload): BookingGraph {
     });
   }
 
-  // deal — the booked call opens a deal at the start of its ONE lifecycle,
-  // `commercialStage: draft` (W15; the retired `dealStage` is never written).
-  entities.push({
-    ref: "deal",
-    profileSlug: "deal",
-    title: `Intro call — ${name}`,
-    properties: {
-      commercialStage: "draft",
-      source: "cal.com",
-      ...(uid ? { calBookingUid: uid } : {}),
-    },
-  });
-
   // event — the call itself; shaped for event-sync (startDate/endDate/calendarLink).
   entities.push({
     ref: "event",
@@ -146,18 +152,19 @@ export function mapBookingToGraph(payload: CalBookingPayload): BookingGraph {
     },
   });
 
-  // relations — contact + company anchored to the lead deal (best-effort:
-  // materialization keeps entities even if a relation type fails to resolve).
+  // relations — the call is attended by the person (the lead's agenda), and
+  // the person works at the company (best-effort: materialization keeps
+  // entities even if a relation type fails to resolve).
   relations.push({
-    sourceRef: "person",
-    targetRef: "deal",
-    type: LINKED_TO_DEAL,
+    sourceRef: "event",
+    targetRef: "person",
+    type: RELATION_ATTENDED_BY,
   });
   if (hasCompany) {
     relations.push({
-      sourceRef: "company",
-      targetRef: "deal",
-      type: LINKED_TO_DEAL,
+      sourceRef: "person",
+      targetRef: "company",
+      type: RELATION_WORKS_AT,
     });
   }
 

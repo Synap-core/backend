@@ -50,10 +50,9 @@ describe("mapBookingToGraph — corporate attendee", () => {
   const { entities, relations } = mapBookingToGraph(base);
   const byRef = Object.fromEntries(entities.map((e) => [e.ref, e]));
 
-  it("creates person + company + deal + event", () => {
+  it("creates person + company + event — never a deal (W15)", () => {
     expect(entities.map((e) => e.profileSlug).sort()).toEqual([
       "company",
-      "deal",
       "event",
       "person",
     ]);
@@ -69,11 +68,16 @@ describe("mapBookingToGraph — corporate attendee", () => {
     expect(byRef.company.properties?.website).toBe("https://acme-corp.io");
   });
 
-  it("models the booked call as a deal at commercialStage 'draft' (never the retired dealStage)", () => {
-    expect(byRef.deal.profileSlug).toBe("deal");
-    expect(byRef.deal.properties?.commercialStage).toBe("draft");
-    expect(byRef.deal.properties).not.toHaveProperty("dealStage");
-    expect(byRef.deal.title).toBe("Intro call — Jelle Bets");
+  it("makes the attendee a lead at leadStage 'engaged', forward-only", () => {
+    expect(byRef.person.facets).toEqual([
+      {
+        profileSlug: "lead",
+        status: "engaged",
+        properties: { leadStage: "engaged" },
+        advanceExisting: true,
+      },
+    ]);
+    expect(byRef.company.facets).toBeUndefined();
   });
 
   it("shapes the event for event-sync (startDate/endDate/calendarLink)", () => {
@@ -85,13 +89,11 @@ describe("mapBookingToGraph — corporate attendee", () => {
     expect(byRef.event.properties?.calBookingUid).toBe("bk_123");
   });
 
-  it("links person→deal and company→deal via linked_to_deal", () => {
-    expect(relations).toEqual(
-      expect.arrayContaining([
-        { sourceRef: "person", targetRef: "deal", type: "linked_to_deal" },
-        { sourceRef: "company", targetRef: "deal", type: "linked_to_deal" },
-      ])
-    );
+  it("puts the call on the person (attended_by) and the person at the company (works_at)", () => {
+    expect(relations).toEqual([
+      { sourceRef: "event", targetRef: "person", type: "attended_by" },
+      { sourceRef: "person", targetRef: "company", type: "works_at" },
+    ]);
   });
 
   it("emits no placeholder/summary entities", () => {
@@ -112,12 +114,12 @@ describe("mapBookingToGraph — consumer attendee (gmail)", () => {
 
   it("does NOT mint a company for a consumer mailbox", () => {
     expect(refs).not.toContain("company");
-    expect(refs.sort()).toEqual(["deal", "event", "person"]);
+    expect(refs.sort()).toEqual(["event", "person"]);
   });
 
-  it("still links person→deal (only)", () => {
+  it("still links the call to the person (only)", () => {
     expect(relations).toEqual([
-      { sourceRef: "person", targetRef: "deal", type: "linked_to_deal" },
+      { sourceRef: "event", targetRef: "person", type: "attended_by" },
     ]);
   });
 });
@@ -131,13 +133,13 @@ describe("mapBookingToGraph — degenerate payloads", () => {
     expect(person.title).toBe("founder");
   });
 
-  it("still yields a deal + event with no attendee at all", () => {
+  it("still yields a person + event (and no deal) with no attendee at all", () => {
     const { entities } = mapBookingToGraph({
       uid: "x",
       startTime: "2026-01-01T00:00:00Z",
     });
     const refs = entities.map((e) => e.ref);
-    expect(refs).toContain("deal");
+    expect(refs).not.toContain("deal");
     expect(refs).toContain("event");
     expect(refs).toContain("person"); // "Unknown contact" fallback
   });

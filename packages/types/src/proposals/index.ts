@@ -717,6 +717,14 @@ export interface CompositeCreateEntityOp {
     status?: string;
     properties?: Record<string, unknown>;
     contextRef?: string;
+    /**
+     * When the role is ALREADY on the entity at an EARLIER status of its
+     * lifecycle, move it forward to `status` through the facet door
+     * (`entities.updateFacet` → `moveStatus`). A role already at or past
+     * `status` keeps its stage — never moved backwards, never resurrected.
+     * Absent ⇒ a re-attach leaves the existing role untouched (today's rule).
+     */
+    advanceExisting?: boolean;
   }>;
   /**
    * External records this entity mirrors (e.g. a connection sync's Google

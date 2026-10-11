@@ -41,6 +41,10 @@ import {
   type IdentityResolutionInput,
 } from "../routers/proposals/executors/identity-resolution.js";
 import { rethrowIfWeakDedup } from "./weak-dedup-wire.js";
+import {
+  advanceExistingFacet,
+  type AdvanceableFacet,
+} from "./facet-advance.js";
 
 const logger = createLogger({ module: "materialize-composite" });
 
@@ -536,6 +540,11 @@ export type PlaybookCreateCaller = {
  */
 export type FacetAttachCaller = {
   attachFacet: (input: any) => Promise<any>;
+  /**
+   * The facet update door — used only by `facets[].advanceExisting` to move a
+   * role found at an earlier stage forward (`utils/facet-advance.ts`).
+   */
+  updateFacet?: (input: any) => Promise<any>;
 };
 
 /**
@@ -1332,6 +1341,35 @@ export async function materializeCompositeGraph(
                 facetId,
                 profileSlug: facetOp.profileSlug,
               });
+              // A role the entity already wore came back unchanged; an
+              // opted-in op moves it FORWARD only (never backwards).
+              const facetRow = (attached as { facet?: unknown }).facet;
+              if (
+                facetOp.advanceExisting &&
+                facetOp.status &&
+                options.facetCaller.updateFacet &&
+                facetRow &&
+                typeof facetRow === "object"
+              ) {
+                try {
+                  await advanceExistingFacet(
+                    { updateFacet: options.facetCaller.updateFacet },
+                    facetRow as AdvanceableFacet,
+                    {
+                      status: facetOp.status,
+                      ...(facetOp.properties
+                        ? { properties: facetOp.properties }
+                        : {}),
+                    },
+                    materializeSource
+                  );
+                } catch (err) {
+                  logger.warn(
+                    { err, facetId, profileSlug: facetOp.profileSlug },
+                    "Composite facet advance failed (role kept at its stage)"
+                  );
+                }
+              }
             } else if (planMode) {
               throw new Error(
                 `facet ${facetOp.profileSlug} did not attach (${String((attached as { status?: unknown } | undefined)?.status ?? "no status")})`
