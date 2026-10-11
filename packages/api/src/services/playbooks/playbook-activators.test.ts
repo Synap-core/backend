@@ -212,6 +212,7 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
 }));
 
 import { applyPlaybookActivators } from "./playbook-activators.js";
+import { toBackendTrigger } from "@synap-core/types/automations";
 import { createRuleGoverned } from "../rules/create.js";
 import { updateRuleGoverned } from "../rules/update.js";
 
@@ -586,5 +587,82 @@ describe("enters_status follows the transition event", () => {
     };
     const res = await run();
     expect(res.outcomes[0]).toMatchObject({ status: "created" });
+  });
+});
+
+/**
+ * R1 — a process on a ROLE (`lead`, `client`). Driven from the real activator
+ * compile through the real sentence → trigger converter to the stored
+ * `triggerConfig` the matcher reads: nothing hand-built in between.
+ */
+describe("a ROLE subject (R1)", () => {
+  function setLeadPlaybook(activators: unknown) {
+    store.playbook = {
+      id: PB,
+      name: "Qualify a lead",
+      status: "active",
+      workspaceId: "ws-1",
+      metadata: (store.playbook?.metadata as Row | undefined) ?? {},
+      subjectProfile: {
+        profileSlug: "lead",
+        statusProperty: "leadStage",
+        activators,
+      },
+    };
+  }
+  const compiled = (ruleId: string) => {
+    const sentence = (ruleRow(ruleId).metadata.rule as Row).sentence as {
+      trigger: Parameters<typeof toBackendTrigger>[0];
+      conditions: Parameters<typeof toBackendTrigger>[1];
+    };
+    return toBackendTrigger(sentence.trigger, sentence.conditions)
+      .triggerConfig;
+  };
+  const CREATED = [{ on: "created", mode: "propose" }];
+
+  it("`created` on a role fires when the role is ATTACHED (the facet event), filtered on the role", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook(CREATED);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
+    expect(compiled(res.outcomes[0]!.ruleId!)).toEqual({
+      eventPattern: "entity_facet.attach.completed",
+      filters: { profileSlug: "lead" },
+    });
+  });
+
+  it("a role rule compiled BEFORE R1 (onto entity.create) recompiles in place — never a second rule", async () => {
+    // The pod did not know `lead` was a role at the first pass: the old
+    // compile, onto the kind's create event (which never names a role).
+    setLeadPlaybook(CREATED);
+    const first = await run();
+    const ruleId = first.outcomes[0]!.ruleId!;
+    expect(compiled(ruleId).eventPattern).toBe("entity.create.completed");
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    const second = await run();
+    expect(second.outcomes[0]).toMatchObject({ status: "updated", ruleId });
+    expect(compiled(ruleId).eventPattern).toBe("entity_facet.attach.completed");
+    expect(createRuleGoverned).toHaveBeenCalledTimes(1);
+  });
+
+  it("`enters_status` on a role follows the role's TRANSITION, filtered on the role, not the kind", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook([
+      { on: "enters_status", status: "qualified", mode: "run" },
+    ]);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
+    expect(compiled(res.outcomes[0]!.ruleId!)).toEqual({
+      eventPattern: "entity.transition.completed",
+      filters: { lifecycleProfile: "lead", to: "qualified" },
+    });
   });
 });

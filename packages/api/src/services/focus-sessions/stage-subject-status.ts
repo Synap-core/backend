@@ -27,6 +27,13 @@
  * A value listed in `subjectProfile.humanOnlyStatuses` is written with
  * `forcePropose`: whoever drove the advance, a person decides it.
  *
+ * A ROLE subject (`subjectProfile.profileSlug` is a role-profile, e.g. `lead`):
+ * the status lives on the role's FACET, so the move names the role and goes
+ * through the status door only. There is no plain-property fallback for a role
+ * — writing `leadStage` into the parent entity's JSONB would be a status no
+ * reader looks at, reported as `written`. A role move the door refuses
+ * (role not attached, no declared lifecycle, unknown option) is `failed`.
+ *
  * Source of the definition: `loadSessionProcess` (@synap/jobs) — the RUN's
  * frozen `definitionSnapshot` first, the live playbook second.
  */
@@ -37,7 +44,8 @@ import { db, entities, eq, getWorkspaceMembership } from "@synap/database";
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import type { Context } from "../../types/context.js";
-import { moveStatus } from "../lifecycle/move-status.js";
+import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
+import { readSubjectProfile } from "../playbooks/playbook-activators.js";
 
 const logger = createLogger({ module: "focus-sessions/stage-subject-status" });
 
@@ -103,20 +111,9 @@ export async function writeStageSubjectStatus(input: {
       .where(eq(entities.id, session.subjectEntityId))
       .limit(1);
     if (!subject) return { status: "skipped", reason: "subject_not_found" };
-    const current = (subject.properties as Record<string, unknown> | null)?.[
-      proc.statusProperty
-    ];
-    if (current === value) return { status: "skipped", reason: "already_set" };
 
-    const wsId = subject.workspaceId ?? session.workspaceId ?? null;
     const reasoning = `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`;
-
-    // THE status door (work model L2) when the playbook's statusProperty IS
-    // the subject kind's declared lifecycle: compare-and-set, the lifecycle
-    // governance floor (a human-only / closing option proposes for an agent),
-    // one transition event. The playbook's own `humanOnlyStatuses` still
-    // force a proposal (OR-ed, never a downgrade).
-    const move = await moveStatus({
+    const moveInput = {
       entityId: session.subjectEntityId,
       property: proc.statusProperty,
       to: value,
@@ -124,45 +121,49 @@ export async function writeStageSubjectStatus(input: {
       // compare-and-set still guards the read→write window.
       actor: input.agentUserId
         ? {
-            kind: "agent",
+            kind: "agent" as const,
             userId: input.userId,
             agentUserId: input.agentUserId,
           }
-        : { kind: "human", userId: input.userId },
+        : { kind: "human" as const, userId: input.userId },
       sessionId: session.id,
       reason: reasoning,
-      workspaceId: wsId,
       forcePropose: proc.humanOnlyStatuses.includes(value) || undefined,
-    });
+    };
+
+    // A ROLE subject: the facet's status, through the door, or nothing.
+    const subjectProfile = proc.profileSlug
+      ? await readSubjectProfile(proc.profileSlug, session.workspaceId)
+      : null;
+    if (subjectProfile?.profileKind === "role") {
+      const move = await moveStatus({
+        ...moveInput,
+        role: proc.profileSlug,
+        // The lens picks the role's facet when it is attached in several
+        // spaces: the run's own space first.
+        workspaceId: session.workspaceId ?? subject.workspaceId ?? null,
+      });
+      return fromMove(move, proc.statusProperty, value);
+    }
+
+    const current = (subject.properties as Record<string, unknown> | null)?.[
+      proc.statusProperty
+    ];
+    if (current === value) return { status: "skipped", reason: "already_set" };
+
+    const wsId = subject.workspaceId ?? session.workspaceId ?? null;
+
+    // THE status door (work model L2) when the playbook's statusProperty IS
+    // the subject kind's declared lifecycle: compare-and-set, the lifecycle
+    // governance floor (a human-only / closing option proposes for an agent),
+    // one transition event. The playbook's own `humanOnlyStatuses` still
+    // force a proposal (OR-ed, never a downgrade).
+    const move = await moveStatus({ ...moveInput, workspaceId: wsId });
     const isTheLifecycle = !(
       move.status === "refused" &&
       (move.code === "NO_LIFECYCLE" || move.code === "NOT_THE_LIFECYCLE")
     );
-    if (isTheLifecycle && move.status !== "refused") {
-      switch (move.status) {
-        case "moved":
-          return { status: "written", property: proc.statusProperty, value };
-        case "unchanged":
-          return { status: "skipped", reason: "already_set" };
-        case "proposed":
-          return {
-            status: "proposed",
-            property: proc.statusProperty,
-            value,
-            proposalId: move.proposalId,
-          };
-        case "conflict":
-          return {
-            status: "failed",
-            reason: `the subject's status moved meanwhile (now "${move.actual ?? "none"}")`,
-          };
-        case "denied":
-          return { status: "failed", reason: move.reason };
-      }
-    }
-    if (isTheLifecycle && move.status === "refused") {
-      return { status: "failed", reason: move.reason };
-    }
+    if (isTheLifecycle) return fromMove(move, proc.statusProperty, value);
 
     // The kind declares no lifecycle: `statusProperty` is a plain property,
     // written through the governed entity-update door as before —
@@ -208,5 +209,34 @@ export async function writeStageSubjectStatus(input: {
       "stage subject-status write failed — the stage stands"
     );
     return { status: "failed", reason };
+  }
+}
+
+/** The status door's answer → this write's outcome. */
+function fromMove(
+  move: MoveStatusResult,
+  property: string,
+  value: string
+): StageSubjectStatusOutcome {
+  switch (move.status) {
+    case "moved":
+      return { status: "written", property, value };
+    case "unchanged":
+      return { status: "skipped", reason: "already_set" };
+    case "proposed":
+      return {
+        status: "proposed",
+        property,
+        value,
+        proposalId: move.proposalId,
+      };
+    case "conflict":
+      return {
+        status: "failed",
+        reason: `the subject's status moved meanwhile (now "${move.actual ?? "none"}")`,
+      };
+    case "denied":
+    case "refused":
+      return { status: "failed", reason: move.reason };
   }
 }

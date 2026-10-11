@@ -447,9 +447,26 @@ describe("every offered rule subject can actually fire", () => {
           `being withheld for no reason. Add it to TRIGGER_SUBJECT_CATEGORIES.`
       ).toBe(0);
     }
-    // Workspace-scoped producer, but the subject is outside every event
-    // vocabulary, so `compile.ts` refuses the pattern at the door.
+    // `entity_facet` (R1, 2026-10-12): workspace-scoped producer AND an
+    // authorable pattern (`DOMAIN_SUBJECT_TYPES`), because a ROLE's `created`
+    // compiles to `entity_facet.attach.completed`. It is still NOT a picker
+    // subject: a role is chosen as an ENTITY trigger's profile
+    // (`profileKind: "role"`), so the grammar keeps one "kind or role" choice.
     expect(verdict("entity_facet").reaching).toBeGreaterThan(0);
-    expect(() => validateEventPattern("entity_facet.*")).toThrow();
+    expect(validateEventPattern("entity_facet.attach.completed")).toBe(
+      "entity_facet.attach.completed"
+    );
+    expect(TRIGGER_SUBJECT_CATEGORIES as readonly string[]).not.toContain(
+      "entity_facet"
+    );
+    expect(
+      buildEventPattern({
+        triggerType: "event",
+        subjectCategory: "entity",
+        actionVerb: "created",
+        profileSlug: "lead",
+        profileKind: "role",
+      })
+    ).toBe("entity_facet.attach.completed");
   });
 });

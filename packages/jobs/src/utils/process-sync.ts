@@ -150,6 +150,7 @@ async function followTransition(
         typeof data.entityId === "string" ? data.entityId : ev.subjectId,
       data: { changedKeys: [property], [property]: data.to },
     },
+    role,
     facetId
       ? async () => {
           const [f] = await db
@@ -165,6 +166,12 @@ async function followTransition(
 
 async function followSubjectStatus(
   ev: ProcessSyncEvent,
+  /**
+   * The ROLE whose status moved (a facet transition), or null for the kind's.
+   * Only a process ON that role follows it: two roles of one entity may name
+   * their lifecycles alike, and a `client` run must not follow a `lead` move.
+   */
+  movedRole: string | null = null,
   /** Where the CURRENT value is read (default: the entity's properties). */
   readCurrent?: () => Promise<Record<string, unknown>>
 ): Promise<ProcessSyncOutcome[]> {
@@ -221,6 +228,8 @@ async function followSubjectStatus(
         playbookId: s.playbookId,
       });
       if (!proc?.statusProperty || !changed.includes(proc.statusProperty))
+        continue;
+      if (movedRole && proc.profileSlug && proc.profileSlug !== movedRole)
         continue;
       const value = data[proc.statusProperty];
       if (current[proc.statusProperty] !== value) {

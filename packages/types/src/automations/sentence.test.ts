@@ -1136,6 +1136,62 @@ describe("playbookActivatorSentence — a declared activator as a rule", () => {
     expect(node.data).not.toHaveProperty("mode");
   });
 
+  // R1: a ROLE is never created — it is ATTACHED. The entity-create event
+  // names the entity's KIND (`person`), so `profileSlug: "lead"` there would
+  // match nothing; the facet door's attach event carries the role.
+  it("a ROLE's `created` compiles onto the facet ATTACH, filtered on the role, and reads back", () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "lead",
+      on: "created",
+      profileKind: "role",
+      mode: "propose",
+    });
+    const trigger = toBackendTrigger(sentence.trigger!, sentence.conditions);
+    expect(trigger.triggerConfig.eventPattern).toBe(
+      "entity_facet.attach.completed"
+    );
+    // The rule compiler runs the matcher's own grammar: it must accept it.
+    expect(validateEventPattern("entity_facet.attach.completed")).toBe(
+      "entity_facet.attach.completed"
+    );
+    // `emitFacetSideEffects` puts the ROLE in `data.profileSlug`.
+    expect(trigger.triggerConfig.filters).toEqual({ profileSlug: "lead" });
+    expect(
+      triggerToSentence(trigger.triggerType, trigger.triggerConfig)
+    ).toEqual({
+      triggerType: "event",
+      subjectCategory: "entity",
+      actionVerb: "created",
+      profileKind: "role",
+      profileSlug: "lead",
+    });
+  });
+
+  it("a KIND's `created` sentence is byte-identical to before roles (no seed hash moves)", () => {
+    const kind = playbookActivatorSentence({
+      playbookId: PB,
+      profileSlug: "deal",
+      on: "created",
+      mode: "propose",
+    });
+    expect(kind.trigger).toEqual({
+      triggerType: "event",
+      subjectCategory: "entity",
+      profileSlug: "deal",
+      actionVerb: "created",
+    });
+    expect(
+      playbookActivatorSentence({
+        playbookId: PB,
+        profileSlug: "deal",
+        on: "created",
+        profileKind: "kind",
+        mode: "propose",
+      })
+    ).toEqual(kind);
+  });
+
   it("the 'Always propose this' sentence is the created/propose activator", () => {
     expect(
       proposePlaybookOnKindSentence({ playbookId: PB, profileSlug: "deal" })

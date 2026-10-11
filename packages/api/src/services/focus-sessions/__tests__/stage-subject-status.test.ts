@@ -11,11 +11,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   proc: null as null | {
     stages: Array<Record<string, unknown>>;
+    profileSlug?: string | null;
     statusProperty: string | null;
     humanOnlyStatuses: string[];
   },
-  entity: null as null | { properties: Record<string, unknown>; workspaceId: string },
-  update: vi.fn(async (_input: Record<string, unknown>) => ({ status: "updated" }) as Record<string, unknown>),
+  entity: null as null | {
+    properties: Record<string, unknown>;
+    workspaceId: string;
+  },
+  update: vi.fn(
+    async (_input: Record<string, unknown>) =>
+      ({ status: "updated" }) as Record<string, unknown>
+  ),
   ctx: [] as Array<Record<string, unknown>>,
   // The status door. Default: the kind declares no lifecycle → the legacy
   // governed entity-update path below runs (what the cases above pin).
@@ -29,6 +36,16 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("../../lifecycle/move-status.js", () => ({ moveStatus: h.move }));
+// The ONE kind-or-role reader (shared with the activators). Default: a kind.
+const subjectProfile = vi.hoisted(() => ({
+  read: vi.fn(async (_slug: string, _ws: string | null) => ({
+    profileKind: "kind" as "kind" | "role",
+    lifecycleProperty: null as string | null,
+  })),
+}));
+vi.mock("../../playbooks/playbook-activators.js", () => ({
+  readSubjectProfile: subjectProfile.read,
+}));
 
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
@@ -71,7 +88,17 @@ const STAGES = [
 ];
 
 beforeEach(() => {
-  h.proc = { stages: STAGES, statusProperty: "post-status", humanOnlyStatuses: [] };
+  h.proc = {
+    stages: STAGES,
+    profileSlug: "post",
+    statusProperty: "post-status",
+    humanOnlyStatuses: [],
+  } as typeof h.proc;
+  subjectProfile.read.mockClear();
+  subjectProfile.read.mockResolvedValue({
+    profileKind: "kind",
+    lifecycleProperty: null,
+  });
   h.entity = { properties: { "post-status": "idea" }, workspaceId: "ws-1" };
   h.update.mockClear();
   h.update.mockResolvedValue({ status: "updated" });
@@ -93,7 +120,11 @@ describe("writeStageSubjectStatus — the status door (work model L2)", () => {
       userId: "owner-1",
       agentUserId: "agent-1",
     });
-    expect(out).toEqual({ status: "written", property: "post-status", value: "drafting" });
+    expect(out).toEqual({
+      status: "written",
+      property: "post-status",
+      value: "drafting",
+    });
     expect(h.update).not.toHaveBeenCalled();
     expect(h.move.mock.calls[0]![0]).toMatchObject({
       entityId: "post-1",
@@ -145,7 +176,11 @@ describe("writeStageSubjectStatus", () => {
       userId: "owner-1",
       agentUserId: "agent-1",
     });
-    expect(out).toEqual({ status: "written", property: "post-status", value: "drafting" });
+    expect(out).toEqual({
+      status: "written",
+      property: "post-status",
+      value: "drafting",
+    });
     expect(h.update).toHaveBeenCalledTimes(1);
     expect(h.update.mock.calls[0]![0]).toMatchObject({
       id: "post-1",
@@ -157,7 +192,10 @@ describe("writeStageSubjectStatus", () => {
   });
 
   it("a PROPOSED write is success, reported with its proposal", async () => {
-    h.update.mockResolvedValueOnce({ status: "proposed", proposalId: "prop-9" });
+    h.update.mockResolvedValueOnce({
+      status: "proposed",
+      proposalId: "prop-9",
+    });
     const out = await writeStageSubjectStatus({
       session: SESSION,
       toStage: "publish",
@@ -173,29 +211,164 @@ describe("writeStageSubjectStatus", () => {
   });
 
   it("LOOP GUARD: the subject already holds the value → nothing is written", async () => {
-    h.entity = { properties: { "post-status": "drafting" }, workspaceId: "ws-1" };
-    const out = await writeStageSubjectStatus({ session: SESSION, toStage: "draft", userId: "owner-1" });
+    h.entity = {
+      properties: { "post-status": "drafting" },
+      workspaceId: "ws-1",
+    };
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "draft",
+      userId: "owner-1",
+    });
     expect(out).toEqual({ status: "skipped", reason: "already_set" });
     expect(h.update).not.toHaveBeenCalled();
   });
 
   it("a human-only status is always proposed (forcePropose)", async () => {
     h.proc!.humanOnlyStatuses = ["published"];
-    await writeStageSubjectStatus({ session: SESSION, toStage: "publish", userId: "owner-1" });
-    expect(h.update.mock.calls[0]![0]).toMatchObject({ forcePropose: true, source: "user" });
+    await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "publish",
+      userId: "owner-1",
+    });
+    expect(h.update.mock.calls[0]![0]).toMatchObject({
+      forcePropose: true,
+      source: "user",
+    });
   });
 
   it("skips — no subject, no statusProperty, a stage with no subjectStatus", async () => {
     expect(
-      await writeStageSubjectStatus({ session: { ...SESSION, subjectEntityId: null }, toStage: "draft", userId: "u" })
+      await writeStageSubjectStatus({
+        session: { ...SESSION, subjectEntityId: null },
+        toStage: "draft",
+        userId: "u",
+      })
     ).toEqual({ status: "skipped", reason: "no_subject" });
     expect(
-      await writeStageSubjectStatus({ session: SESSION, toStage: "idea", userId: "u" })
+      await writeStageSubjectStatus({
+        session: SESSION,
+        toStage: "idea",
+        userId: "u",
+      })
     ).toEqual({ status: "skipped", reason: "stage_has_no_subject_status" });
     h.proc!.statusProperty = null;
     expect(
-      await writeStageSubjectStatus({ session: SESSION, toStage: "draft", userId: "u" })
+      await writeStageSubjectStatus({
+        session: SESSION,
+        toStage: "draft",
+        userId: "u",
+      })
     ).toEqual({ status: "skipped", reason: "no_status_property" });
     expect(h.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * R1 — a ROLE subject (`subjectProfile.profileSlug` is a role-profile). The
+ * status lives on the role's FACET: the stage moves it through the status door
+ * naming the role, and NEVER falls back to writing the parent entity's JSONB —
+ * the defect this pins: a `lead` process wrote `leadStage` onto the person's
+ * properties (a status no reader looks at) and reported `written`.
+ */
+describe("writeStageSubjectStatus — a ROLE subject (R1)", () => {
+  const LEAD_STAGES = [
+    { key: "research", name: "Research", subjectStatus: "prospect" },
+    { key: "decide", name: "Decide", subjectStatus: "qualified" },
+  ];
+  beforeEach(() => {
+    h.proc = {
+      stages: LEAD_STAGES,
+      profileSlug: "lead",
+      statusProperty: "leadStage",
+      humanOnlyStatuses: [],
+    };
+    // The parent is a person; a stale JSONB copy of the role's status must
+    // not short-circuit the facet move.
+    h.entity = { properties: { leadStage: "qualified" }, workspaceId: "ws-1" };
+    subjectProfile.read.mockResolvedValue({
+      profileKind: "role",
+      lifecycleProperty: "leadStage",
+    });
+  });
+
+  it("moves the FACET's status through moveStatus, naming the role — never entities.update", async () => {
+    h.move.mockResolvedValue({ status: "moved", transition: {} });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "decide",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+    });
+    expect(out).toEqual({
+      status: "written",
+      property: "leadStage",
+      value: "qualified",
+    });
+    expect(subjectProfile.read).toHaveBeenCalledWith("lead", "ws-1");
+    expect(h.move).toHaveBeenCalledTimes(1);
+    expect(h.move.mock.calls[0]![0]).toMatchObject({
+      entityId: "post-1",
+      role: "lead",
+      property: "leadStage",
+      to: "qualified",
+      workspaceId: "ws-1",
+      actor: { kind: "agent", agentUserId: "agent-1", userId: "owner-1" },
+    });
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it("a role with NO declared lifecycle is a FAILED write — never the parent's JSONB, never `written`", async () => {
+    h.move.mockResolvedValue({
+      status: "refused",
+      code: "NO_LIFECYCLE",
+      reason: '"lead" declares no lifecycle',
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "research",
+      userId: "owner-1",
+    });
+    expect(out).toEqual({
+      status: "failed",
+      reason: '"lead" declares no lifecycle',
+    });
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it("the role is not attached → failed, nothing written", async () => {
+    h.move.mockResolvedValue({
+      status: "refused",
+      code: "ROLE_NOT_ATTACHED",
+      reason: "no lead facet",
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "research",
+      userId: "owner-1",
+    });
+    expect(out.status).toBe("failed");
+    expect(h.move.mock.calls[0]![0]).toMatchObject({ role: "lead" });
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it("a proposed role move is success, with the playbook's human-only floor", async () => {
+    h.proc!.humanOnlyStatuses = ["qualified"];
+    h.move.mockResolvedValue({
+      status: "proposed",
+      proposalId: "p-7",
+      proposalType: "entity.transition",
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "decide",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+    });
+    expect(out).toMatchObject({ status: "proposed", proposalId: "p-7" });
+    expect(h.move.mock.calls[0]![0]).toMatchObject({
+      role: "lead",
+      forcePropose: true,
+    });
   });
 });

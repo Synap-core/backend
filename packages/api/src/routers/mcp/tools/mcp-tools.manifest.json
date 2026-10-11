@@ -6670,6 +6670,10 @@
                       "profileSlug": {
                         "type": "string"
                       },
+                      "profileKind": {
+                        "type": "string",
+                        "enum": ["kind", "role"]
+                      },
                       "actionVerb": {
                         "type": "string",
                         "enum": [

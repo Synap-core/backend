@@ -196,13 +196,21 @@ export function activatorRuleDecl(input: {
       }),
     };
   }
+  // A ROLE is not created, it is ATTACHED (Kind + Facets): "a lead is
+  // created" means a lead role landed on a person — the facet-attach event,
+  // which fires whether the role came with a new entity or onto an existing
+  // one. The entity-create event names the KIND and would never match.
+  const role = subject.profileKind === "role";
   return {
     key,
-    intent: `When a ${kind} is created, ${verb} "${input.playbookName}" on it.`,
+    intent: role
+      ? `When something becomes a ${kind}, ${verb} "${input.playbookName}" on it.`
+      : `When a ${kind} is created, ${verb} "${input.playbookName}" on it.`,
     sentence: playbookActivatorSentence({
       playbookId,
       profileSlug,
       on: "created",
+      ...(role ? { profileKind: "role" as const } : {}),
       mode: a.mode,
     }),
   };
@@ -220,8 +228,12 @@ export interface SubjectLifecycle {
  * the playbook's workspace sees under that slug. A slug the pod does not know
  * reads as a kind with no lifecycle: the property-change compile, exactly what
  * this module did before lifecycles existed.
+ *
+ * The ONE reader of "is this process's subject a kind or a role" — the stage
+ * door (`focus-sessions/stage-subject-status.ts`) asks it too, so an activator
+ * and the stage write can never disagree about where the status lives.
  */
-async function readSubjectLifecycle(
+export async function readSubjectProfile(
   profileSlug: string,
   workspaceId: string | null
 ): Promise<SubjectLifecycle> {
@@ -387,9 +399,11 @@ async function applyOnce(input: {
   /** Rules that should be LIVE after this pass — their automations get linked. */
   const liveRuleIds = new Set<string>();
 
+  // Every activator needs it: `enters_status` for where the status lives,
+  // `created` because a ROLE is never created — it is attached.
   const subject =
-    process.profileSlug && declared.some((a) => a.on === "enters_status")
-      ? await readSubjectLifecycle(process.profileSlug, pb.workspaceId)
+    process.profileSlug && declared.length > 0
+      ? await readSubjectProfile(process.profileSlug, pb.workspaceId)
       : { profileKind: "kind" as const, lifecycleProperty: null };
   for (const activator of declared) {
     const built = process.profileSlug

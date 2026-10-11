@@ -375,6 +375,29 @@ describe("the transition event (work model L2) → run stage", () => {
     expect(out[0]).toMatchObject({ kind: "ignored", reason: "stale_event" });
   });
 
+  // R1: two roles of one entity may name their lifecycle property alike. A
+  // process follows ITS role's move only.
+  it("a run ON the role follows that role's move", async () => {
+    h.sessions = [session("schedule")];
+    h.facetStatus = "published";
+    h.proc = { ...(h.proc as Record<string, unknown>), profileSlug: "lead" };
+    const out = await syncProcessOnEvent(
+      transition({ role: "lead", facetId: "facet-1" })
+    );
+    expect(out[0]).toMatchObject({ kind: "followed", toStage: "publish" });
+  });
+
+  it("a run on ANOTHER role of the same entity does not follow it", async () => {
+    h.sessions = [session("schedule")];
+    h.facetStatus = "published";
+    h.proc = { ...(h.proc as Record<string, unknown>), profileSlug: "client" };
+    const out = await syncProcessOnEvent(
+      transition({ role: "lead", facetId: "facet-1" })
+    );
+    expect(h.advances).toEqual([]);
+    expect(out).toEqual([]);
+  });
+
   it("a KIND's transition is left to the dual-emitted update event (no double follow)", async () => {
     h.sessions = [session("schedule")];
     h.subject = { "post-status": "published" };

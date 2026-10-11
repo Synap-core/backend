@@ -28,6 +28,11 @@ import { readSubjectLifecycle, type PlaybookStage } from "@synap/playbooks";
 
 export interface SessionProcess {
   stages: PlaybookStage[];
+  /**
+   * The subject profile the process runs on — a KIND or a ROLE. A role's
+   * status lives on its facet, so the forward write must name it.
+   */
+  profileSlug: string | null;
   statusProperty: string | null;
   humanOnlyStatuses: string[];
 }
@@ -70,7 +75,7 @@ export async function loadSessionProcess(input: {
     }
   }
   if (!stages) return null;
-  const { statusProperty, humanOnlyStatuses } =
+  const { profileSlug, statusProperty, humanOnlyStatuses } =
     readSubjectLifecycle(subjectProfile);
-  return { stages, statusProperty, humanOnlyStatuses };
+  return { stages, profileSlug, statusProperty, humanOnlyStatuses };
 }

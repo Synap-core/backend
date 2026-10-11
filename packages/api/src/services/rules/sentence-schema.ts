@@ -148,6 +148,10 @@ const sentenceTriggerSchema = z.object({
   // event
   subjectCategory: subjectCategorySchema.optional(),
   profileSlug: z.string().optional(),
+  // A ROLE subject: `created` then compiles to the facet-attach event. Without
+  // it here the wire strips it and a role's activator silently reverts to the
+  // entity-create event, which names the kind and never matches.
+  profileKind: z.enum(["kind", "role"]).optional(),
   actionVerb: actionVerbSchema.optional(),
   conditions: z.array(conditionRowSchema).optional(),
   // cron

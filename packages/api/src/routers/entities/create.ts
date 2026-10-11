@@ -71,7 +71,11 @@ import { syncPropertyToRelations } from "../../utils/property-relation-sync.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js";
 import { createLogger } from "@synap-core/core";
-import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
+import {
+  emitFacetSideEffects,
+  entityWriteVisibleWhere,
+  toApiEntity,
+} from "./helpers.js";
 import { assertDocumentAttachable } from "./mutate.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
@@ -1708,6 +1712,25 @@ export const createProcs = {
             status: "attached",
             outcome: "attached",
             facetId: adapterFacet.id,
+          });
+          // The adapter's attach went through the repository (fact bus only),
+          // so no automation saw the role land. Emit what the facet door
+          // emits: a role's `created` activator ("a lead is created") fires on
+          // `entity_facet.attach` (R1), whichever door attached the role.
+          emitFacetSideEffects({
+            action: "attach",
+            entityId: createdEntity.id,
+            facetId: adapterFacet.id,
+            profileSlug: earlyResolvedProfile.slug,
+            status: adapterFacet.status,
+            userId: ctx.userId,
+            workspaceId: adapterFacet.workspaceId ?? governanceWorkspaceId,
+            sessionId: ctx.sessionId ?? null,
+            entityTitle: createdEntity.title,
+            origin: ctx.origin,
+            proposalId:
+              ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
+              ctx.governanceProposalId,
           });
         }
       }
