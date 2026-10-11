@@ -35,6 +35,9 @@ import type {
   RemapPropertyValuesOp,
   MoveBasePropertyToFacetOp,
   RenamePropertyKeyOp,
+  RemapFacetPropertyValuesOp,
+  FoldRoleIntoStatusOp,
+  RenameProfileOp,
   MergeIntoScope,
 } from "./manifest.js";
 import {
@@ -124,6 +127,12 @@ export interface OpCounts {
   entitiesBasePropertyStripped?: number;
   /** moveBasePropertyToFacet: entities with the source value but NO live target facet — left untouched, counted for follow-up. */
   entitiesSkippedNoFacet?: number;
+  /** remapFacetPropertyValues: facet instances whose value was remapped. */
+  facetsRemapped?: number;
+  /** foldRoleIntoStatus: entities whose existing target-role facet(s) received the status. */
+  facetsFolded?: number;
+  /** renameProfile: entities whose `type` was rewritten to the new slug. */
+  entitiesRetyped?: number;
   /** renamePropertyKey: entities whose sourceKey was renamed/stripped. */
   entitiesKeyRenamed?: number;
   /** renamePropertyKey: of those, entities that carried BOTH keys — the losing value was discarded per onConflict. */
@@ -235,6 +244,11 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   remapPropertyValues: "advisory",
   moveBasePropertyToFacet: "advisory",
   renamePropertyKey: "advisory",
+  remapFacetPropertyValues: "advisory",
+  // Identity ops: a half-applied fold or rename leaves a thing wearing a dead
+  // role or a kind under two names.
+  foldRoleIntoStatus: "fatal",
+  renameProfile: "fatal",
   reconcileEntityScope: "advisory",
   reconcileFacetScope: "advisory",
   keep: "advisory",
@@ -262,7 +276,8 @@ export function opHasDestructiveTail(op: ConversionOp): boolean {
   return (
     op.op === "mergeInto" ||
     op.op === "dedupeProfileRows" ||
-    op.op === "dedupeRelationDefs"
+    op.op === "dedupeRelationDefs" ||
+    op.op === "foldRoleIntoStatus"
   );
 }
 
@@ -577,6 +592,12 @@ async function applyOp(
       return applyMoveBasePropertyToFacet(tx, op);
     case "renamePropertyKey":
       return applyRenamePropertyKey(tx, op);
+    case "remapFacetPropertyValues":
+      return applyRemapFacetPropertyValues(tx, op);
+    case "foldRoleIntoStatus":
+      return applyFoldRoleIntoStatus(tx, op, options.destructiveTail);
+    case "renameProfile":
+      return applyRenameProfile(tx, op);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -2124,6 +2145,255 @@ export async function applyRenamePropertyKey(
   return counts;
 }
 
+/**
+ * remapPropertyValues for a role's facet instances. See
+ * RemapFacetPropertyValuesOp. Two shapes: an IN-PLACE value remap (sourceKey
+ * === targetKey) and a key MOVE (source stripped; a preferred existing target
+ * value wins).
+ */
+export async function applyRemapFacetPropertyValues(
+  tx: Sql,
+  op: RemapFacetPropertyValuesOp
+): Promise<OpCounts> {
+  const mapJson = buildValueMapJson(op.valueMap);
+  const preferValues = op.preferTargetValues ?? [];
+  const res =
+    op.sourceKey === op.targetKey
+      ? await tx`
+          UPDATE entity_facets f
+          SET properties = f.properties || jsonb_build_object(
+                ${op.targetKey}::text, ${mapJson}::jsonb -> (f.properties->>${op.sourceKey})
+              ),
+              updated_at = now()
+          FROM profiles p
+          WHERE f.profile_id = p.id AND p.slug = ${op.slug}
+            AND f.deleted_at IS NULL
+            AND f.properties ? ${op.sourceKey}::text
+            AND ${mapJson}::jsonb ? (f.properties->>${op.sourceKey})
+        `
+      : await tx`
+          UPDATE entity_facets f
+          SET properties = (COALESCE(f.properties, '{}'::jsonb) - ${op.sourceKey}::text)
+                || jsonb_build_object(
+                     ${op.targetKey}::text,
+                     CASE
+                       WHEN f.properties ? ${op.targetKey}::text
+                         AND (f.properties->>${op.targetKey}) = ANY(${preferValues}::text[])
+                       THEN f.properties -> ${op.targetKey}::text
+                       ELSE ${mapJson}::jsonb -> (f.properties->>${op.sourceKey})
+                     END
+                   ),
+              updated_at = now()
+          FROM profiles p
+          WHERE f.profile_id = p.id AND p.slug = ${op.slug}
+            AND f.deleted_at IS NULL
+            AND f.properties ? ${op.sourceKey}::text
+            AND ${mapJson}::jsonb ? (f.properties->>${op.sourceKey})
+        `;
+  const n = res.count ?? 0;
+  return n > 0 ? { facetsRemapped: n } : {};
+}
+
+/**
+ * Fold a state-as-role into a status value of another role. See
+ * FoldRoleIntoStatusOp. One transaction (runConversions wraps applyOp); a
+ * folded source facet is soft-deleted, never hard-deleted.
+ */
+export async function applyFoldRoleIntoStatus(
+  tx: Sql,
+  op: FoldRoleIntoStatusOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const counts: OpCounts = {};
+  const mappingJson = buildValueMapJson(op.propertyMapping);
+  const retire = async (entityIds: string[], into: string): Promise<number> => {
+    if (entityIds.length === 0) return 0;
+    const r = await tx`
+      UPDATE entity_facets ff
+      SET deleted_at = now(), updated_at = now(),
+          metadata = COALESCE(ff.metadata, '{}'::jsonb)
+            || jsonb_build_object('foldedInto', ${into}::text, 'conversion', ${op.opKey}::text)
+      FROM profiles fp
+      WHERE ff.profile_id = fp.id AND fp.slug = ${op.slug}
+        AND ff.deleted_at IS NULL AND ff.entity_id = ANY(${entityIds}::uuid[])
+    `;
+    return r.count ?? 0;
+  };
+  let deactivated = 0;
+
+  // (a) Targets in order: the first role the entity already wears takes it.
+  for (const t of op.targets) {
+    const rows = await tx<Array<{ entity_id: string }>>`
+      WITH src AS (
+        SELECT DISTINCT ON (ff.entity_id) ff.entity_id, ff.properties AS fprops
+        FROM entity_facets ff
+        JOIN profiles fp ON fp.id = ff.profile_id AND fp.slug = ${op.slug}
+        WHERE ff.deleted_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM entity_facets tf
+            JOIN profiles tp ON tp.id = tf.profile_id AND tp.slug = ${t.role}
+            WHERE tf.entity_id = ff.entity_id AND tf.deleted_at IS NULL
+          )
+        ORDER BY ff.entity_id, ff.id
+      ),
+      mapped AS (
+        SELECT src.entity_id,
+               COALESCE((
+                 SELECT jsonb_object_agg(m.value, src.fprops -> m.key)
+                 FROM jsonb_each_text(${mappingJson}::jsonb) m
+                 WHERE COALESCE(src.fprops, '{}'::jsonb) ? m.key
+               ), '{}'::jsonb) AS extra
+        FROM src
+      )
+      UPDATE entity_facets tf
+      SET properties = mapped.extra || COALESCE(tf.properties, '{}'::jsonb)
+            || jsonb_build_object(${t.statusKey}::text, ${t.value}::text),
+          updated_at = now()
+      FROM mapped, profiles tp
+      WHERE tf.entity_id = mapped.entity_id AND tf.profile_id = tp.id
+        AND tp.slug = ${t.role} AND tf.deleted_at IS NULL
+      RETURNING tf.entity_id
+    `;
+    const ids = [...new Set(rows.map((r) => r.entity_id))];
+    counts.facetsFolded = (counts.facetsFolded ?? 0) + ids.length;
+    deactivated += await retire(ids, t.role);
+  }
+
+  // (b) No target worn: attach targets[0], or park.
+  const left = await tx<
+    Array<{
+      id: string;
+      entity_id: string;
+      user_id: string;
+      workspace_id: string | null;
+      context_entity_id: string | null;
+      properties: Record<string, unknown> | null;
+    }>
+  >`
+    SELECT ff.id, ff.entity_id, ff.user_id, ff.workspace_id, ff.context_entity_id, ff.properties
+    FROM entity_facets ff
+    JOIN profiles fp ON fp.id = ff.profile_id AND fp.slug = ${op.slug}
+    WHERE ff.deleted_at IS NULL
+    ORDER BY ff.entity_id, ff.id
+  `;
+  if (left.length > 0 && op.whenNoTarget === "park") {
+    counts.facetsParked = left.length;
+  } else if (left.length > 0) {
+    const first = op.targets[0]!;
+    const attachedEntities: string[] = [];
+    for (const f of left) {
+      const targetId = await resolveTargetProfileId(
+        tx,
+        first.role,
+        f.workspace_id
+      );
+      if (!targetId) {
+        counts.facetsParked = (counts.facetsParked ?? 0) + 1;
+        continue;
+      }
+      const props: Record<string, unknown> = {};
+      for (const [from, to] of Object.entries(op.propertyMapping ?? {})) {
+        if (f.properties && from in f.properties)
+          props[to] = f.properties[from];
+      }
+      props[first.statusKey] = first.value;
+      // The entity wears no target facet at all (set (a) took every one that
+      // did), so this cannot collide with the live-facet unique key — except a
+      // second source facet of the SAME entity in the SAME lens, guarded here.
+      const ins = await tx`
+        INSERT INTO entity_facets
+          (entity_id, profile_id, user_id, workspace_id, context_entity_id, properties, metadata)
+        SELECT ${f.entity_id}::uuid, ${targetId}::uuid, ${f.user_id}, ${f.workspace_id}::uuid,
+               ${f.context_entity_id}::uuid, ${JSON.stringify(props)}::jsonb,
+               jsonb_build_object('convertedFrom', ${op.slug}::text, 'conversion', ${op.opKey}::text)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM entity_facets x
+          WHERE x.entity_id = ${f.entity_id}::uuid AND x.profile_id = ${targetId}::uuid
+            AND x.deleted_at IS NULL
+            AND x.workspace_id IS NOT DISTINCT FROM ${f.workspace_id}::uuid
+            AND x.context_entity_id IS NOT DISTINCT FROM ${f.context_entity_id}::uuid
+        )
+      `;
+      counts.facetsCreated = (counts.facetsCreated ?? 0) + (ins.count ?? 0);
+      attachedEntities.push(f.entity_id);
+    }
+    deactivated += await retire([...new Set(attachedEntities)], first.role);
+  }
+  if (deactivated > 0) counts.facetsDeactivated = deactivated;
+
+  // Destructive tail: retire the drained role row(s).
+  if (destructiveTail) {
+    const drained = await tx<Array<{ id: string }>>`
+      SELECT p.id FROM profiles p
+      WHERE p.slug = ${op.slug} AND p.is_active = true
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_facets f WHERE f.profile_id = p.id AND f.deleted_at IS NULL
+        )
+    `;
+    const n = await retireDrainedProfiles(
+      tx,
+      drained.map((r) => r.id),
+      { at: new Date().toISOString(), reason: `conversion:${op.opKey}` }
+    );
+    if (n > 0) counts.profilesDeactivated = n;
+  }
+  return counts;
+}
+
+/**
+ * Rename a profile slug in place. See RenameProfileOp. Refuses (throws) when
+ * an active `toSlug` row already holds the same scope + workspace as a row
+ * being renamed — that is a merge, and renaming would mint a twin.
+ */
+export async function applyRenameProfile(
+  tx: Sql,
+  op: RenameProfileOp
+): Promise<OpCounts> {
+  assertProfileSlugNotReserved(op.toSlug);
+  const clash = await tx<
+    Array<{ scope: string | null; workspace_id: string | null }>
+  >`
+    SELECT src.scope, src.workspace_id FROM profiles src
+    JOIN profiles k ON k.slug = ${op.toSlug} AND k.is_active = true
+      AND k.scope IS NOT DISTINCT FROM src.scope
+      AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
+    WHERE src.slug = ${op.slug} AND src.is_active = true
+  `;
+  if (clash.length > 0) {
+    const where = clash
+      .map(
+        (c) =>
+          `scope=${c.scope ?? "NULL"}, workspace=${c.workspace_id ?? "NULL"}`
+      )
+      .join("; ");
+    throw new Error(
+      `renameProfile '${op.opKey}': an active '${op.toSlug}' row already exists beside '${op.slug}' (${where}) — that is a merge, not a rename. Fix: use mergeInto for that pair.`
+    );
+  }
+  const rows = await tx<Array<{ id: string }>>`
+    SELECT id FROM profiles WHERE slug = ${op.slug}
+  `;
+  if (rows.length === 0) return {};
+  const ids = rows.map((r) => r.id);
+  const ents = await tx`
+    UPDATE entities SET type = ${op.toSlug}, updated_at = now()
+    WHERE profile_id = ANY(${ids}::uuid[]) AND type IS DISTINCT FROM ${op.toSlug}
+  `;
+  const prof = op.displayName
+    ? await tx`
+        UPDATE profiles SET slug = ${op.toSlug}, display_name = ${op.displayName}, updated_at = now()
+        WHERE id = ANY(${ids}::uuid[])
+      `
+    : await tx`
+        UPDATE profiles SET slug = ${op.toSlug}, updated_at = now()
+        WHERE id = ANY(${ids}::uuid[])
+      `;
+  const counts: OpCounts = {};
+  if (prof.count) counts.profilesUpdated = prof.count;
+  if (ents.count) counts.entitiesRetyped = ents.count;
+  return counts;
+}
+
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
 export async function computeCounts(
@@ -2192,6 +2462,9 @@ export async function computeCounts(
     case "dedupeProfileRows":
     case "dedupeRelationDefs":
     case "renamePropertyKey":
+    case "remapFacetPropertyValues":
+    case "foldRoleIntoStatus":
+    case "renameProfile":
       // Derived, not mirrored: the apply itself, rolled back. (renamePropertyKey
       // carries no field plan — opCarriesFieldPlan stays merge/dedupe only — but
       // its counts come from the same rolled-back apply, never a count query.)

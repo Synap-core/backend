@@ -32,7 +32,10 @@ export type ConversionOp =
   | ReconcileFacetScopeOp
   | RemapPropertyValuesOp
   | MoveBasePropertyToFacetOp
-  | RenamePropertyKeyOp;
+  | RenamePropertyKeyOp
+  | RemapFacetPropertyValuesOp
+  | FoldRoleIntoStatusOp
+  | RenameProfileOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -473,6 +476,79 @@ export interface RenamePropertyKeyOp extends BaseOp {
   /** See {@link CanonicalPrecondition}. */
   requiresCanonical?: CanonicalPrecondition;
 }
+
+/**
+ * `remapPropertyValues` for a ROLE's facet instances: remap the VALUES of one
+ * key in `entity_facets.properties` through a value map, writing them under
+ * `targetKey` (which MAY equal `sourceKey` — an in-place value remap, e.g.
+ * leadStage `prospect` → `new`). When the keys differ the source key is
+ * stripped. Only live facets of a profile whose slug is `slug` and whose
+ * source value HAS a mapping are touched; unmapped values keep their key.
+ * `preferTargetValues`: an existing target value in this set wins over the
+ * mapped source value (the source is still stripped).
+ *
+ * Idempotent: a moved key is stripped (keys differ), and an in-place remap's
+ * output values are not map keys (validated), so a re-run selects nothing.
+ * Not destructive-tail. Mark `deferAtBoot` for a cutover an operator runs.
+ */
+export interface RemapFacetPropertyValuesOp extends BaseOp {
+  op: "remapFacetPropertyValues";
+  /** Role slug whose facet instances are remapped. */
+  slug: string;
+  sourceKey: string;
+  targetKey: string;
+  valueMap: Record<string, string>;
+  preferTargetValues?: string[];
+}
+
+/**
+ * Fold a STATE that was modelled as a ROLE into a status value of another role
+ * ("a state is never a role" — the `churned` role becomes `clientStatus:
+ * churned`). Per live facet F of role `slug`, in one transaction:
+ *   (a) the FIRST target role (in `targets` order) the entity already wears
+ *       live receives `properties[statusKey] = value` on every live facet of
+ *       that role on the entity, plus F's `propertyMapping` keys (collision-
+ *       skipped: an existing value is never clobbered);
+ *   (b) if the entity wears NO target role: `whenNoTarget: "attachFirst"`
+ *       attaches `targets[0]` (same lens/user/context as F, carrying the status
+ *       and mapped keys; `metadata.convertedFrom`); `"park"` leaves F alone and
+ *       counts it (`facetsParked`) for a human call;
+ *   (c) F is soft-deleted (its row and properties survive for audit).
+ * DESTRUCTIVE TAIL (operator `--destructive-tail` only): the `slug` profile
+ * rows left with no live facet are deactivated + tombstoned. Idempotent: a
+ * re-run finds no live F (parked ones are re-parked, never duplicated).
+ */
+export interface FoldRoleIntoStatusOp extends BaseOp {
+  op: "foldRoleIntoStatus";
+  /** The role being retired into a status value. */
+  slug: string;
+  targets: Array<{ role: string; statusKey: string; value: string }>;
+  /** F's property key → target facet property key. */
+  propertyMapping?: Record<string, string>;
+  whenNoTarget: "attachFirst" | "park";
+}
+
+/**
+ * Rename a profile SLUG in place (the profile ROW keeps its id, so property
+ * defs, profile links, views and relation edges — all keyed by id — follow for
+ * free), and rewrite `entities.type` of its entities. Optional new
+ * `displayName` (`semantic_slug` is left to the template reconcile). REFUSES (throws, nothing written) when an
+ * active `toSlug` row already exists at the same scope + workspace as a row
+ * being renamed — that is a merge, not a rename (use `mergeInto`). Slug-keyed
+ * CONFIG elsewhere (automation/playbook JSON naming the old slug) is NOT
+ * rewritten: the template that declares the new slug is the fix for those.
+ * Idempotent: after a run no row carries `slug`. Not destructive-tail; its
+ * boot severity is fatal (identity), so mark it `deferAtBoot`.
+ */
+export interface RenameProfileOp extends BaseOp {
+  op: "renameProfile";
+  /** The slug being renamed. */
+  slug: string;
+  toSlug: string;
+  displayName?: string;
+}
+
+export const FOLD_ROLE_NO_TARGET = ["attachFirst", "park"] as const;
 
 export const RENAME_PROPERTY_KEY_CONFLICTS = [
   "keepTarget",
@@ -1573,6 +1649,150 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       },
       preferTargetValues: ["proposed", "negotiating", "won", "lost"],
     },
+
+    // ─── Work model wave 0: a state is never a role ───────────────────────────
+    //
+    // The `churned` role duplicated `clientStatus: churned` (catalog retired it
+    // 2026-10-11). Each live churned facet sets `churned` on the client facet
+    // the entity wears, else its partner facet; a churned party wearing
+    // neither gets a client facet at `churned` (an ended relationship was a
+    // client relationship — the catalog's own `churned` description). Its
+    // churnedDate / churnReason / notes move along, never clobbering. The
+    // drained `churned` rows retire only under --destructive-tail.
+    {
+      op: "foldRoleIntoStatus",
+      opKey: "w12.role.churned-into-status",
+      deferAtBoot: true,
+      slug: "churned",
+      targets: [
+        { role: "client", statusKey: "clientStatus", value: "churned" },
+        { role: "partner", statusKey: "partnerStatus", value: "churned" },
+      ],
+      propertyMapping: {
+        churnedDate: "churnedDate",
+        churnReason: "churnReason",
+        notes: "notes",
+      },
+      whenNoTarget: "attachFirst",
+    },
+
+    // ─── Work model wave 0: a lead has ONE lifecycle, `leadStage` ─────────────
+    //
+    // (1) Business Developer's `lifecycleStage` overlay folds onto leadStage.
+    // An explicit leadStage wins (any value but the old untouched default
+    // `prospect`), exactly as the CRM app's resolveLeadStage reads it. (2) the
+    // old base values move onto the qualification vocabulary.
+    {
+      op: "remapFacetPropertyValues",
+      opKey: "w12.lead.lifecycle-stage-fold",
+      deferAtBoot: true,
+      slug: "lead",
+      sourceKey: "lifecycleStage",
+      targetKey: "leadStage",
+      valueMap: {
+        new: "new",
+        researching: "researching",
+        outreach: "outreach",
+        engaged: "engaged",
+        qualified: "qualified",
+        nurturing: "nurturing",
+        converted: "converted",
+        disqualified: "disqualified",
+      },
+      preferTargetValues: [
+        "new",
+        "researching",
+        "outreach",
+        "engaged",
+        "qualified",
+        "nurturing",
+        "converted",
+        "disqualified",
+        "lost",
+      ],
+    },
+    {
+      op: "remapFacetPropertyValues",
+      opKey: "w12.lead.legacy-stage-values",
+      deferAtBoot: true,
+      slug: "lead",
+      sourceKey: "leadStage",
+      targetKey: "leadStage",
+      valueMap: { prospect: "new", lost: "disqualified" },
+    },
+
+    // ─── Work model wave 0: "pipeline" names only the view (kinds) ────────────
+    //
+    // content-studio's stored `content-pipeline` kind is `production-recipe` in
+    // the catalog; rename the row in place (id kept), then its keys. A pod that
+    // somehow already holds a `production-recipe` row beside it is refused
+    // (that is a merge), never twinned.
+    {
+      op: "renameProfile",
+      opKey: "w12.content.pipeline-kind-to-production-recipe",
+      deferAtBoot: true,
+      slug: "content-pipeline",
+      toSlug: "production-recipe",
+      displayName: "Production recipe",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "w12.content.recipe-key.pipeline-kind",
+      deferAtBoot: true,
+      slug: "production-recipe",
+      sourceKey: "pipeline-kind",
+      targetKey: "recipe-kind",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "w12.content.recipe-key.pipeline-platform",
+      deferAtBoot: true,
+      slug: "production-recipe",
+      sourceKey: "pipeline-platform",
+      targetKey: "recipe-platform",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "w12.content.recipe-key.pipeline-mode",
+      deferAtBoot: true,
+      slug: "production-recipe",
+      sourceKey: "pipeline-mode",
+      targetKey: "recipe-mode",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "w12.content.recipe-key.pipeline-script",
+      deferAtBoot: true,
+      slug: "production-recipe",
+      sourceKey: "pipeline-script",
+      targetKey: "recipe-script",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "w12.content.recipe-key.pipeline-stages",
+      deferAtBoot: true,
+      slug: "production-recipe",
+      sourceKey: "pipeline-stages",
+      targetKey: "recipe-stages",
+      onConflict: "keepTarget",
+    },
+    // A POD-ONLY CRM kind named `pipeline` ("Named pipelines and their stage
+    // configurations for different sales motions") exists on both live pods
+    // and in no catalog file. MCP reads saw 0 entities on either pod, but a
+    // scoped read is not proof, so it is RENAMED (safe whether empty or not)
+    // rather than retired: `sales-motion` is what it describes.
+    {
+      op: "renameProfile",
+      opKey: "w12.crm.pipeline-kind-to-sales-motion",
+      deferAtBoot: true,
+      slug: "pipeline",
+      toSlug: "sales-motion",
+      displayName: "Sales motion",
+    },
   ],
 };
 
@@ -1594,6 +1814,9 @@ export const CONVERSION_OP_TYPES = [
   "remapPropertyValues",
   "moveBasePropertyToFacet",
   "renamePropertyKey",
+  "remapFacetPropertyValues",
+  "foldRoleIntoStatus",
+  "renameProfile",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -1823,6 +2046,64 @@ export function validateManifest(manifest: ConversionManifest): void {
           );
         }
         validateCanonicalPrecondition(op.opKey, op.requiresCanonical);
+        break;
+      case "remapFacetPropertyValues": {
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.sourceKey, "sourceKey");
+        requireSlug(op.opKey, op.targetKey, "targetKey");
+        const keys = Object.keys(op.valueMap ?? {});
+        if (keys.length === 0) {
+          throw new Error(
+            `Conversion manifest: remapFacetPropertyValues '${op.opKey}' needs a non-empty valueMap`
+          );
+        }
+        // An IN-PLACE remap must not map onto another map key, or a re-run
+        // would remap again (prospect→new, new→… would chain).
+        if (op.sourceKey === op.targetKey) {
+          const chained = Object.values(op.valueMap).filter((v) =>
+            keys.includes(v)
+          );
+          if (chained.length > 0) {
+            throw new Error(
+              `Conversion manifest: remapFacetPropertyValues '${op.opKey}' remaps in place onto map key(s) ${chained.join(", ")} — not idempotent`
+            );
+          }
+        }
+        break;
+      }
+      case "foldRoleIntoStatus":
+        requireSlug(op.opKey, op.slug);
+        if (!Array.isArray(op.targets) || op.targets.length === 0) {
+          throw new Error(
+            `Conversion manifest: foldRoleIntoStatus '${op.opKey}' needs at least one target`
+          );
+        }
+        for (const t of op.targets) {
+          requireSlug(op.opKey, t.role, "targets.role");
+          requireSlug(op.opKey, t.statusKey, "targets.statusKey");
+          requireSlug(op.opKey, t.value, "targets.value");
+          if (t.role === op.slug) {
+            throw new Error(
+              `Conversion manifest: foldRoleIntoStatus '${op.opKey}' cannot fold '${op.slug}' into itself`
+            );
+          }
+        }
+        if (
+          !(FOLD_ROLE_NO_TARGET as readonly string[]).includes(op.whenNoTarget)
+        ) {
+          throw new Error(
+            `Conversion manifest: foldRoleIntoStatus '${op.opKey}' has invalid whenNoTarget '${op.whenNoTarget}'`
+          );
+        }
+        break;
+      case "renameProfile":
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.toSlug, "toSlug");
+        if (op.slug === op.toSlug) {
+          throw new Error(
+            `Conversion manifest: renameProfile '${op.opKey}' cannot rename '${op.slug}' to itself`
+          );
+        }
         break;
     }
   }
