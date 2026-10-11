@@ -3126,7 +3126,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "playbook" | "automation" | "agent" | "human";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3141,7 +3141,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "playbook" | "automation" | "agent" | "human";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3247,7 +3247,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3709,7 +3709,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4506,7 +4506,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4528,7 +4528,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "session" | "project";
+			data: "project" | "session";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4543,7 +4543,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "session" | "project";
+			$type: "project" | "session";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -5035,6 +5035,12 @@ export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
 	displayOrder: number;
+	/**
+	 * This property IS the profile's lifecycle (work model L1) — the same
+	 * answer as `getEffectiveLifecycle`, from the same rule
+	 * (`nearestLifecycleLink`). Read it; never guess from a select's name.
+	 */
+	isLifecycle: boolean;
 }
 /**
  * RendererRef — what a profile or workspace stores as its renderer choice
@@ -7003,6 +7009,14 @@ export interface CompositeCreateEntityOp {
 		status?: string;
 		properties?: Record<string, unknown>;
 		contextRef?: string;
+		/**
+		 * When the role is ALREADY on the entity at an EARLIER status of its
+		 * lifecycle, move it forward to `status` through the facet door
+		 * (`entities.updateFacet` → `moveStatus`). A role already at or past
+		 * `status` keeps its stage — never moved backwards, never resurrected.
+		 * Absent ⇒ a re-attach leaves the existing role untouched (today's rule).
+		 */
+		advanceExisting?: boolean;
 	}>;
 	/**
 	 * External records this entity mirrors (e.g. a connection sync's Google
@@ -10456,6 +10470,7 @@ declare const OperationalEventTypes: {
 		readonly domain: "Entity";
 		readonly description: "Fires when a thing's lifecycle status moves (the kind's own, or a role's), through the one moveStatus door.";
 		readonly filterKeys: [
+			"lifecycleProfile",
 			"profileSlug",
 			"role",
 			"property",
@@ -17946,6 +17961,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sourceSha256?: string | undefined;
 				anchorEntityId?: string | undefined;
 				intentText?: string | undefined;
+				captureRound?: number | undefined;
 			};
 			output: {
 				sourceFileStaged: {
@@ -18056,6 +18072,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityId: string;
 					profileSlug: string;
 					linked: boolean;
+					action: "linked" | "created" | "updated" | "matched";
 				}[];
 				relations: {
 					sourceEntityId: string;
@@ -18120,6 +18137,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityId: string;
 					profileSlug: string;
 					linked: boolean;
+					action: "linked" | "created" | "updated" | "matched";
 				}[];
 				relations: {
 					sourceEntityId: string;
@@ -18184,6 +18202,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityId: string;
 					profileSlug: string;
 					linked: boolean;
+					action: "linked" | "created" | "updated" | "matched";
 				}[];
 				relations: {
 					sourceEntityId: string;
@@ -18242,6 +18261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityId: string;
 					profileSlug: string;
 					linked: boolean;
+					action: "linked" | "created" | "updated" | "matched";
 				}[];
 				relations: {
 					sourceEntityId: string;
@@ -19655,7 +19675,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19709,7 +19729,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20407,7 +20427,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20461,7 +20481,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20509,7 +20529,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20563,7 +20583,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20625,7 +20645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20679,7 +20699,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -26086,7 +26106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "automation";
 				automationId: string;
 				name: string;
-				status: "active" | "archived" | "draft" | "paused" | "error";
+				status: "active" | "archived" | "error" | "draft" | "paused";
 			} | {
 				kind: "playbook";
 				playbookId: string;
@@ -26105,7 +26125,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automations: {
 					automationId: string;
 					name: string;
-					status: "active" | "archived" | "draft" | "paused" | "error";
+					status: "active" | "archived" | "error" | "draft" | "paused";
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					nextRunAt: Date | null;
 				}[];
@@ -34523,7 +34543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -35434,7 +35454,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				status?: "active" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "paused" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -35526,7 +35546,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				patch: {
 					params?: Record<string, unknown> | undefined;
-					status?: "active" | "paused" | "error" | undefined;
+					status?: "active" | "error" | "paused" | undefined;
 					cursor?: string | undefined;
 				};
 			};
@@ -35650,7 +35670,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				sourceConfigId?: string | undefined;
-				status?: "active" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "paused" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -35768,7 +35788,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
 				limit?: number | undefined;
 			} | undefined;
@@ -35782,7 +35802,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "draft" | "paused" | "error";
+					status: "active" | "archived" | "error" | "draft" | "paused";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -35810,7 +35830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listPage: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
@@ -35825,7 +35845,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "draft" | "paused" | "error";
+					status: "active" | "archived" | "error" | "draft" | "paused";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -35950,7 +35970,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				id: string;
 				workspaceId: string | null;
-				status: "active" | "archived" | "draft" | "paused" | "error";
+				status: "active" | "archived" | "error" | "draft" | "paused";
 				version: number;
 				createdAt: Date;
 				updatedAt: Date;
@@ -35990,7 +36010,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				description?: string | undefined;
 				triggerConfig?: Record<string, unknown> | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				state?: Record<string, unknown> | undefined;
 				agentUserId?: string | undefined;
@@ -36022,7 +36042,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					edges: Record<string, unknown>[];
 					precondition?: string | undefined;
 				} | undefined;
-				status?: "active" | "draft" | "paused" | "error" | undefined;
+				status?: "active" | "error" | "draft" | "paused" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				state?: Record<string, unknown> | undefined;
 			};
@@ -40981,6 +41001,99 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal?: string | undefined;
 			};
 			output: StartStageSessionResult;
+			meta: object;
+		}>;
+	}>>;
+	lifecycle: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				opRef?: string | undefined;
+				reasonCode?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug: string;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				profileSlug: string;
+				profileKind: "kind" | "role";
+				property: string;
+				options: {
+					key: string;
+					label: string;
+					category: "active" | "paused" | "open" | "done" | "lost";
+					tone: string;
+					humanOnly: boolean;
+				}[];
+			};
+			meta: object;
+		}>;
+		board: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug: string;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+				workspaceId?: string | null | undefined;
+				window?: {
+					days: number;
+				} | undefined;
+				firstN?: number | undefined;
+			};
+			output: {
+				lifecycle: {
+					profileSlug: string;
+					profileKind: "kind" | "role";
+					property: string;
+					options: {
+						key: string;
+						label: string;
+						category: "active" | "paused" | "open" | "done" | "lost";
+						tone: string;
+						humanOnly: boolean;
+					}[];
+				};
+				columns: {
+					key: string;
+					category: "active" | "paused" | "open" | "done" | "lost" | null;
+					count: number;
+					items: {
+						id: string;
+						name: string | null;
+						status: string | null;
+						enteredAt: string | null;
+						since: string;
+					}[];
+					windowed: boolean;
+				}[];
+				doneWindowed: number;
+				lostWindowed: number;
+				total: number;
+				live: number;
+				hasWorker: boolean;
+				suggestedShape: "list" | "board";
+				window: {
+					days: number;
+					since: string;
+				};
+			};
 			meta: object;
 		}>;
 	}>>;
