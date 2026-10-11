@@ -37,7 +37,10 @@ import {
   createAndVerifyHubInboundKey,
   type RegistrationResult,
 } from "./external-registration.js";
-import { agentKeyGrantPermissions } from "@synap-core/types/grants";
+import {
+  agentKeyGrantPermissions,
+  aiDefaultCapabilities,
+} from "@synap-core/types/grants";
 import { attachGrantOrRevoke } from "./key-grant.js";
 import {
   AGENT_KEY_TTL_DAYS,
@@ -734,6 +737,8 @@ export async function createNamedAgent(opts: {
     creatorId: opts.createdByUserId,
     agentType: opts.agentType,
     label: opts.name,
+    // A NEW AI starts with "AI — read & propose"; an existing one keeps its own.
+    metadata: { capabilities: aiDefaultCapabilities() },
   });
 
   // Ensure a managed REGISTRY row exists for this agent-user so it appears as a
@@ -963,6 +968,8 @@ export async function provisionSurfaceAgentKey(
     label: agentLabel,
     metadata: {
       description: opts.agentDescription ?? `${agentLabel} — external agent`,
+      // A NEW AI starts with "AI — read & propose"; an existing one keeps its own.
+      capabilities: aiDefaultCapabilities(),
     },
     logger,
   });

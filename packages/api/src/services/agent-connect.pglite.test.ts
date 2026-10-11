@@ -33,7 +33,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  // The mint door's event append goes to the live postgres client; here the
+  // rows under test are the key and its grant, not the event log.
+  class EventRepository {
+    async append(e: unknown) {
+      return e;
+    }
+  }
+  return { ...actual, db: h.db, getDb: async () => h.db, EventRepository };
 });
 
 vi.mock("../utils/audit-log.js", () => ({ auditLog: async () => null }));
@@ -75,8 +82,14 @@ import {
 } from "@synap-core/types/grants";
 import {
   attachAgentKeyGrant,
+  createNamedAgent,
+  provisionSurfaceAgentKey,
   reapplyAgentKeyGrants,
 } from "./agent-identity-service.js";
+import { aiDefaultCapabilities } from "@synap-core/types/grants";
+import { decideAgentPolicy } from "@synap/governance-policy";
+import { mcpToolAllowed } from "../access/grant-door-fence.js";
+import { grantWriteDenial } from "../utils/grant-write-check.js";
 import {
   approvePendingAgentKey,
   fileAgentConnectProposal,
@@ -451,5 +464,106 @@ describe("agent/updateCapabilities — an edit that became a proposal applies on
     await expect(approveCaps(id, data)).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
+  });
+});
+
+describe('a NEW agent from /setup/agent starts with "AI — read & propose"', () => {
+  it("its key resolves to the preset: ask/orient/session/facet yes; delete/approve/vault no", async () => {
+    const res = await provisionSurfaceAgentKey({
+      agentType: "fresh-surface",
+      createdByUserId: OWNER,
+      linkedUserId: OWNER,
+    });
+    expect(res.alreadyValid).not.toBe(true);
+    const keyId = (res as { keyId: string }).keyId;
+    const caps = (
+      await q<{ caps: string[] }>(
+        `select agent_metadata -> 'capabilities' as caps from users where id = $1`,
+        [res.agentUserId]
+      )
+    ).rows[0]!.caps;
+    expect(caps).toEqual(aiDefaultCapabilities());
+
+    const grant = (await new GrantRepository(h.db as never).resolveForKey(
+      keyId
+    ))!;
+    expect(grant.scopes.flatMap((s) => [...s.permissions]).sort()).toEqual(
+      agentKeyGrantPermissions(aiDefaultCapabilities()).permissions.sort()
+    );
+
+    for (const tool of ["synap_ask", "synap_orient", "synap_list_sessions"])
+      expect(mcpToolAllowed(tool, true, grant), tool).toBe(true);
+
+    const write = (subjectType: string, action: string) =>
+      grantWriteDenial(
+        {
+          subjectType,
+          action,
+          data: subjectType === "entity" ? { profileSlug: "note" } : {},
+        },
+        grant
+      );
+    const rung = (subjectType: string, action: string) =>
+      decideAgentPolicy({
+        subjectType,
+        action,
+        agentCapabilities: caps,
+        subjectKind: subjectType === "entity" ? "note" : undefined,
+      } as Parameters<typeof decideAgentPolicy>[0]).verdict !== "deny";
+
+    for (const [subject, action] of [
+      ["focus_session", "create"],
+      ["facet", "attach"],
+      ["entity", "create"],
+    ] as const) {
+      expect(await write(subject, action), `${subject}.${action}`).toBeNull();
+      expect(rung(subject, action), `${subject}.${action}`).toBe(true);
+    }
+    for (const [subject, action] of [
+      ["entity", "delete"],
+      ["proposal", "approve"],
+      ["vault", "grant"],
+    ] as const) {
+      expect(
+        await write(subject, action),
+        `${subject}.${action}`
+      ).not.toBeNull();
+      expect(rung(subject, action), `${subject}.${action}`).toBe(false);
+    }
+  });
+
+  it("createNamedAgent: a new named agent starts with the preset too", async () => {
+    const res = await createNamedAgent({
+      name: "Named",
+      agentType: "named-fresh",
+      createdByUserId: OWNER,
+    });
+    const caps = (
+      await q<{ caps: string[] }>(
+        `select agent_metadata -> 'capabilities' as caps from users where id = $1`,
+        [res.agentUserId]
+      )
+    ).rows[0]!.caps;
+    expect(caps).toEqual(aiDefaultCapabilities());
+  });
+
+  it("an EXISTING agent keeps its own limits ([] stays full access)", async () => {
+    const res = await provisionSurfaceAgentKey({
+      agentType: "codex",
+      createdByUserId: OWNER,
+      linkedUserId: OWNER,
+    });
+    expect(res.agentUserId).toBe(FULL_AGENT);
+    const caps = (
+      await q<{ caps: string[] }>(
+        `select agent_metadata -> 'capabilities' as caps from users where id = $1`,
+        [FULL_AGENT]
+      )
+    ).rows[0]!.caps;
+    expect(caps).toEqual([]);
+    const keyId = (res as { keyId: string }).keyId;
+    expect(await grantOf(keyId)).toEqual([
+      { permissions: ["*"], workspaceIds: null },
+    ]);
   });
 });

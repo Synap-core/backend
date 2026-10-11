@@ -81,6 +81,7 @@ vi.mock("../utils/audit-log.js", () => ({ auditLog: () => {} }));
 
 import { agentUsersRouter } from "./agent-users.js";
 import type { Context } from "../types/context.js";
+import { MAX_GRANT_PERMISSIONS } from "@synap-core/types/grants";
 
 const caller = () =>
   agentUsersRouter.createCaller({
@@ -135,7 +136,10 @@ describe("agentUsers.update — capabilities bind the agent's keys", () => {
   });
 
   it("a list that cannot fit one grant is refused", async () => {
-    const many = Array.from({ length: 70 }, (_, i) => `entity.k${i}.create`);
+    const many = Array.from(
+      { length: MAX_GRANT_PERMISSIONS + 1 },
+      (_, i) => `entity.k${i}.create`
+    );
     await expect(update(many)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(h.gated).toEqual([]);
   });
