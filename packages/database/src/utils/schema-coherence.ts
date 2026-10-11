@@ -1422,6 +1422,30 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0174_entity_facets.sql",
   },
 
+  // Lifecycle (0319, work model W12): the kind/role status columns and the
+  // one-lifecycle flag. Absence means `moveStatus` and the lifecycle resolver
+  // would hit a missing column.
+  {
+    table: "entities",
+    column: "status",
+    addedBy: "0319_lifecycle_columns.sql",
+  },
+  {
+    table: "entities",
+    column: "status_category",
+    addedBy: "0319_lifecycle_columns.sql",
+  },
+  {
+    table: "entity_facets",
+    column: "status_category",
+    addedBy: "0319_lifecycle_columns.sql",
+  },
+  {
+    table: "profile_properties",
+    column: "is_lifecycle",
+    addedBy: "0319_lifecycle_columns.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.

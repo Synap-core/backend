@@ -49,7 +49,12 @@ export const entityFacets = pgTable(
       onDelete: "set null",
     }),
 
+    // LIFECYCLE (0319, W12): a ROLE's status is this column pair — the truth.
+    // `properties[<lifecycle slug>]` is its READ PROJECTION, written through
+    // only by the `moveStatus` door. `statusCategory` is one of the fixed
+    // `LIFECYCLE_CATEGORIES`, CHECKed in the database.
     status: text("status"),
+    statusCategory: text("status_category"),
 
     // Validated against the role-profile's effective properties.
     properties: jsonb("properties").default("{}").notNull(),
@@ -76,6 +81,9 @@ export const entityFacets = pgTable(
       .where(sql`${table.deletedAt} IS NULL`),
     profileWorkspaceIdx: index("entity_facets_profile_workspace_idx")
       .on(table.profileId, table.workspaceId)
+      .where(sql`${table.deletedAt} IS NULL`),
+    profileStatusCategoryIdx: index("entity_facets_profile_status_category_idx")
+      .on(table.profileId, table.statusCategory)
       .where(sql`${table.deletedAt} IS NULL`),
     // Re-attach after soft-detach must succeed — partial unique index only
     // covers live rows. Matches migration 0174's COALESCE-sentinel index.

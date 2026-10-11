@@ -15,6 +15,7 @@ import {
   jsonb,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { documents } from "./documents.js";
 import { profiles } from "./profiles.js";
 import type { ProvenanceKind } from "./provenance.js";
@@ -65,6 +66,15 @@ export const entities = pgTable(
     // Validated against profile property definitions
     properties: jsonb("properties").default("{}").notNull(),
 
+    // LIFECYCLE (0319, work model W12): the kind's status is THIS column pair —
+    // the truth. `properties[<lifecycle slug>]` is its READ PROJECTION, written
+    // through only by the `moveStatus` door (`services/lifecycle/move-status.ts`).
+    // `statusCategory` is one of the fixed `LIFECYCLE_CATEGORIES`
+    // (`utils/lifecycle-model.ts`), CHECKed in the database. NULL = the kind
+    // declares no lifecycle (or a stored value no option declares).
+    status: text("status"),
+    statusCategory: text("status_category"),
+
     // System data (JSONB) - System-managed state, separate from user properties
     // Stores: viewMode ('document' | 'bento'), bentoViewId (uuid of entity bento view)
     // Never shown in property editors; not validated against profile schema.
@@ -101,6 +111,9 @@ export const entities = pgTable(
       table.deletedAt
     ),
     profileIdIdx: index("entities_profile_id_idx").on(table.profileId),
+    profileStatusCategoryIdx: index("entities_profile_status_category_idx")
+      .on(table.profileId, table.statusCategory)
+      .where(sql`${table.deletedAt} IS NULL`),
     typeWorkspaceIdx: index("entities_type_workspace_idx").on(
       table.type,
       table.workspaceId

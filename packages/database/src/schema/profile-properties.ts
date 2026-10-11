@@ -13,7 +13,9 @@ import {
   integer,
   primaryKey,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { profiles } from "./profiles.js";
 import { propertyDefs } from "./property-defs.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
@@ -35,6 +37,12 @@ export const profileProperties = pgTable(
 
     // Display order (for UI)
     displayOrder: integer("display_order").default(0).notNull(),
+
+    // LIFECYCLE (0319, W12): this property IS the profile's lifecycle. At most
+    // one per profile — `profile_properties_one_lifecycle_uniq` (partial unique
+    // on profile_id WHERE is_lifecycle). Its options live on the def at
+    // `constraints.enumOptions` (`utils/property-enum.ts`, the one mapper).
+    isLifecycle: boolean("is_lifecycle").default(false).notNull(),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.profileId, table.propertyDefId] }),
@@ -42,6 +50,9 @@ export const profileProperties = pgTable(
     propertyDefIdx: index("profile_properties_property_def_id_idx").on(
       table.propertyDefId
     ),
+    oneLifecycleUniq: uniqueIndex("profile_properties_one_lifecycle_uniq")
+      .on(table.profileId)
+      .where(sql`${table.isLifecycle}`),
   })
 );
 

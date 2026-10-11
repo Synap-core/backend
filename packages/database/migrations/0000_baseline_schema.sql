@@ -4932,3 +4932,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
 CREATE INDEX IF NOT EXISTS "apps_owner_idx" ON "apps" ("owner_user_id");
 CREATE UNIQUE INDEX IF NOT EXISTS "apps_agent_user_unique"
   ON "apps" ("agent_user_id") WHERE "agent_user_id" IS NOT NULL;
+
+-- 0319: lifecycle columns (work model W12–W14). The columns are the truth;
+-- `properties[<lifecycle slug>]` is the read projection written by moveStatus.
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "status" text;
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "status_category" text;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "status_category" text;
+ALTER TABLE "profile_properties" ADD COLUMN IF NOT EXISTS "is_lifecycle" boolean NOT NULL DEFAULT false;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entities_status_category_check') THEN
+    ALTER TABLE "entities" ADD CONSTRAINT "entities_status_category_check"
+      CHECK ("status_category" IS NULL OR "status_category" IN ('open','active','paused','done','lost'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entity_facets_status_category_check') THEN
+    ALTER TABLE "entity_facets" ADD CONSTRAINT "entity_facets_status_category_check"
+      CHECK ("status_category" IS NULL OR "status_category" IN ('open','active','paused','done','lost'));
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS "profile_properties_one_lifecycle_uniq"
+  ON "profile_properties" ("profile_id") WHERE "is_lifecycle";
+CREATE INDEX IF NOT EXISTS "entities_profile_status_category_idx"
+  ON "entities" ("profile_id", "status_category") WHERE "deleted_at" IS NULL;
+CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_category_idx"
+  ON "entity_facets" ("profile_id", "status_category") WHERE "deleted_at" IS NULL;
