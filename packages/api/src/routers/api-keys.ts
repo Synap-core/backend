@@ -14,6 +14,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { integrationKindSchema } from "@synap-core/types";
+import { isAppPublicId } from "@synap-core/types/membrane";
 import { API_KEY_SCOPES } from "@synap/database/schema";
 import {
   db,
@@ -25,6 +26,8 @@ import {
   EventRepository,
   ApiKeyRepository,
   GrantRepository,
+  GrantRoleRepository,
+  isNull,
   type KeyReach,
   sql,
 } from "@synap/database";
@@ -38,6 +41,7 @@ import {
 } from "../services/key-grant.js";
 import {
   apiKeys,
+  grants,
   workspaceMembers,
   mcpConnectCodes,
   users,
@@ -164,6 +168,8 @@ export const apiKeysRouter = router({
       linkedUserId: key.linkedUserId,
       /** True when an agent acting for you holds this key, not you. */
       heldByAgent: key.userId !== ctx.userId,
+      /** Who holds it: you, or the agent user acting for you (its holder page). */
+      holderUserId: key.userId,
       /** What this key may touch (W1): `access` + every live grant. */
       ...reachOf(key.id),
       scope: key.scope,
@@ -521,6 +527,121 @@ export const apiKeysRouter = router({
         status: "rotated" as const,
         message: "Save this new key securely. It will not be displayed again.",
       };
+    }),
+
+  /**
+   * Replace what a LIVE key may touch — its owner, signed in, on the key's
+   * own page. One grant set per key (`GrantRepository.attachMany` revokes the
+   * previous set in the same transaction), and the key's bound is resolved per
+   * request (`resolveKeyIdentity`), so a narrowing refuses the next call.
+   *
+   * Signed-in session only: a key cannot reshape its own access, and a
+   * proposal replay (no session) cannot reach it. Owner = the key's holder or
+   * the person an agent-held key acts for (the keys `list` shows). An app's
+   * key is changed on the app's page, where its approved requests live.
+   */
+  setGrants: protectedProcedure
+    .input(
+      z.object({
+        keyId: z.string().uuid(),
+        grants: z.array(GrantInputSchema).min(1).max(64),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (!ctx.session || ctx.keyType || ctx.agentUserId || ctx.isHubProtocol) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Change a key's access while signed in.",
+        });
+      }
+      const key = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, input.keyId),
+      });
+      if (
+        !key ||
+        (key.userId !== ctx.userId && key.linkedUserId !== ctx.userId)
+      ) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "API key not found",
+        });
+      }
+      if (
+        !key.isActive ||
+        key.revokedAt ||
+        (key.expiresAt && key.expiresAt.getTime() <= Date.now())
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This key no longer works — there is nothing to change.",
+        });
+      }
+      const [appGrant] = await db
+        .select({ clientId: grants.clientId })
+        .from(grants)
+        .where(and(eq(grants.apiKeyId, key.id), isNull(grants.revokedAt)))
+        .limit(1);
+      if (isAppPublicId(appGrant?.clientId)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This key belongs to an app — change its access on the app's page.",
+        });
+      }
+      for (const grant of input.grants) {
+        assertGrantInput(grant);
+        if (
+          grant.roleId &&
+          !(await new GrantRoleRepository(db).findOwned(
+            ctx.userId,
+            grant.roleId
+          ))
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "That role is not one of yours.",
+          });
+        }
+      }
+
+      await new GrantRepository(db).attachMany(
+        input.grants.map((grant) => ({
+          apiKeyId: key.id,
+          principalUserId: key.userId,
+          onBehalfOf: key.linkedUserId ?? key.userId,
+          permissions: grant.permissions,
+          workspaceIds: grant.workspaceIds ?? null,
+          projectIds: grant.projectIds ?? null,
+          entityIds: grant.entityIds ?? null,
+          expiresAt: key.expiresAt ?? null,
+          label: grant.label ?? null,
+          roleId: grant.roleId ?? null,
+          createdBy: ctx.userId,
+        }))
+      );
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: key.id,
+        userId: ctx.userId,
+        data: {
+          grants: input.grants.map((g) => ({
+            permissions: g.permissions,
+            workspaceIds: g.workspaceIds ?? null,
+          })),
+        },
+      });
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "update",
+        subjectId: key.id,
+        userId: ctx.userId,
+      });
+
+      const reach = await loadKeyReach([key.id]);
+      return { status: "updated" as const, ...reach(key.id) };
     }),
 
   /**
