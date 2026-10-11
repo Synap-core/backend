@@ -45,6 +45,8 @@ export interface CaptureGraphEntity {
     status?: string;
     properties?: Record<string, unknown>;
     contextRef?: string;
+    /** See CompositeCreateEntityOp.facets[].advanceExisting. */
+    advanceExisting?: boolean;
   }>;
 }
 

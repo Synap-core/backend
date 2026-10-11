@@ -102,6 +102,18 @@ const flowAutomationTriggerConfigSchema = z
     }
   });
 
+/**
+ * `profiles[].lifecycle` (work model L1) — carried, not judged: the profile
+ * objects below are NOT passthrough, so an undeclared key is stripped, and the
+ * one install door (`installFromCatalog` → `createFromDefinition`) used to
+ * drop every catalog lifecycle here. The options are parsed by the apply's own
+ * door (`withLifecycleOptions` → `parseLifecycleOptions`).
+ */
+const templateLifecycleSchema = z.object({
+  property: z.string(),
+  options: z.array(z.record(z.string(), z.unknown())),
+});
+
 export const definitionEngineProcedures = {
   /**
    * PREFLIGHT the create path — write-free. The missing half of this door.
@@ -211,6 +223,9 @@ export const definitionEngineProcedures = {
                   // domain vocabulary.
                   profileKind: z.enum(["kind", "role"]).optional(),
                   applicableKinds: z.array(z.string()).optional(),
+                  // The profile's ONE lifecycle (work model L1). Validated by
+                  // the apply's own door (`withLifecycleOptions`), not here.
+                  lifecycle: templateLifecycleSchema.optional(),
                   // Proposal format: flat property list
                   properties: z
                     .array(
@@ -1756,6 +1771,7 @@ export const definitionEngineProcedures = {
                 // definitions. The materializer validates the combination.
                 profileKind: z.enum(["kind", "role"]).optional(),
                 applicableKinds: z.array(z.string()).optional(),
+                lifecycle: templateLifecycleSchema.optional(),
                 properties: z
                   .array(
                     z.object({

@@ -82,6 +82,8 @@ export function withLifecycleOptions<
 
 export type DeclareLifecycleResult =
   | { status: "declared" | "unchanged"; propertyDefId: string }
+  /** `keepExisting`: the profile already declares `existing`; nothing changed. */
+  | { status: "kept"; existing: string }
   | { status: "refused"; reason: string };
 
 /**
@@ -89,10 +91,15 @@ export type DeclareLifecycleResult =
  * be LINKED to this profile directly, its def must carry categorized options,
  * and no ancestor may declare a DIFFERENT lifecycle (a child never adds a
  * second one). Refusals are returned, not thrown — the caller reports them.
+ *
+ * `keepExisting` is for a template applying onto a profile it REUSES (a system
+ * kind, or a shared role another template created): it may declare the
+ * lifecycle the profile does not have yet, but never replace one the profile
+ * already declares — that is answered `kept`, and nothing is written.
  */
 export async function declareLifecycle(
   db: Db,
-  input: { profileId: string; propertySlug: string }
+  input: { profileId: string; propertySlug: string; keepExisting?: boolean }
 ): Promise<DeclareLifecycleResult> {
   const links = await db
     .select({
@@ -108,6 +115,13 @@ export async function declareLifecycle(
       eq(propertyDefs.id, profileProperties.propertyDefId)
     )
     .where(eq(profileProperties.profileId, input.profileId));
+
+  if (input.keepExisting) {
+    const existing = links.find(
+      (l) => l.isLifecycle && l.slug !== input.propertySlug
+    );
+    if (existing) return { status: "kept", existing: existing.slug };
+  }
 
   const target = links.filter((l) => l.slug === input.propertySlug);
   if (target.length !== 1) {

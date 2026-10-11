@@ -1539,15 +1539,24 @@ export async function createWorkspaceFromDefinition(
           );
         }
       }
-      // Declare the lifecycle on a profile THIS definition owns. A reused
-      // profile (owned elsewhere) keeps its own lifecycle — appending options
-      // to it is the overlay path (deferred, C9).
-      if (profile.lifecycle && !profileIsReused) {
+      // Declare the lifecycle. A reused profile (a system kind like `deal`, a
+      // shared role another template created) is declared too, but keeps a
+      // lifecycle it already has (`keepExisting`) — appending options to it is
+      // the overlay path (deferred, C9). Its existing property def was not
+      // converged here, so a refusal on a reused profile is logged, never fatal:
+      // the next reconcile converges the options and declares it.
+      if (profile.lifecycle) {
         const declared = await declareLifecycle(dbConn, {
           profileId: created!.id,
           propertySlug: profile.lifecycle.property,
+          keepExisting: profileIsReused,
         });
-        if (declared.status === "refused") {
+        if (declared.status === "refused" && profileIsReused) {
+          logger.warn(
+            { slug: profile.slug, reason: declared.reason },
+            "Lifecycle not declared on a reused profile — reconcile will retry"
+          );
+        } else if (declared.status === "refused") {
           await handleStepError(
             `profiles[${profile.slug}].lifecycle`,
             new LifecycleDeclarationError(declared.reason)

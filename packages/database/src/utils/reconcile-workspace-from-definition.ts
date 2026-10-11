@@ -923,12 +923,15 @@ export async function reconcileWorkspaceFromDefinition(
       }
     }
 
-    // Declare the lifecycle on a profile THIS definition owns (a reused one
-    // keeps its own; appending to it is the overlay path, deferred C9).
-    if (lifecycleFolded && profile.lifecycle && !profileIsReused && !dryRun) {
+    // Declare the lifecycle. A REUSED profile is every profile on a re-apply
+    // (and a system kind like `deal` on a first one), so it is declared too —
+    // but never replaces a lifecycle it already has (`keepExisting`: a reused
+    // one keeps its own; appending to it is the overlay path, deferred C9).
+    if (lifecycleFolded && profile.lifecycle && !dryRun) {
       const declared = await declareLifecycle(dbConn, {
         profileId: resolved.id,
         propertySlug: profile.lifecycle.property,
+        keepExisting: profileIsReused,
       });
       if (declared.status === "refused") {
         report.properties.lifecycles!.refused.push({
