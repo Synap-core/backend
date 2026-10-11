@@ -150,6 +150,13 @@ describe("resolveActionProgressive — the in-flight verb", () => {
 });
 
 describe("resolveActionLabel — two moods", () => {
+  it("names the focus verbs in both moods (humanize has no past tense)", () => {
+    expect(resolveActionLabel("send_back", "imperative")).toBe("Send back");
+    expect(resolveActionLabel("send_back", "past")).toBe("Sent back");
+    expect(resolveActionLabel("message", "past")).toBe("Messaged");
+    expect(resolveActionLabel("move_on", "past")).toBe("Moved on");
+  });
+
   it("names the governed space operations in both moods (P1)", () => {
     expect(resolveActionLabel("move", "imperative")).toBe("Move");
     expect(resolveActionLabel("move", "past")).toBe("Moved");

@@ -332,6 +332,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   answer: { imperative: "Answer", past: "Answered" },
   review: { imperative: "Review", past: "Reviewed" },
   dismiss: { imperative: "Dismiss", past: "Dismissed" },
+  // The focus verbs (`lensFocus`, `@synap-core/types/lens`): a criterion the
+  // reader judges not met is SENT BACK (the scorecard's negative half beside
+  // `accept`); a working agent is MESSAGED from its room; a finished track step
+  // MOVES ON. Humanized, the receipts would read "Send back" / "Move on".
+  send_back: { imperative: "Send back", past: "Sent back" },
+  message: { imperative: "Message", past: "Messaged" },
+  move_on: { imperative: "Move on", past: "Moved on" },
   // CONNECTION lifecycle (`@synap-core/types/membrane`, the Connected page).
   // `revoke` / `expire` / `reconnect` / `approve` live above; these are the
   // verbs the connection action rules and lifecycle events add.

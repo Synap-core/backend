@@ -22,6 +22,10 @@
  * An obligation the reader HOLDS outranks one they merely have to JUDGE. That
  * is exactly `resolveUnitState`'s order (`needs_you` before `needs_review`), so
  * a unit's state chip and its layout can never disagree about what it wants.
+ *
+ * The PAGE-level lead (which section of a session / track page comes first,
+ * and its one primary action) is `lensFocus` (`../lens/focus.ts`), which takes
+ * this precedence verbatim and is held equal to it by `focus.test.ts`.
  */
 
 /**
