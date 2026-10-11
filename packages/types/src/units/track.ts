@@ -179,6 +179,34 @@ export interface TrackStageHistoryEntry {
   enteredAt: string;
   /** The user (or agent) id that moved it. */
   actor: string;
+  /**
+   * The verdict of the entered step's `check` ENTRY gate, which measured the
+   * step LEFT (`fromStage`). Present only when such a gate ran on this move;
+   * absent = no check gate ran (or the move predates the stamp, U5).
+   */
+  check?: TrackStageCheckVerdict;
+}
+
+/** A check gate's verdict on one move (`stage_history[].check`). */
+export interface TrackStageCheckVerdict {
+  passed: boolean;
+  /** Required criteria / outcomes not met; `CHECK_GATE_UNEVALUATED` = not measured. */
+  failing: string[];
+  reason?: string;
+}
+
+function readCheckVerdict(raw: unknown): TrackStageCheckVerdict | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.passed !== "boolean") return undefined;
+  const failing = Array.isArray(r.failing)
+    ? r.failing.filter((f): f is string => typeof f === "string")
+    : [];
+  return {
+    passed: r.passed,
+    failing,
+    ...(typeof r.reason === "string" && r.reason ? { reason: r.reason } : {}),
+  };
 }
 
 /** Read the untyped jsonb history; malformed entries are skipped, never thrown on. */
@@ -195,6 +223,9 @@ export function readTrackStageHistory(raw: unknown): TrackStageHistoryEntry[] {
       fromStage: typeof r.fromStage === "string" ? r.fromStage : null,
       enteredAt: r.enteredAt,
       actor: typeof r.actor === "string" ? r.actor : "",
+      ...(readCheckVerdict(r.check)
+        ? { check: readCheckVerdict(r.check)! }
+        : {}),
     });
   }
   return out;
@@ -297,6 +328,43 @@ export function trackPausedBy(track: {
     (meta as Record<string, unknown>)[CHECK_GATE_METADATA_KEY]
     ? "check"
     : "human";
+}
+
+/**
+ * What a check gate that HELD the track recorded (`metadata.checkGate`): the
+ * step entered (`stageKey`, whose entry gate it is), the step it measured
+ * (`fromStage`), what failed and why. Projected on every track read while the
+ * track is paused by it — `null` otherwise (the marker is cleared on every
+ * status change, so a stale one never leaks).
+ */
+export interface TrackCheckGate {
+  stageKey: string;
+  fromStage: string;
+  failing: string[];
+  reason: string | null;
+}
+
+export function readTrackCheckGate(track: {
+  status: string;
+  metadata?: unknown;
+}): TrackCheckGate | null {
+  if (trackPausedBy(track) !== "check") return null;
+  const raw = (track.metadata as Record<string, unknown>)[
+    CHECK_GATE_METADATA_KEY
+  ];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.stageKey !== "string" || typeof r.fromStage !== "string") {
+    return null;
+  }
+  return {
+    stageKey: r.stageKey,
+    fromStage: r.fromStage,
+    failing: Array.isArray(r.failing)
+      ? r.failing.filter((f): f is string => typeof f === "string")
+      : [],
+    reason: typeof r.reason === "string" && r.reason ? r.reason : null,
+  };
 }
 
 /**
