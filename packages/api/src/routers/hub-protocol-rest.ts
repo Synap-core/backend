@@ -82,6 +82,7 @@ import {
   registerCellInstancesRoutes,
   registerWhiteboardsRoutes,
   registerWorkspacesRoutes,
+  registerWorkspacesEnsureTemplateRoutes,
   registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
   registerMessagingRoutes,
@@ -279,6 +280,8 @@ app.use(
 registerAuthRoutes(app); // /auth/status — bearer introspection
 registerExchangeRoutes(app); // /auth/exchange — RFC 7523 JWT-Bearer Grant (no API-key auth)
 registerUsersRoutes(app); // /users/me
+// Static `/workspaces/ensure-template` BEFORE the `/workspaces/:id` family.
+registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Contract B)
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers

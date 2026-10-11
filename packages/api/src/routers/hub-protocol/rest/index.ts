@@ -11,6 +11,7 @@ export { registerHealthRoutes } from "./health.js";
 export { registerHealthDependenciesRoutes } from "./health-dependencies.js";
 export { registerUsersRoutes } from "./users.js";
 export { registerWorkspacesRoutes } from "./workspaces.js";
+export { registerWorkspacesEnsureTemplateRoutes } from "./workspaces-ensure-template.js";
 export { registerWorkspaceOpsRoutes } from "./workspace-ops.js";
 // Kept as its OWN export statement: `check-orphan-routes.mjs` recognises a
 // route file only via an `export { register*Routes }` block containing nothing

@@ -44,6 +44,10 @@ import {
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import { resolveWorkspaceTemplate } from "../services/capabilities/resolve-workspace-template.js";
+import {
+  readTemplateStanding,
+  type EnsureTemplateResult,
+} from "../services/ensure-template.js";
 import { TRPCError } from "@trpc/server";
 import {
   checkPermissionOrPropose,
@@ -1340,6 +1344,39 @@ export const workspacesRouter = router({
 });
 
 /**
+ * The body of `installFromCatalog`, shared with `ensureTemplate` so both reach
+ * the ONE install door. Resolves the FRESHEST definition cache-first via
+ * `resolveWorkspaceTemplate` (the SAME resolver the Hub adopt / approve paths
+ * use), then delegates to `createFromDefinition` — no forked provisioning
+ * path. `createFromDefinition` re-runs the protected middleware + tier gate
+ * against this same ctx, so an SDK caller gets identical governance. Defined
+ * outside the router so it can call `workspacesRouter` without a
+ * self-referencing initializer (which would infer the router as `any`).
+ */
+export async function installTemplateFromCatalog(
+  ctx: Parameters<typeof workspacesRouter.createCaller>[0],
+  input: { slug: string; workspaceId?: string; proposalId?: string }
+) {
+  const resolved = await resolveWorkspaceTemplate(input.slug);
+  if (!resolved) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Unknown workspace template: ${input.slug}`,
+    });
+  }
+  const caller = workspacesRouter.createCaller(ctx);
+  return caller.createFromDefinition({
+    definition: resolved.packageDefinition as unknown as Parameters<
+      typeof caller.createFromDefinition
+    >[0]["definition"],
+    packageSlug: input.slug,
+    packageVersion: resolved.version,
+    workspaceId: input.workspaceId,
+    proposalId: input.proposalId,
+  });
+}
+
+/**
  * Workspace CATALOG router — browse + slug-install the ONE marketplace catalog
  * of WORKSPACE templates, for pod-connected SDK / embedded apps that hold a
  * catalog slug rather than a hand-built definition.
@@ -1427,26 +1464,92 @@ export const workspaceCatalogRouter = router({
         proposalId: z.string().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
-      const resolved = await resolveWorkspaceTemplate(input.slug);
-      if (!resolved) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Unknown workspace template: ${input.slug}`,
-        });
+    .mutation(async ({ input, ctx }) => installTemplateFromCatalog(ctx, input)),
+
+  /**
+   * TEMPLATE-LIFECYCLE Contract B — "this app runs on template X": is it on
+   * the pod, and (with `install`) put it there through governance. Answers
+   * `installed` / `missing` / `proposed` / `installing` / `retired` / `exists`
+   * (a domain twin, one space per domain) / `not_in_catalog` (only after a
+   * complete catalog sync) / `unknown`. See `services/ensure-template.ts`.
+   *
+   * The install is governed by the ONE gate: an agent or app key gets a
+   * reviewable proposal (approved through the `workspace/create` executor,
+   * which replays the catalog definition), a person installs directly through
+   * `installFromCatalog`. The definition is ALWAYS the catalog's.
+   */
+  ensureTemplate: protectedProcedure
+    .input(
+      z.object({
+        slug: z.string().min(1),
+        install: z.boolean().optional(),
+        /** Why the app needs it — shown on the proposal a reviewer reads. */
+        reason: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }): Promise<EnsureTemplateResult> => {
+      const slug = input.slug.trim();
+      const standing = await readTemplateStanding(slug, ctx.userId);
+      if (standing.status !== "available") return standing;
+      if (!input.install) {
+        return { status: "missing", template: standing.template };
       }
-      // Delegate to the ONE shared create engine — never a second provisioning
-      // path. `createFromDefinition` re-runs the protected middleware + tier gate
-      // against this same ctx, so an SDK caller gets identical governance.
-      const caller = workspacesRouter.createCaller(ctx);
-      return caller.createFromDefinition({
-        definition: resolved.packageDefinition as unknown as Parameters<
-          typeof caller.createFromDefinition
-        >[0]["definition"],
-        packageSlug: input.slug,
-        packageVersion: resolved.version,
-        workspaceId: input.workspaceId,
-        proposalId: input.proposalId,
+
+      const resolved = await resolveWorkspaceTemplate(slug);
+      if (!resolved) return { status: "unknown" };
+      const definition = {
+        ...resolved.packageDefinition,
+        _meta: {
+          ...(resolved.packageDefinition._meta ?? {}),
+          slug,
+          ...(resolved.version ? { version: resolved.version } : {}),
+        },
+      };
+      const agentUserId = ctx.agentUserId ?? undefined;
+      // Same proposal payload the Hub `/packages/apply` door files, so the
+      // `workspace/create` approve executor materializes it AND runs its
+      // post-workspace layers (`source: "packages.apply"`).
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId,
+        workspaceId: null,
+        subjectType: "workspace",
+        action: "create",
+        data: {
+          name: standing.template.name,
+          definition,
+          templateId: slug,
+          packageSlug: slug,
+          packageVersion: resolved.version,
+          proposalId: slug,
+          createdBy: "provisioning",
+          source: "packages.apply",
+          via: "workspaces.ensureTemplate",
+          ...(input.reason ? { reason: input.reason } : {}),
+        },
       });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm && perm.proposalId && !perm.granted) {
+        return {
+          status: "proposed",
+          proposalId: perm.proposalId,
+          reviewUrl: perm.reviewUrl,
+        };
+      }
+
+      const installed = await installTemplateFromCatalog(ctx, { slug });
+      if (installed.status === "pending") {
+        return { status: "installing", workspaceId: installed.workspaceId };
+      }
+      return {
+        status: "installed",
+        workspaceId: installed.workspaceId,
+        version: resolved.version ?? null,
+        drifted: false,
+        lifecycle: "current",
+        replacedBy: null,
+      };
     }),
 });
