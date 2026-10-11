@@ -8263,6 +8263,19 @@ export interface TrackStageCheckVerdict {
  */
 export type TrackPausedBy = "check" | "human" | null;
 /**
+ * What a check gate that HELD the track recorded (`metadata.checkGate`): the
+ * step entered (`stageKey`, whose entry gate it is), the step it measured
+ * (`fromStage`), what failed and why. Projected on every track read while the
+ * track is paused by it — `null` otherwise (the marker is cleared on every
+ * status change, so a stale one never leaks).
+ */
+export interface TrackCheckGate {
+	stageKey: string;
+	fromStage: string;
+	failing: string[];
+	reason: string | null;
+}
+/**
  * The number a track steers by (`project_tracks.kpi`, 0302).
  *
  * `current` is STATED, never measured: nothing in the pod derives "qualified
@@ -14096,6 +14109,82 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
+/** Doors the event names — each opens that object's own page. */
+export interface TrackHistoryRefs {
+	sessionId?: string;
+	proposalId?: string;
+}
+export interface TrackHistoryEventBase {
+	/** Stable across reads — a client may key rows by it. */
+	id: string;
+	/** ISO-8601. */
+	at: string;
+	/** Who acted, named by the pod. A check is `system` with no name. */
+	actor: ActivityActor;
+	/**
+	 * The step the event belongs to — what it is grouped under. A move and its
+	 * check belong to the step ENTERED; a session or decision to the step it was
+	 * filed at; a status move to the step the track stood on. `null` = no step
+	 * (a stageless method, or a session filed at none).
+	 */
+	stageKey: string | null;
+	refs: TrackHistoryRefs;
+}
+export type TrackHistoryEvent = TrackHistoryEventBase & ({
+	kind: "track_started";
+} | {
+	kind: "step_moved";
+	/** The step left — `null` when the track entered its first step. */
+	fromStage: string | null;
+} | {
+	kind: "session_started";
+	title: string;
+} | {
+	kind: "session_closed";
+	title: string;
+	/** The session's settled status (`closed`, `cancelled`, `failed`, …). */
+	sessionStatus: string;
+	/** Its contract, graded (`computeSessionVerdict`). */
+	verdict: SessionVerdict["state"];
+} | {
+	/** A decision still PENDING — an open ask of a person. */
+	kind: "decision_asked";
+	title: string | null;
+} | {
+	kind: "decision_answered";
+	title: string | null;
+	/** `approved` | `rejected` | `reverted` | `approval_failed`. */
+	decision: string;
+	/** The reviewer's note, when one was left. */
+	note: string | null;
+} | {
+	/** The entered step's `check` gate measured the step LEFT: met. */
+	kind: "check_passed";
+	fromStage: string;
+} | {
+	/** …and it was NOT met — the track holds (`Paused · by a check`). */
+	kind: "check_held";
+	fromStage: string;
+	/** Required criteria / outcomes not met (`CHECK_GATE_UNEVALUATED` = not measured). */
+	failing: string[];
+	reason: string | null;
+} | {
+	kind: "paused";
+} | {
+	kind: "resumed";
+} | {
+	/** Any other status move (complete, reopen, archive). */
+	kind: "status_changed";
+	fromStatus: string;
+	toStatus: string;
+});
+/** The `tracks.history` read. Newest first. */
+export interface TrackHistoryWire {
+	trackId: string;
+	events: TrackHistoryEvent[];
+	/** A source hit its scan cap — older events exist and are not listed. */
+	truncated: boolean;
+}
 /** A session's deliverables, counted — the progress rail and the owed badge. */
 export interface DeliverableCounts {
 	/** Stamped done. */
@@ -15664,6 +15753,9 @@ export interface ProposedOutcome {
 	message: string;
 	reviewUrl: string;
 }
+export type TrackViewStageHistoryEntry = TrackStageHistoryEntry & {
+	enteredBy?: ActivityActor;
+};
 export interface TrackView {
 	id: string;
 	projectId: string;
@@ -15687,8 +15779,18 @@ export interface TrackView {
 	 * live playbook, whose params may have moved on since the pin.
 	 */
 	declaredParams: unknown[];
-	/** Every stage the track entered, oldest first (0274). */
-	stageHistory: TrackStageHistoryEntry[];
+	/**
+	 * Every stage the track entered, oldest first (0274). `enteredBy` names the
+	 * mover (resolved by the pod — a client cannot); absent when the names could
+	 * not be read (a write's fallback view), never a guessed name.
+	 */
+	stageHistory: TrackViewStageHistoryEntry[];
+	/**
+	 * What the check gate that HOLDS the track recorded — `null` unless
+	 * `pausedBy === "check"`. `fromStage` is the step it measured (the one
+	 * left); `stageKey` the step entered, whose entry gate it is.
+	 */
+	checkGate: TrackCheckGate | null;
 	/** Where the track is heading, one line (0302) — `null` when unsaid. */
 	direction: string | null;
 	/**
@@ -40758,6 +40860,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: TrackView;
+			meta: object;
+		}>;
+		history: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: TrackHistoryWire;
 			meta: object;
 		}>;
 		start: import("@trpc/server").TRPCMutationProcedure<{
