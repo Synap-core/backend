@@ -29,6 +29,7 @@ import {
   EventRepository,
   ViewRepository,
   ProfileRepository,
+  isProfileKindTwinError,
   RelationDefRepository,
   FacetRepository,
   type ProfileScope,
@@ -628,34 +629,46 @@ async function materializeProfile(
       profileUserId = userId;
     }
 
-    await profileRepo.create({
-      id: subjectId,
-      slug: data.slug as string,
-      // Provenance (0263): a proposal-approved event. Agent-authored iff the
-      // approved PROPOSAL row names an agent — never the event `data`, which
-      // the catch-all emitter does not populate with the agent (R4).
-      origin: proposalAgentUserId ? "agent" : "authored",
-      displayName: (data.displayName as string) || (data.slug as string),
-      parentProfileId: (data.parentProfileId as string) || undefined,
-      uiHints: (data.uiHints as Record<string, unknown>) || undefined,
-      defaultValues:
-        (data.defaultValues as Record<string, unknown>) || undefined,
-      scope: scope as ProfileScope,
-      // Pass through `undefined` when unspecified — do NOT default to
-      // "workspace" here. `ProfileRepository.resolveEntityScope()` is the one
-      // door that resolves the doctrine default from `profileKind` (kind ⇒ pod,
-      // role ⇒ workspace). Forcing "workspace" at this call site silently
-      // bypassed it and made every materialized kind workspace-scoped.
-      entityScope: (data.entityScope as "pod" | "workspace") || undefined,
-      profileKind: (data.profileKind as "kind" | "role") || "kind",
-      applicableKinds: Array.isArray(data.applicableKinds)
-        ? data.applicableKinds.filter(
-            (value): value is string => typeof value === "string"
-          )
-        : undefined,
-      userId: profileUserId,
-      workspaceId: profileWorkspaceId,
-    });
+    await profileRepo
+      .create({
+        id: subjectId,
+        slug: data.slug as string,
+        // Provenance (0263): a proposal-approved event. Agent-authored iff the
+        // approved PROPOSAL row names an agent — never the event `data`, which
+        // the catch-all emitter does not populate with the agent (R4).
+        origin: proposalAgentUserId ? "agent" : "authored",
+        displayName: (data.displayName as string) || (data.slug as string),
+        parentProfileId: (data.parentProfileId as string) || undefined,
+        uiHints: (data.uiHints as Record<string, unknown>) || undefined,
+        defaultValues:
+          (data.defaultValues as Record<string, unknown>) || undefined,
+        scope: scope as ProfileScope,
+        // Pass through `undefined` when unspecified — do NOT default to
+        // "workspace" here. `ProfileRepository.resolveEntityScope()` is the one
+        // door that resolves the doctrine default from `profileKind` (kind ⇒ pod,
+        // role ⇒ workspace). Forcing "workspace" at this call site silently
+        // bypassed it and made every materialized kind workspace-scoped.
+        entityScope: (data.entityScope as "pod" | "workspace") || undefined,
+        profileKind: (data.profileKind as "kind" | "role") || "kind",
+        applicableKinds: Array.isArray(data.applicableKinds)
+          ? data.applicableKinds.filter(
+              (value): value is string => typeof value === "string"
+            )
+          : undefined,
+        userId: profileUserId,
+        workspaceId: profileWorkspaceId,
+      })
+      .catch((err: unknown) => {
+        // The kind-twin floor refused it: the pod already holds this slug as a
+        // pod-wide kind. Skipped, not thrown — like the sync materializer, it
+        // can never become valid by retrying, so a rethrow would only fill the
+        // pg-boss retry queue.
+        if (!isProfileKindTwinError(err)) throw err;
+        logger.warn(
+          { subjectId, slug: err.slug, holder: err.holder },
+          "Profile create refused as a kind twin; skipping materialization"
+        );
+      });
   } else if (action === "update") {
     await profileRepo.update(subjectId, {
       displayName: (data.displayName as string) || undefined,

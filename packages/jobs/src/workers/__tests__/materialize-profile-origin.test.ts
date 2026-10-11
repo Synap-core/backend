@@ -14,12 +14,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   proposalRow: undefined as Record<string, unknown> | undefined,
   created: [] as Record<string, unknown>[],
+  createError: undefined as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   class FakeProfileRepository {
     async create(input: Record<string, unknown>) {
+      if (h.createError) throw h.createError;
       h.created.push(input);
       return { id: input.id };
     }
@@ -40,7 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn(async () => {}) }));
 
-import { EventRepository } from "@synap/database";
+import { EventRepository, ProfileKindTwinError } from "@synap/database";
 import { handleMaterialize } from "../materializer.js";
 
 vi.spyOn(EventRepository.prototype, "append").mockResolvedValue({} as never);
@@ -75,6 +77,7 @@ function profileCreateJob() {
 
 beforeEach(() => {
   h.created.length = 0;
+  h.createError = undefined;
 });
 
 describe("materializeProfile — origin from the approved proposal (R4)", () => {
@@ -100,5 +103,35 @@ describe("materializeProfile — origin from the approved proposal (R4)", () => 
     await handleMaterialize(profileCreateJob());
     expect(h.created).toHaveLength(1);
     expect(h.created[0]).toMatchObject({ origin: "authored" });
+  });
+});
+
+describe("materializeProfile — a kind-twin refusal is skipped, not retried", () => {
+  it("resolves (no pg-boss retry) when the create is refused as a kind twin", async () => {
+    h.proposalRow = {
+      id: PROPOSAL_ID,
+      status: "approved",
+      workspaceId: "11111111-1111-4111-8111-111111111111",
+      agentUserId: null,
+    };
+    h.createError = new ProfileKindTwinError("podcast", {
+      id: "66666666-6666-4666-8666-666666666666",
+      scope: "system",
+    });
+    await expect(handleMaterialize(profileCreateJob())).resolves.not.toThrow();
+    expect(h.created).toHaveLength(0);
+  });
+
+  it("any other create failure still rethrows (pg-boss retries the write)", async () => {
+    h.proposalRow = {
+      id: PROPOSAL_ID,
+      status: "approved",
+      workspaceId: "11111111-1111-4111-8111-111111111111",
+      agentUserId: null,
+    };
+    h.createError = new Error("connection reset");
+    await expect(handleMaterialize(profileCreateJob())).rejects.toThrow(
+      "connection reset"
+    );
   });
 });
