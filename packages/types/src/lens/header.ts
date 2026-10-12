@@ -207,9 +207,17 @@ export type LensNarrativePart =
   | { key: "produced" | "blocking" | "happening"; text: string }
   | { key: "last-activity"; at: string };
 
-/** A count shown as a DOOR to its section. `count: null` = unknown (no number). */
-export interface LensCountDoor {
-  section: "blocking" | "happening" | "produced";
+/** The lens sections a header count opens. */
+export type LensCountSection = "blocking" | "happening" | "produced";
+
+/**
+ * A count shown as a DOOR to its section. `count: null` = unknown (no number).
+ * `X` = extra sections a SURFACE adds (an intent surface's `pipeline`,
+ * `lensIntentHeaderModel`); a lens header has none, so its hosts' handlers
+ * never meet a section they do not know.
+ */
+export interface LensCountDoor<X extends string = never> {
+  section: LensCountSection | X;
   label: string;
   count: number | null;
   /**
@@ -272,9 +280,9 @@ export function lensNextMove(
   };
 }
 
-/** The strip's words for one count door. */
-function countDoorText(
-  section: LensCountDoor["section"],
+/** The strip's words for one lens-section count door. */
+export function lensCountDoorText(
+  section: "blocking" | "happening" | "produced",
   count: number | null
 ): string {
   if (count === null) return LENS_SECTION_LABELS[section];
@@ -284,7 +292,7 @@ function countDoorText(
   return `${count} running`;
 }
 
-export interface LensHeaderModel {
+export interface LensHeaderModel<X extends string = never> {
   /** The scope kind this header is for (decides e.g. whether it has a pulse). */
   scopeKind: Exclude<LensScopeKind, "pod">;
   /** The scope's aggregate state (v1 drew it before the title; v2 hosts may badge with it). */
@@ -296,7 +304,7 @@ export interface LensHeaderModel {
    */
   narrative: LensNarrativePart[];
   /** The counts strip, in reading order: Needs you · Produced · Happening. */
-  doors: LensCountDoor[];
+  doors: LensCountDoor<X>[];
   /** The ONE move (see {@link LensNextMove}); null ⇒ the row omits. */
   nextMove: LensNextMove | null;
   /** The newest activity (ISO) — "active 1h ago" — or null when unknown. */
@@ -365,7 +373,7 @@ export function lensHeaderModel<
       section,
       label: LENS_SECTION_LABELS[section],
       count: counts[section],
-      text: countDoorText(section, counts[section]),
+      text: lensCountDoorText(section, counts[section]),
     }));
 
   return {
