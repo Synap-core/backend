@@ -13085,6 +13085,17 @@ export type PaginatedResponse<T> = {
 		offset: number;
 	};
 };
+export interface RailPin {
+	/** `view:<viewId>` or `kind:<profileSlug>` — one pin per surface. */
+	key: string;
+	profileSlug: string;
+	/** The saved pipeline view, when the pin is one. */
+	viewId: string | null;
+	/** The name the person (or the template) gave it; null = the kind's name. */
+	label: string | null;
+	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
+	source: "user" | "template";
+}
 export type PublishResult = {
 	status: "proposed";
 	proposalId: string;
@@ -21096,6 +21107,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				correlationId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
+				profileSlug?: string | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
 				excludeBookkeeping?: boolean | undefined;
@@ -21256,6 +21268,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
 				trackId?: string | undefined;
+				profileSlug?: string | undefined;
 				automationId?: string | undefined;
 				status?: "pending" | "rejected" | undefined;
 				limit?: number | undefined;
@@ -28601,6 +28614,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includePodWide?: boolean | undefined;
 				type?: "table" | "map" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "calendar" | "graph" | "sheet" | "gallery" | "kanban" | "pipeline" | "matrix" | "masonry" | "gantt" | "timeline" | "branch_tree" | "mindmap" | "zoom_map" | undefined;
 				excludeAutoCreated?: boolean | undefined;
+				profileSlug?: string | undefined;
 			};
 			output: PaginatedResponse<{
 				description: string | null;
@@ -29059,6 +29073,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		railPins: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				pins: RailPin[];
+			};
+			meta: object;
+		}>;
+		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				profileSlug: string;
+				viewId?: string | undefined;
+				label?: string | undefined;
+			};
+			output: {
+				pins: RailPin[];
+			};
+			meta: object;
+		}>;
+		unpinSurface: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				key: string;
+			};
+			output: {
+				pins: RailPin[];
+			};
+			meta: object;
+		}>;
+		reorderRailPins: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				keys: string[];
+			};
+			output: {
+				pins: RailPin[];
+			};
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
@@ -37494,6 +37544,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includeTrackedRuns?: boolean | undefined;
 				trackId?: string | undefined;
 				order?: "started" | "open_first" | undefined;
+				subject?: {
+					profileSlug: string;
+				} | {
+					entityIds: string[];
+				} | undefined;
 				playbookId?: string | undefined;
 				automationId?: string | undefined;
 			};
@@ -37558,6 +37613,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unfiled?: boolean | undefined;
 				includeTrackedRuns?: boolean | undefined;
 				trackId?: string | undefined;
+				subject?: {
+					profileSlug: string;
+				} | {
+					entityIds: string[];
+				} | undefined;
 				liveness?: boolean | undefined;
 				limit?: number | undefined;
 			};
@@ -41413,6 +41473,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					category: "active" | "paused" | "open" | "done" | "lost";
 					tone: string;
 					humanOnly: boolean;
+					stuckAfterDays: number | null;
 				}[];
 			};
 			meta: object;
@@ -41420,9 +41481,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		board: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				profileSlug: string;
-				projectId?: string | undefined;
-				trackId?: string | undefined;
-				workspaceId?: string | null | undefined;
 				window?: {
 					days: number;
 				} | undefined;
@@ -41430,6 +41488,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				column?: string | undefined;
 				cursor?: string | undefined;
 				limit?: number | undefined;
+				workedBy?: boolean | undefined;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+				workspaceId?: string | null | undefined;
 			};
 			output: {
 				lifecycle: {
@@ -41442,6 +41504,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						category: "active" | "paused" | "open" | "done" | "lost";
 						tone: string;
 						humanOnly: boolean;
+						stuckAfterDays: number | null;
 					}[];
 				};
 				columns: {
@@ -41455,8 +41518,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						status: string | null;
 						enteredAt: string | null;
 						since: string;
+						stuck: boolean;
+						workedBy?: {
+							sessionId: string;
+							kind: "session" | "worker";
+							live: boolean;
+						}[] | undefined;
 					}[];
 					windowed: boolean;
+					stuck: number | null;
 				}[];
 				doneWindowed: number;
 				lostWindowed: number;
@@ -41469,6 +41539,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					since: string;
 				};
 				nextCursor: string | null;
+			};
+			meta: object;
+		}>;
+		throughput: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug: string;
+				period?: {
+					bucket: "day" | "week" | "month";
+					count: number;
+				} | undefined;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				bucket: "day" | "week" | "month";
+				since: string;
+				buckets: {
+					bucketStart: string;
+					done: number;
+					lost: number;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -42328,6 +42420,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | undefined;
 				trackId?: string | undefined;
 				automationId?: string | undefined;
+				profileSlug?: string | undefined;
 			};
 			output: {
 				signals: Signal[];
@@ -42352,6 +42445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | undefined;
 				trackId?: string | undefined;
 				automationId?: string | undefined;
+				profileSlug?: string | undefined;
 			} | undefined;
 			output: {
 				needsYou: number;
@@ -42390,6 +42484,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			} | {
 				projectId: string;
+				status: "unavailable";
+				count?: undefined;
+			})[];
+			meta: object;
+		}>;
+		countByProfile: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlugs: string[];
+				workspaceId?: string | null | undefined;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+			};
+			output: ({
+				profileSlug: string;
+				status: "ok";
+				count: {
+					needsYou: number;
+					distinct: number;
+					truncated: boolean;
+					blocked: number;
+					decisions: number;
+					notifications: number;
+					review: number;
+					captures: number;
+					drafts: number;
+					draftsTruncated: boolean;
+					suggestions: number;
+				};
+			} | {
+				profileSlug: string;
 				status: "unavailable";
 				count?: undefined;
 			})[];
