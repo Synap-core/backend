@@ -245,11 +245,26 @@ export function templateLifecycleWarning(
   return null;
 }
 
-/** Compose the axes from a workspace's slug/version + a resolved catalog view. */
+/**
+ * Compose the axes from a workspace's slug/version + a resolved catalog view.
+ *
+ * `provisioningStatus` is REQUIRED (pass the workspace's
+ * `settings.provisioningStatus`, or `null` where there is none, e.g. an
+ * overlay) so no caller can forget it. `"failed"` is the applier's durable
+ * record that the last install/update did NOT converge
+ * (`applyPackagePostWorkspace` writes it on any layer-2 throw) — whatever the
+ * version stamp says, a stamp can only claim what landed. A failed space reads
+ * DRIFTED, so `synap templates update` offers it and the apply door resumes it
+ * (`resumeIfFailed` already bypasses the stamp compare on `"failed"`). Health
+ * and the apply door read the same truth. Founder pod 2026-10-12: CRM carried
+ * `failed` AND the new stamp (layer 1 stamped before layer 2 threw), so health
+ * read "current" and the update was skipped forever.
+ */
 export function templateHealthFor(
   packageSlug: string | null,
   installedVersion: string | null,
-  catalog: TemplateCatalogView
+  catalog: TemplateCatalogView,
+  provisioningStatus: unknown
 ): TemplateHealth {
   const latestVersion = packageSlug
     ? (catalog.latestBySlug.get(packageSlug) ?? null)
@@ -262,7 +277,9 @@ export function templateHealthFor(
     stamped: installedVersion != null,
     installedVersion,
     latestVersion,
-    drifted: isTemplateDrifted(installedVersion, latestVersion),
+    drifted:
+      isTemplateDrifted(installedVersion, latestVersion) ||
+      (packageSlug != null && provisioningStatus === "failed"),
     lifecycle: standing?.lifecycle ?? null,
     replacedBy: standing?.replacedBy ?? null,
     retiredReason: standing?.retiredReason ?? null,
@@ -376,7 +393,9 @@ export function overlayHealthFor(
     ...ledger.map((o) => o.slug),
   ]);
   return ledger.map(({ slug, version }) => {
-    const h = templateHealthFor(slug, version, catalog);
+    // An overlay has no provisioning status of its own — the space's is the
+    // workspace row's, not the pack's.
+    const h = templateHealthFor(slug, version, catalog, null);
     const lifecycle = h.lifecycle!; // attached: `slug` is non-null
     const replacementHere =
       lifecycle === "retired" &&
@@ -491,11 +510,17 @@ export async function listWorkspaceTemplateHealth(
     const s = (r.settings ?? {}) as {
       packageSlug?: unknown;
       packageVersion?: unknown;
+      provisioningStatus?: unknown;
     };
     const pkgSlug = typeof s.packageSlug === "string" ? s.packageSlug : null;
     const installedVersion =
       typeof s.packageVersion === "string" ? s.packageVersion : null;
-    const health = templateHealthFor(pkgSlug, installedVersion, catalog);
+    const health = templateHealthFor(
+      pkgSlug,
+      installedVersion,
+      catalog,
+      s.provisioningStatus
+    );
     const overlays = overlayHealthFor(r.settings, catalog);
     return {
       workspaceId: r.id,

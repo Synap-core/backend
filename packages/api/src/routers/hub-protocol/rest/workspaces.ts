@@ -580,7 +580,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         const health = templateHealthFor(
           pkgSlug,
           installedVersion,
-          templateCatalog
+          templateCatalog,
+          settings.provisioningStatus
         );
         return {
           id: workspace.id,

@@ -49,6 +49,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       append: async () => undefined,
       emitCompleted: async () => undefined,
     },
+    // Template health's catalog-completeness read: no sync stamps here (it
+    // only gates `unlisted`, not drift).
+    getCatalogSyncStamps: async () => ({}),
     preflightWorkspaceFromDefinition: async () => ({
       dryRun: true,
       ok: true,
@@ -115,6 +118,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import { registerPackagesRoutes } from "./packages.js";
 import type { HubHono, HubVariables } from "./_shared.js";
+import { listWorkspaceTemplateHealth } from "../../../services/template-health.js";
 
 const OWNER = randomUUID();
 const WS = randomUUID();
@@ -268,6 +272,35 @@ describe("an action placement waiting on a proposed playbook is deferred", () =>
       missing: { kind: "playbook", ref: "Nurture a lead" },
     });
     expect(body.error).toContain('missing playbook "Nurture a lead"');
+    // A failed layer 2 earns no stamp: the version layer 1 deferred is not
+    // written, and the failure is recorded durably.
+    const s = await settings();
+    expect(s.packageVersion).toBe("h-v1");
+    expect(s.provisioningStatus).toBe("failed");
+  });
+
+  it("(3b) health reads a FAILED space as drifted even when its stamp equals the catalog (founder pod state)", async () => {
+    // The founder pod after errorId cef79303: a build that stamped after layer
+    // 1 left the NEW version beside provisioningStatus "failed".
+    await q(
+      `update workspaces set settings = settings || '{"packageSlug":"crm","packageVersion":"h-v2","provisioningStatus":"failed"}'::jsonb where id = $1`,
+      [WS]
+    );
+    await q(
+      `insert into cp_catalog_cache (source, kind, slug, name, version) values ('https://cp.test','template','crm','CRM','h-v2')`
+    );
+    const [health] = await listWorkspaceTemplateHealth([WS]);
+    expect(health).toMatchObject({
+      packageSlug: "crm",
+      installedVersion: "h-v2",
+      latestVersion: "h-v2",
+      drifted: true,
+    });
+    // Restore the drifted pre-(4) state the next test starts from.
+    await q(
+      `update workspaces set settings = settings || '{"packageVersion":"h-v1"}'::jsonb where id = $1`,
+      [WS]
+    );
   });
 
   it("(4) once the playbook exists, the next apply places it and earns the stamp", async () => {
