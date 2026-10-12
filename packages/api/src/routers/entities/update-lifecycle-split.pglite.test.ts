@@ -16,7 +16,8 @@ const holder = vi.hoisted(() => ({
 }));
 holder.move = vi.fn();
 
-vi.mock("../../services/lifecycle/move-status.js", () => ({
+vi.mock("../../services/lifecycle/move-status.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   moveStatus: (...a: unknown[]) => holder.move(...a),
 }));
 
@@ -195,17 +196,52 @@ async function props(client: PGlite, id: string) {
   );
   return r.rows[0]!.properties;
 }
-async function callerFor(database: unknown) {
+async function callerFor(
+  database: unknown,
+  extra: Record<string, unknown> = {}
+) {
   const { entitiesRouter } = await import("../entities.js");
   return entitiesRouter.createCaller({
     db: database,
     authenticated: true,
     userId: USER,
     workspaceId: null,
+    ...extra,
   } as never);
 }
 
 describe("entities.update — the lifecycle split", () => {
+  it("a hub key with no agent moves as an UNATTRIBUTED agent; a wire client cannot claim the system", async () => {
+    const { client, database } = await freshDb();
+    const id = await insertDeal(client);
+    holder.move.mockReset();
+    holder.move.mockResolvedValue({ status: "moved", transition: {} });
+    const hub = await callerFor(database, {
+      source: "intelligence",
+      isHubProtocol: true,
+    });
+    await hub.update({
+      id,
+      properties: { commercialStage: "lost" },
+      source: "intelligence",
+    });
+    expect(holder.move.mock.calls[0]![0].actor).toEqual({
+      kind: "agent",
+      userId: USER,
+      agentUserId: null,
+    });
+    const wire = await callerFor(database, { req: {} });
+    await wire.update({
+      id,
+      properties: { commercialStage: "lost" },
+      source: "system",
+    });
+    expect(holder.move.mock.calls[1]![0].actor).toEqual({
+      kind: "human",
+      userId: USER,
+    });
+  });
+
   it("hands the status to moveStatus and patches only the other keys", async () => {
     const { client, database } = await freshDb();
     const id = await insertDeal(client);

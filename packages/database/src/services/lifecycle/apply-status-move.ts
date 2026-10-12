@@ -18,7 +18,10 @@
  *    landing between the read and the update);
  *  - a HUMAN move WINS: a stale `expectedFrom` is applied anyway, the
  *    transition records the ACTUAL `from` and `staleExpected: true` ("moved
- *    meanwhile"). The CAS still guards the read→write window (one re-read).
+ *    meanwhile"). The CAS still guards the read→write window (one re-read);
+ *  - an APPROVAL REPLAY is strict whoever the actor is (`strict: true`): the
+ *    approval carries a belief from filing time, and a person who moved the
+ *    thing since must never be overwritten by it.
  *
  * GOVERNANCE IS NOT HERE. The governed doors (`@synap/api` `moveStatus`, the
  * jobs automation gate, the proposal executor) decide first, then call this.
@@ -44,6 +47,10 @@ import {
 type Db = PostgresJsDatabase<typeof schema>;
 
 export interface StatusMoveActor {
+  /**
+   * `agent` with no `agentUserId` is an UNATTRIBUTED AI write (a service or
+   * hub key): still an AI, governed and compare-and-set as one, never a person.
+   */
   kind: "human" | "agent" | "system";
   /** The human the write is attributed to (owner of an agent's write). */
   userId: string;
@@ -234,6 +241,11 @@ export interface ApplyStatusMoveInput {
   reason?: string | null;
   proposalId?: string | null;
   /**
+   * Strict compare-and-set even for a human actor (an approval replay).
+   * Agents and the system are always strict.
+   */
+  strict?: boolean;
+  /**
    * The caller's lens. Stamped on the transition when the target itself has no
    * workspace (a pod-wide kind), so the trigger hop — workspace-scoped — can
    * still match it, exactly as `entities.update` routes a pod-wide entity.
@@ -343,7 +355,7 @@ export async function applyStatusMove(
       reason: `"${to}" is not a status of ${target.role ?? target.entityType ?? "this kind"} (${target.lifecycle.options.map((o) => o.key).join(", ")})`,
     };
   }
-  const human = actor.kind === "human";
+  const human = actor.kind === "human" && input.strict !== true;
   let current = target.current;
   const expressed = input.expectedFrom !== undefined;
   const expected = expressed ? (input.expectedFrom ?? null) : current;

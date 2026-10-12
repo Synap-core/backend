@@ -32,6 +32,7 @@ import {
 import { auditLog } from "../../utils/audit-log.js";
 import {
   moveStatus,
+  statusMoveActorFor,
   type MoveStatusResult,
 } from "../../services/lifecycle/move-status.js";
 import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
@@ -501,25 +502,14 @@ export const facetProcs = {
           // The DELEGATED door (an approved proposal replayed through the
           // composite caller) carries the agent on `ctx` for ATTRIBUTION and an
           // approved proposal id: it is replayed, never re-governed.
-          const delegatedAgent =
-            !input.agentUserId && ctx.agentUserId && ctx.governanceProposalId
-              ? ctx.agentUserId
-              : undefined;
-          const actingAgent = input.agentUserId ?? delegatedAgent;
+          const mover = statusMoveActorFor(ctx, input);
           statusMove = await moveStatus({
             entityId: existing.entityId,
             facetId: existing.id,
             to,
             expectedFrom: input.expectedStatus,
-            approvedProposalId: delegatedAgent
-              ? ctx.governanceProposalId
-              : undefined,
-            actor: actingAgent
-              ? { kind: "agent", userId: ctx.userId, agentUserId: actingAgent }
-              : {
-                  kind: input.source === "system" ? "system" : "human",
-                  userId: ctx.userId,
-                },
+            approvedProposalId: mover.approvedProposalId,
+            actor: mover.actor,
             sessionId: ctx.sessionId ?? null,
             reason: input.reasoning ?? null,
             workspaceId: governanceWorkspaceId,

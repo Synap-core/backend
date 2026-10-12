@@ -16,7 +16,13 @@
  * A proposed agent move is SUCCESS (the person reviews it). Its approval
  * replays the move with the agent's original `expectedFrom`
  * (`executors/entity-transition.ts`), so a person moving the thing meanwhile
- * makes that approval fail as stale instead of overwriting them.
+ * makes that approval fail as stale instead of overwriting them. Every replay
+ * is strict, whoever filed it.
+ *
+ * WHO IS MOVING (`statusMoveActorFor`, the one derivation for the request
+ * doors): an AI write with no agent attribution (a service / hub key) is an
+ * unattributed AGENT, never a person — governed on the anonymous AI ladder and
+ * strict CAS. `system` is server code only: a request can never claim it.
  */
 import {
   db,
@@ -53,6 +59,63 @@ export interface MoveStatusInput {
   forcePropose?: boolean;
   /** An approved proposal replaying this move — governance already decided. */
   approvedProposalId?: string | null;
+}
+
+const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
+
+/** The request facts `statusMoveActorFor` reads (a subset of the tRPC ctx). */
+export interface StatusMoveCallerContext {
+  userId?: string | null;
+  /** Server-set: `intelligence` for a hub / api-key caller. */
+  source?: string | null;
+  /** Server-set: true only for a hub-protocol key. */
+  isHubProtocol?: boolean;
+  /** Server-set: the authenticated agent (agent key / approval caller). */
+  agentUserId?: string | null;
+  /** Server-set: an internal caller that already holds a governance decision. */
+  governanceProposalId?: string;
+  /** Present on every request that arrived over the wire. */
+  req?: unknown;
+}
+
+/**
+ * Who a request-door status move is made by, derived ONCE for
+ * `entities.update` and `entities.updateFacet` (backend review F1/F2/F15):
+ *  - an attributed agent (body or ctx) → `agent`;
+ *  - an AI caller (AI `source` in the body or on the ctx, or a hub key) with
+ *    no agent → an UNATTRIBUTED agent (`agentUserId: null`), never a person;
+ *  - `source: "system"` → `system` only for server code (no wire request);
+ *    a client that sends it is a person;
+ *  - an internal caller holding a decision (`ctx.governanceProposalId`) is a
+ *    REPLAY: governance is skipped and the CAS is strict.
+ */
+export function statusMoveActorFor(
+  ctx: StatusMoveCallerContext,
+  input: { source?: string | null; agentUserId?: string | null }
+): { actor: StatusMoveActor; approvedProposalId?: string } {
+  const userId = ctx.userId ?? "";
+  const agentUserId = input.agentUserId ?? ctx.agentUserId ?? null;
+  const approvedProposalId = ctx.governanceProposalId || undefined;
+  if (agentUserId) {
+    return {
+      actor: { kind: "agent", userId, agentUserId },
+      approvedProposalId,
+    };
+  }
+  const aiCaller =
+    ctx.isHubProtocol === true ||
+    AI_SOURCES.has(ctx.source ?? "") ||
+    AI_SOURCES.has(input.source ?? "");
+  if (aiCaller) {
+    return {
+      actor: { kind: "agent", userId, agentUserId: null },
+      approvedProposalId,
+    };
+  }
+  if (input.source === "system" && ctx.req === undefined) {
+    return { actor: { kind: "system", userId }, approvedProposalId };
+  }
+  return { actor: { kind: "human", userId }, approvedProposalId };
 }
 
 export type MoveStatusResult =
@@ -104,10 +167,13 @@ export async function moveStatus(
     };
   }
   const agent = input.actor.kind === "agent";
+  // Strict compare-and-set: every non-person, and every approval replay.
+  const strict =
+    input.actor.kind !== "human" || Boolean(input.approvedProposalId);
   // An agent acting on a belief that is already false never files a proposal
   // that could only fail at approval.
   if (
-    agent &&
+    strict &&
     input.expectedFrom !== undefined &&
     (input.expectedFrom ?? null) !== target.current
   ) {
@@ -130,7 +196,12 @@ export async function moveStatus(
       workspaceId: governanceWorkspaceId,
       subjectType: "entity",
       action: "transition",
-      source: agent ? "agent" : "user",
+      // An unattributed agent reaches the anonymous AI ladder; never "user".
+      source: agent
+        ? input.actor.agentUserId
+          ? "agent"
+          : "intelligence"
+        : "user",
       lifecycleMove,
       forcePropose: input.forcePropose,
       reasoning:
@@ -168,6 +239,7 @@ export async function moveStatus(
     expectedFrom: input.expectedFrom,
     to: input.to,
     actor: input.actor,
+    strict,
     sessionId: input.sessionId,
     reason: input.reason,
     proposalId: input.approvedProposalId ?? receiptId ?? null,
