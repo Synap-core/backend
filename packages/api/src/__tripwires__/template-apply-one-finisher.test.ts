@@ -17,7 +17,11 @@
  *      spaces "pending" forever, which this catches first);
  *  (2) only the finisher calls `stampWorkspacePackageVersion(`;
  *  (3) no other file writes a `packageVersion` key through `mergeSettings(` /
- *      `.set(` / a `settings.packageVersion =` assignment.
+ *      `.set(` / a `settings.packageVersion =` assignment;
+ *  (4) the overlay ledger's version (`installedPacks[].version`) is recorded
+ *      only by the finisher (on convergence) and the boot ledger pass (after
+ *      its own `playbookReportConverged`); compose records the PACK, never its
+ *      version — every `upsertInstalledPack(` caller is derived and classified.
  *
  * NOT covered, measured: granularity is the FILE, not the call site — a door
  * file with two core calls and one finisher call stays green if the second
@@ -225,5 +229,24 @@ describe("template apply — one finisher writes the stamp and active", () => {
     expect(
       CORE_CALL.test("export async function createWorkspaceFromDefinition(")
     ).toBe(false);
+  });
+
+  it("(4) only the finisher and the boot ledger pass record an overlay's version", () => {
+    const callers = apiFiles.filter((p) =>
+      /(?<!function\s)\bupsertInstalledPack\s*\(/.test(code(p))
+    );
+    // Non-vacuity: compose, the finisher and the boot ledger pass all call it.
+    expect(callers.map(rel).sort()).toEqual([
+      "services/compose-overlay.ts",
+      "services/reconcile-installed-packs.ts",
+      FINISHER,
+    ]);
+    // Compose records the pack WITHOUT a version (layer 2 has not run yet).
+    const composeSpans = callSpans(
+      code(join(API_SRC, "services/compose-overlay.ts")),
+      /(?<!function\s)\bupsertInstalledPack\s*\(/
+    );
+    expect(composeSpans.length).toBeGreaterThan(0);
+    for (const span of composeSpans) expect(span).not.toMatch(/\bversion\b/);
   });
 });

@@ -1375,6 +1375,15 @@ export const definitionEngineProcedures = {
                   ...summarizePostWorkspaceLayers(composePost)
                 );
                 composeTrackTemplates = installedTrackTemplates(composePost);
+                // The overlay pack's version is recorded only once its layer
+                // 2 converged (`finishTemplateApply`) — never by compose.
+                await finishTemplateApply({
+                  workspaceId: core.composeTargetWorkspaceId,
+                  userId: ctx.userId,
+                  built: false,
+                  pendingPack: core.pendingPack,
+                  post: composePost,
+                });
               } catch (err) {
                 composeLayers.push({
                   layer: "post-workspace",
@@ -2446,6 +2455,15 @@ export const definitionEngineProcedures = {
           composedTarget = core.composeTargetWorkspaceId;
           // The compose door already adopted/created the seeds (W4b).
           composeSeeds = core.reconcile.seeds;
+          // This door runs no layer 2: an overlay pack's version is not
+          // earned here (recorded "layer-2-not-run" by the finisher).
+          await finishTemplateApply({
+            workspaceId: composedTarget,
+            userId: ctx.userId,
+            built: false,
+            pendingPack: core.pendingPack,
+            post: null,
+          });
         }
       }
 

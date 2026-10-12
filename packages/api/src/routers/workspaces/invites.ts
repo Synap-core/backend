@@ -1362,6 +1362,16 @@ export const inviteProcedures = {
               },
               "Plugin workspace composed onto base (provisioning)"
             );
+            // No layer 2 here: an overlay pack's version is not earned.
+            const { finishTemplateApply } =
+              await import("../../services/template-apply-finisher.js");
+            await finishTemplateApply({
+              workspaceId: core.composeTargetWorkspaceId,
+              userId: systemUserId,
+              built: false,
+              pendingPack: core.pendingPack,
+              post: null,
+            });
             return {
               status: "created" as const,
               workspaceId: core.composeTargetWorkspaceId,

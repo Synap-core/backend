@@ -273,6 +273,7 @@ async function executeTemplateApplyApproval({
     userId,
     built: created?.outcome === "created",
     pendingVersionStamp,
+    pendingPack: core.status === "composed" ? core.pendingPack : undefined,
     post: needsPost ? (post ?? {}) : {},
   });
   const versionStamped = finished.versionStamped;
@@ -1024,6 +1025,7 @@ export function registerWorkspaceExecutors(): void {
           userId,
           built: false,
           pendingVersionStamp: core.pendingVersionStamp,
+          pendingPack: core.pendingPack,
           post,
         });
       } catch (e) {

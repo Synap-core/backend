@@ -72,7 +72,7 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
         installedPacks: [{ slug: "other", version: "1", installedAt: "t0" }],
       },
     };
-    await composeOntoBaseWorkspace({
+    const report = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: "ws-foundation",
       userId: "u",
       definition: OVERLAY,
@@ -98,9 +98,18 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
       "business-model",
       "other",
     ]);
+    // The pack is RECORDED, but its version is not: layer 2 has not run. The
+    // caller's finisher records `pendingPack.version` once it converged.
     expect(
       patch.installedPacks.find((p) => p.slug === "business-model")?.version
-    ).toBe("h-bm");
+    ).toBe("");
+    expect(patch.installedPacks.find((p) => p.slug === "other")?.version).toBe(
+      "1"
+    );
+    expect(report.pendingPack).toEqual({
+      slug: "business-model",
+      version: "h-bm",
+    });
   });
 
   it("--onto an UNIDENTIFIED workspace makes the slug its identity (unchanged)", async () => {

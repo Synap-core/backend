@@ -469,10 +469,61 @@ export async function awaitingApprovalByWorkspace(
   return out;
 }
 
-/** The plain sentence for a space whose update waits on the person's approval. */
-export function awaitingApprovalWarning(proposalIds: string[]): string {
-  const n = proposalIds.length;
-  return `Waiting on your approval of ${n} proposal${n === 1 ? "" : "s"}, then run \`synap templates update\`.`;
+/**
+ * THE wording for why a space's last template apply did not finish — ONE
+ * function, served by every reader (MCP `template_health`, Hub `GET
+ * /workspaces` → `synap templates`, the `/packages/apply` response → `synap
+ * templates update`), so the CLI prints the pod's sentence and never words it
+ * itself. `livePending` = the recorded proposals that are STILL pending
+ * (`awaitingApprovalByWorkspace`): an awaiting-approval record whose proposals
+ * were all decided returns `null` — the space then reads as a plain "update
+ * available" (drifted), with nothing left to wait on. `null` = nothing to say.
+ */
+export function templateApplyWarning(
+  slug: string,
+  settings: unknown,
+  livePending: string[]
+): string | null {
+  const s = (settings ?? {}) as {
+    provisioningStatus?: unknown;
+    templateApply?: { state?: unknown } | null;
+  };
+  const run = `\`synap templates update ${slug}\``;
+  if (s.provisioningStatus === "failed")
+    return `Not finished: the last update of ${slug} failed. Run ${run} to resume.`;
+  switch (s.templateApply?.state) {
+    case "awaiting-approval": {
+      const n = livePending.length;
+      if (n === 0) return null;
+      return `Waiting on your approval of ${n} proposal${n === 1 ? "" : "s"} (${livePending.join(", ")}), then run ${run}.`;
+    }
+    case "partial":
+      return `Not finished: part of ${slug} did not apply. Run ${run} to retry.`;
+    case "layer-2-not-run":
+      return `Not finished: run ${run} to apply the rest of ${slug}.`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * `templateApplyWarning` for ONE space, read fresh (its settings + the live
+ * status of the proposals it waits on) — what an apply door returns right
+ * after its finisher, so the person reads the same sentence `synap templates`
+ * will keep showing. `null` = nothing to say (or no template identity).
+ */
+export async function templateApplyWarningFor(
+  workspaceId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ id: workspaces.id, settings: workspaces.settings })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  const slug = (row?.settings as { packageSlug?: unknown } | null)?.packageSlug;
+  if (!row || typeof slug !== "string") return null;
+  const waiting = await awaitingApprovalByWorkspace([row]);
+  return templateApplyWarning(slug, row.settings, waiting.get(row.id) ?? []);
 }
 
 /** One workspace's identity + its template health — the MCP `template_health` row shape. */
@@ -488,6 +539,8 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
    * waits — including once they were approved or rejected (plain drift then).
    */
   awaitingApproval: string[];
+  /** Why the last template apply did not finish — `templateApplyWarning`. `null` = nothing to say. */
+  applyWarning: string | null;
   /**
    * Non-fatal template problems in this space — a retired / unlisted template
    * (`lifecycleWarning`, first), then each overlay's warning, and an `always` skill whose body is over the
@@ -582,6 +635,9 @@ export async function listWorkspaceTemplateHealth(
     );
     const overlays = overlayHealthFor(r.settings, catalog);
     const awaitingApproval = waitingByWs.get(r.id) ?? [];
+    const applyWarning = pkgSlug
+      ? templateApplyWarning(pkgSlug, r.settings, awaitingApproval)
+      : null;
     return {
       workspaceId: r.id,
       workspaceName: r.name,
@@ -589,10 +645,9 @@ export async function listWorkspaceTemplateHealth(
       ...health,
       overlays,
       awaitingApproval,
+      applyWarning,
       warnings: [
-        ...(awaitingApproval.length > 0
-          ? [awaitingApprovalWarning(awaitingApproval)]
-          : []),
+        ...(applyWarning ? [applyWarning] : []),
         ...(health.lifecycleWarning ? [health.lifecycleWarning] : []),
         ...overlays.flatMap((o) =>
           o.lifecycleWarning ? [o.lifecycleWarning] : []

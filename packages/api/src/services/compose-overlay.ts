@@ -59,6 +59,14 @@ export type ComposeReport = ReconcileReport & {
    * is the caller's to stamp, through `finishTemplateApply`.
    */
   identityStamped?: boolean;
+  /**
+   * The overlay pack recorded in the target's `installedPacks` and the version
+   * it is being applied at — NOT written to the ledger here (the entry keeps
+   * its previous version, or none when new). The caller hands it to
+   * `finishTemplateApply`, which records the version only once layer 2
+   * converged. Absent when nothing was recorded as a pack.
+   */
+  pendingPack?: { slug: string; version: string };
 };
 
 /**
@@ -234,10 +242,10 @@ export async function composeOntoBaseWorkspace(
         {
           installedPacks: upsertInstalledPack(
             baseSettings.installedPacks,
-            {
-              slug: overlaySlug!,
-              version: input.overlay?.version,
-            },
+            // The VERSION is not recorded here: layer 2 has not run. The
+            // entry keeps its previous version (or none when new); the
+            // finisher records `pendingPack.version` on convergence.
+            { slug: overlaySlug! },
             new Date().toISOString()
           ),
         },
@@ -247,8 +255,16 @@ export async function composeOntoBaseWorkspace(
     // Seeds — adopt what the base already holds, create only what is missing.
     // Per-seed failures are collected (never thrown), like the other doors.
     const seedList = definitionSeedEntities(definition);
+    const pendingPack =
+      recordPack && !stampIdentity && input.overlay?.version
+        ? { slug: overlaySlug!, version: input.overlay.version }
+        : undefined;
     if (seedList.length === 0)
-      return { ...report, identityStamped: stampIdentity };
+      return {
+        ...report,
+        identityStamped: stampIdentity,
+        ...(pendingPack ? { pendingPack } : {}),
+      };
     const seeds = await applyDefinitionSeeds({
       database: db,
       eventRepo: eventRepository,
@@ -259,7 +275,12 @@ export async function composeOntoBaseWorkspace(
         definition as { suggestedRelations?: DefinitionSeedRelation[] }
       ).suggestedRelations,
     });
-    return { ...report, seeds, identityStamped: stampIdentity };
+    return {
+      ...report,
+      seeds,
+      identityStamped: stampIdentity,
+      ...(pendingPack ? { pendingPack } : {}),
+    };
   } catch (e) {
     throw new ComposeOverlayError((e as Error).message);
   }

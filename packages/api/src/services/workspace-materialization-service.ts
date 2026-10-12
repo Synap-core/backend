@@ -171,6 +171,12 @@ export type MaterializeCoreResult =
        * `finishTemplateApply` with its layer-2 result.
        */
       pendingVersionStamp?: string;
+      /**
+       * The overlay pack recorded in the target's `installedPacks` and the
+       * version it is applied at — NOT recorded yet. The caller hands it to
+       * `finishTemplateApply`, which records it once layer 2 converged.
+       */
+      pendingPack?: { slug: string; version: string };
     }
   | {
       /**
@@ -332,6 +338,7 @@ export async function materializeWorkspaceCore(
       ...(reconcile.identityStamped && input.packageVersion
         ? { pendingVersionStamp: input.packageVersion }
         : {}),
+      ...(reconcile.pendingPack ? { pendingPack: reconcile.pendingPack } : {}),
     };
   }
 
@@ -370,6 +377,7 @@ export async function materializeWorkspaceCore(
       composeTargetWorkspaceId: primary.workspaceId,
       dependencies,
       reconcile,
+      ...(reconcile.pendingPack ? { pendingPack: reconcile.pendingPack } : {}),
     };
   }
 

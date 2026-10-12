@@ -14,7 +14,10 @@
  *      once it is decided the warning is gone and the space is plain drift;
  *  (2) the same space, FAILED, then re-applied once the playbook can land: the
  *      wrapper resumes it, layer 2 converges, and the finisher stamps the
- *      version, marks it "active" and clears the record — health current.
+ *      version, marks it "active" and clears the record — health current;
+ *  (3) an overlay pack's ledger version (`installedPacks[].version`, recorded
+ *      by compose WITHOUT a version) is written by the finisher only when its
+ *      layer 2 converged.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -134,11 +137,23 @@ vi.mock(
   })
 );
 vi.mock("../../../utils/permission-check.js", () => ({
+  // A proposed create FILES its row, as the real gate does — health reads the
+  // proposal's live status.
   checkPermissionOrPropose: vi.fn(
-    async (o: { subjectType?: string; data?: { name?: string } }) =>
-      o.subjectType === "playbook" && o.data?.name === h.proposedName
-        ? { proposalId: h.filedProposalId }
-        : { allowed: true }
+    async (o: {
+      subjectType?: string;
+      workspaceId?: string;
+      data?: { name?: string };
+    }) => {
+      if (o.subjectType !== "playbook" || o.data?.name !== h.proposedName)
+        return { allowed: true };
+      await h.client!.query(
+        `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status)
+         values ($1,$2,'playbook',gen_random_uuid()::text,'playbook.create',$3::jsonb,'pending')`,
+        [h.filedProposalId, o.workspaceId ?? null, JSON.stringify(o.data ?? {})]
+      );
+      return { proposalId: h.filedProposalId };
+    }
   ),
   previewPermissionDecision: vi.fn(async () => ({ decision: "allow" })),
   proposedMessageFor: vi.fn(() => "proposed"),
@@ -160,6 +175,7 @@ import { registerPackagesRoutes } from "./packages.js";
 import { registerWorkspacesRoutes } from "./workspaces.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 import { listWorkspaceTemplateHealth } from "../../../services/template-health.js";
+import { finishTemplateApply } from "../../../services/template-apply-finisher.js";
 
 const OWNER = randomUUID();
 const SLUG = "crm-finish";
@@ -250,6 +266,10 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
       state: "awaiting-approval",
       proposals: [h.filedProposalId],
     });
+    // The pod's one sentence, returned by the apply door itself.
+    expect(body.templateApplyWarning).toBe(
+      `Waiting on your approval of 1 proposal (${h.filedProposalId}), then run \`synap templates update ${SLUG}\`.`
+    );
     version = body.templateApply.version;
     expect(version).toMatch(/^h-/);
     // The catalog's latest IS this version: only the record can make it drift.
@@ -269,25 +289,18 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
 
   it("(1b) health names the proposal it waits on — read live, plain drift once decided", async () => {
     const { id } = await space();
-    // The governed create filed this proposal (the gate is stubbed here, so
-    // the row is written as the real gate would).
-    await q(
-      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status)
-       values ($1,$2,'playbook',$3,'playbook.create','{"name":"Qualify a lead"}'::jsonb,'pending')`,
-      [h.filedProposalId, id, randomUUID()]
-    );
-    const warning =
-      "Waiting on your approval of 1 proposal, then run `synap templates update`.";
+    const warning = `Waiting on your approval of 1 proposal (${h.filedProposalId}), then run \`synap templates update ${SLUG}\`.`;
     const [waiting] = await listWorkspaceTemplateHealth([id]);
     expect(waiting).toMatchObject({
       drifted: true,
       awaitingApproval: [h.filedProposalId],
+      applyWarning: warning,
     });
     expect(waiting!.warnings).toContain(warning);
     expect(await hubRow(id)).toMatchObject({
       drifted: true,
       awaitingApproval: [h.filedProposalId],
-      awaitingApprovalWarning: warning,
+      applyWarning: warning,
     });
 
     // Decided (approved here; rejected reads the same): the stored array still
@@ -296,12 +309,16 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
       h.filedProposalId,
     ]);
     const [decided] = await listWorkspaceTemplateHealth([id]);
-    expect(decided).toMatchObject({ drifted: true, awaitingApproval: [] });
+    expect(decided).toMatchObject({
+      drifted: true,
+      awaitingApproval: [],
+      applyWarning: null,
+    });
     expect(decided!.warnings).not.toContain(warning);
     expect(await hubRow(id)).toMatchObject({
       drifted: true,
       awaitingApproval: [],
-      awaitingApprovalWarning: null,
+      applyWarning: null,
     });
     expect((await space()).settings.templateApply.proposals).toEqual([
       h.filedProposalId,
@@ -331,5 +348,46 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     expect(settings.templateApply).toBeNull();
     const [health] = await listWorkspaceTemplateHealth([id]);
     expect(health).toMatchObject({ stamped: true, drifted: false });
+  });
+
+  it("(3) an overlay pack's version is recorded only once its layer 2 converged", async () => {
+    const { id } = await space();
+    // As compose leaves it: the pack is recorded, its version is not.
+    await q(
+      `update workspaces set settings = settings || '{"installedPacks":[{"slug":"grants","version":"","installedAt":"t0"}]}'::jsonb where id = $1`,
+      [id]
+    );
+    const pendingPack = { slug: "grants", version: "h-g" };
+    const ledger = async () =>
+      (
+        (await space()).settings.installedPacks as Array<{
+          slug: string;
+          version: string;
+        }>
+      ).find((p) => p.slug === "grants")!;
+
+    const held = await finishTemplateApply({
+      workspaceId: id,
+      userId: OWNER,
+      built: false,
+      pendingPack,
+      post: {
+        playbooks: [
+          { name: "Grant", status: "proposed", proposalId: randomUUID() },
+        ],
+      },
+    });
+    expect(held.state).toBe("awaiting-approval");
+    expect((await ledger()).version).toBe("");
+
+    const landed = await finishTemplateApply({
+      workspaceId: id,
+      userId: OWNER,
+      built: false,
+      pendingPack,
+      post: { playbooks: [{ name: "Grant", status: "created" }] },
+    });
+    expect(landed.state).toBe("converged");
+    expect(await ledger()).toMatchObject({ version: "h-g", installedAt: "t0" });
   });
 });

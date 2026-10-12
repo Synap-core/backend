@@ -21,6 +21,7 @@ import {
   TemplateIncompleteError,
 } from "../../../services/package-apply-post-workspace.js";
 import { finishTemplateApply } from "../../../services/template-apply-finisher.js";
+import { templateApplyWarningFor } from "../../../services/template-health.js";
 import { installedTemplateSpace } from "../../../services/installed-template-space.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
@@ -880,6 +881,7 @@ export function registerPackagesRoutes(app: HubHono): void {
     let postWorkspaceOutcome:
       "created" | "reconciled" | "unchanged" | undefined;
     let pendingVersionStamp: string | undefined;
+    let pendingPack: { slug: string; version: string } | undefined;
     try {
       const core = await materializeWorkspaceCore({
         definition: body as unknown as WorkspaceDefinitionInput,
@@ -922,6 +924,7 @@ export function registerPackagesRoutes(app: HubHono): void {
       if (core.status === "composed") {
         workspaceId = core.workspaceId;
         pendingVersionStamp = core.pendingVersionStamp;
+        pendingPack = core.pendingPack;
         result.workspace = {
           status: "composed",
           workspaceId,
@@ -1111,11 +1114,16 @@ export function registerPackagesRoutes(app: HubHono): void {
           userId,
           built: postWorkspaceOutcome === "created",
           pendingVersionStamp,
+          pendingPack,
           post,
         });
         result.versionStamped = finished.versionStamped;
-        if (finished.templateApply)
+        if (finished.templateApply) {
           result.templateApply = finished.templateApply;
+          // The pod's ONE sentence for why it is not finished (the CLI prints it).
+          result.templateApplyWarning =
+            await templateApplyWarningFor(workspaceId);
+        }
       } else if (workspaceId && body.playbooks?.length) {
         // "unchanged" says the version STAMP matches — not that every playbook
         // the template declares exists. A stamp written by a pass that did not
@@ -1141,8 +1149,12 @@ export function registerPackagesRoutes(app: HubHono): void {
           built: false,
           post,
         });
-        if (finished.templateApply)
+        if (finished.templateApply) {
           result.templateApply = finished.templateApply;
+          // The pod's ONE sentence for why it is not finished (the CLI prints it).
+          result.templateApplyWarning =
+            await templateApplyWarningFor(workspaceId);
+        }
       }
     } catch (e) {
       if (e instanceof TemplateIncompleteError) {
