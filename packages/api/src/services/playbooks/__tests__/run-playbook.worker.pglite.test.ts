@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   pending: 0,
   sends: 0,
   inFlight: [] as string[],
+  subjectProfile: { profileSlug: "deal" } as Record<string, unknown>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -72,7 +73,7 @@ vi.mock("../playbook-lifecycle.js", async (importOriginal) => {
       metadata: {},
       inputStrategy: null,
       goalTemplate: "Review them",
-      subjectProfile: { profileSlug: "deal" },
+      subjectProfile: h.subjectProfile,
     })),
     instantiateSession: vi.fn(
       async (i: { subjectId?: string | null; metadata?: unknown }) => {
@@ -115,6 +116,8 @@ import {
   profiles,
   profileWorkspaceAccess,
   focusSessions,
+  profileProperties,
+  propertyDefs,
 } from "@synap/database";
 import { runPlaybook } from "../run-playbook.js";
 
@@ -164,6 +167,8 @@ beforeAll(async () => {
     profiles,
     profileWorkspaceAccess,
     focusSessions,
+    profileProperties,
+    propertyDefs,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -195,14 +200,53 @@ beforeEach(async () => {
   h.pending = 0;
   h.sends = 0;
   h.inFlight = [];
+  h.subjectProfile = { profileSlug: "deal" };
+  await h.client!.exec(
+    "delete from profile_properties; delete from property_defs;"
+  );
 });
 
-async function deal(status: string): Promise<string> {
+/** Declare `property` as the deal kind's lifecycle (the column is the truth). */
+async function declareLifecycle(property: string): Promise<void> {
+  const def = randomUUID();
+  await q(
+    `insert into property_defs (id, slug, value_type, constraints)
+     values ($1, $2, 'string', $3::jsonb)`,
+    [
+      def,
+      property,
+      JSON.stringify({
+        enumOptions: [
+          { key: "draft", category: "open" },
+          { key: "review", category: "active" },
+        ],
+      }),
+    ]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, is_lifecycle)
+     values ($1, $2, true)`,
+    [DEAL, def]
+  );
+}
+
+async function deal(
+  status: string | null,
+  properties: Record<string, unknown> = {}
+): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into entities (id, user_id, workspace_id, type, profile_id, title, status, properties)
-     values ($1, $2, $3, 'deal', $4, $5, $6, '{}'::jsonb)`,
-    [id, USER, WS, DEAL, `Deal ${id.slice(0, 4)}`, status]
+     values ($1, $2, $3, 'deal', $4, $5, $6, $7::jsonb)`,
+    [
+      id,
+      USER,
+      WS,
+      DEAL,
+      `Deal ${id.slice(0, 4)}`,
+      status,
+      JSON.stringify(properties),
+    ]
   );
   return id;
 }
@@ -321,6 +365,7 @@ describe("the gate — before any session exists", () => {
   });
 
   it("per_thing: a subject that left the status → stale_transition", async () => {
+    await declareLifecycle("stage");
     const moved = await deal("draft");
     expect(
       await fire(worker({ size: "per_thing", key: "enters_status:review" }), {
@@ -328,5 +373,35 @@ describe("the gate — before any session exists", () => {
       })
     ).toEqual({ skipped: "stale_transition" });
     expect(await sessions()).toHaveLength(0);
+  });
+});
+
+/**
+ * arch F4: a kind with NO declared lifecycle has a NULL status column. The
+ * stale check reads the playbook's `statusProperty` on the thing instead —
+ * reading the column skipped every fire of such a worker for good.
+ */
+describe("per_thing stale check on a kind with no declared lifecycle", () => {
+  const perThing = worker({ size: "per_thing", key: "enters_status:review" });
+
+  it("still in the status (in properties, column NULL) → the run goes on", async () => {
+    h.subjectProfile = { profileSlug: "deal", statusProperty: "stage" };
+    const still = await deal(null, { stage: "review" });
+    const r = await fire(perThing, { subjectId: still });
+    expect(r).not.toEqual({ skipped: "stale_transition" });
+  });
+
+  it("moved on in properties → stale_transition", async () => {
+    h.subjectProfile = { profileSlug: "deal", statusProperty: "stage" };
+    const moved = await deal(null, { stage: "draft" });
+    expect(await fire(perThing, { subjectId: moved })).toEqual({
+      skipped: "stale_transition",
+    });
+  });
+
+  it("no statusProperty to read → passes", async () => {
+    const thing = await deal(null, {});
+    const r = await fire(perThing, { subjectId: thing });
+    expect(r).not.toEqual({ skipped: "stale_transition" });
   });
 });

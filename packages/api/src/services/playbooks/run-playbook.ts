@@ -84,6 +84,7 @@ import {
 import { resolveExecutor } from "./executors/registry.js";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
+import { readPlaybookProcess } from "../../schemas/playbook-process.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
@@ -773,7 +774,10 @@ export async function runPlaybook(
   // session exists. A per_moment worker runs ONE session over its set and
   // returns here — it never fans out, pins, or binds a subject.
   if (input.worker) {
-    const skipped = await gateWorkerRun(input, input.worker);
+    const skipped = await gateWorkerRun(input, input.worker, {
+      statusProperty: readPlaybookProcess(playbook.subjectProfile)
+        .statusProperty,
+    });
     if (skipped) return { run: null, session: null, skipped };
     if (input.worker.size === "per_moment") {
       return runWorkerBatch(playbook, input, input.worker, filing);
@@ -1242,13 +1246,19 @@ interface WorkerBatch {
  *   2. `volume_ceiling` — the enablement used today's irreversible-send
  *      ceiling (`WORKER_IRREVERSIBLE_DAILY_CEILING`, a system constant);
  *   3. `stale_transition` — a per_thing worker on a status: the subject is no
- *      longer in it (it moved on between the event and this run).
+ *      longer in it (it moved on between the event and this run). Where the
+ *      status lives decides what is read: a DECLARED lifecycle's status
+ *      column (the board's own read), else the playbook's `statusProperty`
+ *      on the thing's properties — a kind with no declared lifecycle has a
+ *      NULL column, and reading it skipped every fire. No property to read
+ *      ⇒ the check passes.
  * Both counts need the enablement's automation; a worker fired outside one
  * (a manual test run) has nothing to count and skips them.
  */
 export async function gateWorkerRun(
   input: RunPlaybookInput,
-  worker: RunWorker
+  worker: RunWorker,
+  process: { statusProperty: string | null } = { statusProperty: null }
 ): Promise<WorkerSkipReason | null> {
   if (worker.automationId) {
     const max = workerMaxPending(worker.maxPendingApprovals);
@@ -1263,6 +1273,28 @@ export async function gateWorkerRun(
     }
   }
   if (worker.size === "per_thing" && worker.status && input.subjectId) {
+    const { readSubjectProfile } = await import("./playbook-activators.js");
+    const { lifecycleProperty } = await readSubjectProfile(
+      worker.profileSlug,
+      input.workspaceId
+    );
+    const statusProperty = process.statusProperty ?? lifecycleProperty;
+    if (!lifecycleProperty || statusProperty !== lifecycleProperty) {
+      if (!statusProperty) return null;
+      const db = await getDb();
+      const [thing] = await db
+        .select({
+          value: drizzleSql<
+            string | null
+          >`${entities.properties}->>${statusProperty}`,
+        })
+        .from(entities)
+        .where(eq(entities.id, input.subjectId))
+        .limit(1);
+      return thing?.value === worker.status
+        ? null
+        : WORKER_SKIP_REASONS.staleTransition;
+    }
     const { listThingsInStatus } = await loadStatusGroups();
     const still = await listThingsInStatus({
       profileSlug: worker.profileSlug,
