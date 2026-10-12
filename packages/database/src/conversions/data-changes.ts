@@ -82,6 +82,13 @@ const OP_PROFILE_SLUGS: {
   renameProfile: (op) => [op.slug, op.toSlug],
   // Fills lifecycle columns for EVERY kind or role that declares a lifecycle.
   projectLifecycleColumns: () => EVERY_PROFILE,
+  foldBookingDealIntoLead: (op) => [
+    op.slug,
+    op.lead.personSlug,
+    op.lead.role,
+    op.companySlug,
+    op.eventSlug,
+  ],
 };
 
 export function opProfileSlugs(op: ConversionOp): OpProfileSlugs {
@@ -137,6 +144,10 @@ const CHANGED_COUNTERS = [
   "propertyDefRelationsRepointed",
   "relationDefsDeleted",
   "lifecycleColumnsProjected",
+  "dealsConverted",
+  "leadsAdvanced",
+  "relationsCreated",
+  "entitiesArchived",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 const LEFT_ALONE_COUNTERS = [
@@ -146,6 +157,10 @@ const LEFT_ALONE_COUNTERS = [
   "relationDefsKept",
   // A subset of `lifecycleColumnsProjected`: rows whose value no option declares.
   "lifecycleUncategorized",
+  // Booking deals a person edited, or with no linked person: kept, reported.
+  "dealsKeptEdited",
+  "dealsKeptNoPerson",
+  "leadsUnjudged",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 type _CountersClassified =
@@ -223,6 +238,8 @@ export function describeConversionOp(op: ConversionOp): string {
       return `Rename the kind "${op.slug}" to "${op.toSlug}".`;
     case "projectLifecycleColumns":
       return "Fill in each thing's lifecycle status from the value it already holds.";
+    case "foldBookingDealIntoLead":
+      return `Turn each untouched booked-call "${op.slug}" into a "${op.lead.role}" at "${op.lead.status}" on its person, linking the call; edited ones are kept.`;
     default: {
       const unhandled: never = op;
       return unhandled;
