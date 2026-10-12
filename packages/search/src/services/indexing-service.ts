@@ -12,6 +12,7 @@ import {
   eq,
   isNull,
   loadDocumentBodyTexts,
+  notStagedImportItemWhere,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
@@ -192,7 +193,11 @@ export class IndexingService {
 
       case "documents": {
         const docRows = await db.query.documents.findMany({
-          where: inArray(schema.documents.id, ids),
+          // A staged import item is never indexed (see fullReindex below).
+          where: and(
+            inArray(schema.documents.id, ids),
+            notStagedImportItemWhere(schema.documents.metadata)
+          ),
         });
         // The documents table has NO `content` column. Index the stored body —
         // the markdown as it is now (a person's saves cut no version row, so the
@@ -370,7 +375,10 @@ export class IndexingService {
             break;
           case "documents":
             dbRecords = await db.query.documents.findMany({
-              where: (d, { isNull }) => isNull(d.deletedAt),
+              // A STAGED import item (Import → Curate → Build) is not indexed
+              // until its group is built — nobody's record yet.
+              where: (d, { isNull, and }) =>
+                and(isNull(d.deletedAt), notStagedImportItemWhere(d.metadata)),
             });
             break;
           case "views":
