@@ -26,6 +26,16 @@ const h = vi.hoisted(() => ({
   installError: null as unknown,
 }));
 
+// The ONE finisher (stamp + "active" on convergence) reads and writes the
+// workspace row; its behaviour is pinned on PGlite by
+// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
+vi.mock("../../../services/template-apply-finisher.js", () => ({
+  finishTemplateApply: vi.fn(async () => ({
+    state: "converged",
+    versionStamped: false,
+  })),
+}));
+
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   class FakeProfileRepository {
