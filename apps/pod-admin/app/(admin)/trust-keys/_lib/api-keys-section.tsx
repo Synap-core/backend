@@ -83,7 +83,6 @@ export interface UnifiedKey {
   lastUsedAt?: Date | string | null;
   usageCount?: number | null;
   createdAt?: Date | string | null;
-  workspaceId?: string | null;
   revokedAt?: Date | string | null;
   revokedReason?: string | null;
   user?: {
@@ -330,7 +329,7 @@ export function ApiKeysSection() {
   const allKeys = useMemo<UnifiedKey[]>(() => {
     const map = new Map<string, UnifiedKey>();
     for (const k of (operatorKeys.data as UnifiedKey[] | undefined) ?? []) {
-      if (k.hubId?.startsWith("workspace:") || k.workspaceId) continue;
+      if (k.hubId?.startsWith("workspace:")) continue;
       map.set(k.id, k);
     }
     for (const k of (systemKeys.data as UnifiedKey[] | undefined) ?? []) {

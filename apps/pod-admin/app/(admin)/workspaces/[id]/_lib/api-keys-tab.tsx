@@ -29,6 +29,7 @@ import {
   ResourceRowSkeleton,
 } from "../../../components/resource-row";
 import { StatusPill } from "../../../components/status-pill";
+import { useFocusRow } from "../../../components/use-focus-row";
 import {
   GrantRolePicker,
   keyMintFromRole,
@@ -112,6 +113,10 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     () => (keysQuery.data as ApiKey[] | undefined) ?? [],
     [keysQuery.data]
   );
+
+  // ?focus=<keyId> — the receiver for a workspace-scoped key, which the
+  // pod-wide Trust & Keys list filters out. `data-row-id` is on each KeyRow.
+  useFocusRow({ ready: !keysQuery.isLoading });
   const active = useMemo(() => keys.filter((k) => k.isActive), [keys]);
   const revoked = useMemo(() => keys.filter((k) => !k.isActive), [keys]);
 
@@ -246,7 +251,10 @@ function KeyRow({
   const scopes = normalizeScopes(apiKey.scope);
 
   return (
-    <div className="flex items-center gap-3 py-3 px-1">
+    <div
+      data-row-id={apiKey.id}
+      className="flex items-center gap-3 rounded-md py-3 px-1 transition-shadow"
+    >
       <KeyRound
         className="h-4 w-4 shrink-0 text-foreground/40"
         strokeWidth={2}
