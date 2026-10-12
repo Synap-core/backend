@@ -33,8 +33,11 @@ import {
   requireUuidParam,
 } from "./_shared.js";
 import { resolveByName } from "../../../services/object-graph/graph-service.js";
-import { resolveObjectKind } from "../../../services/diagnose/resolve-object-kind.js";
-import { browserRouteFor, EMITTABLE_LABELS } from "./resolve-browser-route.js";
+import { EMITTABLE_LABELS } from "./resolve-browser-route.js";
+import {
+  resolveOpenTarget,
+  RESOLVE_UNKNOWN_TYPE as UNKNOWN_TYPE,
+} from "./resolve-open-target.js";
 
 const ResolveByNameSchema = z
   .object({
@@ -51,9 +54,6 @@ const ResolveByNameSchema = z
     unique: z.boolean(),
   })
   .openapi("ResolveByNameResponse");
-
-/** `unknown` is not a routable label — it is the honest "no match" answer. */
-const UNKNOWN_TYPE = "unknown";
 
 /**
  * Machine-readable discriminator on the 500 body: the probe FAILED, which is a
@@ -199,16 +199,17 @@ export function registerResolveRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
-    let resolved;
     try {
-      resolved = await resolveObjectKind(id, acting.userId);
+      // ONE body for both doors (Hub REST here, tRPC `diagnose.resolveOpen`
+      // for the cookie-authenticated desktop): see resolve-open-target.ts.
+      return c.json(await resolveOpenTarget(id, acting.userId));
     } catch (err) {
       // A FAILED read is not an EMPTY one. This used to log and answer
       // `unknown` — i.e. "nothing you can see has this id" — for a probe that
       // never ran to completion, so a broken lookup rendered in the CLI and the
       // desktop app as a calm, confident "Nothing to open." Not-found stays the
-      // 200 `unknown` answer below; a failure is a 500 the caller can show as
-      // an error and retry. (`synap open` already throws on `!res.ok`.)
+      // 200 `unknown` answer; a failure is a 500 the caller can show as an
+      // error and retry. (`synap open` already throws on `!res.ok`.)
       logger.error({ err, id }, "resolve failed");
       return c.json(
         {
@@ -219,38 +220,5 @@ export function registerResolveRoutes(app: HubHono): void {
         500
       );
     }
-
-    if (!resolved) {
-      return c.json({
-        type: UNKNOWN_TYPE,
-        id,
-        displayName: null,
-        workspaceId: null,
-        openable: false,
-      });
-    }
-
-    const route = browserRouteFor(resolved);
-    if (!route) {
-      // Resolved, but there is no browser surface for it. Report WHAT it is and
-      // that it cannot be opened — never a link into nothing.
-      return c.json({
-        type: resolved.kind,
-        id: resolved.id,
-        displayName: resolved.displayName ?? null,
-        workspaceId: resolved.workspaceId ?? null,
-        openable: false,
-      });
-    }
-
-    return c.json({
-      type: route.label,
-      id: resolved.id,
-      displayName: resolved.displayName ?? null,
-      workspaceId: resolved.workspaceId ?? null,
-      ...(resolved.profileSlug ? { profileSlug: resolved.profileSlug } : {}),
-      openable: true,
-      ...(route.params ? { params: route.params } : {}),
-    });
   });
 }

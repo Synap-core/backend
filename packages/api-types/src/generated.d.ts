@@ -15974,6 +15974,19 @@ export interface AgentStanding {
 	 */
 	writes7d: number;
 }
+export interface OpenTarget {
+	/** An `object-nav.ts` label, a known-but-unopenable kind, or `unknown`. */
+	type: string;
+	/** The id to OPEN — may differ from the queried id (a correlationId). */
+	id: string;
+	displayName: string | null;
+	workspaceId: string | null;
+	profileSlug?: string;
+	/** Whether `type` names a surface the browser can open. */
+	openable: boolean;
+	/** Address parameters the link must carry (only runs: `flowType`). */
+	params?: Record<string, string>;
+}
 /**
  * Agent provenance — WHERE an agent came from, for the Agent dashboard.
  *
@@ -41992,6 +42005,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		agents: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: AgentStanding[];
+			meta: object;
+		}>;
+		resolveOpen: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: OpenTarget;
 			meta: object;
 		}>;
 		agent: import("@trpc/server").TRPCQueryProcedure<{
