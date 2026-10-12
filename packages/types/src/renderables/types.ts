@@ -1055,15 +1055,60 @@ export type EmptyViewConfig = Record<string, never>;
 
 // ─── Discriminated union: view type → config ─────────────────────────────────
 
+/** The tabs of an intent surface (design A + B): the board, then the dashboard. */
+export const PIPELINE_SURFACE_TABS = ["pipeline", "dashboard"] as const;
+export type PipelineSurfaceTab = (typeof PIPELINE_SURFACE_TABS)[number];
+
+/**
+ * The zones of an intent surface's right rail, in their default order:
+ * needs you (`signals` on the kind) · working now (sessions on its things,
+ * live) · workers (`workers.list` on its lifecycle) · the door to all its
+ * sessions (`focusSessions.list({ subject })`).
+ */
+export const PIPELINE_RAIL_ZONES = [
+  "needs-you",
+  "working-now",
+  "workers",
+  "sessions",
+] as const;
+export type PipelineRailZone = (typeof PIPELINE_RAIL_ZONES)[number];
+
+/** Goal-line periods — a subset of `lifecycle.throughput`'s buckets. */
+export const PIPELINE_GOAL_PERIODS = ["week", "month"] as const;
+export type PipelineGoalPeriod = (typeof PIPELINE_GOAL_PERIODS)[number];
+
+/**
+ * How an intent surface is laid out — STORED config (configuration over
+ * code), every field optional so a plain pipeline view renders exactly as
+ * before. The lens is the view's own: its workspace + `projectId`/`trackId`.
+ */
+export interface PipelineSurfaceConfig {
+  /** The tab it opens on. Absent ⇒ `pipeline`. */
+  tab?: PipelineSurfaceTab;
+  /**
+   * The rail's zones, in order. Absent ⇒ all of `PIPELINE_RAIL_ZONES`;
+   * `[]` ⇒ no rail. Each zone at most once.
+   */
+  rail?: PipelineRailZone[];
+  /**
+   * The goal line's TARGET: things into a `done` option per period. The
+   * measured side is `lifecycle.throughput`. Absent ⇒ the goal line shows
+   * throughput without a target.
+   */
+  goal?: { count: number; per: PipelineGoalPeriod };
+}
+
 /**
  * A pipeline view (work model L3): the lifecycle board of ONE kind or role,
  * optionally narrowed to a project (or a track's project). Read by
- * `lifecycle.board`; nothing else to configure.
+ * `lifecycle.board`. With `surface`, it is an INTENT SURFACE (surfaces W1.6):
+ * the board plus its rail and dashboard tab.
  */
 export interface PipelineViewConfig {
   profileSlug: string;
   projectId?: string;
   trackId?: string;
+  surface?: PipelineSurfaceConfig;
 }
 
 export interface ViewConfigByType {
