@@ -19,11 +19,10 @@ import {
 import { ExitFallback, ExitLink, externalProps } from "../../../lib/exit-link";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 /* Relative time is NOT vocabulary — `.claude/rules/vocabulary.md` excludes
-   date/duration formatting on purpose. Reusing the AUDIT copy rather than the
-   People one because it accepts `Date | string`: `createdAt` is typed `Date`
-   through superjson, and a helper that only accepts `Date` would be a lie the
-   day a plain-JSON path feeds this page. Writing a third copy is what the rule
-   forbids. */
+   date/duration formatting on purpose. The shared helper accepts
+   `Date | string`: `createdAt` is typed `Date` through superjson, and a helper
+   that only accepts `Date` would be a lie the day a plain-JSON path feeds this
+   page. */
 import { formatRelative } from "../../../lib/format";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
@@ -33,6 +32,7 @@ import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
 import { proposalHeading } from "./proposal-heading";
+import { proposalWhy } from "./proposal-why";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -258,10 +258,10 @@ export function ProposalReview({
      That exact leak is named in .claude/rules/vocabulary.md. */
   const payload = p.request.data ?? p.data;
   const { heading, appConnect } = proposalHeading(p, payload);
-  const reasoning =
-    typeof p.review.reasoning === "string" && p.review.reasoning.trim()
-      ? p.review.reasoning
-      : undefined;
+  const why = proposalWhy({
+    governanceReason: p.governanceReason,
+    reasoning: p.review.reasoning,
+  });
   const actionable = isActionable(status);
   const busy = approve.isPending || reject.isPending;
 
@@ -333,9 +333,20 @@ export function ProposalReview({
       </CardHeader>
 
       <CardBody className="flex flex-col gap-5 px-7 pb-7 pt-5">
-        {reasoning && (
+        {why.proposer && (
           <p className="text-[13px] leading-relaxed text-foreground/65">
-            {reasoning}
+            {why.proposer}
+          </p>
+        )}
+
+        {/* The policy's WHY, never voiced as the proposer's. Worded for every
+            status: an approved proposal still needed approval. */}
+        {why.policy && (
+          <p className="text-[12.5px] leading-relaxed text-foreground/65">
+            <span className="font-medium text-foreground/80">
+              Why this needs approval:
+            </span>{" "}
+            {why.policy}
           </p>
         )}
 
