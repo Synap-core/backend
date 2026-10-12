@@ -38,6 +38,32 @@ import { assertApplied, reportApproved } from "./shared.js";
  * so a REVIEWER can see the shape before approving, not so the replay can
  * trust it.
  */
+/**
+ * A stage worker's overlap refusal (`assertNoWorkerOverlap`) as the approval's
+ * CONFLICT. A rule that is not a worker's passes untouched.
+ */
+async function refuseWorkerOverlap(input: {
+  seed: { template: string; key: string } | null;
+  ruleId?: string;
+}): Promise<void> {
+  // Nothing to identify the rule by: a plain create, never a worker's.
+  if (!input.seed && !input.ruleId) return;
+  const { assertNoWorkerOverlap, WorkerScopeOverlapError } =
+    await import("../../../services/playbooks/workers.js");
+  try {
+    await assertNoWorkerOverlap(input);
+  } catch (err) {
+    if (err instanceof WorkerScopeOverlapError) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: err.message,
+        cause: err,
+      });
+    }
+    throw err;
+  }
+}
+
 export function registerRuleExecutors(): void {
   registerProposalExecutor({
     key: "rule/create",
@@ -69,6 +95,10 @@ export function registerRuleExecutors(): void {
         await import("../../../services/rules/expiry.js");
       const scope = readRuleScope(innerData.scope);
       const expiresAt = readExpiresAt(innerData.expiresAt);
+
+      // An agent's worker enable: a person may have enabled the same worker
+      // over the same things since it was filed.
+      await refuseWorkerOverlap({ seed: readRuleSeed(innerData.seed) });
 
       const { createRuleGoverned } =
         await import("../../../services/rules/create.js");
@@ -219,6 +249,15 @@ export function registerRuleExecutors(): void {
         await import("../../../services/rules/expiry.js");
       const scope = readRuleScope(innerData.scope);
       const expiresAt = readExpiresAt(innerData.expiresAt);
+
+      // An edit that leaves the rule live (an agent's worker resume, among
+      // others) must not arm a second enablement over the same things.
+      if (innerData.draft !== true) {
+        await refuseWorkerOverlap({
+          seed: readRuleSeed(innerData.seed),
+          ruleId,
+        });
+      }
 
       const { updateRuleGoverned } =
         await import("../../../services/rules/update.js");

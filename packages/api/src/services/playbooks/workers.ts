@@ -18,7 +18,8 @@
  * proposal. Each is followed by the activator pass, which keeps the
  * `playbook_automations` activator links in step with what is live.
  *
- * OVERLAP is refused at enable, naming the holder: the same activator already
+ * OVERLAP is refused at enable, at resume and at the approval of an agent's
+ * enable or resume (`assertNoWorkerOverlap`), naming the holder: the same activator already
  * LIVE for the whole space, or for the same project (two tracks of one project
  * enabling one worker = overlap — a track's filter is its project). Two
  * different projects never overlap. Two concurrent enables that both pass
@@ -39,6 +40,7 @@ import {
   drizzleSql,
   playbooks,
   automations,
+  skills,
   countWorkerPendingApprovals,
   userVisibleWhere,
 } from "@synap/database";
@@ -60,7 +62,11 @@ import {
   templateRuleHash,
   type TemplateRuleDecl,
 } from "../rules/template-rules.js";
-import type { RuleMetadata } from "../rules/index.js";
+import {
+  RULE_CATEGORY,
+  readRuleMetadata,
+  type RuleMetadata,
+} from "../rules/index.js";
 import {
   activatorRuleDecl,
   activatorSeedTemplate,
@@ -279,26 +285,40 @@ export async function listEnabledWorkers(input: {
 }
 
 /**
- * The LIVE enablement this one would overlap, as the refusal to throw: the
- * same activator running for the whole space, or for the same project (any
- * track of it). Null = free.
+ * The LIVE enablement this one would overlap, as the refusal to throw, or null
+ * when it is free. `projectId` null = the whole space, which overlaps every
+ * live project enablement of the activator; a project overlaps the space one
+ * and the same project's (any track of it). Two different projects never do.
+ *
+ * Of several holders the one with the SMALLEST id is named: the post-write
+ * settle in `enableWorker` keeps the smallest live id, so with three
+ * concurrent enables (A < B < C) B must see A, not C, or A and B both stay.
  */
 async function findOverlap(input: {
   playbookId: string;
   activatorKey: string;
-  projectId: string;
+  projectId: string | null;
   excludeRuleId?: string;
 }): Promise<WorkerScopeOverlapError | null> {
   const live = (r: { id: string; meta: RuleMetadata }) =>
     !r.meta.draft && r.id !== input.excludeRuleId;
-  const space = (
-    await rulesOfSeedTemplate(activatorSeedTemplate(input.playbookId))
-  ).find((r) => r.meta.seed!.key === input.activatorKey && live(r));
-  if (space) {
-    return new WorkerScopeOverlapError(
-      "This worker already runs for the whole space — pause it there first, then enable it for this project.",
-      { ruleId: space.id, scope: "space", projectId: null, trackId: null }
-    );
+  const holders: Array<{
+    ruleId: string;
+    scope: WorkerScopeKind;
+    projectId: string | null;
+    trackId: string | null;
+  }> = [];
+  for (const r of await rulesOfSeedTemplate(
+    activatorSeedTemplate(input.playbookId)
+  )) {
+    if (r.meta.seed!.key === input.activatorKey && live(r)) {
+      holders.push({
+        ruleId: r.id,
+        scope: "space",
+        projectId: null,
+        trackId: null,
+      });
+    }
   }
   for (const r of await rulesOfSeedTemplate(
     workerSeedTemplate(input.playbookId)
@@ -307,23 +327,87 @@ async function findOverlap(input: {
     if (
       !p ||
       p.activatorKey !== input.activatorKey ||
-      p.projectId !== input.projectId ||
+      (input.projectId !== null && p.projectId !== input.projectId) ||
       !live(r)
     )
       continue;
-    return new WorkerScopeOverlapError(
-      p.trackId
-        ? "This worker already runs for this project, enabled by one of its tracks — a worker runs once per project."
-        : "This worker already runs for this project.",
-      {
-        ruleId: r.id,
-        scope: "project",
-        projectId: p.projectId,
-        trackId: p.trackId,
-      }
-    );
+    holders.push({
+      ruleId: r.id,
+      scope: "project",
+      projectId: p.projectId,
+      trackId: p.trackId,
+    });
   }
-  return null;
+  if (holders.length === 0) return null;
+  const holder = holders.reduce((min, h) => (h.ruleId < min.ruleId ? h : min));
+  return new WorkerScopeOverlapError(
+    holder.scope === "space"
+      ? "This worker already runs for the whole space — pause it there first, then enable it for this project."
+      : input.projectId === null
+        ? "This worker already runs for a project — pause it there first, then run it for the whole space."
+        : holder.trackId
+          ? "This worker already runs for this project, enabled by one of its tracks — a worker runs once per project."
+          : "This worker already runs for this project.",
+    holder
+  );
+}
+
+/**
+ * The overlap check for a rule door that knows only the rule — the approval
+ * of an agent's enable or resume proposal (`rule/create`, `rule/update`
+ * executors). `seed` is the one the replay stamps; with none, an existing
+ * rule's (`ruleId`) is read. `ruleId` is also left out of the holders. A rule
+ * that is not a worker's passes. Throws the overlap refusal; the caller maps
+ * it.
+ */
+export async function assertNoWorkerOverlap(input: {
+  seed?: { template: string; key: string } | null;
+  ruleId?: string;
+}): Promise<void> {
+  let seed = input.seed ?? null;
+  if (!seed && input.ruleId) {
+    const [row] = await db
+      .select({ metadata: skills.metadata })
+      .from(skills)
+      .where(
+        and(eq(skills.id, input.ruleId), eq(skills.category, RULE_CATEGORY))
+      )
+      .limit(1);
+    seed = row
+      ? (readRuleMetadata(row.metadata as Record<string, unknown>)?.seed ??
+        null)
+      : null;
+  }
+  if (!seed) return;
+  let target: {
+    playbookId: string;
+    activatorKey: string;
+    projectId: string | null;
+  } | null = null;
+  const space = activatorSeedTemplate("");
+  const project = workerSeedTemplate("");
+  if (seed.template.startsWith(space)) {
+    target = {
+      playbookId: seed.template.slice(space.length),
+      activatorKey: seed.key,
+      projectId: null,
+    };
+  } else if (seed.template.startsWith(project)) {
+    const p = parseWorkerEnablementKey(seed.key);
+    if (p) {
+      target = {
+        playbookId: seed.template.slice(project.length),
+        activatorKey: p.activatorKey,
+        projectId: p.projectId,
+      };
+    }
+  }
+  if (!target) return;
+  const overlap = await findOverlap({
+    ...target,
+    excludeRuleId: input.ruleId,
+  });
+  if (overlap) throw overlap;
 }
 
 export type EnableWorkerResult =
@@ -465,7 +549,7 @@ export async function enableWorker(input: {
       excludeRuleId: result.ruleId,
     });
     if (after && after.holder.ruleId < result.ruleId) {
-      await updateRuleGoverned({
+      const back = await updateRuleGoverned({
         userId: input.userId,
         ruleId: result.ruleId,
         workspaceId: pb.workspaceId,
@@ -480,6 +564,14 @@ export async function enableWorker(input: {
         draft: true,
         auditSource: "playbook-worker",
       });
+      // A step-back that did not apply leaves this rule LIVE beside the
+      // holder: never report "refused" over it.
+      if (back.status !== "updated") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `This worker overlapped another enablement and could not step back (${back.status}) — it is still running. Pause one of the two.`,
+        });
+      }
       throw after;
     }
   }
@@ -550,7 +642,9 @@ export type SetWorkerPausedResult =
  * Pause or resume ONE enablement (space-wide or project). Pausing makes its
  * rule a draft (the automation is archived: nothing fires; sessions already
  * running finish). The activator convergence leaves a person's pause alone on
- * every later pass. Resuming recompiles through the rule door.
+ * every later pass. Resuming recompiles through the rule door, and is refused
+ * (the overlap error) when another enablement of the same worker is live over
+ * the same things.
  */
 export async function setWorkerPaused(input: {
   userId: string;
@@ -573,6 +667,15 @@ export async function setWorkerPaused(input: {
       : workerSeedTemplate(w.playbookId)
   );
   const row = rows.find((r) => r.id === input.ruleId)!;
+  if (!input.paused) {
+    const overlap = await findOverlap({
+      playbookId: w.playbookId,
+      activatorKey: w.activatorKey,
+      projectId: w.scope === "space" ? null : w.projectId,
+      excludeRuleId: w.ruleId,
+    });
+    if (overlap) throw overlap;
+  }
   const r = await updateRuleGoverned({
     userId: input.userId,
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),

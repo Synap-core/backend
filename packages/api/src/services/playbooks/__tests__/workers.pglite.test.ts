@@ -6,7 +6,10 @@
  *    code and the holder named — asserted on the code, not on "it threw";
  *  - allowed for two DIFFERENT projects;
  *  - a paused space-wide run does not block a project enablement;
- *  - re-enabling an enablement a person disabled turns the SAME rule back on.
+ *  - re-enabling an enablement a person disabled turns the SAME rule back on;
+ *  - FB2 item 4: the race settles on the SMALLEST live id, a step-back that
+ *    did not apply is never reported as a refusal, and RESUME and the
+ *    approval of an agent's enable/resume run the same overlap check.
  *
  * Mocked, each proven elsewhere: the rule door (a stateful fake that writes
  * the rule row exactly as `createRuleGoverned` stamps it — so the overlap
@@ -100,6 +103,9 @@ vi.mock("../playbook-activators.js", async (importOriginal) => ({
     outcomes: [],
   })),
 }));
+vi.mock("../../rules/lineage.js", () => ({
+  readRuleAutomationIds: vi.fn(async () => []),
+}));
 vi.mock("../../projects/load-visible-project.js", () => ({
   loadVisibleProject: vi.fn(async (_db: unknown, id: string) => ({ id })),
 }));
@@ -123,7 +129,12 @@ import {
   projectMembers,
   users,
 } from "@synap/database";
-import { WORKER_SCOPE_OVERLAP, enableWorker } from "../workers.js";
+import {
+  WORKER_SCOPE_OVERLAP,
+  assertNoWorkerOverlap,
+  enableWorker,
+  setWorkerPaused,
+} from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
 import { createRuleGoverned } from "../../rules/create.js";
 
@@ -337,5 +348,166 @@ describe("enableWorker — a race past the check", () => {
       { id: RIVAL, draft: null },
       { id: expect.any(String), draft: "true" },
     ]);
+  });
+});
+
+/** A live (or paused) project enablement row with a chosen id. */
+async function projectRule(id: string, projectId: string, draft = false) {
+  await q(
+    `insert into skills (id, user_id, name, category, metadata) values ($1, 'user-1', 'rule', 'rule', $2::jsonb)`,
+    [
+      id,
+      JSON.stringify({
+        rule: {
+          v: 1,
+          intent: "rival",
+          scope: {},
+          seed: {
+            template: `playbook-worker:${PB}`,
+            key: `${KEY}@project:${projectId}`,
+            hash: "h",
+          },
+          behaviours: [],
+          ...(draft ? { draft: true } : {}),
+        },
+      }),
+    ]
+  );
+  return id;
+}
+
+describe("enableWorker — FB2 item 4: the race names the smallest holder", () => {
+  it("three concurrent enables (A < ours < C): ours sees A, not C, and steps back", async () => {
+    const A = "00000000-0000-4000-8000-000000000001";
+    const OURS = "80000000-0000-4000-8000-000000000000";
+    const C = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    vi.mocked(createRuleGoverned).mockImplementationOnce(async (input) => {
+      // C is written FIRST, so a holder picked in row order is C (> ours).
+      await projectRule(C, P1);
+      await projectRule(A, P1);
+      const ours = input as unknown as {
+        intent: string;
+        scope: unknown;
+        seed: unknown;
+      };
+      await q(
+        `insert into skills (id, user_id, name, category, metadata) values ($1, 'user-1', 'rule', 'rule', $2::jsonb)`,
+        [
+          OURS,
+          JSON.stringify({
+            rule: {
+              v: 1,
+              intent: ours.intent,
+              scope: ours.scope,
+              seed: ours.seed,
+              behaviours: [],
+            },
+          }),
+        ]
+      );
+      return { status: "created", ruleId: OURS, automationIds: [] } as never;
+    });
+    const out = await refusal(enable({ projectId: P1 }));
+    expect(out?.code).toBe(WORKER_SCOPE_OVERLAP);
+    expect(out?.holder).toMatchObject({ ruleId: A });
+    const { rows } = await q(
+      `select (metadata->'rule'->>'draft') as draft from skills where id = $1`,
+      [OURS]
+    );
+    expect(rows).toEqual([{ draft: "true" }]);
+  });
+
+  it("a step-back the rule door did not apply is an error, never an overlap refusal", async () => {
+    const RIVAL = "00000000-0000-4000-8000-000000000001";
+    vi.mocked(createRuleGoverned).mockImplementationOnce(async (input) => {
+      await projectRule(RIVAL, P1);
+      return {
+        status: "created",
+        ruleId: await insertRule(input as never),
+        automationIds: [],
+      } as never;
+    });
+    vi.mocked(updateRuleGoverned).mockImplementationOnce(
+      async () => ({ status: "proposed", proposalId: "prop-1" }) as never
+    );
+    const err = await enable({ projectId: P1 }).then(
+      () => null,
+      (e: { code?: string; reasonCode?: string; message: string }) => e
+    );
+    expect(err?.reasonCode).toBeUndefined();
+    expect(err?.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(err?.message).toMatch(/could not step back \(proposed\)/);
+  });
+});
+
+describe("setWorkerPaused — FB2 item 4: resume runs the overlap check", () => {
+  it("resuming the space run while a project runs it is refused, naming the project", async () => {
+    const space = await spaceRule(true);
+    const p1 = await projectRule("00000000-0000-4000-8000-0000000000aa", P1);
+    expect(
+      await refusal(
+        setWorkerPaused({ userId: USER, ruleId: space, paused: false })
+      )
+    ).toEqual({
+      code: WORKER_SCOPE_OVERLAP,
+      holder: { ruleId: p1, scope: "project", projectId: P1, trackId: null },
+    });
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+  });
+
+  it("resuming a project while the space run is live is refused", async () => {
+    const space = await spaceRule(false);
+    const p1 = await projectRule(randomUUID(), P1, true);
+    expect(
+      (
+        await refusal(
+          setWorkerPaused({ userId: USER, ruleId: p1, paused: false })
+        )
+      )?.holder
+    ).toMatchObject({ ruleId: space, scope: "space" });
+  });
+
+  it("a resume with nothing else live goes through; pausing never checks", async () => {
+    const p1 = await projectRule(randomUUID(), P1, true);
+    await projectRule(randomUUID(), P2);
+    expect(
+      await setWorkerPaused({ userId: USER, ruleId: p1, paused: false })
+    ).toEqual({ status: "updated", state: "running" });
+    await spaceRule(false);
+    expect(
+      await setWorkerPaused({ userId: USER, ruleId: p1, paused: true })
+    ).toEqual({ status: "updated", state: "paused" });
+  });
+});
+
+describe("assertNoWorkerOverlap — FB2 item 4: the approval of an agent's enable/resume", () => {
+  it("a create's seed for a project the space already runs is refused", async () => {
+    await spaceRule(false);
+    await expect(
+      assertNoWorkerOverlap({
+        seed: {
+          template: `playbook-worker:${PB}`,
+          key: `${KEY}@project:${P1}`,
+        },
+      })
+    ).rejects.toMatchObject({ reasonCode: WORKER_SCOPE_OVERLAP });
+  });
+
+  it("an update with no seed reads the rule's own, and leaves the rule itself out", async () => {
+    const space = await spaceRule(true);
+    expect(await assertNoWorkerOverlap({ ruleId: space })).toBeUndefined();
+    await projectRule(randomUUID(), P1);
+    await expect(
+      assertNoWorkerOverlap({ ruleId: space })
+    ).rejects.toMatchObject({
+      reasonCode: WORKER_SCOPE_OVERLAP,
+    });
+  });
+
+  it("a rule that is not a worker's passes", async () => {
+    await spaceRule(false);
+    expect(
+      await assertNoWorkerOverlap({ seed: { template: "pack:x", key: KEY } })
+    ).toBeUndefined();
   });
 });

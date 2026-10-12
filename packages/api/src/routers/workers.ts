@@ -126,11 +126,22 @@ export const workersRouter = router({
         z.object({ status: z.literal("denied"), reason: z.string() }),
       ])
     )
-    .mutation(async ({ ctx, input }) =>
-      setWorkerPaused({
-        userId: requireUserId(ctx.userId),
-        agentUserId: ctx.agentUserId ?? null,
-        ...input,
-      })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await setWorkerPaused({
+          userId: requireUserId(ctx.userId),
+          agentUserId: ctx.agentUserId ?? null,
+          ...input,
+        });
+      } catch (err) {
+        if (err instanceof WorkerScopeOverlapError) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: err.message,
+            cause: err,
+          });
+        }
+        throw err;
+      }
+    }),
 });
