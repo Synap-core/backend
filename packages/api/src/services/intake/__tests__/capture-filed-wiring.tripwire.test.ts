@@ -84,6 +84,18 @@ describe("capture_filed — written by execute on every exit", () => {
     );
   });
 
+  // P1: the project line shown before filing is sent as the explicit pin, so
+  // the receipt must carry the project execute LINKED (rung 1 honours the pin,
+  // a missing pin resolves to null) — never the AI's advisory pick. Source
+  // shape only: it cannot see a resolver that ignores the pin (that ladder has
+  // its own tests in project-placement).
+  it("the applied receipt names the project execute linked, never the advisory pick", () => {
+    expect(executeSrc).toMatch(
+      /recordFiledReceipt\(\s*\{\s*kind: "applied", created, updated: captureUpdates \},\s*resolvedProjectId \?\? null\s*\)/
+    );
+    expect(executeSrc).toMatch(/explicitProjectId: input\.projectId,/);
+  });
+
   it("execute is the only writer", () => {
     const writers = SOURCES.filter(
       (f) =>
