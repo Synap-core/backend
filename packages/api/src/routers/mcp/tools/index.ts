@@ -304,15 +304,15 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
-    "Slug of the subject kind's lifecycle property this process owns (e.g. 'post-status'). Needs subjectProfileSlug. One process owns one property."
+    "Slug of the subject's lifecycle property (e.g. 'post-status'). Omit it: the process follows the lifecycle the kind or role declares. If you name it, name that same property. Needs subjectProfileSlug."
   ),
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
-    "Stage workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
+    "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
-    "Status options no stage owns — set only by a person (e.g. Idea, Archived). With the stages' subjectStatus values they should cover every option of the property."
+    "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
   ),
   expectedOutputs: buildOutputSlotsJsonSchema(
     "What every run of this playbook must produce (playbook-level slots): each { kind, label, relationToSubject? }."
@@ -1048,7 +1048,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done) and property updates. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
+          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1736,7 +1736,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's TRACKS (its lasting goals) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's TRACKS (its lasting goals) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this (another conversation's session is joined only by passing its id as `sessionId`); calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1912,7 +1912,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), track step (`trackId` + `trackStage` ADOPT existing work into a track step — always a proposal; trackId null unfiles), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1949,7 +1949,7 @@ export const tools = {
             currentStage: {
               type: "string",
               description:
-                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. Changing it emits a stage-transition event automations can react to.",
+                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door. Changing it emits a stage-transition event automations can react to.",
             },
             subjectEntityId: {
               type: ["string", "null"],
@@ -1969,7 +1969,7 @@ export const tools = {
             trackStage: {
               type: ["string", "null"],
               description:
-                "The track STEP to file it at — a stage key the track pinned (synap_list_tracks). Omit for the track's current step. REFUSED if the track does not declare it.",
+                "LEGACY (staged tracks only) — the track STEP to file it at, a stage key the track pinned (synap_list_tracks). Omit it; a new track has no stages. REFUSED if the track does not declare it.",
             },
             expectedOutputs: {
               type: "array",
@@ -2618,7 +2618,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Pass scope: "project" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default "session" is a template for one focus session. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind: set subjectProfileSlug + statusProperty, give each stage the subjectStatus it writes (an existing status option), gates at the commitments, onFail loops, typed expectedOutputs, plus activators and humanOnlyStatuses — load_skill system/synap/processes first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.',
         inputSchema: {
           type: "object",
           properties: {
@@ -2703,7 +2703,7 @@ export const tools = {
               type: "string",
               enum: ["session", "project"],
               description:
-                "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session. 'project': a METHOD a project runs as a track (synap_start_track) — its stages are the project's long-running phases.",
+                "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session, which a session or a worker follows. 'project': LEGACY — a staged method a track runs (synap_start_track); a new track needs none.",
             },
             params: {
               type: "array",
@@ -3390,7 +3390,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List a project's TRACKS — the lasting goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A legacy track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
+          "List a project's TRACKS — the lasting goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages and never completes. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3412,7 +3412,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Start a TRACK on a project — a LASTING goal (e.g. 'Grow the newsletter'): pass a `name`, a one-line `direction` in the person's words and, only if the person names a number, a `kpi`. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal lasts; it is paused or archived, never completed for hitting a number. No method needed: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+          "Start a TRACK on a project — a LASTING goal (e.g. 'Grow the newsletter'): pass a `name`, a one-line `direction` in the person's words and, only if the person names a number, a `kpi`. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal lasts; it is paused or archived, never completed for hitting a number. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3558,7 +3558,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Answer (some of) a track's method params — the questions the method DECLARED when the track started (synap_list_tracks returns them as `declaredParams`, with each one's `type`, `required` and any `options`). MERGED onto the answers already given: only the keys you pass change, and a null value clears that answer. A key the method does not declare, or a value of the wrong type, is refused with the reason. Stage sessions started afterwards carry the answers; a required param still unanswered is a question owed to the person. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "LEGACY (tracks started with a method) — answer (some of) a track's method params — the questions the method DECLARED when the track started (synap_list_tracks returns them as `declaredParams`, with each one's `type`, `required` and any `options`). MERGED onto the answers already given: only the keys you pass change, and a null value clears that answer. A key the method does not declare, or a value of the wrong type, is refused with the reason. Stage sessions started afterwards carry the answers; a required param still unanswered is a question owed to the person. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3624,7 +3624,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Add a stage to a RUNNING track — work the method did not foresee. Appended after the existing stages; adding never enters it (move there with synap_advance_track, then synap_start_stage_session). A stage carries a name and an optional goal; what it must yield is declared as `outcomes` on the session worked there, and that is what a check gate measures. A key already declared is refused. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "LEGACY — a track has no stages; only an old track started from a method does. Add a stage to such a RUNNING track — work the method did not foresee. Appended after the existing stages; adding never enters it (move there with synap_advance_track, then synap_start_stage_session). A stage carries a name and an optional goal; what it must yield is declared as `outcomes` on the session worked there, and that is what a check gate measures. A key already declared is refused. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {

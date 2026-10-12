@@ -39,6 +39,21 @@ Filters narrow the event to specific conditions:
 }
 ```
 
+### Status changes: the transitioned event
+
+A status move (a kind's own lifecycle, or a role's) emits ONE event, `entity.transition.completed` (the verb "transitioned"), whatever moved it: a person, a board drag, an agent through `update_entity` + `expectedStatus`, a sync. Filter it on `lifecycleProfile` (the kind or ROLE whose lifecycle moved; `profileSlug` stays the entity's kind even for a role) and `to` / `from` / `property`:
+
+```json
+{
+  "eventPattern": "entity.transition.completed",
+  "filters": { "lifecycleProfile": "lead", "to": "qualified" }
+}
+```
+
+Prefer it to `entity.update.completed` for any status. For a ROLE it is the only one: a role's status lives on its facet, so an update rule never sees it.
+
+**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
+
 ### Cron Expressions
 
 Standard 5-field cron (minute hour day month weekday):

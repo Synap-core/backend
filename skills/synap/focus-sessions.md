@@ -19,7 +19,9 @@ On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps i
 
 **Keep the session true as you work — the person watches it, not your chat.**
 
-- **Stages.** A bound playbook seeds the session's `stages`; set `currentStage` with `synap_update_session` each time the work moves on. A hand-set `progress` says less than a stage does.
+- **Step = the subject's status.** With a subject (a post, a deal), move the thing through the door (`update_entity` + `expectedStatus`); the session's step follows it, and a stage's `subjectStatus` moves the thing when you set `currentStage`. Without a subject, a bound playbook seeds `stages`; set `currentStage` as the work moves on. A hand-set `progress` says less than either.
+- **Size it from the work.** One session per thing when each needs its own thinking (a post, a feature); one per batch when the items are interchangeable ("find 10 leads today"). Following a method (`followPlaybookId`) keeps the session your work; it also shows in the method's runs.
+- **Targets get a result each.** A worker session holds its things as targets: your own move of a target marks it `done`, someone else's marks it `skipped`, and targets left at close are `skipped`. Put each outcome on its thing, not only in a summary. Model: `work-model`.
 - **Person-only steps** are an `owner: 'human'` output with a `blockedReason` and a `why` (below) — never a line buried in your reply.
 - **Room first.** Post progress, questions and results in the session room (below); your own chat may repeat them.
 - **Grade before you say done.** `synap_evaluate_session { sessionId, evidence: { <criterionKey>: { passed, detail } } }` with the real evidence — the command output, the link, the count. Then `synap_complete_session`. Closing never blocks on criteria, but an ungraded one reads as unmeasured: a claim nobody checked.

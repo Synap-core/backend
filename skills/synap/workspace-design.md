@@ -1,6 +1,6 @@
 ## Workspace design — is this concern a WORKSPACE, or something smaller?
 
-Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
+Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **lasting goal** (track), or a **status**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
 
 **One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
 
@@ -13,12 +13,12 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 
 **All four, or it is not a workspace.** Then fork it to the right lighter structure:
 
-| If the concern is…                                          | It is a…       | Substrate                              | Example                                     |
-| ----------------------------------------------------------- | -------------- | -------------------------------------- | ------------------------------------------- |
-| a **role/hat** an existing entity wears in a domain         | **Facet**      | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
-| a **cross-cutting, time-bound initiative** spanning domains | **Project**    | `create_project` (a lens)              | a campaign, an engagement, a launch         |
-| a **lasting goal** a project pursues (worked in sessions)   | **Track**      | `start_track` (no method needed)       | grow the newsletter, win ten clients        |
-| a **stage/filter WITHIN a domain**                          | **State/View** | a `status` property def + a view       | pipeline stage, "active"/"archived"         |
+| If the concern is…                                          | It is a…    | Substrate                              | Example                                     |
+| ----------------------------------------------------------- | ----------- | -------------------------------------- | ------------------------------------------- |
+| a **role/hat** an existing entity wears in a domain         | **Facet**   | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
+| a **cross-cutting, time-bound initiative** spanning domains | **Project** | `create_project` (a lens)              | a campaign, an engagement, a launch         |
+| a **lasting goal** a project pursues (worked in sessions)   | **Track**   | `start_track` (no method needed)       | grow the newsletter, win ten clients        |
+| a **stage/filter WITHIN a domain**                          | **Status**  | an option of the kind's lifecycle      | pipeline stage, "active"/"archived"         |
 
 ## The decision procedure (follow in order)
 
@@ -27,7 +27,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity. One role per name, pod-wide: a role several workspaces use is ONE role, each workspace adding properties by overlay — never a per-workspace twin (`concepts`).
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — near-duplicate names are rejected with the existing candidates; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
 5. **If it's a lasting goal a project pursues** ("keep the content side of the launch going") → a **track**: `list_tracks`, else `start_track` (`name`, `direction`); work in it with `start_session` + `trackId`. Never a workspace, never a twin project.
-6. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
+6. **If it's a stage inside a domain** → it is an option of the kind's or role's declared lifecycle, never a role and never a space. Its pipeline is computed from the lifecycle: open it, don't build one. A kind with no lifecycle yet gets a `status` property def (`create_property_def`).
 7. **Only if all four held** → **template first** (escalation ladder L3):
    `market.search({query, kind: "template"})` and propose install of a matching
    template before freehand `create_workspace`. Freehand create is last resort

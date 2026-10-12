@@ -5,7 +5,7 @@ Some workspaces run an editorial engine: `pillar`, `post`, `platform`, `newslett
 **The editorial core:**
 
 - **`pillar`** — a recurring theme the audience knows the operator for. Two to four, not twelve. `pillar-status` (Active, Developing, Paused, Retired), `pillar-goal`, `pillar-formats`, `posting-frequency`.
-- **`post`** — the atomic unit. `post-status` moves Idea → Briefed → In Draft → Review → Scheduled → Published → Archived. Plus `post-format`, `post-platform`, `publish-date`, `post-hook`, `post-cta`; measured by `engagement-score` and `post-reach`.
+- **`post`** — the atomic unit. `post-status` is the post's ONE lifecycle: Idea → Briefed → Scripted → In Draft → Review → Scheduled → Published, or Archived (see below). Plus `post-format`, `post-platform`, `publish-date`, `post-hook`, `post-cta`; measured by `engagement-score` and `post-reach`.
 - **`platform`** — a publishing account (social, newsletter publication, podcast). Carries its own cadence and audience metrics.
 - **`newsletter`** — one issue of the owned channel. `newsletter-status`, `newsletter-pillar`.
 - **`campaign`** and **`sponsor`** — reused from marketing / foundation, not owned here.
@@ -19,6 +19,15 @@ Some workspaces run an editorial engine: `pillar`, `post`, `platform`, `newslett
 A post joins these through `post-stage`, `post-series`, `post-offer`; a repurposed post points at its source with `derived-from`.
 
 **Two axes, both optional, composable:** CURRICULUM (`series` — ordered, "which chapter is this?") and AUDIENCE STAGE (`journey-stage` — an unordered tag, "where is the reader?"). A post carries at most one of each. With neither, Content OS still works exactly as a post tracker — that is a valid end state, not an incomplete one.
+
+## The post lifecycle and who moves it
+
+The lifecycle is declared on the `post` kind (work model: `load_skill system/synap/work-model`). Categories: Idea = open; Briefed, Scripted, In Draft, Review, Scheduled = active; Published = done; Archived = lost and **human-only**.
+
+- **Nothing publishes itself.** Your move to Published is a proposal the person approves on the preview. Never set Archived.
+- **Every move goes through the door:** `update_entity` with `post-status` = the new option AND `expectedStatus` = the status you read. A `conflict` means someone moved it; re-read. Never invent an option.
+- **Workers, as the model maps them:** **Draft** (per post, when it enters Briefed) · **Review prep** (per post, when it enters Review; ends by proposing the publish date) · **Ideas** (per batch, weekly; creates posts at Idea). Today the catalog ships them as Produce Content (enters Briefed, a person approves the script and the draft), Repurpose (enters Published) and Plan Next Content (weekly, off until the operator turns it on).
+- **Results go on each post**, not only in a summary. "What to make next" = read the pipeline (the Posts board): gaps per pillar, posts waiting per status.
 
 ## The degradation rule — check before you assume
 

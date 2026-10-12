@@ -33,6 +33,8 @@ POST /api/hub/entities
 
 When the person chooses to pursue: create the `deal` at `commercialStage: "draft"`, link the party with `linked_to_deal`, and set the lead's `leadStage: "converted"`. When a person confirms the deal is won: set `commercialStage: "won"` and `attach_facet` the `client` role on the party with `clientStatus: "active"`. Moving a deal to won or lost is a person's call — propose it, never decide it.
 
+Every status move goes through the one door (work model: `load_skill system/synap/work-model`): send the new value AND `expectedStatus` = the status you read (`update_entity` for the deal's `commercialStage`; `update_facet` for a role's status where your tools list it). A `conflict` means someone moved it: re-read. `converted` and `won` are done, `lost` and `disqualified` are lost: an agent's move into them proposes, and `disqualified` is a person's call only.
+
 ```json
 PATCH /api/hub/entities/ent_deal_acme
 { "properties": { "commercialStage": "won" } }

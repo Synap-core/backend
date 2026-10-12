@@ -30,7 +30,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 - A **project spans workspaces** and a **workspace spans projects**.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- A method inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
+- A lasting goal inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
 - **These are per-Claude-session.** Two concurrent Claude sessions can sit on different projects/workspaces/sessions without colliding. `synap use` here rebinds **this** session only.
