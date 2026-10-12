@@ -68,9 +68,8 @@
  * subject write, and a kind with NO declared lifecycle (its legacy
  * `entities.update` fallback writes the status property; the column is then
  * written here as before). The caller doors and the gated path are pinned by
- * the shrink-only ratchet `__tripwires__/current-stage-direct-writers.ratchet
- * .test.ts` — wave 5 retires them (gate executor + routers, with L7's
- * track-stage retirement).
+ * the shrink-only block of `__tripwires__/current-stage-one-door.test.ts` —
+ * wave 5: gate executor + routers, with L7.
  */
 
 import { db, focusSessions, eq, and } from "@synap/database";

@@ -38,8 +38,10 @@
  *     (`session --targets--> X`, role `worker_target`, no result yet):
  *       - moved by THAT session (`sessionId` on the transition) ⇒ `done`: the
  *         worker moved the thing it was given (it was targeted for sitting in
- *         a status, and its own move takes it on). Named default: no worker
- *         declares a goal category yet, so any own move counts.
+ *         a status, and its own move takes it on). NAMED DEFAULT (lead,
+ *         2026-10-12): ANY move by the worker's own session is `done`. The
+ *         result records whether the WORKER did its job; the THING's outcome
+ *         is its status category, a separate fact read off the thing itself.
  *       - moved by anyone else (a person, another session) ⇒ `skipped`,
  *         `moved_by_person`, with the transition id, and ONE line in the
  *         session's room so the agent re-plans without it.
