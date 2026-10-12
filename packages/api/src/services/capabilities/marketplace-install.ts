@@ -788,6 +788,26 @@ export async function applyMarketInstall(
       // errored returned `postWorkspace` and looked resolved. `layers[]` is the
       // same `InstallLayerReport` type `createFromDefinition` emits — not a
       // second shape — so a consumer branches on one field for either door.
+      // The ONE finisher: the version the core handed back is stamped, and a
+      // newly built space marked "active", only when layer 2 landed
+      // (`{}` = the template has no living layers). An "unchanged" re-hit
+      // that skipped layer 2 ran nothing to finish.
+      if (!(needsPost && !postWorkspace)) {
+        const { finishTemplateApply } =
+          await import("../template-apply-finisher.js");
+        await finishTemplateApply({
+          workspaceId: result.workspaceId,
+          userId: input.userId,
+          built: result.outcome === "created",
+          pendingVersionStamp:
+            core.status === "created"
+              ? core.created.pendingVersionStamp
+              : core.status === "composed"
+                ? core.pendingVersionStamp
+                : undefined,
+          post: postWorkspace ?? {},
+        });
+      }
       const layers = summarizePostWorkspaceLayers(postWorkspace);
       return {
         kind: "template",

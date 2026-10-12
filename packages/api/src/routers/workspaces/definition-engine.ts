@@ -45,8 +45,8 @@ import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import {
   withWorkspaceProposalIdLock,
   reconcileWorkspaceIfStale,
-  stampWorkspacePackageVersion,
 } from "../../services/workspace-creation-service.js";
+import { finishTemplateApply } from "../../services/template-apply-finisher.js";
 import { resolveWorkspaceExtends } from "../../services/workspace-composition.js";
 import type { ResolvedPackageDependency } from "../../services/package-dependency-resolver.js";
 import {
@@ -63,7 +63,6 @@ import {
 } from "../../services/definition-seeds.js";
 import {
   summarizePostWorkspaceLayers,
-  postWorkspaceLayersConverged,
   installedTrackTemplates,
   type InstalledTrackTemplate,
 } from "../../services/capabilities/install-layers.js";
@@ -862,10 +861,8 @@ export const definitionEngineProcedures = {
           packageSlug: input.packageSlug,
           currentSettings,
           userId: ctx.userId,
-          // Stamp only what was earned: the new version is written below,
-          // once layer 2 converged (same rule as the approve path and the
-          // Hub `/packages/apply` door).
-          deferVersionStamp: true,
+          // Never stamps: the new version comes back as `pendingVersionStamp`
+          // and `finishTemplateApply` below stamps it once layer 2 converged.
         });
         let report: ReconcileReport | undefined;
         // Sync the post-workspace layers only when the template ACTUALLY drifted
@@ -960,18 +957,17 @@ export const definitionEngineProcedures = {
             });
             layers.push(...summarizePostWorkspaceLayers(post));
             trackTemplates = installedTrackTemplates(post);
-            // The version layer 1 deferred: stamped only when layer 2 landed
-            // (nothing errored, nothing still proposed); otherwise the next
-            // reinstall still sees the drift and re-applies.
-            if (
-              outcome.pendingVersionStamp &&
-              postWorkspaceLayersConverged(post)
-            ) {
-              await stampWorkspacePackageVersion(
-                workspaceId,
-                outcome.pendingVersionStamp
-              );
-            }
+            // The ONE finisher: the version layer 1 handed back is stamped
+            // only when layer 2 landed (nothing errored, nothing still
+            // proposed); otherwise it records why, health reads the space
+            // drifted, and the next reinstall re-applies.
+            await finishTemplateApply({
+              workspaceId,
+              userId: ctx.userId,
+              built: false,
+              pendingVersionStamp: outcome.pendingVersionStamp,
+              post,
+            });
           } catch (err) {
             // A1 — THE CHANNEL THAT WAS MISSING NOW EXISTS. Historical note kept
             // deliberately: this catch is still non-fatal (the workspace really
@@ -1079,6 +1075,16 @@ export const definitionEngineProcedures = {
                       userId: ctx.userId,
                     });
                   },
+                });
+                // This door resumes layer 1 only: the finisher marks the
+                // space active, and a template version it cannot earn here is
+                // recorded "layer-2-not-run" (health: drifted) — never stamped.
+                await finishTemplateApply({
+                  workspaceId: resumeResult.workspaceId,
+                  userId: ctx.userId,
+                  built: true,
+                  pendingVersionStamp: resumeResult.pendingVersionStamp,
+                  post: null,
                 });
                 return {
                   status: "created" as const,
@@ -1217,6 +1223,16 @@ export const definitionEngineProcedures = {
                       userId: ctx.userId,
                     });
                   },
+                });
+                // This door resumes layer 1 only: the finisher marks the
+                // space active, and a template version it cannot earn here is
+                // recorded "layer-2-not-run" (health: drifted) — never stamped.
+                await finishTemplateApply({
+                  workspaceId: resumeResult.workspaceId,
+                  userId: ctx.userId,
+                  built: true,
+                  pendingVersionStamp: resumeResult.pendingVersionStamp,
+                  post: null,
                 });
                 return {
                   status: "created" as const,
@@ -1651,6 +1667,7 @@ export const definitionEngineProcedures = {
           // undefined. Same shape, same derivation, now reported here too.
           const layers: InstallLayerReport[] = [];
           let trackTemplates: InstalledTrackTemplate[] = [];
+          let postBag: Record<string, unknown> = {};
           if (hasPostWork) {
             try {
               const post = await applyPackagePostWorkspace({
@@ -1660,6 +1677,7 @@ export const definitionEngineProcedures = {
                 agentUserId: (ctx as { agentUserId?: string }).agentUserId,
                 scopes: [],
               });
+              postBag = post;
               layers.push(...summarizePostWorkspaceLayers(post));
               trackTemplates = installedTrackTemplates(post);
               logger.info(
@@ -1678,6 +1696,16 @@ export const definitionEngineProcedures = {
               });
             }
           }
+          // The ONE finisher: stamps the version and marks the new space
+          // "active" only when its layer 2 landed (`{}` = the template has no
+          // living layers); otherwise records why — never an unearned stamp.
+          await finishTemplateApply({
+            workspaceId: result.workspaceId,
+            userId: ctx.userId,
+            built: true,
+            pendingVersionStamp: result.pendingVersionStamp,
+            post: hasPostWork ? postBag : {},
+          });
 
           // Enqueue workspace-init for default whiteboard/commands
           // (skips default views when packageSlug is set)
@@ -2438,6 +2466,14 @@ export const definitionEngineProcedures = {
           onProgress: () => {},
         });
         workspaceId = createResult.workspaceId;
+        // Layer 1 only (no template identity): the finisher marks it active.
+        await finishTemplateApply({
+          workspaceId,
+          userId: ctx.userId,
+          built: true,
+          pendingVersionStamp: createResult.pendingVersionStamp,
+          post: null,
+        });
       }
 
       // After workspace is created/composed, apply entities and relations

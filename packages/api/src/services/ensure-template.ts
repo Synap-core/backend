@@ -90,17 +90,9 @@ export async function readTemplateStanding(
   const catalog = await resolveTemplateCatalog([slug]);
 
   if (held) {
-    const heldSettings = (held.settings ?? {}) as {
-      packageVersion?: string;
-      provisioningStatus?: unknown;
-    };
+    const heldSettings = (held.settings ?? {}) as { packageVersion?: string };
     const version = heldSettings.packageVersion ?? null;
-    const health = templateHealthFor(
-      slug,
-      version,
-      catalog,
-      heldSettings.provisioningStatus
-    );
+    const health = templateHealthFor(slug, version, catalog, held.settings);
     return {
       status: "installed",
       workspaceId: held.id,

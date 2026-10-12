@@ -146,9 +146,9 @@ export function installedTrackTemplates(
 /**
  * Did layer 2 actually LAND? True only when no item in the bag errored AND no
  * item is still `proposed` (a governed write that filed a proposal created
- * nothing yet). This is what a template version stamp may assert: a caller
- * that deferred `settings.packageVersion` (`reconcileWorkspaceIfStale`'s
- * `deferVersionStamp`) stamps it only when this holds — otherwise the stamp
+ * nothing yet). This is what a template version stamp may assert: the ONE
+ * finisher (`finishTemplateApply`) stamps `settings.packageVersion` only when
+ * this holds — otherwise the stamp
  * would claim a playbook the next `market update` then never re-sends. The
  * same rule boot's playbook report applies (`playbookReportConverged`: no
  * failed, no missing, nothing proposed).

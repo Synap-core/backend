@@ -104,11 +104,9 @@ async function executeTemplateApplyApproval({
   let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
   try {
     core = await materializeWorkspaceCore({
-      // Stamp only what was earned: an idempotent re-hit that reconciles
-      // layer 1 to a newer template hands its version back here instead
-      // of stamping it, and it is stamped below only once the
-      // post-workspace layers converged.
-      deferVersionStamp: true,
+      // The core never stamps: the version comes back as
+      // `pendingVersionStamp` and `finishTemplateApply` below stamps it only
+      // once the post-workspace layers converged.
       definition:
         innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
       userId,
@@ -191,7 +189,9 @@ async function executeTemplateApplyApproval({
   // syncs layer 2 from that same template, not the stored copy, which may
   // predate the version layer 1 just applied.
   const created = core.status === "created" ? core.created : undefined;
-  const pendingVersionStamp = created?.pendingVersionStamp;
+  const pendingVersionStamp =
+    created?.pendingVersionStamp ??
+    (core.status === "composed" ? core.pendingVersionStamp : undefined);
   const resolvedPackage = created?.packageDefinition as
     Record<string, unknown> | undefined;
   const definition: Record<string, unknown> = resolvedPackage
@@ -260,31 +260,32 @@ async function executeTemplateApplyApproval({
     }
   }
 
-  // The version stamp layer 1 deferred: written only when layer 2 actually
-  // landed (nothing errored, nothing still proposed). Otherwise the space
-  // keeps its previous stamp, so the next `market update` still sees the
-  // drift and re-applies — the stamp never claims a playbook that is not
-  // there. A throw above already left it unstamped (and the space marked
-  // `provisioningStatus:"failed"` for the resume path).
-  let versionStamped = false;
-  if (pendingVersionStamp) {
-    const { postWorkspaceLayersConverged } =
-      await import("../../../services/capabilities/install-layers.js");
-    if (!needsPost || postWorkspaceLayersConverged(post)) {
-      const { stampWorkspacePackageVersion } =
-        await import("../../../services/workspace-creation-service.js");
-      await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
-      versionStamped = true;
-    } else {
-      logger.warn(
-        {
-          proposalId: input.proposalId,
-          workspaceId,
-          version: pendingVersionStamp,
-        },
-        "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
-      );
-    }
+  // The ONE finisher: the version layer 1 handed back is stamped, and a
+  // newly built space marked "active", only when layer 2 actually landed
+  // (nothing errored, nothing still proposed). Otherwise the space keeps its
+  // previous stamp and records why, so the next `market update` still sees
+  // the drift and re-applies. A throw above already left it unstamped (and
+  // the space marked `provisioningStatus:"failed"` for the resume path).
+  const { finishTemplateApply } =
+    await import("../../../services/template-apply-finisher.js");
+  const finished = await finishTemplateApply({
+    workspaceId,
+    userId,
+    built: created?.outcome === "created",
+    pendingVersionStamp,
+    post: needsPost ? (post ?? {}) : {},
+  });
+  const versionStamped = finished.versionStamped;
+  if (pendingVersionStamp && !versionStamped) {
+    logger.warn(
+      {
+        proposalId: input.proposalId,
+        workspaceId,
+        version: pendingVersionStamp,
+        state: finished.state,
+      },
+      "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
+    );
   }
 
   // Report to IS telemetry (fire-and-forget — never blocks)
@@ -1006,7 +1007,7 @@ export function registerWorkspaceExecutors(): void {
       try {
         const { applyPackagePostWorkspace } =
           await import("../../../services/package-apply-post-workspace.js");
-        await applyPackagePostWorkspace({
+        const post = await applyPackagePostWorkspace({
           workspaceId,
           body: definition as Parameters<
             typeof applyPackagePostWorkspace
@@ -1014,6 +1015,16 @@ export function registerWorkspaceExecutors(): void {
           userId,
           agentUserId: proposal.agentUserId ?? undefined,
           scopes: [],
+        });
+        // An `--onto` identity's version is stamped only once layer 2 landed.
+        const { finishTemplateApply } =
+          await import("../../../services/template-apply-finisher.js");
+        await finishTemplateApply({
+          workspaceId,
+          userId,
+          built: false,
+          pendingVersionStamp: core.pendingVersionStamp,
+          post,
         });
       } catch (e) {
         // Scrub the raw cause to the operator log; the client gets a fixed
@@ -1103,7 +1114,6 @@ export function registerWorkspaceExecutors(): void {
       > = {
         packageSlug: templateSlug,
         proposalId: templateSlug,
-        ...(resolved.version ? { packageVersion: resolved.version } : {}),
       };
       const dbConn = await getDb();
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
@@ -1118,6 +1128,19 @@ export function registerWorkspaceExecutors(): void {
           typeof reconcileWorkspaceFromDefinition
         >[0]["definition"],
         mergeCapabilities: true,
+      });
+      // Adopt binds the identity and reconciles layer 1 only: the version is
+      // NOT earned here. The finisher records "layer-2-not-run", health reads
+      // the space drifted, and `synap templates update` applies the rest and
+      // stamps it.
+      const { finishTemplateApply } =
+        await import("../../../services/template-apply-finisher.js");
+      await finishTemplateApply({
+        workspaceId,
+        userId,
+        built: false,
+        pendingVersionStamp: resolved.version ?? undefined,
+        post: null,
       });
 
       const updatedData = {

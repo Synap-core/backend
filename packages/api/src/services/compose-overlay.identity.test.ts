@@ -77,7 +77,6 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
       userId: "u",
       definition: OVERLAY,
       packageSlug: "business-model",
-      packageVersion: "h-bm",
       overlay: { slug: "business-model", version: "h-bm" },
     });
     const opts = reconcileMock.mock.calls[0]![0] as Record<string, unknown>;
@@ -111,17 +110,19 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
       packageSlug: null,
       settings: {},
     };
-    await composeOntoBaseWorkspace({
+    const report = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: "ws-bare",
       userId: "u",
       definition: OVERLAY,
       packageSlug: "business-model",
-      packageVersion: "h-bm",
       overlay: { slug: "business-model", version: "h-bm" },
     });
     const opts = reconcileMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(opts.packageSlug).toBe("business-model");
-    expect(opts.packageVersion).toBe("h-bm");
+    // The VERSION is never written by compose: the caller's finisher stamps it
+    // once layer 2 converged (`identityStamped` tells materialize to hand it back).
+    expect(opts.packageVersion).toBeUndefined();
+    expect(report.identityStamped).toBe(true);
     expect(mergeSettingsMock).not.toHaveBeenCalled();
   });
 

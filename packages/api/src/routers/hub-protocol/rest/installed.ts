@@ -372,7 +372,7 @@ export function registerInstalledRoutes(app: HubHono): void {
             slug,
             installedVersion,
             templateCatalog,
-            s.provisioningStatus
+            s
           );
           rows.push({
             kind: "workspace",

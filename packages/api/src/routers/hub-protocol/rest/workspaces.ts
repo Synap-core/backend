@@ -52,6 +52,7 @@ import {
   isAgentTypeAllowedToCreateWorkspaces,
   WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
 } from "../../../services/workspace-creation-service.js";
+import { finishTemplateApply } from "../../../services/template-apply-finisher.js";
 import { enrollAgentInWorkspace } from "../../../services/enroll-agent-in-workspace.js";
 import {
   buildDigestSummary,
@@ -581,7 +582,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           pkgSlug,
           installedVersion,
           templateCatalog,
-          settings.provisioningStatus
+          settings
         );
         return {
           id: workspace.id,
@@ -854,6 +855,14 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         workspaceName: name,
         workspaceType: "agent",
         createdBy: "provisioning",
+      });
+      // Layer 1 only, no template: the finisher marks a new space active.
+      await finishTemplateApply({
+        workspaceId: result.workspaceId,
+        userId: agentUserId,
+        built: result.outcome === "created",
+        pendingVersionStamp: result.pendingVersionStamp,
+        post: null,
       });
 
       // The wide preset an agent-owned workspace grants its agent. CONTRACT
@@ -1143,6 +1152,15 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         // Always "provisioning" — this endpoint is gated to agent users only,
         // never humans. Audit trail must distinguish machine-provisioned rows.
         createdBy: "provisioning",
+      });
+      // This door runs layer 1 only: the finisher marks a new space active,
+      // and a template version it cannot earn is recorded "layer-2-not-run".
+      await finishTemplateApply({
+        workspaceId: result.workspaceId,
+        userId: ownerId,
+        built: result.outcome === "created",
+        pendingVersionStamp: result.pendingVersionStamp,
+        post: null,
       });
       return c.json(
         {

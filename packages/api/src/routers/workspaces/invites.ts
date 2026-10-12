@@ -1377,6 +1377,16 @@ export const inviteProcedures = {
           packageSlug: input.pluginId,
           createdBy: "provisioning",
         });
+        // Layer 1 only (no version passed): the finisher marks it active.
+        const { finishTemplateApply } =
+          await import("../../services/template-apply-finisher.js");
+        await finishTemplateApply({
+          workspaceId: result.workspaceId,
+          userId: systemUserId,
+          built: true,
+          pendingVersionStamp: result.pendingVersionStamp,
+          post: null,
+        });
 
         // Enqueue workspace-init (whiteboard + commands, skips default views)
         try {

@@ -664,6 +664,13 @@ export interface CreateFromDefinitionResult {
   profileIds: string[];
   viewIds: string[];
   entityIds: string[];
+  /**
+   * The template version this create materialized — NOT written. Layer 1 alone
+   * never earns the stamp: the caller runs layer 2 and hands this to the ONE
+   * finisher (`finishTemplateApply`, api), which stamps it and marks the space
+   * "active" only when layer 2 converged. The space is left "pending" until then.
+   */
+  pendingVersionStamp?: string;
 }
 
 /**
@@ -999,7 +1006,8 @@ export async function createWorkspaceFromDefinition(
   // Build workspace settings with provenance
   const settings: WorkspaceSettings = {
     // Provisioning lifecycle — status starts "pending" so a crash mid-way leaves
-    // an inspectable workspace instead of silent data loss. Marked "active" at the end.
+    // an inspectable workspace instead of silent data loss. Marked "active" by
+    // the caller's finisher once layer 2 ran (`finishTemplateApply`, api).
     provisioningStatus: "pending",
     provisioningStartedAt,
     createdBy,
@@ -1062,7 +1070,8 @@ export async function createWorkspaceFromDefinition(
     };
   }
   if (packageSlug) settings.packageSlug = packageSlug;
-  if (packageVersion) settings.packageVersion = packageVersion;
+  // `packageVersion` is NOT written here: it is handed back as
+  // `pendingVersionStamp` (see `CreateFromDefinitionResult`).
   if (templateId) settings.templateId = templateId;
   if (templateName) settings.templateName = templateName;
   if (createdBy === "provisioning") {
@@ -2280,9 +2289,11 @@ export async function createWorkspaceFromDefinition(
 
   // Atomically persist all accumulated settings in ONE call:
   // profileBentoViewIds, profileEntityBentoTemplates, homeDashboardViewId,
-  // and final provisioningStatus / completedSteps.
+  // and completedSteps. `provisioningStatus` stays "pending" (written when
+  // this run began): "active" is the finisher's to write, once the caller's
+  // layer 2 has run (`finishTemplateApply`, api) — a crash in between leaves
+  // an honest "pending", never an "active" space missing its living layers.
   const finalSettingsPatch: Partial<WorkspaceSettings> = {
-    provisioningStatus: "active",
     completedSteps,
     // Clear any stale failure markers from a prior failed attempt this run just
     // resumed past — nulled (not omitted) because mergeSettings' JSONB `||`
@@ -2324,5 +2335,11 @@ export async function createWorkspaceFromDefinition(
 
   onProgress?.("done", 100, "Complete");
 
-  return { workspaceId, profileIds, viewIds, entityIds };
+  return {
+    workspaceId,
+    profileIds,
+    viewIds,
+    entityIds,
+    ...(packageVersion ? { pendingVersionStamp: packageVersion } : {}),
+  };
 }
