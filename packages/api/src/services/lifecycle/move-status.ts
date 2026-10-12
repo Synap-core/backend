@@ -31,11 +31,16 @@ import {
   applyStatusMove,
   classifyStatusMove,
   resolveStatusMoveTarget,
+  expireProposalsStaleAfterMove,
   type ApplyStatusMoveResult,
   type StatusMoveActor,
 } from "@synap/database";
 import { dispatchLifecycleTransition } from "@synap/events";
+import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
+
+const logger = createLogger({ module: "move-status" });
 
 export interface MoveStatusInput {
   entityId: string;
@@ -250,6 +255,23 @@ export async function moveStatus(
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).
     await dispatchLifecycleTransition(result.transition.transitionId);
+    // A person decided: pending agent proposals that believed another status
+    // are stale, never left counting toward a worker's backlog (L2, F16). The
+    // move already landed, so a failure here is logged, not thrown.
+    if (result.transition.actorKind === "human") {
+      try {
+        const expired = await expireProposalsStaleAfterMove(
+          db,
+          result.transition
+        );
+        if (expired.length) markProposalNotificationsActioned(expired);
+      } catch (err) {
+        logger.warn(
+          { err, entityId: input.entityId },
+          "stale agent proposals not expired after a person's move"
+        );
+      }
+    }
   }
   return result;
 }

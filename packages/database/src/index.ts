@@ -337,6 +337,7 @@ export {
   type ChangeLifecycleOptionsResult,
 } from "./services/lifecycle/lifecycle-def-guard.js";
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
+export { expireProposalsStaleAfterMove } from "./services/lifecycle/stale-proposals.js";
 export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,

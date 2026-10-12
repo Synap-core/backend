@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   perm: vi.fn(),
   apply: vi.fn(),
   emit: vi.fn(),
+  expire: vi.fn(async () => [] as string[]),
+  actioned: vi.fn(),
   current: "negotiating" as string | null,
 }));
 
@@ -56,8 +58,15 @@ vi.mock("@synap/database", () => ({
       : null;
   },
   applyStatusMove: h.apply,
+  expireProposalsStaleAfterMove: h.expire,
 }));
 vi.mock("@synap/events", () => ({ dispatchLifecycleTransition: h.emit }));
+vi.mock(
+  "../../../notifications/mark-proposal-notifications-actioned.js",
+  () => ({
+    markProposalNotificationsActioned: h.actioned,
+  })
+);
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.perm,
 }));
@@ -70,6 +79,8 @@ beforeEach(() => {
   h.perm.mockReset();
   h.apply.mockReset();
   h.emit.mockReset();
+  h.expire.mockClear();
+  h.actioned.mockReset();
   h.current = "negotiating";
 });
 
@@ -168,6 +179,29 @@ describe("moveStatus door", () => {
     });
     expect(h.perm.mock.calls[0][0]).toMatchObject({ source: "user" });
     expect(h.apply.mock.calls[0][1]).toMatchObject({ strict: false });
+  });
+
+  it("a person's move expires the agent proposals it made stale; an agent's does not (F16)", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.expire.mockResolvedValueOnce(["p-stale"]);
+    h.apply.mockResolvedValue({
+      status: "moved",
+      transition: { transitionId: "t1", actorKind: "human", to: "lost" },
+    });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: { kind: "human", userId: "u1" },
+    });
+    expect(h.expire).toHaveBeenCalledTimes(1);
+    expect(h.actioned).toHaveBeenCalledWith(["p-stale"]);
+
+    h.apply.mockResolvedValue({
+      status: "moved",
+      transition: { transitionId: "t2", actorKind: "agent", to: "lost" },
+    });
+    await moveStatus({ entityId: "e1", to: "lost", actor: AGENT });
+    expect(h.expire).toHaveBeenCalledTimes(1);
   });
 
   it("an approval replay with no agent is strict compare-and-set", async () => {
