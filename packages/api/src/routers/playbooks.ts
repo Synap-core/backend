@@ -2691,6 +2691,16 @@ export const playbooksRouter = router({
 
       const database = await getDb();
 
+      // APPROVED REPLAY — the `playbook/run` executor replays an approved
+      // proposal through this door with `ctx.governanceProposalId` set (the
+      // internal "a decision exists for this write" channel, never
+      // wire-supplied — see `Context`). It still passes `input.agentUserId`, so
+      // the session/run/channel are OWNED by the agent that asked. But the
+      // governance decision was the approver's: gating the replay on the agent
+      // again re-proposed every run filed by an agent whose policy is
+      // "propose", so such a proposal could never be approved by anyone.
+      const approvedReplay = Boolean(ctx.governanceProposalId);
+
       // WRITE HOME — the ONE ladder, shared with `runPlaybookDoor`:
       // explicit → playbook home → subject home → ambient header. Never a
       // membership pick.
@@ -2746,6 +2756,24 @@ export const playbooksRouter = router({
       });
       if (unenabledSkills.length > 0) {
         const names = unenabledSkills.map((s) => s.name).join(", ");
+        // An APPROVED replay (see `approvedReplay` below) is the person's
+        // decision, not the agent's: it files no enable request in the agent's
+        // name, and it does not throw either — a thrown error would keep the
+        // executor's dispatch claim, so the person could not approve again
+        // once the skills are enabled. The executor turns this into its reason.
+        if (approvedReplay) {
+          return {
+            run: null,
+            session: null as FocusSession | null,
+            status: "blocked" as const,
+            message: `"${playbook.name}" uses skills that are not enabled yet: ${names}. Enable them in Settings → Capabilities, then approve again.`,
+            proposalId: null as string | null,
+            unenabledSkills,
+            enableProposals: [] as Awaited<
+              ReturnType<typeof proposeCapabilityEnable>
+            >,
+          };
+        }
         if (!input.agentUserId) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
@@ -2806,7 +2834,10 @@ export const playbooksRouter = router({
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
-        agentUserId: input.agentUserId,
+        // The approver's own check on an approved replay (see `approvedReplay`);
+        // the agent's otherwise. Attribution is unaffected: `runPlaybook`
+        // below still receives `input.agentUserId`.
+        agentUserId: approvedReplay ? undefined : input.agentUserId,
         workspaceId: runWorkspaceId,
         subjectType: "playbook",
         action: "run",

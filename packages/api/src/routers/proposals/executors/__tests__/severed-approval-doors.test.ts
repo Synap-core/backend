@@ -403,7 +403,10 @@ describe("(6b) playbook/run is at-most-once — runPlaybook is NOT idempotent", 
     // un-appliable even by an admin, so the executor returns delivered:false.
     expect(b).toContain('result.status === "running"');
     expect(b).toContain("delivered: false as const");
-    expect(b).toContain("only filed another proposal");
+    // Every not-started outcome (re-proposed, blocked, skipped) gets its own
+    // reason from ONE function — behaviour pinned in
+    // `playbook-run-approval-reasons.test.ts`.
+    expect(b).toContain("reason: notStartedReason(result)");
     // The throwing helper must NOT be used inside the claim.
     const claimIdx = b.indexOf("dispatchExternalOnce(");
     expect(b.slice(claimIdx)).not.toContain("assertApplied(result)");

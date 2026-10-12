@@ -156,6 +156,8 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
       "text-lane capture receipt — pre-allocates the id and inserts the row before building the materialize ctx (the lexical case enforces that).",
     "services/import-orchestrator.ts":
       "import apply / applyLarge — stamps `input.proposalId`, the analyze-time proposal `resolveApplyOperations` just loaded as PENDING, so the FK target exists.",
+    "routers/proposals/executors/playbook.ts":
+      "playbook/run approval replay — stamps `proposal.id`, a row loaded from the DB, so the FK target already exists; it also tells `playbooks.run` to gate on the approver, not the agent.",
     "services/forms/direct-materialize.ts":
       "guest form DIRECT mode (Sites W4) — stamps `input.receiptId`, the gate's `autoApprovedProposalId`, which the gate returns only AFTER its receipt insert succeeded (absent when that insert failed), so the FK target exists.",
   };
@@ -218,6 +220,11 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
     expect(found.get("services/import-orchestrator.ts")).toEqual([
       "input.proposalId",
       "input.proposalId",
+    ]);
+
+    // The playbook-run replay stamps the loaded proposal's id, never a minted one.
+    expect(found.get("routers/proposals/executors/playbook.ts")).toEqual([
+      "proposal.id",
     ]);
 
     // The guest-form producer stamps the gate's receipt id, never a minted one.

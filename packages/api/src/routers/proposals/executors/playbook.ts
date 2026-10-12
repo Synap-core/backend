@@ -48,6 +48,27 @@ export function missingRunArgs(input: {
   return { needsParams, needsSubject, refuse: needsParams || needsSubject };
 }
 
+/**
+ * Why an approved run did not start — ONE sentence per non-running outcome of
+ * `playbooks.run`, shown after "Couldn't apply — ". Each one says what to do.
+ */
+export function notStartedReason(result: {
+  status: "proposed" | "blocked" | "skipped";
+  message: string;
+}): string {
+  if (result.status === "proposed") {
+    // The approver's OWN check refused (the agent's policy is not consulted on
+    // an approved replay), so this one really is about their role.
+    return "your workspace role cannot run this playbook, so approving it only filed another proposal — ask a workspace admin or owner to approve that one";
+  }
+  // `blocked` (skills not enabled) / `skipped` (cooling down, nothing ready):
+  // the door's own sentence, as a clause.
+  const clause = result.message.replace(/\.$/, "");
+  return /^[A-Z][a-z]/.test(clause)
+    ? clause[0]!.toLowerCase() + clause.slice(1)
+    : clause;
+}
+
 export function registerPlaybookExecutors(): void {
   // ── playbook / create ────────────────────────────────────────────────────────
   // (object-proposal manifest W1) A gated playbook RAW create lands here on
@@ -517,8 +538,12 @@ export function registerPlaybookExecutors(): void {
   // Replayed through `playbooksRouter.run` — never `runPlaybook` directly — so
   // the visibility load, the editor+ `assertWorkspaceWrite` floor and the
   // subject IDOR guard all run again. Re-running the gated procedure does not
-  // re-propose: the caller ctx carries no `agentUserId`, so
-  // `checkPermissionOrPropose` takes the human path and executes inline.
+  // re-propose on the AGENT's policy: the caller ctx carries
+  // `governanceProposalId`, so `playbooks.run` gates on the approver (the human
+  // path) while the input `agentUserId` still owns the session. (Until
+  // 2026-10-12 this said the ctx's missing `agentUserId` did that — but the
+  // INPUT `agentUserId` reached the gate, so every agent-filed run whose policy
+  // is "propose" re-proposed on approval and could never be applied.)
   registerProposalExecutor({
     key: "playbook/run",
     async execute({ proposal, userId, input, deps }) {
@@ -634,6 +659,11 @@ export function registerPlaybookExecutors(): void {
         userId,
         workspaceId,
         workspaceRole: membership.role,
+        // "A decision exists for this write": `playbooks.run` then checks the
+        // APPROVER, not the agent passed below as `agentUserId` (which still
+        // owns the session). Without it, a proposal filed by an agent whose
+        // policy is "propose" re-proposed on every approval.
+        governanceProposalId: proposal.id,
       } as unknown as Context);
 
       // ONE run per subject. A BATCH proposal (one import's leads, coalesced
@@ -713,13 +743,9 @@ export function registerPlaybookExecutors(): void {
           );
         }
         if (result.status === "running") return { delivered: true as const };
-        // `playbooks.run` returns exactly `"running" | "proposed"`, so this is
-        // the re-propose branch (TS narrows the alternative to `never`).
-        return {
-          delivered: false as const,
-          reason:
-            "your workspace role cannot run this playbook, so re-running it only filed another proposal — ask a workspace admin or owner to approve",
-        };
+        // Nothing started, so the claim is released and the person can approve
+        // again once the reason is fixed.
+        return { delivered: false as const, reason: notStartedReason(result) };
       });
 
       await db

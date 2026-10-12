@@ -122,6 +122,9 @@ export interface Context {
    *    re-entering the governance membrane. Without that skip the ladder falls
    *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
    *    edge is silently never created while the receipt reports it linked.
+   *    `playbooks.run` reads it the same way (set by the `playbook/run`
+   *    executor): it gates on the APPROVER, while its `agentUserId` input
+   *    still owns the session.
    *
    * Declared here rather than cast at each reader: it was read through
    * `(ctx as { governanceProposalId?: string })` in seven places across three
