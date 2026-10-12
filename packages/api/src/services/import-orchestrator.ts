@@ -109,7 +109,19 @@ export type ImportAnalyzeInput = {
    */
   items: Array<{ path: string; content: string; sourceDocumentId?: string }>;
   relationType?: string;
+  /**
+   * Opt IN to the AI read of the content (deep structuring for prose, AI typing
+   * for shallow rows). ABSENT ⇒ deterministic: import reads nothing with a
+   * model unless the caller asks (D4, import-curate-build plan). Only an
+   * explicit `true` turns it on.
+   */
   aiStructure?: boolean;
+  /**
+   * The CSV column→kind table plan (one cheap IS call per CSV, not per row).
+   * Its own flag, ON unless explicitly `false`: without it a CSV of people
+   * lands as flat notes.
+   */
+  csvTablePlan?: boolean;
   /**
    * Pre-existing session to attach this import's proposals to. When omitted on a
    * workspace-scoped analyze, `analyze()` creates a fresh `Import …` session and
@@ -392,7 +404,7 @@ export class ImportOrchestrator {
     let items: ImportItem[];
     if (
       input.source === "csv" &&
-      input.aiStructure !== false &&
+      input.csvTablePlan !== false &&
       input.items[0]
     ) {
       tablePlan = await buildCsvTablePlan(
@@ -470,7 +482,7 @@ export class ImportOrchestrator {
     });
     let deepStructureMeta: StructureRunMeta | null | undefined;
 
-    if (isProse && input.aiStructure !== false) {
+    if (isProse && input.aiStructure === true) {
       try {
         const { client } = await resolveIntelligenceService({
           userId,
@@ -530,7 +542,7 @@ export class ImportOrchestrator {
       // CSV with a table plan is ALREADY typed per-column (the plan is the
       // typing) — skip the per-row enrich that would re-call the IS and clobber
       // the table-wide profile. Other shallow sources still get per-item enrich.
-      if (input.aiStructure !== false && !tablePlan) {
+      if (input.aiStructure === true && !tablePlan) {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
@@ -709,7 +721,12 @@ export class ImportOrchestrator {
             run: {
               guidelines: importContext.guidelines,
               guidelineStatus: importContext.guidelineStatus,
-              ...importRunFacts(mode, input.aiStructure, deepStructureMeta),
+              ...importRunFacts(
+                mode,
+                // A CSV table plan is a model call too: the run is not "deterministic".
+                input.aiStructure === true || tablePlan !== null,
+                deepStructureMeta
+              ),
             },
           })
         : null;
@@ -1143,6 +1160,13 @@ export class ImportOrchestrator {
    * keep using `analyze()` where 1 row = 1 entity is already correct.
    */
   async analyzeLarge(input: ImportAnalyzeInput, opts?: LargeImportOpts) {
+    // Deterministic unless the caller opted in (D4). The chunked deep path
+    // below exists to keep cross-chunk dedup ACROSS model calls; with no model
+    // call there is nothing to chunk, so the deterministic run is `analyze()`'s
+    // own (same session, staging, idempotency and proposal contract).
+    if (input.aiStructure !== true) {
+      return this.analyze({ ...input, aiStructure: false });
+    }
     let { workspaceId } = this.ctx;
     const { userId } = this.ctx;
     // Optional workspaceId for IS routing + the live-search resolver — a pod-wide

@@ -554,9 +554,10 @@ export const ImportRequestSchema = z
     /** Relation type for cross-references (default "references"). */
     relationType: z.string().min(1).max(64).optional(),
     /**
-     * Route items through AI structuring (deep for prose). Default on.
+     * Route items through AI structuring (deep for prose). Default OFF:
+     * import is deterministic unless the caller opts in.
      */
-    aiStructure: z.boolean().optional().default(true),
+    aiStructure: z.boolean().optional().default(false),
     items: z
       .array(
         z.object({

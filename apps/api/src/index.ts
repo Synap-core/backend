@@ -1847,6 +1847,8 @@ try {
                 source: p.source as never,
                 items: p.items,
                 sessionId: p.sessionId ?? null,
+                // The caller's opt-in, carried by the job (deterministic when absent).
+                ...(p.aiStructure === true ? { aiStructure: true } : {}),
               });
               // Project the orchestrator's own numbers into the queue's OUTPUT
               // contract (ImportCorpusResult). pg-boss persists whatever the

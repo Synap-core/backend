@@ -319,6 +319,8 @@ describe("POST /import/enqueue-corpus — thin door onto the existing background
       workspaceId: WORKSPACE_ID,
       source: "markdown",
       items: validBody().items,
+      // Deterministic unless asked (D4): the schema default travels with the job.
+      aiStructure: false,
       // BOTH doors stamp the resolved import session — routers/import.ts:254
       // and rest/capture.ts:378, the same `...(session.sessionId ? … : {})`
       // spread — so a session cancel can find a corpus that has not started
@@ -327,6 +329,16 @@ describe("POST /import/enqueue-corpus — thin door onto the existing background
       // acting context, not the session helper), so it is asserted by shape.
       sessionId: expect.any(String),
     });
+  });
+
+  it("carries an explicit AI opt-in to the worker", async () => {
+    const app = buildTestApp();
+    const res = await postEnqueue(app, { ...validBody(), aiStructure: true });
+    expect(res.status).toBe(202);
+    expect(sendMock).toHaveBeenCalledWith(
+      "import-corpus",
+      expect.objectContaining({ aiStructure: true })
+    );
   });
 
   it("stamps the workspace resolved by the acting context, never the raw body value", async () => {

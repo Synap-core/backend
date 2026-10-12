@@ -37,7 +37,9 @@ const AnalyzeImportSchema = z.object({
     .min(1)
     .max(2000),
   relationType: z.string().min(1).max(64).optional(),
-  aiStructure: z.boolean().optional().default(true),
+  // Import is deterministic by default (D4): the content is read with a model
+  // only when the caller opts in. Build reads kept items itself, by note.
+  aiStructure: z.boolean().optional().default(false),
   // Pre-existing focus session to attach this import's proposals to. Omitted →
   // analyze may mint an Import session (N≥2 or forceSession) and returns its id.
   sessionId: z.string().uuid().optional(),
@@ -94,11 +96,10 @@ const ApplyImportSchema = ApplyImportBaseSchema.superRefine(
 
 // Large (chunked) variants — same shape as analyze/apply with raised ceilings.
 // The orchestrator splits the corpus into chunks internally while preserving
-// cross-chunk dedup. These run SYNCHRONOUSLY in one request today, so the
-// ceilings are deliberately bounded (not "no cap") to keep wall-clock + body
-// size sane until a pg-boss-backed worker streams them as a background job
-// (see UI-CONSOLIDATION-PLAN.md → large-import). An aggregate byte budget
-// mirrors submitBatch's MAX_BATCH_BYTES, scaled.
+// cross-chunk dedup. `analyzeLarge` runs synchronously in one request;
+// `enqueueLargeImport` hands the same corpus to the `import-corpus` pg-boss
+// worker. Both validate this one schema, so the ceilings stay bounded (not
+// "no cap") by an aggregate byte budget.
 const MAX_LARGE_CONTENT_BYTES = 48 * 1024 * 1024; // 48MB total text/request
 
 /**
@@ -256,6 +257,7 @@ export const importRouter = router({
         workspaceId,
         source: input.source,
         items: input.items,
+        aiStructure: input.aiStructure,
         ...(session.sessionId ? { sessionId: session.sessionId } : {}),
       });
       logger.info(
