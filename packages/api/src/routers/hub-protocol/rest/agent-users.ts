@@ -20,6 +20,7 @@ import {
   loadAgentPresence,
   NEVER_SEEN,
 } from "../../../services/agent-presence.js";
+import { liveAgentConnections } from "../../../services/agent-connect.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
 import { loadAgentDispatchSummaries } from "../../../services/agent-dispatch/agent-binding.js";
 
@@ -234,6 +235,16 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         const dispatch = await loadAgentDispatchSummaries(
           mineAgents.map((r) => r.id)
         );
+        // One agent, several computers: each live connection with the
+        // computer it runs on ("Claude Code on devbox") and when it was last
+        // used — what `synap agents list` prints per computer.
+        const connections = new Map(
+          await Promise.all(
+            mineAgents.map(
+              async (r) => [r.id, await liveAgentConnections(r.id)] as const
+            )
+          )
+        );
         return c.json(
           mineAgents.map((row) => {
             const meta = (row.agentMetadata ?? {}) as {
@@ -252,6 +263,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
               ...(presence.get(row.id) ?? NEVER_SEEN),
               reach: dispatch.get(row.id)?.reach ?? "pull",
               binding: dispatch.get(row.id)?.binding ?? null,
+              connections: connections.get(row.id) ?? [],
             };
           })
         );

@@ -472,6 +472,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   },
   {
     table: "api_keys",
+    column: "instance_label",
+    addedBy: "0325_api_keys_instance_label.sql",
+  },
+  {
+    table: "api_keys",
     column: "tool_profile",
     addedBy: "0280_api_keys_tool_profile.sql",
   },

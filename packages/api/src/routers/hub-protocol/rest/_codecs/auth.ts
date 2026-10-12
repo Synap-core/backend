@@ -83,6 +83,11 @@ export const KeyHolderStateSchema = z
     keyId: z.string().uuid().optional(),
     agentType: z.string().nullable().optional(),
     instanceId: z.string().nullable().optional(),
+    instanceLabel: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("The computer's name this key was made on; null = unlabelled."),
     createdAt: z.string().datetime().optional(),
     expiresAt: z.string().datetime().nullable().optional(),
     approvalUrl: z
@@ -95,6 +100,7 @@ export const KeyHolderStateSchema = z
       .object({
         createdAt: z.string().datetime(),
         instanceId: z.string().nullable(),
+        instanceLabel: z.string().nullable().optional(),
       })
       .nullable()
       .optional()

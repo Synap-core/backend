@@ -23,6 +23,7 @@ import {
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 
 import {
@@ -81,9 +82,15 @@ import { provisionSurfaceAgentKey } from "../../../services/agent-identity-servi
 import {
   approvePendingAgentKey,
   canDecidePendingConnection,
+  connectionDisplayName,
   fileAgentConnectProposal,
+  liveAgentConnections,
+  newerPendingRequest,
+  normalizeInstanceLabel,
   rejectPendingAgentKey,
+  sameComputer,
   settleRejectedAgentConnect,
+  type PendingKeyOutcome,
 } from "../../../services/agent-connect.js";
 import { disconnectAllUserConnections } from "../../../services/capabilities/capability-nango-sync.js";
 import {
@@ -657,6 +664,10 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.instanceId === "string" && body.instanceId.trim()
         ? body.instanceId.trim()
         : undefined;
+    // The computer's human name for that instance ("devbox", "MacBook") —
+    // what the approval page and the connection's name show. Display only:
+    // the instance id, never this, decides what an approval replaces.
+    const instanceLabel = normalizeInstanceLabel(body.instanceLabel);
     // OPT-IN — mint a POD-WIDE agent key (key.linkedUserId = null), governed as
     // its OWN agent-user principal rather than acting for a human. Default
     // false: absent/false keeps the fail-closed linked-human resolution below. A
@@ -1020,6 +1031,7 @@ export function registerSetupRoutes(app: HubHono): void {
         // as the agent-user's own principal). Ignored when false.
         podWide,
         instanceId,
+        instanceLabel,
         agentLabel,
         ...(toolProfile ? { toolProfile } : {}),
         // Only the surface-key path provisions a genuine local CLI adjunct
@@ -2347,8 +2359,11 @@ export function registerSetupRoutes(app: HubHono): void {
     const rows = await db
       .select({
         id: apiKeys.id,
+        userId: apiKeys.userId,
         keyName: apiKeys.keyName,
         instanceId: apiKeys.instanceId,
+        instanceLabel: apiKeys.instanceLabel,
+        createdAt: apiKeys.createdAt,
         isActive: apiKeys.isActive,
         revokedAt: apiKeys.revokedAt,
         linkedUserId: apiKeys.linkedUserId,
@@ -2372,17 +2387,30 @@ export function registerSetupRoutes(app: HubHono): void {
         keys.push({ keyId, status: "forbidden" as const });
         continue;
       }
+      // A pending request with a NEWER one from the same computer is stale:
+      // never offered — approving the newest expires it.
+      const stale =
+        !r.revokedAt && !r.isActive && (await newerPendingRequest(r)) !== null;
       keys.push({
         keyId,
         status: r.revokedAt
           ? ("rejected" as const)
           : r.isActive
             ? ("active" as const)
-            : ("pending" as const),
+            : stale
+              ? ("superseded" as const)
+              : ("pending" as const),
         keyName: r.keyName,
         agentType: r.agentType ?? null,
         agentName: r.agentName ?? null,
         instanceId: r.instanceId ?? null,
+        instanceLabel: r.instanceLabel ?? null,
+        displayName: connectionDisplayName(
+          r.agentType,
+          r.agentName,
+          r.instanceLabel
+        ),
+        createdAt: r.createdAt.toISOString(),
         ...(await pendingKeyAccess(r)),
       });
     }
@@ -2408,11 +2436,7 @@ export function registerSetupRoutes(app: HubHono): void {
         400
       );
     }
-    const results: Array<{
-      keyId: string;
-      outcome:
-        "approved" | "already_active" | "rejected" | "not_found" | "forbidden";
-    }> = [];
+    const results: Array<{ keyId: string; outcome: PendingKeyOutcome }> = [];
     for (const keyId of [...new Set(parsed.data.keyIds)]) {
       results.push({
         keyId,
@@ -2469,16 +2493,66 @@ export function registerSetupRoutes(app: HubHono): void {
     );
   });
 
-  /** Approve a pending key — only the connection's linked human, or a pod admin. */
+  /**
+   * Approve a pending key — only the connection's linked human, or a pod
+   * admin. Body (optional): `{ alsoDisconnect: keyId[] }` — this agent's
+   * other connections the person chose to switch off too (default none:
+   * approving never disconnects another computer on its own).
+   */
+  const ApproveBodySchema = z
+    .object({
+      alsoDisconnect: z
+        .array(z.string().uuid())
+        .max(PENDING_BATCH_MAX)
+        .optional(),
+    })
+    .strict();
+
   app.post("/setup/agent/pending/:keyId/approve", async (c) => {
     const keyId = requireUuidParam(c, "keyId");
     if (keyId instanceof Response) return keyId;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
+    // An empty body is the old client: approve, disconnect nothing else.
+    const raw = await c.req.text().catch(() => "");
+    let json: unknown = {};
+    if (raw.trim()) {
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        return c.json({ error: "Invalid body" }, 400);
+      }
+    }
+    const parsed = ApproveBodySchema.safeParse(json);
+    if (!parsed.success)
+      return c.json(
+        { error: "Invalid body", details: parsed.error.flatten() },
+        400
+      );
 
-    const outcome = await approvePendingAgentKey({ keyId, approverId });
+    let outcome: PendingKeyOutcome;
+    try {
+      outcome = await approvePendingAgentKey({
+        keyId,
+        approverId,
+        alsoDisconnect: parsed.data.alsoDisconnect ?? [],
+      });
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "BAD_REQUEST")
+        return c.json({ error: err.message }, 400);
+      throw err;
+    }
     if (outcome === "forbidden")
       return c.json({ error: "Not authorized to decide this connection" }, 403);
+    if (outcome === "superseded")
+      return c.json(
+        {
+          error:
+            "A newer request from this computer is waiting — approve that one instead.",
+          code: "SUPERSEDED",
+        },
+        409
+      );
     if (outcome !== "approved")
       return c.json(
         { error: "Pending key not found or already processed" },
@@ -2506,11 +2580,15 @@ export function registerSetupRoutes(app: HubHono): void {
       where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
       columns: {
         id: true,
+        userId: true,
         keyName: true,
         scope: true,
         expiresAt: true,
         revokedAt: true,
         linkedUserId: true,
+        instanceId: true,
+        instanceLabel: true,
+        createdAt: true,
       },
     });
     if (
@@ -2523,7 +2601,36 @@ export function registerSetupRoutes(app: HubHono): void {
         404
       );
 
-    return c.json({ keyName: key.keyName, ...(await pendingKeyAccess(key)) });
+    const agent = await db.query.users.findFirst({
+      where: eq(users.id, key.userId),
+      columns: { name: true, agentType: true },
+    });
+    // The agent's OTHER live connections: the page lists each, and what
+    // approving does to it — replaced (same computer) or left alone unless
+    // the person ticks "Also disconnect".
+    const others = await liveAgentConnections(key.userId, {
+      exceptKeyId: key.id,
+    });
+    return c.json({
+      keyName: key.keyName,
+      agentType: agent?.agentType ?? null,
+      agentName: agent?.name ?? null,
+      instanceId: key.instanceId ?? null,
+      instanceLabel: key.instanceLabel ?? null,
+      displayName: connectionDisplayName(
+        agent?.agentType,
+        agent?.name,
+        key.instanceLabel
+      ),
+      createdAt: key.createdAt.toISOString(),
+      connections: others.map((o) => ({
+        ...o,
+        sameComputer: sameComputer(o.instanceId, key.instanceId),
+      })),
+      // A newer request from this computer: this one is stale, not offered.
+      supersededBy: await newerPendingRequest(key),
+      ...(await pendingKeyAccess(key)),
+    });
   });
 
   /** Reject a pending key — only the connection's linked human, or a pod admin. */

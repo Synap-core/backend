@@ -2673,6 +2673,7 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotation_scheduled_at" timestam
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "linked_user_id" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "instance_id" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "instance_label" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_profile" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_groups" text[] NOT NULL DEFAULT '{}';
 DO $$ BEGIN

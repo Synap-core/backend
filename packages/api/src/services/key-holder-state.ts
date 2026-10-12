@@ -46,6 +46,8 @@ export interface KeyHolderState {
   agentType?: string | null;
   /** This key's instance label (`api_keys.instance_id`); null = unlabelled (legacy). */
   instanceId?: string | null;
+  /** This key's computer name (`api_keys.instance_label`); null = unlabelled. */
+  instanceLabel?: string | null;
   createdAt?: string;
   expiresAt?: string | null;
   /** `awaiting_approval` only: where the person approves it (pod-admin). */
@@ -58,7 +60,11 @@ export interface KeyHolderState {
    * when it was created and on which instance. Null when the reason names a
    * replacement but the replacer cannot be found (it was itself removed).
    */
-  replacedBy?: { createdAt: string; instanceId: string | null } | null;
+  replacedBy?: {
+    createdAt: string;
+    instanceId: string | null;
+    instanceLabel?: string | null;
+  } | null;
 }
 
 /**
@@ -98,6 +104,7 @@ export async function describeKeyForHolder(
     keyId: record.id,
     agentType: owner?.agentType ?? null,
     instanceId: record.instanceId ?? null,
+    instanceLabel: record.instanceLabel ?? null,
     createdAt: record.createdAt.toISOString(),
     expiresAt: record.expiresAt ? record.expiresAt.toISOString() : null,
   };
@@ -141,16 +148,25 @@ export async function describeKeyForHolder(
 
   // The replacer: the same agent's newest key created before this one was
   // revoked that was live at that moment — still active, or revoked only
-  // later. A request that was never approved (inactive, never revoked) is not
-  // it; neither is anything created after.
+  // later — on the SAME computer when this key names one (an approval only
+  // replaces its own computer's key; another computer's newer key is not it).
+  // A request that was never approved (inactive, never revoked) is not it;
+  // neither is anything created after.
   const [replacer] = await db
-    .select({ createdAt: apiKeys.createdAt, instanceId: apiKeys.instanceId })
+    .select({
+      createdAt: apiKeys.createdAt,
+      instanceId: apiKeys.instanceId,
+      instanceLabel: apiKeys.instanceLabel,
+    })
     .from(apiKeys)
     .where(
       and(
         eq(apiKeys.userId, record.userId),
         eq(apiKeys.keyType, record.keyType),
         ne(apiKeys.id, record.id),
+        record.instanceId
+          ? eq(apiKeys.instanceId, record.instanceId)
+          : undefined,
         lte(apiKeys.createdAt, record.revokedAt),
         or(eq(apiKeys.isActive, true), gt(apiKeys.revokedAt, record.revokedAt))
       )
@@ -163,6 +179,7 @@ export async function describeKeyForHolder(
       ? {
           createdAt: replacer.createdAt.toISOString(),
           instanceId: replacer.instanceId ?? null,
+          instanceLabel: replacer.instanceLabel ?? null,
         }
       : null,
   };

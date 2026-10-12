@@ -122,6 +122,12 @@ export const apiKeys = pgTable(
     // key label — agent-user identity is singleton per (createdByUserId, agentType).
     // See migration 0204_api_keys_instance_id.sql.
     instanceId: text("instance_id"),
+    // The computer's HUMAN name for that instance (0325) — the hostname-ish
+    // short name the CLI sends (`instanceLabel`), e.g. "MacBook" / "devbox".
+    // Display only: `instanceId` (an opaque per-computer hash) is what scopes
+    // replacement; this is what a person reads ("Claude Code — devbox").
+    // NULL = an older CLI that sent no label.
+    instanceLabel: text("instance_label"),
 
     // MCP tool profile — the tool surface this key's MCP client LISTS (V1 D4).
     // NULL = legacy: every tool (keys minted before 0280 keep what they had).

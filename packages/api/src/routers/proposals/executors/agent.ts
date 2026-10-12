@@ -102,6 +102,12 @@ export function registerAgentExecutors(): void {
           code: "NOT_FOUND",
           message: "This agent's key no longer exists.",
         });
+      if (outcome === "superseded")
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "A newer request from this computer is waiting — approve that one instead.",
+        });
       if (outcome === "rejected" || outcome === "already_active")
         throw new TRPCError({
           code: "CONFLICT",

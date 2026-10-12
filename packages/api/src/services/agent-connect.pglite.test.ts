@@ -772,17 +772,23 @@ describe("agent/connect — the approved proposal must name the key's own agent"
 });
 
 describe("a pending connection never switches the agent's working keys off", () => {
-  it("siblings stay live while it waits, and are replaced when it is approved", async () => {
+  it("siblings stay live while it waits, and the same computer's is replaced when it is approved", async () => {
+    // Same computer reconnecting (one instance id): approval replaces its old
+    // key. Another computer's key is never replaced — see
+    // agent-key-multi-computer.pglite.test.ts.
     const first = await provisionSurfaceAgentKey({
       agentType: "sibling-surface",
       createdByUserId: OWNER,
       linkedUserId: OWNER,
+      instanceId: "m-this-computer",
     });
     const liveKey = (first as { keyId: string }).keyId;
     const pending = await provisionSurfaceAgentKey({
       agentType: "sibling-surface",
       createdByUserId: OWNER,
       linkedUserId: OWNER,
+      instanceId: "m-this-computer",
+      instanceLabel: "devbox",
       pendingApproval: true,
     });
     const pendingKey = (pending as { keyId: string }).keyId;
@@ -802,5 +808,14 @@ describe("a pending connection never switches the agent's working keys off", () 
       is_active: true,
       revoked_at: null,
     });
+    // The mint door stores the computer's name the client sent.
+    expect(
+      (
+        await q<{ instance_label: string | null }>(
+          `select instance_label from api_keys where id = $1`,
+          [pendingKey]
+        )
+      ).rows[0]!.instance_label
+    ).toBe("devbox");
   });
 });

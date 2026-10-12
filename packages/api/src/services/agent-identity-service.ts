@@ -863,6 +863,8 @@ export interface ProvisionSurfaceAgentKeyOpts {
   linkedUserId: string | null;
   /** Per-runtime instance label; scopes the sibling-revoke + idempotency check. */
   instanceId?: string | null;
+  /** The computer's human name for that instance (display only, 0325). */
+  instanceLabel?: string | null;
   /** Hub scopes to grant (default: SETUP_AGENT_HUB_SCOPES). */
   scopes?: readonly ApiKeyScope[];
   /** Display name for the agent user + key (default: capitalized agentType). */
@@ -1129,6 +1131,7 @@ export async function provisionSurfaceAgentKey(
         `Hub Protocol auth token for ${agentLabel} agent`,
       linkedUserId: resolvedLinkedUserId,
       instanceId: instanceId ?? null,
+      instanceLabel: opts.instanceLabel ?? null,
       ...toolSurface,
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(

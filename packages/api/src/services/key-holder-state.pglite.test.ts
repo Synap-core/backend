@@ -15,8 +15,9 @@
  *   - an unknown secret gets the bare `{ state: "unknown" }` — the same shape
  *     as a malformed one, so nothing about other keys is enumerable;
  *   - approving machine B's pending key leaves machine A's live key active
- *     when both carry their own `instanceId`, and (legacy, the incident)
- *     revokes it when neither does.
+ *     when both carry their own `instanceId` (the unlabelled legacy case, the
+ *     incident, is pinned in agent-key-multi-computer.pglite.test.ts: it is
+ *     no longer revoked either).
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -96,6 +97,7 @@ interface Key {
 async function mintKey(opts: {
   active: boolean;
   instanceId?: string | null;
+  instanceLabel?: string | null;
   createdAt?: Date;
   expiresAt?: Date | null;
 }): Promise<Key> {
@@ -103,9 +105,10 @@ async function mintKey(opts: {
   const secret = `synap_hub_live_${randomBytes(24).toString("hex")}`;
   await q(
     `insert into api_keys (id, user_id, linked_user_id, is_active, key_type, key_name,
-       key_prefix, key_hash, key_lookup_hash, scope, instance_id, created_at, expires_at)
+       key_prefix, key_hash, key_lookup_hash, scope, instance_id, created_at, expires_at,
+       instance_label)
      values ($1, $2, $3, $4, 'hub_inbound', 'Claude-code Hub Key', 'synap_hub_live_',
-       $5, $6, '{}', $7, $8, $9)`,
+       $5, $6, '{}', $7, $8, $9, $10)`,
     [
       id,
       AGENT,
@@ -116,6 +119,7 @@ async function mintKey(opts: {
       opts.instanceId ?? null,
       opts.createdAt ?? new Date(),
       opts.expiresAt ?? null,
+      opts.instanceLabel ?? null,
     ]
   );
   return { id, secret };
@@ -200,12 +204,17 @@ describe("the holder learns why its key does not work", () => {
   });
 
   it("a key replaced by an approved connection names when and where its replacer was made — and nothing secret", async () => {
-    // The incident, legacy shape: two computers, no instance labels.
+    // The same computer reconnecting: its new connection replaces its old key.
     const laptop = await mintKey({
       active: true,
+      instanceId: "m-replaced",
       createdAt: new Date(Date.now() - 86_400_000),
     });
-    const devbox = await mintKey({ active: false });
+    const devbox = await mintKey({
+      active: false,
+      instanceId: "m-replaced",
+      instanceLabel: "MacBook",
+    });
     expect(
       await approvePendingAgentKey({ keyId: devbox.id, approverId: OWNER })
     ).toBe("approved");
@@ -221,7 +230,8 @@ describe("the holder learns why its key does not work", () => {
     ).rows[0]!.created_at;
     expect(body.replacedBy).toEqual({
       createdAt: new Date(devboxCreated).toISOString(),
-      instanceId: null,
+      instanceId: "m-replaced",
+      instanceLabel: "MacBook",
     });
     const wire = JSON.stringify(body);
     expect(wire).not.toContain(devbox.secret);
@@ -294,14 +304,18 @@ describe("tripwire: the replacement reasons the classifier reads", () => {
       ),
     };
     const reasons = Object.values(sources).flatMap((src) =>
-      [...src.matchAll(/[rR]eason:\s*"([^"]*[Rr]eplaced[^"]*)"/g)].map(
-        (m) => m[1]!
-      )
+      // A reason is written inline (`reason: "…"`) or as an exported constant
+      // the revoke call names (`export const X =\n  "…"`).
+      [
+        ...src.matchAll(
+          /(?:[rR]eason:\s*|export const [A-Z_]+ =\s*)"([^"]*[Rr]eplaced[^"]*)"/g
+        ),
+      ].map((m) => m[1]!)
     );
     // Non-vacuity: both literals are still where they were.
     expect(reasons).toEqual(
       expect.arrayContaining([
-        "Replaced by a newly approved connection",
+        "Replaced by a new connection from this computer",
         "Re-provisioning — replaced by new key via setup/agent",
       ])
     );

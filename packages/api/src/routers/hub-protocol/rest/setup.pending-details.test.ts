@@ -51,6 +51,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+// The other-connections read and the stale-request check run on PGlite in
+// agent-key-multi-computer.pglite.test.ts; here the db is hand-mocked, so
+// they answer "none".
+vi.mock("../../../services/agent-connect.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  liveAgentConnections: async () => [],
+  newerPendingRequest: async () => null,
+}));
+
 const { registerSetupRoutes } = await import("./setup.js");
 
 const get = (cookie: string | null = "ory_session=x") => {
@@ -61,8 +70,13 @@ const get = (cookie: string | null = "ory_session=x") => {
   });
 };
 
+const CREATED = new Date("2026-10-12T10:00:00.000Z");
 const row = (linkedUserId: string) => ({
   id: KEY,
+  userId: "3aaaaaaa-0000-4000-8000-000000000001",
+  instanceId: null as string | null,
+  instanceLabel: null as string | null,
+  createdAt: CREATED,
   keyName: "raycast",
   scope: ["hub-protocol.read", "mcp.read"],
   expiresAt: EXPIRES,
@@ -123,6 +137,14 @@ describe("GET /setup/agent/pending/:keyId/details", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       keyName: "raycast",
+      agentType: null,
+      agentName: null,
+      instanceId: null,
+      instanceLabel: null,
+      displayName: "Agent",
+      createdAt: CREATED.toISOString(),
+      connections: [],
+      supersededBy: null,
       scopes: ["hub-protocol.read", "mcp.read"],
       expiresAt: EXPIRES.toISOString(),
       grants: TWO_SCOPES_WIRE,

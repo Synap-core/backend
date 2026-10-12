@@ -26,14 +26,20 @@ import {
   eq,
   and,
   desc,
+  gt,
+  lt,
+  or,
   inArray,
   isNull,
   ne,
   drizzleSql,
   apiKeys,
   proposals,
+  users,
   GrantRepository,
 } from "@synap/database";
+import { agentDisplayName } from "@synap-core/types/agents";
+import { resolveServiceMark } from "@synap-core/types/service-marks";
 import { ProposalStatus, grants as grantRows } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { parsePermission, patternMatches } from "@synap-core/types/grants";
@@ -329,7 +335,197 @@ export async function canDecidePendingConnection(
 }
 
 export type PendingKeyOutcome =
-  "approved" | "already_active" | "rejected" | "not_found" | "forbidden";
+  | "approved"
+  | "already_active"
+  | "rejected"
+  | "not_found"
+  | "forbidden"
+  /** A newer request from the same computer is waiting; this one was expired. */
+  | "superseded";
+
+// ─── One agent, several computers ───────────────────────────────────────────
+//
+// One agent identity (person × agent type) is shared by every computer it runs
+// on; each computer's key carries its own `instance_id` (an opaque per-computer
+// hash) and `instance_label` (the computer's human name). Approving a pending
+// key REPLACES only what is unambiguously the same computer's: live keys with
+// the SAME non-null `instance_id`, and that computer's OLDER pending requests.
+// A live key on another computer — or an unlabelled one (an older CLI, null
+// `instance_id`), which may be any computer — keeps working unless the
+// approver explicitly chose to disconnect it (`alsoDisconnect`). 2026-10-12:
+// approving ANY pending key revoked EVERY live key of the identity, and
+// switched the laptop off twice in one afternoon.
+
+/** The revoke reason when a computer's new connection replaces its old key. */
+export const REPLACED_FROM_THIS_COMPUTER =
+  "Replaced by a new connection from this computer";
+/** The revoke reason for a computer's older request once a newer one is decided. */
+export const SUPERSEDED_REQUEST =
+  "Expired: a newer request from this computer was decided";
+
+/** Longest computer name kept from a client (a hostname is ≤ 63 per label). */
+export const INSTANCE_LABEL_MAX = 64;
+
+/**
+ * A client-sent computer name, made safe to store and show: control
+ * characters dropped, whitespace collapsed, capped. Empty/absent ⇒ undefined.
+ */
+export function normalizeInstanceLabel(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const clean = raw
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, INSTANCE_LABEL_MAX)
+    .trim();
+  return clean || undefined;
+}
+
+/** Same computer = both keys carry the SAME non-null instance id. */
+export function sameComputer(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  return !!a && a === b;
+}
+
+/** The agent's product name: the service registry's, else its own, else humanized. */
+export function agentProductName(
+  agentType: string | null | undefined,
+  userName: string | null | undefined
+): string {
+  const mark = resolveServiceMark(agentType, "mono");
+  if (mark.known) return mark.name;
+  if (userName?.trim()) return userName.trim();
+  return mark.name;
+}
+
+/** "Claude Code on devbox" — through the ONE naming door (`agentDisplayName`). */
+export function connectionDisplayName(
+  agentType: string | null | undefined,
+  userName: string | null | undefined,
+  instanceLabel: string | null | undefined
+): string {
+  return agentDisplayName({
+    name: agentProductName(agentType, userName),
+    hostName: instanceLabel,
+  });
+}
+
+/** One live connection (an approved, working key) of an agent. */
+export interface AgentConnection {
+  keyId: string;
+  instanceId: string | null;
+  instanceLabel: string | null;
+  displayName: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+const notExpired = (now: Date) =>
+  or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, now));
+
+/**
+ * The agent's LIVE connections (active, not revoked, not expired hub keys),
+ * newest first, optionally leaving one key out. A failed read throws.
+ */
+export async function liveAgentConnections(
+  agentUserId: string,
+  opts: { exceptKeyId?: string; now?: Date } = {}
+): Promise<AgentConnection[]> {
+  const now = opts.now ?? new Date();
+  const rows = await db
+    .select({
+      id: apiKeys.id,
+      instanceId: apiKeys.instanceId,
+      instanceLabel: apiKeys.instanceLabel,
+      createdAt: apiKeys.createdAt,
+      lastUsedAt: apiKeys.lastUsedAt,
+      agentType: users.agentType,
+      agentName: users.name,
+    })
+    .from(apiKeys)
+    .leftJoin(users, eq(users.id, apiKeys.userId))
+    .where(
+      and(
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.keyType, "hub_inbound"),
+        eq(apiKeys.isActive, true),
+        isNull(apiKeys.revokedAt),
+        notExpired(now),
+        opts.exceptKeyId ? ne(apiKeys.id, opts.exceptKeyId) : undefined
+      )
+    )
+    .orderBy(desc(apiKeys.createdAt));
+  return rows.map((r) => ({
+    keyId: r.id,
+    instanceId: r.instanceId ?? null,
+    instanceLabel: r.instanceLabel ?? null,
+    displayName: connectionDisplayName(
+      r.agentType,
+      r.agentName,
+      r.instanceLabel
+    ),
+    createdAt: r.createdAt.toISOString(),
+    lastUsedAt: r.lastUsedAt ? r.lastUsedAt.toISOString() : null,
+  }));
+}
+
+/**
+ * The NEWEST pending request from the same agent and the same computer (the
+ * same non-null instance id) made after this key — when one exists, this key
+ * is a stale request nobody is waiting on any more. An unlabelled request
+ * (older CLI) names no computer, so it is never judged stale: two of them may
+ * be two computers asking at once.
+ */
+export async function newerPendingRequest(key: {
+  id: string;
+  userId: string;
+  instanceId: string | null;
+  createdAt: Date;
+}): Promise<{ keyId: string; createdAt: string } | null> {
+  if (!key.instanceId) return null;
+  const [row] = await db
+    .select({ id: apiKeys.id, createdAt: apiKeys.createdAt })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.userId, key.userId),
+        eq(apiKeys.keyType, "hub_inbound"),
+        eq(apiKeys.isActive, false),
+        isNull(apiKeys.revokedAt),
+        notExpired(new Date()),
+        eq(apiKeys.instanceId, key.instanceId),
+        ne(apiKeys.id, key.id),
+        gt(apiKeys.createdAt, key.createdAt)
+      )
+    )
+    .orderBy(desc(apiKeys.createdAt))
+    .limit(1);
+  return row ? { keyId: row.id, createdAt: row.createdAt.toISOString() } : null;
+}
+
+/** Expire stale pending keys and reject their open `agent/connect` proposals. */
+async function expirePendingRequests(
+  keyIds: readonly string[],
+  approverId: string
+): Promise<void> {
+  if (keyIds.length === 0) return;
+  await revokeApiKeys(db, {
+    where: and(
+      inArray(apiKeys.id, [...keyIds]),
+      eq(apiKeys.isActive, false),
+      isNull(apiKeys.revokedAt)
+    ),
+    revokedBy: approverId,
+    reason: SUPERSEDED_REQUEST,
+  });
+  for (const keyId of keyIds) {
+    const p = await openAgentConnectProposal(keyId);
+    if (p?.status === ProposalStatus.PENDING)
+      await settleProposal(p.id, "rejected", approverId);
+  }
+}
 
 async function settleProposal(
   proposalId: string,
@@ -375,6 +571,13 @@ export async function approvePendingAgentKey(args: {
   settleProposal?: boolean;
   /** The agent the approved proposal names; must own the key (executor). */
   agentUserId?: string;
+  /**
+   * Other keys of the SAME agent the approver explicitly chose to disconnect
+   * (a live key on another computer, or an unlabelled one). Default none:
+   * approval never switches another computer off on its own. A key of any
+   * other agent — or this key itself — refuses the whole approval.
+   */
+  alsoDisconnect?: readonly string[];
 }): Promise<PendingKeyOutcome> {
   const key = await db.query.apiKeys.findFirst({
     where: eq(apiKeys.id, args.keyId),
@@ -387,6 +590,8 @@ export async function approvePendingAgentKey(args: {
       expiresAt: true,
       keyType: true,
       instanceId: true,
+      instanceLabel: true,
+      createdAt: true,
     },
   });
   if (!key) return "not_found";
@@ -400,6 +605,42 @@ export async function approvePendingAgentKey(args: {
     return "forbidden";
   if (key.revokedAt) return "rejected";
   if (key.isActive) return "already_active";
+
+  // What the approver chose to disconnect must be THIS agent's other keys —
+  // checked before anything changes, so a bad list approves nothing.
+  const alsoDisconnect = [...new Set(args.alsoDisconnect ?? [])];
+  if (alsoDisconnect.length > 0) {
+    const chosen = await db
+      .select({
+        id: apiKeys.id,
+        userId: apiKeys.userId,
+        keyType: apiKeys.keyType,
+      })
+      .from(apiKeys)
+      .where(inArray(apiKeys.id, alsoDisconnect));
+    const ok =
+      chosen.length === alsoDisconnect.length &&
+      chosen.every(
+        (k) =>
+          k.id !== key.id &&
+          k.userId === key.userId &&
+          k.keyType === key.keyType
+      );
+    if (!ok)
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "You can only disconnect this agent's other connections when approving it.",
+      });
+  }
+
+  // A newer request from the same computer is the one its terminal waits on:
+  // this one is stale. Approving it would replace that computer's working key
+  // with a key nobody holds — so it is expired instead, never activated.
+  if (await newerPendingRequest(key)) {
+    await expirePendingRequests([key.id], args.approverId);
+    return "superseded";
+  }
 
   const proposal = await openAgentConnectProposal(args.keyId);
   if (proposal?.status === ProposalStatus.REJECTED) {
@@ -444,21 +685,78 @@ export async function approvePendingAgentKey(args: {
     .returning({ id: apiKeys.id });
   if (flipped.length === 0) return "rejected";
 
-  // The approved key REPLACES the agent's live keys for this runtime — here,
-  // at approval, never when the request is filed: a pending request must not
-  // be able to switch an agent's working keys off.
-  if (key.keyType === "hub_inbound")
+  // The approved key REPLACES only this computer's live key — here, at
+  // approval, never when the request is filed: a pending request must not be
+  // able to switch an agent's working keys off. Another computer's key, and
+  // an unlabelled one (it may be any computer), are left alone.
+  if (key.keyType === "hub_inbound" && key.instanceId)
     await revokeApiKeys(db, {
       where: and(
         eq(apiKeys.userId, key.userId),
         eq(apiKeys.keyType, "hub_inbound"),
         eq(apiKeys.isActive, true),
         ne(apiKeys.id, key.id),
-        key.instanceId ? eq(apiKeys.instanceId, key.instanceId) : undefined
+        eq(apiKeys.instanceId, key.instanceId)
       ),
       revokedBy: args.approverId,
-      reason: "Replaced by a newly approved connection",
+      reason: REPLACED_FROM_THIS_COMPUTER,
     });
+
+  // This computer's OLDER requests are stale now: expired, never approvable.
+  // (An unlabelled request names no computer — it is left for its person.)
+  if (key.instanceId) {
+    const stale = await db
+      .select({ id: apiKeys.id })
+      .from(apiKeys)
+      .where(
+        and(
+          eq(apiKeys.userId, key.userId),
+          eq(apiKeys.keyType, key.keyType),
+          eq(apiKeys.isActive, false),
+          isNull(apiKeys.revokedAt),
+          eq(apiKeys.instanceId, key.instanceId),
+          ne(apiKeys.id, key.id),
+          lt(apiKeys.createdAt, key.createdAt)
+        )
+      );
+    await expirePendingRequests(
+      stale.map((r) => r.id),
+      args.approverId
+    );
+  }
+
+  // What the approver explicitly chose to disconnect — named in the reason,
+  // so its holder learns who switched it off and for what.
+  if (alsoDisconnect.length > 0) {
+    const [approver, agent] = await Promise.all([
+      db.query.users.findFirst({
+        where: eq(users.id, args.approverId),
+        columns: { name: true, email: true },
+      }),
+      db.query.users.findFirst({
+        where: eq(users.id, key.userId),
+        columns: { name: true, agentType: true },
+      }),
+    ]);
+    const who =
+      approver?.name?.trim() ||
+      approver?.email?.trim() ||
+      "the person who approved it";
+    const what = connectionDisplayName(
+      agent?.agentType,
+      agent?.name,
+      key.instanceLabel
+    );
+    await revokeApiKeys(db, {
+      where: and(
+        inArray(apiKeys.id, alsoDisconnect),
+        eq(apiKeys.userId, key.userId),
+        isNull(apiKeys.revokedAt)
+      ),
+      revokedBy: args.approverId,
+      reason: `Disconnected by ${who} when approving ${what}`,
+    });
+  }
 
   if (
     args.settleProposal !== false &&

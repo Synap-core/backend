@@ -36,6 +36,8 @@ export interface CreateApiKeyInput {
   /** Per-runtime instance label for concurrent agent instances sharing one
    * identity. NULL = legacy single-key model. See schema/api-keys.ts. */
   instanceId?: string | null;
+  /** The computer's human name for that instance (0325); display only. */
+  instanceLabel?: string | null;
   /** MCP tool profile (0280). NULL/omitted = legacy (every tool listed). */
   toolProfile?: ApiKeyToolProfile | null;
   /** Tool groups already unlocked (0280) — carried by a re-mint. Omitted = none. */
@@ -95,6 +97,7 @@ export class ApiKeyRepository extends BaseRepository<
         workspaceId: data.workspaceId ?? null,
         linkedUserId: data.linkedUserId ?? null,
         instanceId: data.instanceId ?? null,
+        instanceLabel: data.instanceLabel ?? null,
         toolProfile: data.toolProfile ?? null,
         ...(data.toolGroups ? { toolGroups: data.toolGroups } : {}),
       })
@@ -203,6 +206,7 @@ export class ApiKeyRepository extends BaseRepository<
           workspaceId: oldKey.workspaceId,
           linkedUserId: oldKey.linkedUserId,
           instanceId: oldKey.instanceId,
+          instanceLabel: oldKey.instanceLabel,
           parentKeyId: oldKey.parentKeyId,
           // The MCP tool surface the client lists — a rotation must not widen
           // an entry key to every tool, nor forget what it unlocked.
