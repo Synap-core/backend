@@ -4,7 +4,12 @@
  * `lens` density (a naive "density wins" rule says roomy).
  */
 import { describe, expect, it } from "vitest";
-import { LENS_ROW_STEP, lensBeingWorkedLabel, lensRowStep } from "./rows.js";
+import {
+  LENS_ROW_STEP,
+  lensBeingWorkedLabel,
+  lensBeingWorkedOf,
+  lensRowStep,
+} from "./rows.js";
 
 describe("lens row density", () => {
   it("maps nav · index · lens onto the compact · default · roomy token steps", () => {
@@ -32,5 +37,22 @@ describe("lensBeingWorkedLabel", () => {
       "An agent is working on this"
     );
     expect(lensBeingWorkedLabel({})).toBe("An agent is working on this");
+  });
+});
+
+describe("lensBeingWorkedOf", () => {
+  it("only a LIVE session marks a thing; the live one is the door", () => {
+    expect(lensBeingWorkedOf(undefined)).toBeNull();
+    expect(lensBeingWorkedOf([])).toBeNull();
+    // An open but idle session is NOT being worked (a naive "any entry" rule says it is).
+    expect(
+      lensBeingWorkedOf([{ sessionId: "s1", kind: "session", live: false }])
+    ).toBeNull();
+    expect(
+      lensBeingWorkedOf([
+        { sessionId: "s1", kind: "session", live: false },
+        { sessionId: "s2", kind: "worker", live: true },
+      ])
+    ).toEqual({ sessionId: "s2" });
   });
 });

@@ -131,6 +131,28 @@ export function lensRowStep(
  */
 export interface LensBeingWorked {
   by?: string | null;
+  /** The session doing it — the mark's door. Absent = not addressable. */
+  sessionId?: string;
+}
+
+/** One open session on a thing, as `lifecycle.board` reports it (`workedBy`). */
+export interface LensWorkedByEntry {
+  sessionId: string;
+  kind: "session" | "worker";
+  /** Working RIGHT NOW (the "Working now" rule). */
+  live: boolean;
+}
+
+/**
+ * A board item's `workedBy` → the being-worked mark, or null. Only a LIVE
+ * session marks the thing: an open session nobody is working right now is not
+ * "being worked". `sessionId` is the mark's door (the live session, first).
+ */
+export function lensBeingWorkedOf(
+  workedBy: readonly LensWorkedByEntry[] | null | undefined
+): (LensBeingWorked & { sessionId: string }) | null {
+  const live = workedBy?.find((w) => w.live);
+  return live ? { sessionId: live.sessionId } : null;
 }
 
 /** The being-worked mark's spoken name — one phrase for web and relay. */
