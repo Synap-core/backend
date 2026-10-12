@@ -9,8 +9,75 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { userPreferences } from "@synap/database/schema";
 import { eq } from "@synap/database";
 import { UpdatePreferencesInputSchema } from "@synap-core/types";
+import {
+  assertPinnableSurface,
+  RailPinsFullError,
+  readRailPins,
+  writeRailPins,
+  type RailPinsOp,
+} from "../services/preferences/rail-pins.js";
+
+/** One write door for the rail pins; a full rail is a PRECONDITION, not a 500. */
+async function railPinsWrite(userId: string, op: RailPinsOp) {
+  try {
+    return { pins: await writeRailPins(userId, op) };
+  } catch (err) {
+    if (err instanceof RailPinsFullError) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: err.message,
+      });
+    }
+    throw err;
+  }
+}
 
 export const preferencesRouter = router({
+  /**
+   * The person's RAIL PINS — the intent surfaces on their rail, in order
+   * (surfaces W1.7, `services/preferences/rail-pins.ts`). Per user, across
+   * spaces; a space's template `sidebarItems` pipeline views are folded in as
+   * suggestions until the person first edits their pins.
+   */
+  railPins: protectedProcedure.query(async ({ ctx }) => ({
+    pins: await readRailPins(ctx.userId),
+  })),
+
+  /**
+   * Pin a surface: a kind/role (`profileSlug`), or a saved pipeline view of it
+   * (`viewId`). Idempotent — pinning a pinned surface keeps one pin. The
+   * surface must exist and be readable (NOT_FOUND / BAD_REQUEST otherwise).
+   */
+  pinSurface: protectedProcedure
+    .input(
+      z.object({
+        profileSlug: z.string().min(1),
+        viewId: z.string().uuid().optional(),
+        label: z.string().trim().min(1).max(80).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertPinnableSurface(ctx.userId, input);
+      return railPinsWrite(ctx.userId, { op: "pin", ...input });
+    }),
+
+  /** Unpin by key (`view:<id>` / `kind:<slug>`). A suggested pin stays gone. */
+  unpinSurface: protectedProcedure
+    .input(z.object({ key: z.string().min(1).max(200) }))
+    .mutation(({ ctx, input }) =>
+      railPinsWrite(ctx.userId, { op: "unpin", key: input.key })
+    ),
+
+  /**
+   * Reorder: the named keys first, in order; pins not named keep their place
+   * after them (a stale client never drops a pin).
+   */
+  reorderRailPins: protectedProcedure
+    .input(z.object({ keys: z.array(z.string().min(1).max(200)).max(60) }))
+    .mutation(({ ctx, input }) =>
+      railPinsWrite(ctx.userId, { op: "reorder", keys: input.keys })
+    ),
+
   /**
    * Get user preferences
    */
