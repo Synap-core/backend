@@ -175,6 +175,7 @@ describe("needs-you union", () => {
       decisions: 0,
       notifications: 0,
       review: 0,
+      captures: 0,
       drafts: 0,
       draftsTruncated: false,
       suggestions: 0,

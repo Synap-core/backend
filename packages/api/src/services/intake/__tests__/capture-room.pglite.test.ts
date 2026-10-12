@@ -39,6 +39,7 @@ import {
   users,
   documents,
   documentVersions,
+  links,
 } from "@synap/database";
 import { persistCaptureResult } from "../capture-result-part.js";
 import {
@@ -46,7 +47,9 @@ import {
   readCaptureRoom,
   readRestructureRoom,
   withCaptureTurnEntries,
+  listUnfinishedCaptures,
 } from "../capture-room.js";
+import { persistCaptureQuestion } from "../capture-clarification.js";
 import { TurnContextSchema } from "../../../routers/channels/helpers.js";
 
 const USER = "user-1";
@@ -90,6 +93,7 @@ beforeEach(async () => {
     users,
     documents,
     documentVersions,
+    links,
   };
   for (const t of Object.values(tables)) {
     await client.exec(ddlFor(t as unknown as PgTable));
@@ -376,5 +380,85 @@ describe("readRestructureRoom — what a re-read of a capture session sends", ()
   it("another user's session reads as no room", async () => {
     const sessionId = await seedCapture();
     expect(await readRestructureRoom({ sessionId, userId: OTHER })).toBe(null);
+  });
+});
+
+describe("listUnfinishedCaptures — what Needs-you shows", () => {
+  const filedPart = (sessionId: string, tempIds: string[]) =>
+    JSON.stringify({
+      capturePart: {
+        kind: "capture_filed",
+        v: 1,
+        sessionId,
+        round: 1,
+        rows: tempIds.map((tempId) => ({
+          tempId,
+          entityId: `e-${tempId}`,
+          proposalId: null,
+          outcome: "created",
+          title: tempId,
+        })),
+        truncated: false,
+        workspaceId: null,
+        projectId: null,
+      },
+    });
+  const result = (sessionId: string) =>
+    persistCaptureResult({
+      sessionId,
+      userId: USER,
+      proposals: PROPOSALS,
+      dedupCandidates: {},
+      dedupSkipped: false,
+    });
+
+  it("unfiled suggestions read `suggested`, an open question `needs_answer`; settled ones are absent", async () => {
+    const owing = await seedCapture();
+    await result(owing);
+
+    const asking = await seedCapture();
+    await persistCaptureQuestion({
+      sessionId: asking,
+      userId: USER,
+      followUp: "Which project?",
+      partialCount: 1,
+      refine: { text: NOTE },
+    });
+
+    const settled = await seedCapture();
+    const { channelId } = await result(settled);
+    await q(
+      `insert into messages (channel_id, role, content, user_id, previous_hash, hash, metadata, timestamp)
+       values ($1, 'system', 'Filed 2', $2, '', 'h', $3::jsonb, now() + interval '1 second')`,
+      [channelId, USER, filedPart(settled, ["t1", "t2"])]
+    );
+
+    // Filed before receipts existed: it produced records, the room holds no receipt.
+    const legacy = await seedCapture();
+    await result(legacy);
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata)
+       values (gen_random_uuid(), 'session', $1, 'entity', 'e-old', 'produced', '{}'::jsonb)`,
+      [legacy]
+    );
+
+    const stale = await seedCapture();
+    await result(stale);
+    await q(
+      `update focus_sessions set updated_at = now() - interval '30 days' where id = $1`,
+      [stale]
+    );
+
+    const { captures, truncated } = await listUnfinishedCaptures({
+      userId: USER,
+    });
+    expect(truncated).toBe(false);
+    expect(
+      Object.fromEntries(captures.map((c) => [c.sessionId, c.status]))
+    ).toEqual({ [owing]: "suggested", [asking]: "needs_answer" });
+    expect(await listUnfinishedCaptures({ userId: OTHER })).toEqual({
+      captures: [],
+      truncated: false,
+    });
   });
 });

@@ -25,6 +25,11 @@ import {
   eq,
   desc,
   isNull,
+  isNotNull,
+  inArray,
+  gte,
+  asc,
+  links,
   drizzleSql,
 } from "@synap/database";
 import {
@@ -206,11 +211,18 @@ export function captureRowState(
  * A capture still owes the person a decision: its latest round holds a row
  * nobody has filed or refused (a failed filing still owes one; a held one
  * waits on governance, not on the person). PURE.
+ *
+ * `producedRecords`: the capture already made records. With NO `capture_filed`
+ * receipt in the room, it was filed before receipts existed (the phone kept
+ * them) — the room cannot tell which rows, so it claims nothing is owed rather
+ * than resurfacing every old capture as unfinished.
  */
 export function hasUnfiledSuggestions(
   result: CaptureResultPart | null,
-  filed: ReadonlyArray<CaptureFiledPart>
+  filed: ReadonlyArray<CaptureFiledPart>,
+  producedRecords = false
 ): boolean {
+  if (producedRecords && filed.length === 0) return false;
   return (result?.rows ?? []).some((row) => {
     const state = captureRowState(row, filed);
     return state === "proposed" || state === "failed";
@@ -410,4 +422,142 @@ export async function readRestructureRoom(args: {
         }
       : {}),
   };
+}
+
+/** Capture sessions read per Needs-you pass (newest touched first). */
+export const UNFINISHED_CAPTURES_SCAN = 50;
+/** A capture untouched for longer than this no longer asks for attention. */
+export const UNFINISHED_CAPTURE_WINDOW_MS = 14 * 24 * 3_600_000;
+
+export interface UnfinishedCapture {
+  sessionId: string;
+  title: string | null;
+  goal: string | null;
+  updatedAt: Date;
+  projectId: string | null;
+  status: "needs_answer" | "suggested";
+}
+
+/**
+ * The person's own capture sessions that still owe them something — an OPEN
+ * question, or suggestions nobody filed or refused — touched in the last
+ * {@link UNFINISHED_CAPTURE_WINDOW_MS}. Owner-floored (a capture room is the
+ * owner's). `truncated` when the scan hit its cap. A failed read THROWS.
+ */
+export async function listUnfinishedCaptures(args: {
+  userId: string;
+  now?: Date;
+  database?: typeof db;
+}): Promise<{ captures: UnfinishedCapture[]; truncated: boolean }> {
+  const database = args.database ?? db;
+  const since = new Date(
+    (args.now ?? new Date()).getTime() - UNFINISHED_CAPTURE_WINDOW_MS
+  );
+  const sessions = await database
+    .select({
+      id: focusSessions.id,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      updatedAt: focusSessions.updatedAt,
+      projectId: focusSessions.projectId,
+      channelId: focusSessions.channelId,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.userId, args.userId),
+        isNotNull(focusSessions.channelId),
+        drizzleSql`${focusSessions.metadata} -> 'intake' ->> 'door' = 'capture'`,
+        gte(focusSessions.updatedAt, since)
+      )
+    )
+    .orderBy(desc(focusSessions.updatedAt))
+    .limit(UNFINISHED_CAPTURES_SCAN);
+  const truncated = sessions.length >= UNFINISHED_CAPTURES_SCAN;
+  if (sessions.length === 0) return { captures: [], truncated };
+
+  const channelIds = sessions.map((s) => s.channelId!);
+  const [parts, produced] = await Promise.all([
+    database
+      .select({
+        channelId: messages.channelId,
+        metadata: messages.metadata,
+      })
+      .from(messages)
+      .where(
+        and(
+          inArray(messages.channelId, channelIds),
+          isNull(messages.deletedAt),
+          drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' in ('capture_result', 'capture_filed', 'capture_question')`
+        )
+      )
+      .orderBy(asc(messages.timestamp), asc(messages.id)),
+    database
+      .selectDistinct({ fromId: links.fromId })
+      .from(links)
+      .where(
+        and(
+          eq(links.fromType, "session"),
+          inArray(
+            links.fromId,
+            sessions.map((s) => s.id)
+          ),
+          eq(links.toType, "entity"),
+          eq(links.linkType, "produced")
+        )
+      ),
+  ]);
+  const producedSessions = new Set(produced.map((r) => r.fromId));
+
+  const rooms = new Map<
+    string,
+    {
+      result: CaptureResultPart | null;
+      filed: CaptureFiledPart[];
+      openQuestion: boolean;
+    }
+  >();
+  for (const r of parts) {
+    if (!r.channelId) continue;
+    const part = readCapturePart(r.metadata);
+    const room = rooms.get(r.channelId) ?? {
+      result: null,
+      filed: [],
+      openQuestion: false,
+    };
+    if (part?.kind === "capture_result") {
+      if (!room.result || part.round >= room.result.round) room.result = part;
+    } else if (part?.kind === "capture_filed") {
+      room.filed.push(part);
+    } else if (part?.kind === "capture_question") {
+      // The latest question decides (rows are oldest first).
+      room.openQuestion = part.status === "open";
+    }
+    rooms.set(r.channelId, room);
+  }
+
+  const captures: UnfinishedCapture[] = [];
+  for (const s of sessions) {
+    const room = rooms.get(s.channelId!);
+    if (!room) continue;
+    const status = room.openQuestion
+      ? "needs_answer"
+      : hasUnfiledSuggestions(
+            room.result,
+            room.filed,
+            producedSessions.has(s.id)
+          )
+        ? "suggested"
+        : null;
+    if (!status) continue;
+    captures.push({
+      sessionId: s.id,
+      title: s.title,
+      goal: s.goal,
+      updatedAt: s.updatedAt,
+      projectId: s.projectId ?? null,
+      status,
+    });
+  }
+  return { captures, truncated };
 }

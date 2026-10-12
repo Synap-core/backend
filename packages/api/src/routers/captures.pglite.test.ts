@@ -449,9 +449,21 @@ describe("captures API", () => {
       "2026-10-03T00:00:01Z"
     );
 
+    // Filed before receipts existed: produced records, no receipt in the room.
+    const legacyChannel = randomUUID();
+    const legacySession = await session({ channelId: legacyChannel });
+    const legacy = await capture({ sessionId: legacySession });
+    await edge("document", legacy, "entity", await entity(), "produced");
+    await part(
+      legacyChannel,
+      result(legacySession, 1, ["t1"]),
+      "2026-10-02T00:00:00Z"
+    );
+
     const byId = new Map(
       (await caller(A).list({})).items.map((i) => [i.documentId, i])
     );
+    expect(byId.get(legacy)!.status).toBe("structured");
     expect(byId.get(owed)!.status).toBe("suggested");
     expect(byId.get(done)!.status).toBe("structured");
     const filtered = await caller(A).list({ status: "suggested" });

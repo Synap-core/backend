@@ -114,7 +114,13 @@ export type SignalKind =
    * bare PROJECT scope only — the one scope that counts it — so the project
    * badge and the project list are one number over one predicate (W2 review).
    */
-  | "session-review";
+  | "session-review"
+  /**
+   * One capture that still owes the person something (founder, 2026-10-12):
+   * an OPEN question, or suggestions nobody filed or refused. The door opens
+   * the capture thread (the session's `room` view); `captureStatus` says which.
+   */
+  | "capture";
 
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
@@ -278,6 +284,12 @@ export interface Signal {
    */
   notificationType?: string;
   /**
+   * `capture` only: what the capture owes — `needs_answer` (an open question)
+   * or `suggested` (rows nobody filed or refused). The capture-list status
+   * vocabulary (`deriveCaptureStatus`), so one word names it everywhere.
+   */
+  captureStatus?: "needs_answer" | "suggested";
+  /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
    * everything a session owes the person (its owed slots, its draft-asks row,
    * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -344,6 +356,7 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "activity",
   "event",
   "notificationType",
+  "captureStatus",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -1049,6 +1062,54 @@ export function signalFromReviewSession(
   };
 }
 
+/** One unfinished capture, as `listUnfinishedCaptures` reads it. */
+export interface UnfinishedCaptureSignalInput {
+  sessionId: string;
+  title: string | null;
+  goal: string | null;
+  updatedAt: Date;
+  projectId?: string | null;
+  status: "needs_answer" | "suggested";
+}
+
+/**
+ * The capture rows that are not already another row about the SAME session:
+ * a session that owes a slot or awaits review is already drawn, and opening it
+ * reaches the same room. ONE rule, read by the list AND the count.
+ */
+export function liveCaptureRows(args: {
+  unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
+  owedSlots: readonly OwedSlotSignalInput[];
+  reviewSessions?: readonly { id: string }[];
+}): UnfinishedCaptureSignalInput[] {
+  const drawn = owedSessionIdsOf(args.owedSlots);
+  for (const r of args.reviewSessions ?? []) drawn.add(r.id);
+  return (args.unfinishedCaptures ?? []).filter((c) => !drawn.has(c.sessionId));
+}
+
+/** One unfinished capture → one row whose door is the capture thread. */
+export function signalFromUnfinishedCapture(
+  row: UnfinishedCaptureSignalInput,
+  now: Date = new Date()
+): Signal {
+  const title = resolveSessionTitle(row);
+  return {
+    id: `capture:${row.sessionId}`,
+    kind: "capture",
+    title,
+    count: 1,
+    occurredAt: row.updatedAt,
+    target: { kind: "session", id: row.sessionId, view: "room" },
+    category: "ai",
+    captureStatus: row.status,
+    ...(title ? { sessionTitle: title } : {}),
+    ...(row.projectId ? { sessionProjectId: row.projectId } : {}),
+    groupKey: sessionGroupKey(row.sessionId),
+    ageBucket: ageBucketOf(row.updatedAt, now),
+    repeatCount: 1,
+  };
+}
+
 /** The session ids behind an owed page. */
 export function owedSessionIdsOf(
   owedSlots: readonly OwedSlotSignalInput[]
@@ -1246,6 +1307,8 @@ export function unionNeedsYou(args: {
   draftAsks?: DraftAsksInput;
   /** Sessions awaiting the person's review — at every scope. Absent ⇒ none. */
   reviewSessions?: readonly ReviewSessionSignalInput[];
+  /** Captures that owe an answer or a filing decision. Absent ⇒ none. */
+  unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
   /** The clock `ageBucket` is measured against. Absent ⇒ now. */
   now?: Date;
 }): Signal[] {
@@ -1256,6 +1319,7 @@ export function unionNeedsYou(args: {
   return orderNeedsYou([
     ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
     ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
+    ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
     ...args.clusters.map((c) =>
       signalFromCluster(
         c,
@@ -1456,9 +1520,9 @@ export function orderNeedsYou(input: readonly Signal[]): Signal[] {
  * query; nothing has to run a second count, and the counting rule is not forked
  * to produce the second number.
  *
- * `decisions` / `notifications` / `blocked` / `review` are the PARTS the badge
- * is made of, and `needsYou === decisions + notifications + blocked + review`
- * by construction (asserted in `signals.union.test.ts`). `suggestions` and
+ * `decisions` / `notifications` / `blocked` / `review` / `captures` are the
+ * PARTS the badge is made of, and `needsYou === decisions + notifications +
+ * blocked + review + captures` by construction (asserted in `signals.union.test.ts`). `suggestions` and
  * `drafts` are shipped alongside and are deliberately NOT parts: both are
  * PROPOSED (lens grammar, founder-approved 2026-10-04 — "AI suggestions +
  * agent drafts = Proposed"), and ignoring them costs nothing. `review` —
@@ -1510,6 +1574,12 @@ export function countNeedsYou(args: {
   draftAsks?: DraftAsksInput;
   /** The draft-slot scan hit its cap, so `drafts` is a floor. */
   draftAsksTruncated?: boolean;
+  /** The SAME input `unionNeedsYou` takes; counted through `liveCaptureRows`. */
+  unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
+  /** Review session ids, so a capture already drawn as a review is not counted twice. */
+  reviewSessionIds?: readonly string[];
+  /** The capture scan hit its cap, so `captures` is a floor. */
+  capturesTruncated?: boolean;
 }): {
   needsYou: number;
   distinct: number;
@@ -1521,6 +1591,8 @@ export function countNeedsYou(args: {
   notifications: number;
   /** Sessions awaiting your review / close (every scope). */
   review: number;
+  /** Captures that owe an answer or a filing decision (`capture` rows). */
+  captures: number;
   /**
    * Undecided agent drafts that ask you something — ONE per draft, however
    * many asks it holds, exactly the `draft-asks` rows the `proposed` lens
@@ -1548,6 +1620,11 @@ export function countNeedsYou(args: {
   const notifications = foldNotifications(buckets.needsYou).length;
   const blocked = args.owedSlots.length;
   const review = args.reviewSessions ?? 0;
+  const captures = liveCaptureRows({
+    unfinishedCaptures: args.unfinishedCaptures,
+    owedSlots: args.owedSlots,
+    reviewSessions: (args.reviewSessionIds ?? []).map((id) => ({ id })),
+  }).length;
   // The SAME fold the list renders, counted — never a second rule.
   const drafts = args.draftAsks
     ? signalsFromDraftAsks(args.draftAsks).length
@@ -1556,7 +1633,9 @@ export function countNeedsYou(args: {
     // THE item sum (`needsYouTotal`) over the rule's three populations, plus
     // the notification half. Drafts are PROPOSED (2026-10-04) and never count.
     needsYou:
-      needsYouTotal({ owed: blocked, decisions, review }) + notifications,
+      needsYouTotal({ owed: blocked, decisions, review }) +
+      notifications +
+      captures,
     distinct: decisions,
     decisions,
     notifications,
@@ -1564,9 +1643,11 @@ export function countNeedsYou(args: {
       args.clustersTruncated ||
       args.notificationsTruncated ||
       args.owedTruncated ||
-      (args.reviewTruncated ?? false),
+      (args.reviewTruncated ?? false) ||
+      (args.capturesTruncated ?? false),
     blocked,
     review,
+    captures,
     drafts,
     draftsTruncated: args.draftAsksTruncated ?? false,
     suggestions: Math.min(buckets.suggestions.length, SUGGESTIONS_CAP),

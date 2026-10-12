@@ -306,15 +306,20 @@ async function sessionsWithOpenQuestion(
 }
 
 /**
- * Session ids (among the caller's visible sessions) whose room's latest
- * capture_result still holds a row neither filed nor refused.
+ * The latest capture_result and every capture_filed receipt of each session's
+ * room (among the caller's visible sessions), keyed by session id.
  */
-async function sessionsWithUnfiledSuggestions(
+async function captureRoomsOf(
   access: AccessContext,
   sessionIds: string[]
-): Promise<Set<string>> {
-  const owed = new Set<string>();
-  if (sessionIds.length === 0) return owed;
+): Promise<
+  Map<string, { result: CaptureResultPart | null; filed: CaptureFiledPart[] }>
+> {
+  const out = new Map<
+    string,
+    { result: CaptureResultPart | null; filed: CaptureFiledPart[] }
+  >();
+  if (sessionIds.length === 0) return out;
   const sessions = await scopedDb(access).findMany<{
     id: string;
     channelId: string | null;
@@ -325,7 +330,7 @@ async function sessionsWithUnfiledSuggestions(
   const sessionByChannel = new Map(
     sessions.flatMap((s) => (s.channelId ? [[s.channelId, s.id] as const] : []))
   );
-  if (sessionByChannel.size === 0) return owed;
+  if (sessionByChannel.size === 0) return out;
   const rows = await db
     .select({ channelId: messages.channelId, metadata: messages.metadata })
     .from(messages)
@@ -355,11 +360,9 @@ async function sessionsWithUnfiledSuggestions(
   }
   for (const [channelId, room] of byChannel) {
     const sessionId = sessionByChannel.get(channelId);
-    if (sessionId && hasUnfiledSuggestions(room.result, room.filed)) {
-      owed.add(sessionId);
-    }
+    if (sessionId) out.set(sessionId, room);
   }
-  return owed;
+  return out;
 }
 
 /** The latest version's stored preview per document (list preview only). */
@@ -397,15 +400,16 @@ async function toItems(
   const sessionIds = [
     ...new Set(rows.flatMap((row) => sourceOf(row).sessionId ?? [])),
   ];
-  const [produced, openSessions, owedSessions, previews] = await Promise.all([
+  const [produced, openSessions, rooms, previews] = await Promise.all([
     producedEntityIds(rows),
     sessionsWithOpenQuestion(access, sessionIds),
-    sessionsWithUnfiledSuggestions(access, sessionIds),
+    captureRoomsOf(access, sessionIds),
     versionPreviews(rows.map((row) => row.id)),
   ]);
   const items = rows.map((row): CaptureItem => {
     const source = sourceOf(row);
     const producedCount = produced.get(row.id)?.length ?? 0;
+    const room = source.sessionId ? rooms.get(source.sessionId) : undefined;
     return {
       documentId: row.id,
       kind: source.kind,
@@ -417,9 +421,9 @@ async function toItems(
         hasOpenQuestion: Boolean(
           source.sessionId && openSessions.has(source.sessionId)
         ),
-        hasUnfiledSuggestions: Boolean(
-          source.sessionId && owedSessions.has(source.sessionId)
-        ),
+        hasUnfiledSuggestions: room
+          ? hasUnfiledSuggestions(room.result, room.filed, producedCount > 0)
+          : false,
         degraded: Boolean(source.degraded),
         producedCount,
       }),
