@@ -17,6 +17,13 @@ import {
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
 import {
+  TITLE_HARD_MAX,
+  lintTitle,
+  titleTooLongReason,
+  type TitleLintIssue,
+} from "@synap-core/types/titles";
+import { titleSourceFromProperties } from "../../hub-protocol/write-receipt.js";
+import {
   db,
   knowledgeKeysRepository,
   entities,
@@ -240,7 +247,25 @@ const captureHandler: McpToolHandler = async (
           `entity '${e.ref}' needs a \`profileSlug\` — discover slugs with synap_list_profiles`
         );
       }
+      if (typeof e.title === "string" && e.title.length > TITLE_HARD_MAX) {
+        problems.push(
+          `entity '${e.ref}': ${titleTooLongReason(e.title.length)}`
+        );
+      }
     }
+    // The title rubric per entity — stored as sent, reported so the writer
+    // can rewrite. Same rubric as the create_entity receipt.
+    const titleLint = graphEntities.flatMap((e) => {
+      if (typeof e.title !== "string") return [];
+      const issues: TitleLintIssue[] = lintTitle(e.title, {
+        kind: typeof e.profileSlug === "string" ? e.profileSlug : null,
+        source:
+          titleSourceFromProperties(
+            e.properties as Record<string, unknown> | undefined
+          ) ?? null,
+      });
+      return issues.length ? [{ ref: e.ref, title: e.title, issues }] : [];
+    });
     // Relation SHAPE (sourceRef/targetRef/type presence) stays door-local —
     // MCP-specific message with the field names the agent must supply.
     const shapedRelations: Array<{
@@ -572,6 +597,9 @@ const captureHandler: McpToolHandler = async (
         relationCount: checked.relationCount,
         ...(relationsFailed.length ? { relationsFailed } : {}),
         ...(invalidEntities.length ? { invalidEntities } : {}),
+        // Advisory: a title the rubric flags still writes, so it never makes
+        // the dry run `invalid` — it is here to be fixed before sending.
+        ...(titleLint.length ? { titleLint } : {}),
         // Connected plan: every structural / ownership problem, and the steps
         // as they would be filed (a project step's evidence verdict included).
         ...(planProblems.length ? { planProblems } : {}),
@@ -747,6 +775,7 @@ const captureHandler: McpToolHandler = async (
       // and the session error rides `intake.errors`.
       intake: graphIntake.intake,
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),
+      ...(titleLint.length ? { titleLint } : {}),
       ...(captureNormalizedText
         ? {
             provenance:

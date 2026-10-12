@@ -16,6 +16,7 @@
  */
 
 import type { UnmodeledProperty } from "@synap/database";
+import { lintTitle, type TitleLintIssue } from "@synap-core/types/titles";
 import type { ProposalEffect } from "../proposals/execution-registry.js";
 import { resolveEntityByName } from "../../services/entity-resolution.js";
 import { relationsRouter } from "../relations.js";
@@ -101,6 +102,25 @@ export interface CreateWriteReceipt {
   warnings?: string[];
   /** Present ONLY when the write carried keys the profile does not model. */
   properties?: { unmodeled: UnmodeledProperty[] };
+  /**
+   * The title rubric's verdict on the title that was written (`lintTitle`,
+   * `@synap-core/types/titles`). Present ONLY when it found something. The
+   * title is stored as sent — this is how the writer learns it should be
+   * rewritten, since the pod never shortens a title for it.
+   */
+  titleLint?: TitleLintIssue[];
+}
+
+/**
+ * The longer text a title is most often cut from: a knowledge entry's claim.
+ * Feeds `lintTitle({ source })`, so a title that is a cut-off start of the
+ * claim is reported as cut.
+ */
+export function titleSourceFromProperties(
+  properties: Record<string, unknown> | null | undefined
+): string | undefined {
+  const claim = properties?.ek_claim;
+  return typeof claim === "string" && claim.trim() ? claim : undefined;
 }
 
 /**
@@ -142,6 +162,10 @@ export function buildCreateWriteReceipt(input: {
   effectiveWorkspaceId: string | null;
   projectId?: string;
   source?: string;
+  /** The title that was written. Present ⇒ the receipt carries `titleLint`. */
+  title?: string;
+  /** See `titleSourceFromProperties`. */
+  titleSource?: string;
   /**
    * STORAGE-ENGINE EVIDENCE, when the caller has it (every approve branch in
    * `proposals/apply-approval.ts` now produces one). Present ⇒ it DECIDES the
@@ -195,6 +219,14 @@ export function buildCreateWriteReceipt(input: {
     ];
   });
 
+  const titleLint =
+    input.title === undefined
+      ? []
+      : lintTitle(input.title, {
+          kind: input.profileSlug,
+          source: input.titleSource ?? null,
+        });
+
   const status = input.result.status;
   const pending = status === "proposed";
   const partial = !pending && facets.some((facet) => facet.outcome === "error");
@@ -240,6 +272,7 @@ export function buildCreateWriteReceipt(input: {
     ...(facets.length ? { facets } : {}),
     ...(warnings.length ? { warnings } : {}),
     ...(unmodeled.length ? { properties: { unmodeled } } : {}),
+    ...(titleLint.length ? { titleLint } : {}),
   };
 }
 
@@ -373,6 +406,8 @@ export async function buildCreateEntityReceipt(params: {
   scopes: string[];
   /** The title that was written — resolution matches on exact name. */
   title: string;
+  /** See `titleSourceFromProperties`. */
+  titleSource?: string;
   projectId?: string;
   source?: string;
   resolvedAgentUserId?: string;
@@ -399,6 +434,8 @@ export async function buildCreateEntityReceipt(params: {
   const writeReceipt = buildCreateWriteReceipt({
     result: params.result,
     profileSlug: params.profileSlug,
+    title: params.title,
+    titleSource: params.titleSource,
     effectiveWorkspaceId: params.effectiveWorkspaceId,
     ...(params.projectId ? { projectId: params.projectId } : {}),
     ...(params.source ? { source: params.source } : {}),

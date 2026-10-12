@@ -33,6 +33,12 @@ import {
   McpHandlerMap,
 } from "./shared.js";
 import { toolError } from "../tool-errors.js";
+import {
+  TITLE_HARD_MAX,
+  lintTitle,
+  titleTooLongReason,
+} from "@synap-core/types/titles";
+import { titleSourceFromProperties } from "../../hub-protocol/write-receipt.js";
 import { recordSessionArtifact } from "../../../services/focus-sessions/record-session-artifact.js";
 
 export const entityHandlers: McpHandlerMap = {
@@ -56,6 +62,11 @@ export const entityHandlers: McpHandlerMap = {
     const profileSlug =
       (args.profileSlug as string | undefined) ||
       (args.type as string | undefined);
+    // The pod refuses a title over the hard cap at `entities.create`; saying it
+    // here names the length, where the nested refusal could not.
+    if (typeof args.title === "string" && args.title.length > TITLE_HARD_MAX) {
+      return toolError(titleTooLongReason(args.title.length));
+    }
     const result = await lensCaller.entities.createEntity({
       userId,
       profileSlug,
@@ -129,6 +140,9 @@ export const entityHandlers: McpHandlerMap = {
       userId,
       scopes: apiKeyScopes,
       title: args.title as string,
+      titleSource: titleSourceFromProperties(
+        args.properties as Record<string, unknown> | undefined
+      ),
       ...(args.projectId ? { projectId: args.projectId as string } : {}),
       source: "agent",
       ...(agentUserId ? { resolvedAgentUserId: agentUserId } : {}),
@@ -161,6 +175,9 @@ export const entityHandlers: McpHandlerMap = {
     // "change this entity" and matches where an agent already holds an
     // entityId (it captured the entity; it never saw a documentId).
     const content = args.content as string | undefined;
+    if (typeof args.title === "string" && args.title.length > TITLE_HARD_MAX) {
+      return toolError(titleTooLongReason(args.title.length));
+    }
     const hasEntityFields =
       args.title !== undefined ||
       args.description !== undefined ||
@@ -235,10 +252,27 @@ export const entityHandlers: McpHandlerMap = {
         ? { expectedStatus: args.expectedStatus as string | null }
         : {}),
     });
+    // The title rubric, as on create: the title is stored as sent, and this is
+    // how the writer learns it should be rewritten. Kind unknown here (an
+    // update names no profile), so the kind-specific rules do not apply.
+    const titleLint =
+      typeof args.title === "string"
+        ? lintTitle(args.title, {
+            source:
+              titleSourceFromProperties(
+                (args.properties ?? args.metadata) as
+                  Record<string, unknown> | undefined
+              ) ?? null,
+          })
+        : [];
     // Two governed writes, two independent outcomes — the entity fields may
     // auto-approve while the body edit is still `proposed`. Report both rather
     // than collapsing them into one status the caller would misread.
-    return ok(body ? { ...(result as Record<string, unknown>), body } : result);
+    return ok({
+      ...(result as Record<string, unknown>),
+      ...(body ? { body } : {}),
+      ...(titleLint.length ? { titleLint } : {}),
+    });
   },
   synap_create_document: async (
     ctx: McpToolContext

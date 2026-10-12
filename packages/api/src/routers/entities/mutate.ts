@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { workspaceProcedure, podProcedure } from "../../trpc.js";
 import {
@@ -123,7 +124,7 @@ export const mutateProcs = {
     .input(
       z.object({
         id: z.string().uuid(),
-        title: z.string().optional(),
+        title: z.string().max(TITLE_HARD_MAX, titleTooLongReason()).optional(),
         description: z.string().optional(),
         documentId: z.string().uuid().nullable().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),

@@ -11,6 +11,7 @@
 
 import { PROPOSAL_SOURCES } from "@synap-core/types/proposals";
 import { z } from "zod";
+import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { podProcedure } from "../../trpc.js";
 import {
@@ -87,7 +88,7 @@ export const createProcs = {
       z.object({
         profileSlug: z.string().optional(),
         profileId: z.string().uuid().optional(),
-        title: z.string().optional(),
+        title: z.string().max(TITLE_HARD_MAX, titleTooLongReason()).optional(),
         description: z.string().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
         documentId: z.string().uuid().optional(),
@@ -1763,7 +1764,7 @@ export const createProcs = {
             /** Stable caller-supplied reference key (e.g. "app:web", "pkg:@synap-core/client") */
             refKey: z.string().min(1),
             profileSlug: z.string().min(1),
-            title: z.string().min(1),
+            title: z.string().min(1).max(TITLE_HARD_MAX, titleTooLongReason()),
             description: z.string().optional(),
             properties: z.record(z.string(), z.unknown()).optional(),
             content: z.string().optional(),

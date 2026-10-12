@@ -51,7 +51,10 @@ import {
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { relationsRouter } from "../../relations.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
-import { buildCreateEntityReceipt } from "../write-receipt.js";
+import {
+  buildCreateEntityReceipt,
+  titleSourceFromProperties,
+} from "../write-receipt.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   retrieve,
@@ -1290,6 +1293,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         userId,
         scopes: c.get("scopes") as string[],
         title: body.title,
+        titleSource: titleSourceFromProperties(body.properties),
         ...(body.projectId ? { projectId: body.projectId } : {}),
         ...(body.source ? { source: body.source } : {}),
         ...(resolvedAgentUserId ? { resolvedAgentUserId } : {}),

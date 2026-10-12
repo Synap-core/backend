@@ -177,6 +177,10 @@
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
     },
+    "./titles": {
+      "types": "./dist/titles/index.d.ts",
+      "import": "./dist/titles/index.js"
+    },
     "./failures": {
       "types": "./dist/failures/index.d.ts",
       "import": "./dist/failures/index.js"
