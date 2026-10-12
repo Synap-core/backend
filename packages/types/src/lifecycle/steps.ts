@@ -19,7 +19,7 @@ import {
   lifecycleOptionLabel,
   lifecycleOptionTone,
   type LifecycleCategory,
-  type LifecycleDeclaration,
+  type LifecycleOption,
 } from "./index.js";
 
 /**
@@ -88,7 +88,7 @@ const MAIN_PATH_CATEGORIES: readonly LifecycleCategory[] = [
  * `counts` (optional) carries a per-option count onto each step.
  */
 export function stepsFromLifecycle(
-  decl: Pick<LifecycleDeclaration, "options"> | null | undefined,
+  decl: { readonly options: readonly LifecycleOption[] } | null | undefined,
   currentKey: string | null | undefined,
   counts?: Readonly<Record<string, number>>
 ): StepMark[] {

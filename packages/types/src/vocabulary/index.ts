@@ -1006,6 +1006,11 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // HOUSE AI reach (`IntelligenceStatusKind`): subscribed, never provisioned.
   // Humanized it read "Needs provision" — the person's next step is Activate.
   needs_provision: "Ready to activate",
+  // LIFECYCLE: the pipeline column holding values no declared option names
+  // (`UNCLASSIFIED_STATUS`, `@synap-core/types/lifecycle`). One word on web
+  // and relay — it was "Unclassified" on one and "Not a declared status" on
+  // the other.
+  __unclassified: "Not a declared status",
 };
 
 /**

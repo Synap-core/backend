@@ -65,6 +65,19 @@ const UNIT_TONES: readonly string[] = [
   "textMuted",
 ] satisfies readonly UnitTone[];
 
+/**
+ * The board column (and status read) holding values no declared option names
+ * — a thing written before the lifecycle was declared, or a value an option
+ * rename left behind. Never dropped, never droppable onto. Words:
+ * `resolveStatusLabel(UNCLASSIFIED_STATUS)`; why it exists:
+ * {@link UNCLASSIFIED_STATUS_HINT}.
+ */
+export const UNCLASSIFIED_STATUS = "__unclassified";
+
+/** The EXPLAIN line for the unclassified column (both surfaces). */
+export const UNCLASSIFIED_STATUS_HINT =
+  "Values outside this lifecycle's statuses. Open one to move it to a status.";
+
 export function isTerminalLifecycleCategory(
   category: LifecycleCategory | null | undefined
 ): boolean {
@@ -135,5 +148,19 @@ export {
   moveOutcomeOfResult,
   moveOutcomeOfError,
   moveOutcomeMessage,
+  moveRequest,
+  undoMoveOf,
   type MoveStatusOutcome,
+  type MoveStatusSubject,
+  type MoveStatusArgs,
+  type MoveStatusRequest,
 } from "./move.js";
+
+export {
+  kindCurrentStatus,
+  thingStatusStrips,
+  type ThingLifecycle,
+  type ThingLifecycleRead,
+  type ThingStatusRole,
+  type ThingStatusStrip,
+} from "./thing.js";

@@ -28,6 +28,86 @@ export type MoveStatusOutcome =
   /** Anything else — the network, a server fault. */
   | { status: "failed"; message: string };
 
+/** What a move targets: a kind's own lifecycle, or a role's (on its facet). */
+export type MoveStatusSubject =
+  /** `property` is the declared lifecycle slug (`lifecycle.get().property`). */
+  | { kind: "kind"; entityId: string; property: string }
+  /** A role's lifecycle, stored on the facet (`facetId`). */
+  | { kind: "role"; entityId: string; facetId: string };
+
+export interface MoveStatusArgs {
+  subject: MoveStatusSubject;
+  /** The target option key. */
+  to: string;
+  /** The status the caller SAW — never omitted: a move is compare-and-set. */
+  from: string | null;
+  /** Why, when a person said so (recorded on the transition). */
+  reason?: string;
+}
+
+/** Which door a move calls, with what (tRPC `entities.update` / `entities.updateFacet`). */
+export type MoveStatusRequest =
+  | {
+      door: "update";
+      input: {
+        id: string;
+        properties: Record<string, unknown>;
+        expectedStatus: string | null;
+        reasoning?: string;
+      };
+    }
+  | {
+      door: "updateFacet";
+      input: {
+        facetId: string;
+        status: string;
+        expectedStatus: string | null;
+        reasoning?: string;
+      };
+    };
+
+/**
+ * The ONE subject → request mapping (web `useMoveStatus`, relay's mover).
+ * Compare-and-set ALWAYS: `expectedStatus` is sent even when the reader saw
+ * no status (`null`), so a thing that moved meanwhile is refused (CONFLICT),
+ * never silently overwritten.
+ */
+export function moveRequest(args: MoveStatusArgs): MoveStatusRequest {
+  const reasoning = args.reason ? { reasoning: args.reason } : {};
+  return args.subject.kind === "kind"
+    ? {
+        door: "update",
+        input: {
+          id: args.subject.entityId,
+          properties: { [args.subject.property]: args.to },
+          expectedStatus: args.from,
+          ...reasoning,
+        },
+      }
+    : {
+        door: "updateFacet",
+        input: {
+          facetId: args.subject.facetId,
+          status: args.to,
+          expectedStatus: args.from,
+          ...reasoning,
+        },
+      };
+}
+
+/**
+ * The move that takes a MOVED thing back (the web "Undo"): to where it was,
+ * compare-and-set on where it went — so an undo after someone else moved it
+ * again is refused, never a silent overwrite. Null when there is nowhere to
+ * go back to (it had no status, or did not change).
+ */
+export function undoMoveOf(
+  args: Pick<MoveStatusArgs, "subject" | "to" | "from">
+): MoveStatusArgs | null {
+  if (args.from == null || args.from === args.to) return null;
+  return { subject: args.subject, to: args.from, from: args.to };
+}
+
 function record(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, unknown>)

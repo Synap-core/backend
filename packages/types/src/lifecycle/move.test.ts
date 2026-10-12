@@ -3,6 +3,8 @@ import {
   moveOutcomeMessage,
   moveOutcomeOfError,
   moveOutcomeOfResult,
+  moveRequest,
+  undoMoveOf,
 } from "./index.js";
 
 // The shape a TRPCClientError carries: `data` = the pod's errorFormatter data.
@@ -73,5 +75,57 @@ describe("move outcome", () => {
     expect(
       moveOutcomeMessage({ status: "proposed", proposalId: null })!.text
     ).toBe("Sent for review");
+  });
+});
+
+describe("moveRequest — the one subject → door mapping", () => {
+  it("a kind move writes the lifecycle property, compare-and-set", () => {
+    expect(
+      moveRequest({
+        subject: { kind: "kind", entityId: "d1", property: "commercialStage" },
+        to: "won",
+        from: null,
+      })
+    ).toEqual({
+      door: "update",
+      input: {
+        id: "d1",
+        properties: { commercialStage: "won" },
+        expectedStatus: null,
+      },
+    });
+  });
+  it("a role move goes to the facet, with the reason", () => {
+    expect(
+      moveRequest({
+        subject: { kind: "role", entityId: "d1", facetId: "f1" },
+        to: "churned",
+        from: "active",
+        reason: "left",
+      })
+    ).toEqual({
+      door: "updateFacet",
+      input: {
+        facetId: "f1",
+        status: "churned",
+        expectedStatus: "active",
+        reasoning: "left",
+      },
+    });
+  });
+});
+
+describe("undoMoveOf", () => {
+  const subject = { kind: "kind", entityId: "d1", property: "s" } as const;
+  it("goes back to where it was, expecting where it went", () => {
+    expect(undoMoveOf({ subject, to: "won", from: "lead" })).toEqual({
+      subject,
+      to: "lead",
+      from: "won",
+    });
+  });
+  it("has nothing to undo from no status, or a no-op", () => {
+    expect(undoMoveOf({ subject, to: "won", from: null })).toBeNull();
+    expect(undoMoveOf({ subject, to: "won", from: "won" })).toBeNull();
   });
 });
