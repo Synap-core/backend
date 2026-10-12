@@ -657,11 +657,28 @@ export interface SlotSubjectEdge {
  * `playbook_automations` with role `"activator"`.
  */
 export interface PlaybookActivator {
-  on: "created" | "enters_status";
-  /** Required when `on === "enters_status"` — the status value entered. */
+  /**
+   * `created` / `enters_status` — the thing is created / enters `status`.
+   * `count` — at least `min` things sit in `status` (always per_moment).
+   * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+   * `manual` — a button, never by itself: compiles no rule.
+   * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
+   * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
+   * `satisfies` both.
+   */
+  on: "created" | "enters_status" | "count" | "schedule" | "manual";
+  /** Required for `enters_status` / `count`; optional for `schedule`. */
   status?: string;
+  /** Required for `schedule`. */
+  cron?: string;
+  /** Required for `count` (≥ 2). */
+  min?: number;
+  /** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+  size?: "per_thing" | "per_moment";
   /** `run` starts the run; `propose` files a proposal (the public default). */
   mode: "run" | "propose";
+  /** Pending approvals before the worker stops starting runs (default 20). */
+  maxPendingApprovals?: number;
 }
 
 /** Where a failed stage gate sends the run — see {@link PlaybookStage.onFail}. */

@@ -308,7 +308,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   ),
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
-    "When the process starts on its subject kind: [{ on: 'created' | 'enters_status', status? (with enters_status), mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
+    "Stage workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,

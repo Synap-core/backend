@@ -56,6 +56,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       }
     },
   };
+  // The backlog count reads the pod's own client (proven on SQL in
+  // database `worker-enablement.pglite.test.ts`); zero here.
+  (mocked as Record<string, unknown>).countWorkerPendingApprovals = async () =>
+    0;
   Object.defineProperty(mocked, "db", {
     get: () => holder.db,
     enumerable: true,
@@ -81,6 +85,8 @@ import {
   profiles,
   profileWorkspaceAccess,
   playbooks,
+  skills,
+  automations,
   type db as DatabaseHandle,
 } from "@synap/database";
 
@@ -126,6 +132,8 @@ async function freshDb() {
     profiles,
     profileWorkspaceAccess,
     playbooks,
+    skills,
+    automations,
   ]) {
     await client.exec(ddlFor(table as unknown as PgTable));
   }
@@ -612,5 +620,118 @@ describe("listThingsInStatus — the worker's set is the board's column", () => 
       limit: 10,
     });
     expect(none.total).toBe(0);
+  });
+});
+
+describe("lifecycle.board — hasWorker reads the LIVE enablements covering the filter", () => {
+  const WS = "55555555-5555-4555-8555-555555555555";
+  const PB = "66666666-6666-4666-8666-666666666666";
+  const PROJ = "77777777-7777-4777-8777-777777777777";
+  const OTHER = "88888888-8888-4888-8888-888888888888";
+
+  async function seed(client: PGlite) {
+    await client.query(
+      `insert into workspaces (id, name, owner_id) values ($1, 'Sales', $2)`,
+      [WS, USER]
+    );
+    await client.query(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Review', 'active', $2, $3, 'g', $4::jsonb)`,
+      [
+        PB,
+        WS,
+        USER,
+        JSON.stringify({
+          profileSlug: "deal",
+          activators: [
+            { on: "enters_status", status: "negotiating", mode: "propose" },
+          ],
+        }),
+      ]
+    );
+  }
+  /** One enablement = one rule row + its compiled automation (the edge). */
+  async function rule(
+    client: PGlite,
+    o: { template: string; key: string; draft?: boolean }
+  ) {
+    const ruleId = randomUUID();
+    const automationId = randomUUID();
+    await client.query(
+      `insert into skills (id, user_id, name, category, metadata) values ($1, '${USER}', 'rule', 'rule', $2::jsonb)`,
+      [
+        ruleId,
+        JSON.stringify({
+          rule: {
+            v: 1,
+            intent: "x",
+            scope: { kind: "workspace", workspaceId: WS },
+            seed: { template: o.template, key: o.key, hash: "h" },
+            behaviours: [],
+            ...(o.draft ? { draft: true } : {}),
+          },
+        }),
+      ]
+    );
+    await client.query(
+      `insert into automations (id, name, status, created_by) values ($1, 'a', $2, $3)`,
+      [automationId, o.draft ? "archived" : "active", USER]
+    );
+    await client.query(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata)
+       values (gen_random_uuid(), 'skill', $1, 'automation', $2, 'activates', '{}'::jsonb)`,
+      [ruleId, automationId]
+    );
+  }
+
+  it("the space-wide enablement counts; once PAUSED it does not (a declared activator alone is not a worker)", async () => {
+    const client = await freshDb();
+    await seed(client);
+    await rule(client, {
+      template: `playbook-activator:${PB}`,
+      key: "enters_status:negotiating",
+      draft: true,
+    });
+    const caller = await lifecycleCaller();
+    expect((await caller.board({ profileSlug: "deal" })).hasWorker).toBe(false);
+    await client.query(`delete from skills`);
+    await rule(client, {
+      template: `playbook-activator:${PB}`,
+      key: "enters_status:negotiating",
+    });
+    expect((await caller.board({ profileSlug: "deal" })).hasWorker).toBe(true);
+  });
+
+  it("a PROJECT enablement covers that project's board only", async () => {
+    const client = await freshDb();
+    await seed(client);
+    await rule(client, {
+      template: `playbook-worker:${PB}`,
+      key: `enters_status:negotiating@project:${PROJ}`,
+    });
+    const caller = await lifecycleCaller();
+    expect(
+      (await caller.board({ profileSlug: "deal", projectId: PROJ })).hasWorker
+    ).toBe(true);
+    expect(
+      (await caller.board({ profileSlug: "deal", projectId: OTHER })).hasWorker
+    ).toBe(false);
+    // workers.list — the same reader, as the track page reads it.
+    const { listEnabledWorkers } =
+      await import("../services/playbooks/workers.js");
+    const workers = await listEnabledWorkers({ userId: USER });
+    expect(workers).toEqual([
+      expect.objectContaining({
+        playbookId: PB,
+        activatorKey: "enters_status:negotiating",
+        scope: "project",
+        projectId: PROJ,
+        trackId: null,
+        state: "running",
+        size: "per_thing",
+        mode: "propose",
+        maxPendingApprovals: 20,
+      }),
+    ]);
   });
 });

@@ -211,7 +211,13 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { applyPlaybookActivators } from "./playbook-activators.js";
+import {
+  activatorRuleDecl,
+  applyPlaybookActivators,
+  workerEnablementKey,
+  workerSeedTemplate,
+} from "./playbook-activators.js";
+import { templateRuleHash } from "../rules/template-rules.js";
 import { toBackendTrigger } from "@synap-core/types/automations";
 import { createRuleGoverned } from "../rules/create.js";
 import { updateRuleGoverned } from "../rules/update.js";
@@ -664,5 +670,142 @@ describe("a ROLE subject (R1)", () => {
       eventPattern: "entity.transition.completed",
       filters: { lifecycleProfile: "lead", to: "qualified" },
     });
+  });
+});
+
+describe("stage workers (work model L4)", () => {
+  const configOf = (call: number) =>
+    (
+      vi.mocked(createRuleGoverned).mock.calls[call]![0].sentence as {
+        actions: Array<{ config: Record<string, unknown> }>;
+      }
+    ).actions[0]!.config;
+
+  it("a COUNT worker compiles per_moment: the node runs, its writes propose, the threshold rides on the spec", async () => {
+    store.lifecycleProperty = "post-status";
+    setPlaybook([{ on: "count", status: "review", min: 3, mode: "propose" }]);
+    const res = await run();
+    expect(res.outcomes).toEqual([
+      { key: "count:review", status: "created", ruleId: "rule-1" },
+    ]);
+    const config = configOf(0);
+    expect(config.__worker).toEqual({
+      key: "count:review",
+      size: "per_moment",
+      profileSlug: "post",
+      status: "review",
+      minCount: 3,
+      writes: "propose",
+    });
+    // A batch RUNS; proposing is the writes' job, not the node's.
+    expect(config).not.toHaveProperty("__mode");
+  });
+
+  it("a plain created / enters_status activator carries NO worker spec (installed rules keep their hash)", async () => {
+    setPlaybook(TWO);
+    await run();
+    expect(configOf(0)).not.toHaveProperty("__worker");
+    expect(configOf(1)).not.toHaveProperty("__worker");
+  });
+
+  it("a MANUAL worker compiles no rule", async () => {
+    setPlaybook([{ on: "manual", mode: "run" }]);
+    const res = await run();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    expect(res.outcomes[0]).toMatchObject({
+      key: "manual",
+      status: "unchanged",
+    });
+  });
+
+  /** What `workers.enable` writes for a project: the worker namespace. */
+  async function enableForProject(projectId: string) {
+    const decl = activatorRuleDecl({
+      activator: TWO[1] as never,
+      playbookId: PB,
+      playbookName: "Repurpose",
+      profileSlug: "post",
+      statusProperty: "post-status",
+      subject: { profileKind: "kind", lifecycleProperty: null },
+      scope: { projectId },
+    }) as { key: string; intent: string; sentence: unknown };
+    await createRuleGoverned({
+      userId: "user-1",
+      intent: decl.intent,
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId },
+      sentence: decl.sentence,
+      seed: {
+        template: workerSeedTemplate(PB),
+        key: workerEnablementKey({
+          activatorKey: "enters_status:published",
+          projectId,
+        }),
+        hash: templateRuleHash(decl),
+      },
+    });
+    vi.mocked(createRuleGoverned).mockClear();
+    return store.rules.at(-1)!;
+  }
+
+  it("a PROJECT enablement compiles with its filing + spec, follows its declaration, and is linked while live", async () => {
+    setPlaybook(TWO);
+    await run();
+    const rule = await enableForProject("proj-1");
+    const config = (
+      (rule.metadata.rule as Row).sentence as {
+        actions: Array<{ config: Record<string, unknown> }>;
+      }
+    ).actions[0]!.config;
+    expect(config.__projectId).toBe("proj-1");
+    expect(config.__worker).toMatchObject({
+      key: "enters_status:published",
+      size: "per_thing",
+    });
+    expect((rule.metadata.rule as Row).intent).toBe(
+      'When a post enters "published" in this project, run "Repurpose" on it.'
+    );
+
+    const pass = await run();
+    expect(pass.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "unchanged",
+      ruleId: rule.id,
+    });
+    expect(store.links.map((l) => l.automationId)).toContain(rule.automationId);
+
+    // Undeclared → retired by us, unlinked; declared again → back.
+    setPlaybook([TWO[0]]);
+    const gone = await run();
+    expect(gone.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "retired",
+      ruleId: rule.id,
+    });
+    expect(store.links.map((l) => l.automationId)).not.toContain(
+      rule.automationId
+    );
+    setPlaybook(TWO);
+    const back = await run();
+    expect(back.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "reactivated",
+      ruleId: rule.id,
+    });
+    expect(createRuleGoverned).not.toHaveBeenCalled(); // never created here
+  });
+
+  it("a project enablement a PERSON disabled stays off on every later pass", async () => {
+    setPlaybook(TWO);
+    await run();
+    const rule = await enableForProject("proj-1");
+    (rule.metadata.rule as Row).draft = true; // workers.setPaused(paused: true)
+    const pass = await run();
+    expect(pass.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "owner_choice",
+      ruleId: rule.id,
+      reason: "disabled by a person — left off",
+    });
+    expect((rule.metadata.rule as Row).draft).toBe(true);
   });
 });

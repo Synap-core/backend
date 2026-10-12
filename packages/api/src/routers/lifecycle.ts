@@ -23,13 +23,10 @@ import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
 import {
   db,
-  and,
-  eq,
-  drizzleSql,
   ProfileResolutionService,
   type EffectiveLifecycle,
 } from "@synap/database";
-import { playbooks, profiles } from "@synap/database/schema";
+import { profiles } from "@synap/database/schema";
 import {
   LIFECYCLE_CATEGORIES,
   isTerminalLifecycleCategory,
@@ -38,6 +35,7 @@ import {
 } from "@synap-core/types/lifecycle";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { getTrack } from "../services/tracks/tracks-service.js";
+import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import {
   countThingsByProfileAndStatus,
   groupThingsByStatus,
@@ -104,7 +102,7 @@ const boardWire = z.object({
   total: z.number(),
   /** Open + active + paused + unclassified — the work still in the pipeline. */
   live: z.number(),
-  /** An active playbook with activators follows this lifecycle. */
+  /** A LIVE worker enablement covers this board (its project, or the whole space). */
   hasWorker: z.boolean(),
   /** W17: `list` below ~10 live things or with no worker. */
   suggestedShape: z.enum(["board", "list"]),
@@ -367,7 +365,17 @@ export const lifecycleRouter = router({
         .filter((c) => !isTerminalLifecycleCategory(c.category))
         .reduce((n, c) => n + c.count, 0);
       const total = allGroups.reduce((n, g) => n + g.count, 0);
-      const hasWorker = await hasActiveWorker(input.profileSlug);
+      // A LIVE enablement (not paused, its automation active) whose scope
+      // covers this board's filter — the ONE reader the track page uses too.
+      const hasWorker =
+        (
+          await listEnabledWorkers({
+            userId: ctx.userId,
+            profileSlug: input.profileSlug,
+            projectId: projectId ?? null,
+            liveOnly: true,
+          })
+        ).length > 0;
 
       let shownColumns = columns;
       let nextCursor: string | null = null;
@@ -556,23 +564,3 @@ export const lifecycleRouter = router({
       );
     }),
 });
-
-/**
- * A worker today = an ACTIVE playbook whose subject is this profile and that
- * declares activators (it starts itself on the lifecycle). L4 replaces this
- * with the lifecycle's enabled workers.
- */
-async function hasActiveWorker(profileSlug: string): Promise<boolean> {
-  const [row] = await db
-    .select({ id: playbooks.id })
-    .from(playbooks)
-    .where(
-      and(
-        eq(playbooks.status, "active"),
-        drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${profileSlug}`,
-        drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`
-      )
-    )
-    .limit(1);
-  return !!row;
-}

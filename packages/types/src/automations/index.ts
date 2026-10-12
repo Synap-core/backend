@@ -194,6 +194,8 @@ export {
   proposePlaybookOnKindSentence,
   playbookActivatorSentence,
   type PlaybookActivatorTrigger,
+  // A schedule activator's cron must be one the grammar can spell.
+  isSentenceCron,
   flowToConditions,
   // THEN constructors (moved from automation-intent's sentence-io, 2026-10-06).
   makeSentenceAction,

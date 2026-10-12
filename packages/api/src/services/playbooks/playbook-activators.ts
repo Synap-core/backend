@@ -64,6 +64,7 @@
 
 import { createLogger } from "@synap-core/core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { effectiveWorkerSize } from "@synap-core/types/workers";
 import { playbookActivatorSentence } from "@synap-core/types/automations";
 import {
   db,
@@ -110,6 +111,59 @@ export function activatorSeedTemplate(playbookId: string): string {
   return `playbook-activator:${playbookId}`;
 }
 
+/**
+ * The seed namespace of one playbook's PROJECT enablements (`workers.enable`).
+ * A namespace of its own, so the space pass's retire-what-is-undeclared sweep
+ * of `playbook-activator:<id>` can never touch them.
+ */
+export function workerSeedTemplate(playbookId: string): string {
+  return `playbook-worker:${playbookId}`;
+}
+
+/** A project enablement's seed key: `<activatorKey>@project:<id>[@track:<id>]`. */
+export function workerEnablementKey(input: {
+  activatorKey: string;
+  projectId: string;
+  trackId?: string | null;
+}): string {
+  return `${input.activatorKey}@project:${input.projectId}${
+    input.trackId ? `@track:${input.trackId}` : ""
+  }`;
+}
+
+export function parseWorkerEnablementKey(key: string): {
+  activatorKey: string;
+  projectId: string;
+  trackId: string | null;
+} | null {
+  const m = /^(.*)@project:([^@]+)(?:@track:([^@]+))?$/.exec(key);
+  if (!m) return null;
+  return { activatorKey: m[1]!, projectId: m[2]!, trackId: m[3] ?? null };
+}
+
+/** Every rule of one seed namespace, with its parsed metadata. */
+export async function rulesOfSeedTemplate(
+  template: string
+): Promise<Array<{ id: string; meta: RuleMetadata }>> {
+  const rows = await db
+    .select({ id: skills.id, metadata: skills.metadata })
+    .from(skills)
+    .where(
+      and(
+        eq(skills.category, RULE_CATEGORY),
+        drizzleSql`${skills.metadata}->'rule'->'seed'->>'template' = ${template}`
+      )
+    );
+  const out: Array<{ id: string; meta: RuleMetadata }> = [];
+  for (const row of rows) {
+    const meta = readRuleMetadata(row.metadata as Record<string, unknown>);
+    // Re-checked on the parsed stamp: a row whose JSON matched but whose
+    // stamp does not parse to this namespace is not ours to converge.
+    if (meta?.seed?.template === template) out.push({ id: row.id, meta });
+  }
+  return out;
+}
+
 export type ActivatorOutcomeStatus =
   | "created"
   | "updated"
@@ -143,6 +197,18 @@ export interface ApplyPlaybookActivatorsResult {
  * The rule declaration an activator compiles to. PURE — the intent prose and
  * the sentence are a function of the activator and the playbook, so the hash
  * (and therefore idempotence) is stable across passes.
+ *
+ * STAGE WORKERS (work model L4). The compiled node carries a worker spec
+ * (`PlaybookRunWorkerSpec`: size, status, threshold, backlog limit) when the
+ * activator is a worker shape — `count` / `schedule`, a `per_moment` size, a
+ * declared `maxPendingApprovals` — or when it is compiled for a PROJECT
+ * (`scope`, the `workers.enable` door). A plain space-wide `created` /
+ * `enters_status` activator compiles with NO spec, byte-identical to before
+ * workers existed, so no installed rule's seed hash moves (they run without
+ * the worker gate, as they always have). A per_moment worker's node runs
+ * (`mode` omitted) and carries the declared mode as `writes`: "propose"
+ * makes every agent write inside the batch a proposal. `manual` compiles NO
+ * rule (it is a button over the enablement's filter).
  */
 export function activatorRuleDecl(input: {
   activator: PlaybookActivator;
@@ -156,20 +222,71 @@ export function activatorRuleDecl(input: {
    * which event an `enters_status` follows — see `playbookActivatorSentence`.
    */
   subject: SubjectLifecycle;
-}): TemplateRuleDecl | { key: string; error: string } {
+  /** A PROJECT enablement (`workers.enable`): filing + the project's set. */
+  scope?: { projectId: string; trackId?: string | null };
+}):
+  | TemplateRuleDecl
+  | { key: string; error: string }
+  | { key: string; manual: true } {
   const { activator: a, playbookId, profileSlug, subject } = input;
   const key = activatorKey(a);
+  if (a.on === "manual") return { key, manual: true };
   const kind = resolveObjectNoun(profileSlug).toLowerCase();
-  const verb = a.mode === "propose" ? "propose running" : "run";
-  if (a.on === "enters_status") {
+  const size = effectiveWorkerSize(a);
+  const perMoment = size === "per_moment";
+  const verb = a.mode === "propose" && !perMoment ? "propose running" : "run";
+  const isWorker =
+    !!input.scope ||
+    a.on === "count" ||
+    a.on === "schedule" ||
+    perMoment ||
+    a.maxPendingApprovals !== undefined;
+  const worker = isWorker
+    ? {
+        key,
+        size,
+        profileSlug,
+        ...(a.status ? { status: a.status } : {}),
+        ...(a.on === "count" && a.min !== undefined ? { minCount: a.min } : {}),
+        ...(a.maxPendingApprovals !== undefined
+          ? { maxPendingApprovals: a.maxPendingApprovals }
+          : {}),
+        ...(perMoment ? { writes: a.mode } : {}),
+      }
+    : undefined;
+  const common = {
+    playbookId,
+    profileSlug,
+    // A batch RUNS; whether its writes propose rides on `worker.writes`.
+    mode: perMoment ? ("run" as const) : a.mode,
+    ...(worker ? { worker } : {}),
+    ...(input.scope ? { projectId: input.scope.projectId } : {}),
+    ...(input.scope?.trackId ? { trackId: input.scope.trackId } : {}),
+  };
+  const where = input.scope ? " in this project" : "";
+  const batch = perMoment ? "on them" : "on it";
+  const tail =
+    perMoment && a.mode === "propose" ? ", proposing every change" : "";
+
+  if (a.on === "schedule") {
+    return {
+      key,
+      intent: `On schedule (${a.cron}), ${verb} "${input.playbookName}" ${batch}: every ${kind}${a.status ? ` in "${a.status}"` : ""}${where}${tail}.`,
+      sentence: playbookActivatorSentence({
+        ...common,
+        on: "schedule",
+        cron: a.cron ?? "",
+      }),
+    };
+  }
+  if (a.on === "enters_status" || a.on === "count") {
     // The declared lifecycle IS the status a process follows (work model L1):
     // a playbook that names none follows it.
     const statusProperty = input.statusProperty ?? subject.lifecycleProperty;
     if (!statusProperty || !a.status) {
       return {
         key,
-        error:
-          "an enters_status activator needs subjectProfile.statusProperty — the property whose value the subject enters",
+        error: `an ${a.on} activator needs subjectProfile.statusProperty — the property whose value the subject enters`,
       };
     }
     const declared = subject.lifecycleProperty === statusProperty;
@@ -184,15 +301,16 @@ export function activatorRuleDecl(input: {
     }
     return {
       key,
-      intent: `When a ${kind} enters "${a.status}", ${verb} "${input.playbookName}" on it.`,
+      intent:
+        a.on === "count"
+          ? `When ${a.min} or more ${kind}s are in "${a.status}"${where}, ${verb} "${input.playbookName}" ${batch}${tail}.`
+          : `When a ${kind} enters "${a.status}"${where}, ${verb} "${input.playbookName}" ${batch}${tail}.`,
       sentence: playbookActivatorSentence({
-        playbookId,
-        profileSlug,
-        on: "enters_status",
+        ...common,
+        on: a.on,
         statusProperty,
         status: a.status,
         lifecycle: declared ? "declared" : "undeclared",
-        mode: a.mode,
       }),
     };
   }
@@ -204,14 +322,12 @@ export function activatorRuleDecl(input: {
   return {
     key,
     intent: role
-      ? `When something becomes a ${kind}, ${verb} "${input.playbookName}" on it.`
-      : `When a ${kind} is created, ${verb} "${input.playbookName}" on it.`,
+      ? `When something becomes a ${kind}${where}, ${verb} "${input.playbookName}" ${batch}${tail}.`
+      : `When a ${kind} is created${where}, ${verb} "${input.playbookName}" ${batch}${tail}.`,
     sentence: playbookActivatorSentence({
-      playbookId,
-      profileSlug,
+      ...common,
       on: "created",
       ...(role ? { profileKind: "role" as const } : {}),
-      mode: a.mode,
     }),
   };
 }
@@ -362,22 +478,11 @@ async function applyOnce(input: {
     : { kind: "pod" as const };
 
   // Every rule this playbook's activators ever produced (by seed namespace).
-  const rows = await db
-    .select({ id: skills.id, metadata: skills.metadata })
-    .from(skills)
-    .where(
-      and(
-        eq(skills.category, RULE_CATEGORY),
-        drizzleSql`${skills.metadata}->'rule'->'seed'->>'template' = ${template}`
-      )
-    );
   const grouped = new Map<string, Array<{ id: string; meta: RuleMetadata }>>();
-  for (const row of rows) {
-    const meta = readRuleMetadata(row.metadata as Record<string, unknown>);
-    if (!meta?.seed) continue;
-    const list = grouped.get(meta.seed.key) ?? [];
-    list.push({ id: row.id, meta });
-    grouped.set(meta.seed.key, list);
+  for (const row of await rulesOfSeedTemplate(template)) {
+    const list = grouped.get(row.meta.seed!.key) ?? [];
+    list.push(row);
+    grouped.set(row.meta.seed!.key, list);
   }
   // One row per key: the remembered one, else a live one, else the first.
   // Every OTHER live row of that key is a duplicate a race created — retired.
@@ -422,6 +527,15 @@ async function applyOnce(input: {
     declaredKeys.add(built.key);
     if ("error" in built) {
       outcomes.push({ key: built.key, status: "denied", reason: built.error });
+      continue;
+    }
+    if ("manual" in built) {
+      // A button, not a trigger: nothing to compile (header).
+      outcomes.push({
+        key: built.key,
+        status: "unchanged",
+        reason: "manual — runs from its button, compiles no rule",
+      });
       continue;
     }
     const decl = built;
@@ -588,11 +702,133 @@ async function applyOnce(input: {
       });
     }
   }
+  // ── PROJECT enablements (`workers.enable`, their own namespace) ──────────
+  // Each follows its declared activator: recompiled when the declaration
+  // moves, retired (by us, remembered) when it is no longer declared or the
+  // playbook is not live, re-activated when declared again. One a PERSON
+  // disabled (a draft we did not retire) stays off. Never created here —
+  // enabling is the person's act, through `workers.enable`.
+  const workerRows = await rulesOfSeedTemplate(workerSeedTemplate(pb.id));
+  for (const row of workerRows) {
+    const key = row.meta.seed!.key;
+    try {
+      const parsed = parseWorkerEnablementKey(key);
+      const activator = parsed
+        ? declared.find((a) => activatorKey(a) === parsed.activatorKey)
+        : undefined;
+      const built =
+        parsed && activator && process.profileSlug
+          ? activatorRuleDecl({
+              activator,
+              playbookId: pb.id,
+              playbookName: pb.name,
+              profileSlug: process.profileSlug,
+              statusProperty: process.statusProperty,
+              subject,
+              scope: { projectId: parsed.projectId, trackId: parsed.trackId },
+            })
+          : null;
+      const remembered = memory.rules[key];
+      if (!built || "error" in built || "manual" in built) {
+        if (!row.meta.draft) {
+          const r = await updateRuleGoverned({
+            userId: input.userId,
+            ...agent,
+            ruleId: row.id,
+            workspaceId: pb.workspaceId,
+            intent: row.meta.intent,
+            scope: row.meta.scope,
+            draft: true,
+            auditSource: "playbook-activator",
+          });
+          outcomes.push(updateOutcome(key, row.id, r, "retired"));
+          if (r.status === "updated")
+            memory.rules[key] = { ruleId: row.id, retired: true };
+        }
+        continue;
+      }
+      const seed: RuleSeed = {
+        template: workerSeedTemplate(pb.id),
+        key,
+        hash: templateRuleHash(built),
+      };
+      if (row.meta.draft) {
+        if (!(remembered?.ruleId === row.id && remembered.retired)) {
+          outcomes.push({
+            key,
+            status: "owner_choice",
+            ruleId: row.id,
+            reason: "disabled by a person — left off",
+          });
+          continue;
+        }
+        const r = await updateRuleGoverned({
+          userId: input.userId,
+          ...agent,
+          ruleId: row.id,
+          workspaceId: pb.workspaceId,
+          intent: built.intent,
+          scope: row.meta.scope,
+          sentence: built.sentence,
+          draft: false,
+          seed,
+          auditSource: "playbook-activator",
+        });
+        outcomes.push(updateOutcome(key, row.id, r, "reactivated"));
+        if (r.status === "updated") {
+          liveRuleIds.add(row.id);
+          delete memory.rules[key];
+        }
+        continue;
+      }
+      const d = decideTemplateRule({
+        decl: built,
+        stored: row.meta,
+        ref: null,
+        refRowExists: false,
+      });
+      if (d.action === "update") {
+        const r = await updateRuleGoverned({
+          userId: input.userId,
+          ...agent,
+          ruleId: row.id,
+          workspaceId: pb.workspaceId,
+          intent: built.intent,
+          scope: row.meta.scope,
+          sentence: built.sentence,
+          seed,
+          auditSource: "playbook-activator",
+        });
+        outcomes.push(updateOutcome(key, row.id, r, "updated"));
+      } else {
+        outcomes.push({
+          key,
+          status: d.action === "none" ? toOutcomeStatus(d.status) : "unchanged",
+          ruleId: row.id,
+        });
+      }
+      liveRuleIds.add(row.id);
+    } catch (err) {
+      outcomes.push({
+        key,
+        status: "failed",
+        ruleId: row.id,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // A key neither declared nor backed by a rule is forgotten (re-declaring it
   // later creates afresh); an undeclared key whose rule the OWNER paused keeps
   // no claim either.
   for (const key of Object.keys(memory.rules)) {
     if (declaredKeys.has(key)) continue;
+    if (parseWorkerEnablementKey(key)) {
+      // A project enablement's memory lives while its rule does.
+      if (!workerRows.some((r) => r.id === memory.rules[key]!.ruleId))
+        delete memory.rules[key];
+      continue;
+    }
     const row = byKey.get(key);
     if (!row || memory.rules[key]!.retired !== true) delete memory.rules[key];
   }
