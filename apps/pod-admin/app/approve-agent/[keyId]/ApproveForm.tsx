@@ -13,11 +13,18 @@ import {
   type PendingAccessView,
 } from "./pending-access";
 import { PendingAccessBlock } from "./PendingAccessBlock";
+import {
+  approveBody,
+  viewConnections,
+  type ConnectionFacts,
+  type ConnectionsView,
+} from "./other-connections";
+import { OtherConnectionsBlock } from "./OtherConnectionsBlock";
 
 /** What the pending key would be allowed to do — read from the pod, never assumed. */
 type DetailsRead =
   | { state: "loading" }
-  | { state: "ok"; view: PendingAccessView }
+  | { state: "ok"; view: PendingAccessView; connections: ConnectionsView }
   | { state: "failed"; message: string };
 
 type Step =
@@ -44,6 +51,8 @@ export function ApproveForm({
   const podUrl = useMemo(() => publicPodUrl(), []);
   const [details, setDetails] = useState<DetailsRead>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
+  // The agent's other connections the person chose to switch off too.
+  const [chosen, setChosen] = useState<string[]>([]);
 
   useEffect(() => {
     let live = true;
@@ -61,6 +70,7 @@ export function ApproveForm({
           setDetails({
             state: "ok",
             view: viewPendingAccess(body as PendingAccess),
+            connections: viewConnections(body as ConnectionFacts),
           });
       })
       .catch((err) => {
@@ -87,6 +97,11 @@ export function ApproveForm({
             // Cross-subdomain (pod-admin.<root> → pod.<root>) — send the
             // parent-domain Kratos cookie so resolveKratosSession() passes.
             credentials: "include",
+            // Approving disconnects ONLY what the person ticked.
+            body:
+              action === "approve" && details.state === "ok"
+                ? JSON.stringify(approveBody(details.connections, chosen))
+                : undefined,
           }
         );
         if (!res.ok) {
@@ -103,11 +118,13 @@ export function ApproveForm({
         });
       }
     },
-    [keyId, podUrl]
+    [keyId, podUrl, details, chosen]
   );
 
   const busy = step.kind === "working";
   const agentName = resolveServiceName(agentType);
+  const connections = details.state === "ok" ? details.connections : null;
+  const superseded = connections?.superseded === true;
 
   return (
     <ReceiverShell podHost={podHost} identity={identity} width="sm">
@@ -128,8 +145,13 @@ export function ApproveForm({
             Agent access request
           </p>
           <h1 className="font-heading text-2xl font-medium leading-tight tracking-tight text-foreground">
-            Approve {agentName}
+            Approve {connections?.title ?? agentName}
           </h1>
+          {connections?.requested ? (
+            <p className="text-tiny text-foreground/65">
+              {connections.requested}
+            </p>
+          ) : null}
           <p className="text-small leading-relaxed text-foreground/65">
             A{" "}
             <code className="font-mono text-foreground/80">synap connect</code>{" "}
@@ -172,6 +194,15 @@ export function ApproveForm({
               )}
             </div>
 
+            {connections && (
+              <OtherConnectionsBlock
+                view={connections}
+                chosen={chosen}
+                onChosen={setChosen}
+                isDisabled={busy}
+              />
+            )}
+
             <div className="flex gap-2.5">
               <Button
                 color="primary"
@@ -179,7 +210,8 @@ export function ApproveForm({
                 size="md"
                 className="flex-1 font-medium"
                 // Never approve blind: wait until what it asks for is read.
-                isDisabled={busy || details.state !== "ok"}
+                // A superseded request is never offered: its newer one is.
+                isDisabled={busy || details.state !== "ok" || superseded}
                 isLoading={busy && step.action === "approve"}
                 onPress={() => act("approve")}
                 startContent={

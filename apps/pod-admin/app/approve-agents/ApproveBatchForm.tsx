@@ -16,7 +16,9 @@ import {
 } from "../approve-agent/[keyId]/pending-access";
 import { PendingAccessBlock } from "../approve-agent/[keyId]/PendingAccessBlock";
 
-type KeyStatus = "pending" | "active" | "rejected" | "not_found" | "forbidden";
+/** `superseded`: a newer request from the same computer is waiting — never offered. */
+type KeyStatus =
+  "pending" | "active" | "rejected" | "superseded" | "not_found" | "forbidden";
 
 /** A lookup row; a decidable key also carries what it would be allowed to do. */
 interface PendingKey extends Partial<PendingAccess> {
@@ -26,11 +28,18 @@ interface PendingKey extends Partial<PendingAccess> {
   agentType?: string | null;
   agentName?: string | null;
   instanceId?: string | null;
+  /** The computer's name, as its CLI sent it (null = older CLI). */
+  instanceLabel?: string | null;
 }
 
 /** `/approve-batch` per-key outcome (setup.ts). */
 type BatchOutcome =
-  "approved" | "already_active" | "rejected" | "not_found" | "forbidden";
+  | "approved"
+  | "already_active"
+  | "rejected"
+  | "superseded"
+  | "not_found"
+  | "forbidden";
 
 interface KeyResult {
   key: PendingKey;
@@ -275,7 +284,7 @@ export function ApproveBatchForm({
                         label={agentLabel(k)}
                         value={
                           k.status === "pending"
-                            ? (k.instanceId ?? "Waiting for you")
+                            ? (k.instanceLabel ?? "Waiting for you")
                             : resolveStatusLabel(statusToken(k.status))
                         }
                       />
