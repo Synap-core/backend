@@ -571,6 +571,13 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("denied")).toBe("Rejected");
   });
 
+  it("names the issue lifecycle (issue.issueStatus)", () => {
+    expect(resolveStatusLabel("wont_fix")).toBe("Won't fix");
+    expect(resolveStatusLabel("open")).toBe("Open");
+    expect(resolveStatusLabel("investigating")).toBe("Investigating");
+    expect(resolveStatusLabel("fixed")).toBe("Fixed");
+  });
+
   it("names the three tool-demand states (tool_request.tr_status)", () => {
     // `wanted` rides the humanize fallback; only `installable` needs a row.
     expect(resolveStatusLabel("wanted")).toBe("Wanted");
