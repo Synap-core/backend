@@ -62,6 +62,9 @@ import {
   runWithGrant,
   runWithClientKey,
   clientKeyForApiKey,
+  requestConversationId,
+  CONVERSATION_HEADER,
+  CONVERSATION_CWD_HEADER,
   isProbeApiKey,
 } from "@synap/database";
 import {
@@ -501,9 +504,13 @@ mcpHttpApp.post("/", async (c) => {
     sessionIdGenerator: isInitialize ? () => randomUUID() : undefined,
     enableJsonResponse: true, // prefer SSE when client accepts it, fall back to JSON otherwise
   });
-  const conversationId = isInitialize
-    ? undefined
-    : c.req.header("mcp-session-id");
+  // A LOCAL agent's client (the synap stdio bridge) names its OWN conversation
+  // (`X-Synap-Conversation`, e.g. `claude-code:<id>`) — the one a person can
+  // reopen; it outranks the transport id.
+  const conversationId = requestConversationId(
+    c.req.header(CONVERSATION_HEADER),
+    isInitialize ? undefined : c.req.header("mcp-session-id")
+  );
 
   // Agent-key identity remap — via the ONE door `resolveKeyIdentity`
   // (access/key-identity.ts), mirroring the Hub REST auth middleware. The DATA
@@ -623,11 +630,14 @@ mcpHttpApp.post("/", async (c) => {
   // of each other's, even on one shared agent key).
   return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
     runWithActingAgent(agentUserId, () =>
-      runWithClientKey(clientKeyForApiKey(keyRecord, conversationId), () =>
-        // W1: the key's grant bounds every write gate and scoped read below.
-        runWithGrant(grant, () =>
-          transport.handleRequest(c.req.raw, { parsedBody })
-        )
+      runWithClientKey(
+        clientKeyForApiKey(keyRecord, conversationId),
+        () =>
+          // W1: the key's grant bounds every write gate and scoped read below.
+          runWithGrant(grant, () =>
+            transport.handleRequest(c.req.raw, { parsedBody })
+          ),
+        c.req.header(CONVERSATION_CWD_HEADER)
       )
     )
   );

@@ -938,3 +938,6 @@ export function agentDisplayName(input: {
   const host = input.hostName?.trim();
   return host ? `${name} on ${host}` : name;
 }
+
+// The reopenable agent conversation behind a piece of work.
+export * from "./conversation.js";

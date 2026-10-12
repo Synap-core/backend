@@ -28,6 +28,7 @@ import { focusSessions } from "../schema/focus-sessions.js";
 import { openRunSession } from "./open-run-session.js";
 import {
   clientKeyScope,
+  conversationCwdPatch,
   getRequestClientKey,
 } from "./request-write-context.js";
 
@@ -197,6 +198,7 @@ export async function resolveOrCreateAgentProposalSession(
           kind: AGENT_PROPOSAL_PACKAGE_MARKER,
           autoOpened: true,
           clientKey,
+          ...conversationCwdPatch(clientKey),
           ...(input.stableCorrelation && input.correlationId
             ? { correlationId: input.correlationId }
             : {}),
