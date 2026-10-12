@@ -258,3 +258,63 @@ describe("POST /packages/apply — one space per domain", () => {
     expect(mockVerdict).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /packages/apply — refuses a package that is not a workspace", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPreflight.mockResolvedValue(okReport);
+    mockVerdict.mockResolvedValue({ action: "create" });
+    mockCheckPermission.mockResolvedValue({ status: "applied" });
+    mockApplyPost.mockResolvedValue({});
+    mockMaterialize.mockResolvedValue({
+      status: "created",
+      workspaceId: "ws-new",
+      created: { workspaceId: "ws-new", created: true, outcome: "created" },
+    });
+  });
+
+  // The incident body (2026-10-12): `synap market update` sent the catalog
+  // definition of the `creative-director` SKILL, stamped with `_meta.slug`.
+  // The door minted an empty "New Workspace" from it.
+  const SKILL_BODY = {
+    _meta: { slug: "creative-director", version: "1.1.0" },
+    skill: {
+      slug: "creative-director",
+      name: "Creative director",
+      kind: "instruction",
+      body: "# Creative director",
+    },
+  };
+
+  it("a skill body → typed 400 naming the kind and the right door; nothing minted", async () => {
+    const res = await apply(buildApp(), SKILL_BODY);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      reasonCode: "NOT_A_WORKSPACE_PACKAGE",
+      kind: "skill",
+      door: "market.install",
+    });
+    expect(mockVerdict).not.toHaveBeenCalled();
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+
+  it("a capability body → 400 kind capability", async () => {
+    const res = await apply(buildApp(), {
+      _meta: { slug: "unipile-linkedin" },
+      capability: { key: "unipile-linkedin" },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ kind: "capability" });
+    expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+
+  it("control: a workspace body (with `skills[]`, a workspace slot) still applies", async () => {
+    const res = await apply(buildApp(), {
+      ...PKG,
+      skills: [{ slug: "brand/voice" }],
+    });
+    expect(res.status).toBe(201);
+    expect(mockMaterialize).toHaveBeenCalled();
+  });
+});
