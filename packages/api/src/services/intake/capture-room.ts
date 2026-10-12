@@ -28,14 +28,15 @@ import {
   isNotNull,
   inArray,
   gte,
+  lte,
   asc,
   links,
   drizzleSql,
 } from "@synap/database";
 import {
-  readCapturePart,
-  type CaptureFiledPart,
-  type CaptureResultPart,
+  deriveCaptureRoomState,
+  type CaptureRoomMessage,
+  type CaptureRoomState,
 } from "@synap-core/types/capture";
 import {
   resolveCaptureChipStateLabel,
@@ -58,101 +59,66 @@ const ROOM_PARTS_MAX = 200;
 export const RESTRUCTURE_COMMENTS_MAX = 20;
 export const RESTRUCTURE_COMMENT_MAX_CHARS = 1000;
 
-export interface CaptureRoomRead {
-  /** The latest `capture_result` (highest round, then latest), or null. */
-  result: CaptureResultPart | null;
-  /** Every `capture_filed` receipt, oldest first. */
-  filed: CaptureFiledPart[];
-  /** The latest still-open question's text, or null. */
-  openQuestion: string | null;
-  /** True when the room holds any capture part — i.e. it IS a capture room. */
-  isCaptureRoom: boolean;
-  /** The owner's own comments after the latest result, oldest first. */
-  commentsSinceResult: string[];
-}
-
 /**
- * Read a capture room. `ownerId` selects whose plain messages count as
- * comments (a co-member's message is not the owner's correction).
+ * Read a capture room and fold it through the ONE derivation
+ * (`deriveCaptureRoomState`). `ownerId` selects whose plain messages are the
+ * note and the comments (a co-member's message is not the owner's correction).
+ * Reads the room's capture parts, its first plain owner message (the note
+ * candidate) and the owner's latest {@link RESTRUCTURE_COMMENTS_MAX} plain
+ * messages.
  */
 export async function readCaptureRoom(args: {
   channelId: string;
   ownerId: string;
   database?: typeof db;
-}): Promise<CaptureRoomRead> {
+}): Promise<CaptureRoomState> {
   const database = args.database ?? db;
-  const partRows = await database
-    .select({
-      id: messages.id,
-      metadata: messages.metadata,
-      timestamp: messages.timestamp,
-    })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.channelId, args.channelId),
-        isNull(messages.deletedAt),
-        drizzleSql`${messages.metadata} ? 'capturePart'`
-      )
-    )
-    .orderBy(desc(messages.timestamp), desc(messages.id))
-    .limit(ROOM_PARTS_MAX);
-
-  let result: CaptureResultPart | null = null;
-  let resultAt: Date | null = null;
-  let openQuestion: string | null = null;
-  let questionAt: Date | null = null;
-  const filed: CaptureFiledPart[] = [];
-  for (const row of partRows) {
-    const part = readCapturePart(row.metadata);
-    if (!part) continue;
-    if (part.kind === "capture_result") {
-      // Highest round wins; rows are newest-first, so a tie keeps the later.
-      if (!result || part.round > result.round) {
-        result = part;
-        resultAt = row.timestamp;
-      }
-    } else if (part.kind === "capture_filed") {
-      filed.unshift(part);
-    } else if (part.kind === "capture_question") {
-      if (!questionAt) {
-        questionAt = row.timestamp;
-        openQuestion = part.status === "open" ? part.question : null;
-      }
-    }
-  }
-
-  const commentRows = await database
-    .select({ content: messages.content, metadata: messages.metadata })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.channelId, args.channelId),
-        eq(messages.userId, args.ownerId),
-        eq(messages.role, MessageRole.USER),
-        eq(messages.ephemeral, false),
-        isNull(messages.deletedAt),
-        drizzleSql`NOT (COALESCE(${messages.metadata}, '{}'::jsonb) ? 'capturePart')`,
-        ...(resultAt
-          ? [drizzleSql`${messages.timestamp} > ${resultAt.toISOString()}`]
-          : [])
-      )
-    )
-    .orderBy(desc(messages.timestamp), desc(messages.id))
-    .limit(RESTRUCTURE_COMMENTS_MAX);
-  const commentsSinceResult = commentRows
-    .map((r) => (r.content ?? "").trim())
-    .filter((c) => c.length > 0)
-    .map((c) => c.slice(0, RESTRUCTURE_COMMENT_MAX_CHARS))
-    .reverse();
-
-  return {
-    result,
-    filed,
-    openQuestion,
-    isCaptureRoom: partRows.some((r) => readCapturePart(r.metadata) !== null),
-    commentsSinceResult,
+  const columns = {
+    id: messages.id,
+    role: messages.role,
+    userId: messages.userId,
+    content: messages.content,
+    metadata: messages.metadata,
+    timestamp: messages.timestamp,
   };
+  const ownerPlain = and(
+    eq(messages.channelId, args.channelId),
+    eq(messages.userId, args.ownerId),
+    eq(messages.role, MessageRole.USER),
+    eq(messages.ephemeral, false),
+    isNull(messages.deletedAt),
+    drizzleSql`NOT (COALESCE(${messages.metadata}, '{}'::jsonb) ? 'capturePart')`
+  );
+  const [parts, first, latest] = await Promise.all([
+    database
+      .select(columns)
+      .from(messages)
+      .where(
+        and(
+          eq(messages.channelId, args.channelId),
+          isNull(messages.deletedAt),
+          drizzleSql`${messages.metadata} ? 'capturePart'`
+        )
+      )
+      .orderBy(desc(messages.timestamp), desc(messages.id))
+      .limit(ROOM_PARTS_MAX),
+    database
+      .select(columns)
+      .from(messages)
+      .where(ownerPlain)
+      .orderBy(asc(messages.timestamp), asc(messages.id))
+      .limit(1),
+    database
+      .select(columns)
+      .from(messages)
+      .where(ownerPlain)
+      .orderBy(desc(messages.timestamp), desc(messages.id))
+      .limit(RESTRUCTURE_COMMENTS_MAX),
+  ]);
+  const byId = new Map(
+    [...parts, ...first, ...latest].map((m) => [m.id, m] as const)
+  );
+  return deriveCaptureRoomState([...byId.values()], { ownerId: args.ownerId });
 }
 
 /**
@@ -192,43 +158,6 @@ export async function readCaptureNoteText(args: {
   return body ? body : null;
 }
 
-/** The chip state a row is in, in the client's chip-state tokens. PURE. */
-export function captureRowState(
-  row: CaptureResultPart["rows"][number],
-  filed: ReadonlyArray<CaptureFiledPart>
-): "proposed" | "filed" | "pending" | "refused" | "failed" {
-  let outcome: string | null = null;
-  for (const part of filed) {
-    for (const f of part.rows) if (f.tempId === row.tempId) outcome = f.outcome;
-  }
-  if (outcome === "proposed") return "pending";
-  if (outcome === "failed") return "failed";
-  if (outcome) return "filed";
-  return row.dismissed ? "refused" : "proposed";
-}
-
-/**
- * A capture still owes the person a decision: its latest round holds a row
- * nobody has filed or refused (a failed filing still owes one; a held one
- * waits on governance, not on the person). PURE.
- *
- * `producedRecords`: the capture already made records. With NO `capture_filed`
- * receipt in the room, it was filed before receipts existed (the phone kept
- * them) — the room cannot tell which rows, so it claims nothing is owed rather
- * than resurfacing every old capture as unfinished.
- */
-export function hasUnfiledSuggestions(
-  result: CaptureResultPart | null,
-  filed: ReadonlyArray<CaptureFiledPart>,
-  producedRecords = false
-): boolean {
-  if (producedRecords && filed.length === 0) return false;
-  return (result?.rows ?? []).some((row) => {
-    const state = captureRowState(row, filed);
-    return state === "proposed" || state === "failed";
-  });
-}
-
 const cut = (s: string, max: number) =>
   s.length > max ? `${s.slice(0, max - 1)}…` : s;
 
@@ -239,7 +168,7 @@ const cut = (s: string, max: number) =>
  */
 export function buildCaptureTurnEntries(input: {
   note: string | null;
-  room: CaptureRoomRead;
+  room: CaptureRoomState;
 }): TurnContext["entries"] & object {
   const entries: Array<{
     key: string;
@@ -254,19 +183,20 @@ export function buildCaptureTurnEntries(input: {
       entries.push({ key: "capture.noteTruncated", value: true });
     }
   }
-  const result = input.room.result;
+  const result = input.room.result?.part;
   if (result) {
     entries.push({ key: "capture.round", value: result.round });
-    const lines = result.rows
+    const rows = input.room.rows;
+    const lines = rows
       .slice(0, TURN_CONTEXT_MAX_ARRAY_ITEMS)
-      .map((row) =>
+      .map((view) =>
         cut(
-          `${resolveCaptureChipStateLabel(captureRowState(row, input.room.filed))} · ${resolveObjectNoun(row.profileSlug)} · ${row.title}`,
+          `${resolveCaptureChipStateLabel(view.state)} · ${resolveObjectNoun(view.row.profileSlug)} · ${view.row.title}`,
           TURN_CONTEXT_MAX_ARRAY_STRING_LENGTH
         )
       );
     entries.push({ key: "capture.suggestions", value: lines });
-    if (result.rows.length > TURN_CONTEXT_MAX_ARRAY_ITEMS || result.truncated) {
+    if (rows.length > TURN_CONTEXT_MAX_ARRAY_ITEMS || result.truncated) {
       entries.push({ key: "capture.suggestionsTruncated", value: true });
     }
     const space =
@@ -286,10 +216,11 @@ export function buildCaptureTurnEntries(input: {
       });
     }
   }
-  if (input.room.openQuestion) {
+  const question = input.room.question;
+  if (question?.open) {
     entries.push({
       key: "capture.openQuestion",
-      value: cut(input.room.openQuestion, TURN_CONTEXT_MAX_STRING_LENGTH),
+      value: cut(question.part.question, TURN_CONTEXT_MAX_STRING_LENGTH),
     });
   }
   return entries;
@@ -354,11 +285,14 @@ export async function planCaptureCommentTurn(args: {
     database,
   });
   if (!room.isCaptureRoom) return null;
-  const note = await readCaptureNoteText({
-    sessionId: session.id,
-    userId: args.userId,
-    database,
-  });
+  const note =
+    (await readCaptureNoteText({
+      sessionId: session.id,
+      userId: args.userId,
+      database,
+    })) ??
+    room.note?.text ??
+    null;
   return {
     agentType: "meta",
     entries: buildCaptureTurnEntries({ note, room }),
@@ -406,11 +340,13 @@ export async function readRestructureRoom(args: {
   if (!room.isCaptureRoom || room.commentsSinceResult.length === 0) {
     return { comments: [] };
   }
-  const open = (room.result?.rows ?? []).filter(
-    (row) => captureRowState(row, room.filed) === "proposed"
-  );
+  const open = room.rows
+    .filter((view) => view.state === "suggested" && !view.carried)
+    .map((view) => view.row);
   return {
-    comments: room.commentsSinceResult,
+    comments: room.commentsSinceResult
+      .slice(-RESTRUCTURE_COMMENTS_MAX)
+      .map((c) => c.text.slice(0, RESTRUCTURE_COMMENT_MAX_CHARS)),
     ...(open.length > 0
       ? {
           previousEntities: open.map((row) => ({
@@ -422,6 +358,66 @@ export async function readRestructureRoom(args: {
         }
       : {}),
   };
+}
+
+/** Capture parts read per room when many rooms are folded at once. */
+export const CAPTURE_ROOM_PARTS_PER_CHANNEL = 40;
+
+/**
+ * The capture parts of many rooms, for `deriveCaptureRoomState`: each room's
+ * newest {@link CAPTURE_ROOM_PARTS_PER_CHANNEL} result / filed / question /
+ * answer parts, projected to the part alone (never the whole metadata). A
+ * room past the bound loses its OLDEST parts first — an early round's carry,
+ * never the latest result. A channel with no part is absent from the map.
+ */
+export async function readCaptureRoomParts(args: {
+  channelIds: string[];
+  database?: typeof db;
+}): Promise<Map<string, CaptureRoomMessage[]>> {
+  const database = args.database ?? db;
+  const out = new Map<string, CaptureRoomMessage[]>();
+  if (args.channelIds.length === 0) return out;
+  const ranked = database
+    .select({
+      id: messages.id,
+      channelId: messages.channelId,
+      timestamp: messages.timestamp,
+      part: drizzleSql<unknown>`${messages.metadata} -> 'capturePart'`.as(
+        "part"
+      ),
+      rank: drizzleSql<number>`row_number() over (partition by ${messages.channelId} order by ${messages.timestamp} desc, ${messages.id} desc)`.as(
+        "rank"
+      ),
+    })
+    .from(messages)
+    .where(
+      and(
+        inArray(messages.channelId, args.channelIds),
+        isNull(messages.deletedAt),
+        drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' in ('capture_result', 'capture_filed', 'capture_question', 'capture_answer')`
+      )
+    )
+    .as("ranked");
+  const rows = await database
+    .select({
+      id: ranked.id,
+      channelId: ranked.channelId,
+      timestamp: ranked.timestamp,
+      part: ranked.part,
+    })
+    .from(ranked)
+    .where(lte(ranked.rank, CAPTURE_ROOM_PARTS_PER_CHANNEL));
+  for (const r of rows) {
+    if (!r.channelId) continue;
+    const list = out.get(r.channelId) ?? [];
+    list.push({
+      id: r.id,
+      timestamp: r.timestamp,
+      metadata: { capturePart: r.part },
+    });
+    out.set(r.channelId, list);
+  }
+  return out;
 }
 
 /** Capture sessions read per Needs-you pass (newest touched first). */
@@ -476,22 +472,11 @@ export async function listUnfinishedCaptures(args: {
   const truncated = sessions.length >= UNFINISHED_CAPTURES_SCAN;
   if (sessions.length === 0) return { captures: [], truncated };
 
-  const channelIds = sessions.map((s) => s.channelId!);
-  const [parts, produced] = await Promise.all([
-    database
-      .select({
-        channelId: messages.channelId,
-        metadata: messages.metadata,
-      })
-      .from(messages)
-      .where(
-        and(
-          inArray(messages.channelId, channelIds),
-          isNull(messages.deletedAt),
-          drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' in ('capture_result', 'capture_filed', 'capture_question')`
-        )
-      )
-      .orderBy(asc(messages.timestamp), asc(messages.id)),
+  const [rooms, produced] = await Promise.all([
+    readCaptureRoomParts({
+      channelIds: sessions.map((s) => s.channelId!),
+      database,
+    }),
     database
       .selectDistinct({ fromId: links.fromId })
       .from(links)
@@ -509,46 +494,13 @@ export async function listUnfinishedCaptures(args: {
   ]);
   const producedSessions = new Set(produced.map((r) => r.fromId));
 
-  const rooms = new Map<
-    string,
-    {
-      result: CaptureResultPart | null;
-      filed: CaptureFiledPart[];
-      openQuestion: boolean;
-    }
-  >();
-  for (const r of parts) {
-    if (!r.channelId) continue;
-    const part = readCapturePart(r.metadata);
-    const room = rooms.get(r.channelId) ?? {
-      result: null,
-      filed: [],
-      openQuestion: false,
-    };
-    if (part?.kind === "capture_result") {
-      if (!room.result || part.round >= room.result.round) room.result = part;
-    } else if (part?.kind === "capture_filed") {
-      room.filed.push(part);
-    } else if (part?.kind === "capture_question") {
-      // The latest question decides (rows are oldest first).
-      room.openQuestion = part.status === "open";
-    }
-    rooms.set(r.channelId, room);
-  }
-
   const captures: UnfinishedCapture[] = [];
   for (const s of sessions) {
-    const room = rooms.get(s.channelId!);
-    if (!room) continue;
-    const status = room.openQuestion
-      ? "needs_answer"
-      : hasUnfiledSuggestions(
-            room.result,
-            room.filed,
-            producedSessions.has(s.id)
-          )
-        ? "suggested"
-        : null;
+    const parts = rooms.get(s.channelId!);
+    if (!parts) continue;
+    const status = deriveCaptureRoomState(parts, {
+      producedRecords: producedSessions.has(s.id),
+    }).owed.status;
     if (!status) continue;
     captures.push({
       sessionId: s.id,

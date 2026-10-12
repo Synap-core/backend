@@ -307,7 +307,10 @@ describe("readCaptureRoom — the comments a re-read takes", () => {
       [channelId, USER, OTHER]
     );
     const room = await readCaptureRoom({ channelId, ownerId: USER });
-    expect(room.commentsSinceResult).toEqual(["first", "second"]);
+    expect(room.commentsSinceResult.map((c) => c.text)).toEqual([
+      "first",
+      "second",
+    ]);
   });
 });
 
@@ -460,5 +463,92 @@ describe("listUnfinishedCaptures — what Needs-you shows", () => {
       captures: [],
       truncated: false,
     });
+  });
+
+  it("folds through the shared rule: a reused tempId is not filed, unsure leftovers owe nothing, a superseded question is closed", async () => {
+    const insertPart = (channelId: string, part: unknown, seconds: number) =>
+      q(
+        `insert into messages (channel_id, role, content, user_id, previous_hash, hash, metadata, timestamp)
+         values ($1, 'system', 'part', $2, '', 'h', $3::jsonb, now() + ($4 || ' seconds')::interval)`,
+        [
+          channelId,
+          USER,
+          JSON.stringify({ capturePart: part }),
+          String(seconds),
+        ]
+      );
+    const resultPart = (
+      sessionId: string,
+      round: number,
+      rows: Array<{ tempId: string; title: string; label?: string }>
+    ) => ({
+      kind: "capture_result",
+      v: 1,
+      sessionId,
+      round,
+      rows: rows.map((r) => ({
+        profileSlug: "task",
+        why: null,
+        updatesExisting: false,
+        dismissed: false,
+        ...r,
+      })),
+      truncated: false,
+      notice: null,
+    });
+
+    // Round 1 filed t1 "Call Marie"; round 2 reuses t1 for a NEW record.
+    const reused = await seedCapture();
+    const { channelId: reusedRoom } = await result(reused);
+    await insertPart(
+      reusedRoom,
+      resultPart(reused, 1, [{ tempId: "t1", title: "Call Marie" }]),
+      1
+    );
+    await q(
+      `insert into messages (channel_id, role, content, user_id, previous_hash, hash, metadata, timestamp)
+       values ($1, 'system', 'Filed', $2, '', 'h', $3::jsonb, now() + interval '2 seconds')`,
+      [reusedRoom, USER, filedPart(reused, ["t1"])]
+    );
+    await insertPart(
+      reusedRoom,
+      resultPart(reused, 2, [{ tempId: "t1", title: "Buy milk" }]),
+      3
+    );
+
+    // Only an `unsure` row is left unfiled.
+    const unsure = await seedCapture();
+    const { channelId: unsureRoom } = await result(unsure);
+    await insertPart(
+      unsureRoom,
+      resultPart(unsure, 2, [
+        { tempId: "t9", title: "Maybe", label: "unsure" },
+      ]),
+      1
+    );
+
+    // An open question the read has since moved past.
+    const moved = await seedCapture();
+    await persistCaptureQuestion({
+      sessionId: moved,
+      userId: USER,
+      followUp: "Which project?",
+      partialCount: 1,
+      refine: { text: NOTE },
+    });
+    const [room] = await q<{ channel_id: string }>(
+      `select channel_id from focus_sessions where id = $1`,
+      [moved]
+    );
+    await insertPart(
+      room!.channel_id,
+      resultPart(moved, 2, [{ tempId: "t1", title: "Done", label: "unsure" }]),
+      5
+    );
+
+    const { captures } = await listUnfinishedCaptures({ userId: USER });
+    expect(
+      Object.fromEntries(captures.map((c) => [c.sessionId, c.status]))
+    ).toEqual({ [reused]: "suggested" });
   });
 });

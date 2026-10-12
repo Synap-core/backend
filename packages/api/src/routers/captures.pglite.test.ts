@@ -316,14 +316,24 @@ describe("captures API", () => {
     const plain = await capture({});
 
     const channelId = randomUUID();
-    const asked = await capture({ sessionId: await session({ channelId }) });
+    const askedSession = await session({ channelId });
+    const asked = await capture({ sessionId: askedSession });
     await q(
       `insert into messages (id, channel_id, metadata) values ($1, $2, $3::jsonb)`,
       [
         randomUUID(),
         channelId,
         JSON.stringify({
-          capturePart: { kind: "capture_question", status: "open" },
+          capturePart: {
+            kind: "capture_question",
+            v: 1,
+            sessionId: askedSession,
+            round: 1,
+            question: "Which project?",
+            chips: [],
+            partialCount: 0,
+            status: "open",
+          },
         }),
       ]
     );
