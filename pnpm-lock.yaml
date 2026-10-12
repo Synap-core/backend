@@ -516,6 +516,9 @@ importers:
       '@synap-core/types':
         specifier: workspace:*
         version: link:../types
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@4.20260113.0)(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)
       yjs:
         specifier: ^13.0.0
         version: 13.6.29
