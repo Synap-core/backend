@@ -31,5 +31,5 @@ export const ENTRY_REFLEX_PROSE = [
   "5. **`proposed` is success**, queued for review. Keep working; never retry.",
   `6. **More tools on demand.** This key lists the essentials. For more, \`load_skill\` a group: ${TOOL_GROUP_NAMES.map((g) => `\`${toolGroupRef(g)}\``).join(", ")}, or \`${BUILDER_REF}\` for all. They appear after you reconnect.`,
   "",
-  "Depth via `load_skill`: `system/synap/concepts`, `focus-sessions`, `from-intent` (new area), `writes`, `catalog`.",
+  "Depth via `load_skill`: `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent` (new area), `writes`, `catalog`.",
 ].join("\n");

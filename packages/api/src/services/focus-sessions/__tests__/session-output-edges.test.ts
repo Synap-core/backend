@@ -248,3 +248,44 @@ describe("openOutputBlockerIds", () => {
     expect(await openOutputBlockerIds(A, "u")).toEqual([B]);
   });
 });
+
+describe("a SETTLED worker target is not a wait (work model L4)", () => {
+  const settled = (sessionId: string) =>
+    ({ ...targets(sessionId), settled: true }) as DependencyEdgeRow;
+
+  it("join: a settled targeter waits on nobody; an open one still does", () => {
+    expect(joinOutputDependencies([A, B], [settled(A), produced(B)]).size).toBe(
+      0
+    );
+    expect(
+      joinOutputDependencies([A, B], [targets(A), produced(B)]).get(A)!
+        .waitsOnOutputs
+    ).toEqual([{ entityId: X, producerSessionId: B }]);
+  });
+
+  it("getSessionOutputDependencies carries the row's settled flag into the join", async () => {
+    queue.push([{ toId: X }]);
+    queue.push([
+      {
+        sessionId: A,
+        entityId: X,
+        linkType: "targets",
+        status: "active",
+        settled: true,
+      },
+      { sessionId: B, entityId: X, linkType: "produced", status: "active" },
+    ]);
+    expect((await getSessionOutputDependencies([A, B], "u")).size).toBe(0);
+  });
+
+  it("outputDependentsOf drops a settled targeter", async () => {
+    queue.push([{ toId: X }]);
+    queue.push([
+      { sessionId: A, entityId: X, settled: true },
+      { sessionId: "session-c", entityId: X, settled: false },
+    ]);
+    expect(await outputDependentsOf(B, "u")).toEqual([
+      { entityId: X, dependentSessionId: "session-c" },
+    ]);
+  });
+});

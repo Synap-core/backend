@@ -257,6 +257,30 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(row.verb).toEqual({ action: "answer", label: "Answer" });
     expect(resolveUnitState(row.state).state).toBe("needs_you");
   });
+  it("an unfinished capture: the status word is the chip, the verb fits what it owes, the door is the thread", () => {
+    const answer = needsYouRows([
+      sig({
+        id: "capture:s9",
+        kind: "capture",
+        title: "Idea of content for synap",
+        groupKey: "session:s9",
+        captureStatus: "needs_answer",
+        target: { kind: "session", id: "s9", view: "room" },
+      }),
+    ]).recent[0]!;
+    const row = lensRowOfNeedsYou(answer, "blocking");
+    expect(row.reason).toBe("Needs your answer");
+    expect(row.verb).toEqual({ action: "answer", label: "Answer" });
+    expect(row.door).toEqual({ kind: "session", id: "s9", view: "room" });
+    expect(resolveUnitState(row.state).state).toBe("needs_you");
+    const suggested = needsYouRows([
+      sig({ id: "capture:s8", kind: "capture", captureStatus: "suggested" }),
+    ]).recent[0]!;
+    expect(lensRowOfNeedsYou(suggested, "blocking")).toMatchObject({
+      reason: "Suggested",
+      verb: { action: "file", label: "File" },
+    });
+  });
   it("a SPECIFIC obstacle is the chip, why or not", () => {
     const { recent } = needsYouRows([
       sig({

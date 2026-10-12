@@ -314,7 +314,17 @@ export class PropertyValidationService {
 
     // Enum constraint
     if (constraints.enum && Array.isArray(constraints.enum)) {
-      if (!constraints.enum.includes(value)) {
+      // A multi-select (valueType array) is valid when EVERY element is an
+      // allowed option — comparing the whole array refused any 2+ selection.
+      if (Array.isArray(value)) {
+        const allowed = constraints.enum as unknown[];
+        const unknown = value.filter((v) => !allowed.includes(v));
+        if (unknown.length > 0) {
+          errors.push(
+            `Values '${unknown.join(", ")}' not in enum: ${allowed.join(", ")}`
+          );
+        }
+      } else if (!constraints.enum.includes(value)) {
         errors.push(
           `Value '${value}' not in enum: ${constraints.enum.join(", ")}`
         );

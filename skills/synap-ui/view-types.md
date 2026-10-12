@@ -107,7 +107,7 @@ Best for: articles, bookmarks, products, books, photos.
 
 ## `kanban`
 
-Status pipeline. Requires `groupBy` on an enum/status property.
+Status board for an enum with no declared lifecycle. Requires `groupBy` on an enum/status property. A kind or role with a declared lifecycle already has its pipeline (computed from the lifecycle): open it, don't build a kanban for it.
 
 ```ts
 config: {
@@ -236,7 +236,7 @@ Work from the data, not from the request:
 | "what's due this week"          | has `dueDate`                        | `calendar`                                             |
 | "my reading list"               | articles / bookmarks with thumbnails | `gallery`                                              |
 | "dashboard for X"               | mixed data, 4+ types of info         | `bento`                                                |
-| "pipeline", "stages"            | has ordered enum property            | `kanban`                                               |
+| "pipeline", "stages"            | has ordered enum, no lifecycle       | `kanban` (a declared lifecycle has its pipeline)       |
 | "roadmap", "timeline"           | has start + end dates                | defer (unsupported) — use `calendar` or `list` grouped |
 | "team directory"                | people with photos                   | `gallery`                                              |
 | "urgent vs. important"          | has 2 enum dimensions                | `matrix`                                               |

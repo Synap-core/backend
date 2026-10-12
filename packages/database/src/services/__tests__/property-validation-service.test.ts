@@ -118,3 +118,46 @@ describe("PropertyValidationService.validateEntityCreateForProposal", () => {
     expect(res.valid).toBe(true);
   });
 });
+
+/**
+ * A multi-select (valueType array + enum) is checked PER ELEMENT. The old check
+ * compared the whole array to the option list, so any 2+ selection was refused
+ * ("Value 'carousel,image' not in enum") — every multi-select on the pod.
+ */
+describe("PropertyValidationService enum on a multi-select", () => {
+  const formats = prop("reference-formats", {
+    valueType: PropertyValueType.ARRAY,
+    constraints: { enum: ["carousel", "deck", "image"] },
+  });
+  let svc: PropertyValidationService;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    svc = new PropertyValidationService(
+      new ProfileResolutionService({} as any)
+    );
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveProperties"
+    ).mockResolvedValue([formats]);
+  });
+
+  it("accepts several allowed options", async () => {
+    const res = await svc.validateProperties(
+      { "reference-formats": ["carousel", "image"] },
+      "profile-ref",
+      "ws-1"
+    );
+    expect(res.valid).toBe(true);
+  });
+
+  it("still refuses an option outside the list, naming it", async () => {
+    const res = await svc.validateProperties(
+      { "reference-formats": ["carousel", "video"] },
+      "profile-ref",
+      "ws-1"
+    );
+    expect(res.valid).toBe(false);
+    expect(res.errors.join(" ")).toContain("Values 'video' not in enum");
+  });
+});

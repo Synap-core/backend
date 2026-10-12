@@ -20,6 +20,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { LIFECYCLE_PROJECTION_TEST_SCHEMA } from "./lifecycle-projection-test-schema.js";
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "postgres";
 import { runConversions } from "./engine.js";
@@ -154,7 +155,7 @@ const q = async (text: string, params: unknown[] = []) =>
 
 beforeAll(async () => {
   db = new PGlite();
-  await db.exec(SCHEMA);
+  await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
   sql = makePgliteSql(db);
 }, 120_000);
 

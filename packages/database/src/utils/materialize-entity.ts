@@ -29,7 +29,10 @@ import { createLogger } from "@synap-core/core";
 import { entities } from "../schema/entities.js";
 import type { Entity } from "../schema/entities.js";
 import type { getDb } from "../client-pg.js";
-import { EntityRepository } from "../repositories/entity-repository.js";
+import {
+  EntityRepository,
+  type CreateEntityInput,
+} from "../repositories/entity-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import {
   extractIdentitySignals,
@@ -117,6 +120,11 @@ export interface MaterializeEntityInput {
   userId: string;
   /** Store properties as-is (trusted seed data) — skips schema enforcement. */
   skipValidation?: boolean;
+  /**
+   * A ROLE profile is attached as a facet by the create's role adapter; this
+   * rides its attach announcement (e.g. `origin: "sync"` for a mirror).
+   */
+  facetEmitContext?: CreateEntityInput["facetEmitContext"];
 }
 
 export interface MaterializeEntityOptions {
@@ -256,6 +264,7 @@ export async function materializeEntity(
       workspaceId: input.workspaceId,
       userId: input.userId,
       skipValidation: input.skipValidation,
+      facetEmitContext: input.facetEmitContext,
       createdByKind: provenance.createdByKind,
       createdByUserId: provenance.createdByUserId,
       agentUserId: provenance.agentUserId,

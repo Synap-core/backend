@@ -76,6 +76,11 @@ const NO_ROW: Record<string, string> = {
   "To review":
     "list-header COPY over the `proposal` kind (vocabulary.md: copy is not vocabulary)",
   Role: "a facet / role profile, resolved per profile, not a static kind",
+  // Work model (2026-10-12): the user words of the thing-centred model.
+  Thing: "any entity seen through its kind or a role — not a kind of its own",
+  Status: "a lifecycle option, declared per kind or role — not an object kind",
+  Pipeline: "a computed view of a lifecycle — a view type, never an object",
+  Worker: "configuration (a playbook activator) — not an object kind",
 };
 
 function glossaryHeadings(): string[] {

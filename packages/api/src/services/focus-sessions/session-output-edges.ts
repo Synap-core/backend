@@ -40,6 +40,13 @@
  * assumes. Both invariants together mean every id this module returns belongs
  * to `userId`.
  *
+ * A SETTLED WORKER TARGET IS NOT A WAIT (work model L4). A stage worker's
+ * target edge (`links.metadata.role = "worker_target"`) that carries a
+ * `result` (done / failed / skipped / created) is work that has ENDED on that
+ * thing: the worker no longer waits on anyone's output of it. Both readers
+ * drop it as a targeter (`settledWorkerTargetSql`). An open target (no result
+ * yet) is a wait like any other `targets` edge.
+ *
  * TWO QUERIES, NOT ONE, and deliberately. The join coordinate is the ENTITY,
  * not the session — the counterparty session is reached only THROUGH X and is
  * usually not on the page. A single query over the page's ids would surface a
@@ -57,6 +64,7 @@ import {
   inArray,
   focusSessions,
   links,
+  WORKER_TARGET_LINK_ROLE,
 } from "@synap/database";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 
@@ -95,6 +103,10 @@ const emptyDependencies = (): SessionOutputDependencies => ({
 /** The two link types this derivation reads. Nothing else is a dependency. */
 const DEPENDENCY_LINK_TYPES = ["targets", "produced"] as const;
 
+/** A worker target that already has a result — see the header. */
+const settledWorkerTargetSql = () =>
+  drizzleSql<boolean>`(${links.metadata}->>'role' = ${WORKER_TARGET_LINK_ROLE} AND ${links.metadata}->>'result' IS NOT NULL)`;
+
 /**
  * One side of the join, flattened: "session S relates to entity X as
  * targets|produced, and S is currently open or not".
@@ -105,6 +117,8 @@ export interface DependencyEdgeRow {
   linkType: "targets" | "produced";
   /** Whether `sessionId` is in an OPEN status. */
   open: boolean;
+  /** A worker target that already has a result: no longer a wait. */
+  settled?: boolean;
 }
 
 /**
@@ -126,6 +140,8 @@ export function joinOutputDependencies(
   const targeters = new Map<string, DependencyEdgeRow[]>();
   const producers = new Map<string, DependencyEdgeRow[]>();
   for (const r of rows) {
+    // A settled worker target ended its work on the thing: not a waiter.
+    if (r.linkType === "targets" && r.settled) continue;
     const bucket = r.linkType === "targets" ? targeters : producers;
     const list = bucket.get(r.entityId);
     if (list) list.push(r);
@@ -222,6 +238,7 @@ export async function getSessionOutputDependencies(
       entityId: links.toId,
       linkType: links.linkType,
       status: focusSessions.status,
+      settled: settledWorkerTargetSql(),
     })
     .from(links)
     .innerJoin(
@@ -247,6 +264,7 @@ export async function getSessionOutputDependencies(
       entityId: r.entityId,
       linkType: r.linkType as "targets" | "produced",
       open: open.has(r.status as string),
+      settled: r.settled === true,
     }))
   );
 }
@@ -309,7 +327,11 @@ export async function outputDependentsOf(
   if (entityIds.length === 0) return [];
 
   const targeters = await db
-    .select({ sessionId: links.fromId, entityId: links.toId })
+    .select({
+      sessionId: links.fromId,
+      entityId: links.toId,
+      settled: settledWorkerTargetSql(),
+    })
     .from(links)
     .innerJoin(
       focusSessions,
@@ -331,6 +353,8 @@ export async function outputDependentsOf(
   for (const t of targeters) {
     // A ≠ B — a session targeting its own output never waited on itself.
     if (t.sessionId === sessionId) continue;
+    // A settled worker target was not waiting (see the header).
+    if (t.settled === true) continue;
     const key = `${t.entityId}:${t.sessionId}`;
     if (seen.has(key)) continue;
     seen.add(key);

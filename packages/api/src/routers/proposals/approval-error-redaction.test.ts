@@ -252,7 +252,9 @@ describe("provider text interpolated into a TRPCError is NOT trusted", () => {
     // to begin with and `safeApprovalError` correctly passes it through. The
     // sink-side redaction in `safeFailureSentence` is the second fence, proved
     // by the plain-Error case at the top of this file.
-    expect(caught!.code).toBe("INTERNAL_SERVER_ERROR");
+    // A definite not-delivered keeps its CLASS's code (`provider` →
+    // BAD_GATEWAY) — never a 500, which would claim the pod crashed.
+    expect(caught!.code).toBe("BAD_GATEWAY");
   });
 
   /**
@@ -283,6 +285,78 @@ describe("provider text interpolated into a TRPCError is NOT trusted", () => {
     }
     // "Couldn't apply — " (17) + 200 + "." — comfortably under the sink's 400.
     expect(stored!.reason.length).toBeLessThanOrEqual(230);
+  });
+});
+
+/**
+ * A DEFINITE not-delivered is the far side refusing — never a server crash.
+ *
+ * A code skill that throws its own `Error` (e.g. `capture_social_post` on an
+ * unsupported URL) comes back `{delivered:false}` with NO `errorClass`.
+ * `dispatchExternalOnce` used to throw a hard-coded INTERNAL_SERVER_ERROR, so
+ * the approver got an HTTP 500 and the row was persisted `errorClass:"unknown"`.
+ * Drives the REAL seam: executor → dispatchExternalOnce → dispatchProposalApproval
+ * (classify → onApprovalFailed → safeApprovalError).
+ */
+describe("dispatchExternalOnce not-delivered → typed refusal, not a 500", () => {
+  function fakeExecutor() {
+    const where = () =>
+      Object.assign(Promise.resolve([{ id: "p1" }]), {
+        returning: async () => [{ id: "p1" }],
+      });
+    return {
+      update: () => ({ set: () => ({ where }) }),
+    } as unknown as Parameters<typeof dispatchExternalOnce>[2];
+  }
+
+  async function approveWith(result: {
+    delivered: false;
+    reason?: string;
+    errorClass?: "auth" | "unknown";
+  }): Promise<TRPCError> {
+    proposalExecRegistry.register({
+      key: "*/*",
+      async execute() {
+        await dispatchExternalOnce("p1", async () => result, fakeExecutor());
+        return { status: "approved" } as never;
+      },
+    });
+    try {
+      await dispatchProposalApproval(args(), onFailed);
+    } catch (e) {
+      return e as TRPCError;
+    }
+    throw new Error("expected the approval to throw");
+  }
+
+  it("unclassified skill refusal → 422 + persisted class `validation`", async () => {
+    const caught = await approveWith({
+      delivered: false,
+      reason: "capture_social_post: unsupported URL https://example.com/u/x",
+    });
+    expect(caught).toBeInstanceOf(TRPCError);
+    expect(stored!.meta?.errorClass).toBe("validation");
+    expect(caught.code).toBe("UNPROCESSABLE_CONTENT");
+    expect(caught.message).toBe(stored!.reason);
+    expect(caught.message).toContain("unsupported URL");
+  });
+
+  it("an explicit `unknown` class is still not a 500", async () => {
+    const caught = await approveWith({
+      delivered: false,
+      errorClass: "unknown",
+    });
+    expect(caught.code).toBe("UNPROCESSABLE_CONTENT");
+  });
+
+  it("a classified refusal keeps its class and its code (auth → UNAUTHORIZED)", async () => {
+    const caught = await approveWith({
+      delivered: false,
+      reason: "token expired",
+      errorClass: "auth",
+    });
+    expect(caught.code).toBe("UNAUTHORIZED");
+    expect(stored!.meta?.errorClass).toBe("auth");
   });
 });
 

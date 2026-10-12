@@ -102,6 +102,8 @@ export const playbookStageSchema = z.looseObject({
         ask: AskSchema.nullable().optional(),
         /** See `ExpectedOutput.relationToSubject` — the edge written output → subject on satisfy. */
         relationToSubject: relationTypeSlugSchema.optional(),
+        /** See `ExpectedOutput.optional` — produced if it applies, never owed. */
+        optional: z.boolean().optional(),
       })
     )
     .optional(),

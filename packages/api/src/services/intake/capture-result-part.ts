@@ -34,8 +34,11 @@ import {
   isNull,
   drizzleSql,
 } from "@synap/database";
+import type { IntelligenceHubClient } from "@synap/intelligence-client";
 import {
   CAPTURE_RESULT_LIMITS,
+  CAPTURE_ROW_LABELS,
+  type CaptureRowLabel,
   CaptureResultPartSchema,
   readCapturePart,
   type CaptureResultPart,
@@ -43,6 +46,7 @@ import {
   type CaptureResultProject,
   type CaptureResultRelation,
   type CaptureResultRow,
+  type CaptureResultSuggestion,
 } from "@synap-core/types/capture";
 import type {
   CapturePlacement,
@@ -73,7 +77,50 @@ export interface CaptureResultProposal {
   properties?: Record<string, unknown> | null;
   /** The proposed entity's long-form body. */
   content?: string | null;
+  /** The proposed record's own description → `row.description`. */
+  description?: string | null;
+  /** The structurer's confidence → `row.confidence` (clamped 0..1). */
+  confidence?: number | null;
+  /** Roles to attach (facets) → `row.roles` (their profile slugs). */
+  facets?: ReadonlyArray<{ profileSlug?: string | null }> | null;
+  /** The decision label → `row.label` (only a known value). */
+  label?: string | null;
 }
+
+/**
+ * Every key of the structurer's entity (the SOURCE of a row), classified.
+ * A new key on the IS wire listed in neither set makes `_SourceClassified`
+ * `never` and stops the build — the projection cannot drop a field nobody
+ * decided about.
+ */
+type StructureEntity = NonNullable<
+  Awaited<ReturnType<IntelligenceHubClient["structure"]>>
+>["entities"][number];
+export const PROJECTED_SOURCE_FIELDS = {
+  tempId: "tempId",
+  profileSlug: "profileSlug",
+  title: "title",
+  properties: "properties",
+  description: "description",
+  confidence: "confidence",
+  facets: "roles",
+  label: "label",
+} as const satisfies Partial<
+  Record<keyof StructureEntity, keyof CaptureResultRow>
+>;
+/** Source keys deliberately NOT on the part, each with its reason. */
+export const WITHHELD_SOURCE_FIELDS = {} as const satisfies Partial<
+  Record<keyof StructureEntity, string>
+>;
+type _SourceClassified =
+  Exclude<
+    keyof StructureEntity,
+    keyof typeof PROJECTED_SOURCE_FIELDS
+  > extends keyof typeof WITHHELD_SOURCE_FIELDS
+    ? true
+    : never;
+const _sourceClassified: _SourceClassified = true;
+void _sourceClassified;
 
 /** Property KEYS never persisted into a room part (message metadata). */
 export const SECRET_PROPERTY_KEY = /secret|token|password|api[_-]?key/i;
@@ -135,6 +182,43 @@ export function boundResultFields(p: CaptureResultProposal): {
 }
 
 /**
+ * The structurer's per-record signals, bounded for the part (D10 + D2 label).
+ * PURE. A value out of shape is left off — absent means "the part does not
+ * say", never a guessed default.
+ */
+export function projectRowSignals(
+  p: CaptureResultProposal
+): Pick<CaptureResultRow, "description" | "roles" | "confidence" | "label"> {
+  const L = CAPTURE_RESULT_LIMITS;
+  const out: Pick<
+    CaptureResultRow,
+    "description" | "roles" | "confidence" | "label"
+  > = {};
+  const description = p.description?.replace(/\s+/g, " ").trim();
+  if (description)
+    out.description = description.slice(0, L.descriptionMaxChars);
+  const roles = [
+    ...new Set(
+      (p.facets ?? [])
+        .map((f) => f?.profileSlug?.trim())
+        .filter((slug): slug is string => Boolean(slug))
+        .map((slug) => slug.slice(0, 200))
+    ),
+  ].slice(0, L.rolesMax);
+  if (roles.length > 0) out.roles = roles;
+  if (typeof p.confidence === "number" && Number.isFinite(p.confidence)) {
+    out.confidence = Math.min(1, Math.max(0, p.confidence));
+  }
+  if (
+    typeof p.label === "string" &&
+    (CAPTURE_ROW_LABELS as readonly string[]).includes(p.label)
+  ) {
+    out.label = p.label as CaptureRowLabel;
+  }
+  return out;
+}
+
+/**
  * Project structure proposals onto the part's rows. PURE — no db, no clock.
  *
  * `truncated` is REPORTED, never applied in silence: past `rowsMax` the extra
@@ -154,6 +238,8 @@ export function projectCaptureResultRows(input: {
   matchedTempIds: ReadonlySet<string>;
   /** tempIds the user had already dismissed on an earlier part (carried over). */
   dismissedTempIds: ReadonlySet<string>;
+  /** The top dedup candidate per tempId (D9). */
+  candidates?: ReadonlyMap<string, NonNullable<CaptureResultRow["candidate"]>>;
   /** Structure relations; pruned to rows that exist and capped. */
   relations?: ReadonlyArray<CaptureResultRelation> | null;
 }): {
@@ -181,6 +267,9 @@ export function projectCaptureResultRows(input: {
     };
     if (bounded.properties) row.properties = bounded.properties;
     if (bounded.content !== undefined) row.content = bounded.content;
+    Object.assign(row, projectRowSignals(p));
+    const candidate = input.candidates?.get(p.tempId);
+    if (candidate) row.candidate = candidate;
     // Whole-row cap: the optional fields go first, the row itself stays.
     if (
       Buffer.byteLength(JSON.stringify(row), "utf8") >
@@ -305,6 +394,45 @@ export function projectCaptureRoutingBlocks(input: {
   return out;
 }
 
+/**
+ * The best dedup candidate per tempId, bounded for the row (D9). PURE. The
+ * list is the pod's own dedup output (`mergeDedupCandidates`, best first); an
+ * entry out of shape is skipped, never guessed.
+ */
+export function topDedupCandidates(
+  dedupCandidates: Record<string, ReadonlyArray<unknown>>
+): Map<string, NonNullable<CaptureResultRow["candidate"]>> {
+  const L = CAPTURE_RESULT_LIMITS;
+  const out = new Map<string, NonNullable<CaptureResultRow["candidate"]>>();
+  for (const [tempId, list] of Object.entries(dedupCandidates)) {
+    if (!Array.isArray(list)) continue;
+    let best: NonNullable<CaptureResultRow["candidate"]> | null = null;
+    for (const c of list as ReadonlyArray<Record<string, unknown> | null>) {
+      // A candidate the chip cannot name ("Updates …") is no candidate.
+      const title = typeof c?.title === "string" ? c.title.trim() : "";
+      if (
+        !c ||
+        typeof c.entityId !== "string" ||
+        !c.entityId ||
+        !title ||
+        typeof c.score !== "number" ||
+        !Number.isFinite(c.score)
+      ) {
+        continue;
+      }
+      const score = Math.min(1, Math.max(0, c.score));
+      if (best && best.score >= score) continue;
+      best = {
+        entityId: c.entityId.slice(0, L.routingIdMaxChars),
+        title: title.slice(0, L.titleMaxChars),
+        score,
+      };
+    }
+    if (best) out.set(tempId, best);
+  }
+  return out;
+}
+
 /** The readable line the result message carries in the room. */
 export function resultSummary(rowCount: number, truncated: boolean): string {
   const n = `${rowCount} record${rowCount === 1 ? "" : "s"}`;
@@ -340,6 +468,7 @@ function sansRound(part: CaptureResultPart) {
     notice: part.notice,
     ...(part.project ? { project: part.project } : {}),
     ...(part.placement ? { placement: part.placement } : {}),
+    ...(part.suggestions ? { suggestions: part.suggestions } : {}),
   };
 }
 
@@ -389,6 +518,8 @@ export interface PersistCaptureResultInput {
   project?: CaptureResultProjectInput | null;
   /** The response's `placement` block, persisted on the part. */
   placement?: CapturePlacement | null;
+  /** Next steps found before filing (D6). Absent = not computed. */
+  suggestions?: ReadonlyArray<CaptureResultSuggestion>;
 }
 
 export interface PersistedCaptureResult {
@@ -434,6 +565,9 @@ export async function persistCaptureResult(
     relations: input.relations,
     matchedTempIds,
     dismissedTempIds,
+    candidates: input.dedupSkipped
+      ? undefined
+      : topDedupCandidates(input.dedupCandidates),
   });
 
   const verdict = {
@@ -447,6 +581,14 @@ export async function persistCaptureResult(
       project: input.project,
       placement: input.placement,
     }),
+    ...(input.suggestions
+      ? {
+          suggestions: input.suggestions.slice(
+            0,
+            CAPTURE_RESULT_LIMITS.suggestionsMax
+          ),
+        }
+      : {}),
   };
 
   // NOTHING CHANGED ⇒ no new part. Checked on the VERDICT (rows, truncated,

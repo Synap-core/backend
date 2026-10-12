@@ -29,6 +29,7 @@
 // label below is COMPOSED ("Run" + "playbook") rather than hand-written.
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
+import type { PlaybookRunNodeDef } from "@synap/database";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 
@@ -67,13 +68,11 @@ export interface SentenceAction {
  *   3. `validateEventPattern` accepts the compiled pattern. The rule compiler
  *      (`services/rules/compile.ts:201`) runs it, so a subject outside
  *      `SUBJECT_TYPES` / `DOMAIN_SUBJECT_TYPES` / `CONNECTOR_SUBJECT_TYPES` is
- *      refused at the door. This is what keeps `entity_facet` off the list —
- *      it has a workspace-scoped producer (`routers/entities/helpers.ts:441`)
- *      but is in none of the three subject vocabularies. It is excluded on
- *      condition 3 ALONE — so the remedy is one line (add `entity_facet` to
- *      `DOMAIN_SUBJECT_TYPES` in `types/src/events/unified.ts`), not a new
- *      producer. Kept out here because widening the event grammar is a
- *      decision with its own blast radius, not a side effect of this change.
+ *      refused at the door. `entity_facet` meets all three since R1
+ *      (2026-10-12: it joined `DOMAIN_SUBJECT_TYPES` so a role's `created`
+ *      can fire on attach) but is still NOT a picker subject: a role is
+ *      chosen as an ENTITY trigger's profile (`profileKind: "role"`), so the
+ *      picker keeps one "kind or role" choice instead of a second subject.
  *
  * Pinned by `packages/api/src/__tripwires__/trigger-subject-has-producer.test.ts`,
  * which re-derives all three from source rather than from this comment.
@@ -84,7 +83,10 @@ export interface SentenceAction {
  *   that it removed the entry for exactly this reason. A match in a catalog is
  *   not a call site. `sharing` — ZERO producers since its router was deleted.
  *   `user` — a producer exists but passes no workspace (condition 2).
- *   `entity_facet` — condition 3.
+ *   `entity_facet` — not a picker subject. Its pattern IS authorable now
+ *   (`DOMAIN_SUBJECT_TYPES`), reached only as an entity trigger on a ROLE
+ *   (`profileKind: "role"` + `created` → `entity_facet.attach.completed`), so
+ *   the picker's one "kind or role" choice covers it.
  *   `projectMember` — reachable, but only through ONE narrow path, and the
  *   emit is GENERIC. `jobs/workers/materializer.ts:313` is the producer: a
  *   post-write `emitSideEffects({ subjectType, … })` over the variable it read
@@ -191,6 +193,14 @@ export interface SentenceTrigger {
   // event
   subjectCategory?: TriggerSubjectCategory;
   profileSlug?: string;
+  /**
+   * `"role"` when an ENTITY trigger's `profileSlug` names a ROLE (Kind +
+   * Facets). Only `created` reads it: a role is never created, it is
+   * ATTACHED, so "a lead is created" compiles to the facet-attach event
+   * (`entity_facet.attach.completed`, see {@link buildEventPattern}).
+   * Absent = a kind — every rule written before roles could be subjects.
+   */
+  profileKind?: "kind" | "role";
   actionVerb?: ActionVerb;
   conditions?: ConditionRow[];
   // cron
@@ -321,6 +331,17 @@ export function entityKindFilterKey(
   return actionVerb === "transitioned" ? "lifecycleProfile" : "profileSlug";
 }
 
+/** The facet-attach event a role's `created` compiles to. */
+export const ROLE_ATTACH_EVENT_PATTERN = "entity_facet.attach.completed";
+
+function isRoleAttachTrigger(trigger: SentenceTrigger): boolean {
+  return (
+    trigger.subjectCategory === "entity" &&
+    trigger.actionVerb === "created" &&
+    trigger.profileKind === "role"
+  );
+}
+
 export function buildEventPattern(trigger: SentenceTrigger): string {
   if (!trigger.subjectCategory) return "";
   const { subjectCategory, actionVerb } = trigger;
@@ -343,6 +364,12 @@ export function buildEventPattern(trigger: SentenceTrigger): string {
   if (!actionVerb) return `${subjectCategory}.*`;
 
   const entityAction = VERB_TO_EVENT_ACTION[actionVerb] ?? actionVerb;
+
+  // A ROLE "created" = the role ATTACHED. The facet doors emit
+  // `entity_facet.attach` (`emitFacetSideEffects`) with the parent in
+  // `data.entityId` and the role in `data.profileSlug`, so the kind filter
+  // below (`profileSlug`) reads the role there unchanged.
+  if (isRoleAttachTrigger(trigger)) return ROLE_ATTACH_EVENT_PATTERN;
 
   // Subjects whose real emit spells its action OUTSIDE the CRUD vocabulary, so
   // the generic `${subject}.${entityAction}.completed` below would name a
@@ -743,6 +770,13 @@ const PLAYBOOK_GOAL_KEY = "__goal";
 const PLAYBOOK_PROJECT_KEY = "__projectId";
 const PLAYBOOK_TRACK_KEY = "__trackId";
 /**
+ * STAGE WORKER — the node's `worker` spec (`PlaybookRunWorkerSpec`,
+ * @synap/database): an enabled worker's size, status, threshold and backlog
+ * limit (work model L4). Bookkeeping, so it never leaks into `paramsMapping`;
+ * lands on the node as `data.worker`, forwarded WHOLE to `runPlaybook`.
+ */
+const PLAYBOOK_WORKER_KEY = "__worker";
+/**
  * MODE — what the `playbook_run` node materializes (`run` | `appointment` |
  * `propose`, `readPlaybookRunMode` in `./rule-run-policy`). The rule editor
  * writes `propose` here for "propose a playbook, I decide"; it lands on the
@@ -808,6 +842,7 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_PROJECT_KEY,
   PLAYBOOK_TRACK_KEY,
   PLAYBOOK_RUN_MODE_KEY,
+  PLAYBOOK_WORKER_KEY,
 ];
 
 /**
@@ -834,7 +869,11 @@ export function proposePlaybookOnKindSentence(input: {
 /**
  * The WHEN of a playbook ACTIVATOR (`PlaybookActivator`, @synap/playbooks):
  *
- *   `created`       — WHEN an entity of `profileSlug` is created.
+ *   `created`       — WHEN an entity of `profileSlug` is created; for a ROLE
+ *                     (`profileKind: "role"`), WHEN that role is ATTACHED
+ *                     (`entity_facet.attach.completed`) — a role is never
+ *                     created on its own, and the entity's create event
+ *                     names its kind.
  *   `enters_status` — WHEN the subject (a kind OR a role) ENTERS `status`.
  *
  * `enters_status` follows the event that actually fires for the property:
@@ -861,13 +900,39 @@ export function proposePlaybookOnKindSentence(input: {
  * transition through the governed rule door (`playbook-activators.ts`).
  */
 export type PlaybookActivatorTrigger =
-  | { on: "created" }
   | {
-      on: "enters_status";
+      on: "created";
+      /** `"role"`: the subject is a ROLE — fires when it is ATTACHED. */
+      profileKind?: "kind" | "role";
+    }
+  | {
+      /** `count` follows the SAME event as `enters_status` (the one that can
+       *  change the count); its threshold rides on the node's worker spec. */
+      on: "enters_status" | "count";
       statusProperty: string;
       status: string;
       lifecycle: "declared" | "undeclared";
+    }
+  | {
+      /** A cron rule (UTC). The cron must be one the grammar can spell —
+       *  {@link isSentenceCron}; the worker spec carries the set. */
+      on: "schedule";
+      cron: string;
     };
+
+/**
+ * Can the rule grammar spell this cron (hourly / daily / weekdays / weekly /
+ * monthly at a time)? A schedule activator whose cron it cannot spell would
+ * compile to a DIFFERENT schedule than the one declared — refused instead.
+ */
+export function isSentenceCron(cron: string): boolean {
+  const normalized = cron.trim().split(/\s+/).join(" ");
+  if (normalized.split(" ").length !== 5) return false;
+  return (
+    buildCronExpression({ triggerType: "cron", ...parseCron(normalized) }) ===
+    normalized
+  );
+}
 
 export function playbookActivatorSentence(
   input: {
@@ -875,16 +940,40 @@ export function playbookActivatorSentence(
     profileSlug: string;
     /** `run` starts the run; `propose` files one proposal per (rule, subject). */
     mode: "run" | "propose";
+    /**
+     * An ENABLED worker's node spec (work model L4) + its filing. Each is
+     * OMITTED when absent, so an activator compiled before workers existed
+     * stays byte-identical (its seed hash does not move).
+     */
+    worker?: PlaybookRunNodeDef["data"]["worker"];
+    projectId?: string;
+    trackId?: string;
   } & PlaybookActivatorTrigger
 ): RuleSentenceValue {
-  const trigger = activatorTriggerShape(input);
+  const trigger =
+    input.on === "schedule"
+      ? { actionVerb: undefined, conditions: [] as ConditionRow[] }
+      : activatorTriggerShape(input);
   return {
-    trigger: {
-      triggerType: "event",
-      subjectCategory: "entity",
-      profileSlug: input.profileSlug,
-      actionVerb: trigger.actionVerb,
-    },
+    trigger:
+      input.on === "schedule"
+        ? {
+            triggerType: "cron",
+            ...parseCron(input.cron.trim().split(/\s+/).join(" ")),
+            cronTimezone: "UTC",
+          }
+        : {
+            triggerType: "event",
+            subjectCategory: "entity",
+            profileSlug: input.profileSlug,
+            actionVerb: trigger.actionVerb,
+            // Only a role says so: a kind's sentence stays byte-identical to the
+            // one every activator compiled before roles could be subjects (so its
+            // seed hash does not move and no installed rule is rewritten).
+            ...(input.on === "created" && input.profileKind === "role"
+              ? { profileKind: "role" as const }
+              : {}),
+          },
     conditions: trigger.conditions,
     actions: [
       {
@@ -897,6 +986,11 @@ export function playbookActivatorSentence(
           ...(input.mode === "propose"
             ? { [PLAYBOOK_RUN_MODE_KEY]: "propose" }
             : {}),
+          ...(input.projectId
+            ? { [PLAYBOOK_PROJECT_KEY]: input.projectId }
+            : {}),
+          ...(input.trackId ? { [PLAYBOOK_TRACK_KEY]: input.trackId } : {}),
+          ...(input.worker ? { [PLAYBOOK_WORKER_KEY]: input.worker } : {}),
           [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
         },
       },
@@ -904,7 +998,9 @@ export function playbookActivatorSentence(
   };
 }
 
-function activatorTriggerShape(t: PlaybookActivatorTrigger): {
+function activatorTriggerShape(
+  t: Exclude<PlaybookActivatorTrigger, { on: "schedule" }>
+): {
   actionVerb: ActionVerb;
   conditions: ConditionRow[];
 } {
@@ -1143,6 +1239,9 @@ function actionToFlowNode(
       data.projectId = cfg[PLAYBOOK_PROJECT_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_TRACK_KEY]))
       data.trackId = cfg[PLAYBOOK_TRACK_KEY];
+    const worker = cfg[PLAYBOOK_WORKER_KEY];
+    if (worker && typeof worker === "object" && !Array.isArray(worker))
+      data.worker = worker;
     // Through the ONE normalizer: an unknown value is `run`, and `run` is
     // omitted, so only a real non-default mode reaches the node.
     const mode = readPlaybookRunMode(cfg[PLAYBOOK_RUN_MODE_KEY]);
@@ -1270,6 +1369,21 @@ export function triggerToSentence(
   // webhook/manual don't map to SentenceTrigger — treat as a bare event trigger
   if (triggerType === "event") {
     const pattern = (triggerConfig.eventPattern as string) ?? "";
+    const storedRoleFilters = triggerConfig.filters as
+      Record<string, unknown> | undefined;
+    // A role's `created` (see `buildEventPattern`): read back as the ENTITY
+    // sentence it was written as, never as an `entity_facet` subject the
+    // grammar does not offer — or the WHEN row would load blank.
+    if (pattern === ROLE_ATTACH_EVENT_PATTERN) {
+      const role = storedRoleFilters?.profileSlug;
+      return {
+        triggerType: "event",
+        subjectCategory: "entity",
+        actionVerb: "created",
+        profileKind: "role",
+        ...(typeof role === "string" ? { profileSlug: role } : {}),
+      };
+    }
     // Read from BOTH homes: an entity trigger now stores the kind in `filters`
     // (where the generic matcher reads it), `capture` still at the top level,
     // and rows written before this fix carry the top-level key whatever their
@@ -1410,6 +1524,7 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       projectId?: string;
       trackId?: string;
       mode?: unknown;
+      worker?: unknown;
       paramsMapping?: Record<string, unknown>;
     };
     const config: Record<string, unknown> = {
@@ -1428,6 +1543,12 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
     if (nonEmptyStr(pdata.projectId))
       config[PLAYBOOK_PROJECT_KEY] = pdata.projectId;
     if (nonEmptyStr(pdata.trackId)) config[PLAYBOOK_TRACK_KEY] = pdata.trackId;
+    if (
+      pdata.worker &&
+      typeof pdata.worker === "object" &&
+      !Array.isArray(pdata.worker)
+    )
+      config[PLAYBOOK_WORKER_KEY] = pdata.worker;
     config[CAPABILITY_ACTION_KEY] =
       `playbook:${pdata.playbookId ?? pdata.playbookName ?? ""}`;
     return {

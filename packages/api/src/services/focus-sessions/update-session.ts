@@ -159,10 +159,9 @@ export interface UpdateFocusSessionParams {
   /**
    * FOLLOW a playbook with this live session — or RELEASE it with `null`.
    *
-   * A followed session BECOMES A RUN of that playbook (`playbookId` is written,
-   * so `projectSessionKind` reclassifies it from `work` to `run`), joins the
-   * playbook's runs, and leaves the owner's default work lens. That consequence
-   * is intended and must be DISCLOSED by the surface before the act.
+   * A followed session joins that playbook's runs (`playbookId` is written and
+   * a `playbook_runs` row minted) and STAYS `work` in its owner's lens — follow
+   * ≠ run since 2026-10-12 (`session-kind.ts` `followedWorkWhere`).
    *
    * Applied by `followPlaybook` (`follow-playbook.ts`) — the ONE implementation
    * behind every door — AFTER the field write below, so the playbook's criteria
@@ -322,6 +321,8 @@ export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
   icon: z.string().optional(),
+  // Owed by nobody (see ExpectedOutput.optional). The declarer's own word.
+  optional: z.boolean().optional(),
   // The slot's stable identity (`slot-keys.ts`). SERVER-STAMPED: on the wire
   // so a round-trip keeps it and so a patch can address a slot by key (the
   // merge matches key first — a renamed label keeps its receipts). A key on a
@@ -518,6 +519,12 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // HOW a deliverable relates to the run's subject. Declaring it closes
   // nothing — the edge is written only by the satisfy door, after `done`.
   "relationToSubject",
+  // "Produce it if it applies, never owe it." The declarer's word, like
+  // `owner`: it closes nothing (an optional slot is `done` only through the
+  // same doors) — it only says nobody is waiting on it. (Not a stamp: an agent
+  // could already drop a slot from the array outright; guarding this flag
+  // would close no hole the wholesale patch leaves open.)
+  "optional",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -600,6 +607,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason: a client that never heard of it must not drop the
   // edge the playbook declared by renaming a sibling.
   "relationToSubject",
+  // Same erasure reason: renaming a sibling must not turn the playbook's
+  // optional milestone invoice back into an owed one.
+  "optional",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**

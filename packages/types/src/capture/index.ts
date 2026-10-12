@@ -204,6 +204,14 @@ export const CAPTURE_RESULT_LIMITS = {
   workspaceNameMaxChars: 200,
   /** The AI's reason for a workspace or project pick. */
   routingReasonMaxChars: 500,
+  /** The proposed record's own one-line description (D10). */
+  descriptionMaxChars: 280,
+  /** Roles (facet profile slugs) a row proposes attaching (D10). */
+  rolesMax: 6,
+  /** Next steps the part offers before anything is filed (D6). */
+  suggestionsMax: 6,
+  /** A next step's one-line reason. */
+  suggestionReasonMaxChars: 280,
   /** "Why?" rows on a placement suggestion — the contract says at most 3. */
   placementAlternativesMax: 3,
 } as const;
@@ -232,6 +240,10 @@ const ResultPropertyValueSchema = z.unknown().refine(
   },
   { message: "property value out of bounds" }
 );
+
+/** A row's decision label (D2), from the structurer's confidence. */
+export const CAPTURE_ROW_LABELS = ["certain", "likely", "unsure"] as const;
+export type CaptureRowLabel = (typeof CAPTURE_ROW_LABELS)[number];
 
 export const CaptureResultRowSchema = z.object({
   /**
@@ -281,6 +293,38 @@ export const CaptureResultRowSchema = z.object({
   action: z.enum(["create", "update", "link"]).optional(),
   /** Dedup target when `action` is update/link. Same status as `action`. */
   existingEntityId: z.string().uuid().optional(),
+  /**
+   * The proposed record's own description (NOT the pod's reason — that is
+   * `why`). Optional: absent = this part does not say.
+   */
+  description: z
+    .string()
+    .max(CAPTURE_RESULT_LIMITS.descriptionMaxChars)
+    .optional(),
+  /** Role profile slugs (facets) the row proposes attaching — client, investor… */
+  roles: z
+    .array(z.string().min(1).max(200))
+    .max(CAPTURE_RESULT_LIMITS.rolesMax)
+    .optional(),
+  /** The structurer's confidence in this record, 0..1. */
+  confidence: z.number().min(0).max(1).optional(),
+  /**
+   * How sure the structurer is the person wants this record: `certain` rows
+   * are filed by "File all", `likely` ones need a tap, `unsure` ones fold.
+   */
+  label: z.enum(CAPTURE_ROW_LABELS).optional(),
+  /**
+   * The pod's top fuzzy duplicate for this row (D9): what it would UPDATE.
+   * The client keeps the update-vs-create rule (`autoDecideAction`); this only
+   * names the candidate. Absent = no candidate, or dedup did not run (`notice`).
+   */
+  candidate: z
+    .object({
+      entityId: z.string().min(1).max(CAPTURE_RESULT_LIMITS.routingIdMaxChars),
+      title: z.string().max(CAPTURE_RESULT_LIMITS.titleMaxChars),
+      score: z.number().min(0).max(1),
+    })
+    .optional(),
 });
 export type CaptureResultRow = z.infer<typeof CaptureResultRowSchema>;
 
@@ -303,6 +347,11 @@ export const PROJECTED_RESULT_ROW_FIELDS = [
   "content",
   "action",
   "existingEntityId",
+  "description",
+  "roles",
+  "confidence",
+  "label",
+  "candidate",
 ] as const satisfies ReadonlyArray<keyof CaptureResultRow>;
 
 /** Withheld from the part, each with its reason — never merely forgotten. */
@@ -414,6 +463,26 @@ const _outcomeSame: _Same<
 void _placementSame;
 void _outcomeSame;
 
+/**
+ * A next step the pod found for this capture BEFORE anything is filed (D6): a
+ * playbook to run or a propose-mode rule to keep, matched from the row's kind +
+ * the note (`playbooks.matchForEntity` / `automations.matchForEntity`).
+ * `forTempId` names the row it needs filed first (`null` = it needs none).
+ */
+export const CaptureResultSuggestionSchema = z.object({
+  kind: z.enum(["playbook", "rule"]),
+  id: z.string().min(1).max(CAPTURE_RESULT_LIMITS.routingIdMaxChars),
+  title: z.string().min(1).max(CAPTURE_RESULT_LIMITS.titleMaxChars),
+  forTempId: z.string().min(1).max(200).nullable(),
+  reason: z
+    .string()
+    .max(CAPTURE_RESULT_LIMITS.suggestionReasonMaxChars)
+    .optional(),
+});
+export type CaptureResultSuggestion = z.infer<
+  typeof CaptureResultSuggestionSchema
+>;
+
 export const CaptureResultPartSchema = z.object({
   kind: z.literal("capture_result"),
   v: z.literal(1),
@@ -444,6 +513,14 @@ export const CaptureResultPartSchema = z.object({
   project: CaptureResultProjectSchema.nullable().optional(),
   /** Where the capture will land (`CapturePlacement`). Optional + nullable. */
   placement: CaptureResultPlacementSchema.nullable().optional(),
+  /**
+   * Next steps, ranked. ABSENT = not computed (an older pod, or the match read
+   * failed); `[]` = computed, none found. Never conflate the two.
+   */
+  suggestions: z
+    .array(CaptureResultSuggestionSchema)
+    .max(CAPTURE_RESULT_LIMITS.suggestionsMax)
+    .optional(),
 });
 export type CaptureResultPart = z.infer<typeof CaptureResultPartSchema>;
 
@@ -549,6 +626,7 @@ export function readCapturePart(
 }
 
 export * from "./progress.js";
+export * from "./room-state.js";
 export {
   isExplicitCapturePrefix,
   stripCapturePrefix,

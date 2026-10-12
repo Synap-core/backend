@@ -4997,3 +4997,31 @@ CREATE INDEX IF NOT EXISTS "entities_profile_status_category_idx"
   ON "entities" ("profile_id", "status_category") WHERE "deleted_at" IS NULL;
 CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_category_idx"
   ON "entity_facets" ("profile_id", "status_category") WHERE "deleted_at" IS NULL;
+
+-- 0323: (profile_id, status) for the board / lifecycle.list value groups, and
+-- the worker reads' focus_sessions(metadata->>'automationId') expression index.
+CREATE INDEX IF NOT EXISTS "entities_profile_status_idx"
+  ON "entities" ("profile_id", "status") WHERE "deleted_at" IS NULL;
+CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_idx"
+  ON "entity_facets" ("profile_id", "status") WHERE "deleted_at" IS NULL;
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_automation_id
+  ON focus_sessions ((metadata->>'automationId'))
+  WHERE (metadata->>'automationId') IS NOT NULL;
+
+-- 0324: the lifecycle transition outbox (D8) — the event a status move owes,
+-- written in the move's own transaction; dispatched + retried from here.
+CREATE TABLE IF NOT EXISTS "lifecycle_transition_outbox" (
+  "transition_id" uuid PRIMARY KEY,
+  "transition" jsonb NOT NULL,
+  "emit_context" jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "event_id" uuid,
+  "delivered" text[] NOT NULL DEFAULT '{}'::text[],
+  "attempts" integer NOT NULL DEFAULT 0,
+  "last_error" text,
+  "claimed_until" timestamptz,
+  "emitted_at" timestamptz,
+  "created_at" timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS "lifecycle_transition_outbox_pending_idx"
+  ON "lifecycle_transition_outbox" ("created_at") WHERE "emitted_at" IS NULL;

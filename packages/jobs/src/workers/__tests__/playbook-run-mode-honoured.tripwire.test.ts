@@ -19,6 +19,11 @@
  * The scanned set is DERIVED (every non-test .ts under jobs/src and api/src),
  * never hand-listed, so a new caller joins the scan by existing.
  *
+ * C. (2026-10-12, work model L4) A literal call site forwards EVERY field
+ *    `PlaybookRunNodeDef.data` declares — the set is parsed from the schema,
+ *    so the stage-worker `worker` spec (and any later field) is held to the
+ *    same rule as `mode`.
+ *
  * WHAT THIS DOES NOT COVER, measured: it reads source text. It cannot see a
  * call that forwards a WRONG value under the right key (`mode: data.agentType`
  * passes), and "after the branch" is textual order inside one function — it
@@ -122,6 +127,37 @@ describe("tripwire: every playbook_run path honours the node's mode", () => {
           !/^\w+\.data\b/.test(c.arg) && !/\bmode:\s*\w+\.mode\b/.test(c.arg)
       )
       .map((c) => `${c.rel}: ${c.arg.slice(0, 80)}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it("C. a literal call forwards EVERY field the node declares (derived from PlaybookRunNodeDef)", () => {
+    // The set is DERIVED from the node's own declaration, so a field added to
+    // `PlaybookRunNodeDef.data` (worker, filing, the next one) joins the scan
+    // by existing. `label` / `errorHandling` are the node's, not the run's.
+    const schema = readFileSync(
+      join(PKGS, "database", "src", "schema", "automations.ts"),
+      "utf8"
+    );
+    const start = schema.indexOf("export interface PlaybookRunNodeDef");
+    expect(start).toBeGreaterThan(-1);
+    const dataOpen = schema.indexOf("data: {", start);
+    const block = firstArg(schema, dataOpen + "data: ".length);
+    const declared = [...block.matchAll(/^ {4}(\w+)\??:/gm)]
+      .map((m) => m[1]!)
+      .filter((k) => k !== "label" && k !== "errorHandling");
+    // Non-vacuous: the run fields we know of, including the worker spec.
+    expect(declared).toEqual(
+      expect.arrayContaining(["playbookId", "mode", "projectId", "worker"])
+    );
+    const offenders: string[] = [];
+    for (const c of calls) {
+      const arg = firstArg(c.src, c.index + "executePlaybookRun(".length);
+      if (/^\w+\.data\b/.test(arg)) continue; // wholesale: every field rides
+      for (const k of declared) {
+        if (!new RegExp(`\\b${k}:\\s*\\w+\\.${k}\\b`).test(arg))
+          offenders.push(`${c.rel}: drops ${k}`);
+      }
+    }
     expect(offenders).toEqual([]);
   });
 

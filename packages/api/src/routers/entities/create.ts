@@ -1454,6 +1454,18 @@ export const createProcs = {
               sourceProposalId: ctx.governanceProposalId,
               correlationId,
             }),
+            // A ROLE profile is attached as a facet by the repository's role
+            // adapter, which announces the attach (`notifyFacetAttached`) —
+            // this is what that announcement cannot know on its own.
+            facetEmitContext: {
+              sessionId: ctx.sessionId ?? null,
+              origin: ctx.origin,
+              proposalId:
+                ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
+                ctx.governanceProposalId,
+              entityTitle: input.title ?? null,
+              fallbackWorkspaceId: governanceWorkspaceId,
+            },
           },
           ctx.userId
         );

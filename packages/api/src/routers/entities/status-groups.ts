@@ -22,9 +22,11 @@ import {
   eq,
   inArray,
   isNull,
+  notInArray,
   drizzleSql,
   facetVisibilityConditions,
   notProbeEntityWhere,
+  profileSlugRows,
 } from "@synap/database";
 import { entities, entityFacets, events } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -41,6 +43,8 @@ export type StatusGroupSubject =
 
 export interface StatusGroupItem {
   id: string;
+  /** A role grouping's facet (the row a role status move targets); null for a kind. */
+  facetId: string | null;
   name: string | null;
   createdAt: string;
   /** The last transition INTO this status; null = none recorded. */
@@ -142,77 +146,13 @@ export async function groupThingsByStatus(params: {
   order: "newest" | "time_in_column";
   terminal?: { statuses: string[]; since: Date };
 }): Promise<StatusGroup[]> {
-  const { subject } = params;
-  if (subject.profileIds.length === 0) return [];
-  const isRole = subject.kind === "role";
-  // Correlated, so every reference is QUALIFIED by hand: drizzle renders a
-  // single-table select's columns bare, and a bare "id" inside the subquery
-  // would bind to the EVENT's id (aliased `ev`), not the thing's.
-  const roleMatch = isRole
-    ? drizzleSql`ev.data->>'role' = ${subject.roleSlug}`
-    : drizzleSql.raw(`ev.data->>'role' IS NULL`);
-  const enteredAt = drizzleSql`(SELECT max(ev.timestamp) FROM ${events} ev WHERE ev.subject_type = 'entity' AND ev.subject_id = "entities"."id"::text AND ev.type = ${TRANSITION_EVENT} AND ${roleMatch})`;
-
-  const base = isRole
-    ? db
-        .select({
-          id: entities.id,
-          name: entities.title,
-          createdAt: drizzleSql`${entities.createdAt}`.as("created_at"),
-          status: drizzleSql<string | null>`${entityFacets.status}`.as(
-            "status"
-          ),
-          enteredAt: enteredAt.as("entered_at"),
-          fallbackAt: drizzleSql`${entityFacets.createdAt}`.as("fallback_at"),
-        })
-        .from(entityFacets)
-        .innerJoin(entities, eq(entities.id, entityFacets.entityId))
-        .where(
-          and(
-            inArray(entityFacets.profileId, subject.profileIds),
-            isNull(entityFacets.deletedAt),
-            isNull(entities.deletedAt),
-            ...params.conditions
-          )
-        )
-    : db
-        .select({
-          id: entities.id,
-          name: entities.title,
-          createdAt: drizzleSql`${entities.createdAt}`.as("created_at"),
-          status: drizzleSql<string | null>`${entities.status}`.as("status"),
-          enteredAt: enteredAt.as("entered_at"),
-          fallbackAt: drizzleSql`${entities.createdAt}`.as("fallback_at"),
-        })
-        .from(entities)
-        .where(
-          and(
-            inArray(entities.profileId, subject.profileIds),
-            isNull(entities.deletedAt),
-            ...params.conditions
-          )
-        );
-  const t = base.as("t");
-
-  const since = drizzleSql`coalesce(${t.enteredAt}, ${t.fallbackAt})`;
-  const terminal = params.terminal?.statuses.length ? params.terminal : null;
-  const isTerminal = terminal
-    ? drizzleSql`coalesce(${t.status} IN (${drizzleSql.join(
-        terminal.statuses.map((s) => drizzleSql`${s}`),
-        drizzleSql`, `
-      )}), false)`
-    : drizzleSql`false`;
-  const orderBy =
-    params.order === "newest"
-      ? drizzleSql`${t.createdAt} DESC, ${t.id}`
-      : drizzleSql`CASE WHEN ${isTerminal} THEN -extract(epoch from ${since}) ELSE extract(epoch from ${since}) END, ${t.id}`;
-  const windowFilter = terminal
-    ? drizzleSql`(NOT ${isTerminal} OR ${since} >= ${terminal.since.toISOString()}::timestamptz)`
-    : drizzleSql`true`;
+  if (params.subject.profileIds.length === 0) return [];
+  const { t, since, orderBy, windowFilter } = thingsInColumns(params);
 
   const ranked = db
     .select({
       id: t.id,
+      facetId: t.facetId,
       name: t.name,
       createdAt: t.createdAt,
       status: t.status,
@@ -246,15 +186,382 @@ export async function groupThingsByStatus(params: {
       g = { status: key, count: Number(r.groupCount), items: [] };
       groups.set(key, g);
     }
-    if (Number(r.rn) <= params.firstN) {
-      g.items.push({
-        id: r.id as string,
-        name: (r.name as string | null) ?? null,
-        createdAt: iso(r.createdAt),
-        enteredAt: r.enteredAt == null ? null : iso(r.enteredAt),
-        since: iso(r.since),
-      });
-    }
+    if (Number(r.rn) <= params.firstN) g.items.push(itemOf(r));
   }
   return [...groups.values()];
+}
+
+/**
+ * ONE column of the same set, paged (the pipeline's "Show all N"): the things
+ * whose status is `column.statuses` — or, for the unclassified column, any
+ * status OUTSIDE `column.declared` (NULL included) — in the board's own order
+ * and terminal window, `limit` from `offset`. `hasMore` = a further page exists.
+ */
+export async function pageThingsInColumn(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  order: "newest" | "time_in_column";
+  terminal?: { statuses: string[]; since: Date };
+  column: { statuses: string[] } | { outside: string[] };
+  offset: number;
+  limit: number;
+}): Promise<{
+  items: Array<StatusGroupItem & { status: string | null }>;
+  hasMore: boolean;
+}> {
+  if (params.subject.profileIds.length === 0)
+    return { items: [], hasMore: false };
+  const { t, since, orderBy, windowFilter } = thingsInColumns(params);
+  const list = (keys: string[]) =>
+    drizzleSql.join(
+      keys.map((k) => drizzleSql`${k}`),
+      drizzleSql`, `
+    );
+  const inColumn =
+    "statuses" in params.column
+      ? params.column.statuses.length
+        ? drizzleSql`${t.status} IN (${list(params.column.statuses)})`
+        : drizzleSql`false`
+      : params.column.outside.length
+        ? drizzleSql`(${t.status} IS NULL OR ${t.status} NOT IN (${list(params.column.outside)}))`
+        : drizzleSql`true`;
+  const rows = await db
+    .select({
+      id: t.id,
+      facetId: t.facetId,
+      name: t.name,
+      createdAt: t.createdAt,
+      status: t.status,
+      enteredAt: t.enteredAt,
+      since: since.as("since"),
+    })
+    .from(t)
+    .where(and(windowFilter, inColumn))
+    .orderBy(orderBy)
+    .offset(params.offset)
+    .limit(params.limit + 1);
+  return {
+    items: rows.slice(0, params.limit).map((r) => ({
+      ...itemOf(r),
+      status: (r.status as string | null) ?? null,
+    })),
+    hasMore: rows.length > params.limit,
+  };
+}
+
+function itemOf(r: {
+  id: unknown;
+  facetId: unknown;
+  name: unknown;
+  createdAt: unknown;
+  enteredAt: unknown;
+  since: unknown;
+}): StatusGroupItem {
+  return {
+    id: r.id as string,
+    facetId: (r.facetId as string | null) ?? null,
+    name: (r.name as string | null) ?? null,
+    createdAt: iso(r.createdAt),
+    enteredAt: r.enteredAt == null ? null : iso(r.enteredAt),
+    since: iso(r.since),
+  };
+}
+
+/**
+ * The ONE base set every status read draws from: the visible things of
+ * `subject` (subject + visibility conditions) with their status and time in
+ * column, plus the order and the terminal window. `groupThingsByStatus` ranks
+ * it per status; `pageThingsInColumn` pages one column of it — the same rows
+ * in the same order, never a second read path.
+ */
+function thingsInColumns(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  order: "newest" | "time_in_column";
+  terminal?: { statuses: string[]; since: Date };
+}) {
+  const { subject } = params;
+  const isRole = subject.kind === "role";
+  // ONE events read for the whole set (review backend F3), never a probe per
+  // row: the last transition of each thing of these profiles, grouped once,
+  // then joined. The candidate ids are the profiles' live things, so the
+  // aggregate stays bounded by the board, not by the event log.
+  const profileIdList = subject.profileIds.length
+    ? drizzleSql.join(
+        subject.profileIds.map((id) => drizzleSql`${id}::uuid`),
+        drizzleSql`, `
+      )
+    : drizzleSql`NULL::uuid`;
+  const candidateIds = isRole
+    ? drizzleSql`SELECT f2.entity_id::text FROM ${entityFacets} f2 WHERE f2.profile_id IN (${profileIdList}) AND f2.deleted_at IS NULL`
+    : drizzleSql`SELECT e2.id::text FROM ${entities} e2 WHERE e2.profile_id IN (${profileIdList}) AND e2.deleted_at IS NULL`;
+  const roleMatch = isRole
+    ? drizzleSql`${events.data}->>'role' = ${subject.roleSlug}`
+    : drizzleSql`${events.data}->>'role' IS NULL`;
+  const lastMove = db
+    .select({
+      subjectId: events.subjectId,
+      enteredAt: drizzleSql`max(${events.timestamp})`.as("last_entered_at"),
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.subjectType, "entity"),
+        eq(events.type, TRANSITION_EVENT),
+        roleMatch,
+        drizzleSql`${events.subjectId} IN (${candidateIds})`
+      )
+    )
+    .groupBy(events.subjectId)
+    .as("last_move");
+  const enteredAt = drizzleSql`${lastMove.enteredAt}`;
+
+  const base = isRole
+    ? db
+        .select({
+          id: entities.id,
+          facetId: drizzleSql<string | null>`${entityFacets.id}`.as("facet_id"),
+          name: entities.title,
+          createdAt: drizzleSql`${entities.createdAt}`.as("created_at"),
+          status: drizzleSql<string | null>`${entityFacets.status}`.as(
+            "status"
+          ),
+          enteredAt: enteredAt.as("entered_at"),
+          fallbackAt: drizzleSql`${entityFacets.createdAt}`.as("fallback_at"),
+        })
+        .from(entityFacets)
+        .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+        .leftJoin(
+          lastMove,
+          drizzleSql`${lastMove.subjectId} = ${entities.id}::text`
+        )
+        .where(
+          and(
+            inArray(entityFacets.profileId, subject.profileIds),
+            isNull(entityFacets.deletedAt),
+            isNull(entities.deletedAt),
+            ...params.conditions
+          )
+        )
+    : db
+        .select({
+          id: entities.id,
+          facetId: drizzleSql<string | null>`NULL::uuid`.as("facet_id"),
+          name: entities.title,
+          createdAt: drizzleSql`${entities.createdAt}`.as("created_at"),
+          status: drizzleSql<string | null>`${entities.status}`.as("status"),
+          enteredAt: enteredAt.as("entered_at"),
+          fallbackAt: drizzleSql`${entities.createdAt}`.as("fallback_at"),
+        })
+        .from(entities)
+        .leftJoin(
+          lastMove,
+          drizzleSql`${lastMove.subjectId} = ${entities.id}::text`
+        )
+        .where(
+          and(
+            inArray(entities.profileId, subject.profileIds),
+            isNull(entities.deletedAt),
+            ...params.conditions
+          )
+        );
+  const t = base.as("t");
+
+  const since = drizzleSql`coalesce(${t.enteredAt}, ${t.fallbackAt})`;
+  const terminal = params.terminal?.statuses.length ? params.terminal : null;
+  const isTerminal = terminal
+    ? drizzleSql`coalesce(${t.status} IN (${drizzleSql.join(
+        terminal.statuses.map((s) => drizzleSql`${s}`),
+        drizzleSql`, `
+      )}), false)`
+    : drizzleSql`false`;
+  const orderBy =
+    params.order === "newest"
+      ? drizzleSql`${t.createdAt} DESC, ${t.id}`
+      : drizzleSql`CASE WHEN ${isTerminal} THEN -extract(epoch from ${since}) ELSE extract(epoch from ${since}) END, ${t.id}`;
+  const windowFilter = terminal
+    ? drizzleSql`(NOT ${isTerminal} OR ${since} >= ${terminal.since.toISOString()}::timestamptz)`
+    : drizzleSql`true`;
+  return { t, since, orderBy, windowFilter };
+}
+
+/**
+ * Counts only, PER PROFILE and status (a project's pipeline doors,
+ * `lifecycle.list`): the same base rows as the grouping above — `entities` of
+ * a kind, or `entity_facets` of a role joined to a live entity — under the
+ * caller's visibility conditions, without the time-in-column read (a count
+ * needs no order). A failed read THROWS.
+ */
+export async function countThingsByProfileAndStatus(params: {
+  kind: "kind" | "role";
+  profileIds: string[];
+  conditions: SQL[];
+}): Promise<
+  Array<{ profileId: string; status: string | null; count: number }>
+> {
+  if (params.profileIds.length === 0) return [];
+  const rows =
+    params.kind === "role"
+      ? await db
+          .select({
+            profileId: entityFacets.profileId,
+            status: entityFacets.status,
+            count: drizzleSql<number>`cast(count(*) as integer)`,
+          })
+          .from(entityFacets)
+          .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+          .where(
+            and(
+              inArray(entityFacets.profileId, params.profileIds),
+              isNull(entityFacets.deletedAt),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          )
+          .groupBy(entityFacets.profileId, entityFacets.status)
+      : await db
+          .select({
+            profileId: entities.profileId,
+            status: entities.status,
+            count: drizzleSql<number>`cast(count(*) as integer)`,
+          })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.profileId, params.profileIds),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          )
+          .groupBy(entities.profileId, entities.status);
+  return rows.map((r) => ({
+    profileId: r.profileId as string,
+    status: (r.status as string | null) ?? null,
+    count: Number(r.count),
+  }));
+}
+
+/**
+ * A slug's grouping subject: a ROLE when any of its rows is a role (a slug
+ * that is a role groups facets), else a kind. `podScopeKind` = any kind row is
+ * pod-scope (its things live nowhere else). The board's rule, ONE place.
+ */
+export function statusSubjectOfRows(
+  profileSlug: string,
+  rows: Array<{
+    id: string;
+    profileKind: "kind" | "role";
+    entityScope: "pod" | "workspace";
+  }>
+): {
+  subject: StatusGroupSubject;
+  profileKind: "kind" | "role";
+  podScopeKind: boolean;
+  chosen: typeof rows;
+} {
+  const roleRows = rows.filter((r) => r.profileKind === "role");
+  const chosen = roleRows.length > 0 ? roleRows : rows;
+  const profileKind = roleRows.length > 0 ? "role" : "kind";
+  return {
+    subject:
+      profileKind === "role"
+        ? {
+            kind: "role",
+            profileIds: chosen.map((r) => r.id),
+            roleSlug: profileSlug,
+          }
+        : { kind: "kind", profileIds: chosen.map((r) => r.id) },
+    profileKind,
+    podScopeKind: chosen.some((r) => r.entityScope === "pod"),
+    chosen,
+  };
+}
+
+/**
+ * THE things a stage worker works on (work model L4): the visible things of a
+ * kind or role sitting in `status` (or every status, when absent), under the
+ * SAME base set and visibility as the board — so the board's column count and
+ * the worker's set can never disagree. Longest in the column first.
+ *
+ * Visibility is the OWNER's (`userId`, the automation's owner) inside the
+ * worker's space (`workspaceId`, explicit), narrowed to `projectId` for a
+ * project-scoped enablement. `excludeIds` drops things already being worked
+ * (they still count in `total`); `onlyIds` asks about specific things (the
+ * stale-transition check). `total` = everything in the status, unpaged and
+ * unexcluded — what a `count` worker compares with its threshold.
+ *
+ * An unknown slug THROWS (a worker on a deleted vocabulary is a failure, not
+ * an empty week). A failed read throws.
+ */
+export async function listThingsInStatus(params: {
+  profileSlug: string;
+  status?: string | null;
+  userId: string;
+  workspaceId: string | null;
+  projectId?: string | null;
+  limit: number;
+  excludeIds?: readonly string[];
+  onlyIds?: readonly string[];
+}): Promise<{
+  items: Array<StatusGroupItem & { status: string | null }>;
+  total: number;
+  hasMore: boolean;
+}> {
+  if (params.onlyIds && params.onlyIds.length === 0) {
+    return { items: [], total: 0, hasMore: false };
+  }
+  const rows = await profileSlugRows(db, params.profileSlug);
+  if (rows.length === 0) {
+    throw new Error(
+      `"${params.profileSlug}" is not a kind or role in this pod — the worker has nothing to read.`
+    );
+  }
+  const { subject, profileKind, podScopeKind } = statusSubjectOfRows(
+    params.profileSlug,
+    rows
+  );
+  const projectId = params.projectId ?? undefined;
+  const conditions =
+    profileKind === "role"
+      ? await roleVisibilityConditions({
+          userId: params.userId,
+          lensWorkspaceId: params.workspaceId,
+          projectId,
+        })
+      : kindVisibilityConditions({
+          userId: params.userId,
+          lensWorkspaceId: params.workspaceId,
+          explicitWorkspace: true,
+          projectId,
+          podScopeKind,
+        });
+  const narrowed = [
+    ...conditions,
+    ...(params.onlyIds ? [inArray(entities.id, [...params.onlyIds])] : []),
+  ];
+  const statusKey = params.status ?? null;
+  const [page, counts] = await Promise.all([
+    pageThingsInColumn({
+      subject,
+      conditions: [
+        ...narrowed,
+        ...(params.excludeIds?.length
+          ? [notInArray(entities.id, [...params.excludeIds])]
+          : []),
+      ],
+      order: "time_in_column",
+      column: statusKey ? { statuses: [statusKey] } : { outside: [] },
+      offset: 0,
+      limit: params.limit,
+    }),
+    countThingsByProfileAndStatus({
+      kind: profileKind,
+      profileIds: subject.profileIds,
+      conditions: narrowed,
+    }),
+  ]);
+  const total = counts
+    .filter((c) => statusKey === null || c.status === statusKey)
+    .reduce((n, c) => n + c.count, 0);
+  return { items: page.items, total, hasMore: page.hasMore };
 }

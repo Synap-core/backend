@@ -14,6 +14,7 @@ import {
 } from "../execution-registry.js";
 import type { FailureErrorClass } from "../../../connectors/external-dispatch.js";
 import { redactForStorage } from "../../../utils/redact-secrets.js";
+import { CLASS_TRPC_CODE } from "../failure-classification.js";
 
 /**
  * Bound on the PROVIDER-authored fragment interpolated into the sentence below.
@@ -118,7 +119,14 @@ export async function dispatchExternalOnce(
     // catch can persist a next action alongside the human message (unchanged).
     throw attachFailureMeta(
       new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
+        // A DEFINITE not-delivered is the far side refusing, never our crash:
+        // a classified refusal keeps its own code (auth → UNAUTHORIZED …); an
+        // unclassified one (a code skill's own `throw`) is a 422, which the
+        // classifier reads back as `validation` — not a 500 / `unknown`.
+        code:
+          result.errorClass && result.errorClass !== "unknown"
+            ? CLASS_TRPC_CODE[result.errorClass]
+            : "UNPROCESSABLE_CONTENT",
         message: `Couldn't apply — ${
           result.reason
             ? redactForStorage(result.reason, PROVIDER_REASON_MAX)

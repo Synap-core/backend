@@ -21,6 +21,12 @@ const POD_ADMIN_BOUNCE_TYPES = [
   "workspace",
   "capability",
   "settings",
+  "skill",
+  "tool",
+  "playbook",
+  "automation",
+  "agent",
+  "run",
 ] as const;
 
 // Frozen copy of TYPED_DEEP_LINK_KINDS (packages/api/src/utils/deep-links.ts).
@@ -42,6 +48,85 @@ describe("open kinds lock", () => {
     ].sort();
     const fromApi = [...TYPED_OPEN_KINDS].sort();
     expect(fromPodAdmin).toEqual(fromApi);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TYPED_OPEN_KINDS ⊇ the canonical resolver's routable labels.
+//
+// `GET /api/hub/resolve/:id` (packages/api) names an id's kind with a label from
+// `EMITTABLE_LABELS` (resolve-browser-route.ts) — every one an `object-nav.ts`
+// arm. A typed link `/open/<label>/<id>` for any of them must be SERVED here,
+// or it is a 400 "Invalid deep link" for a kind the app can open (the skill /
+// playbook / automation dead links of 2026-10-12).
+//
+// DERIVED, never a third hand list: apps/api cannot import packages/api (tsc
+// rootDir, see above), so the labels are PARSED off the projection's own
+// source — every `label: "<word>"` in code (comments stripped). WHAT THIS CANNOT
+// SEE: a label built any other way (a variable, a template string, a spread
+// from another module). The non-vacuity checks below pin that the parse still
+// finds the table and a literal sample of it.
+// ---------------------------------------------------------------------------
+
+const ROUTE_PROJECTION_PATH = fileURLToPath(
+  new URL(
+    "../../../packages/api/src/routers/hub-protocol/rest/resolve-browser-route.ts",
+    import.meta.url
+  )
+);
+
+/** Prose documents the grammar; only CODE decides routing. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+const LABEL_LITERAL = /\blabel:\s*"([a-z_-]+)"/g;
+
+function parseEmittableLabels(source: string): Set<string> {
+  const labels = new Set<string>();
+  for (const m of stripComments(source).matchAll(LABEL_LITERAL)) {
+    labels.add(m[1]!);
+  }
+  return labels;
+}
+
+describe("typed open route serves every label the resolver emits", () => {
+  const source = readFileSync(ROUTE_PROJECTION_PATH, "utf8");
+  const labels = parseEmittableLabels(source);
+
+  it("the parser sees labels in code and ignores them in comments (fixture)", () => {
+    const fixture = [
+      "const T = {",
+      '  a: { label: "alpha" },',
+      '  b: { label: "beta", params: { x: "y" } },',
+      '  // c: { label: "gamma" },',
+      '  /* d: { label: "delta" } */',
+      "};",
+    ].join("\n");
+    expect([...parseEmittableLabels(fixture)].sort()).toEqual([
+      "alpha",
+      "beta",
+    ]);
+  });
+
+  it("finds a non-trivial projection table (non-vacuity)", () => {
+    // `entity` and `skill` are literal samples of the two tables
+    // (ROUTE_BY_KIND / ROUTE_BY_SUBKIND); if either disappears from the parse,
+    // the regex or the file moved and the superset check below proves nothing.
+    expect(labels.has("entity")).toBe(true);
+    expect(labels.has("skill")).toBe(true);
+    expect(labels.size).toBeGreaterThan(10);
+  });
+
+  it("TYPED_OPEN_KINDS ⊇ EMITTABLE_LABELS", () => {
+    const served = new Set<string>(TYPED_OPEN_KINDS);
+    const unserved = [...labels].filter((l) => !served.has(l)).sort();
+    expect(
+      unserved,
+      "resolve-browser-route.ts can name a kind that `/open/:type/:id` rejects " +
+        "with 400. Add it to TYPED_OPEN_KINDS (open-dispatch.ts) and to " +
+        "pod-admin BOUNCE_TYPES (apps/pod-admin/app/open/open-params.ts)."
+    ).toEqual([]);
   });
 });
 

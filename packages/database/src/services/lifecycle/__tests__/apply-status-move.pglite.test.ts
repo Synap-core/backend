@@ -179,6 +179,22 @@ describe("applyStatusMove", () => {
     expect((await row(dealId)).status).toBe("draft");
   });
 
+  it("an approval replay (strict) never overwrites a newer move, even as a person", async () => {
+    const r = await applyStatusMove(db, {
+      target: await target(dealId),
+      expectedFrom: "negotiating",
+      to: "won",
+      actor: HUMAN,
+      strict: true,
+    });
+    expect(r).toEqual({
+      status: "conflict",
+      expectedFrom: "negotiating",
+      actual: "draft",
+    });
+    expect((await row(dealId)).status).toBe("draft");
+  });
+
   it("a human move with a stale belief wins and records the actual from", async () => {
     const r = await applyStatusMove(db, {
       target: await target(dealId),

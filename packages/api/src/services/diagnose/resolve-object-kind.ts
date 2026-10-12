@@ -43,10 +43,17 @@ import {
   tools,
   events,
   workspaces,
+  projects,
+  channels,
+  playbooks,
+  automations,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { AccessContext } from "../../access/context.js";
+import { projectVisibleWhere } from "../../access/project-visibility.js";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
@@ -97,11 +104,27 @@ export const PROBE_ORDER: ObjectKind[] = [
   "capability",
   "automation_run",
   "playbook_run",
+  // The DEFINITIONS behind those runs — an automation and a playbook template.
+  // Their tables are disjoint from every other probed table, so the slot only
+  // matters for cost: beside their runs, below the commoner governance probes,
+  // above the broad `entity` catch like every specific probe.
+  "automation",
+  "playbook",
   "agent",
   // A WORKSPACE id. Sits above the broad `entity` catch for the same reason
   // every specific probe does; its own table is disjoint from all the others,
   // so its position relative to `view`/`document` is only ever cosmetic.
   "workspace",
+  // A PROJECT id. MUST be probed BEFORE `entity` — load-bearing, not cosmetic:
+  // migration 0151 copied projects into the first-class `projects` table while
+  // PRESERVING their ids, and left the pre-0151 `entities` row live under the
+  // same id. An entity-first probe resolves a project id to that stale copy,
+  // which opens a profile-entity page that can never load the project (the
+  // same precedence the public `/open/:id` bounce has always encoded).
+  "project",
+  // A CHANNEL id (rooms, threads, feeds). Disjoint table; sits with the other
+  // specific probes above the broad `entity` catch.
+  "channel",
   // `view` and `document` sit ABOVE the broad `entity` catch and BELOW every
   // specific governance/capability probe — the same slot they held in the
   // `/resolve/:id` list this prober absorbed (which probed entities → views →
@@ -337,6 +360,92 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r ? { displayName: r.name ?? null, workspaceId: id } : null;
+      },
+    },
+    {
+      kind: "automation",
+      run: async () => {
+        const [r] = await db
+          .select({
+            name: automations.name,
+            workspaceId: automations.workspaceId,
+          })
+          .from(automations)
+          // The registered `automations` VisibilityRule (access/registry.ts):
+          // `workspace` with NULL = pod-wide config — exactly
+          // `userVisibleWhere` with no lens, the floor the sibling
+          // `automation_run` probe uses.
+          .where(
+            and(
+              eq(automations.id, id),
+              userVisibleWhere(automations.workspaceId, userId)
+            )
+          )
+          .limit(1);
+        return r
+          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          : null;
+      },
+    },
+    {
+      kind: "playbook",
+      run: async () => {
+        const [r] = await db
+          .select({ name: playbooks.name, workspaceId: playbooks.workspaceId })
+          .from(playbooks)
+          // The registered `playbooks` VisibilityRule: `workspace`, NULL =
+          // pod-wide config — the same floor as `playbook_run` above.
+          .where(
+            and(
+              eq(playbooks.id, id),
+              userVisibleWhere(playbooks.workspaceId, userId)
+            )
+          )
+          .limit(1);
+        return r
+          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          : null;
+      },
+    },
+    {
+      kind: "project",
+      run: async () => {
+        const [r] = await db
+          .select({ name: projects.name, workspaceId: projects.workspaceId })
+          .from(projects)
+          // THE project predicate (access/project-visibility.ts) — the one the
+          // registered `projects` VisibilityRule uses: workspace rows follow
+          // membership, a pod-personal (NULL-workspace) project keeps an owner
+          // floor, plus the project-member branch. No lens: this prober is
+          // user-wide, like every other probe here.
+          .where(
+            and(
+              eq(projects.id, id),
+              projectVisibleWhere(AccessContext.operator({ userId }))
+            )
+          )
+          .limit(1);
+        return r
+          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          : null;
+      },
+    },
+    {
+      kind: "channel",
+      run: async () => {
+        const [r] = await db
+          .select({ title: channels.title, workspaceId: channels.workspaceId })
+          .from(channels)
+          // THE channel read floor (utils/channel-visibility.ts — own /
+          // explicit member / shared-type in an accessible workspace, AND the
+          // calling key's grant). NOT `userVisibleWhere`: a NULL-workspace
+          // channel is PERSONAL, not pod-wide, and the flat workspace rule
+          // would leak every user's personal channels.
+          .where(and(eq(channels.id, id), channelVisibilityWhere(userId)))
+          .limit(1);
+        return r
+          ? { displayName: r.title ?? null, workspaceId: r.workspaceId ?? null }
+          : null;
       },
     },
     {

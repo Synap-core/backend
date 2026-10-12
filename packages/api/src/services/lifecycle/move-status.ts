@@ -11,23 +11,36 @@
  *   → WRITE: `applyStatusMove` (@synap/database) — one compare-and-set
  *     statement writing the columns (the truth) and `properties[slug]` (the
  *     read projection). Agents are strict CAS; a person's move wins.
- *   → EMIT: `emitLifecycleTransition` (@synap/events) — the ONE event.
+ *     The owed event is written in the same transaction (outbox, D8).
+ *   → EMIT: `dispatchLifecycleTransition` (@synap/events) — the ONE event;
+ *     a failed delivery stays owed and the sweeper retries it.
  *
  * A proposed agent move is SUCCESS (the person reviews it). Its approval
  * replays the move with the agent's original `expectedFrom`
  * (`executors/entity-transition.ts`), so a person moving the thing meanwhile
- * makes that approval fail as stale instead of overwriting them.
+ * makes that approval fail as stale instead of overwriting them. Every replay
+ * is strict, whoever filed it.
+ *
+ * WHO IS MOVING (`statusMoveActorFor`, the one derivation for the request
+ * doors): an AI write with no agent attribution (a service / hub key) is an
+ * unattributed AGENT, never a person — governed on the anonymous AI ladder and
+ * strict CAS. `system` is server code only: a request can never claim it.
  */
 import {
   db,
   applyStatusMove,
   classifyStatusMove,
   resolveStatusMoveTarget,
+  expireProposalsStaleAfterMove,
   type ApplyStatusMoveResult,
   type StatusMoveActor,
 } from "@synap/database";
-import { emitLifecycleTransition } from "@synap/events";
+import { dispatchLifecycleTransition } from "@synap/events";
+import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
+
+const logger = createLogger({ module: "move-status" });
 
 export interface MoveStatusInput {
   entityId: string;
@@ -53,6 +66,63 @@ export interface MoveStatusInput {
   forcePropose?: boolean;
   /** An approved proposal replaying this move — governance already decided. */
   approvedProposalId?: string | null;
+}
+
+const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
+
+/** The request facts `statusMoveActorFor` reads (a subset of the tRPC ctx). */
+export interface StatusMoveCallerContext {
+  userId?: string | null;
+  /** Server-set: `intelligence` for a hub / api-key caller. */
+  source?: string | null;
+  /** Server-set: true only for a hub-protocol key. */
+  isHubProtocol?: boolean;
+  /** Server-set: the authenticated agent (agent key / approval caller). */
+  agentUserId?: string | null;
+  /** Server-set: an internal caller that already holds a governance decision. */
+  governanceProposalId?: string;
+  /** Present on every request that arrived over the wire. */
+  req?: unknown;
+}
+
+/**
+ * Who a request-door status move is made by, derived ONCE for
+ * `entities.update` and `entities.updateFacet` (backend review F1/F2/F15):
+ *  - an attributed agent (body or ctx) → `agent`;
+ *  - an AI caller (AI `source` in the body or on the ctx, or a hub key) with
+ *    no agent → an UNATTRIBUTED agent (`agentUserId: null`), never a person;
+ *  - `source: "system"` → `system` only for server code (no wire request);
+ *    a client that sends it is a person;
+ *  - an internal caller holding a decision (`ctx.governanceProposalId`) is a
+ *    REPLAY: governance is skipped and the CAS is strict.
+ */
+export function statusMoveActorFor(
+  ctx: StatusMoveCallerContext,
+  input: { source?: string | null; agentUserId?: string | null }
+): { actor: StatusMoveActor; approvedProposalId?: string } {
+  const userId = ctx.userId ?? "";
+  const agentUserId = input.agentUserId ?? ctx.agentUserId ?? null;
+  const approvedProposalId = ctx.governanceProposalId || undefined;
+  if (agentUserId) {
+    return {
+      actor: { kind: "agent", userId, agentUserId },
+      approvedProposalId,
+    };
+  }
+  const aiCaller =
+    ctx.isHubProtocol === true ||
+    AI_SOURCES.has(ctx.source ?? "") ||
+    AI_SOURCES.has(input.source ?? "");
+  if (aiCaller) {
+    return {
+      actor: { kind: "agent", userId, agentUserId: null },
+      approvedProposalId,
+    };
+  }
+  if (input.source === "system" && ctx.req === undefined) {
+    return { actor: { kind: "system", userId }, approvedProposalId };
+  }
+  return { actor: { kind: "human", userId }, approvedProposalId };
 }
 
 export type MoveStatusResult =
@@ -104,10 +174,13 @@ export async function moveStatus(
     };
   }
   const agent = input.actor.kind === "agent";
+  // Strict compare-and-set: every non-person, and every approval replay.
+  const strict =
+    input.actor.kind !== "human" || Boolean(input.approvedProposalId);
   // An agent acting on a belief that is already false never files a proposal
   // that could only fail at approval.
   if (
-    agent &&
+    strict &&
     input.expectedFrom !== undefined &&
     (input.expectedFrom ?? null) !== target.current
   ) {
@@ -130,7 +203,12 @@ export async function moveStatus(
       workspaceId: governanceWorkspaceId,
       subjectType: "entity",
       action: "transition",
-      source: agent ? "agent" : "user",
+      // An unattributed agent reaches the anonymous AI ladder; never "user".
+      source: agent
+        ? input.actor.agentUserId
+          ? "agent"
+          : "intelligence"
+        : "user",
       lifecycleMove,
       forcePropose: input.forcePropose,
       reasoning:
@@ -168,13 +246,32 @@ export async function moveStatus(
     expectedFrom: input.expectedFrom,
     to: input.to,
     actor: input.actor,
+    strict,
     sessionId: input.sessionId,
     reason: input.reason,
     proposalId: input.approvedProposalId ?? receiptId ?? null,
     lensWorkspaceId: input.workspaceId,
   });
   if (result.status === "moved") {
-    await emitLifecycleTransition(result.transition);
+    // Owed in the move's transaction; a failed delivery stays owed (sweeper).
+    await dispatchLifecycleTransition(result.transition.transitionId);
+    // A person decided: pending agent proposals that believed another status
+    // are stale, never left counting toward a worker's backlog (L2, F16). The
+    // move already landed, so a failure here is logged, not thrown.
+    if (result.transition.actorKind === "human") {
+      try {
+        const expired = await expireProposalsStaleAfterMove(
+          db,
+          result.transition
+        );
+        if (expired.length) markProposalNotificationsActioned(expired);
+      } catch (err) {
+        logger.warn(
+          { err, entityId: input.entityId },
+          "stale agent proposals not expired after a person's move"
+        );
+      }
+    }
   }
   return result;
 }

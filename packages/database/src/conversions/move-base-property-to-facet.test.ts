@@ -25,6 +25,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { LIFECYCLE_PROJECTION_TEST_SCHEMA } from "./lifecycle-projection-test-schema.js";
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "postgres";
 import { runConversions, computeCounts } from "./engine.js";
@@ -146,7 +147,7 @@ function manifestOf(op: ConversionManifest["ops"][number]): ConversionManifest {
 
 async function setupPod() {
   const db = new PGlite();
-  await db.exec(SCHEMA);
+  await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
   const q = async (text: string, params: unknown[] = []) =>
     (await db.query(text, params)).rows as any[];
 
@@ -339,7 +340,7 @@ describe("renamePropertyKey", () => {
 
   async function pod() {
     const db = new PGlite();
-    await db.exec(SCHEMA);
+    await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
     const q = async (text: string, params: unknown[] = []) =>
       (await db.query(text, params)).rows as any[];
     const [sysDecision] = await q(

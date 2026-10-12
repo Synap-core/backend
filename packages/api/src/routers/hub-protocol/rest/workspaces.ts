@@ -32,6 +32,8 @@ import { AccessContext } from "../../../access/index.js";
 import { readWorkspaceEntityStats } from "../../../services/workspace-stats.js";
 import {
   templateHealthFor,
+  overlayHealthFor,
+  templateSlugsOf,
   resolveTemplateCatalog,
 } from "../../../services/template-health.js";
 import { emitSideEffects } from "@synap/events";
@@ -549,10 +551,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       // slug ONCE, then compute drift via the shared `template-health` authority
       // (so the CLI/MCP/browser all agree). Cache-cold slug → `drifted:false`.
       const templateCatalog = await resolveTemplateCatalog(
-        rows.map(
-          (w) =>
-            (w.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
-        )
+        rows.flatMap((w) => templateSlugsOf(w.settings))
       );
 
       const active = rows.filter((workspace) => workspace.archivedAt == null);
@@ -615,6 +614,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           replacedBy: health.replacedBy,
           retiredReason: health.retiredReason,
           lifecycleWarning: health.lifecycleWarning,
+          // Each overlay composed onto this space (`installedPacks`), with its
+          // own standing through the same authority — a retired overlay is
+          // otherwise invisible here.
+          overlays: overlayHealthFor(settings, templateCatalog),
           // Additive-pack installs (profile/view/bento) never set
           // `packageSlug` — they carry their own identity here instead. The
           // CLI unions this with `packageSlug` to match the browser's

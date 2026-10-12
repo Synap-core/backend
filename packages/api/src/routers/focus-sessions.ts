@@ -1972,8 +1972,8 @@ export const focusSessionsRouter = router({
         stages: playbookStagesSchema.optional(),
         /**
          * FOLLOW a playbook with this live session; `null` RELEASES it.
-         * The session BECOMES A RUN of that playbook — it joins the playbook's
-         * runs and leaves the work lens. Applied by the ONE implementation
+         * The session joins that playbook's runs and STAYS in the work lens
+         * (follow ≠ run, 2026-10-12). Applied by the ONE implementation
          * (`follow-playbook.ts`), never inline here.
          */
         followPlaybookId: z.string().uuid().nullable().optional(),

@@ -3,11 +3,13 @@ import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "../proposals/intent.js";
 import {
   resolveNeedsYouItemCount,
   resolveStatusLabel,
+  resolveCaptureChipStateLabel,
   STATUS_LABELS,
   humanizeToken,
   sentenceCaseLabel,
   resolveActionLabel,
   resolveActionProgressive,
+  resolveActionPresent,
   resolveObjectNoun,
   OBJECT_NOUNS,
   buildObjectActionTitle,
@@ -146,6 +148,19 @@ describe("resolveActionProgressive — the in-flight verb", () => {
       "Frobnicate thing"
     );
     expect(resolveActionProgressive(null)).toBe("");
+  });
+});
+
+describe("resolveActionPresent — what a pending choice does", () => {
+  it("reads the curated present for the capture decisions", () => {
+    expect(resolveActionPresent("update")).toBe("Updates");
+    expect(resolveActionPresent("link")).toBe("Links");
+    expect(resolveActionPresent("entity.create")).toBe("Creates");
+    expect(resolveActionPresent("file")).toBe("Files");
+  });
+  it("keeps the imperative where no present is curated", () => {
+    expect(resolveActionPresent("archive")).toBe(resolveActionLabel("archive"));
+    expect(resolveActionPresent(undefined)).toBe("");
   });
 });
 
@@ -1263,5 +1278,47 @@ describe("the `add` verb", () => {
   it("has its own row: imperative Add, past Added (not the humanized token)", () => {
     expect(resolveActionLabel("add", "imperative")).toBe("Add");
     expect(resolveActionLabel("add", "past")).toBe("Added");
+  });
+});
+
+describe("capture chip states", () => {
+  it("names each chip state in the founder's words", () => {
+    expect(resolveCaptureChipStateLabel("proposed")).toBe("Suggested");
+    expect(resolveCaptureChipStateLabel("pending")).toBe(
+      "Waiting for approval"
+    );
+    expect(resolveCaptureChipStateLabel("filed")).toBe("Filed");
+    expect(resolveCaptureChipStateLabel("filing")).toBe("Filing");
+    expect(resolveCaptureChipStateLabel("refused")).toBe("Rejected");
+  });
+
+  it("a refused chip and a rejected proposal read the same word", () => {
+    expect(resolveCaptureChipStateLabel("refused")).toBe(
+      resolveStatusLabel("rejected")
+    );
+  });
+
+  it("leaves the proposal lifecycle's `pending` word alone", () => {
+    expect(resolveStatusLabel("pending")).toBe("Pending");
+  });
+
+  it("falls back to the lifecycle word, never the raw token", () => {
+    expect(resolveCaptureChipStateLabel("failed")).toBe("Failed");
+    expect(resolveCaptureChipStateLabel("approval_failed")).toBe(
+      "Approval failed"
+    );
+  });
+
+  it("the act of filing a chip has both moods and a busy word", () => {
+    expect(resolveActionLabel("file", "imperative")).toBe("File");
+    expect(resolveActionLabel("file", "past")).toBe("Filed");
+    expect(resolveActionProgressive("file")).toBe("Filing");
+  });
+});
+
+describe("capture list statuses", () => {
+  it("an unfinished capture with unfiled suggestions reads Suggested", () => {
+    expect(resolveStatusLabel("suggested")).toBe("Suggested");
+    expect(resolveStatusLabel("needs_answer")).toBe("Needs your answer");
   });
 });

@@ -72,6 +72,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       async getAccessibleProfiles() {
         return [{ id: "p-note", slug: "note", displayName: "Note" }];
       }
+      async getEffectiveLifecycles() {
+        return new Map();
+      }
       async getEffectiveProperties() {
         return [];
       }

@@ -20,6 +20,12 @@ import {
   type PropertyValueType,
   eq,
   drizzleSql,
+  checkLifecycleDefUpdate,
+  lifecycleProfilesOfDef,
+  reprojectLifecycleProfiles,
+  assertNotLifecycleDef,
+  changeLifecycleOptions,
+  LifecycleDefChangeError,
 } from "@synap/database";
 import { entityPropertyIndex } from "@synap/database/schema";
 // PropertySlugConflictError not used, removed
@@ -33,6 +39,12 @@ import {
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "property-defs-router" });
+
+/** A lifecycle-guard refusal as a typed CONFLICT (`reasonCode` on the wire). */
+function asLifecycleConflict(err: unknown): unknown {
+  if (!(err instanceof LifecycleDefChangeError)) return err;
+  return new TRPCError({ code: "CONFLICT", message: err.message, cause: err });
+}
 
 const PropertyValueTypeSchema = z.enum([
   "string",
@@ -333,12 +345,33 @@ export const propertyDefsRouter = router({
         }
       }
 
+      // A def that IS a declared lifecycle: append-only through this door
+      // (the hub door and the proposal executor both land here). A refusal
+      // names the lifecycle door; a plain property keeps the legacy path.
+      const lifecycleProfiles = await lifecycleProfilesOfDef(db, existing.id);
+      let constraints = input.constraints;
+      let optionsChanged = false;
+      if (lifecycleProfiles.length > 0) {
+        try {
+          const checked = checkLifecycleDefUpdate(existing, input);
+          constraints = checked.constraints ?? constraints;
+          optionsChanged = checked.optionsChanged;
+        } catch (err) {
+          throw asLifecycleConflict(err);
+        }
+      }
+
       const updated = await propertyDefRepo.update(input.id, {
         slug: input.slug,
         valueType: input.valueType as PropertyValueType | undefined,
-        constraints: input.constraints,
+        constraints,
         uiHints: input.uiHints,
       });
+      // An appended option can already be held by rows (unclassified until
+      // now): the columns re-derive from the projection.
+      if (optionsChanged) {
+        await reprojectLifecycleProfiles(db, lifecycleProfiles);
+      }
 
       logger.info(
         { propertyDefId: updated.id, userId: ctx.userId },
@@ -346,6 +379,51 @@ export const propertyDefsRouter = router({
       );
 
       return { propertyDef: updated };
+    }),
+
+  /**
+   * THE LIFECYCLE DOOR for what `update` refuses on a declared lifecycle:
+   * recategorise, rename or retire an option. `options` is the complete new
+   * list (each with a category); every key that disappears names where its
+   * things move in `remap`. Rows move and the status columns re-project in one
+   * transaction (`changeLifecycleOptions`). Same owner gate as `update`.
+   */
+  changeLifecycleOptions: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        options: z.array(z.record(z.string(), z.unknown())).min(1),
+        remap: z.record(z.string(), z.string()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const existing = await new PropertyDefRepository(db).getById(input.id);
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Property definition not found: ${input.id}`,
+        });
+      }
+      await assertProfileSchemaWrite(
+        db,
+        ctx.userId,
+        await resolvePropertyDefSchemaOwner(db, existing),
+        { level: "editor", actingWorkspaceId: null }
+      );
+      const result = await changeLifecycleOptions(db, {
+        propertyDefId: input.id,
+        options: input.options,
+        remap: input.remap,
+      });
+      if (result.status === "refused") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: result.reason });
+      }
+      logger.info(
+        { propertyDefId: input.id, userId: ctx.userId, result },
+        "Lifecycle options changed"
+      );
+      return result;
     }),
 
   /**
@@ -415,6 +493,12 @@ export const propertyDefsRouter = router({
       await assertWorkspaceWrite(db, ctx.userId, {
         workspaceId: existing.workspaceId,
       });
+
+      try {
+        await assertNotLifecycleDef(db, [input.id]);
+      } catch (err) {
+        throw asLifecycleConflict(err);
+      }
 
       // Prevent deletion if any entity is still using this property
       const usageResult = await db

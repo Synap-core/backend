@@ -122,6 +122,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   slotKind?: string | null;
   /** Ephemeral lifetime the SERVER carries with the class; null = never expires. */
   lifetimeHours?: number | null;
+  /** `capture`: what the capture owes — an answer, or a filing decision. */
+  captureStatus?: "needs_answer" | "suggested" | null;
 }
 
 /** A work-broke notification ({@link FAILURE_NOTIFICATION_TYPES}): a failed run, not an ask. */
@@ -251,6 +253,16 @@ function itemShape(
         objectKind: "session",
         reason: null,
         verb: verb("review"),
+      };
+    case "capture":
+      // A capture that owes the person something: the open question takes
+      // the answer verb; unfiled suggestions take the file verb. The chip is
+      // the capture-list status word ("Needs your answer" / "Suggested").
+      return {
+        state: { owedFromYou: 1 },
+        objectKind: "capture",
+        reason: s.captureStatus ? resolveStatusLabel(s.captureStatus) : null,
+        verb: verb(s.captureStatus === "needs_answer" ? "answer" : "file"),
       };
     case "draft-asks":
       return {
@@ -604,7 +616,10 @@ function dataRecord(data: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function strField(data: Record<string, unknown> | null, key: string): string | null {
+function strField(
+  data: Record<string, unknown> | null,
+  key: string
+): string | null {
   const v = data?.[key];
   return typeof v === "string" && v.trim() ? v.trim() : null;
 }
@@ -657,9 +672,10 @@ export function happenedItemOfEvent(e: LoggedEvent): HappenedItem | null {
     door = id ? { kind: "channel", id } : null;
   } else if (e.subjectId && !subject.startsWith("webhook")) {
     // A sync / sign-in event's subject is the connection itself.
-    const kind = line.objectKind === "connection"
-      ? "connection"
-      : normalizeObjectKind(e.subjectType ?? subject);
+    const kind =
+      line.objectKind === "connection"
+        ? "connection"
+        : normalizeObjectKind(e.subjectType ?? subject);
     door = { kind, id: e.subjectId };
   }
   return {

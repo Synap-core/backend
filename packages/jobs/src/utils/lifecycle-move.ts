@@ -5,9 +5,10 @@
  * Same three steps as the api door (`services/lifecycle/move-status.ts`), with
  * this package's governance: resolve + classify → `checkAutomationWriteOrPropose`
  * (`entity.transition`, `lifecycleMove`) → `applyStatusMove` (one
- * compare-and-set: columns = truth, `properties[slug]` = read projection) →
- * `emitLifecycleTransition` (the ONE event, carrying the automation chain so
- * the depth/cycle guards see it). A proposed move is filed as
+ * compare-and-set: columns = truth, `properties[slug]` = read projection, and
+ * the owed event in the same transaction) → `dispatchLifecycleTransition`
+ * (the ONE event, carrying the automation chain so the depth/cycle guards see
+ * it, retried by the sweeper if delivery fails). A proposed move is filed as
  * `entity/transition`; its approval replays the move (api executor).
  *
  * The automation is the actor (`system`, strict compare-and-set), attributed to
@@ -20,7 +21,11 @@ import {
   resolveStatusMoveTarget,
   type ApplyStatusMoveResult,
 } from "@synap/database";
-import { emitLifecycleTransition, type SideEffectPayload } from "@synap/events";
+import {
+  dispatchLifecycleTransition,
+  type SideEffectPayload,
+  type TransitionEmitContext,
+} from "@synap/events";
 import { checkAutomationWriteOrPropose } from "./automation-governance.js";
 
 export type AutomationStatusMoveResult =
@@ -110,19 +115,21 @@ export async function moveStatusFromAutomation(input: {
     sessionId: ctx?.focusSessionId ?? null,
     reason: input.reason ?? null,
     lensWorkspaceId: input.workspaceId,
-  });
-  if (result.status === "moved") {
-    await emitLifecycleTransition(result.transition, {
-      automationContext: ctx
-        ? {
+    // Replayed by the dispatcher, so a retried delivery keeps the chain.
+    emitContext: (ctx
+      ? {
+          automationContext: {
             automationRunId: ctx.automationRunId,
             automationId: ctx.automationId,
             chainDepth: ctx.chainDepth,
             rootRunId: ctx.rootRunId,
             chainAutomationIds: ctx.chainAutomationIds,
-          }
-        : undefined,
-    });
+          },
+        }
+      : {}) satisfies TransitionEmitContext,
+  });
+  if (result.status === "moved") {
+    await dispatchLifecycleTransition(result.transition.transitionId);
   }
   return result;
 }
@@ -156,7 +163,7 @@ export async function applyApprovedStatusMove(input: {
     lensWorkspaceId: input.workspaceId,
   });
   if (result.status === "moved") {
-    await emitLifecycleTransition(result.transition);
+    await dispatchLifecycleTransition(result.transition.transitionId);
   }
   return result;
 }

@@ -303,6 +303,12 @@ export const DOMAIN_SUBJECT_TYPES = [
   // the same shape `focus_session.stage_changed` has, so "when a track enters a
   // stage" is authorable as a trigger.
   "track",
+  // A ROLE attached / updated / detached on an entity (Kind + Facets): the
+  // facet doors emit `entity_facet.attach|update|detach` with a workspace
+  // (`routers/entities/helpers.ts` `emitFacetSideEffects`). A role's `created`
+  // activator compiles to the attach (R1, `buildEventPattern`); its actions
+  // are domain verbs, not CRUD, hence this list.
+  "entity_facet",
 ] as const;
 
 export type DomainSubjectType = (typeof DOMAIN_SUBJECT_TYPES)[number];

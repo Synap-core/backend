@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   perm: vi.fn(),
   apply: vi.fn(),
   emit: vi.fn(),
+  expire: vi.fn(async () => [] as string[]),
+  actioned: vi.fn(),
   current: "negotiating" as string | null,
 }));
 
@@ -56,13 +58,20 @@ vi.mock("@synap/database", () => ({
       : null;
   },
   applyStatusMove: h.apply,
+  expireProposalsStaleAfterMove: h.expire,
 }));
-vi.mock("@synap/events", () => ({ emitLifecycleTransition: h.emit }));
+vi.mock("@synap/events", () => ({ dispatchLifecycleTransition: h.emit }));
+vi.mock(
+  "../../../notifications/mark-proposal-notifications-actioned.js",
+  () => ({
+    markProposalNotificationsActioned: h.actioned,
+  })
+);
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.perm,
 }));
 
-import { moveStatus } from "../move-status.js";
+import { moveStatus, statusMoveActorFor } from "../move-status.js";
 
 const AGENT = { kind: "agent" as const, userId: "u1", agentUserId: "a1" };
 
@@ -70,6 +79,8 @@ beforeEach(() => {
   h.perm.mockReset();
   h.apply.mockReset();
   h.emit.mockReset();
+  h.expire.mockClear();
+  h.actioned.mockReset();
   h.current = "negotiating";
 });
 
@@ -141,5 +152,124 @@ describe("moveStatus door", () => {
     });
     expect(h.perm).not.toHaveBeenCalled();
     expect(h.apply.mock.calls[0][1]).toMatchObject({ proposalId: "p9" });
+  });
+
+  it("an UNATTRIBUTED agent is governed on the AI ladder, never as a person, and is strict", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({ status: "moved", transition: {} });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: { kind: "agent", userId: "u1", agentUserId: null },
+    });
+    expect(h.perm.mock.calls[0][0]).toMatchObject({
+      source: "intelligence",
+      agentUserId: undefined,
+    });
+    expect(h.apply.mock.calls[0][1]).toMatchObject({ strict: true });
+  });
+
+  it("a person's move is governed as the user and wins (not strict)", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({ status: "moved", transition: {} });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: { kind: "human", userId: "u1" },
+    });
+    expect(h.perm.mock.calls[0][0]).toMatchObject({ source: "user" });
+    expect(h.apply.mock.calls[0][1]).toMatchObject({ strict: false });
+  });
+
+  it("a person's move expires the agent proposals it made stale; an agent's does not (F16)", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.expire.mockResolvedValueOnce(["p-stale"]);
+    h.apply.mockResolvedValue({
+      status: "moved",
+      transition: { transitionId: "t1", actorKind: "human", to: "lost" },
+    });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: { kind: "human", userId: "u1" },
+    });
+    expect(h.expire).toHaveBeenCalledTimes(1);
+    expect(h.actioned).toHaveBeenCalledWith(["p-stale"]);
+
+    h.apply.mockResolvedValue({
+      status: "moved",
+      transition: { transitionId: "t2", actorKind: "agent", to: "lost" },
+    });
+    await moveStatus({ entityId: "e1", to: "lost", actor: AGENT });
+    expect(h.expire).toHaveBeenCalledTimes(1);
+  });
+
+  it("an approval replay with no agent is strict compare-and-set", async () => {
+    h.apply.mockResolvedValue({ status: "moved", transition: {} });
+    const r = await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      expectedFrom: "draft",
+      actor: { kind: "human", userId: "approver" },
+      approvedProposalId: "p9",
+    });
+    // The belief is already false: a stale approval, nothing written.
+    expect(r).toEqual({
+      status: "conflict",
+      expectedFrom: "draft",
+      actual: "negotiating",
+    });
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("statusMoveActorFor (who a request-door move is made by)", () => {
+  const WIRE = { userId: "u1", req: {} };
+  it("an attributed agent is an agent", () => {
+    expect(
+      statusMoveActorFor(WIRE, { source: "intelligence", agentUserId: "a1" })
+        .actor
+    ).toEqual({ kind: "agent", userId: "u1", agentUserId: "a1" });
+  });
+  it("a hub / service key with no agent is an UNATTRIBUTED agent, never human", () => {
+    const hubCtx = {
+      userId: "u1",
+      source: "intelligence",
+      isHubProtocol: true,
+    };
+    expect(statusMoveActorFor(hubCtx, {}).actor).toEqual({
+      kind: "agent",
+      userId: "u1",
+      agentUserId: null,
+    });
+    // Even when the body claims a person or the system.
+    expect(statusMoveActorFor(hubCtx, { source: "user" }).actor.kind).toBe(
+      "agent"
+    );
+    expect(statusMoveActorFor(hubCtx, { source: "system" }).actor.kind).toBe(
+      "agent"
+    );
+    expect(
+      statusMoveActorFor(WIRE, { source: "intelligence" }).actor
+    ).toMatchObject({ kind: "agent", agentUserId: null });
+  });
+  it("a wire request cannot claim the system; server code can", () => {
+    expect(statusMoveActorFor(WIRE, { source: "system" }).actor.kind).toBe(
+      "human"
+    );
+    expect(
+      statusMoveActorFor({ userId: "u1" }, { source: "system" }).actor.kind
+    ).toBe("system");
+  });
+  it("an internal caller holding a decision replays it", () => {
+    expect(
+      statusMoveActorFor(
+        { userId: "u1", agentUserId: "a1", governanceProposalId: "p1" },
+        {}
+      )
+    ).toEqual({
+      actor: { kind: "agent", userId: "u1", agentUserId: "a1" },
+      approvedProposalId: "p1",
+    });
   });
 });

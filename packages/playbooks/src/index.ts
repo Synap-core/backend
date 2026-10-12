@@ -338,6 +338,20 @@ export interface ExpectedOutput {
   label: string;
   icon?: string;
   /**
+   * OPTIONAL: produce it when it applies, never owe it — e.g. a milestone
+   * invoice on an engagement billed at close. Absent ⇒ `false` (required).
+   * An optional slot is owed by NOBODY (`isDeliverableOutstanding`,
+   * `@synap-core/types/units`): no needs-you row, no reaper hold, never an
+   * unmet required outcome at a stage gate, never a `complete_session` warning.
+   * Filled, it is `done` and counts as produced like any other slot.
+   *
+   * CLIENT-DECLARABLE, like `owner`: set where the slot is declared
+   * (playbook, stage, the session's own declaration), and kept by a patch that
+   * is silent about it. It closes nothing — a filled optional slot is `done`
+   * only through the usual doors.
+   */
+  optional?: boolean;
+  /**
    * The slot's STABLE identity — what every slot door joins on first (the
    * label stays the alias). SERVER-STAMPED: derived by the ONE function
    * `deriveSlotKeys` (`@synap-core/types/units`, a slug of the label, `-2`/`-3`
@@ -643,11 +657,28 @@ export interface SlotSubjectEdge {
  * `playbook_automations` with role `"activator"`.
  */
 export interface PlaybookActivator {
-  on: "created" | "enters_status";
-  /** Required when `on === "enters_status"` — the status value entered. */
+  /**
+   * `created` / `enters_status` — the thing is created / enters `status`.
+   * `count` — at least `min` things sit in `status` (always per_moment).
+   * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+   * `manual` — a button, never by itself: compiles no rule.
+   * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
+   * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
+   * `satisfies` both.
+   */
+  on: "created" | "enters_status" | "count" | "schedule" | "manual";
+  /** Required for `enters_status` / `count`; optional for `schedule`. */
   status?: string;
+  /** Required for `schedule`. */
+  cron?: string;
+  /** Required for `count` (≥ 2). */
+  min?: number;
+  /** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+  size?: "per_thing" | "per_moment";
   /** `run` starts the run; `propose` files a proposal (the public default). */
   mode: "run" | "propose";
+  /** Pending approvals before the worker stops starting runs (default 20). */
+  maxPendingApprovals?: number;
 }
 
 /** Where a failed stage gate sends the run — see {@link PlaybookStage.onFail}. */

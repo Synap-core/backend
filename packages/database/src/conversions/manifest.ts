@@ -36,7 +36,8 @@ export type ConversionOp =
   | RemapFacetPropertyValuesOp
   | FoldRoleIntoStatusOp
   | RenameProfileOp
-  | ProjectLifecycleColumnsOp;
+  | ProjectLifecycleColumnsOp
+  | FoldBookingDealIntoLeadOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -547,6 +548,47 @@ export interface RenameProfileOp extends BaseOp {
   slug: string;
   toSlug: string;
   displayName?: string;
+}
+
+/**
+ * Turn a Cal.com booking that made a draft DEAL into what a booking makes now
+ * (W15, decision D7): the person wears the lead role at `lead.status` through
+ * the forward rule, the call (the event sharing the booking uid) is
+ * `attended_by` the person, the person `works_at` the company the deal named.
+ *
+ * Only UNTOUCHED booking deals: `properties.source = source`, a
+ * `calBookingUid`, no key outside `untouched.keys`, every status key at its
+ * untouched value, and no edge but the booking's own `dealLink` from the
+ * person / company. Anything else is an edited deal: KEPT and counted
+ * (`dealsKeptEdited`), as is a deal with no linked person
+ * (`dealsKeptNoPerson`). The forward rule reads the lead lifecycle's CATEGORY
+ * (open < active < done; paused / lost never left); an existing lead whose
+ * lifecycle is not declared is left as it is (`leadsUnjudged`).
+ * DESTRUCTIVE TAIL (operator `--destructive-tail` only): each converted deal
+ * is soft-deleted (its row survives). Idempotent: facets and edges are
+ * created only when absent, and the forward rule never moves a lead twice.
+ */
+export interface FoldBookingDealIntoLeadOp extends BaseOp {
+  op: "foldBookingDealIntoLead";
+  /** The deal kind. */
+  slug: string;
+  /** `properties.source` a booking deal carries. */
+  source: string;
+  untouched: {
+    /** Every key an untouched booking deal may carry. */
+    keys: string[];
+    /** Status key → its untouched value (at least one must be present). */
+    status: Record<string, string>;
+  };
+  lead: {
+    personSlug: string;
+    role: string;
+    statusKey: string;
+    status: string;
+  };
+  companySlug: string;
+  eventSlug: string;
+  relations: { dealLink: string; attendedBy: string; worksAt: string };
 }
 
 export const FOLD_ROLE_NO_TARGET = ["attachFirst", "park"] as const;
@@ -1816,6 +1858,46 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       toSlug: "sales-motion",
       displayName: "Sales motion",
     },
+
+    // ─── D7 (founder 10-12): booking-made draft deals become leads (W15) ──────
+    //
+    // Before W15 a Cal.com booking created `deal` "Intro call — {name}" at
+    // `dealStage: lead` (shape A) or `commercialStage: draft` (shape B), with
+    // `source: cal.com` + `calBookingUid`, the person and company
+    // `linked_to_deal` to it. Now a booking makes the person a lead at
+    // `engaged`. Untouched booking deals only; an edited deal is kept and
+    // counted for a person to decide. The deal is archived only on the
+    // destructive tail. Operator-run.
+    {
+      op: "foldBookingDealIntoLead",
+      opKey: "w12.calcom.booking-deal-into-lead",
+      deferAtBoot: true,
+      slug: "deal",
+      source: "cal.com",
+      untouched: {
+        keys: [
+          "commercialStage",
+          "dealStage",
+          "stage",
+          "source",
+          "calBookingUid",
+        ],
+        status: { commercialStage: "draft", dealStage: "lead", stage: "lead" },
+      },
+      lead: {
+        personSlug: "person",
+        role: "lead",
+        statusKey: "leadStage",
+        status: "engaged",
+      },
+      companySlug: "company",
+      eventSlug: "event",
+      relations: {
+        dealLink: "linked_to_deal",
+        attendedBy: "attended_by",
+        worksAt: "works_at",
+      },
+    },
   ],
 };
 
@@ -1841,6 +1923,7 @@ export const CONVERSION_OP_TYPES = [
   "foldRoleIntoStatus",
   "renameProfile",
   "projectLifecycleColumns",
+  "foldBookingDealIntoLead",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -2128,6 +2211,29 @@ export function validateManifest(manifest: ConversionManifest): void {
         if (op.slug === op.toSlug) {
           throw new Error(
             `Conversion manifest: renameProfile '${op.opKey}' cannot rename '${op.slug}' to itself`
+          );
+        }
+        break;
+      case "foldBookingDealIntoLead":
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.source, "source");
+        requireSlug(op.opKey, op.lead?.personSlug, "lead.personSlug");
+        requireSlug(op.opKey, op.lead?.role, "lead.role");
+        requireSlug(op.opKey, op.lead?.statusKey, "lead.statusKey");
+        requireSlug(op.opKey, op.lead?.status, "lead.status");
+        requireSlug(op.opKey, op.companySlug, "companySlug");
+        requireSlug(op.opKey, op.eventSlug, "eventSlug");
+        requireSlug(op.opKey, op.relations?.dealLink, "relations.dealLink");
+        requireSlug(op.opKey, op.relations?.attendedBy, "relations.attendedBy");
+        requireSlug(op.opKey, op.relations?.worksAt, "relations.worksAt");
+        if (
+          !Object.keys(op.untouched?.status ?? {}).length ||
+          !Object.keys(op.untouched.status).every((k) =>
+            op.untouched.keys.includes(k)
+          )
+        ) {
+          throw new Error(
+            `Conversion manifest: foldBookingDealIntoLead '${op.opKey}' needs untouched status keys that are among untouched.keys`
           );
         }
         break;

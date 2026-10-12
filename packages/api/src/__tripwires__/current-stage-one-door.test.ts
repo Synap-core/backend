@@ -313,3 +313,81 @@ describe("tripwire: currentStage advances go through ONE door", () => {
     expect(raw).toEqual([]);
   });
 });
+
+/**
+ * SHRINK-ONLY PIN — the advances that still write `current_stage` DIRECTLY
+ * instead of letting the subject's status lead (STEP = STATUS, work model L5,
+ * 2026-10-12; `advance-stage.ts` header). Since then an ungated `"door"`
+ * advance into a subject-led stage moves the subject through the status door
+ * and process-sync's follow writes the column. Two kinds of advance still write
+ * it themselves:
+ *
+ *   1. CALLER doors — scanned files that BOTH write the column (write-shaped,
+ *      `isWriteShaped`) AND call the door with `stageWrite: "caller"`: they
+ *      wrote it in their own multi-field UPDATE (focusSessions.update, Hub
+ *      PATCH, update-session.ts — the outputs-lock TOCTOU kept them in wave 3).
+ *   2. The GATED path — `moveSubjectFirst` declines a gated stage, keeping
+ *      "the stage stands, the gate pauses" (`stage-gate.ts`).
+ *
+ * Both are DERIVED from source, never listed, and pinned EXACTLY: growing goes
+ * red (a new direct writer), shrinking goes red too with a message to lower
+ * the ceiling — so the number only goes down.
+ *
+ * wave 5: gate executor + routers, with L7.
+ *
+ * NOT counted (named in the door's header, not debt): a subject that already
+ * holds the value, a failed subject write, a kind with no declared lifecycle.
+ */
+describe("shrink-only: direct current_stage writers that bypass step = status", () => {
+  /** Lower these when a writer is retired; never raise them. */
+  const CALLER_DOOR_CEILING = 3;
+  const GATED_DECLINE_CEILING = 1;
+
+  /** A CALL passing `stageWrite: "caller"` — not the type, not a comment. */
+  const CALLER_CALL = /^\s*stageWrite:\s*"caller",?\s*$/m;
+
+  const directCallerDoors = () =>
+    scan()
+      .map((h) => h.key)
+      .filter((k) =>
+        CALLER_CALL.test(readFileSync(join(...rootFor(k)), "utf8"))
+      )
+      .sort();
+
+  const moveSubjectFirstBody = (): string => {
+    const src = readFileSync(join(...rootFor(THE_DOOR)), "utf8");
+    const at = src.indexOf("async function moveSubjectFirst(");
+    expect(at, "moveSubjectFirst not found in the door").toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const end = rest.indexOf("\n}\n");
+    expect(end).toBeGreaterThan(0);
+    return rest.slice(0, end);
+  };
+
+  it("NON-VACUITY: the patterns still match what they hunt", () => {
+    expect(CALLER_CALL.test('        stageWrite: "caller",')).toBe(true);
+    expect(CALLER_CALL.test('  stageWrite: "caller" | "door";')).toBe(false);
+    expect(moveSubjectFirstBody()).toContain("writeStageSubjectStatus(");
+  });
+
+  it(`caller doors writing the column themselves: exactly ${CALLER_DOOR_CEILING}`, () => {
+    const set = directCallerDoors();
+    expect(
+      set.length,
+      set.length < CALLER_DOOR_CEILING
+        ? `A caller door was retired — lower CALLER_DOOR_CEILING to ${set.length}.`
+        : `A NEW direct current_stage writer: ${set.join(", ")}. Advance with stageWrite "door" (the subject leads) instead.`
+    ).toBe(CALLER_DOOR_CEILING);
+  });
+
+  it(`gated declines in the door: exactly ${GATED_DECLINE_CEILING}`, () => {
+    const n = (moveSubjectFirstBody().match(/resolveStageGate\(/g) ?? [])
+      .length;
+    expect(
+      n,
+      n < GATED_DECLINE_CEILING
+        ? "The gated path now lets the subject lead — lower GATED_DECLINE_CEILING."
+        : "A new gated decline in moveSubjectFirst is a new direct writer."
+    ).toBe(GATED_DECLINE_CEILING);
+  });
+});

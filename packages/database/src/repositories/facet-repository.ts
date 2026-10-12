@@ -30,6 +30,10 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import { stampProvenance } from "../utils/stamp-provenance.js";
 import {
+  notifyFacetAttached,
+  type FacetAttachContext,
+} from "../utils/facet-attached-hook.js";
+import {
   assertNoLifecycleMove,
   columnsForValue,
   LifecycleWriteOutsideDoorError,
@@ -66,6 +70,13 @@ export interface AttachFacetInput {
    * commits, via `emitAttachCompletedEvent()`.
    */
   skipEvent?: boolean;
+
+  /**
+   * What the caller knows about this attach that the row cannot carry —
+   * session, sync origin, the authorizing proposal, its governance lens. Rides
+   * the attach announcement (`notifyFacetAttached`) to the automation fan-out.
+   */
+  emitContext?: FacetAttachContext;
 
   // Provenance — mirrors CreateEntityInput.
   createdByKind?: "human" | "ai_agent" | "system";
@@ -251,6 +262,14 @@ export class FacetRepository extends BaseRepository<
 
       if (!data.skipEvent) {
         await this.emitCompleted("create", facet, userId);
+        // A NEW attach only — the idempotent return below announces nothing.
+        // Every attach path converges here (router, capture/sync upsert,
+        // merge, team bridge, materializer): ONE announcement per new role.
+        await notifyFacetAttached({
+          facet,
+          userId,
+          context: data.emitContext,
+        });
       }
       return facet;
     } catch (error) {
@@ -322,9 +341,11 @@ export class FacetRepository extends BaseRepository<
    */
   async emitAttachCompletedEvent(
     facet: EntityFacet,
-    userId: string
+    userId: string,
+    context?: FacetAttachContext
   ): Promise<void> {
     await this.emitCompleted("create", facet, userId);
+    await notifyFacetAttached({ facet, userId, context });
   }
 
   /** BaseRepository contract — delegates to `attach()` (the real name). */

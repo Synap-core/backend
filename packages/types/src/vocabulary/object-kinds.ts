@@ -584,6 +584,7 @@ export const VIEW_LENS_ICONS: Record<string, string> = {
   grid: "LayoutGrid",
   gallery: "Images",
   kanban: "Columns",
+  pipeline: "Columns",
   matrix: "Grid3x3",
   masonry: "LayoutGrid",
   calendar: "CalendarDays",

@@ -60,6 +60,7 @@ import type {
   OutputNodeDef,
   GuardNodeDef,
   RunPathTaken,
+  PlaybookRunWorkerSpec,
 } from "@synap/database";
 import {
   beginStepDiagnostics,
@@ -1299,6 +1300,7 @@ async function executeAutomationFlow(params: {
                             projectId?: string;
                             trackId?: string;
                             mode?: PlaybookRunMode;
+                            worker?: PlaybookRunWorkerSpec;
                           },
                           context,
                           workspaceId,
@@ -1835,6 +1837,8 @@ async function executeAutomationFlow(params: {
                 /** `"appointment"` ⇒ a `scheduled` session; `"propose"` ⇒ a
                  *  governed proposal only (see `executePlaybookRun`). */
                 mode?: PlaybookRunMode;
+                /** Stage worker spec (work model L4); absent ⇒ ordinary run. */
+                worker?: PlaybookRunWorkerSpec;
               };
 
               if (!data.playbookId && !data.playbookName)
@@ -1874,6 +1878,13 @@ async function executeAutomationFlow(params: {
                   // correctly. Forwarded explicitly, and pinned by
                   // `steps/__tests__/playbook-run-appointment.test.ts`.
                   mode: data.mode,
+                  // Same hazard, same fix: a worker node reaching the TOP-LEVEL
+                  // path without this line would run as an ordinary playbook —
+                  // no backlog, no stale check, a per_moment batch collapsed to
+                  // one subject-less run with no targets — while the identical
+                  // node inside a loop kept its spec. Forwarded WHOLE (one
+                  // field). Pinned by `playbook-run-mode-honoured.tripwire`.
+                  worker: data.worker,
                 },
                 context,
                 workspaceId,

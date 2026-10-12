@@ -78,10 +78,15 @@ export interface SideEffectPayload {
    * Search index and embedding ignore it, so mirrored records stay searchable.
    * Pinned by `__tests__/side-effects.sync-origin.test.ts`.
    *
+   * `"merge"` = a role MOVED onto the surviving entity of a merge (the facet
+   * door's attach, `entity-merge-service.ts`). Not a new role: event
+   * automations skip it unless opted in (`triggerConfig.includeMergeOrigin`);
+   * webhooks and notifications still deliver it — something did arrive.
+   *
    * TOP-LEVEL, never `data.origin`: `data` is the automation-visible payload and
    * feeds the event fingerprint.
    */
-  origin?: "sync";
+  origin?: "sync" | "merge";
 }
 
 // Re-export the reactor registry surface so future reactions can register
@@ -334,6 +339,27 @@ registerReactor(connectionSyncApprovalReactor);
 export async function emitSideEffects(
   payload: SideEffectPayload
 ): Promise<void> {
+  await fanOutSideEffects(payload);
+}
+
+/** What one fan-out did, per reactor id (the transition outbox records it). */
+export interface FanOutResult {
+  delivered: string[];
+  failed: string[];
+  /** No queue: nothing was attempted. */
+  queueDown: boolean;
+}
+
+/**
+ * The fan-out, reporting what it delivered. `skip` names reactors a previous
+ * attempt already delivered (the transition outbox's retry), so a retry never
+ * re-sends them. Never throws: a failed reactor is logged and reported.
+ */
+export async function fanOutSideEffects(
+  payload: SideEffectPayload,
+  skip: ReadonlySet<string> = new Set()
+): Promise<FanOutResult> {
+  const result: FanOutResult = { delivered: [], failed: [], queueDown: false };
   let boss: ReturnType<typeof getBoss>;
   try {
     boss = getBoss();
@@ -343,13 +369,16 @@ export async function emitSideEffects(
       { err: error, subjectType: payload.subjectType, action: payload.action },
       "Failed to enqueue side-effects: pg-boss unavailable (non-fatal)"
     );
-    return;
+    result.queueDown = true;
+    return result;
   }
 
   for (const reactor of getReactors()) {
     if (reactor.match && !reactor.match(payload)) continue;
+    if (skip.has(reactor.id)) continue;
     try {
       await reactor.handler(payload, { boss });
+      result.delivered.push(reactor.id);
     } catch (error) {
       // One reactor failing must not starve the rest — isolate and continue.
       logger.warn(
@@ -361,6 +390,8 @@ export async function emitSideEffects(
         },
         "Side-effect reactor failed (non-fatal, skipping)"
       );
+      result.failed.push(reactor.id);
     }
   }
+  return result;
 }

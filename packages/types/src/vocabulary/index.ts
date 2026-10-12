@@ -111,6 +111,12 @@ export interface ActionVerb {
    * never as a third `VerbMood` (proposal titles have no "in flight" reading).
    */
   progressive?: string;
+  /**
+   * What a pending choice DOES, said of the thing ("Updates Marie") — a
+   * caption describing a row's effect. Optional and curated like
+   * `progressive`; read through {@link resolveActionPresent}.
+   */
+  present?: string;
 }
 
 export type VerbMood = "imperative" | "past";
@@ -121,8 +127,8 @@ export type VerbMood = "imperative" | "past";
  * absent falls back to {@link humanizeToken}, which is always safe.
  */
 export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
-  create: { imperative: "Create", past: "Created" },
-  update: { imperative: "Update", past: "Updated" },
+  create: { imperative: "Create", past: "Created", present: "Creates" },
+  update: { imperative: "Update", past: "Updated", present: "Updates" },
   delete: { imperative: "Delete", past: "Deleted" },
   archive: { imperative: "Archive", past: "Archived" },
   restore: { imperative: "Restore", past: "Restored" },
@@ -157,7 +163,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // A key here earns its place by being emitted, not by being well-formed.
   received: { imperative: "Receive", past: "Received" },
   merge: { imperative: "Merge", past: "Merged", progressive: "Merging" },
-  link: { imperative: "Link", past: "Linked" },
+  link: { imperative: "Link", past: "Linked", present: "Links" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
   // "Add to <session>" (a capture offered to a running session) — `add`
@@ -285,6 +291,14 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".
   file_entities: { imperative: "File", past: "Filed" },
+  // Filing a captured record (a capture chip's accept): the proposal it was
+  // becomes the thing. "File" on the button, "Filed" on the chip and receipt.
+  file: {
+    imperative: "File",
+    past: "Filed",
+    progressive: "Filing",
+    present: "Files",
+  },
   unfile_entities: { imperative: "Unfile", past: "Unfiled" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
@@ -453,6 +467,22 @@ export function resolveActionLabel(
   const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
   const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
   return verb ? verb[mood] : humanizeToken(action);
+}
+
+/**
+ * What a pending choice does, said of the thing ("Updates", "Links") — the
+ * caption under a row whose action is decided but not yet taken. A row
+ * without a curated `present` keeps its imperative rather than guessing a
+ * conjugation nobody curated.
+ */
+export function resolveActionPresent(
+  action: string | null | undefined
+): string {
+  if (!action) return "";
+  const key = action.toLowerCase();
+  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+  const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
+  return verb?.present ?? resolveActionLabel(action, "imperative");
 }
 
 /**
@@ -835,6 +865,9 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   failed: "Failed",
   cancelled: "Cancelled",
   skipped: "Skipped",
+  // a stage worker's per-target result (`@synap-core/types/workers`): the
+  // worker made this thing. Beside done / failed / skipped above.
+  created: "Created",
   // W2 calm: a run the reaper found past its window with its session still
   // owing the person an open slot (automation_runs / playbook_runs). Not
   // failed, not running — waiting on the human.
@@ -948,6 +981,8 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   structured: "Structured",
   saved_without_ai: "Saved without AI",
   needs_answer: "Needs your answer",
+  // The latest round still holds a suggestion nobody filed or refused.
+  suggested: "Suggested",
   not_structured: "Not structured",
   // CONNECTION credential state (`secrets.connection_state`). Humanized it read
   // "Needs reauth" — jargon for "sign in again".
@@ -976,6 +1011,11 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // HOUSE AI reach (`IntelligenceStatusKind`): subscribed, never provisioned.
   // Humanized it read "Needs provision" — the person's next step is Activate.
   needs_provision: "Ready to activate",
+  // LIFECYCLE: the pipeline column holding values no declared option names
+  // (`UNCLASSIFIED_STATUS`, `@synap-core/types/lifecycle`). One word on web
+  // and relay — it was "Unclassified" on one and "Not a declared status" on
+  // the other.
+  __unclassified: "Not a declared status",
 };
 
 /**
@@ -1084,6 +1124,40 @@ export function resolveCaptureDoorLabel(
 ): string {
   if (!door) return "";
   return CAPTURE_DOOR_LABELS[door.trim().toLowerCase()] ?? humanizeToken(door);
+}
+
+/**
+ * CAPTURE CHIP states — where one record a capture proposed stands, as the word
+ * beside its mark.
+ *
+ * Its OWN table, not `STATUS_LABELS` rows: these are capture-chip states, and
+ * two of them share a token with a proposal lifecycle state that must keep its
+ * own word elsewhere. `pending` here is a chip HELD BY GOVERNANCE ("Waiting for
+ * approval"); on a proposal row it stays "Pending". `proposed` here is a record
+ * the AI suggested that nobody has filed yet ("Suggested") — not a proposal row.
+ * A refused chip reads "Rejected", the one word for a refusal (`STATUS_LABELS`).
+ * Keys are the client's chip-state tokens plus their spelled-out aliases; any
+ * other state (`failed`) is a plain lifecycle state and reads as one.
+ */
+export const CAPTURE_CHIP_STATE_LABELS: Readonly<Record<string, string>> = {
+  proposed: "Suggested",
+  suggested: "Suggested",
+  filing: "Filing",
+  filed: "Filed",
+  pending: "Waiting for approval",
+  awaiting_approval: "Waiting for approval",
+  refused: "Rejected",
+  rejected: "Rejected",
+};
+
+export function resolveCaptureChipStateLabel(
+  state: string | null | undefined
+): string {
+  if (!state) return "";
+  return (
+    CAPTURE_CHIP_STATE_LABELS[state.trim().toLowerCase()] ??
+    resolveStatusLabel(state)
+  );
 }
 
 /**

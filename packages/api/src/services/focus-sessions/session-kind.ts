@@ -147,6 +147,9 @@ function runSignalWhere(): SQL {
   return and(
     drizzleSql`${focusSessions.metadata} #>> ${ACCEPTED_PATH} IS NULL`,
     not(eq(focusSessions.status, SCHEDULED_STATUS)),
+    // The mirror of `followedWorkWhere` in `noRunSignalWhere`: a session a
+    // person FOLLOWED a playbook with is work, whatever `playbookId` says.
+    not(followedWorkWhere()),
     or(
       inArray(focusSessions.origin, [...RUN_ORIGINS]),
       isNotNull(focusSessions.playbookId),
@@ -168,7 +171,10 @@ function noRunSignalWhere(): SQL {
       ),
       isNull(focusSessions.playbookId),
       ...RUN_METADATA_KEYS.map((key) => metadataKeyWhere(key, "IS NULL"))
-    )
+    ),
+    // A person's session that FOLLOWS a playbook: its only run signal is the
+    // `playbookId` the follow wrote, and that does not make it a run.
+    followedWorkWhere()
   ) as SQL;
 }
 
@@ -176,6 +182,18 @@ function noRunSignalWhere(): SQL {
  * A work session a PERSON later attached to a playbook — `noRunSignalWhere`'s
  * conjunction with the `playbookId IS NULL` clause swapped for the attach mark.
  * Every other term is unchanged, so a machine-minted row can never enter here.
+ *
+ * FOLLOW ≠ RUN (work model L5, 2026-10-12). Following a playbook used to flip
+ * the session to `run` (founder, 2026-09-20: "so we can easily get every run
+ * of one playbook"). It no longer does: a followed session stays `work`, so it
+ * stays in its owner's work lens. The 09-20 reason still holds by another
+ * road — the follow keeps `playbookId` and mints a `playbook_runs` row, so the
+ * playbook's runs feed (`listPlaybookRuns`) still lists it.
+ *
+ * `followedVia` is stamped at exactly one place (`follow-playbook.ts`) and by
+ * no run-minting path, so it separates the two populations exactly. Never NULL
+ * (each term is an IS [NOT] NULL test or guards its NULL), so `not(…)` of it in
+ * `runSignalWhere` is safe.
  */
 function followedWorkWhere(): SQL {
   return and(
@@ -191,30 +209,15 @@ function followedWorkWhere(): SQL {
 /**
  * The population the two AMBIENT-ATTRIBUTION resolvers narrow to — the session
  * a PERSON is working in right now, which an agent's unaddressed write is
- * filed under. `work`, PLUS the one row `work` stopped covering on 2026-09-20.
+ * filed under, and never a cron's run or a receipt.
  *
- * Following a playbook writes `playbookId` onto a LIVE session, and that flips
- * its kind to `run` by design. But `run` is also what the 08:00 crons mint, and
- * keeping an ambient write out of a cron run is the entire reason both
- * resolvers narrow at all. A followed session is the opposite case: the person
- * opened it and then attached a process to it. Dropping it does not send the
- * write somewhere sensible — `resolveWorkSession` falls to `none` and a NEW
- * receipt is auto-opened, so the writes that had been landing in their session
- * go on landing beside it, silently, for as long as the attach lasts.
- *
- * `followedVia` is stamped at exactly one place (`follow-playbook.ts:476`) and
- * by no run-minting path, so it separates the two populations exactly.
- *
- * The KIND derivation is deliberately untouched: a followed session still reads
- * `run` in every lens and every list, which is the point of following one. This
- * is an attribution predicate, not a second opinion about kind — which is why
- * it lives here, beside the rule it qualifies, rather than in either resolver.
+ * Since follow ≠ run (2026-10-12) this IS the `work` population: a followed
+ * session is `work` (see `followedWorkWhere`). It was `work` plus followed rows
+ * while following made a session a run. It stays a named door so both
+ * resolvers keep reading one predicate.
  */
 export function ambientWorkWhere(): SQL {
-  return and(
-    notReceiptWhere(),
-    or(noRunSignalWhere(), followedWorkWhere())
-  ) as SQL;
+  return sessionKindWhere("work");
 }
 
 /** SQL: rows of exactly one kind. Apply as a WHERE clause, never a post-filter. */
@@ -248,6 +251,17 @@ function metadataValue(metadata: unknown, key: string): unknown {
   return bag[key];
 }
 
+/** `followedWorkWhere`, in TypeScript: attach mark, no other run signal. */
+function isFollowedWork(row: SessionKindProjectable): boolean {
+  return (
+    metadataValue(row.metadata, "followedVia") != null &&
+    !(
+      !!row.origin && (RUN_ORIGINS as readonly string[]).includes(row.origin)
+    ) &&
+    !RUN_METADATA_KEYS.some((k) => metadataValue(row.metadata, k) != null)
+  );
+}
+
 /**
  * THE derivation, in TypeScript — this and the SQL above must agree, which is
  * why they live in one file.
@@ -261,6 +275,8 @@ export function projectSessionKind(row: SessionKindProjectable): SessionKind {
   if (triage?.acceptedAt != null) return "work";
   // A scheduled session has executed nothing — see `runSignalWhere`.
   if (row.status === SCHEDULED_STATUS) return "work";
+  // A person's session that follows a playbook — see `followedWorkWhere`.
+  if (isFollowedWork(row)) return "work";
   const isRun =
     (!!row.origin && (RUN_ORIGINS as readonly string[]).includes(row.origin)) ||
     !!row.playbookId ||

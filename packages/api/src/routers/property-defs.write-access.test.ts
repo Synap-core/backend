@@ -33,6 +33,10 @@ const h = vi.hoisted(() => ({
   profiles: new Map<string, Record<string, unknown>>(),
   defs: new Map<string, Record<string, unknown>>(),
   db: null as unknown,
+  /** Def id → the profiles whose declared lifecycle it is. */
+  lifecycleOf: new Map<string, string[]>(),
+  reprojected: [] as string[][],
+  updatedWith: [] as Record<string, unknown>[],
 }));
 
 async function makeFakeDb(members: typeof h.members) {
@@ -88,6 +92,16 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: fakeDb,
     getDb: vi.fn(async () => fakeDb),
+    lifecycleProfilesOfDef: async (_db: unknown, id: string) =>
+      h.lifecycleOf.get(id) ?? [],
+    reprojectLifecycleProfiles: async (_db: unknown, ids: string[]) => {
+      h.reprojected.push(ids);
+    },
+    assertNotLifecycleDef: async (_db: unknown, ids: string[]) => {
+      if (ids.some((id) => h.lifecycleOf.has(id))) {
+        throw new actual.LifecycleDefChangeError(["it cannot be deleted"]);
+      }
+    },
     ProfileResolutionService: class {
       async resolveProfile(identifier: string) {
         return h.profiles.get(identifier) ?? null;
@@ -109,8 +123,9 @@ vi.mock("@synap/database", async (importOriginal) => {
         h.writes.push("create");
         return { id: "new-def", ...input };
       }
-      async update(id: string) {
+      async update(id: string, input: Record<string, unknown>) {
         h.writes.push("update");
+        h.updatedWith.push(input);
         return { id };
       }
     },
@@ -124,6 +139,9 @@ const ctx = (userId: string, workspaceId: string) =>
 
 beforeEach(() => {
   h.writes.length = 0;
+  h.lifecycleOf.clear();
+  h.reprojected.length = 0;
+  h.updatedWith.length = 0;
   h.members.length = 0;
   h.members.push(
     { workspaceId: WS_A, userId: "editor-a", role: "editor" },
@@ -254,5 +272,70 @@ describe("propertyDefs.update is gated on the def row", () => {
       .createCaller(ctx("editor-b", WS_B))
       .update({ id: DEF_OVERLAY_B, valueType: "number" });
     expect(h.writes).toEqual(["update"]);
+  });
+});
+
+describe("propertyDefs.update guards a declared lifecycle (arch F1)", () => {
+  const DEAL_STAGE = "20000000-0000-4000-8000-0000000000de";
+  const OPTIONS = [
+    { key: "draft", category: "open" },
+    { key: "won", category: "done" },
+  ];
+  beforeEach(() => {
+    h.defs.set(DEAL_STAGE, {
+      id: DEAL_STAGE,
+      slug: "commercialStage",
+      valueType: "string",
+      profileId: P_B,
+      workspaceId: null,
+      constraints: { enumOptions: OPTIONS, enum: ["draft", "won"] },
+    });
+    h.lifecycleOf.set(DEAL_STAGE, [P_B]);
+  });
+  const update = (input: Record<string, unknown>) =>
+    propertyDefsRouter
+      .createCaller(ctx("editor-b", WS_B))
+      .update({ id: DEAL_STAGE, ...input });
+
+  it("refuses a rename or a dropped option as a typed CONFLICT, writing nothing", async () => {
+    await expect(update({ slug: "stage" })).rejects.toMatchObject({
+      code: "CONFLICT",
+      cause: { reasonCode: "LIFECYCLE_DEF_PROTECTED" },
+    });
+    await expect(
+      update({ constraints: { enumOptions: [OPTIONS[0]] } })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(h.writes).toEqual([]);
+  });
+
+  it("an appended categorised option is stored through the mapper and re-projects", async () => {
+    await update({
+      constraints: {
+        enumOptions: [...OPTIONS, { key: "lost", category: "lost" }],
+      },
+    });
+    expect(h.writes).toEqual(["update"]);
+    expect(h.updatedWith[0].constraints).toMatchObject({
+      enum: ["draft", "won", "lost"],
+    });
+    expect(h.reprojected).toEqual([[P_B]]);
+  });
+
+  it("a plain property keeps the legacy path (no guard, no re-projection)", async () => {
+    await propertyDefsRouter
+      .createCaller(ctx("editor-b", WS_B))
+      .update({ id: DEF_BASE_ON_B, constraints: { enum: [] } });
+    expect(h.writes).toEqual(["update"]);
+    expect(h.reprojected).toEqual([]);
+  });
+
+  it("refuses deleting it", async () => {
+    // Delete is gated on the row's workspace first; a workspace-owned def.
+    h.defs.set(DEAL_STAGE, { ...h.defs.get(DEAL_STAGE), workspaceId: WS_B });
+    await expect(
+      propertyDefsRouter
+        .createCaller(ctx("editor-b", WS_B))
+        .delete({ id: DEAL_STAGE })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });

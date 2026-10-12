@@ -7,6 +7,7 @@ import {
   slotKeyBase,
   slotLabelOf,
   stampSlotKeys,
+  unmetRequiredOutcomes,
   type OutcomeCriterionLike,
 } from "./outcome.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
@@ -533,5 +534,58 @@ describe("metBy — the door that earned the `done` (rules out I)", () => {
     expect(
       view.outcomes.find((o) => o.label === "Claimed only")?.state.state
     ).toBe("needs_review");
+  });
+});
+
+describe("an OPTIONAL slot never holds a gate (rules out 'every slot is required')", () => {
+  const view = (slots: unknown[]) =>
+    projectSessionOutcomes({
+      expectedOutputs: slots,
+      criteria: [],
+      evaluations: [],
+      sessionTerminal: true,
+    });
+
+  it("unfilled: not required, not met, no unmet required outcome, no input raised", () => {
+    const v = view([
+      {
+        kind: "invoice",
+        label: "Milestone invoice",
+        key: "milestone-invoice",
+        owner: "human",
+        blockedReason: "needs_decision",
+        optional: true,
+      },
+    ]);
+    expect(v.outcomes[0]).toMatchObject({
+      key: "milestone-invoice",
+      required: false,
+      met: false,
+    });
+    expect(unmetRequiredOutcomes(v.outcomes)).toEqual([]);
+    expect(v.inputs.filter((i) => i.open)).toEqual([]);
+  });
+
+  it("filled: met and done, like any delivered slot", () => {
+    const v = view([
+      {
+        kind: "invoice",
+        label: "Milestone invoice",
+        key: "milestone-invoice",
+        optional: true,
+        status: "done",
+        attestedBy: "user-1",
+      },
+    ]);
+    expect(v.outcomes[0]).toMatchObject({ met: true, required: false });
+    expect(v.outcomes[0]!.state.state).toBe("done");
+  });
+
+  it("a required sibling still holds the gate", () => {
+    const v = view([
+      { kind: "invoice", label: "Milestone invoice", optional: true },
+      { kind: "report", label: "Acceptance note" },
+    ]);
+    expect(unmetRequiredOutcomes(v.outcomes)).toEqual(["acceptance-note"]);
   });
 });

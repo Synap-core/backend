@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -146,5 +146,32 @@ describe("cell version stamp — door parity (B3)", () => {
     // Two update branches (workspace-scoped upsert + pod-global manual upsert)
     // and one insert `values` — all three must go through the spread.
     expect(src.split("...versionUpdate").length - 1).toBe(3);
+  });
+});
+
+describe("overlay health — door parity", () => {
+  it("every Hub door that projects template health also projects overlays", () => {
+    // DERIVED, not hand-listed: any REST file that calls `templateHealthFor(`
+    // is a health door. A new door joins this scan by existing. The MCP verb
+    // goes through `listWorkspaceTemplateHealth`, which the overlays pglite
+    // test drives directly. Granularity is the file, not the call site.
+    const doors = readdirSync(here)
+      .filter((f) => f.endsWith(".ts") && !f.includes(".test."))
+      .filter((f) => read(`./${f}`).includes("templateHealthFor("));
+    // Non-vacuity: /workspaces and /installed today.
+    expect(doors).toEqual(
+      expect.arrayContaining(["workspaces.ts", "installed.ts"])
+    );
+    for (const f of doors) {
+      const src = read(`./${f}`);
+      expect(
+        /\n\s+overlays:\s*overlayHealthFor\(/.test(src),
+        `${f} projects template health but not \`overlays\` — a retired overlay is invisible through it.`
+      ).toBe(true);
+      expect(
+        src.includes("templateSlugsOf("),
+        `${f} resolves the catalog for its spaces' own slugs only — every overlay would read as unknown/unlisted.`
+      ).toBe(true);
+    }
   });
 });

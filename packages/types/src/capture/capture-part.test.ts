@@ -50,6 +50,7 @@ const PLACEHOLDERS: Record<string, unknown> = {
   "@@TI301@@": "t".repeat(CAPTURE_RESULT_LIMITS.titleMaxChars + 1),
   "@@N501@@": "n".repeat(CAPTURE_RESULT_LIMITS.noticeMaxChars + 1),
   "@@C2049@@": "c".repeat(CAPTURE_RESULT_LIMITS.contentMaxChars + 1),
+  "@@DS281@@": "d".repeat(CAPTURE_RESULT_LIMITS.descriptionMaxChars + 1),
   "@@REL41@@": Array.from(
     { length: CAPTURE_RESULT_LIMITS.relationsMax + 1 },
     () => ({ sourceTempId: "s", targetTempId: "t", relationType: "r" })
@@ -112,7 +113,9 @@ describe("capture clarification part — golden fixture", () => {
         // Every outcome a receipt can show must have a row, or a reader's
         // rendering of the missing one is never exercised.
         const outcomes = new Set(
-          (p.rows as unknown as Array<{ outcome: string }>).map((r) => r.outcome)
+          (p.rows as unknown as Array<{ outcome: string }>).map(
+            (r) => r.outcome
+          )
         );
         return CAPTURE_FILED_OUTCOMES.every((o) => outcomes.has(o))
           ? "f:every-outcome"

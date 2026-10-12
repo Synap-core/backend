@@ -38,6 +38,7 @@ import type {
   RemapFacetPropertyValuesOp,
   FoldRoleIntoStatusOp,
   RenameProfileOp,
+  FoldBookingDealIntoLeadOp,
   MergeIntoScope,
 } from "./manifest.js";
 import {
@@ -46,7 +47,11 @@ import {
   buildValueMapJson,
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
-import { lifecycleProjectionQueries } from "../services/lifecycle/project-lifecycle-columns.js";
+import {
+  lifecycleProjectionQueries,
+  type LifecycleProjectionScope,
+} from "../services/lifecycle/project-lifecycle-columns.js";
+import { EVERY_PROFILE, opProfileSlugs } from "./data-changes.js";
 import {
   classifyRelationDefCopies,
   type RelationDefMeaning,
@@ -132,6 +137,20 @@ export interface OpCounts {
   facetsRemapped?: number;
   /** foldRoleIntoStatus: entities whose existing target-role facet(s) received the status. */
   facetsFolded?: number;
+  /** foldBookingDealIntoLead: untouched booking deals turned into a lead. */
+  dealsConverted?: number;
+  /** foldBookingDealIntoLead: booking deals someone edited — kept for a person to decide. */
+  dealsKeptEdited?: number;
+  /** foldBookingDealIntoLead: untouched booking deals with no linked person — kept. */
+  dealsKeptNoPerson?: number;
+  /** foldBookingDealIntoLead: existing leads moved forward to the booking status. */
+  leadsAdvanced?: number;
+  /** foldBookingDealIntoLead: existing leads whose lifecycle is not declared — left as they are. */
+  leadsUnjudged?: number;
+  /** foldBookingDealIntoLead: attended_by / works_at edges created. */
+  relationsCreated?: number;
+  /** foldBookingDealIntoLead (destructive tail): converted deals soft-deleted. */
+  entitiesArchived?: number;
   /** projectLifecycleColumns: rows whose lifecycle columns were filled from the projection. */
   lifecycleColumnsProjected?: number;
   /** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
@@ -254,6 +273,7 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   // role or a kind under two names.
   foldRoleIntoStatus: "fatal",
   renameProfile: "fatal",
+  foldBookingDealIntoLead: "fatal",
   // Derivation only: an unfilled column reads as "no status yet"; the declare
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
@@ -285,7 +305,8 @@ export function opHasDestructiveTail(op: ConversionOp): boolean {
     op.op === "mergeInto" ||
     op.op === "dedupeProfileRows" ||
     op.op === "dedupeRelationDefs" ||
-    op.op === "foldRoleIntoStatus"
+    op.op === "foldRoleIntoStatus" ||
+    op.op === "foldBookingDealIntoLead"
   );
 }
 
@@ -470,7 +491,13 @@ export async function runConversions(
       } else {
         const plan: FieldPlanRow[] = [];
         const counts = await sql.begin(async (tx) => {
-          const c = await applyOp(tx as unknown as Sql, op, options, plan);
+          const applied = await applyOp(
+            tx as unknown as Sql,
+            op,
+            options,
+            plan
+          );
+          const c = await reprojectAfterOp(tx as unknown as Sql, op, applied);
           await recordLedger(tx as unknown as Sql, op.opKey, c, null);
           return c;
         });
@@ -606,6 +633,8 @@ async function applyOp(
       return applyFoldRoleIntoStatus(tx, op, options.destructiveTail);
     case "renameProfile":
       return applyRenameProfile(tx, op);
+    case "foldBookingDealIntoLead":
+      return applyFoldBookingDealIntoLead(tx, op, options.destructiveTail);
     case "projectLifecycleColumns":
       return applyProjectLifecycleColumns(tx);
     case "keep":
@@ -2350,6 +2379,193 @@ export async function applyFoldRoleIntoStatus(
   return counts;
 }
 
+/** Forward-only by CATEGORY (open < active < done; paused / lost never left). */
+const BOOKING_FORWARD_RANK: Record<string, number> = {
+  open: 0,
+  active: 1,
+  done: 2,
+};
+
+/**
+ * Booking-made draft deals → leads. See FoldBookingDealIntoLeadOp. One
+ * transaction (runConversions wraps applyOp); the lead facet's status columns
+ * follow through the engine's re-projection of the touched profiles.
+ */
+export async function applyFoldBookingDealIntoLead(
+  tx: Sql,
+  op: FoldBookingDealIntoLeadOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const counts: OpCounts = {};
+  const bump = (k: keyof OpCounts, n = 1) => {
+    if (n) counts[k] = ((counts[k] as number | undefined) ?? 0) + n;
+  };
+  const deals = await tx<
+    Array<{
+      id: string;
+      user_id: string;
+      workspace_id: string | null;
+      properties: Record<string, unknown>;
+      foreign_edges: number;
+    }>
+  >`
+    SELECT e.id, e.user_id, e.workspace_id, e.properties,
+      (SELECT count(*)::int FROM relations r
+        WHERE (r.source_entity_id = e.id OR r.target_entity_id = e.id)
+          AND NOT (r.type = ${op.relations.dealLink} AND r.target_entity_id = e.id)
+      ) AS foreign_edges
+    FROM entities e
+    JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+    WHERE e.deleted_at IS NULL
+      AND e.properties->>'source' = ${op.source}
+      AND COALESCE(e.properties->>'calBookingUid', '') <> ''
+    ORDER BY e.id
+  `;
+  const allowed = new Set(op.untouched.keys);
+  const archive: string[] = [];
+  for (const d of deals) {
+    const props = d.properties ?? {};
+    const statusKeys = Object.keys(op.untouched.status).filter(
+      (k) => props[k] !== undefined
+    );
+    const untouched =
+      d.foreign_edges === 0 &&
+      Object.keys(props).every((k) => allowed.has(k)) &&
+      statusKeys.length > 0 &&
+      statusKeys.every((k) => props[k] === op.untouched.status[k]);
+    if (!untouched) {
+      bump("dealsKeptEdited");
+      continue;
+    }
+    const linked = await tx<Array<{ id: string; slug: string }>>`
+      SELECT s.id, sp.slug FROM relations r
+      JOIN entities s ON s.id = r.source_entity_id AND s.deleted_at IS NULL
+      JOIN profiles sp ON sp.id = s.profile_id
+      WHERE r.target_entity_id = ${d.id}::uuid AND r.type = ${op.relations.dealLink}
+        AND sp.slug IN (${op.lead.personSlug}, ${op.companySlug})
+      ORDER BY r.created_at, s.id
+    `;
+    const person = linked.find((l) => l.slug === op.lead.personSlug);
+    if (!person) {
+      bump("dealsKeptNoPerson");
+      continue;
+    }
+    const company = linked.find((l) => l.slug === op.companySlug);
+
+    // (1) The lead role at the booking status — attach, or forward only.
+    const leadProfile = await resolveTargetProfileId(
+      tx,
+      op.lead.role,
+      d.workspace_id
+    );
+    if (!leadProfile) {
+      bump("dealsKeptNoPerson");
+      continue;
+    }
+    const facets = await tx<Array<{ id: string; current: string | null }>>`
+      SELECT f.id, f.properties->>${op.lead.statusKey} AS current
+      FROM entity_facets f
+      WHERE f.entity_id = ${person.id}::uuid AND f.profile_id = ${leadProfile}::uuid
+        AND f.deleted_at IS NULL
+    `;
+    if (facets.length === 0) {
+      const ins = await tx`
+        INSERT INTO entity_facets (entity_id, profile_id, user_id, workspace_id, properties, metadata)
+        VALUES (${person.id}::uuid, ${leadProfile}::uuid, ${d.user_id}, ${d.workspace_id}::uuid,
+                jsonb_build_object(${op.lead.statusKey}::text, ${op.lead.status}::text),
+                jsonb_build_object('convertedFrom', ${op.slug}::text, 'dealId', ${d.id}::text,
+                                   'conversion', ${op.opKey}::text))
+      `;
+      bump("facetsCreated", ins.count ?? 0);
+    } else {
+      const categories = await leadCategories(
+        tx,
+        leadProfile,
+        op.lead.statusKey
+      );
+      for (const f of facets) {
+        if (!categories) {
+          if (f.current !== op.lead.status) bump("leadsUnjudged");
+          continue;
+        }
+        const to = BOOKING_FORWARD_RANK[categories[op.lead.status] ?? ""];
+        const from =
+          f.current == null || f.current === ""
+            ? -1
+            : BOOKING_FORWARD_RANK[categories[f.current] ?? ""];
+        if (to === undefined || from === undefined || from >= to) continue;
+        await tx`
+          UPDATE entity_facets
+          SET properties = COALESCE(properties, '{}'::jsonb)
+                || jsonb_build_object(${op.lead.statusKey}::text, ${op.lead.status}::text),
+              updated_at = now()
+          WHERE id = ${f.id}::uuid
+        `;
+        bump("leadsAdvanced");
+      }
+    }
+
+    // (2) The call is attended by the person; (3) the person works at the company.
+    const edge = async (source: string, target: string, type: string) => {
+      const r = await tx`
+        INSERT INTO relations (user_id, workspace_id, source_entity_id, target_entity_id, type, metadata)
+        SELECT ${d.user_id}, ${d.workspace_id}::uuid, ${source}::uuid, ${target}::uuid, ${type},
+               jsonb_build_object('conversion', ${op.opKey}::text)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM relations x
+          WHERE x.source_entity_id = ${source}::uuid AND x.target_entity_id = ${target}::uuid
+            AND x.type = ${type}
+        )
+      `;
+      bump("relationsCreated", r.count ?? 0);
+    };
+    const events = await tx<Array<{ id: string }>>`
+      SELECT e.id FROM entities e
+      JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.eventSlug}
+      WHERE e.deleted_at IS NULL
+        AND e.properties->>'calBookingUid' = ${String(props.calBookingUid)}
+    `;
+    for (const ev of events)
+      await edge(ev.id, person.id, op.relations.attendedBy);
+    if (company) await edge(person.id, company.id, op.relations.worksAt);
+
+    bump("dealsConverted");
+    archive.push(d.id);
+  }
+
+  if (destructiveTail && archive.length > 0) {
+    const r = await tx`
+      UPDATE entities SET deleted_at = now(), updated_at = now()
+      WHERE id = ANY(${archive}::uuid[]) AND deleted_at IS NULL
+    `;
+    bump("entitiesArchived", r.count ?? 0);
+  }
+  return counts;
+}
+
+/** The lead lifecycle's option → category, or null when it is not declared. */
+async function leadCategories(
+  tx: Sql,
+  profileId: string,
+  statusKey: string
+): Promise<Record<string, string> | null> {
+  const rows = await tx<Array<{ opts: unknown }>>`
+    SELECT pd.constraints->'enumOptions' AS opts
+    FROM profile_properties pp
+    JOIN property_defs pd ON pd.id = pp.property_def_id
+    WHERE pp.profile_id = ${profileId}::uuid AND pp.is_lifecycle AND pd.slug = ${statusKey}
+    LIMIT 1
+  `;
+  const opts = rows[0]?.opts;
+  if (!Array.isArray(opts)) return null;
+  const out: Record<string, string> = {};
+  for (const o of opts as Array<{ key?: unknown; category?: unknown }>) {
+    if (typeof o.key === "string" && typeof o.category === "string")
+      out[o.key] = o.category;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /**
  * Rename a profile slug in place. See RenameProfileOp. Refuses (throws) when
  * an active `toSlug` row already holds the same scope + workspace as a row
@@ -2475,6 +2691,7 @@ export async function computeCounts(
     case "remapFacetPropertyValues":
     case "foldRoleIntoStatus":
     case "renameProfile":
+    case "foldBookingDealIntoLead":
       // Derived, not mirrored: the apply itself, rolled back. (renamePropertyKey
       // carries no field plan — opCarriesFieldPlan stays merge/dedupe only — but
       // its counts come from the same rolled-back apply, never a count query.)
@@ -2598,11 +2815,40 @@ export async function computeCounts(
   }
 }
 
+/**
+ * Keep the lifecycle COLUMNS (the truth) in step with an op that changed data
+ * (backend review F12). An op writes `properties` — a value remap, a role
+ * folded into a status, a profile merge — and only the projection builder
+ * knows which of those keys is a declared lifecycle. So every op that changed
+ * anything re-projects the profiles it touches (`opProfileSlugs`, derived per
+ * op type), in the SAME transaction. The boot-time `projectLifecycleColumns`
+ * op is ledgered once, so an operator running a deferred op later would
+ * otherwise leave the columns stale for good. Idempotent: only rows whose
+ * columns differ from the projection are touched.
+ */
+async function reprojectAfterOp(
+  tx: Sql,
+  op: ConversionOp,
+  counts: OpCounts
+): Promise<OpCounts> {
+  if (op.op === "projectLifecycleColumns") return counts;
+  if (Object.values(counts).every((v) => !v)) return counts;
+  const slugs = opProfileSlugs(op);
+  const re = await applyProjectLifecycleColumns(
+    tx,
+    slugs === EVERY_PROFILE ? null : { profileSlugs: slugs }
+  );
+  return { ...counts, ...re };
+}
+
 /** Fill the lifecycle columns from the read projection (one builder, see the op). */
-async function applyProjectLifecycleColumns(tx: Sql): Promise<OpCounts> {
+async function applyProjectLifecycleColumns(
+  tx: Sql,
+  scope: LifecycleProjectionScope = null
+): Promise<OpCounts> {
   let projected = 0;
   let uncategorized = 0;
-  for (const q of lifecycleProjectionQueries()) {
+  for (const q of lifecycleProjectionQueries(scope)) {
     // Re-enter the compiled statement through the TAGGED-template door every
     // `Sql` here supports (postgres.js and the PGlite shims alike): split on
     // its `$n` placeholders and pass the params in placeholder order.

@@ -98,6 +98,7 @@ vi.mock("@synap/database", () => ({
 
 const {
   handleAutomationTriggerMatch,
+  matchRuleScopeFilters,
   buildAutomationEventClaimKey,
   resolveAutomationEventFingerprintId,
   AUTOMATION_EVENT_CLAIM_NAMESPACE,
@@ -293,5 +294,70 @@ describe("matcher daily cap (triggerConfig.maxRunsPerDay)", () => {
     expect(updateSets).not.toHaveBeenCalledWith(
       expect.objectContaining({ errorMessage: "daily_cap_reached" })
     );
+  });
+});
+
+describe("stage worker idempotency — per (thing, transition event) (work model L4)", () => {
+  const AUTOMATION = "auto-worker";
+  const move = (transitionId: string) => ({
+    eventType: "entity.transition.completed",
+    subjectId: "deal-1",
+    // The emit's payload: the StatusTransition spread + lifecycleProfile.
+    data: {
+      transitionId,
+      entityId: "deal-1",
+      profileSlug: "deal",
+      role: null,
+      from: "draft",
+      to: "review",
+      category: "active",
+      lifecycleProfile: "deal",
+    },
+  });
+  const keyOf = (m: ReturnType<typeof move>) =>
+    buildAutomationEventClaimKey({
+      automationId: AUTOMATION,
+      eventType: m.eventType,
+      subjectEntityId: m.subjectId,
+      eventFingerprintId: resolveAutomationEventFingerprintId(m),
+    });
+
+  it("one move delivered twice is ONE claim", () => {
+    expect(keyOf(move("t-1"))).toBe(keyOf(move("t-1")));
+  });
+
+  it("the same draft→review move made twice is TWO claims (two moves, not a redelivery)", () => {
+    expect(keyOf(move("t-1"))).not.toBe(keyOf(move("t-2")));
+  });
+
+  it("the move's own id IS the fingerprint (named, not left to a payload hash)", () => {
+    expect(resolveAutomationEventFingerprintId(move("t-9"))).toBe("t-9");
+  });
+});
+
+describe("a project-scoped worker and a ROLE's move (work model L4, edge 9)", () => {
+  // A role's transition names the PARENT entity as its subject (the emit's
+  // `subjectId: t.entityId`), so its project membership is the entity's.
+  const facts = (projects: string[]) => ({
+    entityId: "person-1",
+    projectIds: new Set(projects),
+  });
+  it("the move of a thing in project P fires P's worker, not Q's", () => {
+    const event = "entity.transition.completed";
+    expect(
+      matchRuleScopeFilters(event, { projectId: "P" } as never, facts(["P"]))
+    ).toBe(true);
+    expect(
+      matchRuleScopeFilters(event, { projectId: "Q" } as never, facts(["P"]))
+    ).toBe(false);
+  });
+  it("a membership that could not be READ never matches", () => {
+    expect(
+      matchRuleScopeFilters(
+        "entity.transition.completed",
+        { projectId: "P" } as never,
+        { entityId: "person-1", projectIds: null }
+      )
+    ).toBe(false);
   });
 });

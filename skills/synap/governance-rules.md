@@ -36,17 +36,17 @@ Changed: [field] [old value] → [new value]
 
 ```
 Context: User asked to track the Acme deal they mentioned in today's call.
-Intent:  Creates a deal entity for Acme at lead stage linked to Alice Johnson.
+Intent:  Creates a deal entity for Acme at draft stage linked to Alice Johnson.
 Links:   ent_person_alice_johnson, ent_company_acme
 ```
 
 **Example (update):**
 
 ```
-Context: User confirmed the Acme deal moved to proposal stage.
+Context: User confirmed the Acme proposal went out.
 Intent:  Advances the deal through the pipeline so it appears in the proposal view.
 Links:   ent_deal_acme, ent_person_alice_johnson
-Changed: dealStage lead → proposal
+Changed: commercialStage draft → proposed
 ```
 
 Rules:

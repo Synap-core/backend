@@ -502,6 +502,24 @@ function dataChangesNeedConsentBody(
   };
 }
 
+/**
+ * The kind of a package body that is NOT a workspace, or null.
+ *
+ * Read from the RAW body: `skill` and `capability` are the CP
+ * `packageDefinitionSchema` slots that carry another kind's definition, and
+ * `PackageApplySchema` has no slot for either, so zod deletes them before any
+ * later check could see them. Neither is ever a workspace-definition field.
+ */
+export function nonWorkspacePackageKind(
+  raw: Record<string, unknown>
+): "skill" | "capability" | null {
+  const isObject = (v: unknown) =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  if (isObject(raw.skill)) return "skill";
+  if (isObject(raw.capability)) return "capability";
+  return null;
+}
+
 // ─── Route registration ──────────────────────────────────────────────────────
 
 export function registerPackagesRoutes(app: HubHono): void {
@@ -582,6 +600,24 @@ export function registerPackagesRoutes(app: HubHono): void {
         {
           error:
             "instanceName is retired: a template is installed once per pod. To use it for a project, link the project to the existing space (`project_use_workspace`).",
+        },
+        400
+      );
+    }
+    // ── Not a workspace package ──────────────────────────────────────────
+    // This door provisions a WORKSPACE for any body with a `_meta.slug`. A
+    // skill or capability package body (its definition nests under `skill` /
+    // `capability`, slots zod strips below) used to sail through and mint an
+    // empty "New Workspace" (incident 2026-10-12: `synap market update` sent
+    // the `creative-director` skill here). Checked on `raw`, before governance.
+    const otherKind = nonWorkspacePackageKind(raw);
+    if (otherKind) {
+      return c.json(
+        {
+          error: `This is a ${otherKind} package, not a workspace: /packages/apply only installs workspaces. Install it with the \`market.install\` verb (kind: "${otherKind}"); an installed one updates through its own reconcile, never here.`,
+          reasonCode: "NOT_A_WORKSPACE_PACKAGE",
+          kind: otherKind,
+          door: "market.install",
         },
         400
       );

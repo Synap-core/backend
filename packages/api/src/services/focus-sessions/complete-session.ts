@@ -43,7 +43,10 @@ import {
   drizzleSql,
   liveRunStatusWhere,
   playbooks,
+  stampOpenWorkerTargets,
 } from "@synap/database";
+import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
+import { isDeliverableOutstanding } from "@synap-core/types/units";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { retirementForClose } from "./owed-outputs.js";
@@ -300,9 +303,11 @@ export async function completeFocusSession(
     await settleParentAutomationRunFromChild({ playbookRunId: run.id });
   }
 
+  // THE owed floor (`isDeliverableOutstanding`): a retired or OPTIONAL slot is
+  // owed by nobody, so it is no reason to warn.
   const unfinishedOutputs = (
-    (session.expectedOutputs as Array<{ status?: string }> | null) ?? []
-  ).filter((o) => o.status !== "done").length;
+    (session.expectedOutputs as ExpectedOutput[] | null) ?? []
+  ).filter((o) => isDeliverableOutstanding(o)).length;
 
   // CANCELLED retires the slots the human still owed — the obligation ends with
   // the work. Stamped, never deleted (see the header). Computed inside the
@@ -401,6 +406,25 @@ export async function completeFocusSession(
       playbookId: session.playbookId,
       subjectEntityId: session.subjectEntityId,
     });
+  }
+
+  // A stage worker's targets the session never settled are `skipped` /
+  // `session_closed` — "unfinished" is a mark, never an absence (work model
+  // L4). Every exit, after the commit; first verdict wins, so a target already
+  // settled keeps its result. A failed stamp never rolls the close back.
+  if (updated) {
+    try {
+      await stampOpenWorkerTargets({
+        sessionId,
+        result: "skipped",
+        reason: WORKER_TARGET_REASONS.sessionClosed,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, sessionId },
+        "worker targets not stamped on close (the close stands)"
+      );
+    }
   }
 
   // The stop, AFTER the commit: no lock is held across its calls and nothing it

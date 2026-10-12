@@ -10,7 +10,11 @@
  * source token for token. This is the rule they now all call.
  *
  * ── THE TWO QUESTIONS, ASKED IN THIS ORDER ─────────────────────────────────
- * 1. OUTSTANDING — still owed at all: not stamped `done` and not retired.
+ * 1. OUTSTANDING — still owed at all: not stamped `done`, not retired, and
+ *    not OPTIONAL. An optional slot (`optional: true`, declared at its birth —
+ *    e.g. a milestone invoice an `at-close` engagement never produces) is owed
+ *    by NOBODY: no needs-you row, no reaper hold, never an unmet required
+ *    outcome. Filled, it is `done` like any other and counts as produced.
  *    `done` has one write door, so anything else (`pending`, absent, a value
  *    nobody has heard of) is still owed — treating an unknown status as done
  *    would under-report the work, which is the failure direction that matters.
@@ -67,20 +71,42 @@ export interface DeliverableFacts {
   claimedDone?: boolean | null;
   /** The delegate handed it BACK, and why. */
   returnedReason?: string | null;
+  /** Declared at birth: produce it if it applies, never owe it. */
+  optional?: boolean | null;
 }
 
 /** Who an outstanding deliverable is owed by. */
 export type DeliverableOwedBy = "you" | "session";
 
-/** Still owed at all — not stamped done, not retired. THE floor. */
+/**
+ * Still owed at all — not stamped done, not retired, not optional. THE floor:
+ * every "owed" reader (needs-you, tallies, reapers via the SQL mirror, the
+ * stage gate via `outcome.ts`'s `required`) derives from it.
+ */
 export function isDeliverableOutstanding(
-  slot: Pick<DeliverableFacts, "status" | "retiredAt">
+  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "optional">
 ): boolean {
   // `retiredAt == null`, never `!retiredAt`: the pod's SQL mirror reads
   // `slot->>'retiredAt' IS NULL`, so a stamped-but-empty `""` is RETIRED there.
   // A falsy test here read it as still owed, and the row's TS tally then
   // disagreed with the SQL owed count on the same `projects.path` row.
-  return slot.status !== "done" && slot.retiredAt == null;
+  // `optional !== true`, never `!optional`: the SQL mirror reads
+  // `slot->>'optional' IS DISTINCT FROM 'true'` — only a real `true` lets go.
+  return (
+    slot.status !== "done" && slot.retiredAt == null && slot.optional !== true
+  );
+}
+
+/**
+ * An optional slot nobody has filled — not done, not retired. Owed by nobody
+ * (see the floor above), and not done either: it reads `not_started`.
+ */
+export function isUnfilledOptional(
+  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "optional">
+): boolean {
+  return (
+    slot.optional === true && slot.status !== "done" && slot.retiredAt == null
+  );
 }
 
 /**
@@ -90,7 +116,7 @@ export function isDeliverableOutstanding(
  * construction.
  */
 export function deliverableOwedBy(
-  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "owner">
+  slot: Pick<DeliverableFacts, "status" | "retiredAt" | "owner" | "optional">
 ): DeliverableOwedBy | null {
   if (!isDeliverableOutstanding(slot)) return null;
   return slot.owner === "human" ? "you" : "session";
@@ -111,6 +137,11 @@ export function deliverableUnitInput(
   slot: DeliverableFacts,
   ctx: DeliverableContext
 ): UnitStateInput {
+  // Before the floor: owed by nobody, but NOT finished — it was never made.
+  // A claim on it is still a claim to check (the mark only — no one owes it).
+  if (isUnfilledOptional(slot)) {
+    return slot.claimedDone ? { pendingDecisions: 1 } : { everStarted: false };
+  }
   const owedBy = deliverableOwedBy(slot);
   if (owedBy === null) return { terminal: true };
   if (slot.claimedDone) return { pendingDecisions: 1 };
@@ -151,7 +182,7 @@ export function tallyDeliverables(
       continue;
     }
     const by = deliverableOwedBy(slot);
-    if (by === null) continue; // retired
+    if (by === null) continue; // retired, or optional and unfilled
     owed += 1;
     if (by === "you") owedByYou += 1;
   }

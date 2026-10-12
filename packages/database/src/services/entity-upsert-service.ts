@@ -62,6 +62,18 @@ const logger = createLogger({ module: "entity-upsert-service" });
 export type { IdentitySignal };
 
 export interface EntityUpsertInput {
+  /**
+   * `"sync"` for a connection's bulk mirror: a role attached by it is
+   * announced as sync (the automation matcher skips it unless a rule opts in),
+   * so a first sync of 200 contacts never starts 200 processes.
+   */
+  origin?: "sync";
+  /**
+   * The bulk run this record belongs to (one import / capture apply). A role
+   * attached by it announces the batch, so a propose-mode activator files ONE
+   * proposal for the run (`proposeRulePlaybookRun`), not one per record.
+   */
+  batchId?: string;
   profileSlug: string;
   title: string;
   properties: Record<string, unknown>;
@@ -149,7 +161,9 @@ export class EntityUpsertService {
     roleProfileId: string,
     properties: Record<string, unknown>,
     workspaceId: string | null,
-    userId: string
+    userId: string,
+    origin: EntityUpsertInput["origin"],
+    batchId: EntityUpsertInput["batchId"]
   ): Promise<void> {
     try {
       await this.facetRepo.attach(
@@ -160,6 +174,11 @@ export class EntityUpsertService {
           workspaceId,
           properties,
           skipValidation: true,
+          emitContext: {
+            ...(origin ? { origin } : {}),
+            ...(batchId ? { batchId } : {}),
+            fallbackWorkspaceId: workspaceId,
+          },
         },
         userId
       );
@@ -193,7 +212,9 @@ export class EntityUpsertService {
       rolePayload.profileId,
       input.properties,
       input.workspaceId,
-      input.userId
+      input.userId,
+      input.origin,
+      input.batchId
     );
   }
 
@@ -376,6 +397,13 @@ export class EntityUpsertService {
         // This keeps malformed or conflicting legacy+canonical values from
         // becoming durable data through capture's materialized-upsert path.
         skipValidation: createSlug !== "knowledge",
+        // The role-slug fallback (no underlying kind) attaches through the
+        // create's role adapter — its announcement must say sync too.
+        facetEmitContext: {
+          ...(input.origin ? { origin: input.origin } : {}),
+          ...(input.batchId ? { batchId: input.batchId } : {}),
+          fallbackWorkspaceId: input.workspaceId,
+        },
       },
       {
         db: this.db,
@@ -406,7 +434,9 @@ export class EntityUpsertService {
         rolePayload.profileId,
         input.properties,
         input.workspaceId,
-        input.userId
+        input.userId,
+        input.origin,
+        input.batchId
       );
     }
 

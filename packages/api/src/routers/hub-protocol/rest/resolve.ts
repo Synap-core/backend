@@ -33,8 +33,11 @@ import {
   requireUuidParam,
 } from "./_shared.js";
 import { resolveByName } from "../../../services/object-graph/graph-service.js";
-import { resolveObjectKind } from "../../../services/diagnose/resolve-object-kind.js";
-import { browserRouteFor, EMITTABLE_LABELS } from "./resolve-browser-route.js";
+import { EMITTABLE_LABELS } from "./resolve-browser-route.js";
+import {
+  resolveOpenTarget,
+  RESOLVE_UNKNOWN_TYPE as UNKNOWN_TYPE,
+} from "./resolve-open-target.js";
 
 const ResolveByNameSchema = z
   .object({
@@ -52,8 +55,20 @@ const ResolveByNameSchema = z
   })
   .openapi("ResolveByNameResponse");
 
-/** `unknown` is not a routable label — it is the honest "no match" answer. */
-const UNKNOWN_TYPE = "unknown";
+/**
+ * Machine-readable discriminator on the 500 body: the probe FAILED, which is a
+ * different fact from `unknown` (the probe ran and nothing visible matched).
+ */
+export const RESOLVE_FAILED_CODE = "RESOLVE_FAILED";
+
+const ResolveFailedSchema = z
+  .object({
+    error: z.string(),
+    code: z.literal(RESOLVE_FAILED_CODE),
+    /** The queried id, echoed so a caller can retry exactly it. */
+    id: z.string(),
+  })
+  .openapi("ResolveFailed");
 
 const ResolveResponseSchema = z
   .object({
@@ -97,7 +112,7 @@ export function registerResolveRoutes(app: HubHono): void {
     tags: ["System"],
     summary: "Universal ID resolver — what type is this ID?",
     description:
-      "Given any UUID, returns what type of thing it is (proposal, entity, view, document, or unknown). " +
+      "Given any UUID, returns the browser-routable type of the thing it names (see `type`), or `unknown` when nothing the caller can see has that id. " +
       "AI agents use this before opening something in the browser — they don't need to know the type upfront.",
     responses: {
       200: {
@@ -105,7 +120,11 @@ export function registerResolveRoutes(app: HubHono): void {
         schema: ResolveResponseSchema,
       },
       403: { description: "Forbidden", schema: ErrorSchema },
-      500: { description: "Internal error", schema: ErrorSchema },
+      500: {
+        description:
+          "The lookup FAILED (distinct from a 200 `type: unknown`, which means it ran and nothing you can see matched)",
+        schema: ResolveFailedSchema,
+      },
     },
   });
 
@@ -180,47 +199,26 @@ export function registerResolveRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
-    let resolved;
     try {
-      resolved = await resolveObjectKind(id, acting.userId);
+      // ONE body for both doors (Hub REST here, tRPC `diagnose.resolveOpen`
+      // for the cookie-authenticated desktop): see resolve-open-target.ts.
+      return c.json(await resolveOpenTarget(id, acting.userId));
     } catch (err) {
-      // Same posture as the old per-probe try/catch: a resolver failure is not
-      // an outage for the caller, it is "I could not tell you what this is".
-      logger.warn({ err, id }, "resolve failed (returning unknown)");
-      resolved = null;
+      // A FAILED read is not an EMPTY one. This used to log and answer
+      // `unknown` — i.e. "nothing you can see has this id" — for a probe that
+      // never ran to completion, so a broken lookup rendered in the CLI and the
+      // desktop app as a calm, confident "Nothing to open." Not-found stays the
+      // 200 `unknown` answer; a failure is a 500 the caller can show as an
+      // error and retry. (`synap open` already throws on `!res.ok`.)
+      logger.error({ err, id }, "resolve failed");
+      return c.json(
+        {
+          error: "Could not resolve this id — the lookup failed. Retry.",
+          code: RESOLVE_FAILED_CODE,
+          id,
+        },
+        500
+      );
     }
-
-    if (!resolved) {
-      return c.json({
-        type: UNKNOWN_TYPE,
-        id,
-        displayName: null,
-        workspaceId: null,
-        openable: false,
-      });
-    }
-
-    const route = browserRouteFor(resolved);
-    if (!route) {
-      // Resolved, but there is no browser surface for it. Report WHAT it is and
-      // that it cannot be opened — never a link into nothing.
-      return c.json({
-        type: resolved.kind,
-        id: resolved.id,
-        displayName: resolved.displayName ?? null,
-        workspaceId: resolved.workspaceId ?? null,
-        openable: false,
-      });
-    }
-
-    return c.json({
-      type: route.label,
-      id: resolved.id,
-      displayName: resolved.displayName ?? null,
-      workspaceId: resolved.workspaceId ?? null,
-      ...(resolved.profileSlug ? { profileSlug: resolved.profileSlug } : {}),
-      openable: true,
-      ...(route.params ? { params: route.params } : {}),
-    });
   });
 }

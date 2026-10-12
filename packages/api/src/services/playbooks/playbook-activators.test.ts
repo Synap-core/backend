@@ -211,7 +211,15 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { applyPlaybookActivators } from "./playbook-activators.js";
+import {
+  ACTIVATOR_COMPILE_VERSION,
+  activatorRuleDecl,
+  applyPlaybookActivators,
+  workerEnablementKey,
+  workerSeedTemplate,
+} from "./playbook-activators.js";
+import { templateRuleHash } from "../rules/template-rules.js";
+import { toBackendTrigger } from "@synap-core/types/automations";
 import { createRuleGoverned } from "../rules/create.js";
 import { updateRuleGoverned } from "../rules/update.js";
 
@@ -554,6 +562,26 @@ describe("enters_status follows the transition event", () => {
     });
   });
 
+  /**
+   * arch F2: a KIND that declares its lifecycle on ANOTHER field refuses the
+   * activator by name (a second status ladder), like a role does. Rows rule
+   * out: compiling it as `undeclared` (the old path); refusing a kind that
+   * declares nothing (the legacy path must stay).
+   */
+  it("a KIND whose declared lifecycle is another field refuses the activator, naming it", async () => {
+    store.profileRows = [
+      { id: "p-post", profileKind: "kind", workspaceId: null },
+    ];
+    store.lifecycleProperty = "stage";
+    setPlaybook(ENTERS);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "denied" });
+    expect(res.outcomes[0]!.reason).toContain(
+      '"post-status" is not the lifecycle of post ("stage" is)'
+    );
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+  });
+
   it("declaring the lifecycle LATER recompiles the untouched rule in place (the convergence)", async () => {
     store.profileRows = [
       { id: "p-post", profileKind: "kind", workspaceId: null },
@@ -586,5 +614,433 @@ describe("enters_status follows the transition event", () => {
     };
     const res = await run();
     expect(res.outcomes[0]).toMatchObject({ status: "created" });
+  });
+});
+
+/**
+ * R1 — a process on a ROLE (`lead`, `client`). Driven from the real activator
+ * compile through the real sentence → trigger converter to the stored
+ * `triggerConfig` the matcher reads: nothing hand-built in between.
+ */
+describe("a ROLE subject (R1)", () => {
+  function setLeadPlaybook(activators: unknown) {
+    store.playbook = {
+      id: PB,
+      name: "Qualify a lead",
+      status: "active",
+      workspaceId: "ws-1",
+      metadata: (store.playbook?.metadata as Row | undefined) ?? {},
+      subjectProfile: {
+        profileSlug: "lead",
+        statusProperty: "leadStage",
+        activators,
+      },
+    };
+  }
+  const compiled = (ruleId: string) => {
+    const sentence = (ruleRow(ruleId).metadata.rule as Row).sentence as {
+      trigger: Parameters<typeof toBackendTrigger>[0];
+      conditions: Parameters<typeof toBackendTrigger>[1];
+    };
+    return toBackendTrigger(sentence.trigger, sentence.conditions)
+      .triggerConfig;
+  };
+  const CREATED = [{ on: "created", mode: "propose" }];
+
+  it("`created` on a role fires when the role is ATTACHED (the facet event), filtered on the role", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook(CREATED);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
+    expect(compiled(res.outcomes[0]!.ruleId!)).toEqual({
+      eventPattern: "entity_facet.attach.completed",
+      filters: { profileSlug: "lead" },
+    });
+  });
+
+  it("a role rule compiled BEFORE R1 (onto entity.create) recompiles in place — never a second rule", async () => {
+    // The pod did not know `lead` was a role at the first pass: the old
+    // compile, onto the kind's create event (which never names a role).
+    setLeadPlaybook(CREATED);
+    const first = await run();
+    const ruleId = first.outcomes[0]!.ruleId!;
+    expect(compiled(ruleId).eventPattern).toBe("entity.create.completed");
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    const second = await run();
+    expect(second.outcomes[0]).toMatchObject({ status: "updated", ruleId });
+    expect(compiled(ruleId).eventPattern).toBe("entity_facet.attach.completed");
+    expect(createRuleGoverned).toHaveBeenCalledTimes(1);
+  });
+
+  it("a COUNT worker on a role follows the role's transition; its spec names the role", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook([
+      { on: "count", status: "qualified", min: 5, mode: "run" },
+    ]);
+    const res = await run();
+    const ruleId = res.outcomes[0]!.ruleId!;
+    expect(compiled(ruleId)).toEqual({
+      eventPattern: "entity.transition.completed",
+      filters: { lifecycleProfile: "lead", to: "qualified" },
+    });
+    const config = (
+      (ruleRow(ruleId).metadata.rule as Row).sentence as {
+        actions: Array<{ config: Record<string, unknown> }>;
+      }
+    ).actions[0]!.config;
+    expect(config.__worker).toMatchObject({
+      profileSlug: "lead",
+      status: "qualified",
+      minCount: 5,
+      size: "per_moment",
+    });
+  });
+
+  it("a COUNT on a role with NO declared lifecycle is refused by name, like enters_status", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = null;
+    setLeadPlaybook([
+      { on: "count", status: "qualified", min: 5, mode: "run" },
+    ]);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "denied" });
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+  });
+
+  it("a SCHEDULE worker on a role compiles to a cron rule whose spec reads the role's set", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook([
+      { on: "schedule", cron: "0 9 * * 1", status: "engaged", mode: "propose" },
+    ]);
+    const res = await run();
+    const ruleId = res.outcomes[0]!.ruleId!;
+    const sentence = (ruleRow(ruleId).metadata.rule as Row).sentence as {
+      trigger: Parameters<typeof toBackendTrigger>[0];
+      conditions: Parameters<typeof toBackendTrigger>[1];
+      actions: Array<{ config: Record<string, unknown> }>;
+    };
+    const trigger = toBackendTrigger(sentence.trigger, sentence.conditions);
+    expect(trigger.triggerType).toBe("cron");
+    expect(trigger.triggerConfig).toMatchObject({ expression: "0 9 * * 1" });
+    expect(sentence.actions[0]!.config.__worker).toMatchObject({
+      profileSlug: "lead",
+      status: "engaged",
+      size: "per_moment",
+      writes: "propose",
+    });
+  });
+
+  it("`enters_status` on a role follows the role's TRANSITION, filtered on the role, not the kind", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook([
+      { on: "enters_status", status: "qualified", mode: "run" },
+    ]);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "created" });
+    expect(compiled(res.outcomes[0]!.ruleId!)).toEqual({
+      eventPattern: "entity.transition.completed",
+      filters: { lifecycleProfile: "lead", to: "qualified" },
+    });
+  });
+});
+
+describe("stage workers (work model L4)", () => {
+  const configOf = (call: number) =>
+    (
+      vi.mocked(createRuleGoverned).mock.calls[call]![0].sentence as {
+        actions: Array<{ config: Record<string, unknown> }>;
+      }
+    ).actions[0]!.config;
+
+  it("a COUNT worker compiles per_moment: the node runs, its writes propose, the threshold rides on the spec", async () => {
+    store.lifecycleProperty = "post-status";
+    setPlaybook([{ on: "count", status: "review", min: 3, mode: "propose" }]);
+    const res = await run();
+    expect(res.outcomes).toEqual([
+      { key: "count:review", status: "created", ruleId: "rule-1" },
+    ]);
+    const config = configOf(0);
+    expect(config.__worker).toEqual({
+      key: "count:review",
+      size: "per_moment",
+      profileSlug: "post",
+      status: "review",
+      minCount: 3,
+      writes: "propose",
+    });
+    // A batch RUNS; proposing is the writes' job, not the node's.
+    expect(config).not.toHaveProperty("__mode");
+  });
+
+  it("D4: a plain created / enters_status activator carries the worker spec too", async () => {
+    setPlaybook(TWO);
+    await run();
+    expect(configOf(0).__worker).toEqual({
+      key: "created",
+      size: "per_thing",
+      profileSlug: "post",
+    });
+    expect(configOf(1).__worker).toEqual({
+      key: "enters_status:published",
+      size: "per_thing",
+      profileSlug: "post",
+      status: "published",
+    });
+  });
+
+  it("a MANUAL worker compiles no rule", async () => {
+    setPlaybook([{ on: "manual", mode: "run" }]);
+    const res = await run();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    expect(res.outcomes[0]).toMatchObject({
+      key: "manual",
+      status: "unchanged",
+    });
+  });
+
+  /** What `workers.enable` writes for a project: the worker namespace. */
+  async function enableForProject(projectId: string) {
+    const decl = activatorRuleDecl({
+      activator: TWO[1] as never,
+      playbookId: PB,
+      playbookName: "Repurpose",
+      profileSlug: "post",
+      statusProperty: "post-status",
+      subject: { profileKind: "kind", lifecycleProperty: null },
+      scope: { projectId },
+    }) as { key: string; intent: string; sentence: unknown };
+    await createRuleGoverned({
+      userId: "user-1",
+      intent: decl.intent,
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId },
+      sentence: decl.sentence,
+      seed: {
+        template: workerSeedTemplate(PB),
+        key: workerEnablementKey({
+          activatorKey: "enters_status:published",
+          projectId,
+        }),
+        hash: templateRuleHash(decl),
+      },
+    });
+    vi.mocked(createRuleGoverned).mockClear();
+    return store.rules.at(-1)!;
+  }
+
+  it("a PROJECT enablement compiles with its filing + spec, follows its declaration, and is linked while live", async () => {
+    setPlaybook(TWO);
+    await run();
+    const rule = await enableForProject("proj-1");
+    const config = (
+      (rule.metadata.rule as Row).sentence as {
+        actions: Array<{ config: Record<string, unknown> }>;
+      }
+    ).actions[0]!.config;
+    expect(config.__projectId).toBe("proj-1");
+    expect(config.__worker).toMatchObject({
+      key: "enters_status:published",
+      size: "per_thing",
+    });
+    expect((rule.metadata.rule as Row).intent).toBe(
+      'When a post enters "published" in this project, run "Repurpose" on it.'
+    );
+
+    const pass = await run();
+    expect(pass.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "unchanged",
+      ruleId: rule.id,
+    });
+    expect(store.links.map((l) => l.automationId)).toContain(rule.automationId);
+
+    // Undeclared → retired by us, unlinked; declared again → back.
+    setPlaybook([TWO[0]]);
+    const gone = await run();
+    expect(gone.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "retired",
+      ruleId: rule.id,
+    });
+    expect(store.links.map((l) => l.automationId)).not.toContain(
+      rule.automationId
+    );
+    setPlaybook(TWO);
+    const back = await run();
+    expect(back.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "reactivated",
+      ruleId: rule.id,
+    });
+    expect(createRuleGoverned).not.toHaveBeenCalled(); // never created here
+  });
+
+  it("a project enablement a PERSON disabled stays off on every later pass", async () => {
+    setPlaybook(TWO);
+    await run();
+    const rule = await enableForProject("proj-1");
+    (rule.metadata.rule as Row).draft = true; // workers.setPaused(paused: true)
+    const pass = await run();
+    expect(pass.outcomes).toContainEqual({
+      key: "enters_status:published@project:proj-1",
+      status: "owner_choice",
+      ruleId: rule.id,
+      reason: "disabled by a person — left off",
+    });
+    expect((rule.metadata.rule as Row).draft).toBe(true);
+  });
+});
+
+/**
+ * D4 — the compile version. An installed rule compiled before every activator
+ * carried the worker spec (compile version 1) re-converges ONCE, through the
+ * same three-way as any pass. Rows rule out: an untouched v1 rule left
+ * without its spec; an owner-EDITED v1 rule rewritten; a PAUSED one armed or
+ * recompiled; a DELETED one recreated; a version stamped by a pass that did
+ * not converge.
+ */
+describe("D4: rules compiled before the worker spec re-converge once", () => {
+  /** The decl as compile version 1 wrote it: no `__worker` on the node. */
+  function v1Decl(activator: Row) {
+    const decl = activatorRuleDecl({
+      activator: activator as never,
+      playbookId: PB,
+      playbookName: "Repurpose",
+      profileSlug: "post",
+      statusProperty: "post-status",
+      subject: { profileKind: "kind", lifecycleProperty: null },
+    }) as { key: string; intent: string; sentence: Row };
+    const sentence = JSON.parse(JSON.stringify(decl.sentence)) as {
+      actions: Array<{ config: Row }>;
+    };
+    delete sentence.actions[0]!.config.__worker;
+    return { key: decl.key, intent: decl.intent, sentence };
+  }
+  /** An installed v1 rule + the playbook's memory of it (no version). */
+  function installV1(activator: Row, edit?: (rule: Row) => void) {
+    const d = v1Decl(activator);
+    const id = `rule-v1-${++store.seq}`;
+    const rule: Row = {
+      v: 1,
+      intent: d.intent,
+      scope: { kind: "workspace", workspaceId: "ws-1" },
+      sentence: d.sentence,
+      seed: {
+        template: `playbook-activator:${PB}`,
+        key: d.key,
+        hash: templateRuleHash(d),
+      },
+      behaviours: [],
+    };
+    edit?.(rule);
+    store.rules.push({ id, automationId: `auto-${id}`, metadata: { rule } });
+    return { id, key: d.key };
+  }
+  function remember(rules: Record<string, { ruleId: string }>) {
+    store.playbook!.metadata = {
+      activatorRules: { template: `playbook-activator:${PB}`, rules },
+    };
+  }
+  const memory = () =>
+    (store.playbook!.metadata as Row).activatorRules as {
+      compileVersion?: number;
+    };
+
+  it("an untouched v1 rule is recompiled with the spec, once; the version is stamped", async () => {
+    setPlaybook(TWO);
+    const a = installV1(TWO[0]!);
+    const b = installV1(TWO[1]!);
+    remember({ [a.key]: { ruleId: a.id }, [b.key]: { ruleId: b.id } });
+    expect(ACTIVATOR_COMPILE_VERSION).toBe(2);
+
+    const first = await run();
+    expect(first.outcomes.map((o) => o.status)).toEqual(["updated", "updated"]);
+    for (const id of [a.id, b.id]) {
+      const rule = store.rules.find((r) => r.id === id)!.metadata.rule as {
+        sentence: { actions: Array<{ config: Row }> };
+      };
+      expect(rule.sentence.actions[0]!.config.__worker).toBeDefined();
+    }
+    expect(memory().compileVersion).toBe(2);
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+
+    vi.mocked(updateRuleGoverned).mockClear();
+    const second = await run();
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    expect(second.outcomes.every((o) => o.status === "unchanged")).toBe(true);
+  });
+
+  it("an owner-EDITED v1 rule is kept as the owner left it", async () => {
+    setPlaybook([TWO[1]!]);
+    const e = installV1(TWO[1]!, (rule) => {
+      rule.intent = "When a post is published, tell me first.";
+    });
+    remember({ [e.key]: { ruleId: e.id } });
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ key: e.key, ruleId: e.id });
+    expect(["kept", "conflict"]).toContain(res.outcomes[0]!.status);
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    const rule = store.rules[0]!.metadata.rule as {
+      intent: string;
+      sentence: { actions: Array<{ config: Row }> };
+    };
+    expect(rule.intent).toBe("When a post is published, tell me first.");
+    expect(rule.sentence.actions[0]!.config.__worker).toBeUndefined();
+  });
+
+  it("a PAUSED v1 rule stays paused and uncompiled; a DELETED one is not recreated", async () => {
+    setPlaybook(TWO);
+    const paused = installV1(TWO[0]!, (rule) => {
+      rule.draft = true;
+    });
+    remember({
+      [paused.key]: { ruleId: paused.id },
+      "enters_status:published": { ruleId: "rule-gone" },
+    });
+    const res = await run();
+    expect(res.outcomes.map((o) => [o.key, o.status])).toEqual([
+      ["created", "owner_choice"],
+      ["enters_status:published", "owner_choice"],
+    ]);
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    const rule = store.rules[0]!.metadata.rule as Row;
+    expect(rule.draft).toBe(true);
+  });
+
+  it("a pass that did not converge stamps no version", async () => {
+    // An enters_status activator with no status property anywhere: denied.
+    store.playbook = {
+      id: PB,
+      name: "Repurpose",
+      status: "active",
+      workspaceId: "ws-1",
+      metadata: {},
+      subjectProfile: {
+        profileSlug: "post",
+        activators: [{ on: "enters_status", status: "published", mode: "run" }],
+      },
+    };
+    const res = await run();
+    expect(res.outcomes[0]!.status).toBe("denied");
+    expect(
+      ((store.playbook!.metadata as Row).activatorRules as Row | undefined)
+        ?.compileVersion
+    ).toBeUndefined();
   });
 });

@@ -24,6 +24,7 @@ import {
 } from "@synap/database";
 import {
   moveStatus,
+  statusMoveActorFor,
   type MoveStatusResult,
 } from "../../services/lifecycle/move-status.js";
 import { entities, views, workspaces } from "@synap/database/schema";
@@ -273,20 +274,13 @@ export const mutateProcs = {
             message: `"${lifecycleSlug}" is this record's status and needs one of its status values.`,
           });
         }
+        const mover = statusMoveActorFor(ctx, input);
         statusMove = await moveStatus({
           entityId: input.id,
           to,
           expectedFrom: input.expectedStatus,
-          actor: input.agentUserId
-            ? {
-                kind: "agent",
-                userId: ctx.userId,
-                agentUserId: input.agentUserId,
-              }
-            : {
-                kind: input.source === "system" ? "system" : "human",
-                userId: ctx.userId,
-              },
+          actor: mover.actor,
+          approvedProposalId: mover.approvedProposalId,
           sessionId: ctx.sessionId ?? null,
           reason: input.reasoning ?? null,
           workspaceId: overlayWorkspaceId,

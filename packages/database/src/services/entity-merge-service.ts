@@ -20,7 +20,7 @@
  *  - unmerge: reverse stamp + restore snapshots; deletedRelationIds irreversible
  */
 
-import { eq, and, or, isNull, ne } from "drizzle-orm";
+import { eq, and, or, isNull, ne, inArray } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -35,6 +35,7 @@ import {
 import type * as schema from "../schema/index.js";
 import type { Entity } from "../schema/entities.js";
 import { FacetRepository } from "../repositories/facet-repository.js";
+import { notifyFacetAttached } from "../utils/facet-attached-hook.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 import { lifecycleColumnsFor } from "./lifecycle/lifecycle-columns.js";
 import type { EventRepository } from "../repositories/event-repository.js";
@@ -790,6 +791,26 @@ export async function mergeEntities(
     }
     return stamp;
   });
+
+  // The roles that MOVED onto the winner are announced once the merge has
+  // committed — `origin: "merge"`, so listeners (feeds, history) see the role
+  // arrive while event automations skip it by default: a lead that moved is
+  // not a new lead, and must not re-propose "Qualify a lead"
+  // (`AUTOMATION_ORIGIN_OPT_INS`, the matcher). The attach itself ran with
+  // `skipEvent` inside the transaction.
+  if (materialized.winnerFacetIds && materialized.winnerFacetIds.length > 0) {
+    const moved = await db
+      .select()
+      .from(entityFacets)
+      .where(inArray(entityFacets.id, materialized.winnerFacetIds));
+    for (const facet of moved) {
+      await notifyFacetAttached({
+        facet,
+        userId,
+        context: { origin: "merge", fallbackWorkspaceId: winner.workspaceId },
+      });
+    }
+  }
 
   return {
     winnerId,

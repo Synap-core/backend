@@ -530,6 +530,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     ],
     decisionId: "66666666-6666-6666-6666-666666666666",
     relationToSubject: "made_for",
+    optional: true,
     subjectEdge: {
       status: "skipped",
       relationType: "made_for",

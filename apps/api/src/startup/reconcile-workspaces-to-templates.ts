@@ -66,9 +66,12 @@ import {
   reconcileWorkspacePlaybooksToTemplate,
   playbookReportConverged,
   reconcileInstalledPacks,
+  resolveTemplateCatalog,
+  readOverlayLedger,
   applyTemplateRules,
   templateRulesConverged,
   type ResolvedWorkspaceTemplate,
+  type TemplateCatalogView,
 } from "@synap/api";
 
 const logger = createLogger({ module: "reconcile-workspaces-to-templates" });
@@ -427,6 +430,20 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     if (!packMemo.has(slug)) packMemo.set(slug, resolveWorkspaceTemplate(slug));
     return packMemo.get(slug)!;
   };
+  // The catalog standing, read ONCE, says WHY an overlay did not resolve
+  // (retired / not in the catalog / catalog unknown). A failed read is passed
+  // as `null` — "catalog unknown" — never folded into "not there".
+  let overlayCatalog: TemplateCatalogView | null = null;
+  try {
+    overlayCatalog = await resolveTemplateCatalog(
+      rows.flatMap((ws) => readOverlayLedger(ws.settings).map((o) => o.slug))
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Template catalog unreadable: overlay skips will say 'catalog unknown'"
+    );
+  }
   for (const ws of rows) {
     try {
       const outcomes = await reconcileInstalledPacks({
@@ -434,12 +451,28 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         ownerId: ws.ownerId,
         settings: ws.settings as Record<string, unknown> | null,
         resolve: resolvePack,
+        catalog: overlayCatalog,
       });
       const notable = outcomes.filter((o) => o.status !== "skipped");
       if (notable.length > 0) {
         logger.info(
           { workspaceId: ws.id, packs: notable },
           "Installed packs reconciled"
+        );
+      }
+      const skipped = outcomes.filter((o) => o.status === "skipped");
+      if (skipped.length > 0) {
+        logger.warn(
+          {
+            workspaceId: ws.id,
+            packs: skipped.map((o) => ({
+              slug: o.slug,
+              lifecycle: o.lifecycle,
+              replacedBy: o.replacedBy,
+              reason: o.reason,
+            })),
+          },
+          "Installed packs skipped: their template did not resolve"
         );
       }
     } catch (err) {

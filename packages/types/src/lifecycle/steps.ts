@@ -19,7 +19,7 @@ import {
   lifecycleOptionLabel,
   lifecycleOptionTone,
   type LifecycleCategory,
-  type LifecycleDeclaration,
+  type LifecycleOption,
 } from "./index.js";
 
 /**
@@ -88,7 +88,7 @@ const MAIN_PATH_CATEGORIES: readonly LifecycleCategory[] = [
  * `counts` (optional) carries a per-option count onto each step.
  */
 export function stepsFromLifecycle(
-  decl: Pick<LifecycleDeclaration, "options"> | null | undefined,
+  decl: { readonly options: readonly LifecycleOption[] } | null | undefined,
   currentKey: string | null | undefined,
   counts?: Readonly<Record<string, number>>
 ): StepMark[] {
@@ -138,6 +138,16 @@ const TRACK_POSITION: Readonly<Record<TrackStage["position"], StepPosition>> = {
 };
 
 /**
+ * The tone of a track stage's mark, by the ONE step rule ({@link stepTone}):
+ * done → passed (grey), active → current (the accent), not_started → ahead.
+ * Every track step mark reads it — the strips and the track page's rail — so
+ * one track's done step is never grey on one screen and green on the next.
+ */
+export function trackStageStepTone(position: TrackStage["position"]): UnitTone {
+  return stepTone(TRACK_POSITION[position], "primary");
+}
+
+/**
  * A track's stages as steps (done → passed, active → current, not_started →
  * ahead). POSITION is the pod's (`deriveTrackStages`), never re-derived. The
  * current stage wears the one accent; `sessionCount` becomes `count`.
@@ -151,7 +161,7 @@ export function stepsFromTrackStages(
       key: stage.key,
       label: stage.name,
       position,
-      tone: stepTone(position, "primary"),
+      tone: trackStageStepTone(stage.position),
     };
     if (typeof stage.sessionCount === "number") mark.count = stage.sessionCount;
     return mark;
@@ -163,4 +173,42 @@ export function currentStep(steps: readonly StepMark[]): StepMark | null {
   return (
     steps.find((s) => s.position === "current" || s.position === "off") ?? null
   );
+}
+
+/**
+ * A status a thing can be MOVED INTO that the strip does not draw: the paused
+ * and lost options (off the main path, drawn only when current). The "Other
+ * status…" picker beside a strip lists these (D2), so a deal can be marked
+ * lost or a lead put on hold from the thing itself. `tone` is the option's own
+ * mark (a FILL token).
+ */
+export interface StepChoice {
+  key: string;
+  label: string;
+  tone: UnitTone;
+  category: LifecycleCategory;
+  /** Only a person may move a thing INTO this status (the person glyph). */
+  humanOnly?: boolean;
+}
+
+/** The off-path options (paused / lost) other than the current one, in declared order. */
+export function offPathChoices(
+  decl: { readonly options: readonly LifecycleOption[] } | null | undefined,
+  currentKey: string | null | undefined
+): StepChoice[] {
+  if (!decl) return [];
+  return decl.options
+    .filter(
+      (o) => !MAIN_PATH_CATEGORIES.includes(o.category) && o.key !== currentKey
+    )
+    .map((o) => {
+      const choice: StepChoice = {
+        key: o.key,
+        label: lifecycleOptionLabel(o),
+        tone: lifecycleOptionTone(o),
+        category: o.category,
+      };
+      if (o.humanOnly) choice.humanOnly = true;
+      return choice;
+    });
 }

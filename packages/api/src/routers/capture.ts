@@ -45,7 +45,18 @@ import {
   persistCaptureResult,
   type PersistedCaptureResult,
 } from "../services/intake/capture-result-part.js";
-import { CaptureAnswerSchema } from "@synap-core/types/capture";
+import { readRestructureRoom } from "../services/intake/capture-room.js";
+import { findCaptureSuggestions } from "../services/intake/capture-suggestions.js";
+import {
+  buildLinkedProfiles,
+  grantedWorkspaceIdsOf,
+  kindsWithinFloor,
+  type LinkableProfile,
+} from "../services/intake/capture-schema-linking.js";
+import {
+  CaptureAnswerSchema,
+  type CaptureResultSuggestion,
+} from "@synap-core/types/capture";
 import {
   KNOWN_SOURCE_HASHES_MAX,
   PHOTO_RUN_MAX_ITEMS,
@@ -84,6 +95,7 @@ import {
   eq,
   and,
   isNull,
+  isNotNull,
   inArray,
   desc,
   getDb,
@@ -163,6 +175,7 @@ import {
   eventRepository,
   linkEntityToProject,
   EntityBodyService,
+  getRequestGrant,
 } from "@synap/database";
 import {
   materializeCompositeGraph,
@@ -1321,17 +1334,13 @@ const captureBaseRouter = router({
       }
 
       const profileService = new ProfileResolutionService(database);
-      const accessibleProfiles = await profileService.getAccessibleProfiles(
+      // Schema linking (D1): every kind of every space the person can see —
+      // workspace-less is the repository's whole visible floor — ranked for
+      // this note once the space names are known (below).
+      const accessibleProfiles = (await profileService.getAccessibleProfiles(
         userId,
-        workspaceId ?? ""
-      );
-      const availableProfiles = buildAvailableProfiles(
-        await withEffectiveProperties(
-          profileService,
-          accessibleProfiles as unknown as AccessibleProfileLike[],
-          workspaceId ?? null
-        )
-      );
+        ""
+      )) as unknown as LinkableProfile[];
 
       // 1b. Anchor context ("Capture updates on this entity"). When the caller
       // anchors the capture to an existing entity, load its identity + current
@@ -1434,13 +1443,63 @@ const captureBaseRouter = router({
       // Never surface non-domain homes as routing candidates — operational /
       // agent types, surfaceClass admin|settings, or systemSlug pod-admin
       // (legacy personal-typed admin rows). Archived already excluded above.
+      // A key granted on some spaces routes only into those; kinds of an
+      // archived space are never offered (its space is not a destination).
+      const grantedWorkspaceIds = grantedWorkspaceIdsOf(getRequestGrant());
+      const kindSpaceIds = [
+        ...new Set(
+          accessibleProfiles.flatMap((p) =>
+            p.workspaceId ? [p.workspaceId] : []
+          )
+        ),
+      ];
+      const archivedKindSpaces =
+        kindSpaceIds.length > 0
+          ? await database
+              .select({ id: workspaces.id })
+              .from(workspaces)
+              .where(
+                and(
+                  inArray(workspaces.id, kindSpaceIds),
+                  isNotNull(workspaces.archivedAt)
+                )
+              )
+          : [];
+      const linkableProfiles = kindsWithinFloor(accessibleProfiles, {
+        archivedWorkspaceIds: new Set(archivedKindSpaces.map((w) => w.id)),
+        grantedWorkspaceIds,
+      });
       const availableWorkspaces = userWorkspaceRows
         .filter((w) => isDomainHomeWorkspace(w))
+        .filter(
+          (w) => grantedWorkspaceIds === null || grantedWorkspaceIds.has(w.id)
+        )
         .map((w) => ({
           id: w.id,
           name: w.name,
           description: w.description ?? undefined,
         }));
+
+      const availableProfiles = await buildLinkedProfiles({
+        profiles: linkableProfiles,
+        note: inputText,
+        workspaceId: workspaceId ?? null,
+        workspaceNames: new Map(userWorkspaceRows.map((w) => [w.id, w.name])),
+        propertyHintsFor: async (row, hintWorkspaceId) =>
+          buildAvailableProfiles(
+            await withEffectiveProperties(
+              profileService,
+              [row],
+              hintWorkspaceId
+            )
+          )[0]?.propertyHints,
+        lifecyclesFor: (ids) => profileService.getEffectiveLifecycles(ids),
+        onLifecyclesFailed: (err) =>
+          logger.error(
+            { err, userId },
+            "capture.structure: kind lifecycles NOT read — kinds are offered without their first status"
+          ),
+      });
 
       // 2b. Fetch user's PROJECTS (cross-cutting lenses) for routing hints.
       // Scoping mirrors the Hub `/projects` list: pod-wide projects visible to
@@ -1745,6 +1804,21 @@ const captureBaseRouter = router({
       // caller so `capture.execute` can record it on the route decision.
       let workspaceDecision: WorkspaceDecisionRecord | undefined;
 
+      // A re-read of a capture room takes every comment the owner wrote since
+      // the last round, read from the room itself (never client-supplied), and
+      // — unless the caller sent its own — that round's open rows as the
+      // records to refine rather than re-invent; plus the records it already
+      // settled and the note it holds, neither of which may come back.
+      const roomRound = input.sessionId
+        ? await readRestructureRoom({
+            sessionId: input.sessionId,
+            userId,
+            database,
+          })
+        : null;
+      const previousEntities =
+        input.previousEntities ?? roomRound?.previousEntities;
+
       const structureInput = {
         text: input.text ?? "",
         file: input.file,
@@ -1752,14 +1826,26 @@ const captureBaseRouter = router({
         html: input.html,
         context: input.context,
         instructions: structureInstructions,
+        ...(roomRound?.comments.length ? { comments: roomRound.comments } : {}),
         hints: {
           availableProfiles,
           availableWorkspaces,
           availableProjects,
           existingEntityNames,
           previousEntities: anchorPreviousEntity
-            ? [anchorPreviousEntity, ...(input.previousEntities ?? [])]
-            : input.previousEntities,
+            ? [anchorPreviousEntity, ...(previousEntities ?? [])]
+            : previousEntities,
+          ...(roomRound?.settled?.length
+            ? { settledEntities: roomRound.settled }
+            : {}),
+          ...(roomRound?.noteTitle
+            ? {
+                sourceNote: {
+                  profileSlug: FALLBACK_CAPTURE_KIND,
+                  title: roomRound.noteTitle,
+                },
+              }
+            : {}),
           routingMemory,
           ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },
@@ -2388,6 +2474,38 @@ const captureBaseRouter = router({
       // its response and `captureResult` comes back null.
       let captureResult: PersistedCaptureResult | null = null;
       if (structured.sessionId) {
+        // Next steps BEFORE anything is filed (D6), matched in the space the
+        // capture lands in. A failed match stores NO suggestions (absent = not
+        // computed), never `[]` (= none found).
+        let suggestions: CaptureResultSuggestion[] | undefined;
+        const suggestWorkspaceId =
+          structured.placement?.workspaceId ?? workspaceId ?? null;
+        if (suggestWorkspaceId) {
+          try {
+            const [{ playbooksRouter }, { automationsRouter }] =
+              await Promise.all([
+                import("./playbooks.js"),
+                import("./automations.js"),
+              ]);
+            const lensCtx = { ...ctx, workspaceId: suggestWorkspaceId };
+            suggestions = await findCaptureSuggestions({
+              rows: structureResult.entities,
+              workspaceId: suggestWorkspaceId,
+              intentText: inputText,
+              doors: {
+                matchPlaybooks: (match) =>
+                  playbooksRouter.createCaller(lensCtx).matchForEntity(match),
+                matchRules: (match) =>
+                  automationsRouter.createCaller(lensCtx).matchForEntity(match),
+              },
+            });
+          } catch (err) {
+            logger.error(
+              { err, userId, sessionId: structured.sessionId },
+              "capture.structure: next steps NOT computed — the part carries no suggestions"
+            );
+          }
+        }
         try {
           captureResult = await persistCaptureResult({
             sessionId: structured.sessionId,
@@ -2401,6 +2519,7 @@ const captureBaseRouter = router({
             // a room reader (relay) never sees it, so the part carries them.
             project: structured,
             placement: structured.placement,
+            ...(suggestions ? { suggestions } : {}),
           });
         } catch (err) {
           logger.error(
@@ -4812,6 +4931,10 @@ const captureBaseRouter = router({
       const propDefRepo = new PropertyDefRepository(database);
       const upsertService = new EntityUpsertService(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
+      // ONE batch: every role this apply attaches announces it, so a
+      // propose-mode activator ("Qualify a lead") files ONE proposal for the
+      // whole graph instead of one per record.
+      const batchId = randomUUID();
 
       // Provenance for rows this batch CREATES (materializeEntity invariant 4:
       // no silent 'human' default). ctx.agentUserId is set only by the
@@ -4947,6 +5070,7 @@ const captureBaseRouter = router({
             userId,
             provenance,
             projectId: ctx.projectId,
+            batchId,
           });
           tempToReal[entity.tempId] = result.entity.id;
           created.push({

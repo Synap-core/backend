@@ -28,11 +28,27 @@
  *      `changed.<lifecycle slug>`, and owner-edited activator rules (the
  *      convergence keeps them) — plus webhook subscriptions to the update.
  * Turning it off needs 1 + 2 moved to the transition and a conversion for 3.
+ *
+ * DELIVERY (review D8): the move's transaction already OWES this event — an
+ * outbox row written with the compare-and-set (`transition-outbox.ts`,
+ * @synap/database). `dispatchLifecycleTransition` claims that row, appends the
+ * log row (id = transitionId, so a retry can never write a second), runs the
+ * fan-out skipping what an earlier attempt delivered, and settles the row. A
+ * failure leaves it pending; `dispatchDueLifecycleTransitions` (the jobs
+ * sweeper) retries it. Residual, stated: a crash AFTER a reactor's send and
+ * BEFORE the settle re-sends that reactor once; the automation matcher's
+ * fingerprint is the transitionId (2aec15c3), so a rule still fires once.
  */
-import { randomUUID } from "node:crypto";
-import { EventRepository, sql } from "@synap/database";
+import {
+  EventRepository,
+  claimTransitionOutbox,
+  db,
+  listDueTransitions,
+  settleTransitionOutbox,
+  sql,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects, type SideEffectPayload } from "./side-effects.js";
+import { fanOutSideEffects, type SideEffectPayload } from "./side-effects.js";
 
 const logger = createLogger({ module: "lifecycle-transition" });
 
@@ -63,13 +79,35 @@ export const LIFECYCLE_TRANSITION_EVENT_TYPE = "entity.transition.completed";
 /** Feature flag for the dual emit — one place to delete it. */
 export const DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS = true;
 
+/** The emit options a mover passes; stored on the outbox row and replayed. */
+export interface TransitionEmitContext {
+  automationContext?: SideEffectPayload["automationContext"];
+  correlationId?: string;
+}
+
+/** What earlier attempts already did (the outbox row's progress). */
+export interface TransitionEmitProgress {
+  eventId: string | null;
+  /** Fan-out keys delivered: `transition:<reactor>` / `update:<reactor>`. */
+  delivered: string[];
+}
+
+export interface TransitionEmitResult extends TransitionEmitProgress {
+  complete: boolean;
+  error?: string;
+}
+
+const UNIQUE_VIOLATION = "23505";
+
+/**
+ * One delivery attempt: the log row, then the fan-out, skipping what
+ * `progress` says is done. Never throws; reports what is still owed.
+ */
 export async function emitLifecycleTransition(
   t: LifecycleTransitionEvent,
-  opts: {
-    automationContext?: SideEffectPayload["automationContext"];
-    correlationId?: string;
-  } = {}
-): Promise<void> {
+  opts: TransitionEmitContext = {},
+  progress: TransitionEmitProgress = { eventId: null, delivered: [] }
+): Promise<TransitionEmitResult> {
   // `lifecycleProfile` = the kind or role WHOSE lifecycle moved — the one key
   // an `enters_status` / "transitioned" rule filters its subject on
   // (`entityKindFilterKey`, @synap-core/types/automations). `profileSlug`
@@ -82,34 +120,65 @@ export async function emitLifecycleTransition(
   // the causal-chain producer — `producerAgentUserId`): the agent for an agent
   // move, the person otherwise. The payload keeps both.
   const actorId = t.agentUserId ?? t.userId;
-  let eventId: string | null = null;
-  try {
-    const record = await new EventRepository(sql).append({
-      id: randomUUID(),
-      version: "v1",
-      type: LIFECYCLE_TRANSITION_EVENT_TYPE,
-      subjectId: t.entityId,
-      subjectType: "entity",
-      data,
-      metadata: {},
-      userId: t.userId,
-      workspaceId: t.workspaceId ?? undefined,
-      isAgent: t.agentUserId ? true : undefined,
-      agentUserId: t.agentUserId ?? undefined,
-      proposalId: t.proposalId ?? undefined,
-      sessionId: t.sessionId ?? undefined,
-      source: t.actorKind === "system" ? "system" : "api",
-      timestamp: new Date(),
-      correlationId: opts.correlationId,
-    } as Parameters<EventRepository["append"]>[0]);
-    eventId = record?.id ?? null;
-  } catch (err) {
-    // Best-effort like every other domain log append: the status already
-    // moved; the fan-out below still runs (it names no event row then).
-    logger.warn({ err, entityId: t.entityId }, "transition log append failed");
+  let eventId = progress.eventId;
+  if (!eventId) {
+    try {
+      const record = await new EventRepository(sql).append({
+        // The transition's id IS the log row's id: at most one row, ever.
+        id: t.transitionId,
+        version: "v1",
+        type: LIFECYCLE_TRANSITION_EVENT_TYPE,
+        subjectId: t.entityId,
+        subjectType: "entity",
+        data,
+        metadata: {},
+        userId: t.userId,
+        workspaceId: t.workspaceId ?? undefined,
+        isAgent: t.agentUserId ? true : undefined,
+        agentUserId: t.agentUserId ?? undefined,
+        proposalId: t.proposalId ?? undefined,
+        sessionId: t.sessionId ?? undefined,
+        source: t.actorKind === "system" ? "system" : "api",
+        timestamp: new Date(),
+        correlationId: opts.correlationId,
+      } as Parameters<EventRepository["append"]>[0]);
+      eventId = record?.id ?? t.transitionId;
+    } catch (err) {
+      if (pgCode(err) === UNIQUE_VIOLATION) {
+        // An earlier attempt wrote it and died before saying so.
+        eventId = t.transitionId;
+      } else {
+        // No fan-out before the log row: history, triggers and goals must
+        // never disagree about whether the move happened. Retried.
+        logger.warn(
+          { err, entityId: t.entityId },
+          "transition log append failed"
+        );
+        return {
+          eventId: null,
+          delivered: progress.delivered,
+          complete: false,
+          error: `log append: ${errorText(err)}`,
+        };
+      }
+    }
   }
 
-  await emitSideEffects({
+  const delivered = [...progress.delivered];
+  const failures: string[] = [];
+  const fanOut = async (prefix: string, payload: SideEffectPayload) => {
+    const skip = new Set(
+      delivered
+        .filter((k) => k.startsWith(`${prefix}:`))
+        .map((k) => k.slice(prefix.length + 1))
+    );
+    const r = await fanOutSideEffects(payload, skip);
+    delivered.push(...r.delivered.map((id) => `${prefix}:${id}`));
+    if (r.queueDown) failures.push(`${prefix}: queue unavailable`);
+    failures.push(...r.failed.map((id) => `${prefix}:${id}`));
+  };
+
+  await fanOut("transition", {
     subjectType: "entity",
     action: "transition",
     subjectId: t.entityId,
@@ -126,7 +195,7 @@ export async function emitLifecycleTransition(
   } as SideEffectPayload);
 
   if (DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS && t.role === null) {
-    await emitSideEffects({
+    await fanOut("update", {
       subjectType: "entity",
       action: "update",
       subjectId: t.entityId,
@@ -136,6 +205,10 @@ export async function emitLifecycleTransition(
       automationContext: opts.automationContext,
       data: {
         profileSlug: t.profileSlug ?? undefined,
+        // The matcher's fingerprint names it: two identical A→S moves are two
+        // claims for a hand-written "updated" rule, a redelivery one (review
+        // item 10). Without it both moves hashed to the same payload.
+        transitionId: t.transitionId,
         changedKeys: [t.property],
         [`changed.${t.property}`]: true,
         [`previous.${t.property}`]: t.from,
@@ -143,4 +216,60 @@ export async function emitLifecycleTransition(
       },
     } as SideEffectPayload);
   }
+
+  return failures.length
+    ? { eventId, delivered, complete: false, error: failures.join(", ") }
+    : { eventId, delivered, complete: true };
+}
+
+/**
+ * Deliver the event a move owes: claim its outbox row, emit, settle. Call
+ * right after a `moved` result; never throws (what fails stays owed and the
+ * sweeper retries it). `false` = not delivered by this call.
+ */
+export async function dispatchLifecycleTransition(
+  transitionId: string
+): Promise<boolean> {
+  try {
+    const claimed = await claimTransitionOutbox(db, transitionId);
+    if (!claimed) return false;
+    const result = await emitLifecycleTransition(
+      claimed.transition as LifecycleTransitionEvent,
+      claimed.emitContext as TransitionEmitContext,
+      { eventId: claimed.eventId, delivered: claimed.delivered }
+    );
+    await settleTransitionOutbox(db, transitionId, result);
+    if (!result.complete) {
+      logger.warn(
+        { transitionId, attempts: claimed.attempts, error: result.error },
+        "transition delivery incomplete — left owed for the sweeper"
+      );
+    }
+    return result.complete;
+  } catch (err) {
+    logger.warn({ err, transitionId }, "transition dispatch failed");
+    return false;
+  }
+}
+
+/** The sweeper: deliver every owed transition whose backoff has lapsed. */
+export async function dispatchDueLifecycleTransitions(
+  limit = 100
+): Promise<{ due: number; delivered: number }> {
+  const due = await listDueTransitions(db, limit);
+  let delivered = 0;
+  for (const id of due) {
+    if (await dispatchLifecycleTransition(id)) delivered++;
+  }
+  return { due: due.length, delivered };
+}
+
+function pgCode(err: unknown): string | undefined {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = e?.code ?? e?.cause?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

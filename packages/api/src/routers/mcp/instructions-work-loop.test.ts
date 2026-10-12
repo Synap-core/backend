@@ -53,7 +53,9 @@ describe("MCP instructions teach the session work loop", () => {
     ["start or resume a session", "`start_session`"],
     ["bind a playbook candidate", "`templateId`"],
     ["declare criteria", "`criteria`"],
-    ["advance the stage", "`currentStage`"],
+    // Work model (2026-10-12): a step IS the subject's status, so the loop
+    // teaches the one status door, not a session-local stage.
+    ["move a status through the one door", "`expectedStatus`"],
     ["hand person-only work as a human-owned output", "`owner:'human'`"],
     ["…with a reason", "`blockedReason`"],
     ["…choose carries ONE recommended option", "`recommended`"],

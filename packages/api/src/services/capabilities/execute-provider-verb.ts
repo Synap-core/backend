@@ -38,6 +38,8 @@ interface CallCtx {
   tool: string;
   /** Runtime 1-of-N connection selection (Wave 4), threaded to the dispatcher. */
   connectionSelector?: ConnectionSelector | null;
+  /** The run's focus session — a stage worker's send ceiling counts by it. */
+  sessionId?: string | null;
 }
 
 // ── dot-path getter ───────────────────────────────────────────────────────────
@@ -323,6 +325,7 @@ async function executeSingleCall(
     headers: spec.headers,
     workspaceId: ctx.workspaceId,
     connectionSelector: ctx.connectionSelector,
+    sessionId: ctx.sessionId ?? null,
     alreadyApproved: isReadMethod,
   });
 
@@ -425,6 +428,7 @@ export async function executeProviderVerb(
     userId: string;
     workspaceId?: string;
     connectionSelector?: ConnectionSelector | null;
+    sessionId?: string | null;
   }
 ): Promise<unknown> {
   const ctx: CallCtx = {
@@ -432,6 +436,7 @@ export async function executeProviderVerb(
     workspaceId: opts.workspaceId,
     tool: spec.tool,
     connectionSelector: opts.connectionSelector ?? null,
+    sessionId: opts.sessionId ?? null,
   };
 
   const outcome = await executeSingleCall(spec, parameters ?? {}, ctx);

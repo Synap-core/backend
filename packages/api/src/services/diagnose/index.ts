@@ -35,6 +35,10 @@ import {
   skills,
   tools,
   events,
+  projects,
+  channels,
+  playbooks,
+  automations,
   ProposalStatus,
   notAnAppAgent,
 } from "@synap/database";
@@ -43,6 +47,9 @@ import { authoredByUser } from "../agent-identity-service.js";
 import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { AccessContext } from "../../access/context.js";
+import { projectVisibleWhere } from "../../access/project-visibility.js";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
@@ -641,8 +648,141 @@ async function diagnoseObject(
       };
     }
 
-    default:
-      return { error: `No object handler for kind ${kind}` };
+    // The four DEFINITION/container kinds `resolveObjectKind` learned when the
+    // public `/open/:id` bounce stopped owning a probe list. Each gets a real
+    // (if lean) arm — a kind the prober detects but the explainer answers with
+    // "No object handler" is a worse answer than the probe miss it replaced.
+    // Floors are the SAME shared predicates the probes use, never a copy.
+    case "automation": {
+      const [row] = await db
+        .select({
+          name: automations.name,
+          status: automations.status,
+          triggerType: automations.triggerType,
+          errorMessage: automations.errorMessage,
+          lastRunAt: automations.lastRunAt,
+          workspaceId: automations.workspaceId,
+        })
+        .from(automations)
+        .where(
+          and(
+            eq(automations.id, id),
+            userVisibleWhere(automations.workspaceId, userId)
+          )
+        )
+        .limit(1);
+      if (!row) return { error: "Automation not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `Automation "${row.name}" (${row.triggerType}) is ${row.status}`,
+        state: {
+          name: row.name,
+          status: row.status,
+          triggerType: row.triggerType,
+          lastRunAt: row.lastRunAt,
+          errorMessage: row.errorMessage,
+          workspaceId: row.workspaceId,
+        },
+        // Its runs carry the "why" — `diagnose({ flowType: "automation",
+        // flowId })` reads them; this arm explains the definition only.
+        why: null,
+      };
+    }
+
+    case "playbook": {
+      const [row] = await db
+        .select({ name: playbooks.name, workspaceId: playbooks.workspaceId })
+        .from(playbooks)
+        .where(
+          and(
+            eq(playbooks.id, id),
+            userVisibleWhere(playbooks.workspaceId, userId)
+          )
+        )
+        .limit(1);
+      if (!row) return { error: "Playbook not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `Playbook "${row.name}"`,
+        state: { name: row.name, workspaceId: row.workspaceId },
+        why: null,
+      };
+    }
+
+    case "project": {
+      const [row] = await db
+        .select({
+          name: projects.name,
+          status: projects.status,
+          workspaceId: projects.workspaceId,
+        })
+        .from(projects)
+        .where(
+          and(
+            eq(projects.id, id),
+            projectVisibleWhere(AccessContext.operator({ userId }))
+          )
+        )
+        .limit(1);
+      if (!row) return { error: "Project not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `Project "${row.name}" is ${row.status}`,
+        state: {
+          name: row.name,
+          status: row.status,
+          workspaceId: row.workspaceId,
+        },
+        why: null,
+      };
+    }
+
+    case "channel": {
+      const [row] = await db
+        .select({
+          title: channels.title,
+          channelType: channels.channelType,
+          workspaceId: channels.workspaceId,
+        })
+        .from(channels)
+        .where(and(eq(channels.id, id), channelVisibilityWhere(userId)))
+        .limit(1);
+      if (!row) return { error: "Channel not found" };
+      return {
+        mode: "object",
+        kind,
+        id,
+        summary: `Channel "${row.title ?? "untitled"}" (${row.channelType})`,
+        state: {
+          title: row.title,
+          channelType: row.channelType,
+          workspaceId: row.workspaceId,
+        },
+        why: null,
+      };
+    }
+
+    // An agent id never reaches this switch: `diagnose` routes a resolved
+    // `agent` to `agentScorecard` BEFORE calling `diagnoseObject` (a different
+    // report shape). Stated as an arm so the switch is exhaustive below.
+    case "agent":
+      return {
+        error:
+          "agent ids are diagnosed by the agent scorecard (diagnose({ agentId }))",
+      };
+
+    default: {
+      // EXHAUSTIVE: a new `ObjectKind` fails the typecheck here until it gets
+      // an explicit arm — never the silent "No object handler" it used to get.
+      const unhandled: never = kind;
+      return { error: `No object handler for kind ${String(unhandled)}` };
+    }
   }
 }
 

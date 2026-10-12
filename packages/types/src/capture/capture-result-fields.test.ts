@@ -138,3 +138,75 @@ describe("capture_result part-level project + placement", () => {
     expect(ok({ ...part(base), project: null, placement: null })).toBe(true);
   });
 });
+
+describe("capture_result row signals (D10 + label)", () => {
+  it("round-trips description, roles, confidence and label", () => {
+    const p = part({
+      ...base,
+      description: "A post about sovereign data",
+      roles: ["client", "investor"],
+      confidence: 0.8,
+      label: "likely",
+    });
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+  });
+
+  it("refuses out-of-bound signals (the reader drops the part, never a field)", () => {
+    const L = CAPTURE_RESULT_LIMITS;
+    const ok = (row: Record<string, unknown>) =>
+      CaptureResultPartSchema.safeParse(part({ ...base, ...row })).success;
+    expect(ok({ description: "d".repeat(L.descriptionMaxChars + 1) })).toBe(
+      false
+    );
+    expect(
+      ok({ roles: Array.from({ length: L.rolesMax + 1 }, (_, i) => `r${i}`) })
+    ).toBe(false);
+    expect(ok({ confidence: 1.5 })).toBe(false);
+    expect(ok({ label: "maybe" })).toBe(false);
+  });
+});
+
+describe("capture_result suggestions (D6)", () => {
+  const withSuggestions = (suggestions: unknown) => ({
+    ...part(base),
+    suggestions,
+  });
+  it("round-trips ranked next steps; absent and [] are different facts", () => {
+    const p = withSuggestions([
+      {
+        kind: "playbook",
+        id: "pb-1",
+        title: "Produce",
+        forTempId: "t1",
+        reason: "a post",
+      },
+      { kind: "rule", id: "r-1", title: "Tag", forTempId: null },
+    ]);
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+    const none = readCapturePart({ capturePart: withSuggestions([]) });
+    expect(none?.kind === "capture_result" && none.suggestions).toEqual([]);
+    const absent = readCapturePart({ capturePart: part(base) });
+    expect(absent && "suggestions" in absent).toBe(false);
+  });
+
+  it("refuses more than six, or an unknown kind", () => {
+    const step = { kind: "playbook", id: "p", title: "T", forTempId: null };
+    const ok = (s: unknown) =>
+      CaptureResultPartSchema.safeParse(withSuggestions(s)).success;
+    expect(ok(Array(7).fill(step))).toBe(false);
+    expect(ok([{ ...step, kind: "agent" }])).toBe(false);
+  });
+});
+
+describe("capture_result row candidate (D9)", () => {
+  it("round-trips the top duplicate; refuses a score outside 0..1", () => {
+    const candidate = { entityId: "e-1", title: "Alice Martin", score: 0.82 };
+    const p = part({ ...base, candidate });
+    expect(readCapturePart({ capturePart: p })).toEqual(p);
+    expect(
+      CaptureResultPartSchema.safeParse(
+        part({ ...base, candidate: { ...candidate, score: 2 } })
+      ).success
+    ).toBe(false);
+  });
+});

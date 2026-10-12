@@ -640,6 +640,117 @@
         "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc",
         "projectId": null
       }
+    },
+    {
+      "name": "valid result row carrying description, roles, confidence, label and candidate (D10, D2, D9)",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "description": "A post about sovereign data",
+            "roles": [
+              "client",
+              "investor"
+            ],
+            "confidence": 0.8,
+            "label": "likely",
+            "candidate": {
+              "entityId": "e-1",
+              "title": "Sovereign data",
+              "score": 0.82
+            }
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "label": "certain",
+            "confidence": 0
+          },
+          {
+            "tempId": "t3",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "label": "unsure",
+            "confidence": 1
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "valid result carrying suggestions — a playbook for a row and a rule needing nothing filed (D6)",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "suggestions": [
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1",
+            "reason": "about a post"
+          },
+          {
+            "kind": "rule",
+            "id": "r-1",
+            "title": "Tag new posts",
+            "forTempId": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid result with EMPTY suggestions — none found is not absent",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "suggestions": []
+      }
     }
   ],
   "invalid": [
@@ -1784,6 +1895,297 @@
         "truncated": false,
         "workspaceId": "1a2b3c4d-4444-4f55-8d66-778899aabbcc"
       }
+    },
+    {
+      "name": "result row label 'maybe'",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "label": "maybe"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row confidence 1.5 — over 1",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "confidence": 1.5
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row with 7 roles — over the bound of 6",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "roles": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e",
+              "f",
+              "g"
+            ]
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row description over 280 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "description": "@@DS281@@"
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row candidate score 2 — over 1",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "candidate": {
+              "entityId": "e-1",
+              "title": "x",
+              "score": 2
+            }
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row candidate missing entityId",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false,
+            "candidate": {
+              "title": "x",
+              "score": 0.5
+            }
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result with 7 suggestions — over the bound of 6",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "suggestions": [
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          },
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          },
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          },
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          },
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          },
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          },
+          {
+            "kind": "playbook",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "result suggestion kind 'agent'",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "suggestions": [
+          {
+            "kind": "agent",
+            "id": "pb-1",
+            "title": "Produce Content",
+            "forTempId": "t1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "result suggestion missing forTempId — nullable is not optional",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "suggestions": [
+          {
+            "kind": "rule",
+            "id": "r",
+            "title": "T"
+          }
+        ]
+      }
+    },
+    {
+      "name": "result suggestions null — optional is not nullable",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "post",
+            "title": "Sovereign data post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null,
+        "suggestions": null
+      }
     }
   ],
   "placeholders": {
@@ -1806,6 +2208,7 @@
     "@@N501@@": "501 × 'n'",
     "@@ROWS41@@": "41 × a minimal valid result row",
     "@@C2049@@": "2049 × 'c'",
-    "@@REL41@@": "41 × { sourceTempId: 's', targetTempId: 't', relationType: 'r' }"
+    "@@REL41@@": "41 × { sourceTempId: 's', targetTempId: 't', relationType: 'r' }",
+    "@@DS281@@": "281 × 'd'"
   }
 }

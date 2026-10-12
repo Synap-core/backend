@@ -76,8 +76,11 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   templateHealthFor,
+  overlayHealthFor,
+  templateSlugsOf,
   resolveTemplateCatalog,
   type TemplateLifecycle,
+  type OverlayTemplateHealth,
 } from "../../../services/template-health.js";
 import { readMarketSource } from "../../../services/capabilities/market-source.js";
 import { reconcileStandaloneConfigsToTemplates } from "../../../services/capabilities/reconcile-standalone-configs-to-templates.js";
@@ -161,6 +164,8 @@ export interface InstalledRow {
   replacedBy?: string | null;
   retiredReason?: string | null;
   lifecycleWarning?: string | null;
+  /** Workspace rows only: each overlay composed onto the space, with its own standing. */
+  overlays?: OverlayTemplateHealth[];
   /**
    * Free-text note about WHY a field above is what it is — e.g. why drift is
    * unknown for this row. Never a status; always explanatory.
@@ -217,6 +222,29 @@ const InstalledRowSchema = zOpenapi
     replacedBy: zOpenapi.string().nullable().optional(),
     retiredReason: zOpenapi.string().nullable().optional(),
     lifecycleWarning: zOpenapi.string().nullable().optional(),
+    overlays: zOpenapi
+      .array(
+        zOpenapi.object({
+          slug: zOpenapi.string(),
+          installedVersion: zOpenapi.string().nullable(),
+          latestVersion: zOpenapi.string().nullable(),
+          drifted: zOpenapi.boolean(),
+          lifecycle: zOpenapi.enum([
+            "current",
+            "retired",
+            "unlisted",
+            "unknown",
+          ]),
+          replacedBy: zOpenapi.string().nullable(),
+          retiredReason: zOpenapi.string().nullable(),
+          lifecycleWarning: zOpenapi.string().nullable(),
+          replacementHere: zOpenapi.boolean(),
+        })
+      )
+      .optional()
+      .describe(
+        "workspace rows only: each overlay composed onto the space (`installedPacks`), with its own catalog standing."
+      ),
     note: zOpenapi.string().optional(),
   })
   .openapi("InstalledRow");
@@ -327,10 +355,7 @@ export function registerInstalledRoutes(app: HubHono): void {
           .where(inArray(workspaces.id, wsIds));
         const active = wsRows.filter((w) => w.archivedAt == null);
         const templateCatalog = await resolveTemplateCatalog(
-          active.map(
-            (w) =>
-              (w.settings as { packageSlug?: string } | null)?.packageSlug ?? ""
-          )
+          active.flatMap((w) => templateSlugsOf(w.settings))
         );
         for (const w of active) {
           const s = (w.settings ?? {}) as Record<string, unknown>;
@@ -371,6 +396,7 @@ export function registerInstalledRoutes(app: HubHono): void {
             replacedBy: health.replacedBy,
             retiredReason: health.retiredReason,
             lifecycleWarning: health.lifecycleWarning,
+            overlays: overlayHealthFor(s, templateCatalog),
             ...(health.attached && !health.stamped
               ? {
                   note: "attached to a package but never version-stamped — drift cannot be computed",

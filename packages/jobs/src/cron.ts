@@ -80,6 +80,10 @@ import {
   CHAT_TURN_REAPER_QUEUE,
   CHAT_TURN_REAPER_CRON,
 } from "./workers/chat-turn-reaper.js";
+import {
+  LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
+  LIFECYCLE_TRANSITION_SWEEPER_CRON,
+} from "./workers/lifecycle-transition-sweeper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import {
   EXTERNAL_AGENT_POLL_QUEUE,
@@ -234,6 +238,19 @@ export async function registerCronSchedules(): Promise<void> {
   // CHAT_TURN_STUCK_HOURS, default 2h; process-crash mid-stream failsafe)
   await scheduleSafe(boss, CHAT_TURN_REAPER_QUEUE, CHAT_TURN_REAPER_CRON, {});
   logger.info("Registered cron: chat-turn-reaper (every 15min)");
+
+  // Lifecycle transition sweeper (every minute — delivers owed transition
+  // events left by a failed inline dispatch; review D8)
+  await scheduleSafe(
+    boss,
+    LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
+    LIFECYCLE_TRANSITION_SWEEPER_CRON,
+    {}
+  );
+  logger.info("Registered cron: lifecycle-transition-sweeper (every minute)");
+  // And once at boot: an owed event left by a process that died mid-dispatch
+  // is delivered without waiting for the first tick.
+  await sendSafe(boss, LIFECYCLE_TRANSITION_SWEEPER_QUEUE, {});
 
   // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
   await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});

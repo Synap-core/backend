@@ -31,7 +31,7 @@ Do not install templates, define kinds, or create a project until you can answer
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **methods** will it run (business model, content pipeline, build…)?            | **Tracks** — one track template each, started with `synap_start_track`.                 |
+| Which **lasting goals** will it pursue (grow the newsletter, win ten clients…)?      | **Tracks** — `synap_start_track`, no template; methods are playbooks sessions follow.   |
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
@@ -130,7 +130,7 @@ A **track** is a lasting intent with a goal inside ONE project ("Grow the newsle
 - Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
-- Nested or twin projects, or a workspace, to represent a **method** of an existing project. A method is a track; one bounded piece of work inside it is a session (`trackId`).
+- Nested or twin projects, or a workspace, to represent a **goal or method** of an existing project. A lasting goal is a track; a repeatable method is a playbook a session or worker follows; one bounded piece of work is a session (`trackId`).
 - Invent CLI flags or tools this door does not list.
 - A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
 - Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.
@@ -139,4 +139,4 @@ A **track** is a lasting intent with a goal inside ONE project ("Grow the newsle
 
 ### After it works
 
-Offer L4, one at a time: session → work template; stages of a method → track template; cell → renderer; **project → pack** (a `suite`) (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.
+Offer L4, one at a time: session → work template; cell → renderer; **project → pack** (a `suite`) (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.

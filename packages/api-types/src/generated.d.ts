@@ -1737,6 +1737,12 @@ export interface AutomationTriggerConfig {
 	 */
 	includeSyncOrigin?: boolean;
 	/**
+	 * Fire on events whose `origin` is `"merge"` — a role moved onto the
+	 * surviving entity of a merge. Default (absent/false): skipped, like sync:
+	 * merging two duplicate people must not re-propose "Qualify a lead".
+	 */
+	includeMergeOrigin?: boolean;
+	/**
 	 * The connection (`secrets` row id) this automation's capability steps run
 	 * against. Passed as `connectionSelector.connectionId` to every capability
 	 * node that does not name its own selector/connection.
@@ -2278,8 +2284,38 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
 		 */
 		mode?: "run" | "appointment" | "propose";
+		/**
+		 * STAGE WORKER — present when this node is an ENABLED worker (work model
+		 * L4): a playbook activator compiled for a scope. Carries what the runner
+		 * needs to decide whether to start, and how big the run is. Absent ⇒ an
+		 * ordinary playbook run, unchanged. Producer: the activator compiler
+		 * (`playbook-activators.ts` / `workers.ts`, via the rule grammar's
+		 * `__worker` key). Forwarded WHOLE by every executor call site (one field,
+		 * one forward — the `playbook-run-mode-honoured` tripwire pins it).
+		 */
+		worker?: PlaybookRunWorkerSpec;
 		errorHandling?: NodeErrorHandling;
 	};
+}
+/**
+ * A worker node's runtime spec. Mirrors the declared activator
+ * (`WorkerActivator`, `@synap-core/types/workers`) minus what the rule's
+ * trigger already encodes. `writes: "propose"` = every agent write inside a
+ * per_moment batch becomes a proposal (the batch card); a per_thing worker's
+ * propose mode is the node's own `mode: "propose"` instead.
+ */
+export interface PlaybookRunWorkerSpec {
+	/** The activator's key within its playbook (`activatorKey`). */
+	key: string;
+	size: "per_thing" | "per_moment";
+	/** The subject kind or role the worker works on. */
+	profileSlug: string;
+	/** The status its things sit in (enters_status / count / schedule). */
+	status?: string;
+	/** A `count` worker's threshold. */
+	minCount?: number;
+	maxPendingApprovals?: number;
+	writes?: "run" | "propose";
 }
 export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | EntityReadNodeDef | RelatedEntitiesNodeDef | ComputeNodeDef | SelectNodeDef | ClaimNodeDef | GuardNodeDef | MessagesQueryNodeDef | RunsQueryNodeDef | ProposalsQueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
 export interface AutomationEdge {
@@ -3126,7 +3162,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "playbook" | "automation" | "human";
+			data: "agent" | "human" | "automation" | "playbook";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3141,7 +3177,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "playbook" | "automation" | "human";
+			$type: "agent" | "human" | "automation" | "playbook";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3247,7 +3283,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3709,7 +3745,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "capability" | "human" | "evidence" | "judge";
+			data: "human" | "evidence" | "capability" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4506,7 +4542,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "draft" | "paused";
+			data: "active" | "paused" | "archived" | "draft";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4528,7 +4564,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "project" | "session";
+			data: "session" | "project";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4543,7 +4579,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "project" | "session";
+			$type: "session" | "project";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -5544,6 +5580,20 @@ export interface OpCounts {
 	facetsRemapped?: number;
 	/** foldRoleIntoStatus: entities whose existing target-role facet(s) received the status. */
 	facetsFolded?: number;
+	/** foldBookingDealIntoLead: untouched booking deals turned into a lead. */
+	dealsConverted?: number;
+	/** foldBookingDealIntoLead: booking deals someone edited — kept for a person to decide. */
+	dealsKeptEdited?: number;
+	/** foldBookingDealIntoLead: untouched booking deals with no linked person — kept. */
+	dealsKeptNoPerson?: number;
+	/** foldBookingDealIntoLead: existing leads moved forward to the booking status. */
+	leadsAdvanced?: number;
+	/** foldBookingDealIntoLead: existing leads whose lifecycle is not declared — left as they are. */
+	leadsUnjudged?: number;
+	/** foldBookingDealIntoLead: attended_by / works_at edges created. */
+	relationsCreated?: number;
+	/** foldBookingDealIntoLead (destructive tail): converted deals soft-deleted. */
+	entitiesArchived?: number;
 	/** projectLifecycleColumns: rows whose lifecycle columns were filled from the projection. */
 	lifecycleColumnsProjected?: number;
 	/** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
@@ -5843,6 +5893,10 @@ export interface ReconcileReport {
 	};
 }
 export interface StatusMoveActor {
+	/**
+	 * `agent` with no `agentUserId` is an UNATTRIBUTED AI write (a service or
+	 * hub key): still an AI, governed and compare-and-set as one, never a person.
+	 */
 	kind: "human" | "agent" | "system";
 	/** The human the write is attributed to (owner of an agent's write). */
 	userId: string;
@@ -7336,31 +7390,6 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
-/**
- * MOVED HERE from `@synap-core/automation-intent` (synap-app) so the BACKEND can
- * reach the rule-sentence grammar: synap-backend's pnpm workspace is only
- * `apps/*` / `packages/*` / `marketplaces/*`, so it cannot resolve a synap-app
- * workspace package — and the CLI, Discord and Hub REST rule doors are all
- * server-side. Same shape as `@synap-core/types/vocabulary`, which moved for the
- * same reason. `@synap-core/automation-intent/src/sentence.ts` is now a
- * re-export shim over this file, so every existing importer is unchanged.
- *
- * The pure "rule sentence" value-model + its bidirectional converters.
- *
- * A rule reads as a sentence — WHEN [event] (WHERE [filter]) → THEN [action] — and
- * is stored as an `automations` row (triggerType/triggerConfig + flowDefinition).
- * This module is the ONE UI-agnostic home for that value-model and the pure
- * functions that convert it to/from the stored automation shape, so every editor
- * lineage (Studio's HeroUI builder, browser's spatial-ui editor) consumes the
- * SAME logic instead of forking it. No React, no HeroUI, no tRPC — framework-free
- * so both `features/*` (HeroUI) and `browser/` (spatial-ui) can import it.
- *
- * It deliberately does NOT depend on `@synap-core/workflows` (a FEATURE package —
- * a core package may not import upward). The flow shape is expressed here as the
- * structural `RuleFlowDefinition`, to which `@synap-core/workflows`'s
- * `AutomationFlowDefinition` is assignable (its node `type` union widens to
- * `string`), so callers pass their concrete flow type in unchanged.
- */
 export type ActionType = "notify" | "update_entity" | "create_entity" | "run_command" | "post_message" | "call_webhook";
 export interface SentenceAction {
 	type: ActionType | null;
@@ -7408,6 +7437,14 @@ export interface SentenceTrigger {
 	triggerType: "event" | "cron";
 	subjectCategory?: TriggerSubjectCategory;
 	profileSlug?: string;
+	/**
+	 * `"role"` when an ENTITY trigger's `profileSlug` names a ROLE (Kind +
+	 * Facets). Only `created` reads it: a role is never created, it is
+	 * ATTACHED, so "a lead is created" compiles to the facet-attach event
+	 * (`entity_facet.attach.completed`, see {@link buildEventPattern}).
+	 * Absent = a kind — every rule written before roles could be subjects.
+	 */
+	profileKind?: "kind" | "role";
 	actionVerb?: ActionVerb;
 	conditions?: ConditionRow[];
 	cronFrequency?: CronFrequency;
@@ -8653,6 +8690,20 @@ export interface ExpectedOutput {
 	kind: string;
 	label: string;
 	icon?: string;
+	/**
+	 * OPTIONAL: produce it when it applies, never owe it — e.g. a milestone
+	 * invoice on an engagement billed at close. Absent ⇒ `false` (required).
+	 * An optional slot is owed by NOBODY (`isDeliverableOutstanding`,
+	 * `@synap-core/types/units`): no needs-you row, no reaper hold, never an
+	 * unmet required outcome at a stage gate, never a `complete_session` warning.
+	 * Filled, it is `done` and counts as produced like any other slot.
+	 *
+	 * CLIENT-DECLARABLE, like `owner`: set where the slot is declared
+	 * (playbook, stage, the session's own declaration), and kept by a patch that
+	 * is silent about it. It closes nothing — a filled optional slot is `done`
+	 * only through the usual doors.
+	 */
+	optional?: boolean;
 	/**
 	 * The slot's STABLE identity — what every slot door joins on first (the
 	 * label stays the alias). SERVER-STAMPED: derived by the ONE function
@@ -10876,6 +10927,7 @@ declare const CAPTURE_STATUSES: readonly [
 	"structured",
 	"saved_without_ai",
 	"needs_answer",
+	"suggested",
 	"not_structured"
 ];
 export type CaptureStatus = (typeof CAPTURE_STATUSES)[number];
@@ -14097,6 +14149,13 @@ export interface SessionEdges {
  * assumes. Both invariants together mean every id this module returns belongs
  * to `userId`.
  *
+ * A SETTLED WORKER TARGET IS NOT A WAIT (work model L4). A stage worker's
+ * target edge (`links.metadata.role = "worker_target"`) that carries a
+ * `result` (done / failed / skipped / created) is work that has ENDED on that
+ * thing: the worker no longer waits on anyone's output of it. Both readers
+ * drop it as a targeter (`settledWorkerTargetSql`). An open target (no result
+ * yet) is a wait like any other `targets` edge.
+ *
  * TWO QUERIES, NOT ONE, and deliberately. The join coordinate is the ENTITY,
  * not the session — the counterparty session is reached only THROUGH X and is
  * usually not on the page. A single query over the page's ids would surface a
@@ -14246,7 +14305,7 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
 	/** Who yields it. */
 	owner: "agent" | "human";
 	verify: OutcomeVerify;
-	/** Absent on the criterion = true; a declared slot is always required. */
+	/** Absent on the criterion = true; a declared slot unless `optional`. */
 	required: boolean;
 	/** Delivered (slot stamped done) or proven (current verdict `pass`). */
 	met: boolean;
@@ -15928,6 +15987,19 @@ export interface AgentStanding {
 	 */
 	writes7d: number;
 }
+export interface OpenTarget {
+	/** An `object-nav.ts` label, a known-but-unopenable kind, or `unknown`. */
+	type: string;
+	/** The id to OPEN — may differ from the queried id (a correlationId). */
+	id: string;
+	displayName: string | null;
+	workspaceId: string | null;
+	profileSlug?: string;
+	/** Whether `type` names a surface the browser can open. */
+	openable: boolean;
+	/** Address parameters the link must carry (only runs: `flowType`). */
+	params?: Record<string, string>;
+}
 /**
  * Agent provenance — WHERE an agent came from, for the Agent dashboard.
  *
@@ -16523,7 +16595,13 @@ export type SignalKind =
  * bare PROJECT scope only — the one scope that counts it — so the project
  * badge and the project list are one number over one predicate (W2 review).
  */
- | "session-review";
+ | "session-review"
+/**
+ * One capture that still owes the person something (founder, 2026-10-12):
+ * an OPEN question, or suggestions nobody filed or refused. The door opens
+ * the capture thread (the session's `room` view); `captureStatus` says which.
+ */
+ | "capture";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -16686,6 +16764,12 @@ export interface Signal {
 	 */
 	notificationType?: string;
 	/**
+	 * `capture` only: what the capture owes — `needs_answer` (an open question)
+	 * or `suggested` (rows nobody filed or refused). The capture-list status
+	 * vocabulary (`deriveCaptureStatus`), so one word names it everywhere.
+	 */
+	captureStatus?: "needs_answer" | "suggested";
+	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
 	 * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -16783,7 +16867,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "liveness" | "outputs" | "activity" | "events";
+export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "captures" | "liveness" | "outputs" | "activity" | "events";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -17258,6 +17342,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17318,6 +17403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17391,6 +17477,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17455,6 +17542,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17664,6 +17752,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17724,6 +17813,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17797,6 +17887,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17861,6 +17952,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					label?: "certain" | "likely" | "unsure";
 					facets?: Array<{
 						profileSlug: string;
 						status?: string;
@@ -17957,7 +18049,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 					}[] | undefined;
 				} | null | undefined;
-				workspaceChoice?: "removed" | "ignored" | "accepted" | "changed" | undefined;
+				workspaceChoice?: "removed" | "changed" | "ignored" | "accepted" | undefined;
 				aiProjectId?: string | null | undefined;
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
@@ -19689,7 +19781,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19743,7 +19835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20441,7 +20533,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20495,7 +20587,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20543,7 +20635,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20597,7 +20689,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20659,7 +20751,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20713,7 +20805,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -23899,7 +23991,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				cursor?: string | undefined;
 				limit?: number | undefined;
-				status?: "structured" | "not_structured" | "saved_without_ai" | "needs_answer" | undefined;
+				status?: "structured" | "suggested" | "needs_answer" | "not_structured" | "saved_without_ai" | undefined;
 			} | undefined;
 			output: {
 				items: CaptureItem[];
@@ -26162,7 +26254,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "automation";
 				automationId: string;
 				name: string;
-				status: "active" | "archived" | "error" | "draft" | "paused";
+				status: "draft" | "active" | "paused" | "error" | "archived";
 			} | {
 				kind: "playbook";
 				playbookId: string;
@@ -26181,7 +26273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automations: {
 					automationId: string;
 					name: string;
-					status: "active" | "archived" | "error" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "error" | "archived";
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					nextRunAt: Date | null;
 				}[];
@@ -27720,6 +27812,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								}[] | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
+							optional?: boolean | undefined;
 						}[] | undefined;
 						stages?: {
 							[x: string]: unknown;
@@ -27808,6 +27901,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									}[] | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
+								optional?: boolean | undefined;
 							}[] | undefined;
 							suggestedTasks?: string[] | undefined;
 							position?: number | undefined;
@@ -27856,16 +27950,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							profileSlug?: string | undefined;
 							statusProperty?: string | undefined;
 							activators?: {
-								on: "created" | "enters_status";
+								on: "manual" | "schedule" | "created" | "count" | "enters_status";
 								status?: string | undefined;
+								cron?: string | undefined;
+								min?: number | undefined;
+								size?: "per_thing" | "per_moment" | undefined;
 								mode?: "run" | "propose" | undefined;
+								maxPendingApprovals?: number | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
 						} | undefined;
 						activators?: {
-							on: "created" | "enters_status";
+							on: "manual" | "schedule" | "created" | "count" | "enters_status";
 							status?: string | undefined;
+							cron?: string | undefined;
+							min?: number | undefined;
+							size?: "per_thing" | "per_moment" | undefined;
 							mode?: "run" | "propose" | undefined;
+							maxPendingApprovals?: number | undefined;
 						}[] | undefined;
 						humanOnlyStatuses?: string[] | undefined;
 						schedule?: unknown;
@@ -27879,7 +27981,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | undefined;
 						executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
-						status?: "active" | "archived" | "draft" | "paused" | undefined;
+						status?: "draft" | "active" | "paused" | "archived" | undefined;
 						scope?: "project" | "session" | undefined;
 						grants?: (string | {
 							kind: "skill" | "tool" | "command";
@@ -27912,7 +28014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							edges: unknown[];
 							precondition?: string | undefined;
 						} | undefined;
-						status?: "active" | "draft" | "paused" | undefined;
+						status?: "draft" | "active" | "paused" | undefined;
 					}[] | undefined;
 					tools?: {
 						name: string;
@@ -28113,7 +28215,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							edges: unknown[];
 							precondition?: string | undefined;
 						} | undefined;
-						status?: "active" | "draft" | "paused" | undefined;
+						status?: "draft" | "active" | "paused" | undefined;
 					}[] | undefined;
 					actionPlacements?: {
 						profileSlug: string;
@@ -28467,7 +28569,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "map" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "calendar" | "graph" | "sheet" | "gallery" | "kanban" | "matrix" | "masonry" | "gantt" | "timeline" | "branch_tree" | "mindmap" | "zoom_map" | undefined;
+				type?: "table" | "map" | "all" | "bento" | "whiteboard" | "list" | "grid" | "flow" | "calendar" | "graph" | "sheet" | "gallery" | "kanban" | "pipeline" | "matrix" | "masonry" | "gantt" | "timeline" | "branch_tree" | "mindmap" | "zoom_map" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -31862,6 +31964,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		changeLifecycleOptions: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				options: Record<string, unknown>[];
+				remap?: Record<string, string> | undefined;
+			};
+			output: {
+				status: "changed";
+				remapped: number;
+			} | {
+				status: "unchanged";
+			};
+			meta: object;
+		}>;
 		proposeRetire: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -34679,7 +34795,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "normal" | "low" | "high" | "urgent";
+					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -35604,7 +35720,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				status?: "active" | "error" | "paused" | undefined;
+				status?: "active" | "paused" | "error" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -35696,7 +35812,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				patch: {
 					params?: Record<string, unknown> | undefined;
-					status?: "active" | "error" | "paused" | undefined;
+					status?: "active" | "paused" | "error" | undefined;
 					cursor?: string | undefined;
 				};
 			};
@@ -35822,7 +35938,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				sourceConfigId?: string | undefined;
-				status?: "active" | "error" | "paused" | undefined;
+				status?: "active" | "paused" | "error" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -35942,7 +36058,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "error" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "error" | undefined;
 				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
 				limit?: number | undefined;
 			} | undefined;
@@ -35956,7 +36072,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "error" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "error" | "archived";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -35984,7 +36100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listPage: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "error" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "error" | undefined;
 				triggerType?: "event" | "cron" | "webhook" | "manual" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
@@ -35999,7 +36115,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "error" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "error" | "archived";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -36124,7 +36240,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				id: string;
 				workspaceId: string | null;
-				status: "active" | "archived" | "error" | "draft" | "paused";
+				status: "draft" | "active" | "paused" | "error" | "archived";
 				version: number;
 				createdAt: Date;
 				updatedAt: Date;
@@ -36164,7 +36280,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				description?: string | undefined;
 				triggerConfig?: Record<string, unknown> | undefined;
-				status?: "active" | "error" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "error" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				state?: Record<string, unknown> | undefined;
 				agentUserId?: string | undefined;
@@ -36196,7 +36312,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					edges: Record<string, unknown>[];
 					precondition?: string | undefined;
 				} | undefined;
-				status?: "active" | "error" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "error" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				state?: Record<string, unknown> | undefined;
 			};
@@ -37973,6 +38089,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					icon?: string | undefined;
+					optional?: boolean | undefined;
 					key?: string | undefined;
 					status?: "done" | "pending" | undefined;
 					claimedDone?: boolean | undefined;
@@ -38295,6 +38412,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					icon?: string | undefined;
+					optional?: boolean | undefined;
 					key?: string | undefined;
 					status?: "done" | "pending" | undefined;
 					claimedDone?: boolean | undefined;
@@ -38622,6 +38740,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
+						optional?: boolean | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
@@ -39340,7 +39459,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				status?: "active" | "archived" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "archived" | undefined;
 				limit?: number | undefined;
 			} | undefined;
 			output: {
@@ -39361,7 +39480,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				version: number;
 				schedule: unknown;
 				executor: PlaybookExecutorRef;
-				status: "active" | "archived" | "draft" | "paused";
+				status: "draft" | "active" | "paused" | "archived";
 				scope: "project" | "session" | null;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
@@ -39373,7 +39492,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listPage: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				status?: "active" | "archived" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "archived" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
 			} | undefined;
@@ -39395,7 +39514,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: number;
 					schedule: unknown;
 					executor: PlaybookExecutorRef;
-					status: "active" | "archived" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "archived";
 					scope: "project" | "session" | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -39410,7 +39529,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listAllPage: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
-				status?: "active" | "archived" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "archived" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
 			} | undefined;
@@ -39432,7 +39551,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: number;
 					schedule: unknown;
 					executor: PlaybookExecutorRef;
-					status: "active" | "archived" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "archived";
 					scope: "project" | "session" | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -39481,7 +39600,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				id: string;
 				workspaceId: string | null;
-				status: "active" | "archived" | "draft" | "paused";
+				status: "draft" | "active" | "paused" | "archived";
 				version: number;
 				createdAt: Date;
 				updatedAt: Date;
@@ -39591,6 +39710,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
+					optional?: boolean | undefined;
 				}[] | undefined;
 				stages?: {
 					[x: string]: unknown;
@@ -39679,6 +39799,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
+						optional?: boolean | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
@@ -39727,16 +39848,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					profileSlug?: string | undefined;
 					statusProperty?: string | undefined;
 					activators?: {
-						on: "created" | "enters_status";
+						on: "manual" | "schedule" | "created" | "count" | "enters_status";
 						status?: string | undefined;
+						cron?: string | undefined;
+						min?: number | undefined;
+						size?: "per_thing" | "per_moment" | undefined;
 						mode?: "run" | "propose" | undefined;
+						maxPendingApprovals?: number | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
 				} | undefined;
 				activators?: {
-					on: "created" | "enters_status";
+					on: "manual" | "schedule" | "created" | "count" | "enters_status";
 					status?: string | undefined;
+					cron?: string | undefined;
+					min?: number | undefined;
+					size?: "per_thing" | "per_moment" | undefined;
 					mode?: "run" | "propose" | undefined;
+					maxPendingApprovals?: number | undefined;
 				}[] | undefined;
 				humanOnlyStatuses?: string[] | undefined;
 				schedule?: unknown;
@@ -39755,7 +39884,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: string | undefined;
 				forceCreate?: boolean | undefined;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
-				status?: "active" | "archived" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "archived" | undefined;
 				contextSkill?: {
 					body: string;
 					name?: string | undefined;
@@ -39766,7 +39895,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					id: string;
 					workspaceId: string | null;
-					status: "active" | "archived" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "archived";
 					version: number;
 					createdAt: Date;
 					updatedAt: Date;
@@ -39882,6 +40011,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
+					optional?: boolean | undefined;
 				}[] | undefined;
 				stages?: {
 					[x: string]: unknown;
@@ -39970,6 +40100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
+						optional?: boolean | undefined;
 					}[] | undefined;
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
@@ -40018,21 +40149,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					profileSlug?: string | undefined;
 					statusProperty?: string | undefined;
 					activators?: {
-						on: "created" | "enters_status";
+						on: "manual" | "schedule" | "created" | "count" | "enters_status";
 						status?: string | undefined;
+						cron?: string | undefined;
+						min?: number | undefined;
+						size?: "per_thing" | "per_moment" | undefined;
 						mode?: "run" | "propose" | undefined;
+						maxPendingApprovals?: number | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
 				} | undefined;
 				activators?: {
-					on: "created" | "enters_status";
+					on: "manual" | "schedule" | "created" | "count" | "enters_status";
 					status?: string | undefined;
+					cron?: string | undefined;
+					min?: number | undefined;
+					size?: "per_thing" | "per_moment" | undefined;
 					mode?: "run" | "propose" | undefined;
+					maxPendingApprovals?: number | undefined;
 				}[] | undefined;
 				humanOnlyStatuses?: string[] | undefined;
 				schedule?: unknown;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
-				status?: "active" | "archived" | "draft" | "paused" | undefined;
+				status?: "draft" | "active" | "paused" | "archived" | undefined;
 				scope?: "project" | "session" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 			};
@@ -40046,7 +40185,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					id: string;
 					workspaceId: string | null;
-					status: "active" | "archived" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "archived";
 					version: number;
 					createdAt: Date;
 					updatedAt: Date;
@@ -40114,7 +40253,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					id: string;
 					workspaceId: string | null;
-					status: "active" | "archived" | "draft" | "paused";
+					status: "draft" | "active" | "paused" | "archived";
 					version: number;
 					createdAt: Date;
 					updatedAt: Date;
@@ -41137,7 +41276,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setStatus: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				status: "active" | "archived" | "paused" | "completed";
+				status: "active" | "paused" | "archived" | "completed";
 				reasoning?: string | undefined;
 			};
 			output: ProposedOutcome | {
@@ -41258,6 +41397,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					days: number;
 				} | undefined;
 				firstN?: number | undefined;
+				column?: string | undefined;
+				cursor?: string | undefined;
+				limit?: number | undefined;
 			};
 			output: {
 				lifecycle: {
@@ -41278,6 +41420,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					count: number;
 					items: {
 						id: string;
+						facetId: string | null;
 						name: string | null;
 						status: string | null;
 						enteredAt: string | null;
@@ -41295,6 +41438,119 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					days: number;
 					since: string;
 				};
+				nextCursor: string | null;
+			};
+			meta: object;
+		}>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId?: string | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				profileSlug: string;
+				profileKind: "kind" | "role";
+				label: string;
+				live: number;
+				total: number;
+			}[];
+			meta: object;
+		}>;
+	}>>;
+	workers: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
+				opRef?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug?: string | undefined;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+				playbookId?: string | undefined;
+				liveOnly?: boolean | undefined;
+			};
+			output: {
+				ruleId: string;
+				playbookId: string;
+				playbookName: string;
+				activatorKey: string;
+				activator: {
+					on: "manual" | "schedule" | "created" | "count" | "enters_status";
+					mode: "run" | "propose";
+					status?: string | undefined;
+					cron?: string | undefined;
+					min?: number | undefined;
+					size?: "per_thing" | "per_moment" | undefined;
+					maxPendingApprovals?: number | undefined;
+				} | null;
+				profileSlug: string | null;
+				size: "per_thing" | "per_moment";
+				mode: "run" | "propose";
+				scope: "project" | "space";
+				projectId: string | null;
+				trackId: string | null;
+				state: "paused" | "running";
+				automationId: string | null;
+				pendingApprovals: number;
+				maxPendingApprovals: number;
+			}[];
+			meta: object;
+		}>;
+		enable: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				playbookId: string;
+				activatorKey: string;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+			};
+			output: {
+				status: "enabled";
+				ruleId: string;
+				reactivated: boolean;
+			} | {
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "denied";
+				reason: string;
+			};
+			meta: object;
+		}>;
+		setPaused: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				ruleId: string;
+				paused: boolean;
+			};
+			output: {
+				status: "updated";
+				state: "paused" | "running";
+			} | {
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "denied";
+				reason: string;
 			};
 			meta: object;
 		}>;
@@ -41790,6 +42046,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: AgentStanding[];
 			meta: object;
 		}>;
+		resolveOpen: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: OpenTarget;
+			meta: object;
+		}>;
 		agent: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				agentId: string;
@@ -42018,7 +42281,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				lens?: "proposed" | "produced" | "page" | "history" | "suggestions" | "happening" | "needs-you" | undefined;
+				lens?: "proposed" | "produced" | "page" | "suggestions" | "history" | "happening" | "needs-you" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
 				since?: string | undefined;
@@ -42068,6 +42331,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				decisions: number;
 				notifications: number;
 				review: number;
+				captures: number;
 				drafts: number;
 				draftsTruncated: boolean;
 				suggestions: number;
@@ -42089,6 +42353,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					decisions: number;
 					notifications: number;
 					review: number;
+					captures: number;
 					drafts: number;
 					draftsTruncated: boolean;
 					suggestions: number;

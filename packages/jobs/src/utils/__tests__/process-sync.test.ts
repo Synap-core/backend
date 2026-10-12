@@ -22,6 +22,16 @@ const h = vi.hoisted(() => ({
   /** user id → user_type, for the producer's agent-ness. */
   userTypes: {} as Record<string, string>,
   lastUserLookup: null as string | null,
+  /** In-flight sessions holding the moved thing as an open worker target. */
+  targets: [] as Array<{
+    sessionId: string;
+    channelId: string | null;
+    workerProfileSlug?: string | null;
+  }>,
+  /** The result writer: first verdict wins, keyed session:entity. */
+  stamps: new Map<string, Record<string, unknown>>(),
+  posts: [] as Array<Record<string, unknown>>,
+  released: [] as string[],
   T: {
     focusSessions: { __t: "fs" },
     proposals: { __t: "p" },
@@ -29,6 +39,16 @@ const h = vi.hoisted(() => ({
     entityFacets: { __t: "f" },
     users: { __t: "u", id: "users.id" },
   },
+}));
+
+vi.mock("../worker-backlog-release.js", () => ({
+  workerAutomationOfProposal: vi.fn(async (id: string) =>
+    id === "p-worker" ? "auto-w" : null
+  ),
+  releaseHeldWorkerRuns: vi.fn(async (a: string) => {
+    h.released.push(a);
+    return ["run-r"];
+  }),
 }));
 
 vi.mock("@synap/database", () => ({
@@ -78,6 +98,18 @@ vi.mock("@synap/database", () => ({
   and: () => ({}),
   inArray: () => ({}),
   isNotNull: () => ({}),
+  listOpenWorkerTargetSessions: async () =>
+    h.targets.filter((t) => !h.stamps.has(`${t.sessionId}:post-1`)),
+  stampWorkerTargetResult: async (i: Record<string, unknown>) => {
+    const key = `${i.sessionId}:${i.entityId}`;
+    if (h.stamps.has(key)) return false;
+    h.stamps.set(key, i);
+    return true;
+  },
+  insertChannelMessage: async (m: Record<string, unknown>) => {
+    h.posts.push(m);
+    return { messageId: "m-1", mirrored: false };
+  },
 }));
 vi.mock("@synap/events", () => ({
   DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS: true,
@@ -162,6 +194,9 @@ beforeEach(() => {
   h.proposal = null;
   h.advances = [];
   h.updates = [];
+  h.targets = [];
+  h.stamps = new Map();
+  h.posts = [];
   h.proc = {
     stages: STAGES,
     statusProperty: "post-status",
@@ -375,11 +410,183 @@ describe("the transition event (work model L2) → run stage", () => {
     expect(out[0]).toMatchObject({ kind: "ignored", reason: "stale_event" });
   });
 
+  // R1: two roles of one entity may name their lifecycle property alike. A
+  // process follows ITS role's move only.
+  it("a run ON the role follows that role's move", async () => {
+    h.sessions = [session("schedule")];
+    h.facetStatus = "published";
+    h.proc = { ...(h.proc as Record<string, unknown>), profileSlug: "lead" };
+    const out = await syncProcessOnEvent(
+      transition({ role: "lead", facetId: "facet-1" })
+    );
+    expect(out[0]).toMatchObject({ kind: "followed", toStage: "publish" });
+  });
+
+  it("a run on ANOTHER role of the same entity does not follow it", async () => {
+    h.sessions = [session("schedule")];
+    h.facetStatus = "published";
+    h.proc = { ...(h.proc as Record<string, unknown>), profileSlug: "client" };
+    const out = await syncProcessOnEvent(
+      transition({ role: "lead", facetId: "facet-1" })
+    );
+    expect(h.advances).toEqual([]);
+    expect(out).toEqual([]);
+  });
+
   it("a KIND's transition is left to the dual-emitted update event (no double follow)", async () => {
     h.sessions = [session("schedule")];
     h.subject = { "post-status": "published" };
     const out = await syncProcessOnEvent(transition({ role: null }));
     expect(out).toEqual([]);
     expect(h.advances).toEqual([]);
+  });
+});
+
+describe("worker targets (work model L4/L5): a move settles the thing in each worker session", () => {
+  const move = (extra: Record<string, unknown> = {}) => ({
+    eventType: "entity.transition.completed",
+    subjectId: "post-1",
+    userId: "human-2",
+    workspaceId: "ws-1",
+    data: {
+      transitionId: "tr-1",
+      entityId: "post-1",
+      property: "post-status",
+      from: "scheduled",
+      to: "published",
+      role: null,
+      ...extra,
+    },
+  });
+
+  it("a PERSON's move ⇒ skipped / moved_by_person, with the transition, and one room line", async () => {
+    h.targets = [{ sessionId: "worker-1", channelId: "room-1" }];
+    const out = await syncProcessOnEvent(move());
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({
+      result: "skipped",
+      reason: "moved_by_person",
+      transitionEventId: "tr-1",
+    });
+    expect(out).toContainEqual({
+      kind: "target_settled",
+      sessionId: "worker-1",
+      entityId: "post-1",
+      result: "skipped",
+    });
+    expect(h.posts).toHaveLength(1);
+    expect(h.posts[0]).toMatchObject({ channelId: "room-1" });
+    expect(String(h.posts[0]!.content)).toMatch(/re-plan/);
+  });
+
+  it("the WORKER's own move (its sessionId on the transition) ⇒ done, no room line", async () => {
+    h.targets = [{ sessionId: "worker-1", channelId: "room-1" }];
+    await syncProcessOnEvent(move({ sessionId: "worker-1" }));
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({ result: "done" });
+    expect(h.posts).toEqual([]);
+  });
+
+  it("ANOTHER session's move is not this worker's: skipped", async () => {
+    h.targets = [{ sessionId: "worker-1", channelId: null }];
+    await syncProcessOnEvent(move({ sessionId: "other-session" }));
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({
+      result: "skipped",
+      reason: "moved_by_person",
+    });
+  });
+
+  /**
+   * backend F10: a worker follows ONE lifecycle. Rows rule out: settling on
+   * the same thing's OTHER lifecycle (its lead facet moved, the client worker
+   * is told to re-plan); a filter that also drops the worker's own lifecycle;
+   * a legacy session (no stamp) that no move settles anymore.
+   */
+  it("a move of ANOTHER lifecycle of the thing settles nothing", async () => {
+    h.targets = [
+      {
+        sessionId: "worker-1",
+        channelId: "room-1",
+        workerProfileSlug: "client",
+      },
+    ];
+    const out = await syncProcessOnEvent(
+      move({ role: "lead", facetId: "facet-1", lifecycleProfile: "lead" })
+    );
+    expect(h.stamps.size).toBe(0);
+    expect(h.posts).toEqual([]);
+    expect(out.filter((o) => o.kind === "target_settled")).toEqual([]);
+  });
+
+  it("a move of the lifecycle the worker follows settles it", async () => {
+    h.targets = [
+      { sessionId: "worker-1", channelId: null, workerProfileSlug: "post" },
+    ];
+    await syncProcessOnEvent(move({ lifecycleProfile: "post" }));
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({
+      result: "skipped",
+    });
+  });
+
+  it("a session started before the stamp (no profile) is settled by any move", async () => {
+    h.targets = [
+      { sessionId: "worker-1", channelId: null, workerProfileSlug: null },
+    ];
+    await syncProcessOnEvent(move({ lifecycleProfile: "lead" }));
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({
+      result: "skipped",
+    });
+  });
+
+  it("a REDELIVERED transition neither re-stamps nor re-posts", async () => {
+    h.targets = [{ sessionId: "worker-1", channelId: "room-1" }];
+    await syncProcessOnEvent(move());
+    const again = await syncProcessOnEvent(move());
+    expect(h.posts).toHaveLength(1);
+    expect(again.filter((o) => o.kind === "target_settled")).toEqual([]);
+  });
+
+  it("the subject-follow is untouched: no worker targets ⇒ the transition does what it did", async () => {
+    // A KIND's transition is left to the dual-emitted update (see above);
+    // the settle half adds nothing when no session targets the thing.
+    h.sessions = [session("schedule")];
+    const out = await syncProcessOnEvent(move());
+    expect(out).toEqual([]);
+    expect(h.advances).toEqual([]);
+  });
+});
+
+/**
+ * arch F12: a decided proposal of a worker drains its backlog — the fires it
+ * HELD are released (the release itself: worker-backlog-release.pglite).
+ */
+describe("a decided worker proposal releases the held fires", () => {
+  beforeEach(() => {
+    h.released = [];
+    h.proposal = null;
+  });
+  for (const eventType of [
+    "proposal.approved.completed",
+    "proposal.rejected.completed",
+  ]) {
+    it(`${eventType} of a worker's proposal → release`, async () => {
+      const out = await syncProcessOnEvent({
+        eventType,
+        subjectId: "p-worker",
+        userId: "u1",
+      });
+      expect(h.released).toEqual(["auto-w"]);
+      expect(out).toContainEqual({
+        kind: "backlog_released",
+        automationId: "auto-w",
+        runIds: ["run-r"],
+      });
+    });
+  }
+  it("a proposal that is not a worker's → nothing", async () => {
+    await syncProcessOnEvent({
+      eventType: "proposal.approved.completed",
+      subjectId: "p-other",
+      userId: "u1",
+    });
+    expect(h.released).toEqual([]);
   });
 });

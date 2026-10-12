@@ -65,6 +65,7 @@ export { getBoss, startBoss, stopBoss, boss } from "./boss.js";
 
 export {
   emitSideEffects,
+  fanOutSideEffects,
   enqueueConnectionSyncApproval,
   type SideEffectPayload,
 } from "./side-effects.js";
@@ -72,9 +73,12 @@ export {
 // The ONE emitter of a lifecycle transition (work model L2).
 export {
   emitLifecycleTransition,
+  dispatchLifecycleTransition,
+  dispatchDueLifecycleTransitions,
   LIFECYCLE_TRANSITION_EVENT_TYPE,
   DUAL_EMIT_ENTITY_UPDATE_FOR_TRANSITIONS,
   type LifecycleTransitionEvent,
+  type TransitionEmitContext,
 } from "./lifecycle-transition.js";
 
 // Reactor registry — a new reaction = registerReactor(...), never an edit to

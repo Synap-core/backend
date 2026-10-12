@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import {
   eventRepository,
   UNGOVERNED_INSTRUMENTATION_EPOCH,
@@ -27,6 +28,7 @@ import {
   allAgentsScorecard,
 } from "../services/diagnose/agent-scorecard.js";
 import { agentProfile } from "../services/diagnose/agent-profile.js";
+import { resolveOpenTarget } from "./hub-protocol/rest/resolve-open-target.js";
 
 export const diagnoseRouter = router({
   /**
@@ -64,6 +66,33 @@ export const diagnoseRouter = router({
     const userId = requireUserId(ctx.userId);
     return allAgentsScorecard({ userId });
   }),
+
+  /**
+   * "What is this id, and where does it open?" — the tRPC twin of Hub REST
+   * `GET /api/hub/resolve/:id`, returning the SAME body from the SAME
+   * `resolveOpenTarget` (one probe list, one label projection).
+   *
+   * It exists because the desktop authenticates a REMOTE pod with the Kratos
+   * cookie, which tRPC accepts and Hub REST auth does not — so every bare-id
+   * deep link (`synap://open/<uuid>`) 401'd into "lookup failed".
+   *
+   * A FAILED probe throws `INTERNAL_SERVER_ERROR` so the client gets `isError`;
+   * it is never folded into the calm `type: "unknown"` (= nothing you can see).
+   */
+  resolveOpen: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      try {
+        return await resolveOpenTarget(input.id, userId);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not resolve this id — the lookup failed. Retry.",
+          cause: err,
+        });
+      }
+    }),
 
   /**
    * One agent's full scorecard (counts + rates + rejection-reason histogram +

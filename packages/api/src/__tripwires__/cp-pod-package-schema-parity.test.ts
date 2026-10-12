@@ -156,6 +156,11 @@ const CP_ONLY: Record<string, string> = {
   // /api/hub/packages/apply, which provisions a WORKSPACE.
   capability:
     "capability-PACKAGE body; installed via market.install, not packages/apply",
+  // Same for a `category = "skill"` PACKAGE. /packages/apply now REFUSES a body
+  // carrying it (`nonWorkspacePackageKind`, 400 NOT_A_WORKSPACE_PACKAGE) — it
+  // once minted an empty workspace from one (2026-10-12).
+  skill:
+    "skill-PACKAGE body; installed via market.install, refused by packages/apply",
   // Registry provenance for a definition generated from an npm package.
   // Describes the catalog row's origin; nothing on the pod reads it.
   sourcePackage: "CP registry provenance (npm origin of the definition)",

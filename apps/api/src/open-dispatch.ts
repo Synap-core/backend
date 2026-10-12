@@ -43,6 +43,24 @@ export const TYPED_OPEN_KINDS = [
   // hands a person whose fix lives in Settings (the "no agent is bound"
   // ask). Bounced like every non-hosted kind; the apps route it by section.
   "settings",
+  // Every remaining ROUTABLE label the canonical resolver can name
+  // (`EMITTABLE_LABELS`, packages/api/src/routers/hub-protocol/rest/
+  // resolve-browser-route.ts). Rejecting them with 400 made a typed link to a
+  // skill / playbook / automation / tool / agent / run a dead link even though
+  // the app has a door for each. All are BOUNCED (none is hosted on pod-admin).
+  // `open-kinds.lock.tripwire.test.ts` asserts TYPED_OPEN_KINDS ⊇
+  // EMITTABLE_LABELS by parsing that file, so a new routable label cannot
+  // outrun this list.
+  "skill",
+  "tool",
+  "playbook",
+  "automation",
+  "agent",
+  // NB: a run is addressed by {flowType, runId}; this route forwards only
+  // `?view=`, so `/open/run/<id>` reaches the app WITHOUT its flowType (the
+  // app then defaults to `automation`). No producer mints a typed run link
+  // today; carry the discriminator here before one does.
+  "run",
 ] as const;
 
 export type TypedOpenKind = (typeof TYPED_OPEN_KINDS)[number];

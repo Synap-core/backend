@@ -178,9 +178,17 @@ describe("synap_create_playbook → the process contract", () => {
     const activatorItem = (props.activators!.items ?? {}) as {
       properties: Record<string, { enum?: string[] }>;
     };
+    // Stage workers (work model L4) arrive the same way.
     expect(activatorItem.properties.on!.enum).toEqual([
       "created",
       "enters_status",
+      "count",
+      "schedule",
+      "manual",
+    ]);
+    expect(activatorItem.properties.size!.enum).toEqual([
+      "per_thing",
+      "per_moment",
     ]);
     expect(activatorItem.properties.mode!.enum).toEqual(["run", "propose"]);
     expect(tool.description).toContain("system/synap/processes");

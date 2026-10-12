@@ -39,6 +39,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         propertyDefId: "d-lead",
         declaredOnProfileId: "p-lead",
         unclassified: [],
+        // The catalog's categories (foundation.yaml `leadStage`): the
+        // forward rule reads these, never the order.
         options: LEAD_ORDER.map((key) => ({
           key,
           category:
@@ -46,11 +48,9 @@ vi.mock("@synap/database", async (importOriginal) => {
               ? "done"
               : key === "disqualified"
                 ? "lost"
-                : key === "new"
+                : ["new", "researching", "outreach"].includes(key)
                   ? "open"
-                  : key === "nurturing"
-                    ? "paused"
-                    : "active",
+                  : "active",
         })),
       };
     }

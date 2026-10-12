@@ -14,8 +14,8 @@
  *     only COUNTED in `list`; `get` hydrates the entities through `scopedDb`, so
  *     an entity the caller cannot see is dropped, never named;
  *   - sessions are loaded through `scopedDb` (focus_sessions is ownerPrivate);
- *     the open-question probe reads messages only in those sessions' channels
- *     and returns a boolean.
+ *     their rooms' capture parts are read only in those sessions' channels and
+ *     folded by `deriveCaptureRoomState` into what each capture still owes.
  *
  * ── producedCount ─────────────────────────────────────────────────────────
  * `document --produced--> entity` edges (written by `stampMaterialized`). A
@@ -61,12 +61,16 @@ import {
   profiles,
   focusSessions,
   links,
-  messages,
   readDocumentVersionContent,
 } from "@synap/database";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import {
+  deriveCaptureRoomState,
+  type CaptureRoomState,
+} from "@synap-core/types/capture";
+import { readCaptureRoomParts } from "../services/intake/capture-room.js";
 import {
   CAPTURE_STATUSES,
   deriveCaptureStatus,
@@ -263,13 +267,17 @@ async function producedEntityIds(
   return out;
 }
 
-/** Session ids (among the caller's visible sessions) holding an OPEN capture_question. */
-async function sessionsWithOpenQuestion(
+/**
+ * Where each session's capture stands (among the caller's visible sessions),
+ * keyed by session id — the ONE derivation over each room's parts.
+ */
+async function captureRoomsOf(
   access: AccessContext,
-  sessionIds: string[]
-): Promise<Set<string>> {
-  const open = new Set<string>();
-  if (sessionIds.length === 0) return open;
+  sessionIds: string[],
+  producedSessionIds: ReadonlySet<string>
+): Promise<Map<string, CaptureRoomState>> {
+  const out = new Map<string, CaptureRoomState>();
+  if (sessionIds.length === 0) return out;
   const sessions = await scopedDb(access).findMany<{
     id: string;
     channelId: string | null;
@@ -280,22 +288,20 @@ async function sessionsWithOpenQuestion(
   const sessionByChannel = new Map(
     sessions.flatMap((s) => (s.channelId ? [[s.channelId, s.id] as const] : []))
   );
-  if (sessionByChannel.size === 0) return open;
-  const rows = await db
-    .selectDistinct({ channelId: messages.channelId })
-    .from(messages)
-    .where(
-      and(
-        inArray(messages.channelId, [...sessionByChannel.keys()]),
-        drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' = 'capture_question'`,
-        drizzleSql`${messages.metadata} -> 'capturePart' ->> 'status' = 'open'`
-      )
+  const rooms = await readCaptureRoomParts({
+    channelIds: [...sessionByChannel.keys()],
+  });
+  for (const [channelId, parts] of rooms) {
+    const sessionId = sessionByChannel.get(channelId);
+    if (!sessionId) continue;
+    out.set(
+      sessionId,
+      deriveCaptureRoomState(parts, {
+        producedRecords: producedSessionIds.has(sessionId),
+      })
     );
-  for (const r of rows) {
-    const sessionId = r.channelId ? sessionByChannel.get(r.channelId) : null;
-    if (sessionId) open.add(sessionId);
   }
-  return open;
+  return out;
 }
 
 /** The latest version's stored preview per document (list preview only). */
@@ -333,14 +339,23 @@ async function toItems(
   const sessionIds = [
     ...new Set(rows.flatMap((row) => sourceOf(row).sessionId ?? [])),
   ];
-  const [produced, openSessions, previews] = await Promise.all([
+  const [produced, previews] = await Promise.all([
     producedEntityIds(rows),
-    sessionsWithOpenQuestion(access, sessionIds),
     versionPreviews(rows.map((row) => row.id)),
   ]);
+  const producedSessionIds = new Set(
+    rows.flatMap((row) => {
+      const sessionId = sourceOf(row).sessionId;
+      return sessionId && (produced.get(row.id)?.length ?? 0) > 0
+        ? [sessionId]
+        : [];
+    })
+  );
+  const rooms = await captureRoomsOf(access, sessionIds, producedSessionIds);
   const items = rows.map((row): CaptureItem => {
     const source = sourceOf(row);
     const producedCount = produced.get(row.id)?.length ?? 0;
+    const room = source.sessionId ? rooms.get(source.sessionId) : undefined;
     return {
       documentId: row.id,
       kind: source.kind,
@@ -349,9 +364,8 @@ async function toItems(
       door: captureDoorOf(source.door),
       sessionId: source.sessionId ?? null,
       status: deriveCaptureStatus({
-        hasOpenQuestion: Boolean(
-          source.sessionId && openSessions.has(source.sessionId)
-        ),
+        hasOpenQuestion: room?.owed.question ?? false,
+        hasUnfiledSuggestions: (room?.owed.rows ?? 0) > 0,
         degraded: Boolean(source.degraded),
         producedCount,
       }),

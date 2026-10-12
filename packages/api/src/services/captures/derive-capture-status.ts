@@ -7,7 +7,9 @@
  * list, the `status` filter and the detail read all call this one function.
  *
  * ORDER IS THE RULE. An open question beats everything (the user owes an
- * answer). Then the degraded marker beats a produced item.
+ * answer). Then unfiled suggestions (the latest round still holds a row nobody
+ * filed or refused — the user owes a decision). Then the degraded marker beats
+ * a produced item.
  *
  * Founder decision, 2026-09-14: a capture ALWAYS creates something by default,
  * with or without AI. When the AI is down, the fallback is a note. That note is
@@ -24,6 +26,7 @@ export const CAPTURE_STATUSES = [
   "structured",
   "saved_without_ai",
   "needs_answer",
+  "suggested",
   "not_structured",
 ] as const;
 
@@ -31,10 +34,13 @@ export type CaptureStatus = (typeof CAPTURE_STATUSES)[number];
 
 export function deriveCaptureStatus(facts: {
   hasOpenQuestion: boolean;
+  /** The latest capture_result round holds a row neither filed nor refused. */
+  hasUnfiledSuggestions?: boolean;
   degraded: boolean;
   producedCount: number;
 }): CaptureStatus {
   if (facts.hasOpenQuestion) return "needs_answer";
+  if (facts.hasUnfiledSuggestions) return "suggested";
   if (facts.degraded) return "saved_without_ai";
   if (facts.producedCount > 0) return "structured";
   return "not_structured";

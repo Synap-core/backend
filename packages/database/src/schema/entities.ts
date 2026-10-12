@@ -114,6 +114,10 @@ export const entities = pgTable(
     profileStatusCategoryIdx: index("entities_profile_status_category_idx")
       .on(table.profileId, table.statusCategory)
       .where(sql`${table.deletedAt} IS NULL`),
+    // The board / lifecycle.list group by status VALUE (0323).
+    profileStatusIdx: index("entities_profile_status_idx")
+      .on(table.profileId, table.status)
+      .where(sql`${table.deletedAt} IS NULL`),
     typeWorkspaceIdx: index("entities_type_workspace_idx").on(
       table.type,
       table.workspaceId

@@ -460,7 +460,18 @@
     "teachesTools": [],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "The one glossary: workspace, project, track, step, work, template, pack, rule, approvals, tools, to review, role (one role per name, pod-wide).",
+    "summary": "The one glossary: workspace, project, track, step, work, template, pack, rule, approvals, tools, to review, role (one role per name, pod-wide), thing, status, pipeline, worker.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap/work-model": {
+    "teachesTools": [],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "The work model: a process is the life of a thing — one declared lifecycle per kind or role (5 categories), one status door (expectedStatus), sessions per thing or per batch with per-target results, workers, lasting tracks (no stages). Load before planning or running work.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

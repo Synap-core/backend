@@ -2,7 +2,22 @@
  * `playbook_run` step executor — a thin shim over the ONE playbook-run spine
  * reached through the `registerPlaybookRunner` IoC slot.
  */
-import { db, and, eq, isNull, entities, events } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  isNull,
+  entities,
+  events,
+  countWorkerPendingApprovals,
+  WORKER_HELD_OUTPUT_KEY,
+  type PlaybookRunWorkerSpec,
+} from "@synap/database";
+import {
+  DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+  WORKER_MAX_PENDING_APPROVALS_CEILING,
+  WORKER_SKIP_REASONS,
+} from "@synap-core/types/workers";
 import {
   getPlaybookRunner,
   getSessionScheduler,
@@ -136,6 +151,13 @@ export async function executePlaybookRun(
      * decides what an absent/unknown mode means (`run`).
      */
     mode?: PlaybookRunMode;
+    /**
+     * STAGE WORKER spec (work model L4) — forwarded WHOLE to the spine with
+     * the enablement's automation id; the spine gates the fire and runs a
+     * per_moment batch. A per_thing worker in propose mode is held back here
+     * by its approvals backlog. Absent ⇒ an ordinary node, unchanged.
+     */
+    worker?: PlaybookRunWorkerSpec;
   },
   context: StepContext,
   workspaceId: string,
@@ -233,6 +255,26 @@ export async function executePlaybookRun(
         "playbook_run in propose mode needs the automation that owns it (no automationContext) — refusing to file an unattributable proposal"
       );
     }
+    // A worker's backlog holds its proposals too: past `maxPendingApprovals`
+    // waiting on a person, it files no more (the spine's own gate for runs).
+    if (data.worker) {
+      const declared = data.worker.maxPendingApprovals;
+      const max = Math.min(
+        Math.max(
+          typeof declared === "number" && Number.isInteger(declared)
+            ? declared
+            : DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+          1
+        ),
+        WORKER_MAX_PENDING_APPROVALS_CEILING
+      );
+      if (
+        (await countWorkerPendingApprovals(automationContext.automationId)) >=
+        max
+      ) {
+        return heldByBacklog(producerAgentUserId);
+      }
+    }
     const proposed = await proposeRulePlaybookRun({
       ownerId,
       workspaceId,
@@ -257,6 +299,10 @@ export async function executePlaybookRun(
       sessionId: automationContext.focusSessionId,
       stepRunId: attribution?.stepRunId,
       nodeId: attribution?.nodeId,
+      // ONE bulk run (an import attaching 101 leads) → ONE proposal: the
+      // attach event names its batch (`data.batchId`, the facet door). Absent
+      // = a single event, filed exactly as before.
+      ...batchOf(context.trigger.payload),
     });
     return proposed.deduped
       ? {
@@ -420,6 +466,16 @@ export async function executePlaybookRun(
     // byte-identical to before.
     ...(data.projectId ? { projectId: data.projectId } : {}),
     ...(data.trackId ? { trackId: data.trackId } : {}),
+    // A worker node: the spine gates the fire and sizes the run. Its
+    // automation is what the backlog / in-flight / ceiling counts key on.
+    ...(data.worker
+      ? {
+          worker: {
+            ...data.worker,
+            automationId: automationContext?.automationId ?? null,
+          },
+        }
+      : {}),
     goalResolver,
     // The `@{arg:...}` half of the goal grammar. `goalResolver` speaks only
     // {{mustache}} and returns undefined for a pure `@{arg:}` template (saying
@@ -441,6 +497,8 @@ export async function executePlaybookRun(
   // failed automation — and do not stamp a session onto the firing event,
   // because no session exists.
   if (result.session == null) {
+    if (data.worker && result.skipped === WORKER_SKIP_REASONS.approvalsBacklog)
+      return heldByBacklog(producerAgentUserId);
     return {
       status: "skipped",
       reason: result.skipped ?? "no-subject",
@@ -466,5 +524,45 @@ export async function executePlaybookRun(
     runId: result.run?.id,
     sessionId: result.session.id,
     status: result.run?.status ?? "running",
+  };
+}
+
+/**
+ * A worker fire its approvals backlog HOLDS (arch F12). The step output is
+ * the hold: `listHeldWorkerRuns` (`@synap/database`) finds it, and the
+ * release (`utils/worker-backlog-release.ts`) re-runs it once the backlog
+ * drains — an event-triggered fire has no next tick, so a plain skip dropped
+ * the thing for good. The producer rides along so the release is governed
+ * against the same agent the first fire was.
+ */
+function heldByBacklog(
+  producerAgentUserId: string | null | undefined
+): Record<string, unknown> {
+  return {
+    status: "skipped",
+    reason: WORKER_SKIP_REASONS.approvalsBacklog,
+    [WORKER_HELD_OUTPUT_KEY]: true,
+    ...(producerAgentUserId ? { producerAgentUserId } : {}),
+  };
+}
+
+/**
+ * The batch an event belongs to (`data.batchId`, stamped by the facet door for
+ * an import / capture apply) and the kind or role it names (`data.profileSlug`)
+ * — or nothing for a single event.
+ */
+function batchOf(payload: Record<string, unknown>): {
+  batchId?: string;
+  batchSubjectKind?: string;
+} {
+  const data = (payload.data ?? {}) as Record<string, unknown>;
+  const batchId =
+    typeof data.batchId === "string" && data.batchId ? data.batchId : null;
+  if (!batchId) return {};
+  return {
+    batchId,
+    ...(typeof data.profileSlug === "string" && data.profileSlug
+      ? { batchSubjectKind: data.profileSlug }
+      : {}),
   };
 }

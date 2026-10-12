@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   reconcileWorkspaceFromDefinition: vi.fn(),
   reconcileWorkspacePlaybooksToTemplate: vi.fn(),
   reconcileInstalledPacks: vi.fn(),
+  resolveTemplateCatalog: vi.fn(),
 }));
 
 vi.mock("@synap-core/core", () => ({
@@ -61,12 +62,24 @@ vi.mock("@synap/api", () => ({
   reconcileWorkspacePlaybooksToTemplate:
     h.reconcileWorkspacePlaybooksToTemplate,
   reconcileInstalledPacks: h.reconcileInstalledPacks,
+  resolveTemplateCatalog: h.resolveTemplateCatalog,
+  readOverlayLedger: (settings: { installedPacks?: Array<{ slug: string }> }) =>
+    (settings?.installedPacks ?? []).map((p) => ({
+      slug: p.slug,
+      version: null,
+    })),
   playbookReportConverged: () => true,
   applyTemplateRules: async () => [],
   templateRulesConverged: () => true,
 }));
 
 import { reconcileWorkspacesToTemplates } from "./reconcile-workspaces-to-templates.js";
+
+const CATALOG = {
+  latestBySlug: new Map(),
+  entryBySlug: new Map(),
+  complete: true,
+};
 
 const touched = (spy: ReturnType<typeof vi.fn>) =>
   spy.mock.calls.map((c) => (c[0] as { workspaceId: string }).workspaceId);
@@ -84,6 +97,7 @@ describe("reconcileWorkspacesToTemplates — archived workspaces are frozen", ()
       .mockReset()
       .mockResolvedValue({ failed: [] });
     h.reconcileInstalledPacks.mockReset().mockResolvedValue([]);
+    h.resolveTemplateCatalog.mockReset().mockResolvedValue(CATALOG);
     h.rows = [
       {
         id: LIVE,
@@ -119,5 +133,33 @@ describe("reconcileWorkspacesToTemplates — archived workspaces are frozen", ()
       ARCHIVED
     );
     expect(touched(h.reconcileInstalledPacks)).not.toContain(ARCHIVED);
+  });
+
+  // The overlay pass says WHY an overlay did not resolve only if it is handed
+  // the catalog standing; a failed read must reach it as null ("catalog
+  // unknown"), never as an empty catalog.
+  it("hands the overlay pass the catalog it read once, over every overlay slug", async () => {
+    h.rows[0]!.settings = {
+      packageSlug: "builder-workspace",
+      installedPacks: [{ slug: "business-developer" }],
+    };
+    await reconcileWorkspacesToTemplates();
+    expect(h.resolveTemplateCatalog).toHaveBeenCalledTimes(1);
+    expect(h.resolveTemplateCatalog.mock.calls[0]![0]).toContain(
+      "business-developer"
+    );
+    const call = h.reconcileInstalledPacks.mock.calls.find(
+      (c) => (c[0] as { workspaceId: string }).workspaceId === LIVE
+    )!;
+    expect((call[0] as { catalog: unknown }).catalog).toBe(CATALOG);
+  });
+
+  it("a catalog read that FAILED reaches the overlay pass as null", async () => {
+    h.resolveTemplateCatalog.mockRejectedValue(new Error("db down"));
+    await reconcileWorkspacesToTemplates();
+    const call = h.reconcileInstalledPacks.mock.calls.find(
+      (c) => (c[0] as { workspaceId: string }).workspaceId === LIVE
+    )!;
+    expect((call[0] as { catalog: unknown }).catalog).toBeNull();
   });
 });

@@ -48,6 +48,29 @@ const rows: Array<{
     rulesOut: "produced checked before the open question",
   },
   {
+    name: "unfiled suggestions beat produced",
+    facts: {
+      hasOpenQuestion: false,
+      hasUnfiledSuggestions: true,
+      degraded: false,
+      producedCount: 2,
+    },
+    want: "suggested",
+    rulesOut:
+      "a capture with one row filed reads done while others still wait on the person",
+  },
+  {
+    name: "open question beats unfiled suggestions",
+    facts: {
+      hasOpenQuestion: true,
+      hasUnfiledSuggestions: true,
+      degraded: false,
+      producedCount: 0,
+    },
+    want: "needs_answer",
+    rulesOut: "suggestions checked before the open question",
+  },
+  {
     name: "not degraded + nothing produced ⇒ not_structured",
     facts: { hasOpenQuestion: false, degraded: false, producedCount: 0 },
     want: "not_structured",

@@ -224,6 +224,7 @@ const CONNECT_AFFORDANCE =
 // module keep working; the canonical definition lives in the dependency-free
 // leaf module below (see its docstring for why it's split out).
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
+import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 
 /**
@@ -258,6 +259,11 @@ export async function recordExternalAction(opts: {
   userId: string;
   workspaceId?: string | null;
   agentUserId?: string | null;
+  /**
+   * The focus session the send was made in (`events.session_id`) — what a
+   * stage worker's send ceiling counts by (`countWorkerIrreversibleSentToday`).
+   */
+  sessionId?: string | null;
   /** Correlates this audit row to the caller's handle — `diagnose(correlationId)`. */
   correlationId: string;
   /** What the call targeted (threadId / provider+path / tool name). */
@@ -272,6 +278,7 @@ export async function recordExternalAction(opts: {
     userId: opts.userId,
     workspaceId: opts.workspaceId ?? null,
     agentUserId: opts.agentUserId ?? null,
+    sessionId: opts.sessionId ?? null,
     correlationId: opts.correlationId,
     source: EXTERNAL_DISPATCH_SOURCE,
     data: {
@@ -773,6 +780,22 @@ export async function sendExternalMessage(
     };
   }
 
+  // Stage worker ceiling (work model L4): a send made inside a worker's
+  // session — auto, to be filed, or an approved replay — is not made past the
+  // day's irreversible-send ceiling (see worker-send-ceiling.ts).
+  const ceiling = await refuseWorkerSendPastCeiling({
+    sessionId: input.sessionId,
+    replay: !!input.alreadyApproved,
+  });
+  if (ceiling) {
+    return {
+      success: false,
+      error: ceiling.message,
+      errorClass: "transient",
+      providerRef: provider,
+    };
+  }
+
   // ── Capability-execution gate (W3b: messaging-send under the ONE gate) ────────
   // Messaging-send is now governed by the SAME `gateCapabilityExecution` that
   // governs `triggerProviderAction` (the provider-tool door). A messaging
@@ -868,6 +891,7 @@ export async function sendExternalMessage(
       userId,
       workspaceId: input.workspaceId ?? null,
       agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
       correlationId,
       target: threadId,
       status: "sent",
@@ -2154,6 +2178,26 @@ export async function triggerProviderAction(
 ): Promise<TriggerProviderActionResult> {
   const { provider, workspaceId } = input;
 
+  // Stage worker ceiling (work model L4): a WRITE made inside a worker's
+  // session — auto, to be filed, or an approved replay — is not made past the
+  // day's irreversible-send ceiling (see worker-send-ceiling.ts). A read sends
+  // nothing.
+  if (!/^(GET|HEAD|OPTIONS)$/i.test(input.method)) {
+    const ceiling = await refuseWorkerSendPastCeiling({
+      sessionId: input.sessionId,
+      replay: !!input.alreadyApproved,
+    });
+    if (ceiling) {
+      return {
+        success: false,
+        status: 429,
+        errorCode: "unavailable",
+        error: ceiling.message,
+        errorClass: "transient",
+      };
+    }
+  }
+
   // ── Resolve the tool row + its credentialRef ───────────────────────────────
   // `provider` is EITHER a credentialRef (`scheme://rest`, the original form) OR
   // a bare tool NAME (or id). A scheme is what makes a string a credentialRef, so
@@ -2554,6 +2598,7 @@ export async function triggerProviderAction(
         userId: input.userId,
         workspaceId: input.workspaceId ?? null,
         agentUserId: input.agentUserId ?? null,
+        sessionId: input.sessionId ?? null,
         correlationId,
         target: `${provider} ${input.method} ${input.path}`,
         status: "sent",

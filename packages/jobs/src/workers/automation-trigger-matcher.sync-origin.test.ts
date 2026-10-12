@@ -74,7 +74,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
   workspaces: {},
 }));
 
-const { handleAutomationTriggerMatch, shouldSkipSyncOrigin } =
+const { handleAutomationTriggerMatch, shouldSkipOrigin } =
   await import("./automation-trigger-matcher.js");
 
 const EVENT = {
@@ -129,16 +129,14 @@ describe("automation matcher — origin: 'sync'", () => {
   });
 
   it("the predicate: only an explicit true opts in", () => {
-    expect(shouldSkipSyncOrigin("sync", {})).toBe(true);
-    expect(shouldSkipSyncOrigin("sync", null)).toBe(true);
+    expect(shouldSkipOrigin("sync", {})).toBe(true);
+    expect(shouldSkipOrigin("sync", null)).toBe(true);
     expect(
-      shouldSkipSyncOrigin("sync", {
+      shouldSkipOrigin("sync", {
         includeSyncOrigin: "true" as unknown as boolean,
       })
     ).toBe(true);
-    expect(shouldSkipSyncOrigin("sync", { includeSyncOrigin: true })).toBe(
-      false
-    );
-    expect(shouldSkipSyncOrigin(undefined, {})).toBe(false);
+    expect(shouldSkipOrigin("sync", { includeSyncOrigin: true })).toBe(false);
+    expect(shouldSkipOrigin(undefined, {})).toBe(false);
   });
 });

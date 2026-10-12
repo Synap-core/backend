@@ -1,6 +1,7 @@
 operating-mode.md
 reflexes.md
 concepts.md
+work-model.md
 escalation-ladder.md
 from-intent.md
 mental-model.md

@@ -65,6 +65,7 @@ export * from "./utils/entity-create-guardrails.js";
 export * from "./utils/role-underlying-kind.js";
 export * from "./utils/project-slug.js";
 export * from "./utils/cp-project-sync-trigger.js";
+export * from "./utils/facet-attached-hook.js";
 export * from "./utils/materialize-entity.js";
 export * from "./utils/stamp-provenance.js";
 export * from "./utils/package-definition.js";
@@ -75,6 +76,8 @@ export * from "./utils/open-run-session.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
 export * from "./utils/live-run-status.js";
+export * from "./utils/worker-enablement.js";
+export * from "./utils/worker-target-result.js";
 export * from "./utils/resolve-session-project.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
@@ -313,6 +316,28 @@ export {
   type ApplyStatusMoveInput,
   type ApplyStatusMoveResult,
 } from "./services/lifecycle/apply-status-move.js";
+export {
+  insertTransitionOutbox,
+  claimTransitionOutbox,
+  settleTransitionOutbox,
+  listDueTransitions,
+  TRANSITION_OUTBOX_LEASE_SECONDS,
+  TRANSITION_OUTBOX_MAX_BACKOFF_SECONDS,
+  TRANSITION_OUTBOX_SWEEP_GRACE_SECONDS,
+  type ClaimedTransition,
+} from "./services/lifecycle/transition-outbox.js";
+export {
+  LifecycleDefChangeError,
+  LIFECYCLE_DEF_PROTECTED,
+  checkLifecycleDefUpdate,
+  lifecycleProfilesOfDef,
+  reprojectLifecycleProfiles,
+  changeLifecycleOptions,
+  assertNotLifecycleDef,
+  type ChangeLifecycleOptionsResult,
+} from "./services/lifecycle/lifecycle-def-guard.js";
+export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
+export { expireProposalsStaleAfterMove } from "./services/lifecycle/stale-proposals.js";
 export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,

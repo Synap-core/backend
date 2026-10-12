@@ -80,12 +80,34 @@ const DOORS = [
     minCalls: 2,
   },
   { file: "routers/relations.ts", callee: "recordDomainMutation", minCalls: 3 },
+  // update + detach. ATTACH moved to the facet door (R1): its fan-out is the
+  // boot-wired emitter, fed by the `emitContext` the router hands the door —
+  // pinned by the block below.
   {
     file: "routers/entities/facets.ts",
     callee: "emitFacetSideEffects",
-    minCalls: 3,
+    minCalls: 2,
   },
 ] as const;
+
+/** Every `<key>: { … }` object literal in `src` (brace-balanced). */
+function keyedLiterals(src: string, key: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(`\\b${key}:\\s*\\{`, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    let depth = 0;
+    const start = m.index + m[0].length - 1;
+    for (let i = start; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}" && --depth === 0) {
+        out.push(src.slice(start, i + 1));
+        break;
+      }
+    }
+  }
+  return out;
+}
 
 describe("entity + relation + facet doors pass origin and the authorizing proposal", () => {
   it("self-check: the literal extractor sees a known sample", () => {
@@ -119,6 +141,37 @@ describe("entity + relation + facet doors pass origin and the authorizing propos
       }
     });
   }
+
+  // R1: a role attach is announced by the facet DOOR (every path), through
+  // the emitter `registerFacetAttachEmitter` wires at boot. The router and the
+  // create door hand it origin + proposal; the emitter forwards both.
+  it("the attach context the router and create doors hand the facet door carries origin and the proposal", () => {
+    const literals = [
+      ...keyedLiterals(read("routers/entities/facets.ts"), "emitContext"),
+      ...keyedLiterals(read("routers/entities/create.ts"), "facetEmitContext"),
+    ];
+    expect(literals.length).toBeGreaterThanOrEqual(2);
+    for (const lit of literals) {
+      expect(lit).toMatch(/\borigin:\s*ctx\.origin\b/);
+      expect(lit).toMatch(
+        /\bproposalId:[\s\S]{0,160}?\bctx\.governanceProposalId\b/
+      );
+    }
+  });
+
+  it("the boot-wired attach emitter forwards the context's origin and proposal", () => {
+    const src = read("routers/entities/helpers.ts");
+    const body = src.slice(
+      src.indexOf("export function registerFacetAttachEmitter")
+    );
+    const [call] = callLiterals(body, "emitFacetSideEffects");
+    expect(call).toBeDefined();
+    expect(call).toMatch(/\borigin:\s*context\?\.origin\b/);
+    expect(call).toMatch(/\bproposalId:\s*context\?\.proposalId\b/);
+    expect(read("setup-event-broadcasting.ts")).toMatch(
+      /registerFacetAttachEmitter\(\)/
+    );
+  });
 
   it("Context declares origin (so the doors read a typed field, not a cast)", () => {
     expect(read("types/context.ts")).toMatch(/\borigin\?:\s*"sync";/);

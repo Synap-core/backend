@@ -87,6 +87,8 @@ export const playbookExpectedOutputSchema = z.looseObject({
    * stage-level slot uses.
    */
   relationToSubject: relationTypeSlugSchema.optional(),
+  /** See `ExpectedOutput.optional` — produced if it applies, never owed. */
+  optional: z.boolean().optional(),
 });
 
 /**

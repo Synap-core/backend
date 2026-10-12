@@ -72,6 +72,14 @@ const ROUTE_BY_KIND: Record<ObjectKind, BrowserRoute | null> = {
   // would have made the pod's own workspace diagnosis the one result with no
   // way to open what it describes.
   workspace: { label: "workspace" },
+  // Each has its own object-nav arm: `project` → the projects app (a
+  // `projects` row, NOT the stale pre-0151 entity copy), `channel` → the
+  // channel-detail place, `playbook` → the playbooks app, `automation` → the
+  // automations cell addressed by `automationId`. Same word, case 1 above.
+  project: { label: "project" },
+  channel: { label: "channel" },
+  playbook: { label: "playbook" },
+  automation: { label: "automation" },
   // NO BROWSER DOOR. Not an oversight: an external send has no row and no
   // surface — object-nav has no arm for it and inventing one here would be a
   // link into nothing.

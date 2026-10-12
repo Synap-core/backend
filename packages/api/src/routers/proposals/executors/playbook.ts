@@ -24,6 +24,7 @@ import {
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import { readBatchSubjectIds } from "@synap/jobs/utils/automation-governance.js";
 
 /** Register the playbook/* approve executors. */
 /**
@@ -635,11 +636,12 @@ export function registerPlaybookExecutors(): void {
         workspaceRole: membership.role,
       } as unknown as Context);
 
-      // At-most-once: `runPlaybook` is NOT idempotent here (verified — see the
-      // note above), so the dispatch is CAS-claimed. A thrown failure keeps the
-      // claim and lands APPROVAL_FAILED rather than a false APPROVED.
-      await dispatchExternalOnce(input.proposalId, async () => {
-        const result = await playbookCaller.run({
+      // ONE run per subject. A BATCH proposal (one import's leads, coalesced
+      // by `proposeRulePlaybookRun`) lists `subjectIds`; a single one carries
+      // `subjectId`. Same door, same arguments, for each.
+      const subjects = readBatchSubjectIds(inner);
+      const runFor = (subjectId: string | undefined) =>
+        playbookCaller.run({
           playbookId,
           // EXPLICIT write lens — `proposal.workspaceId` is the workspace the
           // gate ran against when this run was proposed, so the replay must
@@ -652,7 +654,7 @@ export function registerPlaybookExecutors(): void {
           // proposal did not carry has already been refused, so a run reaching
           // here is the one the caller described, not a guess at it.
           ...(carriedParams ? { params: carriedParams } : {}),
-          ...(carriedSubjectId ? { subjectId: carriedSubjectId } : {}),
+          ...(subjectId ? { subjectId } : {}),
           ...(Array.isArray(inner.agentIds) && inner.agentIds.length > 0
             ? { agentIds: inner.agentIds as string[] }
             : {}),
@@ -694,13 +696,22 @@ export function registerPlaybookExecutors(): void {
             ? { agentUserId: proposal.agentUserId }
             : {}),
         });
-        // The replay must APPLY, never re-propose (the `assertApplied`
-        // contract) — but report it as a DEFINITE not-dispatched rather than
-        // throwing. Inside `dispatchExternalOnce`, a THROW keeps the CAS claim
-        // forever (at-most-once, for the ambiguous case), which would leave the
-        // proposal permanently un-appliable; a `delivered: false` RELEASES the
-        // claim, so an admin with sufficient authority can approve it after.
-        // Re-proposing is unambiguous: no run was started.
+      let batch: BatchRunReceipt | undefined;
+
+      // At-most-once: `runPlaybook` is NOT idempotent here (verified — see the
+      // note above), so the dispatch is CAS-claimed. A thrown failure keeps the
+      // claim and lands APPROVAL_FAILED rather than a false APPROVED.
+      await dispatchExternalOnce(input.proposalId, async () => {
+        // The FIRST run proves the approver may run it; a re-propose there
+        // means nothing was started, so the claim is released (see below).
+        const result = await runFor(subjects[0] ?? carriedSubjectId);
+        if (result.status === "running" && subjects.length > 1) {
+          batch = await runBatchRest(
+            subjects.slice(1),
+            runFor,
+            startedRun(subjects[0]!, result)
+          );
+        }
         if (result.status === "running") return { delivered: true as const };
         // `playbooks.run` returns exactly `"running" | "proposed"`, so this is
         // the re-propose branch (TS narrows the alternative to `never`).
@@ -718,6 +729,11 @@ export function registerPlaybookExecutors(): void {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
+          // A batch records every run it started ON the proposal — the
+          // outcome every renderer already shows (`data.runResult`) — so the
+          // person can find each one. Not `materialized`: approving a batch
+          // does not opt its sessions into undo.
+          ...(batch ? { data: { ...raw, runResult: batch } } : {}),
         })
         .where(eq(proposals.id, input.proposalId));
 
@@ -729,7 +745,12 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return {
+        success: true,
+        ...(batch
+          ? { batch: { started: batch.started.length, failed: batch.failed } }
+          : {}),
+      };
     },
   });
 
@@ -877,4 +898,67 @@ export function registerPlaybookExecutors(): void {
       return { success: true };
     },
   });
+}
+
+/** At most this many runs of one batch start at once — sane for 100+ leads. */
+export const BATCH_RUN_CONCURRENCY = 3;
+
+/** One run a batch approval started: its subject and the session to open. */
+export interface StartedRun {
+  subjectId: string;
+  sessionId?: string;
+  runId?: string;
+}
+
+/** What a batch approval did — stamped on the proposal as `data.runResult`. */
+export interface BatchRunReceipt {
+  started: StartedRun[];
+  failed: string[];
+}
+
+function startedRun(subjectId: string, result: unknown): StartedRun {
+  const r = result as {
+    session?: { id?: unknown };
+    run?: { id?: unknown };
+  };
+  return {
+    subjectId,
+    ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
+    ...(typeof r.run?.id === "string" ? { runId: r.run.id } : {}),
+  };
+}
+
+/**
+ * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time.
+ * A subject whose run fails (deleted since, no longer visible) is reported,
+ * never allowed to stop its siblings: the approval stands for every subject
+ * that can still run. Every started run is returned with its session.
+ */
+export async function runBatchRest(
+  subjects: string[],
+  runFor: (subjectId: string) => Promise<{ status: string }>,
+  first: StartedRun
+): Promise<BatchRunReceipt> {
+  const started: StartedRun[] = [first];
+  const failed: string[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < subjects.length) {
+      const subjectId = subjects[next++]!;
+      try {
+        const r = await runFor(subjectId);
+        if (r.status === "running") started.push(startedRun(subjectId, r));
+        else failed.push(subjectId);
+      } catch {
+        failed.push(subjectId);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(BATCH_RUN_CONCURRENCY, subjects.length) },
+      worker
+    )
+  );
+  return { started, failed };
 }

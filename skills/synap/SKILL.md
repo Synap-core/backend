@@ -43,16 +43,16 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 The user's Synap pod: their source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).
 
-1. **Recall first.** Before answering about their world or creating, `ask`.
+1. **Recall first.** Before answering or creating, `ask`.
 2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.
 3. **Orient once.** `orient`: pending review (raise first), open sessions, kinds.
-4. **Work in a session.** `start_session` or resume (playbook `templateId`); a lasting goal = TRACK: `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; advance `currentStage`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
+4. **Work in a session.** `start_session` or resume (playbook `templateId`); a lasting goal = TRACK: `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
 5. **Never guess a project.** Pin only what the user names (`set_workspace_focus`, `set_project_focus`).
 6. **`proposed` is success**: keep going, never retry.
 7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first** (facet, overlay, parent); never a twin.
 8. **One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).
 
-Depth: `load_skill` `system/synap/concepts`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
+Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
 
 ---
 
@@ -60,26 +60,115 @@ Depth: `load_skill` `system/synap/concepts`, `focus-sessions`, `from-intent`, `e
 
 The ONE glossary; other skills point here. Word = what the user sees; internal = tools and tables.
 
-| Word          | Internal                | Answers                            | Test · e.g. · not                                                                                                    |
-| ------------- | ----------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **Space**     | workspace               | which domain: kinds + tools?       | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                     |
-| **Project**   | project                 | what am I committed to, with whom? | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                       |
-| **Track**     | project_tracks          | what lasting goal am I pursuing?   | inside ONE project, lasts; work in it = sessions · grow the newsletter · stages optional (legacy)                    |
-| **Step**      | stage                   | which stretch of a staged track?   | legacy: only a track started with a method has steps; a new track needs none                                         |
-| **Work**      | focus_session           | what am I doing this sitting?      | one goal · no noun: "Start work"                                                                                     |
-| **Template**  | playbook                | how do I reuse it?                 | kind DERIVED, never declared: scope session = work template, project = track template; also space and rule templates |
-| **Pack**      | suite                   | which templates come together?     | a bundle; depends on space templates, never creates a space                                                          |
-| **Rule**      | automation              | what runs by itself, when?         | standing · "every Monday…" · not Approvals                                                                           |
-| **Approvals** | governance rules        | which AI writes wait for me?       | decides review vs auto, does no work                                                                                 |
-| **Tools**     | capability, skill, tool | what can it act with?              | one word; the detail shows the kind                                                                                  |
-| **To review** | proposal                | what awaits my approval?           | `proposed` is success                                                                                                |
-| **Role**      | role profile + facet    | which hat does it wear?            | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin      |
+| Word          | Internal                | Answers                            | Test · e.g. · not                                                                                                                                                    |
+| ------------- | ----------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Space**     | workspace               | which domain: kinds + tools?       | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                     |
+| **Project**   | project                 | what am I committed to, with whom? | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                       |
+| **Track**     | project_tracks          | what lasting intent am I pursuing? | inside ONE project, lasts, never completes; direction, instructions, goal; turns workers on; work in it = sessions · grow the newsletter · no stages                 |
+| **Step**      | stage                   | where does this work stand?        | = the subject's status: move the thing, the step follows · legacy: steps of a track started from a method                                                            |
+| **Work**      | focus_session           | what am I doing this sitting?      | one goal · no noun: "Start work"                                                                                                                                     |
+| **Template**  | playbook                | how do I reuse it?                 | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = track template (legacy); also space and rule templates |
+| **Pack**      | suite                   | which templates come together?     | a bundle; depends on space templates, never creates a space                                                                                                          |
+| **Rule**      | automation              | what runs by itself, when?         | standing · "every Monday…" · not Approvals                                                                                                                           |
+| **Approvals** | governance rules        | which AI writes wait for me?       | decides review vs auto, does no work                                                                                                                                 |
+| **Tools**     | capability, skill, tool | what can it act with?              | one word; the detail shows the kind                                                                                                                                  |
+| **To review** | proposal                | what awaits my approval?           | `proposed` is success                                                                                                                                                |
+| **Role**      | role profile + facet    | which hat does it wear?            | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                      |
+| **Thing**     | entity                  | what is being worked on?           | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                      |
+| **Status**    | lifecycle               | where does it stand?               | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                           |
+| **Pipeline**  | pipeline view           | what is in each status?            | computed from a lifecycle, never created · not an object                                                                                                             |
+| **Worker**    | playbook activator      | what starts work by itself?        | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a track or project turns it on                                        |
 
-Doors: `start_track`, `start_session`, `create_rule`, `attach_facet`.
+Doors: `start_track`, `start_session`, `create_rule`, `attach_facet`, `update_entity` + `expectedStatus` (a status). How they fit (sizes, workers, tenses): `work-model`.
 
 A lasting goal on a project: `list_tracks` → none? `start_track` (`name`, `direction`, a `kpi` only if the person names one; no method needed); work in it = `start_session` + `trackId`, as many sessions as it takes. Detail: `from-intent`.
 
-Existing work can be filed into a track with `update_session` `trackId` (proposed; the session keeps its space). Stages are legacy: a track started from a track template has steps (`start_stage_session`; never `advance_track` without the user).
+Existing work can be filed into a track with `update_session` `trackId` (proposed; the session keeps its space). Track stages are legacy: only a track started from a track template has them (`start_stage_session`; never `advance_track` without the user).
+
+---
+
+## Work model — how work is shaped on a pod
+
+Load this before you plan, start or run work, or author a process. The long form is the pod document "The Synap work model" (36878a70-6cbb-4122-8bfa-288fdbd65218); the words are in `concepts`.
+
+### Why
+
+A process is the life of a **thing**, not a script. A lead, a post or a feature has ONE status. Boards, workers, sessions, goals and history read that status or move it through ONE door. So "when a post enters Review, run the review" is one rule, "how many leads reached Qualified this month" is a count, and a person and an agent can work the same thing without overwriting each other. Before, each playbook kept its own stages and status field, and the same fact lived in three places.
+
+### The nouns
+
+| Noun                 | What it is                                                                          | Not                                  |
+| -------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
+| **Project**          | a commitment, and a lens across spaces                                              | a method, a domain                   |
+| **Track** (optional) | a LASTING intent in one project: direction, instructions, goal; it turns workers on | a list of stages; it never completes |
+| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                      | a second entity for a hat            |
+| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch            | a "run" because it follows a method  |
+
+Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
+
+How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order); a status change fires **workers**, which start **sessions** carrying the project, the track and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
+
+### Three tenses of a thing
+
+- **Past = history.** Every status change is one transition event: from, to, who, which session, why.
+- **Present = status.** One value per kind or role, in its own column.
+- **Future = agenda.** Tasks and events linked to the thing, with an owner. _(Planned, wave 4.)_
+
+### Five categories
+
+Every lifecycle option has one fixed category: `open · active · paused · done · lost`. Names are free; rules read the category. An agent moving a thing into `done` or `lost` proposes by default; an option marked `humanOnly` is never set by an agent. A space may ADD options; it never renames, removes or recategorises one.
+
+### The one door
+
+Every status change — your call, a board drag, a method's step, a sync — goes through `moveStatus`. As an agent: a kind's status = `update_entity` with the lifecycle property set to the new value AND, over MCP, `expectedStatus` = the status you saw (the in-app `update_entity` has no `expectedStatus` yet; the door still checks the lifecycle); a role's status = `update_facet` `status` where your tools list it (the in-app agent; MCP has no role-status tool yet).
+
+- `conflict` (with the current status) is normal: someone moved it; re-read and decide again. A person's move always wins.
+- `proposed` is success (a done/lost move, or governance said review).
+- A refusal naming the valid options means the value is not in the declared lifecycle: pick one of them.
+  Never invent a status, never keep your own stage field.
+
+### Session size
+
+- **Per thing** when each item needs its own thinking: a post, a feature, a deal in negotiation.
+- **Per batch** when items are interchangeable: one session for "find 10 leads today" or "today's follow-ups".
+- A session's **step is its subject's status**: move the thing, the step follows.
+- Following a method does not turn your session into a run; it stays your work and still shows in the method's runs.
+- **Targets get a result each**: a worker session holds its things as targets. Your own move of a target marks it `done`; someone else's move marks it `skipped`; targets left at close are `skipped`. Put the outcome on each thing, not only in a summary.
+
+### Workers
+
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A track or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
+
+### Tracks
+
+A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+
+### Rules of thumb
+
+1. Find the thing before creating one: resolve identity, then attach a role — never a twin.
+2. Status changes go through the door, with `expectedStatus`.
+3. Never invent a status or a second status field; the lifecycle is declared on the profile (`list_profiles`).
+4. Size the session from the work: per thing or per batch.
+5. Results go on the things, not only in prose.
+6. `proposed` is success. Commitments (publish, send, sign, spend) are a person's call.
+
+### Applied: content (Content OS)
+
+- Thing = a **post**. Lifecycle `post-status`: Idea (open) · Briefed · Scripted · In Draft · Review · Scheduled (active) · Published (done) · Archived (lost, human-only).
+- Nothing publishes itself: a move to Published is a proposal the person approves on the preview.
+- Pipeline = the Posts board, filtered by project or campaign.
+- Workers: **Draft** (per thing, enters Briefed) · **Review prep** (per thing, enters Review, ends by proposing the publish date) · **Ideas** (per batch, weekly, creates posts at Idea). Today the catalog ships them as Produce Content (enters Briefed), Repurpose (enters Published) and Plan Next Content (weekly, off by default).
+- "The next posts" = read the pipeline: gaps per pillar, posts waiting per status.
+
+### Applied: leads and deals (CRM)
+
+- **Lead** = a role for qualification only, `leadStage`: new · researching · outreach (open) · engaged · qualified · nurturing (active) · converted (done) · disqualified (lost, human-only).
+- **Deal** = the sale, `commercialStage`, created only at hand-off. A **won** deal attaches the client role to the party.
+- A Cal.com booking makes the attendee a lead at `engaged` and records the call as an event; it never creates a deal and never moves a lead backwards.
+
+### Point another AI here
+
+Every door can load this: `load_skill system/synap/work-model`. To make a space carry it, put a one-line pointer in the space brief (`update_space_brief`, `purpose` or `framing`, 240 characters each): in-app agents and worker sessions read the brief every turn, MCP agents when they `orient`. To steer a session in flight, post the pointer in its room. A document attached to a session reaches an agent as a title only, so it does not teach.
 
 ---
 
@@ -198,7 +287,7 @@ Do not install templates, define kinds, or create a project until you can answer
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **methods** will it run (business model, content pipeline, build…)?            | **Tracks** — one track template each, started with `synap_start_track`.                 |
+| Which **lasting goals** will it pursue (grow the newsletter, win ten clients…)?      | **Tracks** — `synap_start_track`, no template; methods are playbooks sessions follow.   |
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
@@ -297,7 +386,7 @@ A **track** is a lasting intent with a goal inside ONE project ("Grow the newsle
 - Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
-- Nested or twin projects, or a workspace, to represent a **method** of an existing project. A method is a track; one bounded piece of work inside it is a session (`trackId`).
+- Nested or twin projects, or a workspace, to represent a **goal or method** of an existing project. A lasting goal is a track; a repeatable method is a playbook a session or worker follows; one bounded piece of work is a session (`trackId`).
 - Invent CLI flags or tools this door does not list.
 - A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
 - Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.
@@ -306,7 +395,7 @@ A **track** is a lasting intent with a goal inside ONE project ("Grow the newsle
 
 ### After it works
 
-Offer L4, one at a time: session → work template; stages of a method → track template; cell → renderer; **project → pack** (a `suite`) (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.
+Offer L4, one at a time: session → work template; cell → renderer; **project → pack** (a `suite`) (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.
 
 ---
 
@@ -462,7 +551,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 - A **project spans workspaces** and a **workspace spans projects**.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- A method inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
+- A lasting goal inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
 - **These are per-Claude-session.** Two concurrent Claude sessions can sit on different projects/workspaces/sessions without colliding. `synap use` here rebinds **this** session only.
@@ -865,17 +954,17 @@ Changed: [field] [old value] → [new value]
 
 ```
 Context: User asked to track the Acme deal they mentioned in today's call.
-Intent:  Creates a deal entity for Acme at lead stage linked to Alice Johnson.
+Intent:  Creates a deal entity for Acme at draft stage linked to Alice Johnson.
 Links:   ent_person_alice_johnson, ent_company_acme
 ```
 
 **Example (update):**
 
 ```
-Context: User confirmed the Acme deal moved to proposal stage.
+Context: User confirmed the Acme proposal went out.
 Intent:  Advances the deal through the pipeline so it appears in the proposal view.
 Links:   ent_deal_acme, ent_person_alice_johnson
-Changed: dealStage lead → proposal
+Changed: commercialStage draft → proposed
 ```
 
 Rules:
@@ -1776,6 +1865,8 @@ POST /api/hub/entities
 
 When the person chooses to pursue: create the `deal` at `commercialStage: "draft"`, link the party with `linked_to_deal`, and set the lead's `leadStage: "converted"`. When a person confirms the deal is won: set `commercialStage: "won"` and `attach_facet` the `client` role on the party with `clientStatus: "active"`. Moving a deal to won or lost is a person's call — propose it, never decide it.
 
+Every status move goes through the one door (work model: `load_skill system/synap/work-model`): send the new value AND `expectedStatus` = the status you read (`update_entity` for the deal's `commercialStage`; `update_facet` for a role's status where your tools list it). A `conflict` means someone moved it: re-read. `converted` and `won` are done, `lost` and `disqualified` are lost: an agent's move into them proposes, and `disqualified` is a person's call only.
+
 ```json
 PATCH /api/hub/entities/ent_deal_acme
 { "properties": { "commercialStage": "won" } }
@@ -1914,7 +2005,9 @@ On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps i
 
 **Keep the session true as you work — the person watches it, not your chat.**
 
-- **Stages.** A bound playbook seeds the session's `stages`; set `currentStage` with `synap_update_session` each time the work moves on. A hand-set `progress` says less than a stage does.
+- **Step = the subject's status.** With a subject (a post, a deal), move the thing through the door (`update_entity` + `expectedStatus`); the session's step follows it, and a stage's `subjectStatus` moves the thing when you set `currentStage`. Without a subject, a bound playbook seeds `stages`; set `currentStage` as the work moves on. A hand-set `progress` says less than either.
+- **Size it from the work.** One session per thing when each needs its own thinking (a post, a feature); one per batch when the items are interchangeable ("find 10 leads today"). Following a method (`followPlaybookId`) keeps the session your work; it also shows in the method's runs.
+- **Targets get a result each.** A worker session holds its things as targets: your own move of a target marks it `done`, someone else's marks it `skipped`, and targets left at close are `skipped`. Put each outcome on its thing, not only in a summary. Model: `work-model`.
 - **Person-only steps** are an `owner: 'human'` output with a `blockedReason` and a `why` (below) — never a line buried in your reply.
 - **Room first.** Post progress, questions and results in the session room (below); your own chat may repeat them.
 - **Grade before you say done.** `synap_evaluate_session { sessionId, evidence: { <criterionKey>: { passed, detail } } }` with the real evidence — the command output, the link, the count. Then `synap_complete_session`. Closing never blocks on criteria, but an ungraded one reads as unmeasured: a claim nobody checked.
@@ -2006,6 +2099,21 @@ Filters narrow the event to specific conditions:
   "filters": { "profileSlug": "task", "metadata.priority": "high" }
 }
 ```
+
+### Status changes: the transitioned event
+
+A status move (a kind's own lifecycle, or a role's) emits ONE event, `entity.transition.completed` (the verb "transitioned"), whatever moved it: a person, a board drag, an agent through `update_entity` + `expectedStatus`, a sync. Filter it on `lifecycleProfile` (the kind or ROLE whose lifecycle moved; `profileSlug` stays the entity's kind even for a role) and `to` / `from` / `property`:
+
+```json
+{
+  "eventPattern": "entity.transition.completed",
+  "filters": { "lifecycleProfile": "lead", "to": "qualified" }
+}
+```
+
+Prefer it to `entity.update.completed` for any status. For a ROLE it is the only one: a role's status lives on its facet, so an update rule never sees it.
+
+**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
 
 ### Cron Expressions
 
@@ -2273,7 +2381,7 @@ The point of the flywheel is that mistakes are **visible and fixable**, not sile
 
 ## Workspace design — is this concern a WORKSPACE, or something smaller?
 
-Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
+Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **lasting goal** (track), or a **status**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
 
 **One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
 
@@ -2286,12 +2394,12 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 
 **All four, or it is not a workspace.** Then fork it to the right lighter structure:
 
-| If the concern is…                                          | It is a…       | Substrate                              | Example                                     |
-| ----------------------------------------------------------- | -------------- | -------------------------------------- | ------------------------------------------- |
-| a **role/hat** an existing entity wears in a domain         | **Facet**      | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
-| a **cross-cutting, time-bound initiative** spanning domains | **Project**    | `create_project` (a lens)              | a campaign, an engagement, a launch         |
-| a **lasting goal** a project pursues (worked in sessions)   | **Track**      | `start_track` (no method needed)       | grow the newsletter, win ten clients        |
-| a **stage/filter WITHIN a domain**                          | **State/View** | a `status` property def + a view       | pipeline stage, "active"/"archived"         |
+| If the concern is…                                          | It is a…    | Substrate                              | Example                                     |
+| ----------------------------------------------------------- | ----------- | -------------------------------------- | ------------------------------------------- |
+| a **role/hat** an existing entity wears in a domain         | **Facet**   | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
+| a **cross-cutting, time-bound initiative** spanning domains | **Project** | `create_project` (a lens)              | a campaign, an engagement, a launch         |
+| a **lasting goal** a project pursues (worked in sessions)   | **Track**   | `start_track` (no method needed)       | grow the newsletter, win ten clients        |
+| a **stage/filter WITHIN a domain**                          | **Status**  | an option of the kind's lifecycle      | pipeline stage, "active"/"archived"         |
 
 ## The decision procedure (follow in order)
 
@@ -2300,7 +2408,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity. One role per name, pod-wide: a role several workspaces use is ONE role, each workspace adding properties by overlay — never a per-workspace twin (`concepts`).
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — near-duplicate names are rejected with the existing candidates; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
 5. **If it's a lasting goal a project pursues** ("keep the content side of the launch going") → a **track**: `list_tracks`, else `start_track` (`name`, `direction`); work in it with `start_session` + `trackId`. Never a workspace, never a twin project.
-6. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
+6. **If it's a stage inside a domain** → it is an option of the kind's or role's declared lifecycle, never a role and never a space. Its pipeline is computed from the lifecycle: open it, don't build one. A kind with no lifecycle yet gets a `status` property def (`create_property_def`).
 7. **Only if all four held** → **template first** (escalation ladder L3):
    `market.search({query, kind: "template"})` and propose install of a matching
    template before freehand `create_workspace`. Freehand create is last resort
@@ -2813,26 +2921,42 @@ normally and, when the moment is right, suggest the user define one.
 
 ---
 
-# Processes — a playbook that runs a kind's lifecycle
+# Processes — a playbook that follows a kind's lifecycle
 
 <!-- brief:start -->
 
-A process = `synap_create_playbook` with `subjectProfileSlug` + `statusProperty`;
-each stage's `subjectStatus` is an EXISTING option of that property (read it
+A process = `synap_create_playbook` with `subjectProfileSlug`; it FOLLOWS the
+lifecycle the kind or role declares (omit `statusProperty`, or name that same
+property). Each stage's `subjectStatus` is an EXISTING option of it (read it
 with `synap_list_profiles` first — never invent one); `gate: {kind: 'human'}` at
 every commitment, `onFail: {toStage}` for rework; typed `expectedOutputs`
-(`kind`, `label`, `relationToSubject`); `activators` (`created` |
-`enters_status`, default `mode: 'propose'`) and `humanOnlyStatuses` for the
-statuses no stage owns. What you create is POD-LOCAL, never an official
+(`kind`, `label`, `relationToSubject`); workers = `activators` (`on`, `size`,
+default `mode: 'propose'`). What you create is POD-LOCAL, never an official
 template.
 
 <!-- brief:end -->
 
-## Writing a process (a playbook that runs a kind's lifecycle)
+## Writing a process (a playbook that follows a kind's lifecycle)
 
-A playbook becomes a **process** when it owns a kind's status: each stage writes the subject's status, a status can
-start it, and a person decides at the moments that commit the business. The reference is Content OS
-"Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
+The status belongs to the **kind or role**, never to a playbook. Its profile declares the lifecycle ONCE, in its
+template:
+
+```yaml
+lifecycle:
+  property: post-status
+  options:
+    - { key: Idea, category: open }
+    - { key: Published, category: done }
+    - { key: Archived, category: lost, humanOnly: true }
+```
+
+Every option has one category (`open · active · paused · done · lost`); rules read the category, names stay free.
+`humanOnly` marks an option no agent sets; an agent's move into `done` or `lost` proposes. Every move goes through
+the one status door (`moveStatus`; an agent sends `update_entity` with `expectedStatus`).
+
+A playbook that works that lifecycle is a **process**: it FOLLOWS it. Its stages name options of it, its workers
+start on it, and a person decides at the moments that commit the business. It never keeps a second status field.
+The reference is Content OS "Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
 
 **Official vs pod-local.** An official template or capability lives ONLY in the catalog
 (`synap-app/packages/workspace-templates/`, by kind) and is published with
@@ -2840,18 +2964,19 @@ start it, and a person decides at the moments that commit the business. The refe
 (`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
 official, write it into the catalog file and publish.
 
-| Field                                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                   |
-| ----------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `subjectProfile.profileSlug` + `statusProperty` | playbook          | The kind the process runs and its lifecycle property. One process owns one property.                                                                                                                                                                                                                                                   |
-| `stages[].subjectStatus`                        | stage             | Entering the stage writes this status. Must be an **existing option** of the property — never invent one.                                                                                                                                                                                                                              |
-| `stages[].gate`                                 | stage             | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status. |
-| `stages[].onFail`                               | stage             | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                |
-| `stages[].criteria`                             | stage             | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                  |
-| `expectedOutputs[]`                             | stage or playbook | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                   |
-| `activators[]`                                  | playbook          | `{on: created \| enters_status, status?, mode: propose \| run}`. Default `propose`; `run` only when cheap and safe. Compiled to a governed rule the owner can pause.                                                                                                                                                                   |
-| `humanOnlyStatuses`                             | playbook          | Statuses no stage owns, set only by a person (e.g. Idea, Archived). Together with the stages they must cover every option of the property.                                                                                                                                                                                             |
-| `goalTemplate`                                  | playbook          | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                   |
-| `params`                                        | playbook          | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                    |
+| Field                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `subjectProfile.profileSlug`    | playbook          | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                          |
+| `subjectProfile.statusProperty` | playbook          | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                         |
+| `stages[].subjectStatus`        | stage             | Entering the stage moves the subject to this option, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                   |
+| `stages[].gate`                 | stage             | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                       |
+| `stages[].onFail`               | stage             | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                      |
+| `stages[].criteria`             | stage             | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                        |
+| `expectedOutputs[]`             | stage or playbook | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                         |
+| `activators[]` (workers)        | playbook          | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual`. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition. |
+| `humanOnlyStatuses`             | playbook          | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                        |
+| `goalTemplate`                  | playbook          | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                         |
+| `params`                        | playbook          | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                          |
 
 Human moments use an `ask` on an owed slot: `confirm` / `choose` (one `recommended`) / `form` / `act` / `provide`
 (connection, file or secret through the vault). Never ask for a secret in a form.
@@ -2862,26 +2987,30 @@ lifecycle kinds with no process may only go down).
 ## Declaring it over MCP
 
 `synap_create_playbook` takes the contract as-is. Before calling it, read the
-subject kind (`synap_list_profiles`) and copy the status options of its
-lifecycle property exactly.
+subject kind (`synap_list_profiles`) and copy the options of its lifecycle
+property exactly. Over MCP you cannot declare or change a lifecycle; it comes
+with the kind's template.
 
 ```json
 {
-  "name": "Produce a post",
-  "goalTemplate": "Produce {post}",
+  "name": "Draft a post",
+  "goalTemplate": "Draft {post}",
   "params": [{ "name": "post", "type": "entity", "required": true }],
   "subjectProfileSlug": "post",
-  "statusProperty": "post-status",
   "activators": [
-    { "on": "enters_status", "status": "Briefed", "mode": "propose" }
+    {
+      "on": "enters_status",
+      "status": "Briefed",
+      "size": "per_thing",
+      "mode": "propose"
+    }
   ],
-  "humanOnlyStatuses": ["Idea", "Archived"],
   "stages": [
     {
       "key": "draft",
       "name": "Draft",
       "category": "started",
-      "subjectStatus": "Drafting",
+      "subjectStatus": "In Draft",
       "expectedOutputs": [
         {
           "kind": "document",
@@ -2894,7 +3023,7 @@ lifecycle property exactly.
       "key": "review",
       "name": "Review",
       "category": "started",
-      "subjectStatus": "Ready",
+      "subjectStatus": "Review",
       "gate": { "kind": "human" },
       "onFail": { "toStage": "draft" }
     }
@@ -2902,7 +3031,10 @@ lifecycle property exactly.
 }
 ```
 
-The status values above are an example: use the options the kind really has.
+These are the Content OS post options; use the ones the kind really has. A
+batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
+"Idea", "mode": "propose" }` (one session over every post in Idea, weekly) or
+`{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
 writes it into the catalog and publishes it with
