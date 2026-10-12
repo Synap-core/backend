@@ -12,9 +12,11 @@
  * ONE fact is the kind's goal (a stated KPI, `lensKpiFact`), never a date.
  */
 import { resolveUnitState } from "../units/state.js";
+import type { PipelineGoalPeriod } from "../renderables/types.js";
 import {
   LENS_UNKNOWN_COUNT,
   lensCountDoorText,
+  lensKpiFact,
   lensNextMove,
   type LensCountDoor,
   type LensHeaderModel,
@@ -72,6 +74,34 @@ export function lensIntentDoorText(
     case "produced":
       return `${count ?? LENS_UNKNOWN_COUNT} done ${windowWords(windowDays)}`;
   }
+}
+
+/**
+ * THE intent surface's goal line (surfaces WP.5) — the stated TARGET of a
+ * pipeline view (`PipelineViewConfig.surface.goal`) over the MEASURED side
+ * (`lifecycle.throughput`: things into a done option this period):
+ *
+ *   Goal 6 / 8 published this month
+ *
+ * `doneWord` names what "done" is for this kind (its one done option's label,
+ * "published"; several ⇒ "done"). The number is MEASURED, never stated, so the
+ * fact carries no `statedAt`; an unknown measure (`done: null`) still says the
+ * target ("Goal: target 8 published this month") and draws no bar. No stated
+ * goal ⇒ no fact (the header's "N done …" door is the measured fact alone).
+ */
+export function lensIntentGoalFact(input: {
+  goal: { count: number; per: PipelineGoalPeriod } | null | undefined;
+  done: number | null;
+  doneWord: string;
+}): LensKpiFact | null {
+  const { goal } = input;
+  if (!goal || !(goal.count > 0)) return null;
+  return lensKpiFact({
+    label: "Goal",
+    target: goal.count,
+    ...(input.done === null ? {} : { current: input.done }),
+    unit: `${input.doneWord.toLowerCase()} this ${goal.per}`,
+  });
 }
 
 const INTENT_DOOR_LABEL: Record<

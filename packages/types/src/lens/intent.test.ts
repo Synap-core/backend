@@ -9,8 +9,13 @@ import {
   LENS_INTENT_SECTION_LABELS,
   lensIntentHeaderModel,
   lensIntentDoorText,
+  lensIntentGoalFact,
 } from "./intent.js";
-import { LENS_SCOPE_FACT_KIND, lensKpiFact } from "./header.js";
+import {
+  LENS_SCOPE_FACT_KIND,
+  lensKpiFact,
+  lensScopeFactLabel,
+} from "./header.js";
 import {
   encodeLensScope,
   lensActivityScope,
@@ -172,5 +177,42 @@ describe("LENS_INTENT_SECTION_LABELS", () => {
       happening: "Working now",
       workers: "Workers",
     });
+  });
+});
+
+describe("lensIntentGoalFact — the goal line (WP.5)", () => {
+  it("a stated target over the measured throughput: 'Goal 6 / 8 published this month'", () => {
+    const fact = lensIntentGoalFact({
+      goal: { count: 8, per: "month" },
+      done: 6,
+      doneWord: "Published",
+    })!;
+    expect(lensScopeFactLabel(fact)).toBe("Goal 6 / 8 published this month");
+    expect(fact.progress).toBe(0.75);
+    expect(fact.statedAt).toBeNull(); // measured, never "stated"
+    expect(lensIntentHeaderModel({ counts, goal: fact }).fact).toEqual(fact);
+  });
+
+  it("an unknown measure still says the target, with no bar", () => {
+    const fact = lensIntentGoalFact({
+      goal: { count: 3, per: "week" },
+      done: null,
+      doneWord: "done",
+    })!;
+    expect(lensScopeFactLabel(fact)).toBe("Goal: target 3 done this week");
+    expect(fact.progress).toBeNull();
+  });
+
+  it("no stated goal ⇒ no fact (the done door is the measured fact alone)", () => {
+    expect(
+      lensIntentGoalFact({ goal: undefined, done: 4, doneWord: "done" })
+    ).toBeNull();
+    expect(
+      lensIntentGoalFact({
+        goal: { count: 0, per: "week" },
+        done: 4,
+        doneWord: "done",
+      })
+    ).toBeNull();
   });
 });
