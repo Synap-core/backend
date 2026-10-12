@@ -54,6 +54,10 @@ import {
   workspaces,
   workspaceMembers,
   podMembers,
+  profileWorkspaceAccess,
+  artifacts,
+  channels,
+  channelMembers,
   focusSessions,
   links,
   messages,
@@ -185,9 +189,17 @@ describe("captures API", () => {
       messages,
       profiles,
       users,
+      // Read by the documents / focus-session visibility rules.
+      profileWorkspaceAccess,
+      artifacts,
+      channels,
+      channelMembers,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
+    // A person row: the workspace-lens floor admits a NULL-workspace row only
+    // to a known non-guest user.
+    await q(`insert into users (id) values ($1), ($2)`, [A, B]);
   });
   beforeEach(async () => {
     await h.client!.exec(
@@ -355,6 +367,95 @@ describe("captures API", () => {
       new Set([saved, noAiNote])
     );
     expect(filtered.nextCursor).toBeNull();
+  });
+
+  it("suggested: the latest round still holds a row nobody filed or refused", async () => {
+    const result = (sessionId: string, round: number, tempIds: string[]) => ({
+      capturePart: {
+        kind: "capture_result",
+        v: 1,
+        sessionId,
+        round,
+        rows: tempIds.map((tempId) => ({
+          tempId,
+          profileSlug: "task",
+          title: tempId,
+          why: null,
+          updatesExisting: false,
+          dismissed: tempId.startsWith("x"),
+        })),
+        truncated: false,
+        notice: null,
+      },
+    });
+    const filed = (sessionId: string, tempId: string, outcome: string) => ({
+      capturePart: {
+        kind: "capture_filed",
+        v: 1,
+        sessionId,
+        round: 2,
+        rows: [
+          { tempId, entityId: "e-1", proposalId: null, outcome, title: tempId },
+        ],
+        truncated: false,
+        workspaceId: null,
+        projectId: null,
+      },
+    });
+    const part = async (channelId: string, metadata: unknown, at: string) =>
+      q(
+        `insert into messages (id, channel_id, metadata, timestamp) values ($1, $2, $3::jsonb, $4)`,
+        [randomUUID(), channelId, JSON.stringify(metadata), at]
+      );
+
+    // Round 2 holds t2 unfiled (round 1's rows do not count any more).
+    const owedChannel = randomUUID();
+    const owedSession = await session({ channelId: owedChannel });
+    const owed = await capture({ sessionId: owedSession });
+    await part(
+      owedChannel,
+      result(owedSession, 1, ["t9"]),
+      "2026-10-01T00:00:00Z"
+    );
+    await part(
+      owedChannel,
+      result(owedSession, 2, ["t1", "t2"]),
+      "2026-10-02T00:00:00Z"
+    );
+    await part(
+      owedChannel,
+      filed(owedSession, "t1", "created"),
+      "2026-10-03T00:00:00Z"
+    );
+
+    // Every row filed (one held for review) or refused: nothing owed.
+    const doneChannel = randomUUID();
+    const doneSession = await session({ channelId: doneChannel });
+    const done = await capture({ sessionId: doneSession });
+    await edge("document", done, "entity", await entity(), "produced");
+    await part(
+      doneChannel,
+      result(doneSession, 2, ["t1", "t2", "x3"]),
+      "2026-10-02T00:00:00Z"
+    );
+    await part(
+      doneChannel,
+      filed(doneSession, "t1", "created"),
+      "2026-10-03T00:00:00Z"
+    );
+    await part(
+      doneChannel,
+      filed(doneSession, "t2", "proposed"),
+      "2026-10-03T00:00:01Z"
+    );
+
+    const byId = new Map(
+      (await caller(A).list({})).items.map((i) => [i.documentId, i])
+    );
+    expect(byId.get(owed)!.status).toBe("suggested");
+    expect(byId.get(done)!.status).toBe("structured");
+    const filtered = await caller(A).list({ status: "suggested" });
+    expect(filtered.items.map((i) => i.documentId)).toEqual([owed]);
   });
 
   it("get returns the full raw, what it made (with kind), and the run plus its rerun", async () => {

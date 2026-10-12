@@ -202,6 +202,21 @@ export function captureRowState(
   return row.dismissed ? "refused" : "proposed";
 }
 
+/**
+ * A capture still owes the person a decision: its latest round holds a row
+ * nobody has filed or refused (a failed filing still owes one; a held one
+ * waits on governance, not on the person). PURE.
+ */
+export function hasUnfiledSuggestions(
+  result: CaptureResultPart | null,
+  filed: ReadonlyArray<CaptureFiledPart>
+): boolean {
+  return (result?.rows ?? []).some((row) => {
+    const state = captureRowState(row, filed);
+    return state === "proposed" || state === "failed";
+  });
+}
+
 const cut = (s: string, max: number) =>
   s.length > max ? `${s.slice(0, max - 1)}…` : s;
 

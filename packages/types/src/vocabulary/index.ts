@@ -954,6 +954,8 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   structured: "Structured",
   saved_without_ai: "Saved without AI",
   needs_answer: "Needs your answer",
+  // The latest round still holds a suggestion nobody filed or refused.
+  suggested: "Suggested",
   not_structured: "Not structured",
   // CONNECTION credential state (`secrets.connection_state`). Humanized it read
   // "Needs reauth" — jargon for "sign in again".

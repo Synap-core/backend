@@ -1301,3 +1301,10 @@ describe("capture chip states", () => {
     expect(resolveActionProgressive("file")).toBe("Filing");
   });
 });
+
+describe("capture list statuses", () => {
+  it("an unfinished capture with unfiled suggestions reads Suggested", () => {
+    expect(resolveStatusLabel("suggested")).toBe("Suggested");
+    expect(resolveStatusLabel("needs_answer")).toBe("Needs your answer");
+  });
+});

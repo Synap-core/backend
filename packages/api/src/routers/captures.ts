@@ -51,6 +51,7 @@ import {
   or,
   eq,
   lt,
+  asc,
   desc,
   isNull,
   inArray,
@@ -67,6 +68,12 @@ import {
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import {
+  readCapturePart,
+  type CaptureFiledPart,
+  type CaptureResultPart,
+} from "@synap-core/types/capture";
+import { hasUnfiledSuggestions } from "../services/intake/capture-room.js";
 import {
   CAPTURE_STATUSES,
   deriveCaptureStatus,
@@ -298,6 +305,63 @@ async function sessionsWithOpenQuestion(
   return open;
 }
 
+/**
+ * Session ids (among the caller's visible sessions) whose room's latest
+ * capture_result still holds a row neither filed nor refused.
+ */
+async function sessionsWithUnfiledSuggestions(
+  access: AccessContext,
+  sessionIds: string[]
+): Promise<Set<string>> {
+  const owed = new Set<string>();
+  if (sessionIds.length === 0) return owed;
+  const sessions = await scopedDb(access).findMany<{
+    id: string;
+    channelId: string | null;
+  }>(focusSessions, {
+    where: inArray(focusSessions.id, sessionIds),
+    columns: { id: true, channelId: true },
+  });
+  const sessionByChannel = new Map(
+    sessions.flatMap((s) => (s.channelId ? [[s.channelId, s.id] as const] : []))
+  );
+  if (sessionByChannel.size === 0) return owed;
+  const rows = await db
+    .select({ channelId: messages.channelId, metadata: messages.metadata })
+    .from(messages)
+    .where(
+      and(
+        inArray(messages.channelId, [...sessionByChannel.keys()]),
+        isNull(messages.deletedAt),
+        drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' in ('capture_result', 'capture_filed')`
+      )
+    )
+    .orderBy(asc(messages.timestamp), asc(messages.id));
+  const byChannel = new Map<
+    string,
+    { result: CaptureResultPart | null; filed: CaptureFiledPart[] }
+  >();
+  for (const r of rows) {
+    if (!r.channelId) continue;
+    const part = readCapturePart(r.metadata);
+    const room = byChannel.get(r.channelId) ?? { result: null, filed: [] };
+    if (part?.kind === "capture_result") {
+      // Highest round wins; a later part of the same round supersedes.
+      if (!room.result || part.round >= room.result.round) room.result = part;
+    } else if (part?.kind === "capture_filed") {
+      room.filed.push(part);
+    }
+    byChannel.set(r.channelId, room);
+  }
+  for (const [channelId, room] of byChannel) {
+    const sessionId = sessionByChannel.get(channelId);
+    if (sessionId && hasUnfiledSuggestions(room.result, room.filed)) {
+      owed.add(sessionId);
+    }
+  }
+  return owed;
+}
+
 /** The latest version's stored preview per document (list preview only). */
 async function versionPreviews(ids: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -333,9 +397,10 @@ async function toItems(
   const sessionIds = [
     ...new Set(rows.flatMap((row) => sourceOf(row).sessionId ?? [])),
   ];
-  const [produced, openSessions, previews] = await Promise.all([
+  const [produced, openSessions, owedSessions, previews] = await Promise.all([
     producedEntityIds(rows),
     sessionsWithOpenQuestion(access, sessionIds),
+    sessionsWithUnfiledSuggestions(access, sessionIds),
     versionPreviews(rows.map((row) => row.id)),
   ]);
   const items = rows.map((row): CaptureItem => {
@@ -351,6 +416,9 @@ async function toItems(
       status: deriveCaptureStatus({
         hasOpenQuestion: Boolean(
           source.sessionId && openSessions.has(source.sessionId)
+        ),
+        hasUnfiledSuggestions: Boolean(
+          source.sessionId && owedSessions.has(source.sessionId)
         ),
         degraded: Boolean(source.degraded),
         producedCount,
