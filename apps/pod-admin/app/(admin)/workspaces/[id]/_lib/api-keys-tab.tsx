@@ -36,8 +36,8 @@ import {
   roleFitsWorkspace,
   roleSetsLifetime,
   useGrantRoleOptions,
-} from "../../../trust-keys/_lib/grant-role-picker";
-import { useOfferedKeyScopes } from "../../../trust-keys/_lib/api-keys-section";
+} from "../../../keys/_lib/grant-role-picker";
+import { useOfferedKeyScopes } from "../../../keys/_lib/api-keys-section";
 import type { GrantMintInput } from "@synap-core/types/grants";
 
 interface ApiKey {
