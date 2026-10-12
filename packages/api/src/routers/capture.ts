@@ -1494,6 +1494,11 @@ const captureBaseRouter = router({
             )
           )[0]?.propertyHints,
         lifecyclesFor: (ids) => profileService.getEffectiveLifecycles(ids),
+        onLifecyclesFailed: (err) =>
+          logger.error(
+            { err, userId },
+            "capture.structure: kind lifecycles NOT read — kinds are offered without their first status"
+          ),
       });
 
       // 2b. Fetch user's PROJECTS (cross-cutting lenses) for routing hints.

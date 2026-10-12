@@ -183,6 +183,12 @@ export async function buildLinkedProfiles(args: {
   lifecyclesFor?: (
     profileIds: string[]
   ) => Promise<ReadonlyMap<string, LinkableLifecycle>>;
+  /**
+   * The lifecycle read failed. It is optional enrichment: the kinds go out
+   * without `firstStatus` (absent = not said) and the failure is reported
+   * here, never swallowed.
+   */
+  onLifecyclesFailed?: (err: unknown) => void;
 }): Promise<LinkedProfile[]> {
   const creatable = args.profiles.filter(
     (p) =>
@@ -213,7 +219,12 @@ export async function buildLinkedProfiles(args: {
       )
     ),
     args.lifecyclesFor && ids.length > 0
-      ? args.lifecyclesFor(ids)
+      ? Promise.resolve()
+          .then(() => args.lifecyclesFor!(ids))
+          .catch((err: unknown) => {
+            args.onLifecyclesFailed?.(err);
+            return new Map<string, LinkableLifecycle>();
+          })
       : Promise.resolve(new Map<string, LinkableLifecycle>()),
   ]);
 

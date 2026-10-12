@@ -36,10 +36,9 @@ const h = vi.hoisted(() => ({
   profiles: [] as Array<Record<string, unknown>>,
   profileReads: [] as string[],
   /** Lifecycles by profile id, as `getEffectiveLifecycles` answers. */
-  lifecycles: new Map<
-    string,
-    { propertySlug: string; options: Array<{ key: string }> }
-  >(),
+  lifecycles: new Map() as
+    | Map<string, { propertySlug: string; options: Array<{ key: string }> }>
+    | "throws",
   /** The request's key grant (`getRequestGrant`); null = a session caller. */
   grant: null as null | {
     scopes: Array<{ permissions: string[]; workspaceIds?: string[] | null }>;
@@ -112,6 +111,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         return [];
       }
       async getEffectiveLifecycles() {
+        if (h.lifecycles === "throws") throw new Error("lifecycle read failed");
         return h.lifecycles;
       }
     },
@@ -515,6 +515,25 @@ describe("capture.structure — schema linking across every visible space (D1)",
       property: "status",
       value: "idea",
     });
+  });
+
+  it("a failed lifecycle read degrades: the capture still structures, no kind claims a first status", async () => {
+    h.profiles = [{ id: "p-post", slug: "post", displayName: "Post" }];
+    h.lifecycles = "throws";
+    try {
+      await callerFor(`user-${randomUUID()}`).structure({
+        text: "idea of content for synap",
+      });
+    } finally {
+      h.lifecycles = new Map();
+    }
+    const offered = (
+      h.isInputs[0]!.hints as {
+        availableProfiles: Array<{ slug: string; firstStatus?: unknown }>;
+      }
+    ).availableProfiles;
+    expect(offered.map((p) => p.slug)).toEqual(["post"]);
+    expect(offered[0]).not.toHaveProperty("firstStatus");
   });
 });
 

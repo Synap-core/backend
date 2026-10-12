@@ -181,6 +181,32 @@ describe("buildLinkedProfiles", () => {
   });
 });
 
+describe("a failed lifecycle read", () => {
+  it("is reported and the kinds go out without a first status — sync or async throw", async () => {
+    for (const lifecyclesFor of [
+      () => {
+        throw new TypeError("not a function");
+      },
+      async () => {
+        throw new Error("db down");
+      },
+    ]) {
+      const failures: unknown[] = [];
+      const linked = await buildLinkedProfiles({
+        profiles: [kind("post", "A post", CONTENT)],
+        propertyHintsFor: async () => undefined,
+        note: "x",
+        workspaceNames: new Map(),
+        lifecyclesFor,
+        onLifecyclesFailed: (err) => failures.push(err),
+      });
+      expect(linked.map((k) => k.slug)).toEqual(["post"]);
+      expect(linked[0]).not.toHaveProperty("firstStatus");
+      expect(failures).toHaveLength(1);
+    }
+  });
+});
+
 describe("the kind floor — live spaces, inside the request's grant", () => {
   const ARCHIVED = "ws-archived";
   const kinds = [
