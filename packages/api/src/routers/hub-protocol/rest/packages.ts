@@ -16,7 +16,10 @@ import {
   ComposeBaseNotFoundError,
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
-import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
+import {
+  applyPackagePostWorkspace,
+  TemplateIncompleteError,
+} from "../../../services/package-apply-post-workspace.js";
 import { installedTemplateSpace } from "../../../services/installed-template-space.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
@@ -1087,47 +1090,67 @@ export function registerPackagesRoutes(app: HubHono): void {
       }
     }
 
-    if (workspaceId && postWorkspaceOutcome !== "unchanged") {
-      const post = await applyPackagePostWorkspace({
-        workspaceId,
-        body,
-        userId,
-        agentUserId,
-        scopes: c.get("scopes") ?? [],
-      });
-      Object.assign(result, post);
-      // The version layer 1 deferred: written only when layer 2 landed
-      // (nothing errored, nothing still proposed), so the next update still
-      // sees the drift otherwise.
-      if (pendingVersionStamp) {
-        const { postWorkspaceLayersConverged } =
-          await import("../../../services/capabilities/install-layers.js");
-        if (postWorkspaceLayersConverged(post)) {
-          const { stampWorkspacePackageVersion } =
-            await import("../../../services/workspace-creation-service.js");
-          await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
-          result.versionStamped = true;
-        } else {
-          result.versionStamped = false;
+    // A template whose action placement names a playbook/automation that
+    // exists nowhere (no row, no pending proposal) is INCOMPLETE: answer it as
+    // a typed 422 the CLI can print, never an "unexpected server error" 500.
+    try {
+      if (workspaceId && postWorkspaceOutcome !== "unchanged") {
+        const post = await applyPackagePostWorkspace({
+          workspaceId,
+          body,
+          userId,
+          agentUserId,
+          scopes: c.get("scopes") ?? [],
+        });
+        Object.assign(result, post);
+        // The version layer 1 deferred: written only when layer 2 landed
+        // (nothing errored, nothing still proposed), so the next update still
+        // sees the drift otherwise.
+        if (pendingVersionStamp) {
+          const { postWorkspaceLayersConverged } =
+            await import("../../../services/capabilities/install-layers.js");
+          if (postWorkspaceLayersConverged(post)) {
+            const { stampWorkspacePackageVersion } =
+              await import("../../../services/workspace-creation-service.js");
+            await stampWorkspacePackageVersion(
+              workspaceId,
+              pendingVersionStamp
+            );
+            result.versionStamped = true;
+          } else {
+            result.versionStamped = false;
+          }
         }
+      } else if (workspaceId && body.playbooks?.length) {
+        // "unchanged" says the version STAMP matches — not that every playbook
+        // the template declares exists. A stamp written by a pass that did not
+        // create a later-added playbook (boot reports it `missing`; it never
+        // creates) would otherwise leave that playbook off the pod for good: an
+        // update is exactly this door, and it would short-circuit here. The
+        // playbook layer alone is database-only (no Control Plane fetch, the
+        // cost the skip exists to avoid): it creates what is missing through the
+        // same governed create, reconciles the rest, and keeps owner archives.
+        const post = await applyPackagePostWorkspace({
+          workspaceId,
+          body: { _meta: body._meta, playbooks: body.playbooks },
+          userId,
+          agentUserId,
+          scopes: c.get("scopes") ?? [],
+        });
+        Object.assign(result, post);
       }
-    } else if (workspaceId && body.playbooks?.length) {
-      // "unchanged" says the version STAMP matches — not that every playbook
-      // the template declares exists. A stamp written by a pass that did not
-      // create a later-added playbook (boot reports it `missing`; it never
-      // creates) would otherwise leave that playbook off the pod for good: an
-      // update is exactly this door, and it would short-circuit here. The
-      // playbook layer alone is database-only (no Control Plane fetch, the
-      // cost the skip exists to avoid): it creates what is missing through the
-      // same governed create, reconciles the rest, and keeps owner archives.
-      const post = await applyPackagePostWorkspace({
-        workspaceId,
-        body: { _meta: body._meta, playbooks: body.playbooks },
-        userId,
-        agentUserId,
-        scopes: c.get("scopes") ?? [],
-      });
-      Object.assign(result, post);
+    } catch (e) {
+      if (e instanceof TemplateIncompleteError) {
+        return c.json(
+          {
+            error: `This template is incomplete: ${e.message}.`,
+            reasonCode: e.reasonCode,
+            missing: e.missing,
+          },
+          422
+        );
+      }
+      throw e;
     }
 
     // Stamp uses-edges onto every resolved require/compose workspace (shared
