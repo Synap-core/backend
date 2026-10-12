@@ -32,6 +32,7 @@ import { profiles } from "@synap/database/schema";
 import {
   LIFECYCLE_CATEGORIES,
   isTerminalLifecycleCategory,
+  type LifecycleOption,
   lifecycleOptionLabel,
   lifecycleOptionTone,
   UNCLASSIFIED_STATUS,
@@ -63,8 +64,12 @@ const lifecycleOptionWire = z.object({
   category: categorySchema,
   tone: z.string(),
   humanOnly: z.boolean(),
-  /** Days in this option before a thing is stuck; null = no stuck rule. */
-  stuckAfterDays: z.number().nullable(),
+  /**
+   * Days in this option before a thing is stuck; absent = no stuck rule.
+   * Optional (not nullable) so the wire option IS `@synap-core/types`
+   * `LifecycleOption` — surfaces assign one to the other.
+   */
+  stuckAfterDays: z.number().optional(),
 });
 
 const lifecycleWire = z.object({
@@ -159,6 +164,16 @@ const lifecycleSummaryWire = z.object({
 });
 
 export type LifecycleWire = z.infer<typeof lifecycleWire>;
+
+/**
+ * COMPILE-TIME PIN: a wire option IS a `@synap-core/types` `LifecycleOption`
+ * (surfaces hand one to code typed by the other). A wire field that drifts
+ * from the model — e.g. `stuckAfterDays: number | null` against the model's
+ * `stuckAfterDays?: number` — stops this build, not a surface's.
+ */
+export const _wireOptionIsLifecycleOption = (
+  o: LifecycleWire["options"][number]
+): LifecycleOption => o;
 export type LifecycleBoardWire = z.infer<typeof boardWire>;
 export type LifecycleSummaryWire = z.infer<typeof lifecycleSummaryWire>;
 
@@ -231,7 +246,9 @@ function toLifecycleWire(
       category: o.category,
       tone: lifecycleOptionTone(o),
       humanOnly: o.humanOnly === true,
-      stuckAfterDays: o.stuckAfterDays ?? null,
+      ...(o.stuckAfterDays !== undefined
+        ? { stuckAfterDays: o.stuckAfterDays }
+        : {}),
     })),
   };
 }
@@ -423,7 +440,8 @@ export const lifecycleRouter = router({
       // a client-side guess. Terminal options never carry one.
       const stuckDays = new Map(
         lifecycle.options.flatMap((o) =>
-          o.stuckAfterDays !== null && !isTerminalLifecycleCategory(o.category)
+          o.stuckAfterDays !== undefined &&
+          !isTerminalLifecycleCategory(o.category)
             ? [[o.key, o.stuckAfterDays] as const]
             : []
         )

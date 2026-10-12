@@ -389,6 +389,10 @@ describe("lifecycle.board — stuck", () => {
     expect(
       board.lifecycle.options.find((o) => o.key === "draft")!.stuckAfterDays
     ).toBe(7);
+    // No rule ⇒ the key is ABSENT (the model's optional), never null.
+    expect(
+      "stuckAfterDays" in board.lifecycle.options.find((o) => o.key === "won")!
+    ).toBe(false);
 
     // The paged column read marks items the same way.
     const page = await caller().board({
