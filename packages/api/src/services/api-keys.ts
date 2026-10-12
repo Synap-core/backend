@@ -497,13 +497,24 @@ export class ApiKeyService {
       return { status: "valid", record: lookupMatch };
     }
 
-    // Fallback (un-migrated legacy keys, lookup hash still NULL).
-    // Look up ALL keys with the matching prefix (no active/expiry filter).
-    // We need the row to disambiguate revoked vs expired vs unknown.
+    // Fallback (un-migrated legacy keys, lookup hash still NULL) — and ONLY
+    // those, and only live ones: a row WITH a lookup hash was already ruled
+    // out by the sha256 miss above, and a revoked row can never authenticate
+    // again. Comparing against every same-prefix row cost a bcrypt (~0.7s at
+    // cost 12) per stored key for any made-up secret — 123 rows, ~12s, on a
+    // live pod, reachable unauthenticated via `/auth/key-state`. A revoked
+    // legacy key now reads `not_found` instead of `revoked`; expired ones are
+    // still compared so their holder hears `expired`.
     const candidates = await db
       .select()
       .from(apiKeys)
-      .where(eq(apiKeys.keyPrefix, prefix));
+      .where(
+        and(
+          eq(apiKeys.keyPrefix, prefix),
+          isNull(apiKeys.keyLookupHash),
+          eq(apiKeys.isActive, true)
+        )
+      );
 
     // Compare hashes for all prefix-matching candidates IN PARALLEL — bcrypt is
     // expensive (~0.7s each at cost 12), so running them concurrently bounds
@@ -580,13 +591,16 @@ export class ApiKeyService {
       return lookupMatch;
     }
 
-    // 2. Fallback (un-migrated legacy keys): find active keys with this prefix
+    // 2. Fallback (un-migrated legacy keys ONLY — lookup hash NULL): a row
+    // with a lookup hash was already ruled out by the sha256 miss, so
+    // bcrypt-comparing it again is pure cost (see `getApiKeyStatus`).
     const candidates = await db
       .select()
       .from(apiKeys)
       .where(
         and(
           eq(apiKeys.keyPrefix, prefix),
+          isNull(apiKeys.keyLookupHash),
           eq(apiKeys.isActive, true),
           or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date()))
         )

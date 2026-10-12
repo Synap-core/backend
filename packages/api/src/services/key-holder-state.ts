@@ -30,7 +30,13 @@ import {
   desc,
 } from "@synap/database";
 import { apiKeyService } from "./api-keys.js";
-import { settleRejectedAgentConnect } from "./agent-connect.js";
+import {
+  LEGACY_REPLACED_BY_APPROVAL,
+  REPLACED_FROM_THIS_COMPUTER,
+  settleRejectedAgentConnect,
+} from "./agent-connect.js";
+import { REPROVISIONED_REPLACED } from "./agent-identity-service.js";
+import { MACHINE_RECONNECTED_REPLACED } from "./machine-connect.js";
 import { agentApprovalPageUrl } from "../utils/pod-admin-origin.js";
 import { shortenKeyId } from "../utils/auth-error.js";
 
@@ -69,15 +75,24 @@ export interface KeyHolderState {
 
 /**
  * The revoke reasons that mean "a newer key took this one's place" — the
- * approval of a pending connection (`approvePendingAgentKey`) and a direct
- * re-provision (`provisionSurfaceAgentKey`). Matched on the word, so a
- * reworded reason that still says "replaced" keeps classifying; a tripwire
- * pins both literals to it.
+ * approval of a pending connection (`approvePendingAgentKey`), a direct
+ * re-provision (`provisionSurfaceAgentKey`), a computer's re-enrolment
+ * (`machine-connect`), and the pre-2026-10-12 approval
+ * wording still on revoked rows. Matched EXACTLY against those constants,
+ * never by grepping free text (any reason that merely says "replaced" would
+ * otherwise reveal a sibling key's computer); a tripwire pins the literals.
  */
+const REPLACEMENT_REASONS: ReadonlySet<string> = new Set([
+  REPLACED_FROM_THIS_COMPUTER,
+  REPROVISIONED_REPLACED,
+  MACHINE_RECONNECTED_REPLACED,
+  LEGACY_REPLACED_BY_APPROVAL,
+]);
+
 export function isReplacementReason(
   reason: string | null | undefined
 ): boolean {
-  return !!reason && /\breplaced\b/i.test(reason);
+  return !!reason && REPLACEMENT_REASONS.has(reason);
 }
 
 /**
@@ -88,9 +103,11 @@ export function isReplacementReason(
  */
 export async function describeKeyForHolder(
   plainKey: string,
-  requestUrl: string
+  requestUrl: string,
+  /** The caller's own `getApiKeyStatus(plainKey)` result, when it has one. */
+  knownStatus?: Awaited<ReturnType<typeof apiKeyService.getApiKeyStatus>>
 ): Promise<KeyHolderState> {
-  const status = await apiKeyService.getApiKeyStatus(plainKey);
+  const status = knownStatus ?? (await apiKeyService.getApiKeyStatus(plainKey));
   if (status.status === "invalid_format" || status.status === "not_found")
     return { state: "unknown" };
 
@@ -173,13 +190,17 @@ export async function describeKeyForHolder(
     )
     .orderBy(desc(apiKeys.createdAt))
     .limit(1);
+  // An UNLABELLED key names no computer, so its "replacer" is only the
+  // agent's newest key — which may be ANOTHER computer, possibly another
+  // person's. Its computer is not this holder's to learn: when, never where.
+  const sameComputer = !!record.instanceId;
   return {
     ...revoked,
     replacedBy: replacer
       ? {
           createdAt: replacer.createdAt.toISOString(),
-          instanceId: replacer.instanceId ?? null,
-          instanceLabel: replacer.instanceLabel ?? null,
+          instanceId: sameComputer ? (replacer.instanceId ?? null) : null,
+          instanceLabel: sameComputer ? (replacer.instanceLabel ?? null) : null,
         }
       : null,
   };

@@ -27,6 +27,7 @@ import { db, apiKeys, users, eq } from "@synap/database";
 
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import { describeKeyForHolder } from "../../../services/key-holder-state.js";
+import { extractBearerToken } from "../_middleware/auth.js";
 import { apiKeyService } from "../../../services/api-keys.js";
 import {
   GUEST_REFUSED_BODY,
@@ -177,6 +178,10 @@ export function registerAuthRoutes(app: HubHono): void {
         content: { "application/json": { schema: KeyHolderStateSchema } },
       },
       401: { $ref: "#/components/responses/Unauthorized" },
+      403: {
+        description: "A guest's key: refused, never described.",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       500: {
         description: "Internal error",
         content: { "application/json": { schema: ErrorSchema } },
@@ -187,9 +192,7 @@ export function registerAuthRoutes(app: HubHono): void {
   // Auth-skipped (`_middleware/auth.ts` skipAuthPaths): the key under question
   // may not authenticate — that is the point. It reads the bearer itself.
   app.openapi(keyStateRoute, async (c) => {
-    const header = c.req.header("authorization") ?? "";
-    const match = header.match(/^Bearer\s+(.+)$/i);
-    const token = match?.[1]?.trim();
+    const token = extractBearerToken(c.req.header("authorization"));
     if (!token) return authErrorResponse(c, "no_auth") as never;
     try {
       // This door skips hub auth, so it owns the guest refusal hub auth gives
@@ -201,8 +204,10 @@ export function registerAuthRoutes(app: HubHono): void {
         status.record &&
         (await isGuestPrincipal(status.record.userId, c.req.raw))
       )
-        return c.json(GUEST_REFUSED_BODY, 403) as never;
-      return c.json(await describeKeyForHolder(token, c.req.url), 200);
+        return c.json(GUEST_REFUSED_BODY, 403);
+      // The status just read is handed on: a second lookup would repeat the
+      // (legacy bcrypt) work for every unknown key.
+      return c.json(await describeKeyForHolder(token, c.req.url, status), 200);
     } catch (err) {
       logger.error({ err }, "/auth/key-state lookup failed");
       return c.json({ error: "Could not read this key's state" }, 500);

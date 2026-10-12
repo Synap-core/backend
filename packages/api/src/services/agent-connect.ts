@@ -359,6 +359,21 @@ export type PendingKeyOutcome =
 /** The revoke reason when a computer's new connection replaces its old key. */
 export const REPLACED_FROM_THIS_COMPUTER =
   "Replaced by a new connection from this computer";
+/**
+ * The wording `approvePendingAgentKey` wrote before 2026-10-12 (when every
+ * live key was replaced on approval). Never written now; still on revoked
+ * rows, so the holder's key-state keeps classifying it as a replacement.
+ */
+export const LEGACY_REPLACED_BY_APPROVAL =
+  "Replaced by a newly approved connection";
+/**
+ * The revoke reason for a connection the approver chose to switch off while
+ * approving another (`alsoDisconnect`). `/auth/key-state` returns it verbatim
+ * to anyone holding that key, so it names the role, never the approver.
+ */
+export function disconnectedWhenApprovingReason(connection: string): string {
+  return `Disconnected by the pod owner when approving ${connection}`;
+}
 /** The revoke reason for a computer's older request once a newer one is decided. */
 export const SUPERSEDED_REQUEST =
   "Expired: a newer request from this computer was decided";
@@ -725,23 +740,14 @@ export async function approvePendingAgentKey(args: {
     );
   }
 
-  // What the approver explicitly chose to disconnect — named in the reason,
-  // so its holder learns who switched it off and for what.
+  // What the approver explicitly chose to disconnect. The reason is read
+  // back VERBATIM by `/auth/key-state` to anyone still holding that key, so
+  // it names the role, never the approver's name or email.
   if (alsoDisconnect.length > 0) {
-    const [approver, agent] = await Promise.all([
-      db.query.users.findFirst({
-        where: eq(users.id, args.approverId),
-        columns: { name: true, email: true },
-      }),
-      db.query.users.findFirst({
-        where: eq(users.id, key.userId),
-        columns: { name: true, agentType: true },
-      }),
-    ]);
-    const who =
-      approver?.name?.trim() ||
-      approver?.email?.trim() ||
-      "the person who approved it";
+    const agent = await db.query.users.findFirst({
+      where: eq(users.id, key.userId),
+      columns: { name: true, agentType: true },
+    });
     const what = connectionDisplayName(
       agent?.agentType,
       agent?.name,
@@ -754,7 +760,7 @@ export async function approvePendingAgentKey(args: {
         isNull(apiKeys.revokedAt)
       ),
       revokedBy: args.approverId,
-      reason: `Disconnected by ${who} when approving ${what}`,
+      reason: disconnectedWhenApprovingReason(what),
     });
   }
 

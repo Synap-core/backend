@@ -21,6 +21,7 @@ const K_REJECTED = "1ccccccc-0000-4000-8000-000000000003";
 const K_ACTIVE = "1ddddddd-0000-4000-8000-000000000004";
 const K_MISSING = "1eeeeeee-0000-4000-8000-000000000005";
 
+const POD_ADMIN = "http://localhost:4040";
 const getSession = vi.fn();
 const assertPodAdmin = vi.fn();
 const findUser = vi.fn();
@@ -122,6 +123,8 @@ const post = (path: string, body: unknown, cookie = "ory_session=x") =>
     method: "POST",
     headers: {
       "content-type": "application/json",
+      // The pod-admin page — the CSRF floor refuses a cookie from elsewhere.
+      origin: POD_ADMIN,
       ...(cookie ? { cookie } : {}),
     },
     body: JSON.stringify(body),
@@ -198,5 +201,76 @@ describe("POST /setup/agent/pending/lookup", () => {
     getSession.mockResolvedValue(null);
     const res = await post("/setup/agent/pending/lookup", { keyIds: [K_MINE] });
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * CSRF floor: the decision routes authenticate with the ambient Kratos
+ * cookie, so a cookie request must be JSON from this pod's pod-admin origin.
+ * A `text/plain` form POST from another site needs no preflight and would
+ * otherwise approve as the signed-in person.
+ */
+describe("Kratos-cookie decision routes refuse a cross-site request", () => {
+  const raw = (
+    path: string,
+    headers: Record<string, string>,
+    body = JSON.stringify({ keyIds: [K_MINE] })
+  ) =>
+    makeApp().request(path, {
+      method: "POST",
+      headers: { cookie: "ory_session=x", ...headers },
+      body,
+    });
+  const ROUTES = [
+    "/setup/agent/pending/approve-batch",
+    "/setup/agent/pending/lookup",
+    `/setup/agent/pending/${K_MINE}/approve`,
+    `/setup/agent/pending/${K_MINE}/reject`,
+  ];
+
+  it("a text/plain POST (no preflight) is refused before anything is read", async () => {
+    for (const path of ROUTES) {
+      const res = await raw(path, {
+        "content-type": "text/plain",
+        origin: POD_ADMIN,
+      });
+      expect(res.status, path).toBe(415);
+    }
+    expect(getSession).not.toHaveBeenCalled();
+    expect(flipped).toEqual([]);
+  });
+
+  it("a JSON POST from another origin — or with no origin — is refused", async () => {
+    for (const path of ROUTES) {
+      for (const origin of ["https://evil.example", undefined, "null"]) {
+        const res = await raw(path, {
+          "content-type": "application/json",
+          ...(origin ? { origin } : {}),
+        });
+        expect(res.status, `${path} from ${origin}`).toBe(403);
+      }
+    }
+    expect(getSession).not.toHaveBeenCalled();
+    expect(flipped).toEqual([]);
+  });
+
+  it("positive control: the same JSON POST from pod-admin goes through", async () => {
+    findKey.mockReturnValueOnce(KEYS[K_MINE]);
+    const res = await raw("/setup/agent/pending/approve-batch", {
+      "content-type": "application/json; charset=utf-8",
+      origin: POD_ADMIN,
+    });
+    expect(res.status).toBe(200);
+    expect(flipped).toEqual([K_MINE]);
+  });
+
+  it("a session-token request (no cookie) is not ambient authority — not refused by the floor", async () => {
+    findKey.mockReturnValueOnce(KEYS[K_MINE]);
+    const res = await makeApp().request("/setup/agent/pending/approve-batch", {
+      method: "POST",
+      headers: { "x-session-token": "t", "content-type": "application/json" },
+      body: JSON.stringify({ keyIds: [K_MINE] }),
+    });
+    expect(res.status).toBe(200);
   });
 });

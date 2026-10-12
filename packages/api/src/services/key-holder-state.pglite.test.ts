@@ -271,6 +271,61 @@ describe("the holder learns why its key does not work", () => {
   });
 });
 
+describe("what the holder of a revoked key may learn about anyone else", () => {
+  it("an UNLABELLED key's replacer is reported without its computer — it may be any computer", async () => {
+    // A legacy unlabelled key, revoked under the pre-10-12 approval wording,
+    // and a newer live key on a NAMED computer that may be someone else's.
+    const legacy = await mintKey({
+      active: true,
+      createdAt: new Date(Date.now() - 2 * 86_400_000),
+    });
+    await mintKey({
+      active: true,
+      instanceId: "m-other",
+      instanceLabel: "Work laptop",
+      createdAt: new Date(Date.now() - 86_400_000),
+    });
+    await q(
+      `update api_keys set is_active = false, revoked_at = now(), revoked_reason = 'Replaced by a newly approved connection' where id = $1`,
+      [legacy.id]
+    );
+    apiKeyService.invalidateVerificationCache();
+    const { body } = await keyState(legacy.secret);
+    expect(body.state).toBe("revoked");
+    expect(body.replacedBy).toMatchObject({
+      instanceId: null,
+      instanceLabel: null,
+    });
+    expect(JSON.stringify(body)).not.toContain("Work laptop");
+    expect(JSON.stringify(body)).not.toContain("m-other");
+  });
+
+  it("a key the approver chose to disconnect never learns the approver's name or email", async () => {
+    await q(`update users set name = 'Antoine Owner' where id = $1`, [OWNER]);
+    const old = await mintKey({ active: true });
+    const pending = await mintKey({
+      active: false,
+      instanceId: "m-new",
+      instanceLabel: "Studio",
+    });
+    expect(
+      await approvePendingAgentKey({
+        keyId: pending.id,
+        approverId: OWNER,
+        alsoDisconnect: [old.id],
+      })
+    ).toBe("approved");
+    apiKeyService.invalidateVerificationCache();
+    const { body } = await keyState(old.secret);
+    expect(body.state).toBe("revoked");
+    expect(body.revokedReason).toMatch(
+      /^Disconnected by the pod owner when approving /
+    );
+    expect(body.revokedReason).not.toContain("Antoine");
+    expect(body.revokedReason).not.toContain("owner@x");
+  });
+});
+
 describe("one key per computer: approval replaces only this computer's key", () => {
   it("approving computer B's connection leaves computer A's live key working", async () => {
     const laptop = await mintKey({ active: true, instanceId: "m-laptop" });
@@ -302,6 +357,7 @@ describe("tripwire: the replacement reasons the classifier reads", () => {
         path.join(here, "agent-identity-service.ts"),
         "utf8"
       ),
+      machine: fs.readFileSync(path.join(here, "machine-connect.ts"), "utf8"),
     };
     const reasons = Object.values(sources).flatMap((src) =>
       // A reason is written inline (`reason: "…"`) or as an exported constant
@@ -317,9 +373,17 @@ describe("tripwire: the replacement reasons the classifier reads", () => {
       expect.arrayContaining([
         "Replaced by a new connection from this computer",
         "Re-provisioning — replaced by new key via setup/agent",
+        "Computer re-connected — replaced by a new key",
+        "Replaced by a newly approved connection",
       ])
     );
     for (const r of reasons) expect(isReplacementReason(r)).toBe(true);
+    // Exact constants, not a grep of free text: a reason that merely SAYS
+    // "replaced" (an API-key reconnect, a rerun) is not a replacement here.
+    expect(isReplacementReason("Replaced by github reconnect")).toBe(false);
+    expect(
+      isReplacementReason("Replaced by a new connection from this computer!")
+    ).toBe(false);
     expect(isReplacementReason("Rejected at approval")).toBe(false);
     expect(isReplacementReason(null)).toBe(false);
   });

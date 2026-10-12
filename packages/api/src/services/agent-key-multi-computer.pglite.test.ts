@@ -252,8 +252,10 @@ describe("approving one computer's connection", () => {
     ).toBe("approved");
     const r = await row(unlabelled);
     expect(r.revoked_at).not.toBeNull();
+    // The reason is read back verbatim by anyone holding that key
+    // (`/auth/key-state`): the role, never the approver's name or email.
     expect(r.revoked_reason).toBe(
-      "Disconnected by Antoine when approving Claude Code on devbox"
+      "Disconnected by the pod owner when approving Claude Code on devbox"
     );
     // A chosen disconnect is not a replacement — key-state must not say so.
     expect(isReplacementReason(r.revoked_reason)).toBe(false);
@@ -500,6 +502,8 @@ describe("the pod-admin approval routes", () => {
         headers: {
           cookie: "ory_session=x",
           "content-type": "application/json",
+          // The pod-admin page (the CSRF floor refuses any other origin).
+          origin: "http://localhost:4040",
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
@@ -524,7 +528,12 @@ describe("the pod-admin approval routes", () => {
     const app = await routes();
     const res = await app.request(`/setup/agent/pending/${pending}/approve`, {
       method: "POST",
-      headers: { cookie: "ory_session=x" },
+      // The pod-admin page always sends JSON; an older one sends no body.
+      headers: {
+        cookie: "ory_session=x",
+        "content-type": "application/json",
+        origin: "http://localhost:4040",
+      },
     });
     expect(res.status).toBe(200);
     expect(await isLive(legacy)).toBe(true);

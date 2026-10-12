@@ -1,3 +1,5 @@
+import { configuredPodAdminBase } from "./pod-admin-url.js";
+
 /**
  * The pod-admin app's origin for a pod origin — where the key-approval pages
  * live (`/approve-agent/:keyId`, `/approve-agents?keys=`). ONE rule: the setup
@@ -43,4 +45,41 @@ export function agentApprovalPageUrl(
 ): string {
   const origin = process.env.PUBLIC_URL || new URL(requestUrl).origin;
   return `${toPodAdminOrigin(origin)}/approve-agent/${keyId}?agentType=${encodeURIComponent(agentType)}`;
+}
+
+/**
+ * Is `origin` (a request's `Origin` header) the pod-admin app of THIS pod?
+ * The pages that call the Kratos-cookie decision routes (approve / reject a
+ * pending key) live there, so a cookie-authenticated POST from anywhere else
+ * is a cross-site request riding the person's session — refused.
+ *
+ * Accepted: the origin `toPodAdminOrigin` derives from the pod's public
+ * origin (the one every approval link is built on), and the configured
+ * `POD_ADMIN_URL` when it is valid (a pod whose console has its own host).
+ * An absent or `null` origin is never accepted.
+ */
+export function isPodAdminOrigin(
+  origin: string | null | undefined,
+  requestUrl: string
+): boolean {
+  if (!origin || origin === "null") return false;
+  let presented: string;
+  try {
+    presented = new URL(origin).origin;
+  } catch {
+    return false;
+  }
+  const allowed = new Set<string>();
+  try {
+    allowed.add(
+      new URL(
+        toPodAdminOrigin(process.env.PUBLIC_URL || new URL(requestUrl).origin)
+      ).origin
+    );
+  } catch {
+    // An unparsable public URL contributes nothing.
+  }
+  const configured = configuredPodAdminBase();
+  if (configured.ok) allowed.add(configured.base.origin);
+  return allowed.has(presented);
 }

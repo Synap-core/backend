@@ -57,6 +57,13 @@ import {
 type AgentRow = typeof agents.$inferSelect;
 type UserRow = typeof users.$inferSelect;
 
+/**
+ * The revoke reason when a direct re-provision (`setup/agent`) replaces this
+ * runtime's key. Read back by the holder's key-state (`isReplacementReason`).
+ */
+export const REPROVISIONED_REPLACED =
+  "Re-provisioning — replaced by new key via setup/agent";
+
 export type AuthorshipMode = "autonomous" | "delegated";
 
 /** Fetch a registry row by id (or null). */
@@ -1105,7 +1112,7 @@ export async function provisionSurfaceAgentKey(
     await revokeActiveHubInboundKeysForUser(db, {
       userId: agentUserId,
       revokedBy: agentUserId,
-      revokedReason: "Re-provisioning — replaced by new key via setup/agent",
+      revokedReason: REPROVISIONED_REPLACED,
       // Instance mode rotates only THIS runtime's key; legacy mode (undefined)
       // revokes all siblings so exactly one key stays live.
       instanceId: instanceId ?? undefined,

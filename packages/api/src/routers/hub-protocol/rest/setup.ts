@@ -110,7 +110,10 @@ import {
   httpStatusForTrpcError,
   requireUuidParam,
 } from "./_shared.js";
-import { agentApprovalPageUrl as approvalPageUrl } from "../../../utils/pod-admin-origin.js";
+import {
+  agentApprovalPageUrl as approvalPageUrl,
+  isPodAdminOrigin,
+} from "../../../utils/pod-admin-origin.js";
 
 /**
  * Agent types an AGENT key (`api_key_surface`) may provision without a
@@ -416,6 +419,13 @@ async function authenticateServiceSetupRequest(
 
 /** Keys one batch approval may carry — the one number pod-admin also reads. */
 const PENDING_BATCH_MAX = PENDING_APPROVAL_BATCH_MAX;
+/**
+ * How many of an agent's OTHER connections one approval may switch off
+ * (`alsoDisconnect`). Its own bound, not the batch size: the page lists every
+ * live connection of the agent, which is unrelated to how many pending keys a
+ * `synap init` files at once. Generous on purpose — it only bounds the body.
+ */
+const ALSO_DISCONNECT_MAX = 100;
 
 /** Canonical uuid shape — anything else in `linkedUserId` is an email or name. */
 const UUID_RE =
@@ -2304,6 +2314,39 @@ export function registerSetupRoutes(app: HubHono): void {
   }
 
   /**
+   * CSRF floor for the Kratos-COOKIE decision routes. A browser attaches the
+   * parent-domain session cookie to any site's POST, and a `text/plain` form
+   * POST needs no CORS preflight — so without this, any page the person
+   * visited could approve (or reject) a pending agent key as them. When the
+   * request carries a cookie, it must be JSON (forces a preflight cross-site)
+   * AND come from this pod's pod-admin origin, where the approval pages live.
+   * A request that authenticates with `x-session-token` and no cookie is not
+   * ambient authority (a page cannot set that header without a preflight),
+   * so it is not refused here. Returns the refusal, or null to proceed.
+   */
+  function refuseCrossSiteCookieRequest(c: Context): Response | null {
+    if (!c.req.header("cookie")) return null;
+    const contentType = (c.req.header("content-type") ?? "")
+      .split(";", 1)[0]!
+      .trim()
+      .toLowerCase();
+    if (contentType !== "application/json")
+      return c.json(
+        { error: "This request must be sent as application/json." },
+        415
+      );
+    if (!isPodAdminOrigin(c.req.header("origin"), c.req.url))
+      return c.json(
+        {
+          error:
+            "Approve or reject this connection from your pod's admin page.",
+        },
+        403
+      );
+    return null;
+  }
+
+  /**
    * What a pending key would be allowed to do, as the approval pages show it:
    * its scopes, EVERY live grant scope (a key holds a set; one with no live
    * grant reads as one deny-all scope — it may touch nothing) and its real
@@ -2345,6 +2388,8 @@ export function registerSetupRoutes(app: HubHono): void {
    * back `forbidden` / `not_found` (never another person's agent details).
    */
   app.post("/setup/agent/pending/lookup", async (c) => {
+    const refused = refuseCrossSiteCookieRequest(c);
+    if (refused) return refused;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
     const parsed = PendingBatchBodySchema.safeParse(
@@ -2425,6 +2470,8 @@ export function registerSetupRoutes(app: HubHono): void {
    * and reported per key; the status is 200 whenever the request was valid.
    */
   app.post("/setup/agent/pending/approve-batch", async (c) => {
+    const refused = refuseCrossSiteCookieRequest(c);
+    if (refused) return refused;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
     const parsed = PendingBatchBodySchema.safeParse(
@@ -2503,7 +2550,7 @@ export function registerSetupRoutes(app: HubHono): void {
     .object({
       alsoDisconnect: z
         .array(z.string().uuid())
-        .max(PENDING_BATCH_MAX)
+        .max(ALSO_DISCONNECT_MAX)
         .optional(),
     })
     .strict();
@@ -2511,10 +2558,19 @@ export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent/pending/:keyId/approve", async (c) => {
     const keyId = requireUuidParam(c, "keyId");
     if (keyId instanceof Response) return keyId;
+    const refused = refuseCrossSiteCookieRequest(c);
+    if (refused) return refused;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
-    // An empty body is the old client: approve, disconnect nothing else.
-    const raw = await c.req.text().catch(() => "");
+    // An empty body is the old client: approve, disconnect nothing else. A
+    // body that cannot be READ is not an empty one — approving then would
+    // silently drop the person's `alsoDisconnect` choice.
+    let raw: string;
+    try {
+      raw = await c.req.text();
+    } catch {
+      return c.json({ error: "Could not read the request body" }, 400);
+    }
     let json: unknown = {};
     if (raw.trim()) {
       try {
@@ -2538,8 +2594,10 @@ export function registerSetupRoutes(app: HubHono): void {
         alsoDisconnect: parsed.data.alsoDisconnect ?? [],
       });
     } catch (err) {
-      if (err instanceof TRPCError && err.code === "BAD_REQUEST")
-        return c.json({ error: err.message }, 400);
+      // A typed refusal keeps its own status; anything else is a real fault.
+      const status = httpStatusForTrpcError(err);
+      if (err instanceof TRPCError && status !== 500)
+        return c.json({ error: err.message }, status);
       throw err;
     }
     if (outcome === "forbidden")
@@ -2637,6 +2695,8 @@ export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent/pending/:keyId/reject", async (c) => {
     const keyId = requireUuidParam(c, "keyId");
     if (keyId instanceof Response) return keyId;
+    const refused = refuseCrossSiteCookieRequest(c);
+    if (refused) return refused;
     const approverId = await resolveKratosPodUserId(c);
     if (!approverId) return c.json({ error: "Sign in to your pod first" }, 401);
 

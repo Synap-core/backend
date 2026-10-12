@@ -196,7 +196,11 @@ const lookup = (keyIds: string[]) => {
   registerSetupRoutes(app as never);
   return app.request("/setup/agent/pending/lookup", {
     method: "POST",
-    headers: { "content-type": "application/json", cookie: "ory_session=x" },
+    headers: {
+      "content-type": "application/json",
+      cookie: "ory_session=x",
+      origin: "http://localhost:4040",
+    },
     body: JSON.stringify({ keyIds }),
   });
 };

@@ -75,7 +75,10 @@ async function refuseGuestPrincipal(
   return c.json(GUEST_REFUSED_BODY, 403);
 }
 
-function extractBearerToken(authHeader: string | null): string | null {
+/** The bearer token of an `Authorization` header — the ONE parser. */
+export function extractBearerToken(
+  authHeader: string | null | undefined
+): string | null {
   if (!authHeader) return null;
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;

@@ -77,6 +77,14 @@ import {
 // ── Contract constants ──────────────────────────────────────────────────────
 
 /** RFC 8628 `expires_in`: a request lives 10 minutes. */
+
+/**
+ * The revoke reason when a computer re-enrols and its new key replaces the
+ * old one. Read back by the holder's key-state (`isReplacementReason`).
+ */
+export const MACHINE_RECONNECTED_REPLACED =
+  "Computer re-connected — replaced by a new key";
+
 export const DEVICE_REQUEST_TTL_SECONDS = 600;
 /** RFC 8628 `interval`: the slowest a terminal may poll, at first. */
 export const DEVICE_POLL_INTERVAL_SECONDS = 5;
@@ -820,7 +828,7 @@ async function mintForApprovedRequest(
   await revokeApiKeys(db, {
     where: and(eq(apiKeys.userId, machineId), isNull(apiKeys.revokedAt)),
     revokedBy: approverId,
-    reason: "Computer re-connected — replaced by a new key",
+    reason: MACHINE_RECONNECTED_REPLACED,
   });
   const nowMs = Date.now();
   const registration = await createAndVerifyHubInboundKey(
