@@ -59,7 +59,6 @@ export const BROWSER_SETTINGS_SECTIONS = [
   "vault",
   "connectors",
   "integrations",
-  "api-keys",
   "ai-governance",
   "subscription",
   "pod",
