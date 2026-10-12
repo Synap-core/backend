@@ -5,7 +5,11 @@
  * window (a naive rule always says "this week").
  */
 import { describe, expect, it } from "vitest";
-import { LENS_INTENT_SECTION_LABELS, lensIntentHeaderModel, lensIntentDoorText } from "./intent.js";
+import {
+  LENS_INTENT_SECTION_LABELS,
+  lensIntentHeaderModel,
+  lensIntentDoorText,
+} from "./intent.js";
 import { LENS_SCOPE_FACT_KIND, lensKpiFact } from "./header.js";
 import {
   encodeLensScope,
