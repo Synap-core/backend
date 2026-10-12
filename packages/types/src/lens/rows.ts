@@ -19,7 +19,12 @@ import {
   type GroupableSignal,
   type NeedsYouRow,
 } from "../needs-you/index.js";
-import type { UnitStateInput } from "../units/state.js";
+import { resolveUnitState, type UnitStateInput } from "../units/state.js";
+import {
+  pathRowSessionFact,
+  sessionRowInput,
+  type PathRowFacts,
+} from "../units/session.js";
 import {
   normalizeObjectKind,
   resolveActionLabel,
@@ -461,6 +466,51 @@ export function lensRowOfHappening(input: LensHappeningInput): LensRow {
     occurredAt: iso(input.startedAt),
     verb: null,
     door: input.door,
+    count: 1,
+  };
+}
+
+/** A session on a path (a `projects.path` row) — what its lens row reads. */
+export interface LensPathSessionInput extends PathRowFacts {
+  id: string;
+  title: string;
+  /** The row's ONE fact the mark cannot carry (the path's next move). */
+  reason?: string | null;
+  /** When it last moved — the quiet age. */
+  occurredAt?: string | Date | null;
+  /** Its project / track, a small door — hidden by the row's own scope. */
+  source?: LensSource | null;
+}
+
+/**
+ * A session on a project / track path as THE lens row (`AttentionRow`) — the
+ * one session row of the track page, the project sidebar and Relay's path
+ * rows. The mark is THE path-row door (`pathRowSessionFact` →
+ * `sessionRowInput`), so a blocked session reads `blocked` and a draft never
+ * reads "needs you" on any of them. The class follows the mark: working ⇒
+ * Happening, your turn ⇒ Blocking, anything else ⇒ Happened.
+ */
+export function lensRowOfPathSession(input: LensPathSessionInput): LensRow {
+  const state = sessionRowInput(pathRowSessionFact(input));
+  const view = resolveUnitState(state);
+  const cls: AttentionClass =
+    view.state === "working"
+      ? "happening"
+      : view.state === "needs_you" || view.state === "needs_review"
+        ? "blocking"
+        : "happened";
+  return {
+    key: input.id,
+    cls,
+    state,
+    objectKind: "session",
+    title: input.title,
+    reason: input.reason?.trim() || null,
+    repeat: null,
+    source: input.source ?? null,
+    occurredAt: iso(input.occurredAt ?? null),
+    verb: null,
+    door: { kind: "session", id: input.id },
     count: 1,
   };
 }
