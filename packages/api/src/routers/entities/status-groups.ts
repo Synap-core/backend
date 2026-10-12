@@ -282,13 +282,39 @@ function thingsInColumns(params: {
 }) {
   const { subject } = params;
   const isRole = subject.kind === "role";
-  // Correlated, so every reference is QUALIFIED by hand: drizzle renders a
-  // single-table select's columns bare, and a bare "id" inside the subquery
-  // would bind to the EVENT's id (aliased `ev`), not the thing's.
+  // ONE events read for the whole set (review backend F3), never a probe per
+  // row: the last transition of each thing of these profiles, grouped once,
+  // then joined. The candidate ids are the profiles' live things, so the
+  // aggregate stays bounded by the board, not by the event log.
+  const profileIdList = subject.profileIds.length
+    ? drizzleSql.join(
+        subject.profileIds.map((id) => drizzleSql`${id}::uuid`),
+        drizzleSql`, `
+      )
+    : drizzleSql`NULL::uuid`;
+  const candidateIds = isRole
+    ? drizzleSql`SELECT f2.entity_id::text FROM ${entityFacets} f2 WHERE f2.profile_id IN (${profileIdList}) AND f2.deleted_at IS NULL`
+    : drizzleSql`SELECT e2.id::text FROM ${entities} e2 WHERE e2.profile_id IN (${profileIdList}) AND e2.deleted_at IS NULL`;
   const roleMatch = isRole
-    ? drizzleSql`ev.data->>'role' = ${subject.roleSlug}`
-    : drizzleSql.raw(`ev.data->>'role' IS NULL`);
-  const enteredAt = drizzleSql`(SELECT max(ev.timestamp) FROM ${events} ev WHERE ev.subject_type = 'entity' AND ev.subject_id = "entities"."id"::text AND ev.type = ${TRANSITION_EVENT} AND ${roleMatch})`;
+    ? drizzleSql`${events.data}->>'role' = ${subject.roleSlug}`
+    : drizzleSql`${events.data}->>'role' IS NULL`;
+  const lastMove = db
+    .select({
+      subjectId: events.subjectId,
+      enteredAt: drizzleSql`max(${events.timestamp})`.as("last_entered_at"),
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.subjectType, "entity"),
+        eq(events.type, TRANSITION_EVENT),
+        roleMatch,
+        drizzleSql`${events.subjectId} IN (${candidateIds})`
+      )
+    )
+    .groupBy(events.subjectId)
+    .as("last_move");
+  const enteredAt = drizzleSql`${lastMove.enteredAt}`;
 
   const base = isRole
     ? db
@@ -305,6 +331,10 @@ function thingsInColumns(params: {
         })
         .from(entityFacets)
         .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+        .leftJoin(
+          lastMove,
+          drizzleSql`${lastMove.subjectId} = ${entities.id}::text`
+        )
         .where(
           and(
             inArray(entityFacets.profileId, subject.profileIds),
@@ -324,6 +354,10 @@ function thingsInColumns(params: {
           fallbackAt: drizzleSql`${entities.createdAt}`.as("fallback_at"),
         })
         .from(entities)
+        .leftJoin(
+          lastMove,
+          drizzleSql`${lastMove.subjectId} = ${entities.id}::text`
+        )
         .where(
           and(
             inArray(entities.profileId, subject.profileIds),

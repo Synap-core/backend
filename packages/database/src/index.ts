@@ -336,6 +336,7 @@ export {
   assertNotLifecycleDef,
   type ChangeLifecycleOptionsResult,
 } from "./services/lifecycle/lifecycle-def-guard.js";
+export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
 export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,

@@ -86,6 +86,7 @@ import {
   podMembers,
   users,
   profiles,
+  profileProperties,
   profileWorkspaceAccess,
   playbooks,
   skills,
@@ -133,6 +134,7 @@ async function freshDb() {
     podMembers,
     users,
     profiles,
+    profileProperties,
     profileWorkspaceAccess,
     playbooks,
     skills,
@@ -148,6 +150,13 @@ async function freshDb() {
       ('${DEAL}', 'deal', 'Deal', 'kind', 'workspace'),
       ('${CLIENT}', 'client', 'Client', 'role', 'workspace'),
       ('${NOTE}', 'note', 'Note', 'kind', 'workspace')`
+  );
+  // DEAL and CLIENT declare a lifecycle (the link the list's filter reads);
+  // NOTE does not.
+  await client.exec(
+    `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values
+      ('${DEAL}', gen_random_uuid(), true),
+      ('${CLIENT}', gen_random_uuid(), true)`
   );
   const database = drizzle(client, {
     schema: { entities, entityFacets, profiles, workspaces, workspaceMembers },

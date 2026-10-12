@@ -23,6 +23,8 @@ import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
 import {
   db,
+  inArray,
+  declaredLifecycleProfilesStatement,
   ProfileResolutionService,
   type EffectiveLifecycle,
 } from "@synap/database";
@@ -307,7 +309,7 @@ export const lifecycleRouter = router({
       const terminalKeys = lifecycle.options
         .filter((o) => isTerminalLifecycleCategory(o.category))
         .map((o) => o.key);
-      const [groups, allGroups] = await Promise.all([
+      const [groups, allCounts] = await Promise.all([
         groupThingsByStatus({
           subject,
           conditions,
@@ -316,12 +318,12 @@ export const lifecycleRouter = router({
           order: "time_in_column",
           terminal: { statuses: terminalKeys, since },
         }),
-        // `total` is unwindowed: the same set, counts only.
-        groupThingsByStatus({
-          subject,
+        // `total` is unwindowed: the same base rows, counts only — no second
+        // grouping, no time-in-column read (review backend F3).
+        countThingsByProfileAndStatus({
+          kind: subject.kind,
+          profileIds: subject.profileIds,
           conditions,
-          firstN: 0,
-          order: "newest",
         }),
       ]);
 
@@ -364,7 +366,7 @@ export const lifecycleRouter = router({
       const live = columns
         .filter((c) => !isTerminalLifecycleCategory(c.category))
         .reduce((n, c) => n + c.count, 0);
-      const total = allGroups.reduce((n, g) => n + g.count, 0);
+      const total = allCounts.reduce((n, g) => n + g.count, 0);
       // A LIVE enablement (not paused, its automation active) whose scope
       // covers this board's filter — the ONE reader the track page uses too.
       const hasWorker =
@@ -452,6 +454,14 @@ export const lifecycleRouter = router({
         input.workspaceId !== undefined
           ? input.workspaceId
           : (ctx.workspaceId ?? undefined);
+      // Only profiles that declare (or inherit) a lifecycle are pipelines:
+      // count those, never every kind in the pod (review backend F4).
+      const res = (await db.execute(declaredLifecycleProfilesStatement())) as
+        Array<{ profile_id: string }> | { rows: Array<{ profile_id: string }> };
+      // postgres.js returns the rows; the PGlite driver (tests) wraps them.
+      const declared = Array.isArray(res) ? res : res.rows;
+      const declaredIds = declared.map((r) => r.profile_id);
+      if (declaredIds.length === 0) return [];
       const profileRows = await db
         .select({
           id: profiles.id,
@@ -460,7 +470,8 @@ export const lifecycleRouter = router({
           profileKind: profiles.profileKind,
           entityScope: profiles.entityScope,
         })
-        .from(profiles);
+        .from(profiles)
+        .where(inArray(profiles.id, declaredIds));
       // A slug with a role row is a role (the board's rule).
       const roleSlugs = new Set(
         profileRows.filter((r) => r.profileKind === "role").map((r) => r.slug)
@@ -528,17 +539,26 @@ export const lifecycleRouter = router({
         );
       }
 
+      // One resolution per slug that has things, in parallel.
+      const resolved = await Promise.all(
+        [...bySlug.keys()].map(async (slug) => {
+          try {
+            return [
+              slug,
+              await resolveProfileLifecycle(slug, lensWorkspaceId),
+            ] as const;
+          } catch (err) {
+            // Undeclared = not a pipeline (a fact). Anything else is a failure.
+            if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED")
+              return [slug, null] as const;
+            throw err;
+          }
+        })
+      );
       const out: LifecycleSummaryWire[] = [];
-      for (const [slug, entry] of bySlug) {
-        let p: ResolvedProfile;
-        try {
-          p = await resolveProfileLifecycle(slug, lensWorkspaceId);
-        } catch (err) {
-          // Undeclared = not a pipeline (a fact). Anything else is a failure.
-          if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED")
-            continue;
-          throw err;
-        }
+      for (const [slug, p] of resolved) {
+        const entry = bySlug.get(slug);
+        if (!p || !entry) continue;
         const terminal = new Set(
           p.lifecycle.options
             .filter((o) => isTerminalLifecycleCategory(o.category))

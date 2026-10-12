@@ -83,6 +83,24 @@ function projected(table: "entities" | "entity_facets"): SQL {
      WHERE r.deleted_at IS NULL`;
 }
 
+/**
+ * Every profile that declares a lifecycle or inherits one (the same `chain`
+ * the projection walks). `lifecycle.list` counts only these, never every kind.
+ */
+export function declaredLifecycleProfilesStatement(): SQL {
+  return sql`
+    WITH RECURSIVE chain AS (
+      SELECT id AS profile_id, id AS ancestor_id, 0 AS depth FROM profiles
+      UNION ALL
+      SELECT c.profile_id, p.parent_profile_id, c.depth + 1
+        FROM chain c JOIN profiles p ON p.id = c.ancestor_id
+       WHERE p.parent_profile_id IS NOT NULL AND c.depth < 16
+    )
+    SELECT DISTINCT c.profile_id
+      FROM chain c
+      JOIN profile_properties pp ON pp.profile_id = c.ancestor_id AND pp.is_lifecycle`;
+}
+
 /** UPDATE statements for both tables, each returning the rows it changed. */
 export function lifecycleProjectionStatements(
   scope: LifecycleProjectionScope = null
