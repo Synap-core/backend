@@ -67,6 +67,29 @@ export function nearestLifecycleLink<
   return undefined;
 }
 
+/** A lifecycle def's options, read through the one mapper. PURE. */
+function effectiveLifecycleOf(
+  def: PropertyDef,
+  declaredOnProfileId: string
+): EffectiveLifecycle {
+  const stored =
+    readStoredEnumOptions({
+      constraints: def.constraints as Record<string, unknown> | null,
+      uiHints: def.uiHints as Record<string, unknown> | null,
+    }) ?? [];
+  const categorized = stored.filter((o) => isLifecycleCategory(o.category));
+  const { options } = parseLifecycleOptions(categorized);
+  return {
+    propertySlug: def.slug,
+    propertyDefId: def.id,
+    declaredOnProfileId,
+    options: categorized.length ? options : [],
+    unclassified: stored
+      .filter((o) => !isLifecycleCategory(o.category))
+      .map((o) => o.key),
+  };
+}
+
 /**
  * RendererRef — what a profile or workspace stores as its renderer choice
  * for a (slot, profile) pair.
@@ -980,22 +1003,66 @@ export class ProfileResolutionService {
       .where(eq(propertyDefs.id, link.propertyDefId))
       .limit(1);
     if (!def) return null;
-    const stored =
-      readStoredEnumOptions({
-        constraints: def.constraints as Record<string, unknown> | null,
-        uiHints: def.uiHints as Record<string, unknown> | null,
-      }) ?? [];
-    const categorized = stored.filter((o) => isLifecycleCategory(o.category));
-    const { options } = parseLifecycleOptions(categorized);
-    return {
-      propertySlug: def.slug,
-      propertyDefId: def.id,
-      declaredOnProfileId: link.profileId,
-      options: categorized.length ? options : [],
-      unclassified: stored
-        .filter((o) => !isLifecycleCategory(o.category))
-        .map((o) => o.key),
+    return effectiveLifecycleOf(def, link.profileId);
+  }
+
+  /**
+   * {@link getEffectiveLifecycle} for many profiles at once — the same rule
+   * (`nearestLifecycleLink` + `effectiveLifecycleOf`) in three reads instead of
+   * three per profile. A profile with no lifecycle is absent from the map.
+   */
+  async getEffectiveLifecycles(
+    profileIds: ReadonlyArray<string>
+  ): Promise<Map<string, EffectiveLifecycle>> {
+    const out = new Map<string, EffectiveLifecycle>();
+    if (profileIds.length === 0) return out;
+    // Profiles are a bounded set per pod (see getDescendantSlugs).
+    const all = await this._db
+      .select({ id: profiles.id, parentProfileId: profiles.parentProfileId })
+      .from(profiles);
+    const parentOf = new Map(all.map((p) => [p.id, p.parentProfileId]));
+    const hierarchyOf = (id: string): Array<{ id: string }> => {
+      const chain: Array<{ id: string }> = [];
+      const seen = new Set<string>();
+      for (let at: string | null | undefined = id; at && !seen.has(at);) {
+        seen.add(at);
+        chain.unshift({ id: at });
+        at = parentOf.get(at);
+      }
+      return chain;
     };
+    const hierarchies = new Map(profileIds.map((id) => [id, hierarchyOf(id)]));
+    const ids = [...new Set([...hierarchies.values()].flat().map((p) => p.id))];
+    const links = await this._db
+      .select({
+        profileId: profileProperties.profileId,
+        propertyDefId: profileProperties.propertyDefId,
+        isLifecycle: profileProperties.isLifecycle,
+      })
+      .from(profileProperties)
+      .where(
+        and(
+          inArray(profileProperties.profileId, ids),
+          eq(profileProperties.isLifecycle, true)
+        )
+      );
+    if (links.length === 0) return out;
+    const defs = await this._db
+      .select()
+      .from(propertyDefs)
+      .where(
+        inArray(propertyDefs.id, [
+          ...new Set(links.map((l) => l.propertyDefId)),
+        ])
+      );
+    const defById = new Map(defs.map((d) => [d.id, d]));
+    for (const [profileId, hierarchy] of hierarchies) {
+      const link = nearestLifecycleLink(hierarchy, links);
+      const def = link ? defById.get(link.propertyDefId) : undefined;
+      if (link && def)
+        out.set(profileId, effectiveLifecycleOf(def, link.profileId));
+    }
+    return out;
   }
 
   /**

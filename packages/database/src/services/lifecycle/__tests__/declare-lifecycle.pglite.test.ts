@@ -171,6 +171,17 @@ describe("declareLifecycle + getEffectiveLifecycle", () => {
         (await resolver.getEffectiveLifecycle(id))!.propertySlug,
       ]);
     }
+
+    // The batch reader gives the SAME answer per profile, inheritance
+    // included; a profile with no lifecycle is absent.
+    const plain = await profile("plain-note");
+    const batch = await resolver.getEffectiveLifecycles([deal, child, plain]);
+    expect(batch.get(deal)).toEqual(await resolver.getEffectiveLifecycle(deal));
+    expect(batch.get(child)).toEqual(
+      await resolver.getEffectiveLifecycle(child)
+    );
+    expect(batch.get(child)?.options[0]?.key).toBe("draft");
+    expect(batch.has(plain)).toBe(false);
   });
 
   it("refuses options without a category and reports uncategorized ones", async () => {

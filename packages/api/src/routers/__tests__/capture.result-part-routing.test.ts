@@ -35,6 +35,15 @@ const h = vi.hoisted(() => ({
   /** The profiles the person can see, and the workspace each read asked for. */
   profiles: [] as Array<Record<string, unknown>>,
   profileReads: [] as string[],
+  /** Lifecycles by profile id, as `getEffectiveLifecycles` answers. */
+  lifecycles: new Map<
+    string,
+    { propertySlug: string; options: Array<{ key: string }> }
+  >(),
+  /** The request's key grant (`getRequestGrant`); null = a session caller. */
+  grant: null as null | {
+    scopes: Array<{ permissions: string[]; workspaceIds?: string[] | null }>;
+  },
   /** What the two next-step match doors answer (D6); a string = it throws. */
   playbookMatches: [] as unknown[] | string,
   ruleMatches: [] as unknown[] | string,
@@ -102,7 +111,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       async getEffectiveProperties() {
         return [];
       }
+      async getEffectiveLifecycles() {
+        return h.lifecycles;
+      }
     },
+    getRequestGrant: () => h.grant ?? undefined,
     resolveWorkspacePlacement: async () => ({
       candidates: [],
       rung: 6,
@@ -461,6 +474,47 @@ describe("capture.structure — schema linking across every visible space (D1)",
     expect(offered.find((p) => p.slug === "post")?.description).toBe(
       "A piece of content to publish"
     );
+  });
+
+  it("every kind names where its lifecycle starts; a key granted on one space never sees another space's kinds", async () => {
+    const CONTENT = "66666666-6666-4666-8666-666666666666";
+    const CRM = "88888888-8888-4888-8888-888888888888";
+    h.profiles = [
+      { id: "p-note", slug: "note", displayName: "Note" },
+      { id: "p-post", slug: "post", displayName: "Post", workspaceId: CONTENT },
+      { id: "p-deal", slug: "deal", displayName: "Deal", workspaceId: CRM },
+    ];
+    h.lifecycles = new Map([
+      [
+        "p-post",
+        {
+          propertySlug: "status",
+          options: [{ key: "idea" }, { key: "draft" }],
+        },
+      ],
+    ]);
+    h.grant = { scopes: [{ permissions: ["*"], workspaceIds: [CONTENT] }] };
+    try {
+      await callerFor(`user-${randomUUID()}`).structure({
+        text: "idea of content for synap",
+      });
+    } finally {
+      h.grant = null;
+      h.lifecycles = new Map();
+    }
+    const offered = (
+      h.isInputs[0]!.hints as {
+        availableProfiles: Array<{
+          slug: string;
+          firstStatus?: { property: string; value: string };
+        }>;
+      }
+    ).availableProfiles;
+    expect(offered.map((p) => p.slug).sort()).toEqual(["note", "post"]);
+    expect(offered.find((p) => p.slug === "post")?.firstStatus).toEqual({
+      property: "status",
+      value: "idea",
+    });
   });
 });
 

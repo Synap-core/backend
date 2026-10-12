@@ -1022,9 +1022,10 @@ export class IntelligenceHubClient {
         preferredProfiles?: string[];
         existingEntityNames?: string[];
         /**
-         * Kinds the structurer may pick, best-ranked first. `propertyHints`
-         * only on the best-ranked few; `spaces` names the spaces that hold
-         * the kind (an older IS ignores it).
+         * Kinds the structurer may pick, best-ranked first (at most 200 — the
+         * IS refuses more). `propertyHints` only on the best-ranked few;
+         * `spaces` names the spaces that hold the kind; `firstStatus` is
+         * where its lifecycle starts (an older IS ignores both).
          */
         availableProfiles?: Array<{
           slug: string;
@@ -1032,6 +1033,7 @@ export class IntelligenceHubClient {
           description?: string;
           propertyHints?: string;
           spaces?: string[];
+          firstStatus?: { property: string; value: string };
         }>;
         availableWorkspaces?: Array<{
           id: string;

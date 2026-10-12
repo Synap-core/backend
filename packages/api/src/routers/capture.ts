@@ -49,6 +49,8 @@ import { readRestructureRoom } from "../services/intake/capture-room.js";
 import { findCaptureSuggestions } from "../services/intake/capture-suggestions.js";
 import {
   buildLinkedProfiles,
+  grantedWorkspaceIdsOf,
+  kindsWithinFloor,
   type LinkableProfile,
 } from "../services/intake/capture-schema-linking.js";
 import {
@@ -93,6 +95,7 @@ import {
   eq,
   and,
   isNull,
+  isNotNull,
   inArray,
   desc,
   getDb,
@@ -172,6 +175,7 @@ import {
   eventRepository,
   linkEntityToProject,
   EntityBodyService,
+  getRequestGrant,
 } from "@synap/database";
 import {
   materializeCompositeGraph,
@@ -1439,8 +1443,37 @@ const captureBaseRouter = router({
       // Never surface non-domain homes as routing candidates — operational /
       // agent types, surfaceClass admin|settings, or systemSlug pod-admin
       // (legacy personal-typed admin rows). Archived already excluded above.
+      // A key granted on some spaces routes only into those; kinds of an
+      // archived space are never offered (its space is not a destination).
+      const grantedWorkspaceIds = grantedWorkspaceIdsOf(getRequestGrant());
+      const kindSpaceIds = [
+        ...new Set(
+          accessibleProfiles.flatMap((p) =>
+            p.workspaceId ? [p.workspaceId] : []
+          )
+        ),
+      ];
+      const archivedKindSpaces =
+        kindSpaceIds.length > 0
+          ? await database
+              .select({ id: workspaces.id })
+              .from(workspaces)
+              .where(
+                and(
+                  inArray(workspaces.id, kindSpaceIds),
+                  isNotNull(workspaces.archivedAt)
+                )
+              )
+          : [];
+      const linkableProfiles = kindsWithinFloor(accessibleProfiles, {
+        archivedWorkspaceIds: new Set(archivedKindSpaces.map((w) => w.id)),
+        grantedWorkspaceIds,
+      });
       const availableWorkspaces = userWorkspaceRows
         .filter((w) => isDomainHomeWorkspace(w))
+        .filter(
+          (w) => grantedWorkspaceIds === null || grantedWorkspaceIds.has(w.id)
+        )
         .map((w) => ({
           id: w.id,
           name: w.name,
@@ -1448,7 +1481,7 @@ const captureBaseRouter = router({
         }));
 
       const availableProfiles = await buildLinkedProfiles({
-        profiles: accessibleProfiles,
+        profiles: linkableProfiles,
         note: inputText,
         workspaceId: workspaceId ?? null,
         workspaceNames: new Map(userWorkspaceRows.map((w) => [w.id, w.name])),
@@ -1460,6 +1493,7 @@ const captureBaseRouter = router({
               hintWorkspaceId
             )
           )[0]?.propertyHints,
+        lifecyclesFor: (ids) => profileService.getEffectiveLifecycles(ids),
       });
 
       // 2b. Fetch user's PROJECTS (cross-cutting lenses) for routing hints.

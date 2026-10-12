@@ -9,6 +9,10 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   buildLinkedProfiles,
+  grantedWorkspaceIdsOf,
+  kindsWithinFloor,
+  LINKED_KINDS_DESCRIBED,
+  LINKED_KINDS_MAX,
   LINKED_KINDS_WITH_HINTS,
   rankKindsForNote,
   type LinkableProfile,
@@ -131,5 +135,90 @@ describe("buildLinkedProfiles", () => {
     });
     expect(only!.description).not.toContain("\n");
     expect(only!.description!.length).toBeLessThanOrEqual(160);
+  });
+
+  it("bounds the list: descriptions for the top kinds, names past them, nothing past the cap — and every kind keeps its first status", async () => {
+    const many = Array.from({ length: LINKED_KINDS_MAX + 10 }, (_, i) =>
+      kind(`kind${String(i).padStart(3, "0")}`, "Something", CONTENT)
+    );
+    const last = many[LINKED_KINDS_MAX - 1]!;
+    const lifecyclesFor = vi.fn(
+      async (ids: string[]) =>
+        new Map(
+          ids
+            .filter((id) => id === last.id)
+            .map((id) => [
+              id,
+              {
+                propertySlug: "stage",
+                options: [{ key: "idea" }, { key: "live" }],
+              },
+            ])
+        )
+    );
+    const linked = await buildLinkedProfiles({
+      profiles: many,
+      propertyHintsFor: hintsFor,
+      note: "unrelated words",
+      workspaceNames: NAMES,
+      lifecyclesFor,
+    });
+    expect(linked).toHaveLength(LINKED_KINDS_MAX);
+    expect(linked[LINKED_KINDS_DESCRIBED - 1]).toMatchObject({
+      description: "Something",
+      spaces: ["Content"],
+    });
+    expect(linked[LINKED_KINDS_DESCRIBED]).toEqual({
+      slug: many[LINKED_KINDS_DESCRIBED]!.slug,
+      displayName: many[LINKED_KINDS_DESCRIBED]!.displayName,
+    });
+    expect(linked[LINKED_KINDS_MAX - 1]).toEqual({
+      slug: last.slug,
+      displayName: last.displayName,
+      firstStatus: { property: "stage", value: "idea" },
+    });
+    expect(lifecyclesFor.mock.calls[0]![0]).toHaveLength(LINKED_KINDS_MAX);
+  });
+});
+
+describe("the kind floor — live spaces, inside the request's grant", () => {
+  const ARCHIVED = "ws-archived";
+  const kinds = [
+    kind("note", "x"),
+    kind("task", "x", BUILDER),
+    kind("post", "x", CONTENT),
+    kind("old", "x", ARCHIVED),
+  ];
+
+  it("drops an archived space's kinds; pod-wide kinds always pass", () => {
+    expect(
+      kindsWithinFloor(kinds, {
+        archivedWorkspaceIds: new Set([ARCHIVED]),
+        grantedWorkspaceIds: null,
+      }).map((k) => k.slug)
+    ).toEqual(["note", "task", "post"]);
+  });
+
+  it("a grant on one space keeps that space's kinds only", () => {
+    expect(
+      kindsWithinFloor(kinds, {
+        archivedWorkspaceIds: new Set(),
+        grantedWorkspaceIds: new Set([CONTENT]),
+      }).map((k) => k.slug)
+    ).toEqual(["note", "post"]);
+  });
+
+  it("a grant narrows only when every scope names its spaces", () => {
+    expect(grantedWorkspaceIdsOf(undefined)).toBeNull();
+    expect(
+      grantedWorkspaceIdsOf({
+        scopes: [{ workspaceIds: [CONTENT] }, { workspaceIds: null }],
+      })
+    ).toBeNull();
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [{ workspaceIds: [CONTENT] }, { workspaceIds: [BUILDER] }],
+      })!,
+    ]).toEqual([CONTENT, BUILDER]);
   });
 });

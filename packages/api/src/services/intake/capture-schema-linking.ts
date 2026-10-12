@@ -32,6 +32,10 @@ interface AccessibleProfileLike {
 
 /** Kinds that carry their full property hints. */
 export const LINKED_KINDS_WITH_HINTS = 12;
+/** Kinds that carry their description and spaces; past this, names only. */
+export const LINKED_KINDS_DESCRIBED = 60;
+/** Kinds offered at all (the IS refuses more: `AVAILABLE_PROFILES_MAX`). */
+export const LINKED_KINDS_MAX = 200;
 /** A kind's description, as the structurer reads it: one line. */
 export const KIND_DESCRIPTION_MAX = 160;
 /** Space names named per kind. */
@@ -52,6 +56,55 @@ export interface LinkedProfile {
   description?: string;
   propertyHints?: string;
   spaces?: string[];
+  /** Where the kind's lifecycle starts — an idea for it is filed there (D3). */
+  firstStatus?: { property: string; value: string };
+}
+
+/** The lifecycle fields schema linking reads (`getEffectiveLifecycles`). */
+export interface LinkableLifecycle {
+  propertySlug: string;
+  options: ReadonlyArray<{ key: string }>;
+}
+
+/**
+ * The spaces a request may route into, from its key grant: `null` = not
+ * narrowed (no grant, or a scope without a space list); otherwise the union of
+ * the scopes' spaces — a key granted on Content and CRM sees exactly those.
+ */
+export function grantedWorkspaceIdsOf(
+  grant:
+    | { scopes: ReadonlyArray<{ workspaceIds?: readonly string[] | null }> }
+    | null
+    | undefined
+): ReadonlySet<string> | null {
+  if (!grant) return null;
+  const out = new Set<string>();
+  for (const scope of grant.scopes) {
+    if (!scope.workspaceIds) return null;
+    for (const id of scope.workspaceIds) out.add(id);
+  }
+  return out;
+}
+
+/**
+ * The kinds a capture may offer: a space kind only while its space is live
+ * (not archived) and inside the request's grant. Pod-wide kinds (no space)
+ * always pass. PURE.
+ */
+export function kindsWithinFloor<P extends { workspaceId?: string | null }>(
+  profiles: ReadonlyArray<P>,
+  floor: {
+    archivedWorkspaceIds: ReadonlySet<string>;
+    grantedWorkspaceIds: ReadonlySet<string> | null;
+  }
+): P[] {
+  return profiles.filter(
+    (p) =>
+      !p.workspaceId ||
+      (!floor.archivedWorkspaceIds.has(p.workspaceId) &&
+        (floor.grantedWorkspaceIds === null ||
+          floor.grantedWorkspaceIds.has(p.workspaceId)))
+  );
 }
 
 function oneLine(text: string | undefined): string | undefined {
@@ -108,8 +161,11 @@ export function rankKindsForNote(
 
 /**
  * The kinds a capture offers the structurer: every visible kind (deduped by
- * slug, best-ranked first), descriptions for all, property hints for the top
- * {@link LINKED_KINDS_WITH_HINTS}, and the spaces that hold each.
+ * slug, best-ranked first, at most {@link LINKED_KINDS_MAX}), property hints
+ * for the top {@link LINKED_KINDS_WITH_HINTS}, description + spaces for the top
+ * {@link LINKED_KINDS_DESCRIBED}, names only past that — and, for EVERY kind,
+ * the first status of its lifecycle, so a low-ranked kind can still take an
+ * idea at its first status.
  */
 export async function buildLinkedProfiles(args: {
   /** Every profile the person can see, in every space. */
@@ -123,6 +179,10 @@ export async function buildLinkedProfiles(args: {
   /** The space the capture started in — a ranking nudge, not a filter. */
   workspaceId?: string | null;
   workspaceNames: ReadonlyMap<string, string>;
+  /** Lifecycles by profile id (`getEffectiveLifecycles`); absent = none sent. */
+  lifecyclesFor?: (
+    profileIds: string[]
+  ) => Promise<ReadonlyMap<string, LinkableLifecycle>>;
 }): Promise<LinkedProfile[]> {
   const creatable = args.profiles.filter(
     (p) =>
@@ -142,25 +202,37 @@ export async function buildLinkedProfiles(args: {
     if (name && !entry.spaces.includes(name)) entry.spaces.push(name);
     bySlug.set(row.slug, entry);
   }
-  const entries = [...bySlug.values()];
+  const entries = [...bySlug.values()].slice(0, LINKED_KINDS_MAX);
 
   const top = entries.slice(0, LINKED_KINDS_WITH_HINTS);
-  const withHints = await Promise.all(
-    top.map(({ row }) =>
-      args.propertyHintsFor(row, row.workspaceId ?? args.workspaceId ?? null)
-    )
-  );
+  const ids = entries.flatMap(({ row }) => (row.id ? [row.id] : []));
+  const [withHints, lifecycles] = await Promise.all([
+    Promise.all(
+      top.map(({ row }) =>
+        args.propertyHintsFor(row, row.workspaceId ?? args.workspaceId ?? null)
+      )
+    ),
+    args.lifecyclesFor && ids.length > 0
+      ? args.lifecyclesFor(ids)
+      : Promise.resolve(new Map<string, LinkableLifecycle>()),
+  ]);
 
   return entries.map(({ row, spaces }, i) => {
-    const description = oneLine(descriptionOf(row));
+    const described = i < LINKED_KINDS_DESCRIBED;
+    const description = described ? oneLine(descriptionOf(row)) : undefined;
     const propertyHints = i < top.length ? withHints[i] : undefined;
+    const lifecycle = row.id ? lifecycles.get(row.id) : undefined;
+    const first = lifecycle?.options[0]?.key;
     return {
       slug: row.slug,
       displayName: row.displayName || row.slug,
       ...(description ? { description } : {}),
       ...(propertyHints ? { propertyHints } : {}),
-      ...(spaces.length > 0
+      ...(described && spaces.length > 0
         ? { spaces: spaces.slice(0, KIND_SPACES_MAX) }
+        : {}),
+      ...(lifecycle && first
+        ? { firstStatus: { property: lifecycle.propertySlug, value: first } }
         : {}),
     };
   });
