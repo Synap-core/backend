@@ -150,9 +150,14 @@ describe("trust ladder reach ↔ the engine", () => {
 
   it("rule/below codes flip to execute under an `auto` rule; floor codes do not", () => {
     for (const [code, input] of Object.entries(FIXTURES)) {
+      // The rule the ladder OFFERS (`nextRungRuleDraft`) is always an EXACT
+      // action rule — it names the write — so that is the rule modelled here.
+      // (A broad rule naming nothing does NOT reach LIFECYCLE_TERMINAL —
+      // lifecycle-move.test.ts.)
       const withRule = decideAgentPolicy({
         ...input,
         governanceRuleVerdict: "auto",
+        governanceRuleNamesWrite: true,
       });
       const reach = (GOVERNANCE_REASON_RULE_REACH as Record<string, string>)[
         code

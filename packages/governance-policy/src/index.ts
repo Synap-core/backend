@@ -67,7 +67,10 @@
  *   2.8 governance_rules store    → additive: auto execute / propose (fires
  *                                    ONLY when the caller resolved a matching
  *                                    rule; undefined = no-op, falls through
- *                                    byte-identical — see below)
+ *                                    byte-identical — see below). An `auto`
+ *                                    rule on a move INTO done/lost applies
+ *                                    only if it names the write; else 2.85
+ *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
  *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
  *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
  *   5. writesRequireProposal      → propose on non-pure-read writes
@@ -1217,8 +1220,13 @@ export interface AgentPolicyInput {
    * status, `from` null), classified from the declared option it moves INTO:
    *  - `humanOnly`    → always propose, ABOVE the rules store (rung 2.075):
    *                     no rule can widen a person-only option.
-   *  - `intoTerminal` → propose BY DEFAULT (rung 2.85, BELOW the rules store,
-   *                     so an operator rule on `entity.transition` may widen it).
+   *  - `intoTerminal` → propose BY DEFAULT (rung 2.85, BELOW the rules store).
+   *                     ONLY an `auto` rule that NAMES this write
+   *                     (`governanceRuleNamesWrite`, e.g. an exact
+   *                     `entity.transition` rule) may widen it — a class
+   *                     pattern (`@reversible`), a glob (`entity.*`), `*` or
+   *                     a profile-wide rule never does: "nothing publishes
+   *                     itself" (W14; proposal 66f24f68 was the hole).
    *  - otherwise      → execute (rung 2.86): a move between open/active/paused
    *                     options is routine once the agent is attributed — the
    *                     origin/ceiling floors (2.55/2.56) still apply above.
@@ -1263,6 +1271,16 @@ export interface AgentPolicyInput {
    * that auto-approved it.
    */
   governanceRuleId?: string;
+  /**
+   * Whether the rule behind `governanceRuleVerdict` NAMES this exact write —
+   * an exact action pattern (`entity.transition`, optionally narrowed to a
+   * profile) or an exact capability — rather than covering it through a class
+   * pattern (`@reversible`), a glob, `*` or a profile-wide target. Resolved by
+   * the caller (`resolveGovernanceRule`'s `namesWrite`). Read ONLY to let an
+   * `auto` rule widen a move into a terminal lifecycle option (2.85): absent/
+   * false → such a move proposes whatever broader rule matched (fail-closed).
+   */
+  governanceRuleNamesWrite?: boolean;
   /**
    * Server-resolved TRUST of the acting channel's ORIGIN — the #4
    * instruction-provenance signal, consumed at rung 2.55. `"untrusted"` for an
@@ -1713,7 +1731,17 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // deny (the store's verdict enum is auto|propose only, never deny). When no
   // rule matched, `governanceRuleVerdict` is undefined and this rung no-ops,
   // falling through byte-identical to every rung below.
-  if (input.governanceRuleVerdict) {
+  //
+  // A move INTO a terminal lifecycle option (done/lost) is the one write a
+  // broad `auto` rule may NOT widen: only a rule that names the write itself
+  // (`governanceRuleNamesWrite`) does. Otherwise the rule is skipped and 2.85
+  // proposes — the pod's `@reversible` default classes `entity.transition` as
+  // reversible, and a class row must not publish a post on its own.
+  const broadAutoOnTerminalMove =
+    input.governanceRuleVerdict === "auto" &&
+    input.lifecycleMove?.intoTerminal === true &&
+    input.governanceRuleNamesWrite !== true;
+  if (input.governanceRuleVerdict && !broadAutoOnTerminalMove) {
     return input.governanceRuleVerdict === "auto"
       ? input.governanceRuleId
         ? { verdict: "execute", governanceRuleId: input.governanceRuleId }
@@ -1726,7 +1754,8 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   }
 
   // 2.85 / 2.86 LIFECYCLE MOVE DEFAULT (W14). Below the rules store so an
-  // operator rule can widen (or tighten) it; above ownership and the
+  // operator rule can tighten it, and widen a terminal move only when the rule
+  // names the write (see 2.8 above); above ownership and the
   // auto-approve lists so neither silently decides a status move.
   if (input.lifecycleMove) {
     if (input.lifecycleMove.intoTerminal) {

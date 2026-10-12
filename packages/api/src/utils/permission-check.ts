@@ -1149,6 +1149,8 @@ interface AnonymousPolicyFacts {
   governanceRuleVerdict: "auto" | "propose" | undefined;
   /** rung 2.8 attribution — the rule behind the verdict (echoed on execute, never decides). */
   governanceRuleId: string | undefined;
+  /** rung 2.8/2.85 — the rule names this exact write (may widen a terminal lifecycle move). */
+  governanceRuleNamesWrite: boolean | undefined;
   /** rung 2.55 — server-resolved trust of the acting channel's ORIGIN. */
   originTrust: "trusted" | "untrusted" | undefined;
   /** lanes 4/8 — the subject is a human-owned entity's body (text tiers b). */
@@ -1246,6 +1248,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
     governanceRuleId: facts.governanceRuleId,
+    governanceRuleNamesWrite: facts.governanceRuleNamesWrite,
     originTrust: facts.originTrust,
     bodyOfHumanOwnedEntity: facts.bodyOfHumanOwnedEntity,
 
@@ -2265,6 +2268,7 @@ async function evaluatePermission(
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
           governanceRuleId: ruleMatch?.ruleId,
+          governanceRuleNamesWrite: ruleMatch?.namesWrite,
           originTrust,
           bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
         })

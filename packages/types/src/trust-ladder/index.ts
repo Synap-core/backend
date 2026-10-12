@@ -197,7 +197,9 @@ export const GOVERNANCE_REASON_RULE_REACH = {
   AGENT_OWNED_DESTRUCTIVE: "floor",
   WRITES_REQUIRE_PROPOSAL: "below",
   // Work model W14: a person-only lifecycle option is decided ABOVE 2.8; an
-  // agent closing a thing (done/lost) proposes BELOW it, so a rule decides first.
+  // agent closing a thing (done/lost) proposes BELOW it, so a rule decides first
+  // — but only a rule that NAMES the write (an exact action rule, which is what
+  // the ladder offers); a class/glob/profile-wide `auto` rule does not reach it.
   HUMAN_ONLY_STATUS: "floor",
   LIFECYCLE_TERMINAL: "below",
   CHANNEL_PROPOSE: "ambiguous",

@@ -299,3 +299,77 @@ describe("the governance preview agrees with the real write", () => {
     expect(autos).toBeGreaterThan(10);
   });
 });
+
+/**
+ * Dogfood 2026-10-12 (proposal 66f24f68): an agent moved a post Briefed →
+ * Published and the pod's `@reversible` class row auto-approved it, because
+ * `entity.transition` is classed reversible. "Nothing publishes itself": a move
+ * INTO done/lost is widened only by a rule that NAMES the write.
+ */
+describe("a move into done/lost under the pod default", () => {
+  async function decideMove(intoTerminal: boolean) {
+    return resolveAgentGovernanceDecision({
+      db,
+      agentUserId: STRICT_AGENT,
+      workspaceId: null,
+      subjectType: "entity",
+      action: "transition",
+      lifecycleMove: { intoTerminal, humanOnly: false },
+      preferAgentMetadataAutoApproveFor: true,
+    });
+  }
+
+  it("@reversible does not publish: a terminal move proposes LIFECYCLE_TERMINAL", async () => {
+    await pg.exec(MIGRATION);
+    // Non-vacuity: the class row really matches this write.
+    expect(
+      await resolveGovernanceRule({
+        db,
+        agentUserId: STRICT_AGENT,
+        subjectType: "entity",
+        action: "transition",
+      })
+    ).toMatchObject({
+      verdict: "auto",
+      matchedPattern: "@reversible",
+      namesWrite: false,
+    });
+    expect(await decideMove(true)).toMatchObject({
+      decision: "propose",
+      reasonCode: "LIFECYCLE_TERMINAL",
+    });
+  });
+
+  it("@reversible still widens a NON-terminal move", async () => {
+    await pg.exec(MIGRATION);
+    const { ruleId } = await readReversibleDefault(db);
+    expect(await decideMove(false)).toMatchObject({
+      decision: "execute",
+      governanceRuleId: ruleId,
+    });
+  });
+
+  it("an explicit entity.transition auto rule widens the terminal move", async () => {
+    await pg.exec(MIGRATION);
+    const { rows } = await pg.query<{ id: string }>(`
+      INSERT INTO governance_rules (principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+      VALUES ('agent', '${STRICT_AGENT}', 'pod', 'action', 'entity.transition', 'auto', 'user:${HUMAN}')
+      RETURNING id;
+    `);
+    expect(await decideMove(true)).toMatchObject({
+      decision: "execute",
+      governanceRuleId: rows[0]!.id,
+    });
+  });
+
+  it("a glob (entity.*) auto rule does not widen it either", async () => {
+    await pg.exec(`
+      INSERT INTO governance_rules (principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+      VALUES ('agent', '${STRICT_AGENT}', 'pod', 'action', 'entity.*', 'auto', 'user:${HUMAN}');
+    `);
+    expect(await decideMove(true)).toMatchObject({
+      decision: "propose",
+      reasonCode: "LIFECYCLE_TERMINAL",
+    });
+  });
+});

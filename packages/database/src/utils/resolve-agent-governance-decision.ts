@@ -478,6 +478,14 @@ export interface GovernanceRuleMatch {
   verdict: "auto" | "propose";
   /** The matched target — an action pattern, or `profile:<slug>` for a profile-kind rule. */
   matchedPattern: string;
+  /**
+   * The winning row NAMES this write — an exact action (optionally narrowed to
+   * a profile) or an exact capability (target score 3) — rather than covering
+   * it by a class (`@reversible`), glob, `*` or profile-wide target. Fed to the
+   * engine as `governanceRuleNamesWrite`: only such a rule may widen a move
+   * into a terminal lifecycle option (rung 2.8 / 2.85).
+   */
+  namesWrite: boolean;
 }
 
 /**
@@ -554,6 +562,7 @@ export async function resolveGovernanceRule(
         createdAt: Date;
         verdict: "auto" | "propose";
         matchedPattern: string;
+        namesWrite: boolean;
       }
     | undefined;
   for (const rule of candidates) {
@@ -595,6 +604,7 @@ export async function resolveGovernanceRule(
           rule.targetKind === "profile"
             ? `profile:${rule.targetProfile}`
             : rule.targetPattern,
+        namesWrite: targetScore === 3,
       };
     }
   }
@@ -603,6 +613,7 @@ export async function resolveGovernanceRule(
         ruleId: best.id,
         verdict: best.verdict,
         matchedPattern: best.matchedPattern,
+        namesWrite: best.namesWrite,
       }
     : undefined;
 }
@@ -1501,6 +1512,7 @@ async function resolveForPrincipal(input: ResolveAgentGovernanceInput): Promise<
     podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,
+    governanceRuleNamesWrite: ruleMatch?.namesWrite,
     originTrust,
     bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
   };

@@ -355,7 +355,11 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
       includeAgentPrincipal: false,
     });
 
-    expect(match).toEqual({ verdict: "auto", matchedPattern: "entity.create" });
+    expect(match).toEqual({
+      verdict: "auto",
+      matchedPattern: "entity.create",
+      namesWrite: true,
+    });
   });
 
   it("resolveGovernanceRule: no agentUserId (legacy AI-source path) only matches any-principal rules", async () => {
@@ -380,7 +384,11 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
       includeAgentPrincipal: false,
     });
 
-    expect(match).toEqual({ verdict: "auto", matchedPattern: "context.link" });
+    expect(match).toEqual({
+      verdict: "auto",
+      matchedPattern: "context.link",
+      namesWrite: true,
+    });
   });
 
   it("resolveGovernanceRule: undefined when no candidate matches the event key", async () => {
@@ -436,6 +444,7 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
     expect(match).toEqual({
       verdict: "auto",
       matchedPattern: "unipile_list_accounts",
+      namesWrite: true,
     });
   });
 
@@ -462,7 +471,11 @@ describe("resolveAgentGovernanceDecision — one-store (governance_rules)", () =
       capabilityVerbName: "unipile_list_accounts",
     });
 
-    expect(match).toEqual({ verdict: "auto", matchedPattern: "skill-id-abc" });
+    expect(match).toEqual({
+      verdict: "auto",
+      matchedPattern: "skill-id-abc",
+      namesWrite: true,
+    });
   });
 
   it("resolveGovernanceRule: capability rule matching neither id nor verb name → undefined", async () => {
