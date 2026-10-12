@@ -1119,7 +1119,7 @@ export class IntelligenceHubClient {
       description?: string;
       properties?: Record<string, unknown>;
       confidence: number;
-      /** How sure the structurer is this record is wanted (two-pass IS). */
+      /** How sure the structurer is this record is wanted, from its confidence. */
       label?: "certain" | "likely" | "unsure";
       /**
        * Kind + Facets: role-profiles the IS proposes attaching to this entity

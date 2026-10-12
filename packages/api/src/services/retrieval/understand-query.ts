@@ -74,19 +74,7 @@ export interface QueryUnderstanding {
    * clients consume to split a query into {type, freeText}.
    */
   cleanedQuery: string;
-  /**
-   * What a CAPTURE wants done with the words (decision 47d56eb0: intent
-   * routing lives here, not in a second classifier). `null` = no cue — the
-   * caller keeps its own default (a capture files), never a guessed intent.
-   */
-  captureIntent: CaptureIntent | null;
 }
-
-/**
- * The three things a note can ask for: FILE it as records, START work on it
- * (a session / a playbook), or BRAINSTORM it before anything is decided.
- */
-export type CaptureIntent = "file" | "start" | "brainstorm";
 
 /**
  * Interrogative / lexical cues → a canonical "kind". Each kind is matched against
@@ -204,40 +192,6 @@ const ROLE_KEYWORDS = [
 // (or backwards) for "what's overdue".
 const TEMPORAL_RE =
   /\b(recent|recently|latest|newest|changed|last (week|month|year|night|quarter)|yesterday|today|tonight|this (week|month|quarter|year)|since)\b/;
-
-/**
- * Capture-intent cues, checked in this order (the first that matches wins):
- * an explicit ask to think something through outranks an ask to start work on
- * it, which outranks an ask to keep it. Phrases only, anchored on word
- * boundaries — a single common word ("run", "plan", "note") is content as
- * often as it is a command, so it is never a cue on its own.
- */
-const CAPTURE_INTENT_RULES: ReadonlyArray<{
-  intent: CaptureIntent;
-  re: RegExp;
-}> = [
-  {
-    intent: "brainstorm",
-    re: /\b(brainstorm\w*|help me think|think (it |this |that )?through|let'?s think|explore (some )?(ideas|options)|ideas? for|what if|bounce (some )?ideas)\b/,
-  },
-  {
-    intent: "start",
-    re: /\b(let'?s (start|begin|kick off|work on|do)|start (a |the |working on |on )|kick ?off|begin (a |the |working on )|run (the |a )?(playbook|process|session)|open a session|get started on)\b/,
-  },
-  {
-    intent: "file",
-    re: /\b(remember (that|this|to)|note (that|this|down)|save (this|that|it)|file (this|that|it|under)|log (this|that|it)|add (this |that |it )?to (my |the )|keep (this|that) in mind|for the record)\b/,
-  },
-];
-
-/** The capture intent a text's own words ask for, or null (no cue). PURE. */
-export function detectCaptureIntent(text: string): CaptureIntent | null {
-  const q = text.toLowerCase().replace(/[’']/g, "'");
-  for (const rule of CAPTURE_INTENT_RULES) {
-    if (rule.re.test(q)) return rule.intent;
-  }
-  return null;
-}
 
 export function tokenize(s: string): string[] {
   return s
@@ -447,6 +401,5 @@ export function understandQuery(
     temporal: TEMPORAL_RE.test(q),
     confidence: Math.min(1, topScore / CONFIDENCE_SCALE),
     cleanedQuery,
-    captureIntent: detectCaptureIntent(query),
   };
 }

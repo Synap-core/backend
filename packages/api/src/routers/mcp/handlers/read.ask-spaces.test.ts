@@ -47,7 +47,6 @@ vi.mock("../../../services/retrieval/retrieve.js", () => ({
       temporal: false,
       confidence: 1,
       cleanedQuery: "",
-      captureIntent: null,
     },
     source: "typesense",
     vectorDown: false,

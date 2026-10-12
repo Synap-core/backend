@@ -241,7 +241,7 @@ const ResultPropertyValueSchema = z.unknown().refine(
   { message: "property value out of bounds" }
 );
 
-/** A row's decision label (two-pass structure, D2). */
+/** A row's decision label (D2), from the structurer's confidence. */
 export const CAPTURE_ROW_LABELS = ["certain", "likely", "unsure"] as const;
 export type CaptureRowLabel = (typeof CAPTURE_ROW_LABELS)[number];
 
