@@ -122,13 +122,17 @@ export async function stampOpenWorkerTargets(input: {
 
 /**
  * In-flight sessions still working `entityId` as a worker target (no result
- * yet). The process-sync side: a move of the thing settles these targets.
+ * yet). The process-sync side: a move of the thing settles these targets —
+ * a move of the lifecycle the worker follows, `workerProfileSlug` (the kind
+ * or role stamped on the session's `metadata.worker` by the api runner; null
+ * on a session started before the stamp, which any move settles).
  */
 export async function listOpenWorkerTargetSessions(entityId: string): Promise<
   Array<{
     sessionId: string;
     channelId: string | null;
     userId: string;
+    workerProfileSlug: string | null;
   }>
 > {
   const rows = await db
@@ -136,6 +140,9 @@ export async function listOpenWorkerTargetSessions(entityId: string): Promise<
       sessionId: focusSessions.id,
       channelId: focusSessions.channelId,
       userId: focusSessions.userId,
+      workerProfileSlug: sql<
+        string | null
+      >`${focusSessions.metadata}->'worker'->>'profileSlug'`,
     })
     .from(links)
     .innerJoin(focusSessions, eq(sql`${focusSessions.id}::text`, links.fromId))

@@ -931,8 +931,16 @@ async function executeSingleRun(
       chainContext: input.chainContext,
       forceProposeWrites,
     }),
+    // `profileSlug` = the lifecycle the worker follows: process-sync settles
+    // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker
-      ? { worker: { key: input.worker.key, size: input.worker.size } }
+      ? {
+          worker: {
+            key: input.worker.key,
+            size: input.worker.size,
+            profileSlug: input.worker.profileSlug,
+          },
+        }
       : {}),
   };
 

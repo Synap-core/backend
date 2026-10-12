@@ -224,10 +224,18 @@ async function settleWorkerTargets(
   const transitionId =
     typeof data.transitionId === "string" ? data.transitionId : null;
   const to = typeof data.to === "string" ? data.to : null;
+  // The kind or role whose lifecycle moved. A worker follows ONE lifecycle:
+  // the same thing's other lifecycle (its lead facet, its kind status) moving
+  // says nothing about the status the worker works (backend F10).
+  const moved =
+    typeof data.lifecycleProfile === "string" ? data.lifecycleProfile : null;
 
   const sessions = await listOpenWorkerTargetSessions(entityId);
   const out: ProcessSyncOutcome[] = [];
   for (const s of sessions) {
+    if (s.workerProfileSlug && moved && s.workerProfileSlug !== moved) {
+      continue;
+    }
     try {
       const own = movedBy === s.sessionId;
       const result = own ? "done" : "skipped";

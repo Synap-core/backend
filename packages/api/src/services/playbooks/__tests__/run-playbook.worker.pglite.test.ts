@@ -305,7 +305,8 @@ describe("per_moment — ONE session over the things in the status", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.subject_entity_id).toBeNull();
     expect(rows[0]!.metadata).toMatchObject({
-      worker: { key: "count:review", size: "per_moment" },
+      // profileSlug: the lifecycle process-sync settles targets on (F10).
+      worker: { key: "count:review", size: "per_moment", profileSlug: "deal" },
     });
     const edges = await targetEdges();
     expect(edges.map((e) => e.to_id).sort()).toEqual([a, b].sort());

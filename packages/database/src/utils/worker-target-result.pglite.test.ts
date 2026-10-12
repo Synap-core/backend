@@ -71,7 +71,7 @@ const meta = async (sessionId: string, entityId: string) =>
 
 beforeAll(async () => {
   await h.client!.exec(`
-    create table focus_sessions (id uuid primary key, user_id text, status text, channel_id uuid);
+    create table focus_sessions (id uuid primary key, user_id text, status text, channel_id uuid, metadata jsonb default '{}'::jsonb);
     create table links (
       id uuid primary key, workspace_id uuid, from_type text, from_id text,
       to_type text, to_id text, link_type text,
@@ -204,5 +204,21 @@ describe("listOpenWorkerTargetSessions", () => {
 
     const rows = await listOpenWorkerTargetSessions(x);
     expect(rows.map((r) => r.sessionId)).toEqual([open]);
+  });
+
+  it("names the lifecycle the worker follows, off the session's worker stamp", async () => {
+    const x = randomUUID();
+    const stamped = await session("active");
+    const legacy = await session("active");
+    await q(`update focus_sessions set metadata = $2::jsonb where id = $1`, [
+      stamped,
+      JSON.stringify({ worker: { key: "k", profileSlug: "client" } }),
+    ]);
+    await edge(stamped, x);
+    await edge(legacy, x);
+    const rows = await listOpenWorkerTargetSessions(x);
+    expect(
+      Object.fromEntries(rows.map((r) => [r.sessionId, r.workerProfileSlug]))
+    ).toEqual({ [stamped]: "client", [legacy]: null });
   });
 });

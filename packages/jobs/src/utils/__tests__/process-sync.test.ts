@@ -23,7 +23,11 @@ const h = vi.hoisted(() => ({
   userTypes: {} as Record<string, string>,
   lastUserLookup: null as string | null,
   /** In-flight sessions holding the moved thing as an open worker target. */
-  targets: [] as Array<{ sessionId: string; channelId: string | null }>,
+  targets: [] as Array<{
+    sessionId: string;
+    channelId: string | null;
+    workerProfileSlug?: string | null;
+  }>,
   /** The result writer: first verdict wins, keyed session:entity. */
   stamps: new Map<string, Record<string, unknown>>(),
   posts: [] as Array<Record<string, unknown>>,
@@ -487,6 +491,48 @@ describe("worker targets (work model L4/L5): a move settles the thing in each wo
     expect(h.stamps.get("worker-1:post-1")).toMatchObject({
       result: "skipped",
       reason: "moved_by_person",
+    });
+  });
+
+  /**
+   * backend F10: a worker follows ONE lifecycle. Rows rule out: settling on
+   * the same thing's OTHER lifecycle (its lead facet moved, the client worker
+   * is told to re-plan); a filter that also drops the worker's own lifecycle;
+   * a legacy session (no stamp) that no move settles anymore.
+   */
+  it("a move of ANOTHER lifecycle of the thing settles nothing", async () => {
+    h.targets = [
+      {
+        sessionId: "worker-1",
+        channelId: "room-1",
+        workerProfileSlug: "client",
+      },
+    ];
+    const out = await syncProcessOnEvent(
+      move({ role: "lead", facetId: "facet-1", lifecycleProfile: "lead" })
+    );
+    expect(h.stamps.size).toBe(0);
+    expect(h.posts).toEqual([]);
+    expect(out.filter((o) => o.kind === "target_settled")).toEqual([]);
+  });
+
+  it("a move of the lifecycle the worker follows settles it", async () => {
+    h.targets = [
+      { sessionId: "worker-1", channelId: null, workerProfileSlug: "post" },
+    ];
+    await syncProcessOnEvent(move({ lifecycleProfile: "post" }));
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({
+      result: "skipped",
+    });
+  });
+
+  it("a session started before the stamp (no profile) is settled by any move", async () => {
+    h.targets = [
+      { sessionId: "worker-1", channelId: null, workerProfileSlug: null },
+    ];
+    await syncProcessOnEvent(move({ lifecycleProfile: "lead" }));
+    expect(h.stamps.get("worker-1:post-1")).toMatchObject({
+      result: "skipped",
     });
   });
 
