@@ -25,9 +25,11 @@
  *
  * GOVERNANCE IS NOT HERE. The governed doors (`@synap/api` `moveStatus`, the
  * jobs automation gate, the proposal executor) decide first, then call this.
- * EVENTS ARE NOT HERE either: the caller emits the returned transition through
- * `emitLifecycleTransition` (`@synap/events`) — this package cannot reach the
- * fan-out.
+ * EVENTS: the move OWES its event from the same transaction — the CAS and an
+ * outbox row (`transition-outbox.ts`, 0324) commit together, so a moved thing
+ * always has its transition owed. The caller then dispatches it
+ * (`dispatchLifecycleTransition`, `@synap/events` — this package cannot reach
+ * the fan-out); the sweeper retries what a failed dispatch left pending.
  */
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -43,8 +45,11 @@ import {
   type EffectiveLifecycle,
   type LifecycleCategory,
 } from "../../utils/lifecycle-model.js";
+import { insertTransitionOutbox } from "./transition-outbox.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
+/** The CAS runs inside the move's transaction. */
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export interface StatusMoveActor {
   /**
@@ -251,6 +256,11 @@ export interface ApplyStatusMoveInput {
    * still match it, exactly as `entities.update` routes a pod-wide entity.
    */
   lensWorkspaceId?: string | null;
+  /**
+   * The emit options the dispatcher replays (automation chain, correlation
+   * id), stored on the outbox row with the transition.
+   */
+  emitContext?: Record<string, unknown>;
 }
 
 export type ApplyStatusMoveResult =
@@ -274,7 +284,7 @@ export class LifecycleConflictError extends Error {
 }
 
 async function casWrite(
-  db: Db,
+  db: Db | Tx,
   target: StatusMoveTarget,
   from: string | null,
   to: string,
@@ -320,7 +330,7 @@ async function casWrite(
 }
 
 async function readCurrent(
-  db: Db,
+  db: Db | Tx,
   target: StatusMoveTarget
 ): Promise<string | null> {
   if (target.facetId) {
@@ -356,44 +366,44 @@ export async function applyStatusMove(
     };
   }
   const human = actor.kind === "human" && input.strict !== true;
-  let current = target.current;
-  const expressed = input.expectedFrom !== undefined;
-  const expected = expressed ? (input.expectedFrom ?? null) : current;
+  // The CAS and the owed event commit together, or neither does.
+  return db.transaction(async (tx): Promise<ApplyStatusMoveResult> => {
+    let current = target.current;
+    const expressed = input.expectedFrom !== undefined;
+    const expected = expressed ? (input.expectedFrom ?? null) : current;
 
-  // Agents/system: the mover's belief must hold.
-  if (!human && expressed && expected !== current) {
-    return { status: "conflict", expectedFrom: expected, actual: current };
-  }
-  if (current === to) return { status: "unchanged", current: to };
-
-  let ok = await casWrite(db, target, current, to, option.category);
-  if (!ok) {
-    // Someone wrote between our read and our update.
-    const actual = await readCurrent(db, target);
-    if (!human) {
-      return { status: "conflict", expectedFrom: expected, actual };
+    // Agents/system: the mover's belief must hold.
+    if (!human && expressed && expected !== current) {
+      return { status: "conflict", expectedFrom: expected, actual: current };
     }
-    current = actual;
     if (current === to) return { status: "unchanged", current: to };
-    ok = await casWrite(db, target, current, to, option.category);
-    if (!ok) {
-      return {
-        status: "conflict",
-        expectedFrom: expected,
-        actual: await readCurrent(db, target),
-      };
-    }
-  }
 
-  const fromOption = findLifecycleOption(target.lifecycle, current);
-  const [profileRow] = await db
-    .select({ type: entities.type })
-    .from(entities)
-    .where(eq(entities.id, target.entityId))
-    .limit(1);
-  return {
-    status: "moved",
-    transition: {
+    let ok = await casWrite(tx, target, current, to, option.category);
+    if (!ok) {
+      // Someone wrote between our read and our update.
+      const actual = await readCurrent(tx, target);
+      if (!human) {
+        return { status: "conflict", expectedFrom: expected, actual };
+      }
+      current = actual;
+      if (current === to) return { status: "unchanged", current: to };
+      ok = await casWrite(tx, target, current, to, option.category);
+      if (!ok) {
+        return {
+          status: "conflict",
+          expectedFrom: expected,
+          actual: await readCurrent(tx, target),
+        };
+      }
+    }
+
+    const fromOption = findLifecycleOption(target.lifecycle, current);
+    const [profileRow] = await tx
+      .select({ type: entities.type })
+      .from(entities)
+      .where(eq(entities.id, target.entityId))
+      .limit(1);
+    const transition: StatusTransition = {
       transitionId: randomUUID(),
       entityId: target.entityId,
       profileSlug: profileRow?.type ?? target.entityType,
@@ -412,6 +422,8 @@ export async function applyStatusMove(
       staleExpected: human && expressed && expected !== current,
       proposalId: input.proposalId ?? null,
       workspaceId: target.workspaceId ?? input.lensWorkspaceId ?? null,
-    },
-  };
+    };
+    await insertTransitionOutbox(tx, transition, input.emitContext);
+    return { status: "moved", transition };
+  });
 }

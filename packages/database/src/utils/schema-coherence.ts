@@ -1494,6 +1494,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "is_lifecycle",
     addedBy: "0319_lifecycle_columns.sql",
   },
+  // The transition outbox (0324, D8). Absence means every status move fails:
+  // `applyStatusMove` inserts its owed event here inside the CAS transaction.
+  {
+    table: "lifecycle_transition_outbox",
+    column: "transition_id",
+    addedBy: "0324_lifecycle_transition_outbox.sql",
+  },
+  {
+    table: "lifecycle_transition_outbox",
+    column: "delivered",
+    addedBy: "0324_lifecycle_transition_outbox.sql",
+  },
 
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema

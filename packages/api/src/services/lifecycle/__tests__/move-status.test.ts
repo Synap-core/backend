@@ -57,7 +57,7 @@ vi.mock("@synap/database", () => ({
   },
   applyStatusMove: h.apply,
 }));
-vi.mock("@synap/events", () => ({ emitLifecycleTransition: h.emit }));
+vi.mock("@synap/events", () => ({ dispatchLifecycleTransition: h.emit }));
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.perm,
 }));

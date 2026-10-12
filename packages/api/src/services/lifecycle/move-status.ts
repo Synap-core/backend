@@ -11,7 +11,9 @@
  *   → WRITE: `applyStatusMove` (@synap/database) — one compare-and-set
  *     statement writing the columns (the truth) and `properties[slug]` (the
  *     read projection). Agents are strict CAS; a person's move wins.
- *   → EMIT: `emitLifecycleTransition` (@synap/events) — the ONE event.
+ *     The owed event is written in the same transaction (outbox, D8).
+ *   → EMIT: `dispatchLifecycleTransition` (@synap/events) — the ONE event;
+ *     a failed delivery stays owed and the sweeper retries it.
  *
  * A proposed agent move is SUCCESS (the person reviews it). Its approval
  * replays the move with the agent's original `expectedFrom`
@@ -32,7 +34,7 @@ import {
   type ApplyStatusMoveResult,
   type StatusMoveActor,
 } from "@synap/database";
-import { emitLifecycleTransition } from "@synap/events";
+import { dispatchLifecycleTransition } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
 export interface MoveStatusInput {
@@ -246,7 +248,8 @@ export async function moveStatus(
     lensWorkspaceId: input.workspaceId,
   });
   if (result.status === "moved") {
-    await emitLifecycleTransition(result.transition);
+    // Owed in the move's transaction; a failed delivery stays owed (sweeper).
+    await dispatchLifecycleTransition(result.transition.transitionId);
   }
   return result;
 }

@@ -65,6 +65,10 @@ import {
   handleChatTurnReaper,
   CHAT_TURN_REAPER_QUEUE,
 } from "./chat-turn-reaper.js";
+import {
+  handleLifecycleTransitionSweeper,
+  LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
+} from "./lifecycle-transition-sweeper.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleVaultGrantExpiry,
@@ -288,6 +292,7 @@ const ALL_QUEUES = [
   "automation-execute",
   "automation-cron-scheduler",
   AUTOMATION_RUN_REAPER_QUEUE,
+  LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
   SESSION_TITLER_QUEUE,
   // Session recall: on-demand per session + the 2-min sweep floor that
@@ -694,6 +699,13 @@ export async function registerAllWorkers(): Promise<void> {
   // after a mid-stream crash; threshold via CHAT_TURN_STUCK_HOURS, default 2h)
   await boss.work(CHAT_TURN_REAPER_QUEUE, async () => handleChatTurnReaper());
   logger.info("Registered worker: chat-turn-reaper");
+
+  // Lifecycle transition sweeper (cron: every minute — delivers the events a
+  // status move still owes after a failed inline dispatch; review D8)
+  await boss.work(LIFECYCLE_TRANSITION_SWEEPER_QUEUE, async () =>
+    handleLifecycleTransitionSweeper()
+  );
+  logger.info("Registered worker: lifecycle-transition-sweeper");
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>

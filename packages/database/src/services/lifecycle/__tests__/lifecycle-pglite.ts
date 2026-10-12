@@ -56,6 +56,7 @@ export async function makeLifecyclePglite() {
     schema.profileProperties,
     schema.entities,
     schema.entityFacets,
+    schema.lifecycleTransitionOutbox,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }

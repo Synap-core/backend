@@ -250,3 +250,7 @@ export * from "./config-settings.js";
 
 // Personal ICS calendar-feed tokens (0255) — one live hashed token per user.
 export * from "./calendar-feed-tokens.js";
+
+// Lifecycle transition outbox (0324, review D8) — the event a status move owes,
+// written in the move's own transaction; dispatched + retried from here.
+export * from "./lifecycle-transition-outbox.js";

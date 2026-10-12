@@ -317,6 +317,16 @@ export {
   type ApplyStatusMoveResult,
 } from "./services/lifecycle/apply-status-move.js";
 export {
+  insertTransitionOutbox,
+  claimTransitionOutbox,
+  settleTransitionOutbox,
+  listDueTransitions,
+  TRANSITION_OUTBOX_LEASE_SECONDS,
+  TRANSITION_OUTBOX_MAX_BACKOFF_SECONDS,
+  TRANSITION_OUTBOX_SWEEP_GRACE_SECONDS,
+  type ClaimedTransition,
+} from "./services/lifecycle/transition-outbox.js";
+export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
   columnsForValue,
