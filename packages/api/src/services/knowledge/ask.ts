@@ -36,6 +36,7 @@ import {
 } from "../retrieval/retrieve.js";
 import {
   understandQuery,
+  detectCaptureIntent,
   type ProfileCatalogEntry,
   type QueryUnderstanding,
 } from "../retrieval/understand-query.js";
@@ -179,6 +180,9 @@ const FALLBACK_UNDERSTANDING: QueryUnderstanding = {
   // Total retrieval failure — nothing was understood, so there is no residual
   // free-text to hand a caller.
   cleanedQuery: "",
+  // Overwritten at the use site: the intent is read off the words alone, so
+  // a retrieval outage never hides it.
+  captureIntent: null,
 };
 
 /**
@@ -289,7 +293,10 @@ export async function ask(params: AskParams): Promise<AskResult> {
     console.error("[ask] semantic retrieval failed:", err);
     semantic = {
       entities: [],
-      understanding: FALLBACK_UNDERSTANDING,
+      understanding: {
+        ...FALLBACK_UNDERSTANDING,
+        captureIntent: detectCaptureIntent(query),
+      },
       // The whole leg errored, so no vector leg ran — reporting "hybrid" would
       // falsely claim the vector half contributed. `degraded:["semantic"]` below
       // already flags the outage; vector-down is a subset of that, not added here.

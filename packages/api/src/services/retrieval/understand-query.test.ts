@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   understandQuery,
+  detectCaptureIntent,
   type ProfileCatalogEntry,
 } from "./understand-query.js";
 
@@ -233,6 +234,47 @@ describe("understandQuery — temporal", () => {
   it("does not flag a non-temporal query", () => {
     expect(understandQuery("who is the VP of Product", CATALOG).temporal).toBe(
       false
+    );
+  });
+});
+
+describe("capture intent (D13) — file / start / brainstorm, keyword rules only", () => {
+  const catalog: ProfileCatalogEntry[] = [
+    { slug: "note", displayName: "Note" },
+    { slug: "task", displayName: "Task" },
+  ];
+  const intentOf = (q: string) => understandQuery(q, catalog).captureIntent;
+
+  it.each([
+    ["brainstorm names for the launch", "brainstorm"],
+    ["help me think through pricing", "brainstorm"],
+    ["what if we priced per seat", "brainstorm"],
+    ["ideas for the offsite", "brainstorm"],
+    ["let's start the launch plan", "start"],
+    ["kick off the Q4 review", "start"],
+    ["start working on the onboarding flow", "start"],
+    ["run the playbook for this lead", "start"],
+    ["remember that Alice prefers async", "file"],
+    ["note this down: the door code is new", "file"],
+    ["add this to my reading list", "file"],
+  ] as const)("%s → %s", (q, intent) => {
+    expect(intentOf(q)).toBe(intent);
+  });
+
+  it.each([
+    "idea of content for synap",
+    "Call Marie",
+    "Test",
+    "run 5k tomorrow",
+    "plan the offsite",
+    "a note about the roadmap",
+  ])("no cue → null, never a guessed intent: %s", (q) => {
+    expect(intentOf(q)).toBeNull();
+  });
+
+  it("asking to think it through outranks asking to start it", () => {
+    expect(detectCaptureIntent("let's start by brainstorming the agenda")).toBe(
+      "brainstorm"
     );
   });
 });

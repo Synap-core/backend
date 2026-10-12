@@ -8,6 +8,7 @@ const u = (over: Partial<QueryUnderstanding> = {}): QueryUnderstanding => ({
   temporal: false,
   confidence: 0,
   cleanedQuery: "",
+  captureIntent: null,
   ...over,
 });
 
