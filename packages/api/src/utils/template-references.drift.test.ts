@@ -2,7 +2,7 @@
  * Drift guard for the command-template reference grammar.
  *
  * `template-references.ts` exists twice — here (runtime substitution) and at
- * `synap-app/packages/core/command-template/src/unresolved.ts` (browser
+ * `synap-app/packages/headless/src/command-template/unresolved.ts` (browser
  * authoring surfaces). Neither repo is a dependency of the other, so a single
  * shared module is not reachable today; see either file's header.
  *
@@ -27,7 +27,7 @@ const OWN_COPY = join(HERE, "template-references.ts");
 // utils → src → api → packages → synap-backend → <repo root>
 const APP_COPY = join(
   HERE,
-  "../../../../../synap-app/packages/core/command-template/src/unresolved.ts"
+  "../../../../../synap-app/packages/headless/src/command-template/unresolved.ts"
 );
 
 describe("template-references.ts — no drift between the two copies", () => {
@@ -57,7 +57,7 @@ describe("template-references.ts — no drift between the two copies", () => {
 
     expect(
       appSrc,
-      "synap-app/packages/core/command-template/src/unresolved.ts has drifted " +
+      "synap-app/packages/headless/src/command-template/unresolved.ts has drifted " +
         "from synap-backend's template-references.ts. The two must stay " +
         "byte-identical — copy one over the other (see the file headers)."
     ).toBe(readFileSync(OWN_COPY, "utf-8"));

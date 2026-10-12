@@ -103,7 +103,7 @@ describe("browser settings sections exist", () => {
 // Guard 2 — the `synap://` grammar
 //
 // `open-in.ts` hand-rolls link shapes that
-// `synap-app/packages/core/deep-link-constants` already builds. pod-admin
+// `synap-app/packages/headless/src/deep-link-constants` already builds. pod-admin
 // cannot import it (workspace boundary, above), so the coupling is FROZEN
 // instead: the builders are mirrored here, `openIn` is asserted equal to the
 // mirror, and the package's own source is pinned so the mirror cannot quietly
@@ -117,7 +117,7 @@ describe("browser settings sections exist", () => {
 describe("synap:// grammar matches deep-link-constants", () => {
   const CONSTANTS = join(
     REPOS,
-    "synap-app/packages/core/deep-link-constants/src/index.ts"
+    "synap-app/packages/headless/src/deep-link-constants/index.ts"
   );
   const present = existsSync(CONSTANTS);
 

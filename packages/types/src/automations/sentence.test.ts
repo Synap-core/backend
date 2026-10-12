@@ -1,6 +1,6 @@
 /**
  * MOVED HERE from
- * `synap-app/packages/core/automation-intent/src/automation-intent.test.ts`
+ * `synap-app/packages/headless/src/automation-intent/automation-intent.test.ts`
  * ("sentence → flow converters emit executor-true nodes" describe block) so the
  * package that OWNS `sentence.ts` can run its own regression gate — the backend's
  * `pnpm test` could previously regress this file green because the only coverage
@@ -969,8 +969,11 @@ describe("event pattern round trip", () => {
  */
 describe("no editor offers an unevaluable operator", () => {
   const REPO = path.resolve(__dirname, "../../../../..");
+  // synap-app's second WHERE editor (features/automations-heroui WhereClause.tsx)
+  // was deleted by the 2026-10 layer consolidation (the package had no
+  // importers); its operator list is now only re-exported from
+  // headless/automation-intent. Browser's RuleSentence is the editor left.
   const EDITORS = [
-    "synap-app/packages/features/automations-heroui/src/sentence/WhereClause.tsx",
     "browser/electron/renderer/src/shared/rule-sentence/RuleSentence.tsx",
   ];
 

@@ -19,7 +19,7 @@ import { fileURLToPath } from "url";
  *
  *   Emitter SSOT:    synap-backend/.../api/src/realtime/socket-events.ts
  *                    → SERVER_CONVERSATION_EVENTS
- *   Subscriber SSOT: synap-app/.../synap-client/src/socket/conversation-events.ts
+ *   Subscriber SSOT: synap-app/.../headless/src/client/socket/conversation-events.ts
  *                    → SUBSCRIBED_CONVERSATION_EVENTS
  *
  * If this fails with a "phantom subscription": the frontend listens for a name
@@ -45,8 +45,9 @@ const FRONTEND_SSOT = join(
   "..",
   "synap-app",
   "packages",
-  "synap-client",
+  "headless",
   "src",
+  "client",
   "socket",
   "conversation-events.ts"
 );

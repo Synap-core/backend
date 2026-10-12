@@ -218,7 +218,7 @@ describe("playbook param projection carries the authored type", () => {
  * The FOURTH producer/projection pair — the browser-side run FORM.
  *
  * `playbookParamsToFormSpec`
- * (`synap-app/packages/core/property-renderer/src/playbookParamsToFormSpec.ts`)
+ * (`synap-app/packages/headless/src/property-renderer/playbookParamsToFormSpec.ts`)
  * maps `PlaybookParam[]` onto a `DynamicFormSpec`, i.e. onto the actual
  * CONTROL the user fills. It is a third mirror of `PlaybookParamType`, after
  * `playbookActionOptions` and `playbookContract.readParams`, and it fails the
@@ -249,12 +249,12 @@ describe("the browser run-form mirror of PlaybookParamType stays in lock-step", 
   const REPO_ROOT = path.resolve(__dirname, "../../../../..");
   const MIRROR = path.join(
     REPO_ROOT,
-    "synap-app/packages/core/property-renderer/src/playbookParamsToFormSpec.ts"
+    "synap-app/packages/headless/src/property-renderer/playbookParamsToFormSpec.ts"
   );
   const CONTRACT = path.resolve(__dirname, "../../../playbooks/src/index.ts");
 
   it("declares every PlaybookParamType member, and no extra", () => {
-    if (!fs.existsSync(MIRROR)) {
+    if (!fs.existsSync(path.join(REPO_ROOT, "synap-app"))) {
       // Not a silent pass: say WHY, so a green run in a backend-only checkout
       // is never mistaken for a checked one.
       console.warn(

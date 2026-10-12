@@ -1028,7 +1028,7 @@ export type EventOption = z.infer<typeof eventOptionSchema>;
  * Both now read this schema.
  *
  * The pinned client mirror is `PARAM_VALUE_TYPES` in
- * `synap-app/packages/core/automation-intent/src/rule-vocabulary.ts`, kept in
+ * `synap-app/packages/headless/src/automation-intent/rule-vocabulary.ts`, kept in
  * lockstep by `action-option-parity.test.ts` (a cross-repo source scan).
  */
 const paramValueTypeSchema = z.enum([
@@ -1479,7 +1479,7 @@ function actionLabelFor(
 /**
  * SENTENCE-CONFIGURABLE output actions — the subset of OUTPUT_NODE_TYPES that the
  * rule-SENTENCE create modal can actually configure, because OutputSettings
- * (synap-app packages/features/workflows/src/flow/node-settings/OutputSettings.tsx)
+ * (synap-app packages/web/src/workflows/flow/node-settings/OutputSettings.tsx)
  * renders a config branch for exactly these five. The advanced graph-only output
  * types (facet_attach/facet_update/facet_detach/relation_create/session_update/
  * set_state) have NO sentence config UI, so offering them in the sentence menu

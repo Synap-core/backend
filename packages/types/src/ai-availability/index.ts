@@ -13,7 +13,7 @@
  *
  * `billing` is typed STRUCTURALLY ({@link AiBillingInput}) rather than by
  * importing `PodBillingStatus`: that type lives in another repo
- * (`synap-app/packages/core/control-plane-types`) and this package must stay
+ * (`synap-app/packages/headless/src/control-plane-types`) and this package must stay
  * dependency-free. A caller passes its `PodBillingStatus` straight in; if the
  * CP shape ever drifts away from these fields, that call stops compiling.
  *

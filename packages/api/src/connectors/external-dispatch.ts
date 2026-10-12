@@ -213,7 +213,7 @@ export function classifyDispatchFailure(args: {
 /**
  * Teach-in-response affordance for the no-credential/no-connection error
  * family below. No stable deep link to Settings → Connectors exists yet
- * (verified: `synap-app/packages/core/deep-link-constants` has no
+ * (verified: `synap-app/packages/headless/src/deep-link-constants` has no
  * `settings/connectors` path) — point the agent at the user instead of
  * fabricating a URL.
  */

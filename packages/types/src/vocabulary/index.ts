@@ -731,7 +731,7 @@ export function buildObjectActionTitle(params: {
  * `composite` proposal reads as "Bundle" (several operations, not one).
  *
  * Curated here because relay's own local map (pre-consolidation) had ALREADY
- * forked from `synap-app/packages/core/proposal-ui/ProposalChrome.tsx`'s local
+ * forked from `synap-app/packages/web/src/proposal-ui/ProposalChrome.tsx`'s local
  * map: `facet` was "Role" in one and "Facet" in the other; `composite` was
  * "Bundle" vs "Multi-entity" — and the latter's `?? presentation.kind`
  * fallback leaked the raw token for any kind it didn't list (e.g. `install`,

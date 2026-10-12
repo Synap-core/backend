@@ -31,7 +31,7 @@ import {
 
 const PIPELINE_SRC = resolve(
   __dirname,
-  "../../../../../../../synap-app/packages/core/capture-pipeline/src"
+  "../../../../../../../synap-app/packages/hooks/src/capture-pipeline"
 );
 
 const CHIPS = [
@@ -169,22 +169,24 @@ describe("pinned outputs", () => {
 });
 
 describe("sameness with @synap-core/capture-pipeline", () => {
+  // Skip ONLY when the synap-app repo is absent. A moved file with the repo
+  // present must fail at the import below, not skip: the 2026-10 layer move
+  // put followup.ts / clarification.ts in the hooks layer (headless holds the
+  // rest of capture-pipeline), and a file-existence skip would have hidden it.
+  const appBeside = existsSync(resolve(PIPELINE_SRC, "../../../.."));
   const followup = resolve(PIPELINE_SRC, "followup.ts");
   const clarification = resolve(PIPELINE_SRC, "clarification.ts");
 
-  it.skipIf(!existsSync(followup))(
-    "chipToContext matches followup.ts",
-    async () => {
-      const client = (await import(followup)) as {
-        chipToContext: typeof chipToContext;
-      };
-      expect(CHIPS.map((c) => client.chipToContext(c))).toEqual(
-        CHIPS.map((c) => chipToContext(c))
-      );
-    }
-  );
+  it.skipIf(!appBeside)("chipToContext matches followup.ts", async () => {
+    const client = (await import(followup)) as {
+      chipToContext: typeof chipToContext;
+    };
+    expect(CHIPS.map((c) => client.chipToContext(c))).toEqual(
+      CHIPS.map((c) => chipToContext(c))
+    );
+  });
 
-  it.skipIf(!existsSync(clarification))(
+  it.skipIf(!appBeside)(
     "formValuesToContext matches clarification.ts (L2)",
     async () => {
       const client = (await import(clarification)) as {
@@ -197,7 +199,7 @@ describe("sameness with @synap-core/capture-pipeline", () => {
     }
   );
 
-  it.skipIf(!existsSync(clarification))(
+  it.skipIf(!appBeside)(
     "answerContextWithQuestion matches clarification.ts (L2, lane LB)",
     async () => {
       const client = (await import(clarification)) as {
