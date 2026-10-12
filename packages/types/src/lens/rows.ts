@@ -99,6 +99,47 @@ export interface LensRow {
   expiresAt?: string | null;
 }
 
+/**
+ * A row's height step — the SAME three steps on web (`--synap-row-*`) and
+ * relay (`synapNative.row`): `nav` 32 (sidebar), `index` 40 (a long list),
+ * `lens` 48 (a lens section, the default). A `happened` row is compact at
+ * every density.
+ */
+export type LensRowDensity = "nav" | "index" | "lens";
+
+/** Density → the design-token row step (`synapNative.row[...]`, `--synap-row[-…]`). */
+export const LENS_ROW_STEP: Record<
+  LensRowDensity,
+  "compact" | "default" | "roomy"
+> = {
+  nav: "compact",
+  index: "default",
+  lens: "roomy",
+};
+
+/** The step a row of `cls` takes at `density` (happened is always compact). */
+export function lensRowStep(
+  density: LensRowDensity,
+  cls: AttentionClass
+): "compact" | "default" | "roomy" {
+  return cls === "happened" ? "compact" : LENS_ROW_STEP[density];
+}
+
+/**
+ * An agent is working on this thing NOW — the ONE AI mark a thing row or card
+ * wears (board C's "being worked"). `by` is the agent's display name.
+ */
+export interface LensBeingWorked {
+  by?: string | null;
+}
+
+/** The being-worked mark's spoken name — one phrase for web and relay. */
+export function lensBeingWorkedLabel(worked: LensBeingWorked): string {
+  return worked.by
+    ? `${worked.by} is working on this`
+    : "An agent is working on this";
+}
+
 function verb(action: string): LensVerb {
   return { action, label: resolveActionLabel(action, "imperative") };
 }
