@@ -436,7 +436,7 @@ function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
  * the re-thrown, redacted error still carries code semantics a client can act
  * on rather than collapsing everything to INTERNAL_SERVER_ERROR.
  */
-const CLASS_TRPC_CODE: Record<FailureErrorClass, TRPCError["code"]> = {
+export const CLASS_TRPC_CODE: Record<FailureErrorClass, TRPCError["code"]> = {
   missing_field: "BAD_REQUEST",
   validation: "BAD_REQUEST",
   conflict: "CONFLICT",
