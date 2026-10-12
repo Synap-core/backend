@@ -529,12 +529,16 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
+      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `profileSlug` converts it to another kind, keeping its id and links (always reviewed).",
       "inputSchema": {
         "type": "object",
         "properties": {
           "entityId": {
             "type": "string"
+          },
+          "profileSlug": {
+            "type": "string",
+            "description": "CONVERT the entity to another kind (e.g. a misfiled knowledge entry → decision, issue or note). It keeps its id, links, document and history; always a proposal. Send the new kind's required properties in `properties` in the same call. An unknown kind is refused — list kinds with synap_list_profiles."
           },
           "title": {
             "type": "string"

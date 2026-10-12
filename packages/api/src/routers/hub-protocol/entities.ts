@@ -369,6 +369,12 @@ export const entitiesRouter = router({
         title: z.string().optional(),
         preview: z.string().optional(),
         metadata: z.record(z.string(), z.any()).optional(),
+        /**
+         * Convert the entity to another KIND, keeping its id, links, document
+         * and history (c-kind-convert). Always a proposal. Declared here
+         * because this forwarder is a whitelist: zod strips an undeclared key.
+         */
+        profileSlug: z.string().min(1).optional(),
         /** Keys to remove from the entity's properties object. Applied before `metadata` merge. */
         deleteProperties: z.array(z.string()).optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
@@ -405,6 +411,7 @@ export const entitiesRouter = router({
           description: input.preview,
           properties: input.metadata,
           deleteProperties: input.deleteProperties,
+          ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
           source: "intelligence",

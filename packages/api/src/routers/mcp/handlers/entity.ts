@@ -182,7 +182,8 @@ export const entityHandlers: McpHandlerMap = {
       args.title !== undefined ||
       args.description !== undefined ||
       args.properties !== undefined ||
-      args.metadata !== undefined;
+      args.metadata !== undefined ||
+      args.profileSlug !== undefined;
 
     let body: Record<string, unknown> | undefined;
     if (content !== undefined) {
@@ -243,6 +244,11 @@ export const entityHandlers: McpHandlerMap = {
       // properties merges into the JSONB column; metadata is a legacy alias
       metadata: (args.properties ?? args.metadata) as
         Record<string, unknown> | undefined,
+      // Convert to another kind (c-kind-convert): same id, links, document and
+      // history; always a proposal.
+      ...(typeof args.profileSlug === "string" && args.profileSlug
+        ? { profileSlug: args.profileSlug }
+        : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Compare-and-set on the status; a stale move comes back as
