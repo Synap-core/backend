@@ -165,8 +165,10 @@ export function openIn(target: ExitTarget): Exit {
           `/open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
         );
       }
-      // Everything else — workspace, session, channel, document, cell,
-      // project, capability — has no web renderer. Be honest about it.
+      // Everything else — workspace, channel, document, cell, project,
+      // capability, playbook — has no web renderer. Be honest about it.
+      // (`automation` / `session` are hosted since D6; a caller that means
+      // "in the desktop app" asks for `objectInApp`.)
       return desktop(
         `synap://open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
       );

@@ -7,7 +7,11 @@ import {
   isOpenViewValue,
   isUnfurlBot,
   OPEN_CLIENT_MOBILE,
+  podAdminBrowserUrl,
+  podAdminResolveTarget,
   podAdminTarget,
+  TYPED_OPEN_KINDS,
+  WEB_HOSTED_OPEN_KINDS,
 } from "./open-dispatch.js";
 
 const ADMIN = "https://pod-admin.example.test";
@@ -76,6 +80,153 @@ describe("podAdminTarget", () => {
       `${ADMIN}/open/entity/${ID}`
     );
     expect(podAdminTarget("view", ID, ADMIN)).toBe(`${ADMIN}/open/view/${ID}`);
+    expect(podAdminTarget("automation", ID, ADMIN)).toBe(
+      `${ADMIN}/open/automation/${ID}`
+    );
+    expect(podAdminTarget("session", ID, ADMIN)).toBe(
+      `${ADMIN}/open/session/${ID}`
+    );
+  });
+
+  it("builds the resolver page for an untyped id", () => {
+    expect(podAdminResolveTarget(ID, ADMIN)).toBe(`${ADMIN}/open/${ID}`);
+  });
+});
+
+describe("podAdminBrowserUrl (the bounce page's 'View in browser')", () => {
+  it.each(["proposal", "entity", "view", "automation", "session"])(
+    "%s → its pod-admin page",
+    (type) => {
+      expect(podAdminBrowserUrl(type, ID, ADMIN)).toBe(
+        type === "proposal"
+          ? `${ADMIN}/proposal/${ID}`
+          : `${ADMIN}/open/${type}/${ID}`
+      );
+    }
+  );
+
+  it("an untyped uuid → the resolver page; a keyword or bounce kind → none", () => {
+    expect(podAdminBrowserUrl(undefined, ID, ADMIN)).toBe(
+      `${ADMIN}/open/${ID}`
+    );
+    expect(podAdminBrowserUrl(undefined, "proposals", ADMIN)).toBeUndefined();
+    expect(podAdminBrowserUrl("channel", ID, ADMIN)).toBeUndefined();
+  });
+
+  it("no pod-admin → no escape link", () => {
+    expect(podAdminBrowserUrl("entity", ID, null)).toBeUndefined();
+  });
+});
+
+describe("hosted kinds match pod-admin", () => {
+  it("WEB_HOSTED_OPEN_KINDS ⊆ TYPED_OPEN_KINDS", () => {
+    for (const kind of WEB_HOSTED_OPEN_KINDS) {
+      expect(TYPED_OPEN_KINDS as readonly string[]).toContain(kind);
+    }
+  });
+});
+
+describe("dispatchOpen — automation / session are web-hosted (D6)", () => {
+  it.each(["automation", "session"])(
+    "%s + human + admin → pod-admin /open/%s/",
+    (type) => {
+      expect(
+        dispatchOpen({ type, id: ID, userAgent: HUMAN, adminBase: ADMIN })
+      ).toEqual({ action: "redirect", url: `${ADMIN}/open/${type}/${ID}` });
+    }
+  );
+
+  it.each(["automation", "session"])(
+    "%s + Discordbot → bounce (bodies never reach an unfurler)",
+    (type) => {
+      expect(
+        dispatchOpen({ type, id: ID, userAgent: DISCORDBOT, adminBase: ADMIN })
+      ).toEqual({ action: "bounce", deep: `synap://open/${type}/${ID}` });
+    }
+  );
+
+  it.each(["automation", "session"])(
+    "%s + ?client=mobile → bounce to relay",
+    (type) => {
+      expect(
+        dispatchOpen({
+          type,
+          id: ID,
+          userAgent: HUMAN,
+          adminBase: ADMIN,
+          client: OPEN_CLIENT_MOBILE,
+        })
+      ).toEqual({ action: "bounce", deep: `synap://open/${type}/${ID}` });
+    }
+  );
+
+  it("session + view=room on desktop → still bounces WITH the view (the Intake Room is app-only)", () => {
+    expect(
+      dispatchOpen({
+        type: "session",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        view: "room",
+      })
+    ).toEqual({
+      action: "bounce",
+      deep: `synap://open/session/${ID}?view=room`,
+    });
+  });
+
+  it("session + an unrecognised view is the plain session → hosted", () => {
+    expect(
+      dispatchOpen({
+        type: "session",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        view: "evil",
+      })
+    ).toEqual({ action: "redirect", url: `${ADMIN}/open/session/${ID}` });
+  });
+});
+
+describe("dispatchOpen — untyped uuid (bare /open/<id> the probe could not type)", () => {
+  it("human + admin → pod-admin's resolver page", () => {
+    expect(
+      dispatchOpen({
+        type: undefined,
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+      })
+    ).toEqual({ action: "redirect", url: `${ADMIN}/open/${ID}` });
+  });
+
+  it("bot, mobile, or no pod-admin → the untyped bounce, as before", () => {
+    const bounce = { action: "bounce", deep: `synap://open/${ID}` };
+    expect(
+      dispatchOpen({
+        type: undefined,
+        id: ID,
+        userAgent: DISCORDBOT,
+        adminBase: ADMIN,
+      })
+    ).toEqual(bounce);
+    expect(
+      dispatchOpen({
+        type: undefined,
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+      })
+    ).toEqual(bounce);
+    expect(
+      dispatchOpen({
+        type: undefined,
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: null,
+      })
+    ).toEqual(bounce);
   });
 });
 
