@@ -27,6 +27,11 @@ import { db, apiKeys, users, eq } from "@synap/database";
 
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import { describeKeyForHolder } from "../../../services/key-holder-state.js";
+import { apiKeyService } from "../../../services/api-keys.js";
+import {
+  GUEST_REFUSED_BODY,
+  isGuestPrincipal,
+} from "../../../access/guest-containment.js";
 import { AuthStatusSchema, KeyHolderStateSchema } from "./_codecs/auth.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
@@ -187,6 +192,16 @@ export function registerAuthRoutes(app: HubHono): void {
     const token = match?.[1]?.trim();
     if (!token) return authErrorResponse(c, "no_auth") as never;
     try {
+      // This door skips hub auth, so it owns the guest refusal hub auth gives
+      // every other route (guest-containment tripwire): a guest's key gets the
+      // same 403 here, never a description.
+      const status = await apiKeyService.getApiKeyStatus(token);
+      if (
+        "record" in status &&
+        status.record &&
+        (await isGuestPrincipal(status.record.userId, c.req.raw))
+      )
+        return c.json(GUEST_REFUSED_BODY, 403) as never;
       return c.json(await describeKeyForHolder(token, c.req.url), 200);
     } catch (err) {
       logger.error({ err }, "/auth/key-state lookup failed");
