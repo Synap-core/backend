@@ -97,6 +97,7 @@ import {
   type PropertyTargetResolutionReport,
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
+import { templateApplyUnfinished } from "./template-apply-state.js";
 import {
   holdsTemplateStamp,
   pendingTemplateDataChanges,
@@ -564,6 +565,19 @@ export async function reconcileWorkspaceFromDefinition(
           error: report.dataChanges.error,
         },
         "reconcile: template version stamp HELD — data changes await consent (synap templates update)"
+      );
+    } else if (templateApplyUnfinished(ws.settings)) {
+      // The last apply on this space did not finish (a layer-2 failure, or a
+      // layer 2 still waiting on approval / never run): this pass did not run
+      // that layer either, so it cannot earn the stamp. The update door
+      // finishes the apply and its finisher stamps (`finishTemplateApply`).
+      logger.warn(
+        {
+          workspaceId,
+          packageSlug: opts.packageSlug,
+          packageVersion: opts.packageVersion,
+        },
+        "reconcile: template version stamp HELD — the last template apply did not finish (synap templates update)"
       );
     } else {
       settingsPatch.packageVersion = opts.packageVersion;

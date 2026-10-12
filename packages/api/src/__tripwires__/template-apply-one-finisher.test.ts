@@ -29,8 +29,10 @@
  * seen.
  * `reconcileWorkspaceFromDefinition({ packageVersion })` (@synap/database) is a
  * second channel: its one caller that passes a version is the boot reconcile,
- * which gates the version on its own convergence report (playbooks + rules) —
- * classified below, not hidden.
+ * which gates the version on its own convergence report (playbooks + rules),
+ * and the util itself holds it while the space's last apply is unfinished
+ * (`templateApplyUnfinished`, pinned in @synap/database
+ * `create-workspace-hands-back-stamp.pglite.test.ts`) — classified below.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -172,7 +174,8 @@ describe("template apply — one finisher writes the stamp and active", () => {
     //  - the stamp writer itself (called only by the finisher — test 2);
     //  - the database `reconcileWorkspaceFromDefinition`, which writes the
     //    version a caller passes — its one version-passing caller is the boot
-    //    reconcile, gated on its own convergence report (playbooks + rules).
+    //    reconcile, gated on its own convergence report (playbooks + rules) —
+    //    and holds it while the last apply is unfinished.
     const CLASSIFIED = new Set([
       "services/workspace-creation-service.ts",
       relative(

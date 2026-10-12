@@ -27,6 +27,7 @@ import {
   workspaces,
   getCatalogSyncStamps,
   type CatalogSyncStamp,
+  templateApplyUnfinished,
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import {
@@ -243,25 +244,6 @@ export function templateLifecycleWarning(
     return `The "${packageSlug}" template is no longer in the catalog. This space keeps working but gets no updates.`;
   }
   return null;
-}
-
-/**
- * Did the last template apply on this space NOT finish? Read from the two
- * durable records an apply writes: `provisioningStatus: "failed"` (a layer-2
- * throw — `applyPackagePostWorkspace`) and `templateApply` (layer 2 did not
- * converge — awaiting approval, partial, or never run — written by the ONE
- * finisher, `finishTemplateApply`). Either way the version stamp was not
- * earned by that apply, whatever it says.
- */
-export function templateApplyUnfinished(settings: unknown): boolean {
-  const s = (settings ?? {}) as {
-    provisioningStatus?: unknown;
-    templateApply?: unknown;
-  };
-  return (
-    s.provisioningStatus === "failed" ||
-    (!!s.templateApply && typeof s.templateApply === "object")
-  );
 }
 
 /**

@@ -11,7 +11,10 @@
  *  (1) a fresh create returns `pendingVersionStamp`, stores no
  *      `packageVersion`, and leaves `provisioningStatus: "pending"`;
  *  (2) a resume of a FAILED space clears the failure and leaves it "pending"
- *      (not "active"), with no stamp.
+ *      (not "active"), with no stamp;
+ *  (3) the reconcile util (the boot pass's stamp channel) holds a version it
+ *      is asked to stamp while the space's last apply is unfinished
+ *      (`templateApply` recorded), and stamps it once that record is cleared.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 
@@ -50,6 +53,7 @@ vi.mock("../client-pg.js", async () => {
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "../schema/index.js";
 import { createWorkspaceFromDefinition } from "./create-workspace-from-definition.js";
+import { reconcileWorkspaceFromDefinition } from "./reconcile-workspace-from-definition.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -158,5 +162,36 @@ describe("the create/resume core hands the stamp back", () => {
     expect(s.provisioningStatus).toBe("pending");
     expect(s.failedStep).toBeNull();
     expect(s.packageVersion).toBeUndefined();
+  });
+
+  it("(3) the reconcile util never stamps over an unfinished apply", async () => {
+    const { workspaceId } = await createWorkspaceFromDefinition({
+      definition: { workspaceName: "Boot held" },
+      userId: USER,
+      packageSlug: "boot-held",
+      createdBy: "provisioning",
+    });
+    await q(
+      `update workspaces set settings = settings || '{"templateApply":{"state":"awaiting-approval","version":"h-3","at":"t"}}'::jsonb where id = $1`,
+      [workspaceId]
+    );
+    const reconcile = () =>
+      reconcileWorkspaceFromDefinition({
+        workspaceId,
+        userId: USER,
+        definition: { workspaceName: "Boot held" },
+        packageSlug: "boot-held",
+        packageVersion: "h-3",
+        pendingDataChanges: [],
+      });
+    await reconcile();
+    expect((await settingsOf(workspaceId)).packageVersion).toBeUndefined();
+    // The update door's finisher cleared the record: now the version lands.
+    await q(
+      `update workspaces set settings = settings || '{"templateApply":null}'::jsonb where id = $1`,
+      [workspaceId]
+    );
+    await reconcile();
+    expect((await settingsOf(workspaceId)).packageVersion).toBe("h-3");
   });
 });
