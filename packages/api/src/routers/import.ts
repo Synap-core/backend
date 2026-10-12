@@ -14,6 +14,7 @@ import { resolveImportSession } from "../services/import/session.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { getBoss } from "@synap/jobs";
 import { IMPORT_CORPUS_QUEUE } from "@synap/jobs/workers/import-corpus-worker.js";
+import { importCurateProcedures } from "./import-curate.js";
 
 const logger = createLogger({ module: "import-router" });
 
@@ -133,6 +134,10 @@ const ApplyLargeImportSchema = ApplyImportBaseSchema.extend({
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const importRouter = router({
+  // Import → Curate → Build (metadata-first import): stage, list, get, group,
+  // curate, attachFile, build, discard — see ./import-curate.ts.
+  ...importCurateProcedures,
+
   /**
    * Preview the structured import graph WITHOUT writing entities. Returns the
    * composite operations (so the client renders the CompositeProposalGraph

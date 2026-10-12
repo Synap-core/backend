@@ -113,6 +113,11 @@ export interface ImportItemSource {
   filename?: string;
   mimeType?: string;
   sizeBytes?: number;
+  /**
+   * The document holding the item's bytes when they are not on the item's own
+   * row — a file the person attached later to a `needs_file` link.
+   */
+  documentId?: string;
 }
 
 /** `documents.metadata.importItem` — written once by the pod at staging. */
@@ -233,7 +238,11 @@ export type ImportCurateOp =
  */
 export const IMPORT_STAGED_MARKER = "awaiting_curation" as const;
 
-/** Why one item was not read by Build. `unreadable`: Build used its title and card only. */
+/**
+ * Why one item was not read by Build. `unreadable`: its content could not be
+ * read or structured (no captions reader, the page did not answer, the AI
+ * failed on it) — it was filed from its title and card only.
+ */
 export type ImportBuildSkipReason =
   "excluded" | "later" | "needs_file" | "unreadable";
 
@@ -248,16 +257,6 @@ export interface ImportBuildResult {
   matched?: Array<{ kind: "template" | "rule"; id: string; name: string }>;
   /** The Tools/Templates/Rules were written from the note alone (the AI did not answer). */
   infrastructureDegraded?: boolean;
-}
-
-/** One open import as `imports.list` returns it. */
-export interface ImportListEntry {
-  sessionId: string;
-  title: string;
-  phase: ImportPhase;
-  origin?: string;
-  counts: ImportCounts;
-  updatedAt: string;
 }
 
 // ── Pure helpers (shared by pod, browser and relay) ────────────────────────
@@ -459,6 +458,27 @@ export function importGroupKey(
 }
 
 // ── Wire results the clients read (added by F1 for the client hooks) ───────
+
+/** Input of `import.stage`. Opens the import (phase `collecting`) when `sessionId` is absent, else appends. */
+export interface ImportStageRequest {
+  sessionId?: string;
+  title?: string;
+  /** Device the import started on (`relay`, `browser`, `cli`, …). */
+  origin?: string;
+  workspaceId?: string | null;
+  projectId?: string | null;
+  items: ImportStageItemInput[];
+}
+
+/** Input of `import.attachFile`: the bytes Build needs for a `needs_file` item. */
+export interface ImportAttachFileRequest {
+  sessionId: string;
+  itemId: string;
+  filename: string;
+  mimeType: string;
+  documentId?: string;
+  contentBase64?: string;
+}
 
 /** Result of `import.stage`. A refused item keeps its input index so the door can say which one. */
 export interface ImportStageResult {
