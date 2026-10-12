@@ -302,6 +302,17 @@ export function activatorRuleDecl(input: {
       };
     }
     const declared = subject.lifecycleProperty === statusProperty;
+    if (!declared && subject.lifecycleProperty) {
+      // arch F2: the profile DECLARES a lifecycle on another field. Following
+      // this one would run a second status ladder beside the declared one —
+      // the stage write refuses it the same way (NOT_THE_LIFECYCLE,
+      // stage-subject-status.ts). A profile with no declared lifecycle keeps
+      // the legacy property path below.
+      return {
+        key,
+        error: `"${statusProperty}" is not the lifecycle of ${profileSlug} ("${subject.lifecycleProperty}" is) — point the playbook's statusProperty at "${subject.lifecycleProperty}" instead of running a second status ladder`,
+      };
+    }
     if (!declared && subject.profileKind === "role") {
       // A role's status lives on its facet; only the moveStatus door's
       // transition event reports it, and only for a DECLARED lifecycle. No

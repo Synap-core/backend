@@ -562,6 +562,26 @@ describe("enters_status follows the transition event", () => {
     });
   });
 
+  /**
+   * arch F2: a KIND that declares its lifecycle on ANOTHER field refuses the
+   * activator by name (a second status ladder), like a role does. Rows rule
+   * out: compiling it as `undeclared` (the old path); refusing a kind that
+   * declares nothing (the legacy path must stay).
+   */
+  it("a KIND whose declared lifecycle is another field refuses the activator, naming it", async () => {
+    store.profileRows = [
+      { id: "p-post", profileKind: "kind", workspaceId: null },
+    ];
+    store.lifecycleProperty = "stage";
+    setPlaybook(ENTERS);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "denied" });
+    expect(res.outcomes[0]!.reason).toContain(
+      '"post-status" is not the lifecycle of post ("stage" is)'
+    );
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+  });
+
   it("declaring the lifecycle LATER recompiles the untouched rule in place (the convergence)", async () => {
     store.profileRows = [
       { id: "p-post", profileKind: "kind", workspaceId: null },
