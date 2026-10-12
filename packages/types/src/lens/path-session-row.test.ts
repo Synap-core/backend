@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveUnitState } from "../units/state.js";
-import { lensRowOfPathSession } from "./rows.js";
+import { lensRowOfPathSession, lensRowOfSession } from "./rows.js";
 
 const facts = { owedFromYou: 2, pendingDecisions: 0 };
 
@@ -61,5 +61,59 @@ describe("lensRowOfPathSession", () => {
     });
     expect(row.reason).toBeNull();
     expect(row.source).toBeNull();
+  });
+});
+
+describe("lensRowOfSession", () => {
+  const now = Date.parse("2026-10-12T12:00:00Z");
+
+  it("owes you ⇒ Blocking; the age is when it last moved", () => {
+    const row = lensRowOfSession({
+      id: "s1",
+      title: "Brief",
+      status: "active",
+      unitFacts: { owedFromYou: 1, pendingDecisions: 0 },
+      startedAt: "2026-10-10T00:00:00Z",
+      updatedAt: "2026-10-12T10:00:00Z",
+      closedAt: "2026-10-11T00:00:00Z",
+      now,
+    });
+    expect(row.cls).toBe("blocking");
+    expect(row.occurredAt).toBe("2026-10-12T10:00:00.000Z");
+    expect(row.door).toEqual({ kind: "session", id: "s1" });
+  });
+
+  it("a finished session's age is when it settled, not when it last moved", () => {
+    const row = lensRowOfSession({
+      id: "s2",
+      title: "Done",
+      status: "closed",
+      updatedAt: "2026-10-12T10:00:00Z",
+      closedAt: "2026-10-11T00:00:00Z",
+    });
+    expect(row.occurredAt).toBe("2026-10-11T00:00:00.000Z");
+    expect(row.cls).toBe("happened");
+  });
+
+  it("the reason defaults to what blocks it; a caller's reason wins, an empty one is none", () => {
+    expect(
+      lensRowOfSession({ id: "a", title: "t", blockedBy: "Review" }).reason
+    ).toBe("Blocked by Review");
+    expect(
+      lensRowOfSession({
+        id: "a",
+        title: "t",
+        blockedBy: "Review",
+        reason: "Drafted",
+      }).reason
+    ).toBe("Drafted");
+    expect(
+      lensRowOfSession({
+        id: "a",
+        title: "t",
+        blockedBy: "Review",
+        reason: null,
+      }).reason
+    ).toBeNull();
   });
 });

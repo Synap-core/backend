@@ -23,8 +23,12 @@ import { resolveUnitState, type UnitStateInput } from "../units/state.js";
 import {
   pathRowSessionFact,
   sessionRowInput,
+  sessionUnitInput,
   type PathRowFacts,
 } from "../units/session.js";
+import type { NeedsYouFacts } from "../units/needs-you.js";
+import type { SessionLiveFacts } from "../run-activity/live.js";
+import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import {
   normalizeObjectKind,
   resolveActionLabel,
@@ -509,6 +513,77 @@ export function lensRowOfPathSession(input: LensPathSessionInput): LensRow {
     repeat: null,
     source: input.source ?? null,
     occurredAt: iso(input.occurredAt ?? null),
+    verb: null,
+    door: { kind: "session", id: input.id },
+    count: 1,
+  };
+}
+
+/** A session list row (`focusSessions.list` / `browse`) — what its lens row reads. */
+export interface LensSessionInput {
+  id: string;
+  title: string;
+  status?: string | null;
+  /** THE needs-you facts; absent / null ⇒ the owed read is not claimed. */
+  unitFacts?: NeedsYouFacts | null;
+  progress?: number | null;
+  /** D1 liveness — "working" only by the shared rule. Absent ⇒ an older pod. */
+  live?: SessionLiveFacts | null;
+  /** Title(s) of the session(s) this one waits on, joined. */
+  blockedBy?: string | null;
+  startedAt?: string | Date | null;
+  updatedAt?: string | Date | null;
+  closedAt?: string | Date | null;
+  /** The row's ONE fact the mark cannot carry. Default: what blocks it. */
+  reason?: string | null;
+  /** Its project, a small door — hidden by the row's own scope. */
+  source?: LensSource | null;
+  now?: number;
+}
+
+/**
+ * ONE session of a session list as THE lens row (`AttentionRow`) — the Work
+ * index, a definition's runs, the phone's sessions list. The mark is THE
+ * session state (`sessionUnitInput`, D1 included); the class follows it:
+ * working ⇒ Happening, owes the person something ⇒ Blocking, anything else ⇒
+ * Happened. The age is when it last moved (open) or settled (finished).
+ */
+export function lensRowOfSession(input: LensSessionInput): LensRow {
+  const status = input.status ?? "active";
+  const facts = input.unitFacts;
+  const blockedBy = input.blockedBy?.trim() || null;
+  const state = sessionUnitInput({
+    status,
+    owedFromYou: facts ? facts.owedFromYou : null,
+    pendingDecisions: facts ? (facts.pendingDecisions ?? null) : null,
+    progress: input.progress ?? null,
+    blockedBy,
+    ...(input.live !== undefined ? { live: input.live } : {}),
+    ...(input.now !== undefined ? { now: input.now } : {}),
+  });
+  const view = resolveUnitState(state);
+  const owes =
+    (facts?.owedFromYou ?? 0) > 0 || (facts?.pendingDecisions ?? 0) > 0;
+  const cls: AttentionClass =
+    view.state === "working" ? "happening" : owes ? "blocking" : "happened";
+  const at = isTerminalSessionStatus(status)
+    ? (input.closedAt ?? input.updatedAt ?? input.startedAt)
+    : (input.updatedAt ?? input.startedAt);
+  return {
+    key: input.id,
+    cls,
+    state,
+    objectKind: "session",
+    title: input.title,
+    reason:
+      input.reason !== undefined
+        ? input.reason?.trim() || null
+        : blockedBy
+          ? `Blocked by ${blockedBy}`
+          : null,
+    repeat: null,
+    source: input.source ?? null,
+    occurredAt: iso(at ?? null),
     verb: null,
     door: { kind: "session", id: input.id },
     count: 1,
