@@ -59,6 +59,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import {
   db,
@@ -137,6 +138,10 @@ import {
 import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
+  resolveThingsLens,
+  type ThingsLens,
+} from "../services/focus-sessions/session-subject.js";
+import {
   listUnfinishedCaptures,
   type UnfinishedCapture,
 } from "../services/intake/capture-room.js";
@@ -203,6 +208,20 @@ const SignalScope = {
    * than returned unnarrowed.
    */
   automationId: z.string().uuid().optional(),
+  /**
+   * An INTENT lens: attention ON the things of this kind or role (an intent
+   * surface's "Needs you" / "Working now", and its rail badge). It narrows
+   * the halves that can follow a thing — decisions on one (or creating one,
+   * or filed in a session on one: `proposalOnThingsWhere`), owed slots and
+   * review of sessions on one, and those sessions working now
+   * (`sessionSubjectWhere`). Notifications resolve to containers, never to
+   * things, so their half is suppressed under it (never returned
+   * unnarrowed); rule runs carry no thing, likewise. Read by `needs-you`,
+   * `proposed`, `suggestions`, `happening` and `count`; the other lenses
+   * refuse it (BAD_REQUEST) rather than answer unnarrowed. An unknown slug
+   * is NOT_FOUND.
+   */
+  profileSlug: z.string().min(1).optional(),
 };
 
 type SignalScopeInput = z.infer<z.ZodObject<typeof SignalScope>>;
@@ -226,6 +245,30 @@ function containerLensOf(input: SignalScopeInput): ContainerLens | undefined {
 /** A half that can only follow an automation through the proposal ledger. */
 function followsScope(input: SignalScopeInput): boolean {
   return !input.automationId;
+}
+
+/** Notifications follow neither an automation nor a thing (they resolve to containers). */
+function notificationsFollow(input: SignalScopeInput): boolean {
+  return followsScope(input) && !input.profileSlug;
+}
+
+/** The intent lens resolved once per read, or undefined without one. */
+async function thingsLensOf(
+  input: SignalScopeInput
+): Promise<ThingsLens | undefined> {
+  return input.profileSlug
+    ? await resolveThingsLens(input.profileSlug)
+    : undefined;
+}
+
+/** Lenses that cannot follow a thing refuse the intent lens, never answer unnarrowed. */
+function assertNoThingsLens(input: SignalScopeInput, lens: string): void {
+  if (input.profileSlug) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `profileSlug narrows needs-you, proposed, suggestions, happening and count — not "${lens}".`,
+    });
+  }
 }
 
 // ── Settled sub-reads ───────────────────────────────────────────────────────
@@ -290,7 +333,11 @@ async function readAttention(
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
   const follows = followsScope(input);
+  const notifsFollow = notificationsFollow(input);
   const container = containerLensOf(input);
+  // Resolved BEFORE the settled halves: an unknown slug is a vocabulary
+  // error for the whole read, never one quietly-empty half.
+  const things = await thingsLensOf(input);
   const owedScope = {
     userId,
     scope: resolveScope(ctx, {
@@ -300,12 +347,13 @@ async function readAttention(
     limit: OWED_SCAN_LIMIT,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(things ? { subject: things.subject } : {}),
   };
 
   // Unfinished captures are the person's own and live in no space or project:
   // they are read on the full floor (Home) only, never under a lens.
   const readsCaptures =
-    follows && !container && input.workspaceId === undefined;
+    follows && !container && !things && input.workspaceId === undefined;
   const [groups, notifs, health, owed, drafts, review, captures] =
     await Promise.all([
       settle(
@@ -318,6 +366,7 @@ async function readAttention(
             projectId: input.projectId,
             trackId: input.trackId,
             automationId: input.automationId,
+            profileSlug: input.profileSlug,
             status: "pending",
             limit: clusterLimit,
             excludeDraftSessions: true,
@@ -326,7 +375,7 @@ async function readAttention(
       ),
       // Under a container lens the door narrows IN SQL, before its limit
       // (`container`); the resolved containers below stay the authority.
-      follows
+      notifsFollow
         ? settle(
             "notifications",
             [] as NotificationSignalInput[],
@@ -348,7 +397,9 @@ async function readAttention(
       // System HEALTH is the pod's, never a container's: under a container lens
       // the banner reads its own rows (every status-role type is `system`,
       // pinned in the tests); at the floor it reads the floor read above.
-      container
+      // Under the intent lens the notification half is suppressed, so the
+      // banner reads its own rows too.
+      container || (follows && !notifsFollow)
         ? settle(
             "notifications",
             [] as NotificationSignalInput[],
@@ -399,6 +450,7 @@ async function readAttention(
               projectId: input.projectId,
               trackId: input.trackId,
               sessionId: input.sessionId,
+              ...(things ? { subject: things.subject } : {}),
             })
           : { sessions: [], truncated: false }
       ),
@@ -573,6 +625,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
   if (!followsScope(input)) return { signals: [], truncated: false };
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
+  const things = await thingsLensOf(input);
   const conditions = sessionListConditions({
     userId,
     scope: { workspaceLens: input.workspaceId, projectLens: input.projectId },
@@ -581,6 +634,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     kind: "all",
     roster: reader.roster,
     ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(things ? { subject: things.subject } : {}),
   });
   conditions.push(or(sessionKindWhere("work"), sessionKindWhere("run"))!);
   if (input.sessionId) conditions.push(eq(focusSessions.id, input.sessionId));
@@ -674,7 +728,12 @@ async function readRuleRuns(
   input: SignalScopeInput,
   now: Date
 ): Promise<{ signals: Signal[]; truncated: boolean }> {
-  if (input.projectId || input.trackId || input.sessionId) {
+  if (
+    input.projectId ||
+    input.trackId ||
+    input.sessionId ||
+    input.profileSlug
+  ) {
     return { signals: [], truncated: false };
   }
   const since = new Date(now.getTime() - SESSION_WORKING_WINDOW_MS);
@@ -1224,6 +1283,7 @@ export const signalsRouter = router({
         input,
       }): Promise<{ signals: Signal[]; page?: LensPageWire }> => {
         if (input.lens === "page") {
+          assertNoThingsLens(input, input.lens);
           return {
             signals: [],
             page: await readLensPage(
@@ -1244,6 +1304,7 @@ export const signalsRouter = router({
           };
         }
         if (input.lens === "produced") {
+          assertNoThingsLens(input, input.lens);
           return {
             signals: (await readProduced(ctx, input)).signals.slice(
               0,
@@ -1252,6 +1313,7 @@ export const signalsRouter = router({
           };
         }
         if (input.lens === "history") {
+          assertNoThingsLens(input, input.lens);
           const happened = await readHappened(ctx, input, {
             limit: input.limit,
             until: input.cursor,
@@ -1355,6 +1417,43 @@ export const signalsRouter = router({
         return r.status === "fulfilled"
           ? { projectId, status: "ok" as const, count: r.value }
           : { projectId, status: "unavailable" as const };
+      });
+    }),
+
+  /**
+   * `count` for SEVERAL intents (kinds/roles) in one round-trip — the rail
+   * badges every pinned surface it shows at once, under ONE shared lens
+   * (workspace / project / track: the rail's).
+   *
+   * `countByProject`'s shape and reason: `count` itself, once per slug, so a
+   * pinned surface's badge equals the needs-you number that surface shows. A
+   * slug whose count FAILS (an unknown slug included) is reported as such,
+   * never as zero.
+   */
+  countByProfile: protectedProcedure
+    .input(
+      z.object({
+        profileSlugs: z.array(z.string().min(1)).max(50),
+        workspaceId: SignalScope.workspaceId,
+        projectId: SignalScope.projectId,
+        trackId: SignalScope.trackId,
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const slugs = [...new Set(input.profileSlugs)];
+      const lens = {
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        trackId: input.trackId,
+      };
+      const settled = await Promise.allSettled(
+        slugs.map((profileSlug) => countSignals(ctx, { ...lens, profileSlug }))
+      );
+      return slugs.map((profileSlug, i) => {
+        const r = settled[i]!;
+        return r.status === "fulfilled"
+          ? { profileSlug, status: "ok" as const, count: r.value }
+          : { profileSlug, status: "unavailable" as const };
       });
     }),
 });

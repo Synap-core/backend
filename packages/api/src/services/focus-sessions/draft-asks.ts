@@ -18,6 +18,7 @@
 import { db, and, eq, inArray, focusSessions } from "@synap/database";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { listOwedSlots, type OwedSlot } from "./owed-outputs.js";
+import type { SessionSubject } from "./session-subject-where.js";
 import { attachSessionParticipants } from "./participants.js";
 
 export interface DraftAskSlots {
@@ -34,6 +35,8 @@ export async function listDraftAskSlots(params: {
   /** Container lenses below the project — see `ListOwedSlotsParams`. */
   sessionId?: string;
   trackId?: string;
+  /** Only slots of sessions on these things — see `ListOwedSlotsParams`. */
+  subject?: SessionSubject;
 }): Promise<DraftAskSlots> {
   const slots = await listOwedSlots({ ...params, onlyDrafts: true });
   const sessionIds = [...new Set(slots.map((s) => s.sessionId))];

@@ -67,6 +67,10 @@ import { deliverableOwedBy } from "@synap-core/types/units";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
+import {
+  sessionSubjectWhere,
+  type SessionSubject,
+} from "./session-subject-where.js";
 import { notTriagePendingWhere, triagePendingWhere } from "./triage.js";
 
 /**
@@ -234,6 +238,11 @@ export interface ListOwedSlotsParams {
    */
   sessionId?: string;
   trackId?: string;
+  /**
+   * Only slots of sessions ON these things (`sessionSubjectWhere`) — an intent
+   * surface's needs-you. In SQL, for the same reason as the container lenses.
+   */
+  subject?: SessionSubject;
 }
 
 type OwedRow = {
@@ -323,6 +332,7 @@ export async function listOwedSlots(
   if (params.sessionId) conditions.push(eq(focusSessions.id, params.sessionId));
   if (params.trackId)
     conditions.push(eq(focusSessions.trackId, params.trackId));
+  if (params.subject) conditions.push(sessionSubjectWhere(params.subject));
   if (params.excludeDrafts) conditions.push(notTriagePendingWhere());
   if (params.onlyDrafts) conditions.push(triagePendingWhere());
 
