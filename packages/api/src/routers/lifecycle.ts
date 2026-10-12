@@ -41,6 +41,7 @@ import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { getTrack } from "../services/tracks/tracks-service.js";
 import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
+import { loadCardFaces } from "../services/lifecycle/card-face.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 import {
   countStuckThings,
@@ -110,6 +111,17 @@ const boardItemWire = z.object({
    * board was read with `workedBy: true`; `[]` = nobody on it.
    */
   workedBy: z.array(workedByWire).optional(),
+  /**
+   * The thing's card face — its kind and properties, what the pipeline card
+   * builds the kind card model's visual + ONE field from (surfaces WP.9).
+   * Present only when the board was read with `card: true`.
+   */
+  card: z
+    .object({
+      profileSlug: z.string().nullable(),
+      properties: z.record(z.string(), z.unknown()),
+    })
+    .optional(),
 });
 
 const boardColumnWire = z.object({
@@ -425,6 +437,12 @@ export const lifecycleRouter = router({
          * Opt-in — the same pattern as `focusSessions.list({ nextMove })`.
          */
         workedBy: z.boolean().optional(),
+        /**
+         * Also project each item's card face (`card`: its kind + properties)
+         * so the pipeline card can draw the kind card's visual and ONE
+         * field. Opt-in, ONE batched read for the page (`loadCardFaces`).
+         */
+        card: z.boolean().optional(),
       })
     )
     .output(boardWire)
@@ -598,6 +616,19 @@ export const lifecycleRouter = router({
             ...i,
             workedBy: marks.get(i.id) ?? [],
           })),
+        }));
+      }
+
+      if (input.card) {
+        const faces = await loadCardFaces(
+          shownColumns.flatMap((c) => c.items.map((i) => i.id))
+        );
+        shownColumns = shownColumns.map((c) => ({
+          ...c,
+          items: c.items.map((i) => {
+            const face = faces.get(i.id);
+            return face ? { ...i, card: face } : i;
+          }),
         }));
       }
 

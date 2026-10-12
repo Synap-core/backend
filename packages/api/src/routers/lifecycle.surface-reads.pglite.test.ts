@@ -229,6 +229,39 @@ describe("lifecycle.board — workedBy", () => {
   });
 });
 
+describe("lifecycle.board — card (WP.9)", () => {
+  it("absent unless asked", async () => {
+    const board = await caller().board({ profileSlug: "deal" });
+    for (const i of board.columns.flatMap((c) => c.items))
+      expect(i.card).toBeUndefined();
+  });
+
+  it("each item carries its kind and properties — one read for the page, a paged column too", async () => {
+    await q(`update entities set properties = $2::jsonb where id = $1`, [
+      A,
+      JSON.stringify({ amount: 1200, owner: "Ana" }),
+    ]);
+    const board = await caller().board({ profileSlug: "deal", card: true });
+    const byId = new Map(
+      board.columns.flatMap((c) => c.items).map((i) => [i.id, i.card])
+    );
+    expect(byId.get(A)).toEqual({
+      profileSlug: "deal",
+      properties: { amount: 1200, owner: "Ana" },
+    });
+    expect(byId.get(C)).toEqual({ profileSlug: "deal", properties: {} });
+    const page = await caller().board({
+      profileSlug: "deal",
+      column: "negotiating",
+      card: true,
+    });
+    expect(page.columns[0]!.items[0]!.card).toEqual({
+      profileSlug: "deal",
+      properties: {},
+    });
+  });
+});
+
 describe("lifecycle.throughput", () => {
   const DAY = 86_400_000;
   async function moved(
