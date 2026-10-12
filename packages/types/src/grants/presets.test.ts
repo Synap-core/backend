@@ -42,6 +42,13 @@ describe("AI — read & propose", () => {
   });
 
   it("never deletes, never names a gate verb, never touches an exclusion", () => {
+    // The two gate verbs it does hold: rejecting a proposal (an agent withdraws
+    // its own work) and a lifecycle status move — reversible, the move an
+    // entity.update used to carry before the status door split it out, with
+    // done/lost and humanOnly options still floored at the door.
+    const held = (subject: string, action: string) =>
+      (subject === "proposal" && action === "reject") ||
+      (subject === "entity" && action === "transition");
     const subjects = [
       ...AI_READ_SUBJECTS,
       ...Object.keys(AI_WRITE_SUBJECTS),
@@ -53,7 +60,7 @@ describe("AI — read & propose", () => {
       expect(allows(perms, { subject, action: "delete" }), subject).toBe(false);
       for (const action of GRANT_GATE_ACTIONS)
         expect(allows(perms, { subject, action }), `${subject}.${action}`).toBe(
-          subject === "proposal" && action === "reject"
+          held(subject, action)
         );
     }
     for (const key of Object.keys(AI_PRESET_EXCLUSIONS)) {
