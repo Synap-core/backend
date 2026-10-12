@@ -441,6 +441,88 @@ export async function countThingsByProfileAndStatus(params: {
   }));
 }
 
+/** A throughput bucket: `date_trunc` unit, UTC. */
+export type ThroughputBucket = "day" | "week" | "month";
+
+/**
+ * THROUGHPUT — things that ENTERED a `done` / `lost` option, per bucket, since
+ * `since`: the goal line of an intent surface (surfaces W1.4) and the measured
+ * goal of work model wave 5.
+ *
+ * Read from the transition log (`entity.transition.completed`, the one status
+ * door's event) — the category stamped at move time, of THAT lifecycle (the
+ * kind's own — `role IS NULL` — or the role's) — over the SAME visible things
+ * as the board (subject + the caller's visibility conditions). A thing counts
+ * once per bucket per category (it may bounce out and back in). A move made
+ * before the door existed has no event and is not counted — reported as
+ * measured, never guessed. A failed read THROWS.
+ */
+export async function countTerminalEntriesByBucket(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  since: Date;
+  bucket: ThroughputBucket;
+}): Promise<Array<{ bucketStart: string; done: number; lost: number }>> {
+  const { subject } = params;
+  if (subject.profileIds.length === 0) return [];
+  const visible =
+    subject.kind === "role"
+      ? db
+          .select({ id: drizzleSql`${entities.id}::text`.as("thing_id") })
+          .from(entityFacets)
+          .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+          .where(
+            and(
+              inArray(entityFacets.profileId, subject.profileIds),
+              isNull(entityFacets.deletedAt),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          )
+      : db
+          .select({ id: drizzleSql`${entities.id}::text`.as("thing_id") })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.profileId, subject.profileIds),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          );
+  const roleMatch =
+    subject.kind === "role"
+      ? drizzleSql`${events.data}->>'role' = ${subject.roleSlug}`
+      : drizzleSql`${events.data}->>'role' IS NULL`;
+  // The unit is one of three literals (typed), never caller text.
+  const unit = drizzleSql.raw(`'${params.bucket}'`);
+  // Truncated in UTC, then read back as an instant (timestamptz).
+  const bucketStart = drizzleSql`(date_trunc(${unit}, ${events.timestamp} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`;
+  const rows = await db
+    .select({
+      bucketStart: drizzleSql<string>`${bucketStart}`.as("bucket_start"),
+      done: drizzleSql<number>`cast(count(DISTINCT ${events.subjectId}) FILTER (WHERE ${events.data}->>'category' = 'done') as integer)`,
+      lost: drizzleSql<number>`cast(count(DISTINCT ${events.subjectId}) FILTER (WHERE ${events.data}->>'category' = 'lost') as integer)`,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.subjectType, "entity"),
+        eq(events.type, TRANSITION_EVENT),
+        roleMatch,
+        drizzleSql`${events.data}->>'category' IN ('done', 'lost')`,
+        drizzleSql`${events.timestamp} >= ${params.since.toISOString()}::timestamptz`,
+        drizzleSql`${events.subjectId} IN (${visible})`
+      )
+    )
+    .groupBy(drizzleSql`1`)
+    .orderBy(drizzleSql`1`);
+  return rows.map((r) => ({
+    bucketStart: iso(r.bucketStart),
+    done: Number(r.done),
+    lost: Number(r.lost),
+  }));
+}
+
 /**
  * A slug's grouping subject: a ROLE when any of its rows is a role (a slug
  * that is a role groups facets), else a kind. `podScopeKind` = any kind row is

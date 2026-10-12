@@ -42,6 +42,7 @@ import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 import {
+  countTerminalEntriesByBucket,
   countThingsByProfileAndStatus,
   groupThingsByStatus,
   kindVisibilityConditions,
@@ -219,6 +220,134 @@ function toLifecycleWire(
   };
 }
 
+/** The lens every pipeline read takes — `board` and `throughput` alike. */
+const boardLensInput = {
+  /** A kind (grouped by `entities.status`) or a role (by facet status). */
+  profileSlug: z.string().min(1),
+  projectId: z.string().uuid().optional(),
+  /** The track's project (L7 will add its enabled workers). */
+  trackId: z.string().uuid().optional(),
+  /** `undefined` → the active workspace header; `null` → pod-wide only. */
+  workspaceId: z.string().uuid().nullable().optional(),
+};
+
+/**
+ * ONE resolution of a pipeline lens: the track → its project, the workspace
+ * three-state, the declared lifecycle, the access-layer visibility conditions
+ * and the grouping subject. `board` and `throughput` read through it, so the
+ * goal line can never count things the board does not show.
+ */
+async function resolveBoardLens(
+  input: {
+    profileSlug: string;
+    projectId?: string;
+    trackId?: string;
+    workspaceId?: string | null;
+  },
+  ctx: { userId: string; workspaceId?: string | null }
+) {
+  let projectId = input.projectId;
+  if (input.trackId) {
+    const track = await getTrack(input.trackId, {
+      userId: ctx.userId,
+      agentUserId: (ctx as { agentUserId?: string | null }).agentUserId,
+    });
+    if (!track) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Track not found",
+      });
+    }
+    if (projectId && projectId !== track.projectId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "trackId belongs to another project than projectId.",
+      });
+    }
+    projectId = track.projectId;
+  }
+  const lensWorkspaceId =
+    input.workspaceId !== undefined
+      ? input.workspaceId
+      : (ctx.workspaceId ?? undefined);
+  const p = await resolveProfileLifecycle(input.profileSlug, lensWorkspaceId);
+  const lifecycle = toLifecycleWire(input.profileSlug, p);
+
+  const conditions =
+    p.profileKind === "role"
+      ? await roleVisibilityConditions({
+          userId: ctx.userId,
+          lensWorkspaceId,
+          projectId,
+        })
+      : kindVisibilityConditions({
+          userId: ctx.userId,
+          lensWorkspaceId,
+          explicitWorkspace: input.workspaceId !== undefined,
+          projectId,
+          podScopeKind: p.podScopeKind,
+        });
+  const subject =
+    p.profileKind === "role"
+      ? {
+          kind: "role" as const,
+          profileIds: p.profileIds,
+          roleSlug: input.profileSlug,
+        }
+      : { kind: "kind" as const, profileIds: p.profileIds };
+  return { projectId, p, lifecycle, conditions, subject };
+}
+
+const THROUGHPUT_BUCKETS = ["day", "week", "month"] as const;
+
+/** The UTC start of the bucket holding `at` (`date_trunc` semantics: weeks start Monday). */
+export function throughputBucketStart(
+  at: Date,
+  bucket: (typeof THROUGHPUT_BUCKETS)[number]
+): Date {
+  const d = new Date(
+    Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate())
+  );
+  if (bucket === "week")
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  if (bucket === "month") d.setUTCDate(1);
+  return d;
+}
+
+/** The start of the bucket `n` buckets before `start` (n ≥ 0). */
+function bucketsBefore(
+  start: Date,
+  bucket: (typeof THROUGHPUT_BUCKETS)[number],
+  n: number
+): Date {
+  const d = new Date(start);
+  if (bucket === "day") d.setUTCDate(d.getUTCDate() - n);
+  if (bucket === "week") d.setUTCDate(d.getUTCDate() - 7 * n);
+  if (bucket === "month") d.setUTCMonth(d.getUTCMonth() - n);
+  return d;
+}
+
+const throughputWire = z.object({
+  bucket: z.enum(THROUGHPUT_BUCKETS),
+  /** The first bucket's start — the read counts entries at or after it. */
+  since: z.string(),
+  /**
+   * EVERY bucket from `since` to the current one, oldest first, zeros
+   * included — a fixed-length series, never a sparse one a client must pad.
+   */
+  buckets: z.array(
+    z.object({
+      bucketStart: z.string(),
+      /** Things that entered a `done` option in the bucket. */
+      done: z.number(),
+      /** Things that entered a `lost` option in the bucket. */
+      lost: z.number(),
+    })
+  ),
+});
+
+export type LifecycleThroughputWire = z.infer<typeof throughputWire>;
+
 export const lifecycleRouter = router({
   get: podProcedure
     .input(
@@ -241,13 +370,7 @@ export const lifecycleRouter = router({
   board: podProcedure
     .input(
       z.object({
-        /** A kind (grouped by `entities.status`) or a role (by facet status). */
-        profileSlug: z.string().min(1),
-        projectId: z.string().uuid().optional(),
-        /** The track's project (L7 will add its enabled workers). */
-        trackId: z.string().uuid().optional(),
-        /** `undefined` → the active workspace header; `null` → pod-wide only. */
-        workspaceId: z.string().uuid().nullable().optional(),
+        ...boardLensInput,
         /** done/lost columns count what entered them within the last N days. */
         window: z
           .object({ days: z.number().int().min(1).max(366) })
@@ -273,58 +396,8 @@ export const lifecycleRouter = router({
     )
     .output(boardWire)
     .query(async ({ input, ctx }) => {
-      let projectId = input.projectId;
-      if (input.trackId) {
-        const track = await getTrack(input.trackId, {
-          userId: ctx.userId,
-          agentUserId: (ctx as { agentUserId?: string | null }).agentUserId,
-        });
-        if (!track) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Track not found",
-          });
-        }
-        if (projectId && projectId !== track.projectId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "trackId belongs to another project than projectId.",
-          });
-        }
-        projectId = track.projectId;
-      }
-      const lensWorkspaceId =
-        input.workspaceId !== undefined
-          ? input.workspaceId
-          : (ctx.workspaceId ?? undefined);
-      const p = await resolveProfileLifecycle(
-        input.profileSlug,
-        lensWorkspaceId
-      );
-      const lifecycle = toLifecycleWire(input.profileSlug, p);
-
-      const conditions =
-        p.profileKind === "role"
-          ? await roleVisibilityConditions({
-              userId: ctx.userId,
-              lensWorkspaceId,
-              projectId,
-            })
-          : kindVisibilityConditions({
-              userId: ctx.userId,
-              lensWorkspaceId,
-              explicitWorkspace: input.workspaceId !== undefined,
-              projectId,
-              podScopeKind: p.podScopeKind,
-            });
-      const subject =
-        p.profileKind === "role"
-          ? {
-              kind: "role" as const,
-              profileIds: p.profileIds,
-              roleSlug: input.profileSlug,
-            }
-          : { kind: "kind" as const, profileIds: p.profileIds };
+      const { projectId, lifecycle, conditions, subject } =
+        await resolveBoardLens(input, ctx);
 
       const since = new Date(Date.now() - input.window.days * 86_400_000);
       const terminalKeys = lifecycle.options
@@ -466,6 +539,47 @@ export const lifecycleRouter = router({
         window: { days: input.window.days, since: since.toISOString() },
         nextCursor,
       };
+    }),
+
+  /**
+   * THROUGHPUT — things that entered a done / lost option, per bucket, over
+   * the board's own lens (`resolveBoardLens`) and visible things
+   * (`countTerminalEntriesByBucket`, read from the transition log). The
+   * goal line of an intent surface; the TARGET is stored config, not API.
+   * `period.count` buckets ending with the current one, zeros included.
+   */
+  throughput: podProcedure
+    .input(
+      z.object({
+        ...boardLensInput,
+        period: z
+          .object({
+            bucket: z.enum(THROUGHPUT_BUCKETS),
+            count: z.number().int().min(1).max(366),
+          })
+          .default({ bucket: "week", count: 12 }),
+      })
+    )
+    .output(throughputWire)
+    .query(async ({ input, ctx }) => {
+      const { conditions, subject } = await resolveBoardLens(input, ctx);
+      const { bucket, count } = input.period;
+      const current = throughputBucketStart(new Date(), bucket);
+      const since = bucketsBefore(current, bucket, count - 1);
+      const rows = await countTerminalEntriesByBucket({
+        subject,
+        conditions,
+        since,
+        bucket,
+      });
+      const byStart = new Map(rows.map((r) => [r.bucketStart, r]));
+      const buckets = Array.from({ length: count }, (_, i) => {
+        const start = bucketsBefore(current, bucket, count - 1 - i);
+        const key = start.toISOString();
+        const r = byStart.get(key);
+        return { bucketStart: key, done: r?.done ?? 0, lost: r?.lost ?? 0 };
+      });
+      return { bucket, since: since.toISOString(), buckets };
     }),
 
   /**

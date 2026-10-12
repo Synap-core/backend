@@ -5,6 +5,8 @@
  *    subject is the thing, or an in-flight worker targeting it; closed
  *    sessions, settled targets and plain `targets` links are not; live
  *    (an IS turn running) first; capped; absent unless asked.
+ *  - `throughput` — things that entered done / lost per bucket, read from
+ *    the transition log over the board's visible things; zeros filled.
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it), plus the
  * worker backlog counts (proven in database `worker-enablement` suites).
@@ -63,7 +65,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { lifecycleRouter } from "./lifecycle.js";
+import { lifecycleRouter, throughputBucketStart } from "./lifecycle.js";
 
 const USER = "user-1";
 const BASIC =
@@ -221,5 +223,110 @@ describe("lifecycle.board — workedBy", () => {
     expect(board.columns[0]!.items[0]!.workedBy).toEqual([
       { sessionId: S.bWorker, kind: "worker", live: false },
     ]);
+  });
+});
+
+describe("lifecycle.throughput", () => {
+  const DAY = 86_400_000;
+  async function moved(
+    entityId: string,
+    o: { to: string; category: string; daysAgo: number; role?: string }
+  ) {
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id)
+       values (gen_random_uuid(), $1, 'entity.transition.completed', $2, 'entity', $3::jsonb, $4)`,
+      [
+        new Date(Date.now() - o.daysAgo * DAY).toISOString(),
+        entityId,
+        JSON.stringify({
+          to: o.to,
+          category: o.category,
+          role: o.role ?? null,
+        }),
+        USER,
+      ]
+    );
+  }
+
+  it("entries into done / lost per week, over the board's visible things, zeros filled", async () => {
+    const won = await deal("Won", "won");
+    const gone = await deal("Gone", "lost");
+    const bounced = await deal("Bounced", "won");
+    // This week: won + bounced (twice — counts once) into done.
+    await moved(won, { to: "won", category: "done", daysAgo: 0 });
+    await moved(bounced, { to: "won", category: "done", daysAgo: 0 });
+    await moved(bounced, { to: "won", category: "done", daysAgo: 0 });
+    // Two weeks ago: gone into lost.
+    await moved(gone, { to: "lost", category: "lost", daysAgo: 14 });
+    // Not counted: an active move, a ROLE move on a deal, a move older than
+    // the window, and a thing the viewer cannot see.
+    await moved(won, { to: "negotiating", category: "active", daysAgo: 0 });
+    // (The role move is on a thing with NO kind entry this week, so a read
+    // that ignored the lifecycle would count it.)
+    await moved(gone, {
+      to: "signed",
+      category: "done",
+      daysAgo: 0,
+      role: "client",
+    });
+    // Older than the 4-week window. NB the door only emits the requested
+    // buckets, so this row cannot reach the output either way: the `since`
+    // bound is a COST bound, not observable here (verified: removing it
+    // keeps this suite green).
+    await moved(gone, { to: "lost", category: "lost", daysAgo: 60 });
+    const hidden = randomUUID();
+    await q(
+      `insert into entities (id, user_id, type, profile_id, title, status, properties, created_at)
+       values ($1,'someone-else','deal',$2,'Hidden','won','{}'::jsonb,now())`,
+      [hidden, DEAL]
+    );
+    await moved(hidden, { to: "won", category: "done", daysAgo: 0 });
+
+    const t = await caller().throughput({
+      profileSlug: "deal",
+      period: { bucket: "week", count: 4 },
+    });
+    expect(t.bucket).toBe("week");
+    expect(t.buckets).toHaveLength(4);
+    const thisWeek = throughputBucketStart(new Date(), "week");
+    expect(t.buckets[3]).toEqual({
+      bucketStart: thisWeek.toISOString(),
+      done: 2,
+      lost: 0,
+    });
+    const twoAgo = throughputBucketStart(
+      new Date(Date.now() - 14 * DAY),
+      "week"
+    );
+    expect(t.buckets[1]).toEqual({
+      bucketStart: twoAgo.toISOString(),
+      done: 0,
+      lost: 1,
+    });
+    expect(t.buckets[0]).toMatchObject({ done: 0, lost: 0 });
+    expect(t.buckets[2]).toMatchObject({ done: 0, lost: 0 });
+    expect(t.since).toBe(t.buckets[0]!.bucketStart);
+  });
+
+  it("weeks start Monday, UTC (date_trunc semantics)", () => {
+    // 2026-10-15 is a Thursday.
+    expect(
+      throughputBucketStart(
+        new Date("2026-10-15T23:30:00Z"),
+        "week"
+      ).toISOString()
+    ).toBe("2026-10-12T00:00:00.000Z");
+    expect(
+      throughputBucketStart(
+        new Date("2026-10-12T00:00:00Z"),
+        "week"
+      ).toISOString()
+    ).toBe("2026-10-12T00:00:00.000Z");
+    expect(
+      throughputBucketStart(
+        new Date("2026-10-11T12:00:00Z"),
+        "month"
+      ).toISOString()
+    ).toBe("2026-10-01T00:00:00.000Z");
   });
 });
