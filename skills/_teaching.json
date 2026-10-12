@@ -26,6 +26,17 @@
       "capability": null
     }
   },
+  "synap/mcp-remote-servers": {
+    "teachesTools": [],
+    "skillGroup": "connect",
+    "alwaysOn": false,
+    "summary": "Remote MCP servers: how a pod registers one (http url, vault auth), approves it (owner), governs its tools (governed by default, inline read allowlist), and why an unauthenticated dev MCP stays on a private network.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/operating-mode-rules": {
     "teachesTools": ["search_unified", "memory_search", "remember_fact"],
     "skillGroup": "core",

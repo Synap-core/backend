@@ -39,3 +39,4 @@ showing.md
 user-model.md
 north-star.md
 processes.md
+mcp-remote-servers.md
