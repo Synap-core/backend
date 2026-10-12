@@ -5,7 +5,7 @@
  * window (a naive rule always says "this week").
  */
 import { describe, expect, it } from "vitest";
-import { lensIntentHeaderModel, lensIntentDoorText } from "./intent.js";
+import { LENS_INTENT_SECTION_LABELS, lensIntentHeaderModel, lensIntentDoorText } from "./intent.js";
 import { LENS_SCOPE_FACT_KIND, lensKpiFact } from "./header.js";
 import {
   encodeLensScope,
@@ -152,5 +152,15 @@ describe("the pipeline lens scope", () => {
         projectId: "p1",
       })
     ).toEqual({ kind: "workspace", workspaceId: "w1" });
+  });
+});
+
+describe("LENS_INTENT_SECTION_LABELS", () => {
+  it("one spelling for the surface's sections, desktop and phone", () => {
+    expect(LENS_INTENT_SECTION_LABELS).toEqual({
+      blocking: "Needs you",
+      happening: "Working now",
+      workers: "Workers",
+    });
   });
 });

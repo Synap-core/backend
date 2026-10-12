@@ -24,6 +24,19 @@ import type { LensRow } from "./rows.js";
 /** An intent surface's extra count section: the kind's board. */
 export type LensIntentSection = "pipeline";
 
+/**
+ * THE intent surface's section headings — one spelling for the desktop rail
+ * (browser `IntentSurface`) and the phone surface (relay `/lifecycle/[profile]`).
+ * A kind's surface names its live work "Working now" (the generic lens word is
+ * "Happening", `LENS_SECTION_LABELS`); the header's count door says "N being
+ * worked" (`lensIntentDoorText`).
+ */
+export const LENS_INTENT_SECTION_LABELS = {
+  blocking: "Needs you",
+  happening: "Working now",
+  workers: "Workers",
+} as const;
+
 export interface LensIntentCounts {
   /** Needs-you signals on this kind (`signals` by profileSlug). null = read failed. */
   needsYou: number | null;
