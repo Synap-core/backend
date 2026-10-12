@@ -1958,10 +1958,11 @@ async function evaluatePermission(
           subjectType,
           action,
           data,
-          // gov.reason carries the per-branch default reasoning; it is undefined
-          // for the plain default-propose case, preserving the prior behavior of
-          // passing the caller's reasoning through unchanged.
-          reasoning: opts.reasoning ?? gov.reason,
+          // The caller's reasoning only. gov.reason is the POLICY's sentence (why
+          // a person must approve) — never the proposer's why; it rides beside
+          // it as `policyReason` (undefined for the plain default-propose case).
+          reasoning: opts.reasoning,
+          policyReason: gov.reason,
           // The slot this draft claims — carried so the human's approval stamps
           // the deliverable the agent was actually working on.
           expectedLabel: sessionSlotClaim,
@@ -2428,11 +2429,11 @@ async function evaluatePermission(
         subjectType,
         action,
         data,
-        // The engine's per-rung default reasoning + its structured reasonCode —
-        // parity with the agent path. Both are undefined for the plain
-        // default-propose case, preserving the prior behaviour of passing the
-        // caller's reasoning through unchanged.
-        reasoning: opts.reasoning ?? proposeReason,
+        // The caller's reasoning; the engine's per-rung sentence + its
+        // structured reasonCode ride beside it — parity with the agent path.
+        // Both are undefined for the plain default-propose case.
+        reasoning: opts.reasoning,
+        policyReason: proposeReason,
         // Parity with the agent path: the anonymous principal's proposal claims
         // the same slot when its own name names one.
         expectedLabel: sessionSlotClaim,
@@ -3566,7 +3567,16 @@ async function createProposal(args: {
   subjectType: string;
   action: string;
   data: Record<string, unknown>;
+  /** The PROPOSER's reasoning — stored on the row as its why. */
   reasoning?: string;
+  /**
+   * The POLICY's sentence for why a person must approve (the governance
+   * engine's `PROPOSE_REASON`). Returned to the caller and used for the
+   * reviewer notification when the proposer gave no reasoning — NEVER stored
+   * as `data.reasoning`: the review page rendered it as the agent's own WHY.
+   * The engine's code is stored as `governanceReason`.
+   */
+  policyReason?: string;
   /**
    * SLOT CLAIM — which declared expected output of the ambient session this
    * change is for, resolved by `resolveSessionSlotClaim`. Stored at the TOP
@@ -3600,6 +3610,7 @@ async function createProposal(args: {
     action,
     data,
     reasoning,
+    policyReason,
     expectedLabel,
     expectedKey,
     governanceReason,
@@ -3916,7 +3927,9 @@ async function createProposal(args: {
         proposalType: `${subjectType}.${action}`,
         summary,
         reasoning:
-          reasoning || `${action} ${singularType} requires your approval`,
+          reasoning ||
+          policyReason ||
+          `${action} ${singularType} requires your approval`,
         reviewPath: openPath(existing.id),
         reviewUrl: openLink(existing.id),
         deduped: true,
@@ -3971,7 +3984,8 @@ async function createProposal(args: {
         requestedEventId: reqEventId ?? null,
         stepRunId: stepRunId ?? null,
         nodeId: nodeId ?? null,
-        notificationDescription: reasoning ?? `${action} ${singularType}`,
+        notificationDescription:
+          reasoning ?? policyReason ?? `${action} ${singularType}`,
         governanceReason: governanceReason ?? null,
       };
 
@@ -4000,7 +4014,10 @@ async function createProposal(args: {
     proposalId: proposal.id,
     proposalType: `${subjectType}.${action}`,
     summary,
-    reasoning: reasoning ?? `${action} ${singularType} requires your approval`,
+    reasoning:
+      reasoning ??
+      policyReason ??
+      `${action} ${singularType} requires your approval`,
     reviewPath: openPath(proposal.id),
     reviewUrl: openLink(proposal.id),
     ...(deduped ? { deduped: true } : {}),
