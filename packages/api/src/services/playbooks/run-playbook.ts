@@ -1340,8 +1340,9 @@ function workerMaxPending(declared: number | undefined): number {
  * is already working, capped at `WORKER_BATCH_LIMIT`. ONE session, no
  * subject, one target edge per thing. Nothing in the set ⇒ `no-subject` (a
  * quiet moment, no session); a `count` worker under its threshold ⇒
- * `below_threshold` — the threshold reads EVERY thing in the status, the
- * in-flight ones included (they are still there).
+ * `below_threshold` — the threshold counts the things in the status that
+ * this enablement is NOT already working, so it gathers N fresh things
+ * before it runs again.
  */
 async function runWorkerBatch(
   playbook: Playbook,
@@ -1362,12 +1363,31 @@ async function runWorkerBatch(
     limit: WORKER_BATCH_LIMIT,
     excludeIds: inFlight,
   });
-  if (typeof worker.minCount === "number" && set.total < worker.minCount) {
-    return {
-      run: null,
-      session: null,
-      skipped: WORKER_SKIP_REASONS.belowThreshold,
-    };
+  if (typeof worker.minCount === "number") {
+    // The threshold counts the things NOT already being worked (backend F11):
+    // once a batch over N runs, every later entry would otherwise find
+    // total ≥ N and start a session over that one new thing. Things in flight
+    // that are still in the status are taken off the status total.
+    const busy = inFlight.length
+      ? (
+          await listThingsInStatus({
+            profileSlug: worker.profileSlug,
+            status: worker.status ?? null,
+            userId: input.userId,
+            workspaceId: input.workspaceId,
+            projectId: filing.projectId,
+            limit: 1,
+            onlyIds: inFlight,
+          })
+        ).total
+      : 0;
+    if (set.total - busy < worker.minCount) {
+      return {
+        run: null,
+        session: null,
+        skipped: WORKER_SKIP_REASONS.belowThreshold,
+      };
+    }
   }
   if (set.items.length === 0) {
     return { run: null, session: null, skipped: "no-subject" };

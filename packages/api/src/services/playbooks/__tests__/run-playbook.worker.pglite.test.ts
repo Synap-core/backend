@@ -6,8 +6,8 @@
  *
  *  - per_moment: N things in the status → ONE session, no subject, N
  *    `worker_target` edges with no result; things already in flight are not
- *    taken again; 0 things → no session row; a `count` under its threshold →
- *    `below_threshold`, no session.
+ *    taken again; 0 things → no session row; a `count` under its threshold
+ *    (things not in flight) → `below_threshold`, no session.
  *  - the gate: backlog AT max → `approvals_backlog` (max − 1 proceeds — the
  *    row that rules out `>`); today's irreversible sends at the ceiling →
  *    `volume_ceiling`; a per_thing subject that left the status →
@@ -341,6 +341,27 @@ describe("per_moment — ONE session over the things in the status", () => {
     await deal("review");
     expect(await fire(worker({ minCount: 3 }))).toEqual({ error: BORN });
     expect(await sessions()).toHaveLength(1);
+  });
+
+  /**
+   * backend F11: a count above its threshold must not start a session over
+   * each later entry. The threshold counts things NOT in flight. Rows rule
+   * out: counting the in-flight things (1 fresh would run); subtracting every
+   * in-flight id, including one that already LEFT the status (2 fresh would
+   * read as 1 and never run).
+   */
+  it("a count's threshold counts the things not already being worked", async () => {
+    const a = await deal("review");
+    const b = await deal("review");
+    await deal("review");
+    const gone = await deal("draft");
+    h.inFlight = [a, b, gone];
+    expect(await fire(worker({ minCount: 2 }))).toEqual({
+      skipped: "below_threshold",
+    });
+    expect(await sessions()).toHaveLength(0);
+    await deal("review");
+    expect(await fire(worker({ minCount: 2 }))).toEqual({ error: BORN });
   });
 });
 
