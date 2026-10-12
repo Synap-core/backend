@@ -17,13 +17,18 @@ const h = vi.hoisted(() => ({
   inFlight: 0,
   maxInFlight: 0,
   failFor: new Set<string>(),
+  sets: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const chain = (result: unknown) => {
     const q: Record<string, unknown> = {};
-    for (const k of ["from", "where", "set", "limit"]) q[k] = () => q;
+    for (const k of ["from", "where", "limit"]) q[k] = () => q;
+    q.set = (v: Record<string, unknown>) => {
+      h.sets.push(v);
+      return q;
+    };
     q.returning = async () => result;
     q.then = (res: (v: unknown) => unknown) =>
       Promise.resolve(result).then(res);
@@ -60,7 +65,11 @@ vi.mock("../../../playbooks.js", () => ({
         if (h.failFor.has(args.subjectId as string)) {
           throw new Error("subject gone");
         }
-        return { status: "running" };
+        return {
+          status: "running",
+          session: { id: `session-${args.subjectId as string}` },
+          run: { id: `run-${args.subjectId as string}` },
+        };
       },
     }),
   },
@@ -99,7 +108,21 @@ beforeEach(() => {
   h.inFlight = 0;
   h.maxInFlight = 0;
   h.failFor.clear();
+  h.sets.length = 0;
 });
+
+/** The `data.runResult` the approval stamped on the proposal, if any. */
+const stampedRunResult = () =>
+  (
+    h.sets.find((v) => v.status === "approved")?.data as
+      | {
+          runResult?: {
+            started: Array<Record<string, unknown>>;
+            failed: string[];
+          };
+        }
+      | undefined
+  )?.runResult;
 
 describe("approving a batch run proposal", () => {
   it("starts ONE run per subject, through the same door, a few at a time", async () => {
@@ -113,6 +136,13 @@ describe("approving a batch run proposal", () => {
       success: true,
       batch: { started: 10, failed: [] },
     });
+    // Every started run is recorded ON the proposal, with the session to open.
+    const receipt = stampedRunResult();
+    expect(receipt?.started).toHaveLength(10);
+    expect(
+      receipt!.started.map((r) => `${r.subjectId}>${r.sessionId}`).sort()
+    ).toEqual(subjects.map((s) => `${s}>session-${s}`).sort());
+    expect(receipt?.failed).toEqual([]);
   });
 
   it("a subject that can no longer run is reported, never stops its siblings", async () => {
@@ -121,11 +151,13 @@ describe("approving a batch run proposal", () => {
     const res = await approve({ subjectId: subjects[0], subjectIds: subjects });
     expect(h.runs).toHaveLength(4);
     expect(res).toMatchObject({ batch: { started: 3, failed: ["lead-2"] } });
+    expect(stampedRunResult()?.failed).toEqual(["lead-2"]);
   });
 
   it("a single proposal starts exactly its one run, as before", async () => {
     const res = await approve({ subjectId: "lead-solo" });
     expect(h.runs.map((r) => r.subjectId)).toEqual(["lead-solo"]);
     expect(res).not.toHaveProperty("batch");
+    expect(stampedRunResult()).toBeUndefined();
   });
 });

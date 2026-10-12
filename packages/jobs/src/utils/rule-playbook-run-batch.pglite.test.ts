@@ -40,7 +40,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { proposals, users } from "@synap/database/schema";
+import { proposals, users, entities } from "@synap/database/schema";
 import {
   proposeRulePlaybookRun,
   readBatchSubjectIds,
@@ -106,6 +106,7 @@ const pendingRuns = async () =>
 beforeAll(async () => {
   await h.client!.exec(ddlFor(proposals as unknown as PgTable));
   await h.client!.exec(ddlFor(users as unknown as PgTable));
+  await h.client!.exec(ddlFor(entities as unknown as PgTable));
   await h.client!.query(
     `insert into users (id, email, user_type) values ($1, 'o@example.test', 'human')`,
     [OWNER]
@@ -119,7 +120,19 @@ beforeEach(() => {
 describe("proposeRulePlaybookRun — one batch files ONE proposal", () => {
   it("every subject of one batch joins one proposal, which counts them", async () => {
     const batch = randomUUID();
-    const subjects = [randomUUID(), randomUUID(), randomUUID()];
+    const subjects = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const names = [
+      "Ada Lovelace",
+      "Grace Hopper",
+      "Mary Jackson",
+      "Katherine Johnson",
+    ];
+    for (const [i, id] of subjects.entries()) {
+      await h.client!.query(
+        `insert into entities (id, user_id, type, title) values ($1, $2, 'person', $3)`,
+        [id, OWNER, names[i]]
+      );
+    }
     const results = [];
     for (const s of subjects) results.push(await propose(s, batch));
     const rows = await pendingRuns();
@@ -129,8 +142,13 @@ describe("proposeRulePlaybookRun — one batch files ONE proposal", () => {
     expect(readBatchSubjectIds(inner)).toEqual(subjects);
     // The first subject stays `subjectId`: a batch of one runs like a single.
     expect(inner.subjectId).toBe(subjects[0]);
+    // The title, through the vocabulary door — what every renderer shows.
+    expect(rows[0]!.summary).toBe(
+      'Run Template "Qualify a lead" for 4 new leads'
+    );
+    // The reasoning names the first subjects, and how many more.
     expect(rows[0]!.reasoning).toBe(
-      '3 new leads arrived together and matched this rule — approving starts "Qualify a lead" on each; rejecting starts none.'
+      'Ada Lovelace, Grace Hopper, Mary Jackson + 1 more arrived together and matched this rule — approving starts "Qualify a lead" on each; rejecting starts none.'
     );
   });
 
@@ -164,6 +182,7 @@ describe("proposeRulePlaybookRun — one batch files ONE proposal", () => {
     expect(rows).toHaveLength(2);
     for (const r of rows) {
       expect(r).not.toHaveProperty("batchId");
+      expect(r).not.toHaveProperty("summary");
       expect(r.data).not.toHaveProperty("subjectIds");
       expect(r.reasoning).toBe(
         "A rule set to propose matched — it asks before starting this playbook."

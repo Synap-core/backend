@@ -47,8 +47,10 @@ import {
   insertPendingProposal,
   deriveProposalProjectId,
   proposals,
+  entities,
   eq,
   and,
+  inArray,
   drizzleSql,
 } from "@synap/database";
 import { users } from "@synap/database/schema";
@@ -59,6 +61,7 @@ import { broadcastNotification } from "./realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
 import { requiredPermissionFor } from "@synap/governance-policy";
 import {
+  buildObjectActionTitle,
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
@@ -991,15 +994,20 @@ export async function proposeRulePlaybookRun(opts: {
 }
 
 /**
- * The words of a batch proposal — what the person reads in the queue: how many
- * of what, and what approving does. Recomputed on every join, so the count is
- * always the batch's real size.
+ * The words of a batch proposal, through the vocabulary door, so every
+ * existing renderer reads it: the TITLE (`data.summary`, which the pod's
+ * display keeps because it names the playbook) says what approving does and
+ * for how many — `Run Template "Qualify a lead" for 12 new leads` — and the
+ * REASONING names the first subjects. Recomputed on every join, so both always
+ * tell the batch's real size.
  */
-export function batchRunReasoning(input: {
+export function batchRunWords(input: {
   count: number;
   subjectKind?: string;
   playbookName?: string;
-}): string {
+  /** Titles of the first subjects, in arrival order (at most 3 are named). */
+  subjectNames?: string[];
+}): { summary: string; reasoning: string } {
   const noun = input.subjectKind
     ? (input.count === 1
         ? resolveObjectNoun(input.subjectKind)
@@ -1008,8 +1016,36 @@ export function batchRunReasoning(input: {
     : input.count === 1
       ? "record"
       : "records";
+  const summary = `${buildObjectActionTitle({
+    action: "run",
+    objectKind: "playbook",
+    objectName: input.playbookName,
+  })} for ${input.count} new ${noun}`;
+  const named = (input.subjectNames ?? []).filter(Boolean).slice(0, 3);
+  const who =
+    named.length > 0
+      ? `${named.join(", ")}${input.count > named.length ? ` + ${input.count - named.length} more` : ""}`
+      : `${input.count} new ${noun}`;
   const what = input.playbookName ? `"${input.playbookName}"` : "this playbook";
-  return `${input.count} new ${noun} arrived together and matched this rule — approving starts ${what} on each; rejecting starts none.`;
+  return {
+    summary,
+    reasoning: `${who} arrived together and matched this rule — approving starts ${what} on each; rejecting starts none.`,
+  };
+}
+
+/** The titles of a batch's first subjects (the words name them). */
+async function subjectNamesOf(
+  executor: typeof db | BatchTx,
+  subjectIds: string[]
+): Promise<string[]> {
+  const first = subjectIds.slice(0, 3);
+  if (first.length === 0) return [];
+  const rows = await executor
+    .select({ id: entities.id, title: entities.title })
+    .from(entities)
+    .where(inArray(entities.id, first));
+  const byId = new Map(rows.map((r) => [r.id, r.title ?? ""]));
+  return first.map((id) => byId.get(id) ?? "").filter(Boolean);
 }
 
 type BatchTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -1058,10 +1094,11 @@ async function coalesceIntoBatchProposal(
       data: {
         ...outer,
         data: { ...inner, subjectIds },
-        reasoning: batchRunReasoning({
+        ...batchRunWords({
           count: subjectIds.length,
           subjectKind: input.batchSubjectKind,
           playbookName: input.playbookName,
+          subjectNames: await subjectNamesOf(tx, subjectIds),
         }),
       },
       updatedAt: new Date(),
@@ -1156,13 +1193,17 @@ async function fileRulePlaybookRunProposal(
         ...(automationRunId ? { automationRunId } : {}),
         ...(agentUserId ? { agentUserId, authorshipMode: "autonomous" } : {}),
         ...(opts.batchId ? { batchId: opts.batchId } : {}),
-        reasoning: opts.batchId
-          ? batchRunReasoning({
+        ...(opts.batchId && subjectId
+          ? batchRunWords({
               count: 1,
               subjectKind: opts.batchSubjectKind,
               playbookName,
+              subjectNames: await subjectNamesOf(executor, [subjectId]),
             })
-          : "A rule set to propose matched — it asks before starting this playbook.",
+          : {
+              reasoning:
+                "A rule set to propose matched — it asks before starting this playbook.",
+            }),
         correlationId,
       },
       createdBy: ownerId,

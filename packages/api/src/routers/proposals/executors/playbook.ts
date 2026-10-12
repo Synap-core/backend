@@ -696,7 +696,7 @@ export function registerPlaybookExecutors(): void {
             ? { agentUserId: proposal.agentUserId }
             : {}),
         });
-      let batch: { started: number; failed: string[] } | undefined;
+      let batch: BatchRunReceipt | undefined;
 
       // At-most-once: `runPlaybook` is NOT idempotent here (verified — see the
       // note above), so the dispatch is CAS-claimed. A thrown failure keeps the
@@ -706,7 +706,11 @@ export function registerPlaybookExecutors(): void {
         // means nothing was started, so the claim is released (see below).
         const result = await runFor(subjects[0] ?? carriedSubjectId);
         if (result.status === "running" && subjects.length > 1) {
-          batch = await runBatchRest(subjects.slice(1), runFor);
+          batch = await runBatchRest(
+            subjects.slice(1),
+            runFor,
+            startedRun(subjects[0]!, result)
+          );
         }
         if (result.status === "running") return { delivered: true as const };
         // `playbooks.run` returns exactly `"running" | "proposed"`, so this is
@@ -725,6 +729,11 @@ export function registerPlaybookExecutors(): void {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
+          // A batch records every run it started ON the proposal — the
+          // outcome every renderer already shows (`data.runResult`) — so the
+          // person can find each one. Not `materialized`: approving a batch
+          // does not opt its sessions into undo.
+          ...(batch ? { data: { ...raw, runResult: batch } } : {}),
         })
         .where(eq(proposals.id, input.proposalId));
 
@@ -736,7 +745,12 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, ...(batch ? { batch } : {}) };
+      return {
+        success: true,
+        ...(batch
+          ? { batch: { started: batch.started.length, failed: batch.failed } }
+          : {}),
+      };
     },
   });
 
@@ -889,17 +903,43 @@ export function registerPlaybookExecutors(): void {
 /** At most this many runs of one batch start at once — sane for 100+ leads. */
 export const BATCH_RUN_CONCURRENCY = 3;
 
+/** One run a batch approval started: its subject and the session to open. */
+export interface StartedRun {
+  subjectId: string;
+  sessionId?: string;
+  runId?: string;
+}
+
+/** What a batch approval did — stamped on the proposal as `data.runResult`. */
+export interface BatchRunReceipt {
+  started: StartedRun[];
+  failed: string[];
+}
+
+function startedRun(subjectId: string, result: unknown): StartedRun {
+  const r = result as {
+    session?: { id?: unknown };
+    run?: { id?: unknown };
+  };
+  return {
+    subjectId,
+    ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
+    ...(typeof r.run?.id === "string" ? { runId: r.run.id } : {}),
+  };
+}
+
 /**
  * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time.
  * A subject whose run fails (deleted since, no longer visible) is reported,
  * never allowed to stop its siblings: the approval stands for every subject
- * that can still run.
+ * that can still run. Every started run is returned with its session.
  */
 export async function runBatchRest(
   subjects: string[],
-  runFor: (subjectId: string) => Promise<{ status: string }>
-): Promise<{ started: number; failed: string[] }> {
-  let started = 1; // the first run, already started by the caller
+  runFor: (subjectId: string) => Promise<{ status: string }>,
+  first: StartedRun
+): Promise<BatchRunReceipt> {
+  const started: StartedRun[] = [first];
   const failed: string[] = [];
   let next = 0;
   const worker = async () => {
@@ -907,7 +947,7 @@ export async function runBatchRest(
       const subjectId = subjects[next++]!;
       try {
         const r = await runFor(subjectId);
-        if (r.status === "running") started += 1;
+        if (r.status === "running") started.push(startedRun(subjectId, r));
         else failed.push(subjectId);
       } catch {
         failed.push(subjectId);
