@@ -321,8 +321,7 @@ export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
   icon: z.string().optional(),
-  // Owed by nobody (see ExpectedOutput.optional). A BIRTH declaration: kept
-  // when a slot is born, round-trip only on a stored slot.
+  // Owed by nobody (see ExpectedOutput.optional). The declarer's own word.
   optional: z.boolean().optional(),
   // The slot's stable identity (`slot-keys.ts`). SERVER-STAMPED: on the wire
   // so a round-trip keeps it and so a patch can address a slot by key (the
@@ -520,6 +519,12 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // HOW a deliverable relates to the run's subject. Declaring it closes
   // nothing — the edge is written only by the satisfy door, after `done`.
   "relationToSubject",
+  // "Produce it if it applies, never owe it." The declarer's word, like
+  // `owner`: it closes nothing (an optional slot is `done` only through the
+  // same doors) — it only says nobody is waiting on it. (Not a stamp: an agent
+  // could already drop a slot from the array outright; guarding this flag
+  // would close no hole the wholesale patch leaves open.)
+  "optional",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -566,11 +571,6 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The output → subject edge receipt (`satisfy-expected-output.ts`). An agent
   // that could author it would claim a link nobody wrote.
   "subjectEdge",
-  // Owed by nobody. Declared at the slot's BIRTH only (`keepBornOptional`, in
-  // both birth paths); a patch that could flip it would let an agent excuse
-  // itself from a required deliverable — and from the stage gate — after the
-  // fact.
-  "optional",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -607,6 +607,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason: a client that never heard of it must not drop the
   // edge the playbook declared by renaming a sibling.
   "relationToSubject",
+  // Same erasure reason: renaming a sibling must not turn the playbook's
+  // optional milestone invoice back into an owed one.
+  "optional",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -694,9 +697,8 @@ export function mergeExpectedOutputs(
       // shape. Dropping still defeats the bypass: a patch inventing a `done` slot
       // under an unmatched label lands it pending, like any other declaration.
       if (!prior) {
-        const born = keepBornOptional(
-          item,
-          dropClearedRef(reconcileOwedSince(stripServerStamped(item)))
+        const born = dropClearedRef(
+          reconcileOwedSince(stripServerStamped(item))
         );
         const proposed = declaredSlotKey(item?.key, taken);
         if (proposed) taken.add(proposed);
@@ -846,11 +848,8 @@ export function sanitizeDeclaredOutputs(
   // minted by the birth door's `stampSlotKeys`.
   const taken = new Set<string>();
   return outputs.map((o) => {
-    const born = keepBornOptional(
-      o,
-      dropClearedRef(
-        reconcileOwedSince(parseDeclaredAsk(stripServerStamped(o)), now)
-      )
+    const born = dropClearedRef(
+      reconcileOwedSince(parseDeclaredAsk(stripServerStamped(o)), now)
     );
     const proposed = declaredSlotKey(o?.key, taken);
     if (!proposed) return born;
@@ -889,15 +888,6 @@ function parseDeclaredAsk(item: OutputItem): OutputItem {
   );
   const { ask: _invalid, ...rest } = item;
   return rest;
-}
-
-/**
- * `optional` is a BIRTH declaration (see `ExpectedOutput.optional`): the strip
- * drops it like a receipt, and a slot being born gets it back — only a real
- * `true`, so the stored slot stays two-state (`true` or no key).
- */
-function keepBornOptional(declared: OutputItem, born: OutputItem): OutputItem {
-  return declared?.optional === true ? { ...born, optional: true } : born;
 }
 
 /** The slot with every receipt removed — what a client may actually author. */

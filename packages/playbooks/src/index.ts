@@ -345,10 +345,10 @@ export interface ExpectedOutput {
    * unmet required outcome at a stage gate, never a `complete_session` warning.
    * Filled, it is `done` and counts as produced like any other slot.
    *
-   * A BIRTH declaration: set where the slot is declared (playbook, stage,
-   * the session's own declaration) and kept by the birth sanitizer; a patch
-   * can never change it on a stored slot (`SERVER_STAMPED_OUTPUT_FIELDS`), so
-   * an agent cannot excuse itself from a required deliverable after the fact.
+   * CLIENT-DECLARABLE, like `owner`: set where the slot is declared
+   * (playbook, stage, the session's own declaration), and kept by a patch that
+   * is silent about it. It closes nothing — a filled optional slot is `done`
+   * only through the usual doors.
    */
   optional?: boolean;
   /**

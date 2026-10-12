@@ -84,6 +84,7 @@ const SAMPLE: Required<
   ],
   decisionId: "66666666-6666-6666-6666-666666666666",
   relationToSubject: "made_for",
+  optional: true,
   subjectEdge: {
     status: "linked",
     relationType: "made_for",

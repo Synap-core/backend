@@ -1,20 +1,18 @@
 /**
- * `optional` on a declared slot is a BIRTH declaration (ExpectedOutput.optional):
- * kept wherever a slot is born — the playbook/stage declaration through
- * `sanitizeDeclaredOutputs` (run birth, stage entry, follow), and a new slot
- * in a wholesale patch — and never changeable on a stored slot, so an agent
- * cannot excuse itself from a required deliverable (or the stage gate) after
- * the fact.
+ * `optional` on a declared slot (ExpectedOutput.optional) is CLIENT-
+ * DECLARABLE and erasure-protected: kept wherever a slot is born — the
+ * playbook/stage declaration through `sanitizeDeclaredOutputs` (run birth,
+ * stage entry, follow) and a new slot in a wholesale patch — and kept by a
+ * patch that is silent about it.
  *
  * Rivals ruled out:
- *   - optional left CLIENT-declarable → a patch flips a stored slot optional;
- *   - optional stripped like every other stamped field → a declared optional
- *     slot is born required, and an `at-close` engagement's milestone invoice
- *     sits in "needs you" forever (the defect this field exists for);
- *   - a truthy keep → `optional: "false"` is born optional.
+ *   - optional stripped like a stamp → a declared optional slot is born
+ *     required, and an `at-close` engagement's milestone invoice sits in
+ *     "needs you" forever (the defect this field exists for);
+ *   - optional missing from the erasure list → a client that never heard of
+ *     it renames a sibling and the invoice is owed again.
  */
 import { describe, it, expect } from "vitest";
-import type { ExpectedOutput } from "@synap/playbooks";
 import {
   mergeExpectedOutputs,
   sanitizeDeclaredOutputs,
@@ -29,17 +27,9 @@ const INVOICE = {
 };
 
 describe("optional slots are declared at birth", () => {
-  it("a declared optional slot is born optional; a non-`true` value is not kept", () => {
-    const [kept, notKept] = sanitizeDeclaredOutputs([
-      INVOICE,
-      {
-        kind: "report",
-        label: "Acceptance",
-        optional: "false" as unknown as boolean,
-      },
-    ]);
+  it("a declared optional slot is born optional", () => {
+    const [kept] = sanitizeDeclaredOutputs([INVOICE]);
     expect(kept).toMatchObject({ label: "Milestone invoice", optional: true });
-    expect(notKept).not.toHaveProperty("optional");
   });
 
   it("entering a stage that declares an optional slot adds it optional", () => {
@@ -53,15 +43,6 @@ describe("optional slots are declared at birth", () => {
   it("a NEW slot in a wholesale patch may be born optional", () => {
     const next = mergeExpectedOutputs([], [INVOICE]);
     expect(next[0]).toMatchObject({ optional: true });
-  });
-
-  it("a STORED required slot can never be flipped optional by a patch", () => {
-    const stored: ExpectedOutput[] = sanitizeDeclaredOutputs([
-      { kind: "report", label: "Acceptance note", owner: "human" },
-    ]);
-    expect(() =>
-      mergeExpectedOutputs(stored, [{ ...stored[0]!, optional: true }])
-    ).toThrow(/optional/);
   });
 
   it("a stored optional slot keeps it through a patch that is silent about it", () => {
