@@ -19,7 +19,7 @@
  * Every list here is capped with a "Show all N".
  *
  * Badge derivation is shared with Keys — see `categorize()` in
- * `../(admin)/keys/_lib/api-keys-section.tsx` — so "what type of
+ * `../(admin)/keys/_lib/key-model.ts` — so "what type of
  * connection is this" never drifts between the two surfaces.
  */
 
@@ -37,7 +37,7 @@ import {
   CATEGORY_LABEL,
   keyStatus,
   type UnifiedKey,
-} from "../(admin)/keys/_lib/api-keys-section";
+} from "../(admin)/keys/_lib/key-model";
 import { formatRelative } from "../../lib/format";
 import {
   FULL_ACCESS_ACCESSIBLE_NAME,

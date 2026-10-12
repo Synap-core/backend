@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Trust & Keys → Trusted issuers → connection broker trust.
+ * Pod security → Trusted issuers → connection broker trust.
  *
  * Shows WHY a Control-Plane-brokered pod has no usable relay key, and the one
  * action that fixes it through an existing door:

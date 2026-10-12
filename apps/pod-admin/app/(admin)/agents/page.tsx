@@ -1,0 +1,228 @@
+"use client";
+
+/**
+ * Agents — every agent that can reach this pod, how it is doing, and who
+ * answers for it.
+ *
+ * Roster: `agentUsers.list` (presence, keys, origin, reach, the viewer's
+ * verbs) joined on `agentUserId` with `diagnose.agents` (lifetime approve /
+ * refuse standing). Both reads are floored to the viewer (D1a): agents in
+ * workspaces the viewer cannot see are not listed, and standings exist only
+ * for agents the viewer owns. Each row is identity + one sentence + at most
+ * one action; detail opens in a drawer.
+ *
+ * Pending keys and connect requests are NOT approved here — the row's one
+ * action goes to Review, the one attention door. `?focus=<agentUserId>` (⌘K)
+ * is received by the `data-row-id` wrappers.
+ */
+
+import { Button } from "@heroui/react";
+import { ArrowRight, Bot } from "lucide-react";
+import Link from "next/link";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { formatRelative } from "../../../lib/format";
+import { PageHeader } from "../components/page-header";
+import {
+  ResourceRow,
+  ResourceRowEmpty,
+  ResourceRowError,
+  ResourceRowSkeleton,
+} from "../components/resource-row";
+import { SectionCard } from "../components/section-card";
+import { useFocusRow } from "../components/use-focus-row";
+import { AgentDrawer } from "./_lib/agent-drawer";
+import {
+  buildAgentRoster,
+  standingLine,
+  type AgentRowView,
+} from "./_lib/agent-roster";
+
+const TITLE = "Agents";
+const DESCRIPTION =
+  "Every agent that can reach this pod, how it is doing, and who answers for it.";
+
+/** Where pending agent keys and connect requests are decided. */
+const AGENT_REVIEW_HREF = "/review?type=agent";
+
+export default function AgentsPage() {
+  return (
+    <Suspense fallback={<AgentsFallback />}>
+      <AgentsInner />
+    </Suspense>
+  );
+}
+
+function AgentsFallback() {
+  return (
+    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+      <PageHeader title={TITLE} description={DESCRIPTION} />
+      <div className="h-40 w-full rounded-2xl bg-foreground/[0.04] shimmer-pulse" />
+    </div>
+  );
+}
+
+function AgentsInner() {
+  const list = trpc.agentUsers.list.useQuery({}, { staleTime: 30_000 });
+  const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
+  // Standings and owner names enrich rows; a failed read leaves them out
+  // rather than failing the roster.
+  const standings = trpc.diagnose.agents.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const members = trpc.workspaces.listPodMembers.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (list.isError) redirectToLoginIfUnauthorized(list.error);
+  }, [list.isError, list.error]);
+  const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
+
+  useFocusRow({ ready: !list.isLoading });
+
+  const roster = useMemo(
+    () =>
+      buildAgentRoster(
+        list.data ?? [],
+        standings.data ?? [],
+        me.data?.id ?? null,
+        (iso) => formatRelative(iso)
+      ),
+    [list.data, standings.data, me.data?.id]
+  );
+
+  const ownerName = useMemo(() => {
+    const byId = new Map(
+      (members.data ?? []).map((m) => [m.id, m.name ?? m.email])
+    );
+    return (userId: string | null | undefined): string | null => {
+      if (!userId) return null;
+      if (userId === me.data?.id) return "You";
+      return byId.get(userId) ?? null;
+    };
+  }, [members.data, me.data?.id]);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = roster.find((v) => v.row.id === selectedId) ?? null;
+
+  const connected = roster.filter((v) => v.direction === "external");
+  const podOwn = roster.filter((v) => v.direction === "house");
+  const waiting = roster.filter((v) => v.needsReview).length;
+
+  const isLoading = list.isLoading || isAuthRedirecting;
+
+  return (
+    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+      <PageHeader title={TITLE} description={DESCRIPTION} />
+
+      <div className="flex flex-col gap-4">
+        {waiting > 0 && (
+          <Link
+            href={AGENT_REVIEW_HREF}
+            className="flex min-h-10 items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
+          >
+            <span>
+              {waiting} {waiting === 1 ? "agent is" : "agents are"} waiting for
+              your approval
+            </span>
+            <span className="inline-flex shrink-0 items-center gap-1 font-medium">
+              Review
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
+          </Link>
+        )}
+
+        <SectionCard
+          title="Connected agents"
+          hint="Agents people brought to this pod"
+          actions={
+            connected.length > 0 ? (
+              <span className="text-[11px] tabular text-foreground/55">
+                {connected.length}
+              </span>
+            ) : null
+          }
+        >
+          {isLoading ? (
+            <ResourceRowSkeleton count={3} />
+          ) : list.isError ? (
+            <ResourceRowError
+              message="Couldn't load agents."
+              onRetry={() => void list.refetch()}
+            />
+          ) : connected.length === 0 ? (
+            <ResourceRowEmpty message="No agent has been connected yet. Run `npx @synap-core/cli init` on a computer to connect one." />
+          ) : (
+            <AgentRows views={connected} onSelect={setSelectedId} />
+          )}
+        </SectionCard>
+
+        {podOwn.length > 0 && (
+          <SectionCard
+            title="The pod's own agents"
+            hint="The twin, capture agents and Intelligence personas"
+          >
+            <AgentRows views={podOwn} onSelect={setSelectedId} />
+          </SectionCard>
+        )}
+      </div>
+
+      <AgentDrawer
+        view={selected}
+        roster={roster}
+        viewerId={me.data?.id ?? null}
+        ownerName={ownerName}
+        isOpen={selected !== null}
+        onClose={() => setSelectedId(null)}
+      />
+    </div>
+  );
+}
+
+function AgentRows({
+  views,
+  onSelect,
+}: {
+  views: AgentRowView[];
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="-mx-2">
+      {views.map((v) => {
+        const standing = standingLine(v.standing);
+        return (
+          <div
+            key={v.row.id}
+            data-row-id={v.row.id}
+            className="rounded-md transition-shadow"
+          >
+            <ResourceRow
+              Icon={Bot}
+              primary={v.row.name ?? v.row.email ?? "Unnamed agent"}
+              secondary={standing ? `${v.sentence} ${standing}.` : v.sentence}
+              status={v.status}
+              onSelect={() => onSelect(v.row.id)}
+              wrap
+              actions={
+                v.needsReview ? (
+                  <Button
+                    as={Link}
+                    href={AGENT_REVIEW_HREF}
+                    size="sm"
+                    variant="flat"
+                    radius="md"
+                    className="min-h-9"
+                  >
+                    Review
+                  </Button>
+                ) : undefined
+              }
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}

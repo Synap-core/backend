@@ -1,5 +1,5 @@
 /**
- * Helpers shared across the People tab.
+ * Pure helpers shared across the Members page.
  *
  * This file used to also export `studioDeepLinkForWorkspace` /
  * `studioDeepLinkForWorkspaceSettings`, which built `hub.synap.live?ws=<id>`
@@ -10,13 +10,60 @@
  * the one door, which only emits destinations whose receiver has been read.
  */
 
-export function formatExpiresAt(date: Date): string {
-  const diff = date.getTime() - Date.now();
-  if (diff <= 0) return "expired";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m left`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h left`;
-  const days = Math.floor(hours / 24);
-  return `${days}d left`;
+import { formatRelative } from "../../../../lib/format";
+import type { StatusKind } from "../../components/status-pill";
+
+export type MemberRole = "owner" | "admin" | "editor" | "viewer";
+
+/** Highest role first — the order the members list groups in. */
+export const MEMBER_ROLES: readonly MemberRole[] = [
+  "owner",
+  "admin",
+  "editor",
+  "viewer",
+];
+
+/** One row of `workspaces.listPodMembers`. */
+export type PodMember = {
+  id: string;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  primaryRole: MemberRole;
+  workspaceCount: number;
+  workspaces: Array<{
+    id: string;
+    name: string;
+    role: string;
+    joinedAt: Date | string;
+  }>;
+};
+
+export function groupByPrimaryRole(
+  members: readonly PodMember[]
+): Record<MemberRole, PodMember[]> {
+  const out: Record<MemberRole, PodMember[]> = {
+    owner: [],
+    admin: [],
+    editor: [],
+    viewer: [],
+  };
+  for (const m of members) {
+    if (m.primaryRole in out) out[m.primaryRole].push(m);
+  }
+  return out;
+}
+
+export function rolePillKind(role: string): StatusKind {
+  if (role === "owner") return "healthy";
+  if (role === "admin") return "stale";
+  return "unknown";
+}
+
+/** "expires in 3d", or "expired" once the moment has passed. */
+export function inviteExpiry(expiresAt: Date | string): string {
+  const at = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  if (Number.isNaN(at.getTime())) return "no expiry date";
+  if (at.getTime() <= Date.now()) return "expired";
+  return `expires ${formatRelative(at)}`;
 }

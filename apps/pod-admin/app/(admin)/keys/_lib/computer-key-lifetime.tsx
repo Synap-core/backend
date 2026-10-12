@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Trust & Keys → API keys: the pod default lifetime of a COMPUTER's key
+ * Keys → the pod default lifetime of a COMPUTER's key
  * (MACHINE-IDENTITY-PLAN, founder decision 4). A computer connected with
  * `synap init`, and the agents it sets up, get keys that last this many days;
  * the terminal renews them before they run out. A computer can override it.

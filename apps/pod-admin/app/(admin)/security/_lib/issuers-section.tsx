@@ -5,9 +5,13 @@
  *
  * Procedures used:
  *   • trpc.trustedIssuers.list      — pod-admin only
- *   • trpc.trustedIssuers.approve   — id + allowedScopes (≥1)
- *   • trpc.trustedIssuers.reject    — id + reason (≥1)
+ *   • trpc.trustedIssuers.approve   — id + allowedScopes (≥1); here only for
+ *                                     the broker panel's scope fix
  *   • trpc.trustedIssuers.revoke    — id only
+ *
+ * PENDING issuers are not decided here: approve / reject live in Review, the
+ * one attention door. This list shows them as a single "N waiting → Review"
+ * line, never as rows with their own Approve buttons.
  *
  * The backend has no "re-review" mutation — once rejected/revoked an issuer
  * stays in that terminal state. Filter chips simply scope the visible list.
@@ -22,19 +26,11 @@ import {
   ModalContent,
   ModalFooter,
   ModalHeader,
-  Textarea,
   addToast,
   useDisclosure,
 } from "@heroui/react";
-import {
-  Ban,
-  Check,
-  KeyRound,
-  Lock,
-  ShieldCheck,
-  ShieldQuestion,
-  X,
-} from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, Ban, Lock, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
@@ -54,8 +50,7 @@ import { BrokerTrustPanel } from "./broker-trust-panel";
 
 type IssuerStatus = "pending" | "approved" | "rejected" | "revoked";
 
-type IssuerFilter =
-  "pending" | "approved" | "rejected" | "revoked" | "built-in";
+type IssuerFilter = "approved" | "rejected" | "revoked" | "built-in";
 
 /** Derived from the generated tRPC contract so this UI cannot submit a scope
  * the Pod does not recognize. */
@@ -164,7 +159,6 @@ function filterLabel(filter: IssuerFilter): string {
 }
 
 const FILTER_ORDER: IssuerFilter[] = [
-  "pending",
   "approved",
   "rejected",
   "revoked",
@@ -173,7 +167,7 @@ const FILTER_ORDER: IssuerFilter[] = [
 
 export function IssuersSection() {
   const [activeFilters, setActiveFilters] = useState<Set<IssuerFilter>>(
-    () => new Set(["pending", "approved"])
+    () => new Set(["approved"])
   );
 
   const list = trpc.trustedIssuers.list.useQuery(undefined, {
@@ -211,21 +205,6 @@ export function IssuersSection() {
     },
   });
 
-  const reject = trpc.trustedIssuers.reject.useMutation({
-    onSuccess: () => {
-      void utils.trustedIssuers.list.invalidate();
-      addToast({ title: "Issuer rejected", color: "default" });
-    },
-    onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err)) return;
-      addToast({
-        title: "Reject failed",
-        description: err.message,
-        color: "danger",
-      });
-    },
-  });
-
   const revoke = trpc.trustedIssuers.revoke.useMutation({
     onSuccess: () => {
       void utils.trustedIssuers.list.invalidate();
@@ -249,36 +228,41 @@ export function IssuersSection() {
   // Apply filter chips.  "built-in" is a special filter that returns ONLY
   // built-in issuers (regardless of status).  The other four filter by
   // status and exclude built-ins so they don't double-count.
+  // Pending issuers are Review's: never listed here, only counted.
+  const decided = useMemo(
+    () => issuers.filter((i) => i.isBuiltIn || i.status !== "pending"),
+    [issuers]
+  );
+  const pendingCount = issuers.length - decided.length;
+
   const filtered = useMemo(() => {
-    if (activeFilters.size === 0) return issuers;
-    return issuers.filter((issuer) => {
+    if (activeFilters.size === 0) return decided;
+    return decided.filter((issuer) => {
       if (issuer.isBuiltIn) return activeFilters.has("built-in");
       if (activeFilters.has("built-in") && activeFilters.size === 1)
         return false;
       return activeFilters.has(issuer.status as IssuerFilter);
     });
-  }, [issuers, activeFilters]);
+  }, [decided, activeFilters]);
 
   const counts = useMemo(() => {
     const c: Record<IssuerFilter, number> = {
-      pending: 0,
       approved: 0,
       rejected: 0,
       revoked: 0,
       "built-in": 0,
     };
-    for (const i of issuers) {
+    for (const i of decided) {
       if (i.isBuiltIn) c["built-in"]++;
       else c[i.status as IssuerFilter]++;
     }
     return c;
-  }, [issuers]);
+  }, [decided]);
 
   const [approveTarget, setApproveTarget] = useState<IssuerLike | null>(null);
   const [approveScopes, setApproveScopes] = useState<
     TrustedIssuerScope[] | undefined
   >(undefined);
-  const [rejectTarget, setRejectTarget] = useState<IssuerLike | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<IssuerLike | null>(null);
 
   function toggleFilter(f: IssuerFilter) {
@@ -305,6 +289,22 @@ export function IssuersSection() {
           setApproveTarget(issuer);
         }}
       />
+
+      {pendingCount > 0 && (
+        <Link
+          href="/review?type=issuer"
+          className="flex min-h-10 items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
+        >
+          <span>
+            {pendingCount} {pendingCount === 1 ? "issuer is" : "issuers are"}{" "}
+            waiting for your approval
+          </span>
+          <span className="inline-flex shrink-0 items-center gap-1 font-medium">
+            Review
+            <ArrowRight className="h-3.5 w-3.5" />
+          </span>
+        </Link>
+      )}
 
       {/* Filter chips */}
       <div className="flex flex-wrap items-center gap-2">
@@ -361,8 +361,6 @@ export function IssuersSection() {
             >
               <IssuerRow
                 issuer={issuer}
-                onApprove={() => setApproveTarget(issuer)}
-                onReject={() => setRejectTarget(issuer)}
                 onRevoke={() => setRevokeTarget(issuer)}
               />
             </div>
@@ -387,17 +385,6 @@ export function IssuersSection() {
           }}
         />
       )}
-      {rejectTarget && (
-        <RejectModal
-          issuer={rejectTarget}
-          isPending={reject.isPending}
-          onClose={() => setRejectTarget(null)}
-          onConfirm={async (reason) => {
-            await reject.mutateAsync({ id: rejectTarget.id, reason });
-            setRejectTarget(null);
-          }}
-        />
-      )}
       {revokeTarget && (
         <RevokeModal
           issuer={revokeTarget}
@@ -417,13 +404,9 @@ export function IssuersSection() {
 
 function IssuerRow({
   issuer,
-  onApprove,
-  onReject,
   onRevoke,
 }: {
   issuer: IssuerLike;
-  onApprove: () => void;
-  onReject: () => void;
   onRevoke: () => void;
 }) {
   const Icon = issuer.isBuiltIn ? Lock : ShieldCheck;
@@ -452,30 +435,6 @@ function IssuerRow({
         status={{ kind: statusKind, label: statusLabel }}
         actions={
           <div className="flex items-center gap-1.5">
-            {issuer.status === "pending" && !issuer.isBuiltIn && (
-              <>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  color="success"
-                  radius="md"
-                  onPress={onApprove}
-                  startContent={<Check className="h-3.5 w-3.5" />}
-                >
-                  Approve
-                </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  color="danger"
-                  radius="md"
-                  onPress={onReject}
-                  startContent={<X className="h-3.5 w-3.5" />}
-                >
-                  Reject
-                </Button>
-              </>
-            )}
             {issuer.status === "approved" && !issuer.isBuiltIn && (
               <Button
                 size="sm"
@@ -625,74 +584,6 @@ function ApproveModal({
   );
 }
 
-function RejectModal({
-  issuer,
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  issuer: IssuerLike;
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: (reason: string) => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-  const [reason, setReason] = useState("");
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(248, 113, 113, 0.18)" }}
-          >
-            <X className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="font-medium">Reject {issuer.displayName}</span>
-        </ModalHeader>
-        <ModalBody className="gap-2 pb-2">
-          <p className="font-mono text-[11.5px] text-foreground/55">
-            {issuer.issuerUrl}
-          </p>
-          <Textarea
-            placeholder="Why is this connection being rejected?"
-            label="Reason"
-            value={reason}
-            onValueChange={setReason}
-            minRows={3}
-            size="sm"
-          />
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="light"
-            size="sm"
-            radius="md"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            size="sm"
-            radius="md"
-            isDisabled={!reason.trim() || isPending}
-            isLoading={isPending}
-            onPress={() => void onConfirm(reason.trim())}
-          >
-            Reject
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
 function RevokeModal({
   issuer,
   isPending,
@@ -756,7 +647,3 @@ function RevokeModal({
     </Modal>
   );
 }
-
-// Suppress unused warning for KeyRound — kept for visual symmetry with overview.
-void ShieldQuestion;
-void KeyRound;

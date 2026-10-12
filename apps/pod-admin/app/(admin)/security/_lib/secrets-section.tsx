@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Trust & Keys → Secrets vault sub-tab.
+ * Pod security → Secrets section.
  *
  * pod-admin does NOT own secrets, and this tab exists only to say so honestly.
  * Two facts, both true and both load-bearing for an operator:

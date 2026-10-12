@@ -1,12 +1,9 @@
 "use client";
 
 /**
- * Trust & Keys → API keys sub-tab.
- *
- * Unified key list (no system/operator split).
- * Tabs: Active | Revoked
- * Each row has a type badge: Agent | Operator | System
- * Revoked keys get a "Delete" action to permanently remove them.
+ * Keys → the unified key list (no system/operator split).
+ * Tabs: Active | Revoked. Each row carries a type badge (`categorize`, in
+ * `key-model.ts`); revoked keys get a "Delete" action to remove the record.
  *
  * Procedures used:
  *   • trpc.apiKeys.adminListAll      — pod-admin, all keys
@@ -24,33 +21,22 @@ import {
   DropdownMenu,
   DropdownTrigger,
   Input,
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalFooter,
-  ModalHeader,
-  Select,
-  SelectItem,
-  Snippet,
   Tab,
   Tabs,
   addToast,
-  useDisclosure,
 } from "@heroui/react";
 import {
   Ban,
-  Copy,
-  Eye,
   KeyRound,
   MoreHorizontal,
   Plus,
   RefreshCw,
-  ShieldAlert,
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { ConfirmModal } from "../../components/confirm-modal";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -58,124 +44,17 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
-import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "../../../../lib/format";
 import {
-  GrantRolePicker,
-  keyMintFromRole,
-  roleSetsLifetime,
-  useGrantRoleOptions,
-} from "./grant-role-picker";
-import { GRANT_PRESETS, type GrantMintInput } from "@synap-core/types/grants";
-
-export interface UnifiedKey {
-  id: string;
-  userId?: string;
-  keyName: string;
-  keyPrefix: string;
-  keyType?: string | null;
-  hubId?: string | null;
-  linkedUserId?: string | null;
-  scope?: string[] | string | null;
-  isActive: boolean;
-  expiresAt?: Date | string | null;
-  lastUsedAt?: Date | string | null;
-  usageCount?: number | null;
-  createdAt?: Date | string | null;
-  revokedAt?: Date | string | null;
-  revokedReason?: string | null;
-  user?: {
-    id: string;
-    email: string | null;
-    name: string | null;
-    userType?: string | null;
-  };
-}
-
-export type KeyCategory = "agent" | "cli" | "service" | "system" | "operator";
-
-/**
- * Badge category, derived purely from `keyType` (the real signal) — never
- * from `hubId`/`keyPrefix` heuristics, which mislabeled a self-service
- * `/connect` CLI key (keyType `hub_inbound`, `linkedUserId` set to the human
- * it acts for) as "System".
- */
-export function categorize(k: UnifiedKey): KeyCategory {
-  switch (k.keyType) {
-    case "is_internal":
-      // The trusted Intelligence-Service pod-read key — operator/system tier.
-      return "system";
-    case "service":
-      return "service";
-    case "hub_inbound":
-      if (k.linkedUserId) {
-        return k.hubId?.startsWith("integration:cli") ? "cli" : "agent";
-      }
-      return "system";
-    default:
-      // "system" (admin-minted) and "user_pat" (personal access token) both
-      // fall here: "system" is already correctly named by keyType; everything
-      // else (personal access tokens) maps to the operator bucket.
-      return k.keyType === "system" ? "system" : "operator";
-  }
-}
-
-export const CATEGORY_LABEL: Record<KeyCategory, string> = {
-  agent: "Agent",
-  cli: "CLI",
-  service: "Service",
-  system: "System",
-  operator: "Operator",
-};
-
-/**
- * Per-key-type curation: which scopes to OFFER for each key type. This is a
- * presentation choice only — the backend (`apiKeys.availableScopes`, backed by
- * `API_KEY_SCOPES`) is the source of truth for which scopes are VALID, and the
- * dialog filters this list through it, so an entry the backend rejects is never
- * shown. Keep entries here to the backend's known scopes.
- */
-const KEY_TYPE_SCOPES = {
-  personal: [
-    "data.read",
-    "data.write",
-    "hub-protocol.read",
-    "setup.agent",
-    "chat.stream",
-    "realtime:observe",
-  ],
-  system: [
-    "data.read",
-    "data.write",
-    "hub-protocol.read",
-    "hub-protocol.write",
-    "setup.agent",
-    "chat.stream",
-    "realtime:observe",
-    "mcp.read",
-    "mcp.write",
-  ],
-} as const;
-
-/**
- * The scopes a key dialog offers for a key type. The backend is the source of
- * truth for which scopes are valid: the per-key-type curation (which subset to
- * OFFER) is filtered through its canonical list, so a scope the validator
- * doesn't accept can never be shown or selected — even if a local list drifts.
- */
-export function useOfferedKeyScopes(
-  kind: keyof typeof KEY_TYPE_SCOPES
-): readonly string[] {
-  const scopeQuery = trpc.apiKeys.availableScopes.useQuery(undefined, {
-    staleTime: 300_000,
-  });
-  const backendScopes = scopeQuery.data?.scopes;
-  const curated = KEY_TYPE_SCOPES[kind];
-  return backendScopes
-    ? curated.filter((s) => backendScopes.includes(s))
-    : curated;
-}
+  CATEGORY_LABEL,
+  categorize,
+  keyStatus,
+  normalizeScopes,
+  type KeyCategory,
+  type UnifiedKey,
+} from "./key-model";
+import { CreateKeyModal, RevealKeyModal } from "./key-modals";
 
 export function ApiKeysSection() {
   const operatorKeys = trpc.apiKeys.adminListAll.useQuery(undefined, {
@@ -210,6 +89,7 @@ export function ApiKeysSection() {
   const [tab, setTab] = useState<"active" | "revoked">("active");
   const [createOpen, setCreateOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<UnifiedKey | null>(null);
+  const [revokeReason, setRevokeReason] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<UnifiedKey | null>(null);
   const [revealedKey, setRevealedKey] = useState<{
     keyName: string;
@@ -490,29 +370,56 @@ export function ApiKeysSection() {
         />
       )}
 
-      {revokeTarget && (
-        <RevokeKeyModal
-          apiKey={revokeTarget}
-          isPending={revoke.isPending}
-          onClose={() => setRevokeTarget(null)}
-          onConfirm={async (reason) => {
-            await revoke.mutateAsync({ keyId: revokeTarget.id, reason });
-            setRevokeTarget(null);
-          }}
+      <ConfirmModal
+        isOpen={revokeTarget !== null}
+        onClose={() => {
+          setRevokeTarget(null);
+          setRevokeReason("");
+        }}
+        onConfirm={() => {
+          if (!revokeTarget) return;
+          revoke.mutate(
+            {
+              keyId: revokeTarget.id,
+              reason: revokeReason.trim() || "Revoked by admin",
+            },
+            {
+              onSuccess: () => {
+                setRevokeTarget(null);
+                setRevokeReason("");
+              },
+            }
+          );
+        }}
+        title={`Revoke ${revokeTarget?.keyName ?? "key"}`}
+        consequence="This key will stop working immediately. It cannot be reactivated."
+        confirmLabel="Revoke"
+        isPending={revoke.isPending}
+      >
+        <Input
+          label="Reason (optional)"
+          placeholder="e.g. compromised, no longer needed"
+          value={revokeReason}
+          onValueChange={setRevokeReason}
+          size="sm"
         />
-      )}
+      </ConfirmModal>
 
-      {deleteTarget && (
-        <DeleteKeyModal
-          apiKey={deleteTarget}
-          isPending={deleteRevoked.isPending}
-          onClose={() => setDeleteTarget(null)}
-          onConfirm={async () => {
-            await deleteRevoked.mutateAsync({ keyId: deleteTarget.id });
-            setDeleteTarget(null);
-          }}
-        />
-      )}
+      <ConfirmModal
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deleteRevoked.mutate(
+            { keyId: deleteTarget.id },
+            { onSuccess: () => setDeleteTarget(null) }
+          );
+        }}
+        title={`Delete ${deleteTarget?.keyName ?? "key"}`}
+        consequence="This permanently removes the key record. The key is already revoked and can no longer authenticate. This cannot be undone."
+        confirmLabel="Delete permanently"
+        isPending={deleteRevoked.isPending}
+      />
 
       {revealedKey && (
         <RevealKeyModal
@@ -626,425 +533,3 @@ function KeyRow({
     />
   );
 }
-
-export function keyStatus(apiKey: {
-  isActive: boolean;
-  expiresAt?: Date | string | null;
-}): { kind: StatusKind; label: string } {
-  if (!apiKey.isActive) return { kind: "down", label: "Revoked" };
-  if (apiKey.expiresAt) {
-    const exp = new Date(apiKey.expiresAt).getTime();
-    if (exp < Date.now()) return { kind: "stale", label: "Expired" };
-    if (exp - Date.now() < 7 * 24 * 60 * 60 * 1000)
-      return { kind: "stale", label: "Expiring soon" };
-  }
-  return { kind: "healthy", label: "Active" };
-}
-
-function normalizeScopes(s: string[] | string | null | undefined): string[] {
-  if (!s) return [];
-  if (Array.isArray(s)) return s;
-  return s
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
-}
-
-// ─── Create modal ─────────────────────────────────────────────────────────
-
-type CreateKeyInput = {
-  kind: "personal" | "system";
-  keyName: string;
-  scope: string[];
-  /** null = never; a personal key omitted = 90 days. */
-  expiresInDays?: number | null;
-  /** Personal keys only (required there): what it may touch. */
-  grant?: GrantMintInput["grant"];
-};
-
-function CreateKeyModal({
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: (input: CreateKeyInput) => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-  const [kind, setKind] = useState<"personal" | "system">("personal");
-  const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>(["data.read"]);
-  const [expiry, setExpiry] = useState<string>("90");
-  const {
-    roles,
-    isError: rolesFailed,
-    refetch: refetchRoles,
-  } = useGrantRoleOptions();
-  const [roleId, setRoleId] = useState<string>(GRANT_PRESETS[0].id);
-  const expiresInDays = expiry === "never" ? null : Number(expiry);
-  const minted =
-    kind === "personal"
-      ? keyMintFromRole(roleId, roles, { expiresInDays })
-      : undefined;
-  const roleLifetime = kind === "personal" && roleSetsLifetime(roleId, roles);
-
-  function toggle(s: string) {
-    setScopes((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-    );
-  }
-
-  const availableScopes = useOfferedKeyScopes(kind);
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(52, 211, 153, 0.18)" }}
-          >
-            <KeyRound className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="font-medium">New API key</span>
-        </ModalHeader>
-        <ModalBody className="gap-4 pb-2">
-          {/* Key kind */}
-          <div className="grid grid-cols-2 gap-2">
-            {(["personal", "system"] as const).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => {
-                  setKind(k);
-                  setScopes(
-                    k === "system"
-                      ? ["hub-protocol.read", "hub-protocol.write"]
-                      : ["data.read"]
-                  );
-                }}
-                className={[
-                  "flex flex-col gap-0.5 rounded-lg border px-3 py-2.5 text-left transition-colors",
-                  kind === k
-                    ? "border-primary/40 bg-primary/[0.07] ring-1 ring-inset ring-primary/30"
-                    : "border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.06]",
-                ].join(" ")}
-              >
-                <span className="text-[12.5px] font-medium text-foreground capitalize">
-                  {k}
-                </span>
-                <span className="text-[11px] text-foreground/55">
-                  {k === "personal"
-                    ? "Your personal access token (synap_user_)"
-                    : "For automation & scripts — CLI/Raycast use /admin/connect"}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          <Input
-            label="Key name"
-            placeholder={
-              kind === "system" ? "e.g. n8n automation" : "e.g. Raycast laptop"
-            }
-            value={name}
-            onValueChange={setName}
-            size="sm"
-            isRequired
-          />
-          <div>
-            <p className="mb-1.5 text-[12.5px] font-medium text-foreground">
-              Scopes
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {availableScopes.map((s) => {
-                const active = scopes.includes(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => toggle(s)}
-                    className={[
-                      "rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors",
-                      active
-                        ? "bg-primary/15 text-primary ring-1 ring-inset ring-primary/40"
-                        : "bg-foreground/[0.05] text-foreground/65 hover:bg-foreground/[0.08]",
-                    ].join(" ")}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          {kind === "personal" ? (
-            <GrantRolePicker
-              value={roleId}
-              onChange={setRoleId}
-              roles={roles}
-              minted={minted}
-              scopes={scopes}
-              rolesFailed={rolesFailed}
-              onRetryRoles={refetchRoles}
-              isDisabled={isPending}
-            />
-          ) : null}
-          {/* A role with its own lifetime sets it; the summary line says when. */}
-          {roleLifetime ? null : (
-            <Select
-              label="Expires in"
-              size="sm"
-              selectedKeys={[expiry]}
-              onSelectionChange={(keys) => {
-                const k = Array.from(keys as Set<string>)[0];
-                if (k) setExpiry(k);
-              }}
-            >
-              <SelectItem key="never">Never</SelectItem>
-              <SelectItem key="30">30 days</SelectItem>
-              <SelectItem key="90">90 days</SelectItem>
-              <SelectItem key="365">1 year</SelectItem>
-            </Select>
-          )}
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="light"
-            size="sm"
-            radius="md"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="primary"
-            size="sm"
-            radius="md"
-            isDisabled={
-              !name.trim() ||
-              scopes.length === 0 ||
-              (kind === "personal" && !minted) ||
-              isPending
-            }
-            isLoading={isPending}
-            onPress={() =>
-              void onConfirm({
-                kind,
-                keyName: name.trim(),
-                scope: scopes,
-                expiresInDays: minted ? minted.expiresInDays : expiresInDays,
-                ...(minted ? { grant: minted.grant } : {}),
-              })
-            }
-          >
-            Create
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-// ─── Revoke modal ─────────────────────────────────────────────────────────
-
-function RevokeKeyModal({
-  apiKey,
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  apiKey: UnifiedKey;
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: (reason: string) => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-  const [reason, setReason] = useState("");
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(248, 113, 113, 0.18)" }}
-          >
-            <Ban className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="font-medium">Revoke {apiKey.keyName}</span>
-        </ModalHeader>
-        <ModalBody className="gap-2 pb-2">
-          <p className="text-[12.5px] text-foreground/85">
-            This key will stop working immediately. It cannot be reactivated.
-          </p>
-          <Input
-            label="Reason (optional)"
-            placeholder="e.g. compromised, no longer needed"
-            value={reason}
-            onValueChange={setReason}
-            size="sm"
-          />
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="light"
-            size="sm"
-            radius="md"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            size="sm"
-            radius="md"
-            isLoading={isPending}
-            onPress={() => void onConfirm(reason.trim() || "Revoked by admin")}
-          >
-            Revoke
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-// ─── Delete modal ─────────────────────────────────────────────────────────
-
-function DeleteKeyModal({
-  apiKey,
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  apiKey: UnifiedKey;
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: () => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(248, 113, 113, 0.18)" }}
-          >
-            <Trash2 className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="font-medium">Delete {apiKey.keyName}</span>
-        </ModalHeader>
-        <ModalBody className="pb-2">
-          <p className="text-[12.5px] text-foreground/85">
-            This will permanently remove the key record. The key is already
-            revoked and can no longer authenticate. This action cannot be
-            undone.
-          </p>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="light"
-            size="sm"
-            radius="md"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            size="sm"
-            radius="md"
-            isLoading={isPending}
-            onPress={() => void onConfirm()}
-          >
-            Delete permanently
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-// ─── Reveal modal — shown ONCE on create / rotate ─────────────────────────
-
-function RevealKeyModal({
-  keyName,
-  plaintext,
-  note,
-  onClose,
-}: {
-  keyName: string;
-  plaintext: string;
-  note: "created" | "rotated";
-  onClose: () => void;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      size="md"
-      isDismissable={false}
-      hideCloseButton
-    >
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(245, 158, 11, 0.20)" }}
-          >
-            <ShieldAlert className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="font-medium">
-            {note === "created" ? "Key created" : "Key rotated"}
-          </span>
-        </ModalHeader>
-        <ModalBody className="gap-3 pb-2">
-          <p className="text-[12.5px] text-foreground/85">
-            Save <span className="font-medium">{keyName}</span> now — this is
-            the only time it will be shown.
-          </p>
-          <Snippet
-            symbol=""
-            size="sm"
-            className="overflow-hidden font-mono"
-            classNames={{ base: "bg-foreground/[0.05]" }}
-          >
-            {plaintext}
-          </Snippet>
-          <p className="text-[11.5px] text-foreground/55">
-            Treat this like a password. Anyone with the key can act on this pod
-            within its scopes.
-          </p>
-        </ModalBody>
-        <ModalFooter>
-          <Button color="primary" size="sm" radius="md" onPress={onClose}>
-            I have saved it
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-void Copy;
-void Eye;
