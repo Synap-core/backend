@@ -34,6 +34,7 @@ import {
   isTerminalLifecycleCategory,
   lifecycleOptionLabel,
   lifecycleOptionTone,
+  UNCLASSIFIED_STATUS,
 } from "@synap-core/types/lifecycle";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { getTrack } from "../services/tracks/tracks-service.js";
@@ -49,8 +50,6 @@ import {
 
 /** W17: below this many LIVE things a pipeline defaults to a list. */
 export const BOARD_LIST_THRESHOLD = 10;
-/** The key of the column holding values no option declares. */
-export const UNCLASSIFIED_COLUMN = "__unclassified";
 
 const categorySchema = z.enum(LIFECYCLE_CATEGORIES);
 
@@ -348,7 +347,7 @@ export const lifecycleRouter = router({
       );
       if (stray.length > 0) {
         columns.push({
-          key: UNCLASSIFIED_COLUMN,
+          key: UNCLASSIFIED_STATUS,
           category: null,
           count: stray.reduce((n, g) => n + g.count, 0),
           items: stray
@@ -386,9 +385,9 @@ export const lifecycleRouter = router({
           columns.find((c) => c.key === input.column) ??
           // An unclassified column with nothing in it is still a column a
           // caller may ask for (it answers empty).
-          (input.column === UNCLASSIFIED_COLUMN
+          (input.column === UNCLASSIFIED_STATUS
             ? {
-                key: UNCLASSIFIED_COLUMN,
+                key: UNCLASSIFIED_STATUS,
                 category: null,
                 count: 0,
                 items: [],
@@ -408,7 +407,7 @@ export const lifecycleRouter = router({
           order: "time_in_column",
           terminal: { statuses: terminalKeys, since },
           column:
-            col.key === UNCLASSIFIED_COLUMN
+            col.key === UNCLASSIFIED_STATUS
               ? { outside: [...declared] }
               : { statuses: [col.key] },
           offset,

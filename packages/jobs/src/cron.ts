@@ -248,6 +248,9 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: lifecycle-transition-sweeper (every minute)");
+  // And once at boot: an owed event left by a process that died mid-dispatch
+  // is delivered without waiting for the first tick.
+  await sendSafe(boss, LIFECYCLE_TRANSITION_SWEEPER_QUEUE, {});
 
   // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
   await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});
