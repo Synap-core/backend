@@ -41473,7 +41473,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					category: "active" | "paused" | "open" | "done" | "lost";
 					tone: string;
 					humanOnly: boolean;
-					stuckAfterDays: number | null;
+					stuckAfterDays?: number | undefined;
 				}[];
 			};
 			meta: object;
@@ -41504,7 +41504,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						category: "active" | "paused" | "open" | "done" | "lost";
 						tone: string;
 						humanOnly: boolean;
-						stuckAfterDays: number | null;
+						stuckAfterDays?: number | undefined;
 					}[];
 				};
 				columns: {
