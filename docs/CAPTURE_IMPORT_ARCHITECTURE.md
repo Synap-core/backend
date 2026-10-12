@@ -1,6 +1,8 @@
 # Capture & Import — Architecture Decisions
 
-**Status:** Decision doc for review BEFORE further implementation.
+**Status:** Decision doc (2026-06-01). §0 and §2 amended 2026-10-12 for the
+Import → Curate → Build split — see [`IMPORT_CURATE_BUILD.md`](IMPORT_CURATE_BUILD.md),
+which supersedes the retired `IMPORT_ONBOARDING_WIRING.md` / `IMPORT_QUALITY_STATE.md`.
 **Date:** 2026-06-01
 **Grounded in:** the real vault at `/Users/antoine/Documents/knowledge` (8068 files, 331 `.md`).
 
@@ -18,8 +20,8 @@ These are three different things and were getting conflated:
 
 **Does import now force everything through the IS / protocol?** **No.**
 
-- `/import/analyze` lives entirely in the **backend** and is **deterministic — zero LLM, zero IS call.**
-- The only thing that changed: `import.submitBatch` stopped **direct-writing** entities and now creates **proposals** — still 100% backend, no AI.
+- `/import/analyze` (tRPC `import.analyze` / `analyzeLarge` / the corpus job) lives in the **backend** and is **deterministic by default — no model reads the content** unless the caller opts in with `aiStructure: true`. (Between June and October 2026 the default was `true`: every note body went to the IS. Flipped back, D4.) The one model call left on by default is the CSV column→kind table plan (`csvTablePlan`, its own flag).
+- Import never direct-writes: it files a governed `import.graph` proposal. (`import.submitBatch`, the old per-file path, is deleted.)
 
 So the real axis is **not** "backend vs IS." It is **"who is allowed to write directly vs through a proposal."** Settled next.
 
@@ -43,15 +45,17 @@ Concretely:
 
 ## 2. Capture vs Import — the boundary (settled)
 
-Two intents, two mechanisms, ONE governance + ONE materializer:
+Two intents, two mechanisms, ONE governance + ONE materializer. **A capture is
+what you write; an import is a batch you didn't write.**
 
-|                       | **Capture**                                              | **Import**                                             |
-| --------------------- | -------------------------------------------------------- | ------------------------------------------------------ |
-| Input                 | unstructured blob (text, a page, a chat)                 | already-structured corpus (Obsidian, Notion, a folder) |
-| Structuring           | **AI** (`capture.structure`, LLM, per item)              | **deterministic** (`/import/analyze`, no LLM)          |
-| Needs IS?             | yes                                                      | no                                                     |
-| Output                | proposal                                                 | proposal (graph composite)                             |
-| Approve / materialize | same `proposals.approve` → same entity/relation creation | same                                                   |
+|                       | **Capture** (read now)                                   | **Import** (stage → curate → build)                                                                  |
+| --------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Input                 | one thing written or shared now (text, a page, a chat)   | a batch the person did not write (files, links, videos, notes, a vault)                              |
+| Reads content         | immediately (`capture.structure`, LLM, per item)         | **only at Build, only kept items**, steered only by the person's notes; collect reads metadata only  |
+| AI on entry           | structures the item                                      | one cheap pass over **titles** to propose groups                                                     |
+| Needs IS?             | yes                                                      | grouping + Build only; the legacy `/import/analyze` path is deterministic unless `aiStructure: true` |
+| Output                | proposal                                                 | one governed bundle per group: things, the group, Tools, Templates (draft), Rules (off), Lists       |
+| Approve / materialize | same `proposals.approve` → same entity/relation creation | same (composite ops incl. `create_view`); undo = the import session's revert                         |
 
 **AI restructuring of imported data is a THIRD, separate step** (the future "Structure Steward") — never folded into import. Import mirrors; restructure improves. See §4 for why this separation is load-bearing.
 
