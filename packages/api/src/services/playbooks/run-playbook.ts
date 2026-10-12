@@ -72,7 +72,6 @@ import {
   getLinksFor,
   createLinks,
 } from "../links/links-service.js";
-import { listThingsInStatus } from "../../routers/entities/status-groups.js";
 import { WORKER_IRREVERSIBLE_DAILY_CEILING } from "@synap/governance-policy";
 import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
@@ -1264,6 +1263,7 @@ export async function gateWorkerRun(
     }
   }
   if (worker.size === "per_thing" && worker.status && input.subjectId) {
+    const { listThingsInStatus } = await loadStatusGroups();
     const still = await listThingsInStatus({
       profileSlug: worker.profileSlug,
       status: worker.status,
@@ -1276,6 +1276,13 @@ export async function gateWorkerRun(
   }
   return null;
 }
+
+/**
+ * The board's status read, loaded only by a worker run: it lives beside the
+ * entity routers and pulls their module graph, which no other run needs.
+ */
+const loadStatusGroups = () =>
+  import("../../routers/entities/status-groups.js");
 
 function workerMaxPending(declared: number | undefined): number {
   const n =
@@ -1303,6 +1310,7 @@ async function runWorkerBatch(
   const inFlight = worker.automationId
     ? await listWorkerTargetsInFlight(worker.automationId)
     : [];
+  const { listThingsInStatus } = await loadStatusGroups();
   const set = await listThingsInStatus({
     profileSlug: worker.profileSlug,
     status: worker.status ?? null,
