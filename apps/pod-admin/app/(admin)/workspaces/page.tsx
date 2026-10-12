@@ -56,6 +56,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { PageHeader } from "../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -65,7 +66,7 @@ import {
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
-import { formatRelative } from "../people/_lib/helpers";
+import { formatRelative } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
 import { ExitFallback } from "../../../lib/exit-link";
 
@@ -137,11 +138,7 @@ export default function WorkspacesPage() {
 function WorkspacesFallback() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Workspaces
-        </h1>
-      </header>
+      <PageHeader title="Workspaces" />
       <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
     </div>
   );
@@ -196,38 +193,36 @@ function WorkspacesInner() {
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-            Workspaces
-          </h1>
-          <p className="text-[13px] text-foreground/55">
-            All workspaces on this pod. Internals are managed in Studio.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 rounded-md bg-foreground/[0.04] px-3 py-1.5 ring-1 ring-inset ring-foreground/10">
-            <span className="text-[11.5px] tabular text-foreground/55">
-              <span className="font-medium text-foreground">{stats.total}</span>{" "}
-              total ·{" "}
-              <span className="font-medium text-foreground">
-                {stats.active}
-              </span>{" "}
-              active in last 7d
-            </span>
-          </div>
-          <Button
-            color="primary"
-            variant="solid"
-            radius="md"
-            size="sm"
-            startContent={<Plus className="h-3.5 w-3.5" />}
-            onPress={createDisclosure.onOpen}
-          >
-            Create workspace
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        title="Workspaces"
+        description="All workspaces on this pod. Internals are managed in Studio."
+        actions={
+          <>
+            <div className="flex items-center gap-2 rounded-md bg-foreground/[0.04] px-3 py-1.5 ring-1 ring-inset ring-foreground/10">
+              <span className="text-[11.5px] tabular text-foreground/55">
+                <span className="font-medium text-foreground">
+                  {stats.total}
+                </span>{" "}
+                total ·{" "}
+                <span className="font-medium text-foreground">
+                  {stats.active}
+                </span>{" "}
+                active in last 7d
+              </span>
+            </div>
+            <Button
+              color="primary"
+              variant="solid"
+              radius="md"
+              size="sm"
+              startContent={<Plus className="h-3.5 w-3.5" />}
+              onPress={createDisclosure.onOpen}
+            >
+              Create workspace
+            </Button>
+          </>
+        }
+      />
 
       <SectionCard
         title="All workspaces"

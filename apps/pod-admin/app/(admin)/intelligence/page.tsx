@@ -70,6 +70,7 @@ import {
 import { SectionCard } from "../components/section-card";
 import type { StatusKind } from "../components/status-pill";
 import { StatusPill } from "../components/status-pill";
+import { formatRelative } from "../../../lib/format";
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
@@ -1486,7 +1487,7 @@ function FailedAiTurnsSection() {
       ) : (
         <div className="-mx-2">
           {runs.map((run) => {
-            const when = formatRelativeTime(run.startedAt);
+            const when = formatRelative(run.startedAt);
             // Absent on a turn whose channel was since deleted — no channel,
             // no exit, rather than a link to nothing.
             const exit = run.channelId
@@ -1548,22 +1549,6 @@ function FailedAiTurnsSection() {
       )}
     </SectionCard>
   );
-}
-
-function formatRelativeTime(iso: string | Date | null | undefined): string {
-  if (!iso) return "—";
-  const d = iso instanceof Date ? iso : new Date(iso);
-  const ms = d.getTime();
-  if (!Number.isFinite(ms)) return "—";
-  const diff = Date.now() - ms;
-  if (diff < 60_000) return "just now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return d.toLocaleDateString();
 }
 
 // ─── 6. OpenClaw summary ─────────────────────────────────────────────

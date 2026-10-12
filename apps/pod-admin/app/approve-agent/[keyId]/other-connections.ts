@@ -12,7 +12,7 @@
  * `connections`; that reads as `known: false`, never as "no other computer".
  */
 import { resolveServiceMark } from "@synap-core/types/service-marks";
-import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
+import { formatRelative } from "../../../lib/format";
 
 /** One of the agent's other live connections, as the pod sends it. */
 export interface OtherConnection {

@@ -24,7 +24,7 @@ import { ReceiverShell } from "../../_lib/receiver-shell";
    through superjson, and a helper that only accepts `Date` would be a lie the
    day a plain-JSON path feeds this page. Writing a third copy is what the rule
    forbids. */
-import { formatRelative } from "../../(admin)/audit/_lib/format";
+import { formatRelative } from "../../../lib/format";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
    non-uuid workspace ref would fire a request that can only fail. */

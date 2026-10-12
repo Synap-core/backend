@@ -39,6 +39,7 @@ import { useEffect, useState } from "react";
 import { Button, Spinner, addToast } from "@heroui/react";
 import { KeyRound, ShieldAlert, Trash2 } from "lucide-react";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { PageHeader } from "../(admin)/components/page-header";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { HandoffCard } from "../(admin)/components/handoff-card";
 import { SectionCard } from "../(admin)/components/section-card";
@@ -47,7 +48,7 @@ import {
   ResourceRowEmpty,
   ResourceRowError,
 } from "../(admin)/components/resource-row";
-import { formatRelative } from "../(admin)/trust-keys/_lib/format";
+import { formatRelative } from "../../lib/format";
 import { openIn } from "../../lib/open-in";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
@@ -157,21 +158,14 @@ export default function MyVaultPage() {
 
   return (
     <div className="mx-auto max-w-[900px] px-6 py-10">
-      <header className="mb-6 max-w-2xl">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          My vault
-        </h1>
-        {/* The honest sentence. This tab's predecessor claimed vaults were
-            client-encrypted and unreadable by the pod; they are not. What is
-            true — and is the reason to keep secrets here at all — is that the
-            vault is scoped to its owner. */}
-        <p className="mt-1 text-[13px] leading-5 text-foreground/65">
-          Secrets you&apos;ve stored on this Pod. They&apos;re encrypted at rest
-          with a key this Pod holds, which is what lets an agent use a
-          credential you grant it. What the vault guarantees is isolation:
-          nobody else on this Pod can list, use, or delete yours.
-        </p>
-      </header>
+      {/* The honest sentence. This tab's predecessor claimed vaults were
+          client-encrypted and unreadable by the pod; they are not. What is
+          true — and is the reason to keep secrets here at all — is that the
+          vault is scoped to its owner. */}
+      <PageHeader
+        title="My vault"
+        description="Secrets you've stored on this Pod. They're encrypted at rest with a key this Pod holds, which is what lets an agent use a credential you grant it. What the vault guarantees is isolation: nobody else on this Pod can list, use, or delete yours."
+      />
 
       <div className="flex flex-col gap-5">
         <SectionCard

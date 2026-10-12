@@ -27,6 +27,7 @@ import {
   type CatalogPage,
   type CatalogPackage,
 } from "../../../lib/marketplace";
+import { PageHeader } from "../components/page-header";
 import { ResourceRowEmpty, ResourceRowError } from "../components/resource-row";
 import { kindIcon, kindLabel } from "./_lib/kind-icon";
 
@@ -117,15 +118,10 @@ export default function MarketplacePage() {
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-5 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Marketplace
-        </h1>
-        <p className="text-[12.5px] text-foreground/55">
-          Workspaces, capabilities and cards published to the Synap catalog.
-          Installing shows you what it will do to this pod first.
-        </p>
-      </header>
+      <PageHeader
+        title="Marketplace"
+        description="Workspaces, capabilities and cards published to the Synap catalog. Installing shows you what it will do to this pod first."
+      />
 
       <div className="mb-4 flex flex-col gap-3">
         <Input

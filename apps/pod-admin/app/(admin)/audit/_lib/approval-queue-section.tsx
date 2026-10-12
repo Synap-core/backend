@@ -40,7 +40,7 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import type { AuditFilters } from "./filter-bar";
-import { formatRelative, shortId } from "./format";
+import { formatRelative, shortId } from "../../../../lib/format";
 
 interface PendingProposal {
   id: string;

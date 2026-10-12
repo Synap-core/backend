@@ -27,7 +27,7 @@ import {
 import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
 import type { AuditFilters } from "./filter-bar";
-import { formatRelative, shortId } from "./format";
+import { formatRelative, shortId } from "../../../../lib/format";
 
 type ProposalStatusUI = "pending" | "validated" | "rejected" | "all";
 

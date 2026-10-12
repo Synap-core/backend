@@ -27,6 +27,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { Ban, ChevronDown, Plug, SquareCode } from "lucide-react";
+import { PageHeader } from "../(admin)/components/page-header";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { CopyButton } from "../_lib/copy-button";
 import { trpc } from "../../lib/trpc";
@@ -37,7 +38,7 @@ import {
   keyStatus,
   type UnifiedKey,
 } from "../(admin)/trust-keys/_lib/api-keys-section";
-import { formatRelative } from "../(admin)/trust-keys/_lib/format";
+import { formatRelative } from "../../lib/format";
 import {
   FULL_ACCESS_ACCESSIBLE_NAME,
   FULL_ACCESS_LABEL,
@@ -305,15 +306,10 @@ export default function MyConnectionsPage() {
 
   return (
     <div className="mx-auto max-w-[900px] px-6 py-10">
-      <header className="mb-6 max-w-2xl">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Connected
-        </h1>
-        <p className="mt-1 text-[13px] leading-5 text-foreground/60">
-          Every app you own and every key you&apos;ve minted for this Pod, with
-          exactly what each may touch. Revoking one here only affects you.
-        </p>
-      </header>
+      <PageHeader
+        title="Connected"
+        description="Every app you own and every key you've minted for this Pod, with exactly what each may touch. Revoking one here only affects you."
+      />
 
       <section className="mb-9 space-y-3" aria-labelledby="apps">
         <div className="flex items-center justify-between gap-3">
