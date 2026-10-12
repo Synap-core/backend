@@ -18,12 +18,51 @@ import { mcpServers } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { invalidateMcpCache } from "./channels.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
-import { execFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
+import {
+  execFieldsChanged,
+  MCP_SERVER_RE_APPROVAL_FIELDS,
+} from "../services/capabilities/skill-exec-fields.js";
 import {
   getWorkspaceRole,
   requireAdminRole,
   requirePodAdmin,
 } from "../utils/workspace-role.js";
+
+/**
+ * THE management gate for an MCP server row — every mutation here calls it.
+ *
+ *   - workspace row → owner/admin of that workspace (`level: "owner"` narrows
+ *     it to owner, for approval);
+ *   - pod-wide row (`workspaceId` null) → pod owner/admin (`requirePodAdmin`).
+ *
+ * The pod-wide branch is the reason this exists. `setApproved`, `ping` and
+ * `delete` used to check a role ONLY when the row had a workspace, so on a
+ * pod-wide server any signed-in user passed straight through. Approval is what
+ * lets the Intelligence Service inject the server's tools
+ * (`hub-protocol/rest/mcp-servers.ts` serves only approved+enabled rows), so a
+ * non-admin approving a pod-wide server was arbitrary tool injection.
+ */
+async function requireServerManager(
+  userId: string,
+  workspaceId: string | null,
+  level: "admin" | "owner" = "admin"
+): Promise<void> {
+  if (!workspaceId) {
+    await requirePodAdmin(userId);
+    return;
+  }
+  const role = await getWorkspaceRole(userId, workspaceId);
+  if (level === "owner") {
+    if (role !== "owner") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Only workspace owners can approve MCP server tool access.",
+      });
+    }
+    return;
+  }
+  requireAdminRole(role);
+}
 
 const McpServerWriteSchema = z.object({
   slug: z
@@ -83,13 +122,7 @@ export const mcpServersRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      if (input.workspaceId) {
-        const role = await getWorkspaceRole(userId, input.workspaceId);
-        requireAdminRole(role);
-      } else {
-        // Pod-wide server (null workspaceId) — pod-level privileged action.
-        await requirePodAdmin(userId);
-      }
+      await requireServerManager(userId, input.workspaceId ?? null);
 
       // Validate transport-specific required fields
       if (input.transport === "stdio" && !input.command) {
@@ -151,39 +184,27 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
-      if (existing.workspaceId) {
-        const role = await getWorkspaceRole(userId, existing.workspaceId);
-        requireAdminRole(role);
-      } else {
-        // Editing a pod-wide server is a pod-level privileged action.
-        await requirePodAdmin(userId);
-      }
-      if (
-        workspaceId !== undefined &&
-        workspaceId !== null &&
-        workspaceId !== existing.workspaceId
-      ) {
-        const targetRole = await getWorkspaceRole(userId, workspaceId);
-        requireAdminRole(targetRole);
+      await requireServerManager(userId, existing.workspaceId);
+      // Moving the row into another scope needs the same right THERE —
+      // including INTO pod-wide (null), which makes it visible to every
+      // workspace's agents.
+      if (workspaceId !== undefined && workspaceId !== existing.workspaceId) {
+        await requireServerManager(userId, workspaceId);
       }
 
       // Security: if any execution-defining field changes, the server may now
       // point somewhere different from what was approved — reset approval so an
       // approved server can't be silently re-pointed to run untrusted code.
-      const RE_APPROVAL_FIELDS = [
-        "command",
-        "args",
-        "env",
-        "url",
-        "transport",
-      ] as const;
+      // The field list is shared with the template applier
+      // (`create-from-definition.ts`), which rewrites the same columns on a
+      // capability re-apply — one list, so the two doors cannot drift.
       // VALUE, not PRESENCE. `saveEdit()` in the browser's MCP settings is a
       // full-object form save: it re-sends transport/command/args/url on every
       // save, so a presence test un-approved the server on a rename or an
       // enabled-toggle — silently pulling its tools out of LLM requests.
       // The comparison rule is shared with the skill and tool doors.
       const execChanged = execFieldsChanged(
-        RE_APPROVAL_FIELDS,
+        MCP_SERVER_RE_APPROVAL_FIELDS,
         fields as Record<string, unknown>,
         existing as unknown as Record<string, unknown>
       );
@@ -223,16 +244,7 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
-      if (existing.workspaceId) {
-        const role = await getWorkspaceRole(userId, existing.workspaceId);
-        if (role !== "owner") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "Only workspace owners can approve MCP server tool access.",
-          });
-        }
-      }
+      await requireServerManager(userId, existing.workspaceId, "owner");
 
       const [updated] = await db
         .update(mcpServers)
@@ -263,10 +275,7 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
-      if (server.workspaceId) {
-        const role = await getWorkspaceRole(userId, server.workspaceId);
-        requireAdminRole(role);
-      }
+      await requireServerManager(userId, server.workspaceId);
 
       const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
         await resolveIntelligenceService({
@@ -396,10 +405,7 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
-      if (existing.workspaceId) {
-        const role = await getWorkspaceRole(userId, existing.workspaceId);
-        requireAdminRole(role);
-      }
+      await requireServerManager(userId, existing.workspaceId);
 
       await db.delete(mcpServers).where(eq(mcpServers.id, input.id));
 

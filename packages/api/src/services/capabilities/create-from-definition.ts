@@ -84,6 +84,7 @@ import {
 } from "../../routers/skills.js";
 import {
   skillExecFieldsChanged,
+  mcpServerExecFieldsChanged,
   allowedHostsChanged,
   readOnlyWidened,
 } from "./skill-exec-fields.js";
@@ -655,7 +656,17 @@ export async function createCapabilityFromDefinition(
       );
     }
     const [existingMcp] = await db
-      .select({ id: mcpServersTable.id })
+      .select({
+        id: mcpServersTable.id,
+        approved: mcpServersTable.approved,
+        // Every MCP_SERVER_RE_APPROVAL_FIELDS column — the demotion below
+        // compares the template against these by VALUE.
+        command: mcpServersTable.command,
+        args: mcpServersTable.args,
+        env: mcpServersTable.env,
+        url: mcpServersTable.url,
+        transport: mcpServersTable.transport,
+      })
       .from(mcpServersTable)
       .where(
         and(
@@ -668,22 +679,41 @@ export async function createCapabilityFromDefinition(
       .limit(1);
 
     if (existingMcp) {
+      // The patch mirrors the `.set({...})` projection below exactly — a field
+      // this comparator reads must be a field that update actually writes.
+      const execPatch = {
+        transport: m.transport,
+        command: m.command ?? null,
+        args: m.args ?? [],
+        url: m.url ?? null,
+        env: m.env ?? {},
+      };
+      // SAME rule as `mcpServersRouter.update`: a re-apply that re-points an
+      // approved server (new url / command / args / env / transport) demotes
+      // it, so a template can never swap what an owner approved while keeping
+      // the approval. Demotion WINS over a template `approved: true` — on
+      // re-apply that flag would otherwise re-approve the new endpoint
+      // unattended. Compared by VALUE, so an unchanged re-apply never demotes.
+      const execChanged = mcpServerExecFieldsChanged(
+        execPatch,
+        existingMcp as unknown as Record<string, unknown>
+      );
       await db
         .update(mcpServersTable)
         .set({
           name: m.name,
           description: m.description ?? null,
-          transport: m.transport,
-          command: m.command ?? null,
-          args: m.args ?? [],
-          url: m.url ?? null,
-          env: m.env ?? {},
+          ...execPatch,
           // Converge to the template on re-apply (0257).
           auth: resolveMcpAuth(m.auth, m.slug),
           toolPolicy: m.toolPolicy ?? null,
           enabled: m.enabled !== false,
-          // Only promote approval (never silently demote on re-apply).
-          ...(m.approved === true ? { approved: true } : {}),
+          // Demote on an execution change; otherwise only ever promote.
+          ...(execChanged
+            ? { approved: false }
+            : m.approved === true
+              ? { approved: true }
+              : {}),
           metadata: {
             ...((m.metadata as Record<string, unknown>) ?? {}),
             sourceCapability: def.key,

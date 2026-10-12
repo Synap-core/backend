@@ -17,8 +17,10 @@
  * SOURCE PARITY, not a re-listed copy: the field lists are legitimately
  * DIFFERENT per entity (a skill's execution surface is not a tool's is not an
  * MCP server's), so they stay next to their entity and are read back OUT of the
- * router source here. What must be shared — and is asserted — is the one
- * comparison rule, `execFieldsChanged`.
+ * source here. What must be shared — and is asserted — is the one comparison
+ * rule, `execFieldsChanged`. The MCP-server list lives in `skill-exec-fields.ts`
+ * (`MCP_SERVER_RE_APPROVAL_FIELDS`) because the template applier rewrites the
+ * same columns and must demote by the same list.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -37,6 +39,9 @@ const routers = join(
 const DOORS = [
   {
     file: "tools.ts",
+    /** Where the door's field list is declared, and under which name. */
+    fieldsFile: join(routers, "tools.ts"),
+    listName: "RE_APPROVAL_FIELDS",
     /** The row column each patch key is compared against, for the value test. */
     sample: {
       credentialRef: "vault:stripe",
@@ -48,6 +53,11 @@ const DOORS = [
   },
   {
     file: "mcp-servers.ts",
+    fieldsFile: join(
+      dirname(fileURLToPath(import.meta.url)),
+      "skill-exec-fields.ts"
+    ),
+    listName: "MCP_SERVER_RE_APPROVAL_FIELDS",
     sample: {
       command: "npx",
       args: ["-y", "server"],
@@ -58,21 +68,22 @@ const DOORS = [
   },
 ] as const;
 
-/** The `RE_APPROVAL_FIELDS = [...] as const` literal, read out of the source. */
-function declaredFields(src: string, file: string): string[] {
-  const m = /const RE_APPROVAL_FIELDS = \[([^\]]*)\]/.exec(src);
-  expect(
-    m,
-    `${file} no longer declares its own RE_APPROVAL_FIELDS list`
-  ).not.toBeNull();
+/** The `<listName> = [...] as const` literal, read out of the source. */
+function declaredFields(src: string, file: string, listName: string): string[] {
+  const m = new RegExp(`const ${listName} = \\[([^\\]]*)\\]`).exec(src);
+  expect(m, `${file} no longer declares its ${listName} list`).not.toBeNull();
   return [...m![1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
 }
 
 describe.each(DOORS)(
   "$file demotes on VALUE, not PRESENCE",
-  ({ file, sample }) => {
+  ({ file, fieldsFile, listName, sample }) => {
     const src = readFileSync(join(routers, file), "utf8");
-    const fields = declaredFields(src, file);
+    const fields = declaredFields(
+      readFileSync(fieldsFile, "utf8"),
+      file,
+      listName
+    );
 
     const WHY =
       `${file} must decide demotion with execFieldsChanged(RE_APPROVAL_FIELDS, patch, existing). ` +
@@ -90,7 +101,7 @@ describe.each(DOORS)(
 
     it("passes the field list and the already-loaded existing row", () => {
       const args = src.slice(callIdx, src.indexOf(");", callIdx));
-      expect(args, WHY).toContain("RE_APPROVAL_FIELDS");
+      expect(args, WHY).toContain(listName);
       expect(args, WHY).toContain("existing");
     });
 

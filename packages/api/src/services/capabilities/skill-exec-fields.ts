@@ -123,6 +123,35 @@ export function execFieldsChanged(
 }
 
 /**
+ * Execution-defining fields of an `mcp_servers` row — a change to any of them
+ * means the server may now run a different process or answer from a different
+ * endpoint than the one an owner approved, so an approved row is demoted.
+ *
+ * Lives HERE (not in `routers/mcp-servers.ts`) because TWO doors rewrite these
+ * columns and must apply the identical rule:
+ *   - `routers/mcp-servers.ts` → `update` (the settings form door)
+ *   - `services/capabilities/create-from-definition.ts` (the template applier,
+ *     which cannot import the router — services → routers cycle)
+ * The applier used to rewrite url/command/args on re-apply while keeping
+ * `approved`, so a re-applied capability could re-point an approved server.
+ */
+export const MCP_SERVER_RE_APPROVAL_FIELDS = [
+  "command",
+  "args",
+  "env",
+  "url",
+  "transport",
+] as const;
+
+/** True when an MCP-server patch actually CHANGES an execution-defining field. */
+export function mcpServerExecFieldsChanged(
+  patch: Record<string, unknown>,
+  existing: Record<string, unknown>
+): boolean {
+  return execFieldsChanged(MCP_SERVER_RE_APPROVAL_FIELDS, patch, existing);
+}
+
+/**
  * True when a skill patch actually CHANGES an execution-defining field.
  *
  * PRESENCE is not change, and testing presence was a live defect. The
