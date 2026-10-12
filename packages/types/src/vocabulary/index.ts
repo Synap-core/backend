@@ -1130,6 +1130,73 @@ export function resolveCaptureDoorLabel(
 }
 
 /**
+ * IMPORT states — where an import (Import → Curate → Build) and each of its
+ * items stand, as the word beside the mark.
+ *
+ * Its OWN table, not `STATUS_LABELS` rows: three closed domains of the import
+ * contract (`@synap-core/types/imports`) share it because one header shows them
+ * together — the import's PHASE (`collecting` … `done`), what Build can READ of
+ * an item (`readable` … `title_only`) and the person's DECISION on it (`keep`,
+ * `later`, `exclude`). The tokens do not collide across the three, and `done`
+ * / `keep` must not borrow a lifecycle word from elsewhere ("Completed",
+ * "Kept").
+ *
+ * A `needs_file` item is not broken — the pod will not scrape that platform —
+ * so it names what the person can do ("Needs the file"), not a failure.
+ * `title_only` says what Build will use, not what is missing.
+ */
+export const IMPORT_STATUS_LABELS: Readonly<Record<string, string>> = {
+  // Phase
+  collecting: "Collecting",
+  curating: "Curating",
+  building: "Building",
+  done: "Built",
+  // What Build can read
+  readable: "Readable",
+  captions: "Captions",
+  file: "File",
+  needs_file: "Needs the file",
+  title_only: "Title only",
+  // Decision
+  keep: "Keep",
+  later: "Later",
+  exclude: "Excluded",
+  excluded: "Excluded",
+};
+
+export function resolveImportStatusLabel(
+  status: string | null | undefined
+): string {
+  if (!status) return "";
+  return (
+    IMPORT_STATUS_LABELS[status.trim().toLowerCase()] ?? humanizeToken(status)
+  );
+}
+
+/**
+ * Where an import was STARTED (`ImportSessionCuration.origin`), as the end of
+ * "Import from …" and "Started on …". Keyed by the client token each door
+ * sends. An unknown origin humanizes, never leaks.
+ */
+export const IMPORT_ORIGIN_LABELS: Readonly<Record<string, string>> = {
+  relay: "your phone",
+  browser: "your computer",
+  desktop: "your computer",
+  extension: "the browser extension",
+  cli: "the command line",
+  web: "the web app",
+};
+
+export function resolveImportOriginLabel(
+  origin: string | null | undefined
+): string {
+  if (!origin?.trim()) return "";
+  return (
+    IMPORT_ORIGIN_LABELS[origin.trim().toLowerCase()] ?? humanizeToken(origin)
+  );
+}
+
+/**
  * CAPTURE CHIP states — where one record a capture proposed stands, as the word
  * beside its mark.
  *
