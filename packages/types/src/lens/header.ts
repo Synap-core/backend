@@ -79,7 +79,9 @@ export type LensScopeFactFor<K extends LensScopeKind> = K extends "project"
     ? Extract<LensScopeFact, { kind: "step" | "kpi" }>
     : K extends "session"
       ? Extract<LensScopeFact, { kind: "criteria" }>
-      : never;
+      : K extends "pipeline"
+        ? Extract<LensScopeFact, { kind: "kpi" }>
+        : never;
 
 /**
  * Which fact a header of this scope kind carries — null for the pod / a space.
@@ -92,6 +94,8 @@ export const LENS_SCOPE_FACT_KIND = {
   project: "target-date",
   track: ["kpi", "step"],
   session: "criteria",
+  /** An intent surface's ONE fact is the kind's goal. */
+  pipeline: "kpi",
 } as const satisfies Record<
   LensScopeKind,
   LensScopeFact["kind"] | readonly LensScopeFact["kind"][] | null
@@ -110,6 +114,7 @@ export const LENS_SCOPE_HAS_PULSE = {
   project: true,
   track: true,
   session: false,
+  pipeline: true,
 } as const satisfies Record<LensScopeKind, boolean>;
 
 /** The fact's words, or null when the fact is a date (the host formats dates). */

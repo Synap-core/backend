@@ -6,7 +6,14 @@
  */
 import { describe, expect, it } from "vitest";
 import { lensIntentHeaderModel, lensIntentDoorText } from "./intent.js";
-import { lensKpiFact } from "./header.js";
+import { LENS_SCOPE_FACT_KIND, lensKpiFact } from "./header.js";
+import {
+  encodeLensScope,
+  lensActivityScope,
+  lensScopeObject,
+  parseLensScope,
+  visibleSource,
+} from "./scope.js";
 
 const counts = {
   needsYou: 3,
@@ -18,7 +25,7 @@ const counts = {
 
 describe("lensIntentHeaderModel", () => {
   it("says the four counts once, in order, each a door", () => {
-    const m = lensIntentHeaderModel({ scopeKind: "workspace", counts });
+    const m = lensIntentHeaderModel({ counts });
     expect(m.doors.map((d) => d.text)).toEqual([
       "3 need you",
       "2 being worked",
@@ -37,7 +44,6 @@ describe("lensIntentHeaderModel", () => {
 
   it("a READ zero omits its door; nobody waiting is All clear", () => {
     const m = lensIntentHeaderModel({
-      scopeKind: "project",
       counts: { ...counts, needsYou: 0, beingWorked: 0 },
     });
     expect(m.doors.map((d) => d.section)).toEqual(["pipeline", "produced"]);
@@ -46,7 +52,6 @@ describe("lensIntentHeaderModel", () => {
 
   it("an UNKNOWN needs-you keeps its door wordless and is never All clear", () => {
     const m = lensIntentHeaderModel({
-      scopeKind: "track",
       counts: { ...counts, needsYou: null },
     });
     expect(m.doors[0]).toMatchObject({
@@ -58,7 +63,6 @@ describe("lensIntentHeaderModel", () => {
     // a live agent outranks the unknown (the shared order); without one, unmeasured
     expect(m.state.state).toBe("working");
     const quiet = lensIntentHeaderModel({
-      scopeKind: "track",
       counts: { ...counts, needsYou: null, beingWorked: 0 },
     });
     expect(quiet.state.state).toBe("unmeasured");
@@ -79,7 +83,74 @@ describe("lensIntentHeaderModel", () => {
       unit: null,
       statedAt: "2026-10-10T00:00:00.000Z",
     });
-    const m = lensIntentHeaderModel({ scopeKind: "workspace", counts, goal });
+    const m = lensIntentHeaderModel({ counts, goal });
     expect(m.fact).toEqual(goal);
+  });
+});
+
+describe("the pipeline lens scope", () => {
+  it("the header is a pipeline header (it carries the kind's goal and a pulse)", () => {
+    expect(lensIntentHeaderModel({ counts }).scopeKind).toBe("pipeline");
+    expect(LENS_SCOPE_FACT_KIND.pipeline).toBe("kpi");
+  });
+
+  it("travels in ONE address token with its narrowest container", () => {
+    const cases = [
+      { kind: "pipeline", profileSlug: "post" },
+      { kind: "pipeline", profileSlug: "post", projectId: "p1" },
+      { kind: "pipeline", profileSlug: "lead", trackId: "t1" },
+      { kind: "pipeline", profileSlug: "deal", workspaceId: "w1" },
+    ] as const;
+    expect(cases.map(encodeLensScope)).toEqual([
+      "pipeline:post",
+      "pipeline:post@project:p1",
+      "pipeline:lead@track:t1",
+      "pipeline:deal@workspace:w1",
+    ]);
+    for (const c of cases)
+      expect(parseLensScope(encodeLensScope(c))).toEqual(c);
+    // the other kinds still read through the activity door
+    expect(parseLensScope("project:p1")).toEqual({
+      kind: "project",
+      projectId: "p1",
+    });
+    expect(parseLensScope("pipeline:")).toBeUndefined();
+    expect(parseLensScope("pipeline:post@session:s1")).toBeUndefined();
+  });
+
+  it("a source the pipeline sits INSIDE is hidden; a more specific one shows", () => {
+    const scope = {
+      kind: "pipeline",
+      profileSlug: "post",
+      projectId: "p1",
+    } as const;
+    expect(lensScopeObject(scope)).toEqual({ kind: "pipeline", id: "post" });
+    const row = (source: { kind: "project" | "session"; id: string }) => ({
+      source: { ...source, label: "x" },
+    });
+    expect(visibleSource(row({ kind: "project", id: "p1" }), scope)).toBeNull();
+    expect(
+      visibleSource(row({ kind: "session", id: "s1" }), scope)
+    ).not.toBeNull();
+  });
+
+  it("reads activity at its container (never a kind's own heat)", () => {
+    expect(
+      lensActivityScope({
+        kind: "pipeline",
+        profileSlug: "post",
+        projectId: "p1",
+      })
+    ).toEqual({ kind: "project", projectId: "p1" });
+    expect(
+      lensActivityScope({ kind: "pipeline", profileSlug: "post" })
+    ).toEqual({ kind: "pod" });
+    expect(
+      lensActivityScope({
+        kind: "workspace",
+        workspaceId: "w1",
+        projectId: "p1",
+      })
+    ).toEqual({ kind: "workspace", workspaceId: "w1" });
   });
 });

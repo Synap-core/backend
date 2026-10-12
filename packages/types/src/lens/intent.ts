@@ -1,8 +1,8 @@
 /**
  * THE INTENT SURFACE header — one kind's surface ("Posts", "Leads") under the
- * shared `LensHeader` (surfaces plan W2.4). The scope (space / project /
- * track) stays the lens; the kind is the surface's second dimension, so the
- * header model is the SAME `LensHeaderModel`, with the intent's own counts:
+ * shared `LensHeader` (surfaces plan W2.4). Its scope is the `pipeline` lens
+ * (`LensScope`, narrowed by a space / project / track), so the header model
+ * is the SAME `LensHeaderModel`, with the intent's own counts:
  *
  *   3 need you · 2 being worked · 15 in pipeline · 1 done this week
  *
@@ -20,7 +20,6 @@ import {
   type LensKpiFact,
 } from "./header.js";
 import type { LensRow } from "./rows.js";
-import type { LensScopeKind } from "./scope.js";
 
 /** An intent surface's extra count section: the kind's board. */
 export type LensIntentSection = "pipeline";
@@ -74,8 +73,6 @@ const INTENT_DOOR_LABEL: Record<
 };
 
 export function lensIntentHeaderModel(input: {
-  /** The lens the surface sits in (a space, a project, a track). */
-  scopeKind: Exclude<LensScopeKind, "pod" | "session">;
   counts: LensIntentCounts;
   /** The kind's goal — the ONE fact. */
   goal?: LensKpiFact | null;
@@ -104,7 +101,7 @@ export function lensIntentHeaderModel(input: {
       text: lensIntentDoorText(section, bySection[section], counts.windowDays),
     }));
   return {
-    scopeKind: input.scopeKind,
+    scopeKind: "pipeline",
     state: resolveUnitState({
       owedFromYou: counts.needsYou ?? 0,
       running: (counts.beingWorked ?? 0) > 0,
