@@ -656,6 +656,72 @@ describe("a ROLE subject (R1)", () => {
     expect(createRuleGoverned).toHaveBeenCalledTimes(1);
   });
 
+  it("a COUNT worker on a role follows the role's transition; its spec names the role", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook([
+      { on: "count", status: "qualified", min: 5, mode: "run" },
+    ]);
+    const res = await run();
+    const ruleId = res.outcomes[0]!.ruleId!;
+    expect(compiled(ruleId)).toEqual({
+      eventPattern: "entity.transition.completed",
+      filters: { lifecycleProfile: "lead", to: "qualified" },
+    });
+    const config = (
+      (ruleRow(ruleId).metadata.rule as Row).sentence as {
+        actions: Array<{ config: Record<string, unknown> }>;
+      }
+    ).actions[0]!.config;
+    expect(config.__worker).toMatchObject({
+      profileSlug: "lead",
+      status: "qualified",
+      minCount: 5,
+      size: "per_moment",
+    });
+  });
+
+  it("a COUNT on a role with NO declared lifecycle is refused by name, like enters_status", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = null;
+    setLeadPlaybook([
+      { on: "count", status: "qualified", min: 5, mode: "run" },
+    ]);
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ status: "denied" });
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+  });
+
+  it("a SCHEDULE worker on a role compiles to a cron rule whose spec reads the role's set", async () => {
+    store.profileRows = [
+      { id: "p-lead", profileKind: "role", workspaceId: null },
+    ];
+    store.lifecycleProperty = "leadStage";
+    setLeadPlaybook([
+      { on: "schedule", cron: "0 9 * * 1", status: "engaged", mode: "propose" },
+    ]);
+    const res = await run();
+    const ruleId = res.outcomes[0]!.ruleId!;
+    const sentence = (ruleRow(ruleId).metadata.rule as Row).sentence as {
+      trigger: Parameters<typeof toBackendTrigger>[0];
+      conditions: Parameters<typeof toBackendTrigger>[1];
+      actions: Array<{ config: Record<string, unknown> }>;
+    };
+    const trigger = toBackendTrigger(sentence.trigger, sentence.conditions);
+    expect(trigger.triggerType).toBe("cron");
+    expect(trigger.triggerConfig).toMatchObject({ expression: "0 9 * * 1" });
+    expect(sentence.actions[0]!.config.__worker).toMatchObject({
+      profileSlug: "lead",
+      status: "engaged",
+      size: "per_moment",
+      writes: "propose",
+    });
+  });
+
   it("`enters_status` on a role follows the role's TRANSITION, filtered on the role, not the kind", async () => {
     store.profileRows = [
       { id: "p-lead", profileKind: "role", workspaceId: null },
