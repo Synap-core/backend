@@ -13,10 +13,10 @@
  * compile time.
  */
 
-import { and, eq, gte, inArray, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals } from "../schema/proposals.js";
-import { focusSessions } from "../schema/focus-sessions.js";
+import { focusSessions, FocusSessionStatus } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
 import { automationRuns, automationStepRuns } from "../schema/automations.js";
 import { events } from "../schema/events.js";
@@ -24,8 +24,27 @@ import { events } from "../schema/events.js";
 /** `links.metadata.role` of a worker's `session --targets--> entity` edge. */
 export const WORKER_TARGET_LINK_ROLE = "worker_target" as const;
 
-/** Session statuses that are done: their targets are no longer being worked. */
-const CLOSED_SESSION_STATUSES = ["closed", "failed", "cancelled"] as const;
+/**
+ * THE "in flight" rule for a worker session (backend F9): its targets are
+ * still being worked. One list, read by the batch exclusion here and by
+ * process-sync's settle (`worker-target-result.ts`) — two lists disagreed on
+ * `stale`, so a reaped session kept its things out of every later batch while
+ * a person's move no longer settled them.
+ *
+ * `stale` is NOT in flight: the reaper marks a session that went quiet, and
+ * its unsettled things become workable again for a batch. (The per_thing
+ * run's subject reuse keeps `stale` on purpose — `IDEMPOTENCY_*` in api
+ * run-playbook.ts — so a stuck run is not re-dispatched daily; that is the
+ * one-run-per-subject rule, not this one.) `scheduled` is not either: it is
+ * an appointment that has executed nothing, and a worker never starts one.
+ * Listed positively, so a status added later reads "not in flight" — the
+ * side where a thing is worked twice rather than dropped.
+ */
+export const WORKER_IN_FLIGHT_SESSION_STATUSES = [
+  FocusSessionStatus.ACTIVE,
+  FocusSessionStatus.PAUSED,
+  FocusSessionStatus.FORMING,
+] as const;
 
 /**
  * The irreversible-send proposal types a worker's daily ceiling counts — the
@@ -70,7 +89,7 @@ export async function countWorkerPendingApprovals(
 
 /**
  * Things this enablement is ALREADY working: worker targets with no result
- * yet, of its sessions that are still open. A per_moment run excludes them, so
+ * yet, of its sessions still in flight (`WORKER_IN_FLIGHT_SESSION_STATUSES`). A per_moment run excludes them, so
  * a thing is never in two of one worker's batches at once.
  */
 export async function listWorkerTargetsInFlight(
@@ -89,7 +108,7 @@ export async function listWorkerTargetsInFlight(
         sql`${links.metadata}->>'role' = ${WORKER_TARGET_LINK_ROLE}`,
         sql`${links.metadata}->>'result' IS NULL`,
         sql`${focusSessions.metadata}->>'automationId' = ${automationId}`,
-        notInArray(focusSessions.status, [...CLOSED_SESSION_STATUSES])
+        inArray(focusSessions.status, [...WORKER_IN_FLIGHT_SESSION_STATUSES])
       )
     );
   return [...new Set(rows.map((r) => r.toId))];

@@ -25,7 +25,10 @@ import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
-import { WORKER_TARGET_LINK_ROLE } from "./worker-enablement.js";
+import {
+  WORKER_IN_FLIGHT_SESSION_STATUSES,
+  WORKER_TARGET_LINK_ROLE,
+} from "./worker-enablement.js";
 
 /**
  * The pod's copy of `@synap-core/types/workers` `WORKER_TARGET_RESULTS`
@@ -39,9 +42,6 @@ export const WORKER_TARGET_LINK_RESULTS = [
 ] as const;
 export type WorkerTargetLinkResult =
   (typeof WORKER_TARGET_LINK_RESULTS)[number];
-
-/** Session statuses that are still being worked. */
-const IN_FLIGHT_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 
 /** A worker target edge of `sessionId` (any target, or one). */
 function workerTargetWhere(sessionId: string, entityId?: string): SQL {
@@ -147,7 +147,7 @@ export async function listOpenWorkerTargetSessions(entityId: string): Promise<
         eq(links.linkType, "targets"),
         sql`${links.metadata}->>'role' = ${WORKER_TARGET_LINK_ROLE}`,
         sql`${links.metadata}->>'result' IS NULL`,
-        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES])
+        inArray(focusSessions.status, [...WORKER_IN_FLIGHT_SESSION_STATUSES])
       )
     );
   return rows;

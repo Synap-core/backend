@@ -27,6 +27,8 @@ import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
 import { automationRuns, automationStepRuns } from "../schema/automations.js";
 import { events } from "../schema/events.js";
+import { FocusSessionStatus } from "../schema/focus-sessions.js";
+import { listOpenWorkerTargetSessions } from "./worker-target-result.js";
 import {
   countWorkerIrreversibleSendsToday,
   countWorkerIrreversibleSentToday,
@@ -141,6 +143,32 @@ describe("listWorkerTargetsInFlight", () => {
     await target(closed, { role: "worker_target" });
     await target(other, { role: "worker_target" });
     expect(await listWorkerTargetsInFlight(A)).toEqual([working]);
+  });
+
+  /**
+   * backend F9: ONE in-flight rule. For every session status the batch
+   * exclusion (this file) and process-sync's settle read
+   * (`listOpenWorkerTargetSessions`) agree — derived from the enum, so a new
+   * status joins by existing. `stale` is the row the two lists used to
+   * disagree on: the batch kept its things out forever while a move no longer
+   * settled them.
+   */
+  it("the batch exclusion and the move settle agree on every session status; stale is not in flight", async () => {
+    const statuses = Object.values(FocusSessionStatus);
+    expect(statuses.length).toBeGreaterThanOrEqual(8);
+    for (const status of statuses) {
+      const s = await session(A, status);
+      const thing = await target(s, { role: "worker_target" });
+      const batch = (await listWorkerTargetsInFlight(A)).includes(thing);
+      const settle = (await listOpenWorkerTargetSessions(thing)).some(
+        (r) => r.sessionId === s
+      );
+      expect({ status, batch }).toEqual({ status, batch: settle });
+      expect({ status, batch }).toEqual({
+        status,
+        batch: ["active", "paused", "forming"].includes(status),
+      });
+    }
   });
 });
 
