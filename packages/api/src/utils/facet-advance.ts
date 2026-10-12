@@ -11,12 +11,46 @@
  * `moveStatus` with `expectedStatus` as its compare-and-set). Never backwards,
  * never out of a later option (a `disqualified` lead is not resurrected).
  *
- * "Earlier" is the option order of the role's lifecycle; for a role whose
- * lifecycle is not declared yet, the order of the select the op itself writes
- * (the property whose value is the op's `status`). Anything it cannot judge —
- * no order, an unknown current value — is left where it is.
+ * "Earlier", for a DECLARED lifecycle, is the CATEGORY, never the position
+ * (L1; review arch F7 / backend F14): `open` < `active` < `done`. A booking
+ * moves an open lead (or one with no status) to engaged; an active one stays
+ * (it is engaged at most); `done` / `lost` are never left; `paused` is a hold
+ * a person set, so a booking leaves it too. Declaration order, an appended
+ * option or a reorder change nothing. For a role whose lifecycle is not
+ * declared yet, "earlier" is the order of the select the op itself writes (the
+ * property whose value is the op's `status`). Anything it cannot judge — no
+ * order, an unknown current value — is left where it is.
  */
-import { db, ProfileResolutionService } from "@synap/database";
+import {
+  db,
+  ProfileResolutionService,
+  type LifecycleCategory,
+} from "@synap/database";
+
+/** Which categories a forward-only advance may move between, in order. */
+const FORWARD_RANK: Partial<Record<LifecycleCategory, number>> = {
+  open: 0,
+  active: 1,
+  done: 2,
+};
+
+/**
+ * Strictly forward by CATEGORY? An absent `from` sits before every option;
+ * `paused` and `lost` (no rank) are never left, and never entered this way.
+ */
+export function isForwardCategory(
+  categories: Readonly<Record<string, LifecycleCategory>>,
+  from: string | null | undefined,
+  to: string
+): boolean {
+  const toRank = categories[to] ? FORWARD_RANK[categories[to]] : undefined;
+  if (toRank === undefined) return false;
+  if (from == null || from === "") return true;
+  const fromRank = categories[from]
+    ? FORWARD_RANK[categories[from]]
+    : undefined;
+  return fromRank !== undefined && fromRank < toRank;
+}
 
 /** Strictly later in `order`? An absent `from` sits before every option. */
 export function isForwardStage(
@@ -48,7 +82,13 @@ export interface FacetAdvanceSpec {
 export async function readRoleStage(
   facet: AdvanceableFacet,
   target: FacetAdvanceSpec
-): Promise<{ order: string[]; slug: string; current: string | null } | null> {
+): Promise<{
+  order: string[];
+  slug: string;
+  current: string | null;
+  /** Declared lifecycle only: each option's category (the forward rule). */
+  categories?: Record<string, LifecycleCategory>;
+} | null> {
   const resolver = new ProfileResolutionService(db);
   const props = facet.properties ?? {};
   const lifecycle = await resolver.getEffectiveLifecycle(
@@ -60,6 +100,9 @@ export async function readRoleStage(
     const fromProps = props[slug];
     return {
       order: lifecycle.options.map((o) => o.key),
+      categories: Object.fromEntries(
+        lifecycle.options.map((o) => [o.key, o.category])
+      ),
       slug,
       current:
         facet.status ?? (typeof fromProps === "string" ? fromProps : null),
@@ -102,7 +145,10 @@ export async function advanceExistingFacet(
 ): Promise<"advanced" | "proposed" | "kept" | "unjudged"> {
   const stage = await readRoleStage(facet, target);
   if (!stage) return "unjudged";
-  if (!isForwardStage(stage.order, stage.current, target.status)) {
+  const forward = stage.categories
+    ? isForwardCategory(stage.categories, stage.current, target.status)
+    : isForwardStage(stage.order, stage.current, target.status);
+  if (!forward) {
     return "kept";
   }
   const result = await caller.updateFacet({
