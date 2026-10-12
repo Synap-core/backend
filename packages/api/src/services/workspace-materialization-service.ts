@@ -237,6 +237,12 @@ export interface MaterializeWorkspaceCoreInput {
   packageVersion?: string;
   workspaceType?: "personal" | "agent" | "project" | "operational";
   createdBy?: "user" | "provisioning" | "plugin";
+  /**
+   * Idempotent re-hit only: leave the new version unstamped and return it as
+   * `created.pendingVersionStamp`, for a caller that stamps it once the
+   * post-workspace layers applied (see `reconcileWorkspaceIfStale`).
+   */
+  deferVersionStamp?: boolean;
 }
 
 /**
@@ -383,6 +389,7 @@ export async function materializeWorkspaceCore(
     packageVersion: input.packageVersion,
     workspaceType: input.workspaceType,
     createdBy: input.createdBy,
+    deferVersionStamp: input.deferVersionStamp,
   });
   return {
     status: "created",

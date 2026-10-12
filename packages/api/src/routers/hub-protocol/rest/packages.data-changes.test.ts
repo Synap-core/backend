@@ -51,6 +51,13 @@ vi.mock("@synap/database", async (importOriginal) => ({
   runConsentedDataChanges: (...a: unknown[]) => mockRun(...a),
 }));
 
+// Which space a template update targets (and the proposal it files) is proven
+// on PGlite (`workspace-template-update-approve.pglite.test.ts`); this suite is
+// about consent, so the update's proposal shape is out of its scope.
+vi.mock("../../../services/installed-template-space.js", () => ({
+  installedTemplateSpace: async () => null,
+}));
+
 vi.mock("../../../utils/workspace-role.js", () => ({
   isPodAdmin: (...a: unknown[]) => mockIsPodAdmin(...a),
 }));

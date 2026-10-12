@@ -17,6 +17,7 @@ import {
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
+import { installedTemplateSpace } from "../../../services/installed-template-space.js";
 import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
@@ -762,14 +763,37 @@ export function registerPackagesRoutes(app: HubHono): void {
     // `composeOntoBaseWorkspace` (reached below) still re-gates via
     // `assertWorkspaceWrite` as defense in depth — this is the governance
     // layer in front of it, same as every other write door.
+    //
+    // A slug some space already holds is a template UPDATE of that space: the
+    // proposal targets it (`id` → the proposal's targetId) under its real name,
+    // as `operation: "template_update"`, which the `workspace/update` executor
+    // approves through the same body as `workspace/create` (idempotent re-hit
+    // → layer 1 → layer 2 → stamp). Same `workspaceId: null` lens as a create,
+    // so RBAC is unchanged; `workspace.update` is an ADMIN action, so an agent
+    // always proposes it.
+    const existingSpace =
+      !body.targetWorkspaceId && packageSlug
+        ? await installedTemplateSpace(packageSlug, userId)
+        : null;
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId,
       workspaceId: body.targetWorkspaceId ?? null,
       subjectType: "workspace",
-      action: body.targetWorkspaceId ? "update" : "create",
+      action: body.targetWorkspaceId || existingSpace ? "update" : "create",
       data: {
-        name: workspaceName ?? body._meta?.slug ?? "untitled",
+        name:
+          existingSpace?.name ??
+          workspaceName ??
+          body._meta?.slug ??
+          "untitled",
+        ...(existingSpace
+          ? {
+              id: existingSpace.id,
+              existingWorkspaceId: existingSpace.id,
+              operation: "template_update",
+            }
+          : {}),
         definition: body,
         workspaceName,
         templateId: body._meta?.slug,

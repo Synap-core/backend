@@ -142,3 +142,32 @@ export function installedTrackTemplates(
   }
   return out;
 }
+
+/**
+ * Did layer 2 actually LAND? True only when no item in the bag errored AND no
+ * item is still `proposed` (a governed write that filed a proposal created
+ * nothing yet). This is what a template version stamp may assert: a caller
+ * that deferred `settings.packageVersion` (`reconcileWorkspaceIfStale`'s
+ * `deferVersionStamp`) stamps it only when this holds — otherwise the stamp
+ * would claim a playbook the next `market update` then never re-sends. The
+ * same rule boot's playbook report applies (`playbookReportConverged`: no
+ * failed, no missing, nothing proposed).
+ */
+export function postWorkspaceLayersConverged(
+  bag: Record<string, unknown> | null | undefined
+): boolean {
+  if (summarizePostWorkspaceLayers(bag).length > 0) return false;
+  for (const value of Object.values(bag ?? {})) {
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      if (
+        item &&
+        typeof item === "object" &&
+        (item as AppliedItem).status === "proposed"
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}

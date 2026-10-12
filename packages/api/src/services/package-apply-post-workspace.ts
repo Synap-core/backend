@@ -383,6 +383,17 @@ export interface ApplyPackagePostWorkspaceInput {
   body: PackagePostWorkspaceBody;
   userId: string;
   agentUserId?: string;
+  /**
+   * An agent to ENROLL in the workspace without making it the acting identity
+   * of the layer writes. The approve executor passes the proposing agent here
+   * and NO `agentUserId`: a person approved the package — its capabilities,
+   * playbooks and automations included — so the layers apply under that
+   * approval instead of each re-filing a proposal of its own (which left an
+   * approved template update with its new playbook still pending). The agent
+   * is still enrolled, so its follow-on writes do not collapse to join
+   * proposals. Defaults to `agentUserId`.
+   */
+  enrollAgentUserId?: string;
   /** Hub API scopes; approve path may pass []. */
   scopes?: string[];
 }
@@ -445,6 +456,7 @@ async function applyPackagePostWorkspaceInner(
   input: ApplyPackagePostWorkspaceInput
 ): Promise<Record<string, unknown>> {
   const { workspaceId, body, userId, agentUserId } = input;
+  const enrollAgentUserId = input.enrollAgentUserId ?? agentUserId;
   const scopes = input.scopes ?? [];
   const result: Record<string, unknown> = {};
 
@@ -452,7 +464,7 @@ async function applyPackagePostWorkspaceInner(
   // createWorkspaceFromDefinition adds ONLY the human owner. Without this,
   // the agent's follow-on writes collapse into contentless workspace.join
   // proposals. Idempotent; only for the brand-new workspace this apply owns.
-  if (agentUserId) {
+  if (enrollAgentUserId) {
     try {
       const { db, workspaces, eq } = await import("@synap/database");
       const [ws] = await db
@@ -468,7 +480,7 @@ async function applyPackagePostWorkspaceInner(
         await import("./enroll-agent-in-workspace.js");
       result.agentMembership = await enrollAgentInWorkspace({
         workspaceId,
-        agentUserId,
+        agentUserId: enrollAgentUserId,
         role,
       });
     } catch (e) {

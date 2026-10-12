@@ -2767,6 +2767,23 @@ export function buildProposalSummary(
   if (subjectType === "profile" && data.updateExistingProfile === true) {
     return buildDescriptiveProfileUpdateSummary(data);
   }
+  // A template apply onto the space that already holds the template (Hub
+  // `/packages/apply`, `operation: "template_update"`) — "Update Space
+  // "Builder" to the latest template", naming the REAL space, never the
+  // "Create Space "<template name>"" its create-shaped payload used to read as.
+  if (
+    subjectType === "workspace" &&
+    action === "update" &&
+    data.operation === "template_update"
+  ) {
+    const head = buildObjectActionTitle({
+      action,
+      objectKind: "workspace",
+      objectName:
+        payloadName(data.targetName) ?? payloadName(data.name) ?? undefined,
+    });
+    return `${head} to the latest template`;
+  }
   // focus_session lifecycle close — human-readable "Complete session …"
   if (
     subjectType === "focus_session" &&

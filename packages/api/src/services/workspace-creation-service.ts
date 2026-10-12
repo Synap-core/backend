@@ -69,6 +69,39 @@ export interface ReconcileIfStaleResult {
    * template) — then the caller's own definition IS the right source.
    */
   packageDefinition?: ResolvedWorkspaceTemplate["packageDefinition"];
+  /**
+   * Set when the caller asked to `deferVersionStamp` and layer 1 reconciled to
+   * a NEW version: the stamp this pass did NOT write. The caller writes it with
+   * `stampWorkspacePackageVersion` only once its post-workspace layers
+   * (capabilities / playbooks / automations) actually applied — the stamp says
+   * "this space is at template version X", and layer 1 alone has not earned it.
+   */
+  pendingVersionStamp?: string;
+}
+
+/**
+ * Stamp `settings.packageVersion` — the marker every idempotent hit compares
+ * against (`reconcileWorkspaceIfStale`), so the NEXT hit short-circuits as up
+ * to date. Merged atomically from the database's current value: replacing the
+ * whole JSONB document would erase settings a reconcile just persisted.
+ *
+ * The ONE writer of a reconciled version stamp: `reconcileWorkspaceIfStale`
+ * calls it inline, and a caller that deferred the stamp calls it once its
+ * post-workspace layers converged. Throws on a failed write — the caller
+ * decides whether that is fatal.
+ */
+export async function stampWorkspacePackageVersion(
+  workspaceId: string,
+  version: string
+): Promise<void> {
+  await db
+    .update(workspaces)
+    .set({
+      settings: drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(
+        { packageVersion: version }
+      )}::jsonb`,
+    })
+    .where(eq(workspaces.id, workspaceId));
 }
 
 /**
@@ -121,6 +154,13 @@ export async function reconcileWorkspaceIfStale(opts: {
    * `workspaceDefinition` are unavailable, so a reconcile write has
    * something to apply. */
   callerDefinition?: WorkspaceDefinitionInput;
+  /**
+   * Do NOT stamp the new version here; hand it back as `pendingVersionStamp`.
+   * For a caller that also applies the post-workspace layers and must stamp
+   * only what was earned (the proposal approve executor). Omitted ⇒ the
+   * historical behavior: stamp right after layer 1.
+   */
+  deferVersionStamp?: boolean;
 }): Promise<ReconcileIfStaleResult> {
   const {
     workspaceId,
@@ -129,6 +169,7 @@ export async function reconcileWorkspaceIfStale(opts: {
     userId,
     callerVersion,
     callerDefinition,
+    deferVersionStamp,
   } = opts;
   if (!packageSlug) return { reconciled: false, checked: false };
 
@@ -160,24 +201,17 @@ export async function reconcileWorkspaceIfStale(opts: {
     });
 
     // Stamp the new version so the NEXT idempotent hit short-circuits as
-    // up to date instead of re-reconciling every time. Merge atomically from
-    // the database's post-reconcile value: currentSettings is the snapshot
-    // from before reconciliation and replacing the whole JSONB document here
-    // would erase layout/settings changes the reconcile just persisted.
-    try {
-      await db
-        .update(workspaces)
-        .set({
-          settings: drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(
-            { packageVersion: version }
-          )}::jsonb`,
-        })
-        .where(eq(workspaces.id, workspaceId));
-    } catch (err) {
-      logger.warn(
-        { err, workspaceId },
-        "reconcileWorkspaceIfStale: failed to stamp reconciled packageVersion (non-fatal)"
-      );
+    // up to date instead of re-reconciling every time — unless the caller
+    // deferred it until its post-workspace layers have applied too.
+    if (!deferVersionStamp) {
+      try {
+        await stampWorkspacePackageVersion(workspaceId, version);
+      } catch (err) {
+        logger.warn(
+          { err, workspaceId },
+          "reconcileWorkspaceIfStale: failed to stamp reconciled packageVersion (non-fatal)"
+        );
+      }
     }
 
     return {
@@ -188,6 +222,7 @@ export async function reconcileWorkspaceIfStale(opts: {
       // Hand back the SAME source layer 1 reconciled against so a caller
       // syncing layer 2 stays in lockstep with it (see the field's doc).
       packageDefinition: resolved?.packageDefinition,
+      ...(deferVersionStamp ? { pendingVersionStamp: version } : {}),
     };
   } catch (err) {
     logger.warn(
@@ -517,6 +552,12 @@ export interface CreateWorkspaceFromDefinitionInput {
   linkedAgentId?: string;
   /** Audit field — who/what triggered this creation. */
   createdBy?: "user" | "provisioning" | "plugin";
+  /**
+   * On an idempotent re-hit that reconciles to a newer template, do not stamp
+   * the new version — return it as `pendingVersionStamp` (see
+   * `reconcileWorkspaceIfStale`). Has no effect on a fresh create.
+   */
+  deferVersionStamp?: boolean;
 }
 
 export interface CreateWorkspaceFromDefinitionResult {
@@ -543,6 +584,14 @@ export interface CreateWorkspaceFromDefinitionResult {
    *     current (or no version comparison was possible) — no write happened.
    */
   outcome: "created" | "reconciled" | "unchanged";
+  /**
+   * `"reconciled"` re-hit only: the server-resolved template layer 1 ran
+   * against — the source a caller syncing layer 2 must use (see
+   * `ReconcileIfStaleResult.packageDefinition`).
+   */
+  packageDefinition?: ReconcileIfStaleResult["packageDefinition"];
+  /** `deferVersionStamp` only: the version this re-hit did NOT stamp yet. */
+  pendingVersionStamp?: string;
 }
 
 /**
@@ -604,7 +653,24 @@ export async function createWorkspaceFromDefinitionIdempotent(
     workspaceType,
     linkedAgentId,
     createdBy = "user",
+    deferVersionStamp,
   } = input;
+
+  // A re-hit's reconcile verdict → the result fields every re-hit branch
+  // returns (one projection, so the three branches below cannot drift).
+  const rehit = (
+    workspaceId: string,
+    r: ReconcileIfStaleResult
+  ): CreateWorkspaceFromDefinitionResult => ({
+    workspaceId,
+    created: false,
+    outcome: r.reconciled ? "reconciled" : "unchanged",
+    ...(r.reconciled && r.report ? { reconciled: r.report } : {}),
+    ...(r.packageDefinition ? { packageDefinition: r.packageDefinition } : {}),
+    ...(r.pendingVersionStamp
+      ? { pendingVersionStamp: r.pendingVersionStamp }
+      : {}),
+  });
 
   // Recovery: a workspace whose last provisioning attempt FAILED must be
   // RESUMED from its completed steps, not reconciled. `reconcileWorkspaceIfStale`
@@ -686,29 +752,25 @@ export async function createWorkspaceFromDefinitionIdempotent(
         // W2b: bring an already-present workspace up to the FRESHEST template
         // (cache-first, hash-compared) instead of silently no-op-ing — this is
         // the Hub-door gap the tRPC door already had a (now-shared) fix for.
-        const { reconciled, report } = await reconcileWorkspaceIfStale({
+        const verdict = await reconcileWorkspaceIfStale({
           workspaceId: ws.id,
           packageSlug,
           currentSettings,
           userId,
           callerVersion: packageVersion,
           callerDefinition: definition,
+          deferVersionStamp,
         });
         logger.info(
           {
             userId,
             proposalId,
             workspaceId: ws.id,
-            reconciled,
+            reconciled: verdict.reconciled,
           },
           "createFromDefinition (Hub): returning existing workspace by proposalId"
         );
-        return {
-          workspaceId: ws.id,
-          created: false,
-          outcome: reconciled ? "reconciled" : "unchanged",
-          ...(reconciled && report ? { reconciled: report } : {}),
-        };
+        return rehit(ws.id, verdict);
       }
     }
 
@@ -757,7 +819,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
         currentSettings
       );
       if (resumed) return resumed;
-      const { reconciled, report } = packageSlug
+      const verdict: ReconcileIfStaleResult = packageSlug
         ? await reconcileWorkspaceIfStale({
             workspaceId: holder.existingWorkspaceId,
             packageSlug,
@@ -765,23 +827,19 @@ export async function createWorkspaceFromDefinitionIdempotent(
             userId,
             callerVersion: packageVersion,
             callerDefinition: definition,
+            deferVersionStamp,
           })
-        : { reconciled: false, report: undefined };
+        : { reconciled: false, checked: false };
       logger.info(
         {
           userId,
           field: holder.field,
           workspaceId: holder.existingWorkspaceId,
-          reconciled,
+          reconciled: verdict.reconciled,
         },
         "createFromDefinition: returning the pod-wide identity holder"
       );
-      return {
-        workspaceId: holder.existingWorkspaceId,
-        created: false,
-        outcome: reconciled ? "reconciled" : "unchanged",
-        ...(reconciled && report ? { reconciled: report } : {}),
-      };
+      return rehit(holder.existingWorkspaceId, verdict);
     }
 
     // ── 1b. Fallback match for PRE-version-stamping legacy workspaces ──────────
@@ -798,13 +856,14 @@ export async function createWorkspaceFromDefinitionIdempotent(
         // reconciling (a same-version reconcile would short-circuit to no-op).
         const resumed = await resumeIfFailed(fallback.id, currentSettings);
         if (resumed) return resumed;
-        const { reconciled, report } = await reconcileWorkspaceIfStale({
+        const verdict = await reconcileWorkspaceIfStale({
           workspaceId: fallback.id,
           packageSlug,
           currentSettings,
           userId,
           callerVersion: packageVersion,
           callerDefinition: definition,
+          deferVersionStamp,
         });
 
         // Adopt the identity so the NEXT call hits the fast path (step 1)
@@ -834,17 +893,12 @@ export async function createWorkspaceFromDefinitionIdempotent(
             userId,
             packageSlug,
             workspaceId: fallback.id,
-            reconciled,
+            reconciled: verdict.reconciled,
           },
           "createFromDefinition: adopted legacy workspace via fallback identity match"
         );
 
-        return {
-          workspaceId: fallback.id,
-          created: false,
-          outcome: reconciled ? "reconciled" : "unchanged",
-          ...(reconciled && report ? { reconciled: report } : {}),
-        };
+        return rehit(fallback.id, verdict);
       }
     }
 

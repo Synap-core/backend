@@ -11,11 +11,292 @@ import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspaceRuntimePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
-import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  registerProposalExecutor,
+  type ProposalExecutorArgs,
+} from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
 import type { Context } from "../../../context.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-workspace" });
+
+/**
+ * Approve a template apply (`source: "packages.apply"`, or any gated
+ * create-from-definition): materialize through the SAME `materializeWorkspaceCore`
+ * the Hub `/packages/apply` door uses — a FRESH create, or an idempotent re-hit
+ * that reconciles layer 1 onto the space already holding the template — then
+ * the SAME post-workspace layers (`applyPackagePostWorkspace`), then the version
+ * stamp, only if layer 2 converged.
+ *
+ * Shared by `workspace/create` and by `workspace/update` for a template UPDATE
+ * of an existing space (the honest shape the apply door files when the slug is
+ * already installed) — one body, so the two can never diverge.
+ */
+async function executeTemplateApplyApproval({
+  proposal,
+  payload,
+  userId,
+  input,
+  deps,
+}: ProposalExecutorArgs) {
+  const inner = ((proposal.data as Record<string, unknown>)?.data ??
+    proposal.data ??
+    {}) as Record<string, unknown>;
+  const name =
+    (inner.name as string | undefined) ??
+    (inner.workspaceName as string | undefined);
+  if (!name || typeof name !== "string" || name.trim() === "") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Workspace proposal is missing name",
+    });
+  }
+
+  // Idempotency: approve is not status-guarded before dispatch; skip if
+  // already materialized (idempotent create would still re-hit deps/reconcile).
+  const [alreadyDone] = await db
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, input.proposalId));
+  if (alreadyDone?.status === ProposalStatus.APPROVED) {
+    return { success: true, alreadyApproved: true };
+  }
+
+  const {
+    materializeWorkspaceCore,
+    materializeReportStatus,
+    ComposeBaseUnavailableError,
+    DependencyResolutionError,
+    ComposeBaseNotFoundError,
+    ComposeOverlayError,
+  } = await import("../../../services/workspace-materialization-service.js");
+
+  // Template identity (0308): a template proposal installs under its slug
+  // (installed once per pod). Falling back to the proposal ROW id as the
+  // key matched nothing and minted a second, empty space beside the real
+  // one (incident 2026-10-06: a catalog definition with no `_meta.slug`).
+  // A template proposal with neither a slug nor an explicit key is refused;
+  // only a freehand create may still key on its proposal id.
+  const innerDefinition = (inner.definition ?? {}) as Record<
+    string,
+    unknown
+  > & { _meta?: { slug?: unknown } };
+  const metaSlug = innerDefinition._meta?.slug;
+  const packageSlug =
+    (inner.packageSlug as string | undefined) ??
+    (typeof metaSlug === "string" && metaSlug.trim()
+      ? metaSlug.trim()
+      : undefined);
+  const explicitKey = inner.proposalId as string | undefined;
+  const isTemplateProposal = !!(
+    packageSlug ||
+    inner.templateId ||
+    innerDefinition._meta ||
+    inner.source === "packages.apply"
+  );
+  if (isTemplateProposal && !packageSlug && !explicitKey) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This template proposal carries no package slug and no idempotency key, so approving it would create a duplicate space. Re-submit it with the catalog slug (`_meta.slug`).",
+    });
+  }
+
+  let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
+  try {
+    core = await materializeWorkspaceCore({
+      // Stamp only what was earned: an idempotent re-hit that reconciles
+      // layer 1 to a newer template hands its version back here instead
+      // of stamping it, and it is stamped below only once the
+      // post-workspace layers converged.
+      deferVersionStamp: true,
+      definition:
+        innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
+      userId,
+      agentUserId: proposal.agentUserId ?? undefined,
+      proposalId:
+        explicitKey ??
+        (isTemplateProposal ? packageSlug : undefined) ??
+        input.proposalId,
+      workspaceName: (inner.workspaceName as string | undefined) ?? name,
+      templateId: inner.templateId as string | undefined,
+      packageSlug,
+      // The version the apply door stamped onto the proposal — the same
+      // FALLBACK the direct door passes (a private template the pod's catalog
+      // cache cannot resolve); a cache-resolved version still wins.
+      packageVersion: inner.packageVersion as string | undefined,
+      workspaceType: inner.workspaceType as
+        "personal" | "agent" | "project" | "operational" | undefined,
+      createdBy:
+        (inner.createdBy as "user" | "provisioning" | "plugin" | undefined) ??
+        "provisioning",
+    });
+  } catch (e) {
+    if (
+      e instanceof DependencyResolutionError ||
+      e instanceof ComposeBaseUnavailableError ||
+      e instanceof ComposeOverlayError
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: (e as Error).message,
+      });
+    }
+    if (e instanceof ComposeBaseNotFoundError) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: (e as Error).message,
+      });
+    }
+    throw e;
+  }
+
+  // deferCreate is never set here — core is "created" | "composed" (both
+  // carry workspaceId). Narrow so the "resolved"-only union arm is excluded.
+  if (core.status === "resolved") {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        "Workspace materialize returned resolved-without-create (unexpected on approve path)",
+    });
+  }
+  const workspaceId = core.workspaceId;
+
+  // Stamp the produced workspaceId onto the proposal row so clients/revert
+  // can recover it (ProposalMaterializedRecord has no workspaceIds field —
+  // store as a sibling lifecycle key next to materialized).
+  void payload;
+  const updatedData = {
+    ...((proposal.data as Record<string, unknown> | null | undefined) ?? {}),
+    materializedWorkspaceId: workspaceId,
+    materializeStatus: materializeReportStatus(core),
+  };
+
+  await db
+    .update(proposals)
+    .set({
+      status: ProposalStatus.APPROVED,
+      data: updatedData,
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(proposals.id, input.proposalId));
+
+  // packages.apply: after workspace materialize, run the SAME post-workspace
+  // layers as the grant path (enroll agent + caps/autos/playbooks/loops).
+  // Without this, every agent package install silently dropped Phase 2.
+  const source = inner.source as string | undefined;
+  const storedDefinition = (inner.definition ?? {}) as Record<string, unknown>;
+  // SOURCE MUST MATCH LAYER 1 (the tRPC door's `reconcileExisting` rule):
+  // a re-hit that reconciled against the FRESH server-resolved template
+  // syncs layer 2 from that same template, not the stored copy, which may
+  // predate the version layer 1 just applied.
+  const created = core.status === "created" ? core.created : undefined;
+  const pendingVersionStamp = created?.pendingVersionStamp;
+  const resolvedPackage = created?.packageDefinition as
+    Record<string, unknown> | undefined;
+  const definition: Record<string, unknown> = resolvedPackage
+    ? {
+        ...resolvedPackage,
+        _meta: {
+          ...((resolvedPackage._meta as Record<string, unknown>) ?? {}),
+          ...(packageSlug ? { slug: packageSlug } : {}),
+          ...(pendingVersionStamp ? { version: pendingVersionStamp } : {}),
+        },
+        // The engagement project is the CALLER's, never the template's.
+        ...(storedDefinition.projectId !== undefined
+          ? { projectId: storedDefinition.projectId }
+          : {}),
+      }
+    : storedDefinition;
+  const needsPost =
+    source === "packages.apply" ||
+    Boolean(
+      definition.capabilities ||
+      definition.automations ||
+      definition.playbooks ||
+      definition.loops ||
+      definition.projectId
+    );
+  let post: Record<string, unknown> | undefined;
+  if (needsPost) {
+    try {
+      const { applyPackagePostWorkspace } =
+        await import("../../../services/package-apply-post-workspace.js");
+      post = await applyPackagePostWorkspace({
+        workspaceId,
+        body: definition as Parameters<
+          typeof applyPackagePostWorkspace
+        >[0]["body"],
+        userId,
+        // The APPROVER is the authority: a person approved this package,
+        // its layers included, so they apply as the approver — never as
+        // the proposing agent, which re-filed every floored write (a new
+        // playbook) as a second proposal and left the approved update
+        // without it. The agent is still enrolled, so its follow-on writes
+        // don't collapse to join proposals.
+        enrollAgentUserId: proposal.agentUserId ?? undefined,
+        scopes: [],
+      });
+    } catch (e) {
+      // Workspace already exists — surface post-layer failure rather than
+      // leaving APPROVED with a silent partial package. Scrub the raw cause
+      // (it can carry DB/connector internals) to the operator log; the client
+      // gets a fixed message, not the interpolated exception text (E1).
+      logger.warn(
+        { proposalId: input.proposalId, err: (e as Error).message },
+        "workspace create: package layers failed post-workspace"
+      );
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Workspace created, but applying its package layers failed.",
+      });
+    }
+  }
+
+  // The version stamp layer 1 deferred: written only when layer 2 actually
+  // landed (nothing errored, nothing still proposed). Otherwise the space
+  // keeps its previous stamp, so the next `market update` still sees the
+  // drift and re-applies — the stamp never claims a playbook that is not
+  // there. A throw above already left it unstamped (and the space marked
+  // `provisioningStatus:"failed"` for the resume path).
+  let versionStamped = false;
+  if (pendingVersionStamp) {
+    const { postWorkspaceLayersConverged } =
+      await import("../../../services/capabilities/install-layers.js");
+    if (!needsPost || postWorkspaceLayersConverged(post)) {
+      const { stampWorkspacePackageVersion } =
+        await import("../../../services/workspace-creation-service.js");
+      await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
+      versionStamped = true;
+    } else {
+      logger.warn(
+        {
+          proposalId: input.proposalId,
+          workspaceId,
+          version: pendingVersionStamp,
+        },
+        "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
+      );
+    }
+  }
+
+  // Report to IS telemetry (fire-and-forget — never blocks)
+  reportApproved(deps, proposal, input.proposalId);
+
+  deps.emitProposalReviewed(
+    input.proposalId,
+    proposal.workspaceId,
+    "approved",
+    userId
+  );
+  return {
+    success: true,
+    primaryId: workspaceId,
+    ...(pendingVersionStamp ? { versionStamped } : {}),
+  };
+}
 
 /** Register the workspace/* approve executors. */
 export function registerWorkspaceExecutors(): void {
@@ -38,200 +319,8 @@ export function registerWorkspaceExecutors(): void {
   // back to the proposal row id so re-approve is always stable.
   registerProposalExecutor({
     key: "workspace/create",
-    async execute({ proposal, payload, userId, input, deps }) {
-      const inner = ((proposal.data as Record<string, unknown>)?.data ??
-        proposal.data ??
-        {}) as Record<string, unknown>;
-      const name =
-        (inner.name as string | undefined) ??
-        (inner.workspaceName as string | undefined);
-      if (!name || typeof name !== "string" || name.trim() === "") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Workspace proposal is missing name",
-        });
-      }
-
-      // Idempotency: approve is not status-guarded before dispatch; skip if
-      // already materialized (idempotent create would still re-hit deps/reconcile).
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
-      }
-
-      const {
-        materializeWorkspaceCore,
-        materializeReportStatus,
-        ComposeBaseUnavailableError,
-        DependencyResolutionError,
-        ComposeBaseNotFoundError,
-        ComposeOverlayError,
-      } =
-        await import("../../../services/workspace-materialization-service.js");
-
-      // Template identity (0308): a template proposal installs under its slug
-      // (installed once per pod). Falling back to the proposal ROW id as the
-      // key matched nothing and minted a second, empty space beside the real
-      // one (incident 2026-10-06: a catalog definition with no `_meta.slug`).
-      // A template proposal with neither a slug nor an explicit key is refused;
-      // only a freehand create may still key on its proposal id.
-      const innerDefinition = (inner.definition ?? {}) as Record<
-        string,
-        unknown
-      > & { _meta?: { slug?: unknown } };
-      const metaSlug = innerDefinition._meta?.slug;
-      const packageSlug =
-        (inner.packageSlug as string | undefined) ??
-        (typeof metaSlug === "string" && metaSlug.trim()
-          ? metaSlug.trim()
-          : undefined);
-      const explicitKey = inner.proposalId as string | undefined;
-      const isTemplateProposal = !!(
-        packageSlug ||
-        inner.templateId ||
-        innerDefinition._meta ||
-        inner.source === "packages.apply"
-      );
-      if (isTemplateProposal && !packageSlug && !explicitKey) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "This template proposal carries no package slug and no idempotency key, so approving it would create a duplicate space. Re-submit it with the catalog slug (`_meta.slug`).",
-        });
-      }
-
-      let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
-      try {
-        core = await materializeWorkspaceCore({
-          definition:
-            innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
-          userId,
-          agentUserId: proposal.agentUserId ?? undefined,
-          proposalId:
-            explicitKey ??
-            (isTemplateProposal ? packageSlug : undefined) ??
-            input.proposalId,
-          workspaceName: (inner.workspaceName as string | undefined) ?? name,
-          templateId: inner.templateId as string | undefined,
-          packageSlug,
-          workspaceType: inner.workspaceType as
-            "personal" | "agent" | "project" | "operational" | undefined,
-          createdBy:
-            (inner.createdBy as
-              "user" | "provisioning" | "plugin" | undefined) ?? "provisioning",
-        });
-      } catch (e) {
-        if (
-          e instanceof DependencyResolutionError ||
-          e instanceof ComposeBaseUnavailableError ||
-          e instanceof ComposeOverlayError
-        ) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: (e as Error).message,
-          });
-        }
-        if (e instanceof ComposeBaseNotFoundError) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: (e as Error).message,
-          });
-        }
-        throw e;
-      }
-
-      // deferCreate is never set here — core is "created" | "composed" (both
-      // carry workspaceId). Narrow so the "resolved"-only union arm is excluded.
-      if (core.status === "resolved") {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Workspace materialize returned resolved-without-create (unexpected on approve path)",
-        });
-      }
-      const workspaceId = core.workspaceId;
-
-      // Stamp the produced workspaceId onto the proposal row so clients/revert
-      // can recover it (ProposalMaterializedRecord has no workspaceIds field —
-      // store as a sibling lifecycle key next to materialized).
-      void payload;
-      const updatedData = {
-        ...((proposal.data as Record<string, unknown> | null | undefined) ??
-          {}),
-        materializedWorkspaceId: workspaceId,
-        materializeStatus: materializeReportStatus(core),
-      };
-
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          data: updatedData,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
-
-      // packages.apply: after workspace materialize, run the SAME post-workspace
-      // layers as the grant path (enroll agent + caps/autos/playbooks/loops).
-      // Without this, every agent package install silently dropped Phase 2.
-      const source = inner.source as string | undefined;
-      const definition = (inner.definition ?? {}) as Record<string, unknown>;
-      const needsPost =
-        source === "packages.apply" ||
-        Boolean(
-          definition.capabilities ||
-          definition.automations ||
-          definition.playbooks ||
-          definition.loops ||
-          definition.projectId
-        );
-      if (needsPost) {
-        try {
-          const { applyPackagePostWorkspace } =
-            await import("../../../services/package-apply-post-workspace.js");
-          await applyPackagePostWorkspace({
-            workspaceId,
-            body: definition as Parameters<
-              typeof applyPackagePostWorkspace
-            >[0]["body"],
-            userId,
-            // Approver is authority for creates; still enroll the proposing
-            // agent so follow-on agent writes don't collapse to join proposals.
-            agentUserId: proposal.agentUserId ?? undefined,
-            scopes: [],
-          });
-        } catch (e) {
-          // Workspace already exists — surface post-layer failure rather than
-          // leaving APPROVED with a silent partial package. Scrub the raw cause
-          // (it can carry DB/connector internals) to the operator log; the client
-          // gets a fixed message, not the interpolated exception text (E1).
-          logger.warn(
-            { proposalId: input.proposalId, err: (e as Error).message },
-            "workspace create: package layers failed post-workspace"
-          );
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Workspace created, but applying its package layers failed.",
-          });
-        }
-      }
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportApproved(deps, proposal, input.proposalId);
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true, primaryId: workspaceId };
+    async execute(args) {
+      return executeTemplateApplyApproval(args);
     },
   });
 
@@ -506,11 +595,27 @@ export function registerWorkspaceExecutors(): void {
   // userId (mirrors workspace/create's approve-as-authority above).
   registerProposalExecutor({
     key: "workspace/update",
-    async execute({ proposal, payload, userId, input, deps }) {
+    async execute(args) {
+      const { proposal, payload, userId, input, deps } = args;
       void payload;
       const inner = ((proposal.data as Record<string, unknown>)?.data ??
         proposal.data ??
         {}) as Record<string, unknown>;
+
+      // A template UPDATE of the space that already holds the template (Hub
+      // `/packages/apply` with no `targetWorkspaceId`, slug already installed).
+      // Filed as an update of THAT space so the reviewer reads what it is, and
+      // approved through the very body `workspace/create` runs: the slug keys
+      // the idempotent re-hit, layer 1 reconciles, layer 2 applies, then the
+      // stamp. Never the `targetWorkspaceId` compose branch below — that one
+      // OVERLAYS a package onto a foreign space.
+      if (
+        inner.source === "packages.apply" &&
+        inner.operation === "template_update" &&
+        inner.targetWorkspaceId === undefined
+      ) {
+        return executeTemplateApplyApproval(args);
+      }
       const targetWorkspaceId =
         (inner.targetWorkspaceId as string | undefined) ??
         proposal.workspaceId ??

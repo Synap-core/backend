@@ -30,13 +30,23 @@ describe("workspace/create approve executor registration", () => {
   });
 
   it("materializes via materializeWorkspaceCore (shared core, not a fork)", () => {
-    // The executor body must call the shared core — not invent a second create path.
+    // The executor body must call the shared core — not invent a second create
+    // path. Its body is `executeTemplateApplyApproval` (shared with the
+    // template-update arm of `workspace/update`), so: the key delegates to it,
+    // and it drives the shared core from the stored definition.
     const createBlock = src.slice(
       src.indexOf('key: "workspace/create"'),
       src.indexOf('key: "workspace/join"')
     );
-    expect(createBlock).toContain("materializeWorkspaceCore");
-    expect(createBlock).toContain("inner.definition");
+    expect(createBlock).toContain("executeTemplateApplyApproval(");
+    const body = src.slice(
+      src.indexOf("async function executeTemplateApplyApproval("),
+      src.indexOf("export function registerWorkspaceExecutors(")
+    );
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain("materializeWorkspaceCore");
+    expect(body).toContain("inner.definition");
+    expect(body).toContain("applyPackagePostWorkspace");
   });
 });
 
