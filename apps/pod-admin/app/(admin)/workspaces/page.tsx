@@ -57,6 +57,7 @@ import { useRouter } from "next/navigation";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { PageHeader } from "../components/page-header";
+import { useFocusRow } from "../components/use-focus-row";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -126,8 +127,8 @@ function deriveStatus(ws: Workspace): WorkspaceStatus {
 // ─── Page ───────────────────────────────────────────────────────────
 
 export default function WorkspacesPage() {
-  // useSearchParams in `useFocusRow` requires a Suspense boundary in the
-  // App Router; we wrap the heavy lifting in `WorkspacesInner`.
+  // `useFocusRow` (in `WorkspacesInner`) reads useSearchParams, which needs a
+  // Suspense boundary in the App Router.
   return (
     <Suspense fallback={<WorkspacesFallback />}>
       <WorkspacesInner />
@@ -156,6 +157,9 @@ function WorkspacesInner() {
   const query = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 30_000,
   });
+
+  // Receives `?focus=<id>` from the search palette; rows carry `data-row-id`.
+  useFocusRow({ ready: !query.isLoading });
 
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {

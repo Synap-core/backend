@@ -573,14 +573,19 @@ function InviteHeader({
 function InviteExpiry({ expiresAt }: { expiresAt: Date | string }) {
   const at = new Date(expiresAt);
   if (Number.isNaN(at.getTime())) return null;
-  const expired = at.getTime() <= Date.now();
+  const msLeft = at.getTime() - Date.now();
+  const expired = msLeft <= 0;
   return (
     <p
       className={`text-[12.5px] ${expired ? "text-danger" : "text-foreground/65"}`}
     >
       {expired ? "Expired" : "Expires"}{" "}
-      <time dateTime={at.toISOString()}>{formatRelative(at)}</time> ·{" "}
-      {formatTimestamp(at)}
+      <time dateTime={at.toISOString()}>
+        {msLeft > 0 && msLeft < 60_000
+          ? "in under a minute"
+          : formatRelative(at)}
+      </time>{" "}
+      · {formatTimestamp(at)}
     </p>
   );
 }

@@ -226,11 +226,7 @@ function NeedsYouBand() {
                 ))}
               </div>
             )}
-            {needsYou.hiddenCount > 0 && (
-              <p className="mt-2 px-1 text-[11.5px] text-foreground/65">
-                +{needsYou.hiddenCount} more, less urgent
-              </p>
-            )}
+            <HiddenRows rows={needsYou.hiddenRows} />
             <DesktopFallbackOnce rows={needsYou.rows} />
             {failures.map((f) => (
               <ResourceRowError
@@ -249,8 +245,8 @@ function NeedsYouBand() {
 
 function NeedsYouRowView({ row }: { row: NeedsYouRow }) {
   const [open, setOpen] = useState(false);
-  // Only the urgent rows wear a pill: the list is already ranked, and at
-  // 360px a pill on every row leaves the headline no room.
+  // Only the urgent rows wear a pill: the list is already ranked, and below
+  // `sm` the row drops it (via `wrap`) so the headline keeps the room.
   const pill = row.tone === "degraded" ? TONE_PILL.degraded : undefined;
 
   let action = null;
@@ -283,6 +279,7 @@ function NeedsYouRowView({ row }: { row: NeedsYouRow }) {
         secondary={row.secondary}
         status={pill}
         actions={action}
+        wrap
       />
       {open && row.items.length > 0 && (
         <ul className="mb-2 ml-10 mr-3 flex flex-col gap-1">
@@ -355,6 +352,35 @@ function DesktopFallbackOnce({ rows }: { rows: NeedsYouRow[] }) {
   return (
     <div className="mt-1 flex justify-end px-1">
       <ExitFallback exit={desktopExit} />
+    </div>
+  );
+}
+
+/** "+N more, less urgent" — a disclosure that reveals the rows past the cap. */
+function HiddenRows({ rows }: { rows: NeedsYouRow[] }) {
+  const [open, setOpen] = useState(false);
+  if (rows.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-1 text-[12.5px] text-foreground/65 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      >
+        +{rows.length} more, less urgent
+        <ChevronDown
+          className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
+          aria-hidden
+        />
+      </button>
+      {open && (
+        <div className="-mx-2">
+          {rows.map((row) => (
+            <NeedsYouRowView key={row.key} row={row} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

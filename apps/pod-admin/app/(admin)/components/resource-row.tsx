@@ -3,7 +3,8 @@
 /**
  * `ResourceRow` — the canonical list-item used in every tab.
  *
- *   56px tall, padding-x 12, hover bg-content2/50
+ *   56px tall (`wrap`: at least 56px, primary line up to two lines),
+ *   padding-x 12, hover bg-content2/50
  *   [icon 16px, foreground/40] [primary] [secondary] [status pill] [⋯]
  *
  * Click anywhere on the row except the actions popover triggers `onSelect`
@@ -31,6 +32,13 @@ interface ResourceRowProps {
   onSelect?: () => void;
   /** Optional actions slot rendered as a `⋯` popover trigger. */
   actions?: ReactNode;
+  /**
+   * Let a long primary line wrap to two lines instead of truncating, and the
+   * row grow to fit. Off by default so every other list keeps its fixed 56px.
+   * The status pill then shows from `sm` up only: below it the headline needs
+   * the width more than the pill does.
+   */
+  wrap?: boolean;
 }
 
 export function ResourceRow({
@@ -40,6 +48,7 @@ export function ResourceRow({
   status,
   onSelect,
   actions,
+  wrap = false,
 }: ResourceRowProps) {
   const interactive = !!onSelect;
 
@@ -64,7 +73,8 @@ export function ResourceRow({
         }
       }}
       className={[
-        "group flex h-14 items-center gap-3 px-3",
+        "group flex items-center gap-3 px-3",
+        wrap ? "min-h-14 py-2" : "h-14",
         "border-b border-foreground/[0.05] last:border-b-0",
         interactive
           ? "cursor-pointer transition-colors hover:bg-content2/50"
@@ -78,7 +88,9 @@ export function ResourceRow({
       />
 
       <div className="min-w-0 flex-1 flex flex-col">
-        <span className="truncate text-[13px] font-medium text-foreground">
+        <span
+          className={`${wrap ? "line-clamp-2" : "truncate"} text-[13px] font-medium text-foreground`}
+        >
           {primary}
         </span>
         {secondary && (
@@ -89,7 +101,7 @@ export function ResourceRow({
       </div>
 
       {status && (
-        <div className="shrink-0">
+        <div className={wrap ? "hidden shrink-0 sm:block" : "shrink-0"}>
           <StatusPill kind={status.kind} label={status.label} />
         </div>
       )}

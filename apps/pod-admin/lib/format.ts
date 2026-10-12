@@ -14,6 +14,9 @@ export function formatRelative(
   const d = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(d.getTime())) return empty;
   const diff = Date.now() - d.getTime();
+  // Clock skew between pod and browser makes a fresh row land a few seconds
+  // "in the future"; either side of now within a minute is just now.
+  if (Math.abs(diff) < 60_000) return "just now";
   if (diff < 0) {
     // Future: expiresAt and the like.
     const minutes = Math.floor(-diff / 60_000);
@@ -22,7 +25,6 @@ export function formatRelative(
     if (hours < 24) return `in ${hours}h`;
     return `in ${Math.floor(hours / 24)}d`;
   }
-  if (diff < 60_000) return "just now";
   const minutes = Math.floor(diff / 60_000);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);

@@ -440,7 +440,7 @@ function IssuerRow({
 
   const secondary = [
     issuer.issuerUrl,
-    `added ${formatRelative(issuer.firstContactedAt ?? issuer.createdAt, { empty: "never" })}`,
+    `added ${formatRelative(issuer.firstContactedAt ?? issuer.createdAt)}`,
   ].join(" · ");
 
   return (

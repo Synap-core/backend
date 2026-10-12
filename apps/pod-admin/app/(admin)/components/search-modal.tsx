@@ -15,11 +15,11 @@
  *
  * Selection navigates to the appropriate tab with `?focus=<id>` (and, when
  * needed, `?section=<sub-tab>`) so the receiver can scroll the row into
- * view + apply the temporary highlight ring. Two receivers do NOT honour
- * `?focus=` and are therefore linked without it: a workspace-scoped API key
- * goes to `/workspaces/<id>?tab=api-keys` (the pod-wide Trust & Keys list
- * skips workspace keys, so focusing one there would show nothing), and an
- * entity goes to `/entities`.
+ * view + apply the temporary highlight ring. A workspace-scoped API key
+ * goes to `/workspaces/<id>?tab=api-keys&focus=<id>` (the pod-wide Trust &
+ * Keys list skips workspace keys, so focusing one there would show nothing).
+ * The one receiver that does NOT honour `?focus=` is `/entities`, so an entity
+ * is linked without it.
  *
  * Keyboard model:
  *   ⌘K / Ctrl+K  — toggle open
@@ -299,7 +299,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         primary: k.keyName,
         secondary: `${k.keyPrefix}… · ${k.isActive ? "active" : "revoked"}`,
         href: scopedWorkspaceId
-          ? `/workspaces/${encodeURIComponent(scopedWorkspaceId)}?tab=api-keys`
+          ? `/workspaces/${encodeURIComponent(scopedWorkspaceId)}?tab=api-keys&focus=${encodeURIComponent(k.id)}`
           : `/trust-keys?section=api-keys&focus=${encodeURIComponent(k.id)}`,
       });
       if (bucket.length >= cap) break;

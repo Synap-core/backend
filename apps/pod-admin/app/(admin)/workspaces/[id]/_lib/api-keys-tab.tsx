@@ -50,7 +50,6 @@ interface ApiKey {
   expiresAt?: Date | string | null;
   lastUsedAt?: Date | string | null;
   createdAt?: Date | string | null;
-  workspaceId?: string | null;
 }
 
 function normalizeScopes(s: string[] | string | null | undefined): string[] {

@@ -75,6 +75,9 @@ describe("buildNeedsYou ranking", () => {
     });
     expect(result.rows).toHaveLength(NEEDS_YOU_CAP);
     expect(result.hiddenCount).toBe(keys.length - NEEDS_YOU_CAP);
+    expect(result.hiddenRows.map((r) => r.key)).toEqual(
+      keys.slice(NEEDS_YOU_CAP)
+    );
     expect(result.rows.at(-1)?.key).not.toBe("schema_contract");
   });
 });
@@ -269,19 +272,18 @@ describe("buildNeedsYou link building", () => {
     ]);
   });
 
-  it("focuses the single pending issuer and the single failing peer", () => {
+  it("focuses the single pending issuer; failing peers expand in place", () => {
     const { rows } = buildNeedsYou({
       sections: [],
       pendingIssuers: [{ id: "a b", issuerUrl: null }],
       syncErrors: [{ id: "peer/1", label: "Laptop", error: "x" }],
     });
-    const hrefs = rows.map((r) =>
-      r.action.kind === "link" ? r.action.exit.href : null
+    const [sync, issuer] = rows;
+    expect(sync.action).toEqual({ kind: "expand", label: "Show peers" });
+    expect(sync.items).toEqual([{ id: "peer/1", label: "Laptop", meta: "x" }]);
+    expect(issuer.action.kind === "link" && issuer.action.exit.href).toBe(
+      "/trust-keys?section=issuers&focus=a%20b"
     );
-    expect(hrefs).toEqual([
-      "/connectors?focus=peer%2F1",
-      "/trust-keys?section=issuers&focus=a%20b",
-    ]);
   });
 
   it("sends several pending issuers to the issuers list without a focus", () => {

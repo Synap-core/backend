@@ -68,6 +68,8 @@ export interface NeedsYou {
   rows: NeedsYouRow[];
   /** Rows ranked below the cap — counted, never silently dropped. */
   hiddenCount: number;
+  /** The rows behind `hiddenCount`, for the "+N more" disclosure. */
+  hiddenRows: NeedsYouRow[];
   /** Sections reporting `ok`, for the "N checks passing" disclosure. */
   passing: Array<{ key: string; headline: string }>;
 }
@@ -101,7 +103,7 @@ const SEVERITY: Record<NeedsYouRow["tone"], number> = {
   attention: 1,
 };
 
-/** The self-service review queue — the console page for pending proposals. */
+/** The review queue — the admin console page for pending proposals. */
 const REVIEW_QUEUE: Exit = {
   href: "/audit?section=queue",
   isDesktopLink: false,
@@ -448,16 +450,10 @@ function syncRow(errors: SyncError[]): NeedsYouRow | null {
       ? `Sync with ${only.label} is failing`
       : `${errors.length} sync peers are failing`,
     secondary: only ? only.error.slice(0, 80) : undefined,
-    action: {
-      kind: "link",
-      label: "Open",
-      exit: consoleRoute(
-        only
-          ? `/connectors?focus=${encodeURIComponent(only.id)}`
-          : "/connectors"
-      ),
-    },
-    items: [],
+    // /connectors lists connector connections, not sync peers, so no page
+    // owns a peer: the row opens in place to show who is failing and why.
+    action: { kind: "expand", label: "Show peers" },
+    items: errors.map((e) => ({ id: e.id, label: e.label, meta: e.error })),
   };
 }
 
@@ -496,6 +492,7 @@ export function buildNeedsYou({
   return {
     rows: rows.slice(0, NEEDS_YOU_CAP),
     hiddenCount: Math.max(0, rows.length - NEEDS_YOU_CAP),
+    hiddenRows: rows.slice(NEEDS_YOU_CAP),
     passing: sections
       .filter((s) => s.status === "ok")
       .map((s) => ({ key: s.key, headline: s.headline })),

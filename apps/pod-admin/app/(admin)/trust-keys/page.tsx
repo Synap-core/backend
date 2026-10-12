@@ -6,7 +6,7 @@
  * Combines TrustedIssuers + ApiKeys + Secrets/Vault from the legacy
  * admin-ui (Phase C of the pod-admin port).  Three sub-tabs render in
  * a HeroUI `Tabs` strip; the active sub-tab is encoded in the URL
- * (`?section=...`) so deep links from Overview alerts (`/trust-keys?focus=...`)
+ * (`?section=...`) so deep links from Overview alerts (`/trust-keys?section=issuers&focus=...`)
  * land in the right place.
  *
  * Sub-tabs:
