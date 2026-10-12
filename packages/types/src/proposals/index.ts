@@ -565,6 +565,21 @@ export interface ProposalReviewGraph {
     statusProperty?: string;
     bornStatus: "draft";
   }>;
+  /**
+   * `create_view` — a List over this bundle's things (import Build). Counts,
+   * not ids: the members are refs into `entities[]` or existing ids.
+   */
+  views?: Array<{
+    ref: string;
+    name: string;
+    viewType: "list" | "table" | "kanban" | "gallery";
+    /** Kinds the list shows, when the op named them. */
+    scopeProfileSlugs?: string[];
+    /** How many things the list holds (in-batch refs + existing ids). */
+    memberCount: number;
+    /** The group container the list is about, when there is one. */
+    containerRef?: string;
+  }>;
 }
 
 export interface ProposalReviewModel {
@@ -848,6 +863,51 @@ export interface CompositeCreatePlaybookOp {
 }
 
 /**
+ * ── List op (import Build, 2026-10-12) ──────────────────────────────────────
+ *
+ * A saved LIST (a `views` row) filed in the SAME governed bundle as the things
+ * it lists, so an import group lands as "the items + their list" in one review
+ * and one undo. Materialized through the EXISTING `views.create` door — never a
+ * raw insert — with the approver's authority.
+ *
+ * Scoping: `entityRefs` (in-batch `create_entity` refs or real entity ids)
+ * become the view's FIXED set (`query.entityIds`). `containerRef` (the group's
+ * container entity) is recorded on the view config as `membersOf`, so a later
+ * "members of X" filter can make the list live without a migration.
+ * `scopeProfileSlugs` names the kinds the list shows; absent, the materializer
+ * derives them from the listed entities.
+ *
+ * Per-op RESILIENT (like the Rule Loop config ops): a list that fails never
+ * discards the things captured beside it.
+ */
+export interface CompositeCreateViewOp {
+  op: "create_view";
+  /** Stable handle for this view within the proposal (e.g. "list1"). */
+  ref: string;
+  name: string;
+  viewType: "list" | "table" | "kanban" | "gallery";
+  /** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
+  workspaceId?: string;
+  /** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
+  scopeProfileSlugs?: string[];
+  /** The listed things: in-batch `create_entity` refs or existing entity ids. */
+  entityRefs?: string[];
+  /** The group's container (a `create_entity` ref or an existing id). */
+  containerRef?: string;
+  /** Render config overrides, validated by the views door. */
+  config?: Record<string, unknown>;
+}
+
+/** The view types a `create_view` op may ask for (all structured). */
+export const COMPOSITE_VIEW_TYPES = [
+  "list",
+  "table",
+  "kanban",
+  "gallery",
+] as const;
+export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
+
+/**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────
  *
  * A plan is the composite graph extended with the objects that are NOT
@@ -965,6 +1025,7 @@ export type CompositeProposalOperation =
   | CompositeCreateAutomationOp
   | CompositeCreateRuleOp
   | CompositeCreatePlaybookOp
+  | CompositeCreateViewOp
   | CompositeCreateSessionOp
   | CompositeCreateDocumentOp
   | CompositeCreateProjectOp
@@ -1028,6 +1089,8 @@ const RESILIENT_OPERATION_KINDS = [
   "create_rule",
   // A draft process: a failed draft must not discard the capture beside it.
   "create_playbook",
+  // A list over the bundle's things: a failed list must not discard them.
+  "create_view",
 ] as const satisfies ReadonlyArray<CompositeProposalOperation["op"]>;
 
 type _EveryOpKindClassified =
@@ -1346,6 +1409,7 @@ export function isCompositeProposalData(
         o.op === "create_automation" ||
         o.op === "create_rule" ||
         o.op === "create_playbook" ||
+        o.op === "create_view" ||
         isPlanOperation(o))
   );
 }

@@ -112,6 +112,12 @@ export function revertTargetsFromPlan(
     ...plan.ruleIds.map((id) => ({ kind: "rule" as const, id })),
     ...plan.automationIds.map((id) => ({ kind: "automation" as const, id })),
     ...plan.skillIds.map((id) => ({ kind: "skill" as const, id })),
+    // Draft playbooks and lists a bundle created (absent on older records).
+    ...(plan.playbookIds ?? []).map((id) => ({
+      kind: "playbook" as const,
+      id,
+    })),
+    ...(plan.viewIds ?? []).map((id) => ({ kind: "view" as const, id })),
     // A connected plan's non-entity rows (absent on every older record).
     ...(plan.linkIds ?? []).map((id) => ({ kind: "link" as const, id })),
     ...(plan.projectIds ?? []).map((id) => ({
@@ -191,6 +197,8 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
       | "skillIds"
       | "automationIds"
       | "ruleIds"
+      | "playbookIds"
+      | "viewIds"
       | "sessionIds"
       | "projectIds"
       | "linkIds"
@@ -202,6 +210,8 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
     skillIds: [],
     automationIds: [],
     ruleIds: [],
+    playbookIds: [],
+    viewIds: [],
     sessionIds: [],
     projectIds: [],
     linkIds: [],
@@ -255,6 +265,10 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
         record.projectIds.push(target.id);
         break;
       case "playbook":
+        record.playbookIds.push(target.id);
+        break;
+      case "view":
+        record.viewIds.push(target.id);
         break;
     }
   }

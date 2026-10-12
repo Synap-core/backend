@@ -335,6 +335,17 @@ export interface MaterializePlaybookResult {
   status: "draft";
 }
 
+/** Per-op result for a `create_view` op (a List over the bundle's things). */
+export interface MaterializeViewResult {
+  ref: string;
+  opIndex: number;
+  viewId: string;
+  /** The fixed member set the view was created with (resolved ids). */
+  entityIds: string[];
+  /** The group container recorded on the view config, when there was one. */
+  containerEntityId?: string;
+}
+
 /** Per-op result for a `create_project` op (connected plan). */
 export interface MaterializeProjectResult {
   ref: string;
@@ -456,6 +467,8 @@ export interface MaterializeResult {
   rules: MaterializeRuleResult[];
   /** Draft processes created by `create_playbook` ops. Empty by default. */
   playbooks: MaterializePlaybookResult[];
+  /** Lists created by `create_view` ops. Empty by default. */
+  views: MaterializeViewResult[];
   /** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
   projects: MaterializeProjectResult[];
   sessions: MaterializeSessionResult[];
@@ -530,6 +543,24 @@ export type PlaybookCreateCaller = {
     subjectProfile: { profileSlug: string; statusProperty?: string };
     /** Always "draft" — the materializer never asks for a live process. */
     status: "draft";
+  }) => Promise<{ id: string }>;
+};
+
+/**
+ * A List (`create_view`). Routes to the EXISTING `views.create` door (wired by
+ * `buildRuleLoopCallers`). Refs are already resolved to real ids here.
+ */
+export type ViewCreateCaller = {
+  create: (input: {
+    name: string;
+    viewType: "list" | "table" | "kanban" | "gallery";
+    workspaceId?: string;
+    scopeProfileSlugs?: string[];
+    /** The fixed member set (real entity ids). */
+    entityIds: string[];
+    /** The group container (real entity id), recorded on the view config. */
+    containerEntityId?: string;
+    config?: Record<string, unknown>;
   }) => Promise<{ id: string }>;
 };
 
@@ -694,6 +725,8 @@ export interface MaterializeOptions {
   ruleCaller?: RuleCreateCaller;
   /** Draft process (`create_playbook`) — wired with the Rule Loop callers. */
   playbookCaller?: PlaybookCreateCaller;
+  /** List (`create_view`) — wired with the Rule Loop callers. */
+  viewCaller?: ViewCreateCaller;
   /**
    * Connected plan (sessions / documents / projects / session edges). Required
    * the moment a batch carries a plan op — absent ⇒ the batch is refused before
@@ -743,6 +776,8 @@ function appliedRowsOf(
       id: a.automationId,
     })),
     ...result.rules.map((r) => ({ kind: "rule", id: r.ruleId })),
+    ...result.playbooks.map((p) => ({ kind: "playbook", id: p.playbookId })),
+    ...result.views.map((v) => ({ kind: "view", id: v.viewId })),
     ...result.projects
       .filter((p) => !p.linked)
       .map((p) => ({ kind: "project", id: p.projectId })),
@@ -781,7 +816,8 @@ export async function materializeCompositeGraph(
       (op.op === "create_skill" && !options?.skillCaller) ||
       (op.op === "create_automation" && !options?.automationCaller) ||
       (op.op === "create_rule" && !options?.ruleCaller) ||
-      (op.op === "create_playbook" && !options?.playbookCaller)
+      (op.op === "create_playbook" && !options?.playbookCaller) ||
+      (op.op === "create_view" && !options?.viewCaller)
   );
   if (missingConfigCaller) {
     throw new Error(
@@ -878,6 +914,7 @@ export async function materializeCompositeGraph(
   const automationResults: MaterializeAutomationResult[] = [];
   const ruleResults: MaterializeRuleResult[] = [];
   const playbookResults: MaterializePlaybookResult[] = [];
+  const viewResults: MaterializeViewResult[] = [];
   const facetResults: MaterializeFacetResult[] = [];
   let relations: MaterializeRelationResult[] = [];
   const relationsFailed: MaterializeRelationFailure[] = [];
@@ -899,6 +936,7 @@ export async function materializeCompositeGraph(
     automations: automationResults,
     rules: ruleResults,
     playbooks: playbookResults,
+    views: viewResults,
     projects: projectResults,
     sessions: sessionResults,
     links: linkResults,
@@ -1643,6 +1681,61 @@ export async function materializeCompositeGraph(
         logger.warn(
           { err, ref: op.ref, name: op.name },
           "Skipping create_playbook op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
+    // ── Pass 5 — LISTS (`create_view`) ─────────────────────────────────────
+    // LAST, so every member ref resolves against the fully populated map
+    // (entities from pass 1, a group container included). Through the
+    // EXISTING `views.create` door. Per-op resilient: a list that fails never
+    // discards the things it was meant to list.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_view") continue;
+      currentOpIndex = i;
+      if (!options?.viewCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips).
+        throw new Error(
+          "materializeCompositeGraph: create_view op reached pass execution with no viewCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const entityIds = [
+          ...new Set(
+            (op.entityRefs ?? []).map((ref) =>
+              resolveCompositeRef(refToRealId, ref)
+            )
+          ),
+        ];
+        const containerEntityId = op.containerRef
+          ? resolveCompositeRef(refToRealId, op.containerRef)
+          : undefined;
+        const created = await options.viewCaller.create({
+          name: op.name,
+          viewType: op.viewType,
+          ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+          ...(op.scopeProfileSlugs?.length
+            ? { scopeProfileSlugs: op.scopeProfileSlugs }
+            : {}),
+          entityIds,
+          ...(containerEntityId ? { containerEntityId } : {}),
+          ...(op.config ? { config: op.config } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        viewResults.push({
+          ref: op.ref,
+          opIndex: i,
+          viewId: created.id,
+          entityIds,
+          ...(containerEntityId ? { containerEntityId } : {}),
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_view op (batch continues)"
         );
         failPlanStep(i, err);
       }

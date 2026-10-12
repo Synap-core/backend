@@ -57,6 +57,7 @@ import {
   playbookRuns,
   projects,
   links,
+  views,
   ProfileResolutionService,
   columnsForValue,
 } from "@synap/database";
@@ -74,6 +75,8 @@ export type RevertTarget =
   /** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
   | { kind: "rule"; id: string }
   | { kind: "playbook"; id: string }
+  /** A saved List (`views` row). No soft delete exists: retired by delete. */
+  | { kind: "view"; id: string }
   | {
       kind: "project";
       id: string;
@@ -469,6 +472,36 @@ async function inspectPlaybook(
   return null;
 }
 
+/** A list someone has since edited (renamed, re-filtered, re-scoped) is theirs now. */
+async function inspectView(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "view" }>,
+  ctx: InspectContext
+): Promise<RevertSkip | null> {
+  const [row] = await reader
+    .select({
+      id: views.id,
+      updatedAt: views.updatedAt,
+      documentId: views.documentId,
+    })
+    .from(views)
+    .where(eq(views.id, target.id))
+    .for("update");
+  if (!row) return skip(target, "already_reverted", "the list is already gone");
+  // A canvas view owns a document + blobs, which only the view door removes.
+  if (row.documentId) {
+    return skip(target, "in_use", "the list has a canvas document of its own");
+  }
+  if (changedAfter(row.updatedAt, ctx.since)) {
+    return skip(
+      target,
+      "edited_since",
+      "the list was changed after it was created"
+    );
+  }
+  return null;
+}
+
 /**
  * A project is in use the moment anything ELSE points at it: another session
  * scoped to it, or any link that is not its own lineage edge.
@@ -629,6 +662,8 @@ async function inspect(
       return inspectSkillRow(reader, target, ctx);
     case "playbook":
       return inspectPlaybook(reader, target);
+    case "view":
+      return inspectView(reader, target, ctx);
     case "project":
       return inspectProject(reader, target, ctx);
     case "link":
@@ -654,6 +689,7 @@ const APPLY_ORDER: Record<RevertTarget["kind"], number> = {
   automation: 6,
   skill: 7,
   playbook: 8,
+  view: 8,
   project: 9,
 };
 
@@ -772,6 +808,9 @@ async function apply(
         .update(playbooks)
         .set({ status: "archived", updatedAt: now })
         .where(eq(playbooks.id, target.id));
+      return;
+    case "view":
+      await tx.delete(views).where(eq(views.id, target.id));
       return;
     case "project":
       await tx

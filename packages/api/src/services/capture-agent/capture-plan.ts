@@ -16,6 +16,7 @@
  */
 
 import {
+  COMPOSITE_VIEW_TYPES,
   isLikelyUUID,
   isPlanOperation,
   PLAN_LINK_TYPES,
@@ -86,7 +87,8 @@ export type PlanRefKind =
   | "skill"
   | "automation"
   | "rule"
-  | "playbook";
+  | "playbook"
+  | "view";
 
 export interface CapturePlanProblem {
   /** Index in `operations[]`. */
@@ -117,6 +119,7 @@ const OP_REF_KIND: Partial<
   create_automation: "automation",
   create_rule: "rule",
   create_playbook: "playbook",
+  create_view: "view",
 };
 
 /** ref → kind for every op that registers a ref (first declaration wins). */
@@ -166,7 +169,8 @@ export function hasComposedSteps(
       op.op === "create_skill" ||
       op.op === "create_automation" ||
       op.op === "create_rule" ||
-      op.op === "create_playbook"
+      op.op === "create_playbook" ||
+      op.op === "create_view"
   );
 }
 
@@ -264,7 +268,13 @@ function findCycle(
  * ops and valid refs — so it is safe to run on every composite.
  */
 export function validatePlanOperations(
-  operations: CompositeProposalOperation[]
+  operations: CompositeProposalOperation[],
+  /**
+   * Where the batch will be filed. Present on every door that knows it (the
+   * submit / dry-run / revision preflight); absent only for a pure structural
+   * check, which then skips the placement rules below.
+   */
+  placement?: { workspaceId: string | null }
 ): CapturePlanProblem[] {
   const problems: CapturePlanProblem[] = [];
   const kinds = planRefKinds(operations);
@@ -590,6 +600,26 @@ export function validatePlanOperations(
             push(i, "flowDefinition.nodes must be an array");
           if (!Array.isArray(flow.edges))
             push(i, "flowDefinition.edges must be an array");
+          // An EVENT rule matches on `triggerConfig.eventPattern`, which the
+          // automation door reads off the flow (the op has no field of its
+          // own). Without it the automation lands, but can never fire — a
+          // rule that silently does nothing. Refused here, by name.
+          if (op.triggerType === "event") {
+            const triggerConfig = (flow as { triggerConfig?: unknown })
+              .triggerConfig as { eventPattern?: unknown } | null | undefined;
+            if (
+              !triggerConfig ||
+              typeof triggerConfig !== "object" ||
+              Array.isArray(triggerConfig) ||
+              typeof triggerConfig.eventPattern !== "string" ||
+              !triggerConfig.eventPattern.trim()
+            ) {
+              push(
+                i,
+                'an event automation needs `flowDefinition.triggerConfig.eventPattern` (e.g. "entity.create.completed") — without it the rule can never fire'
+              );
+            }
+          }
         }
         return;
       }
@@ -653,6 +683,69 @@ export function validatePlanOperations(
             i,
             'a process drafted from a capture is always `status: "draft"`'
           );
+        }
+        // A process lives in a space: the playbook door refuses a pod-wide
+        // one at apply time, after the things beside it have landed. Refused
+        // HERE instead, so the bundle is never filed with a step that cannot
+        // apply.
+        if (placement && !placement.workspaceId) {
+          push(
+            i,
+            "a process draft needs a space — file this bundle into a space (workspaceId), or drop the process step"
+          );
+        }
+        return;
+      // ── List (import Build) ───────────────────────────────────────────
+      // Shape and refs only: the kinds' existence and the view config are
+      // the views door's to judge at apply time.
+      case "create_view":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a list step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a list step needs a `name`");
+        if (
+          !(COMPOSITE_VIEW_TYPES as readonly string[]).includes(op.viewType)
+        ) {
+          push(
+            i,
+            `list viewType "${String(op.viewType)}" is not valid — use one of ${COMPOSITE_VIEW_TYPES.join(", ")}`
+          );
+        }
+        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        if (
+          op.scopeProfileSlugs !== undefined &&
+          (!Array.isArray(op.scopeProfileSlugs) ||
+            op.scopeProfileSlugs.some(
+              (slug) => typeof slug !== "string" || !slug.trim()
+            ))
+        ) {
+          push(i, "scopeProfileSlugs must be an array of kind slugs");
+        }
+        if (op.entityRefs !== undefined && !Array.isArray(op.entityRefs)) {
+          push(i, "entityRefs must be an array of entity refs or ids");
+        }
+        for (const ref of Array.isArray(op.entityRefs) ? op.entityRefs : [])
+          expectRefOrId(i, "entityRefs", ref, "entity");
+        if (op.containerRef)
+          expectRefOrId(i, "containerRef", op.containerRef, "entity");
+        // A list must know WHAT it lists: its kinds, or its members (whose
+        // kinds the materializer reads).
+        if (
+          (op.scopeProfileSlugs?.length ?? 0) === 0 &&
+          (Array.isArray(op.entityRefs) ? op.entityRefs.length : 0) === 0
+        ) {
+          push(
+            i,
+            "a list needs `scopeProfileSlugs` (the kinds it shows) or `entityRefs` (the things it holds)"
+          );
+        }
+        if (
+          op.config !== undefined &&
+          (op.config === null ||
+            typeof op.config !== "object" ||
+            Array.isArray(op.config))
+        ) {
+          push(i, "config must be an object");
         }
         return;
       default:
@@ -746,7 +839,8 @@ export interface PlanStepSummary {
     | "skill"
     | "automation"
     | "rule"
-    | "playbook";
+    | "playbook"
+    | "view";
   label: string;
 }
 
@@ -790,6 +884,8 @@ export function planStepSummaries(
         return { ...base, kind: "rule", label: op.intent };
       case "create_playbook":
         return { ...base, kind: "playbook", label: op.name };
+      case "create_view":
+        return { ...base, kind: "view", label: op.name };
     }
   });
 }

@@ -179,6 +179,31 @@ describe("validatePlanOperations", () => {
     );
     expect(out.some((m) => /is not a plan edge/.test(m))).toBe(true);
   });
+
+  it("refuses an EVENT automation with no trigger pattern — it could never fire", () => {
+    const automation = (flow: Record<string, unknown>, triggerType = "event") =>
+      ({
+        op: "create_automation",
+        ref: `a_${triggerType}_${Object.keys(flow).join("_")}`,
+        name: "On new client",
+        triggerType,
+        flowDefinition: { nodes: [], edges: [], ...flow },
+      }) as CompositeProposalOperation;
+    const missing = messages([automation({})]);
+    expect(missing).toEqual([
+      'an event automation needs `flowDefinition.triggerConfig.eventPattern` (e.g. "entity.create.completed") — without it the rule can never fire',
+    ]);
+    expect(
+      messages([automation({ triggerConfig: { eventPattern: "  " } })])
+    ).toHaveLength(1);
+    // A pattern satisfies it; a manual trigger needs none.
+    expect(
+      messages([
+        automation({ triggerConfig: { eventPattern: "entity.created" } }),
+        automation({}, "manual"),
+      ])
+    ).toEqual([]);
+  });
 });
 
 describe("plan edges and order", () => {
