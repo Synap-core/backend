@@ -10,9 +10,32 @@
  * renamed or missing field degrades the row to its server headline, never to
  * a crash or a fabricated number. An unknown section key renders the same way
  * — headline, no link — because a link we have not verified is worse than none.
+ *
+ * Where a row goes is decided by `DIAGNOSE_DESTINATION` (lib/console-nav.ts),
+ * the same table the nav's badges read, so a row and the badge it raises can
+ * never point at different pages.
  */
 
+import {
+  DIAGNOSE_DESTINATION,
+  navHref,
+  navItem,
+  navLabel,
+  navVisibleTo,
+  pendingIssuerHref,
+  type NavAudience,
+  type NavId,
+} from "../../../../lib/console-nav";
 import { openIn, type Exit } from "../../../../lib/open-in";
+
+/**
+ * `diagnose.global` runs ~a dozen aggregate reads server-side; it is a health
+ * snapshot, not a live feed. Two minutes keeps tab switches free without
+ * letting the page drift far from what the pod reports. Home AND the nav's
+ * badges (`useConsoleBadges`) pass exactly these options, so they share one
+ * cached query instead of racing two.
+ */
+export const DIAGNOSE_QUERY_OPTIONS = { staleTime: 120_000 } as const;
 
 export type HealthStatus = "ok" | "attention" | "degraded";
 
@@ -103,14 +126,23 @@ const SEVERITY: Record<NeedsYouRow["tone"], number> = {
   attention: 1,
 };
 
-/** The review queue — the admin console page for pending proposals. */
-const REVIEW_QUEUE: Exit = {
-  href: "/audit?section=queue",
-  isDesktopLink: false,
-};
-
 function consoleRoute(href: string): Exit {
   return { href, isDesktopLink: false };
+}
+
+/** The one queue every decision lands in. */
+const REVIEW_QUEUE: Exit = consoleRoute(navHref("review"));
+
+/** "Open <page>" to the console page a section belongs to. */
+function openPage(
+  id: NavId,
+  params?: Record<string, string | undefined>
+): NeedsYouAction {
+  return {
+    kind: "link",
+    label: `Open ${navLabel(id).toLowerCase()}`,
+    exit: consoleRoute(navHref(id, params)),
+  };
 }
 
 // ── Narrowing readers for `detail` ──────────────────────────────────────────
@@ -182,11 +214,11 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
     if (unapproved === null) return null;
     return {
       headline: `${plural(unapproved, "capability", "capabilities")} installed but awaiting approval`,
-      secondary: "Approve them in the desktop app's capability settings",
+      secondary: "Approve them under Marketplace → Installed",
       action: {
         kind: "link",
-        label: "Open in app",
-        exit: openIn({ kind: "settings", section: "capabilities" }),
+        label: "Review in Marketplace",
+        exit: consoleRoute(navHref("marketplace", { tab: "installed" })),
       },
       items: [],
     };
@@ -197,44 +229,30 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
     if (failing === null) return null;
     const windowDays = num(s.detail, "windowDays");
     const failedTotal = num(s.detail, "failedTotal");
-    const items: NeedsYouItem[] = list(s.detail, "flows").flatMap((f, i) => {
+    // The worst flow by name, so the row says WHAT is failing before the
+    // reader opens Runs (which lists every flow and its failures).
+    let worstName: string | null = null;
+    let worstFailed: number | null = null;
+    for (const f of list(s.detail, "flows")) {
       const name = str(f, "flowName");
-      if (!name) return [];
-      const flowType = str(f, "flowType");
-      const flowId = str(f, "flowId");
       const failed = num(f, "failedCount");
-      // Automation/playbook rows carry their address; the synthetic "Chat"
-      // row has none — its failures are listed under Intelligence.
-      const exit =
-        flowId && (flowType === "automation" || flowType === "playbook")
-          ? openIn({ kind: "object", objectKind: flowType, id: flowId })
-          : !flowType && name === "Chat"
-            ? consoleRoute("/intelligence")
-            : undefined;
-      return [
-        {
-          id: flowId ?? `${name}-${i}`,
-          label: name,
-          meta:
-            failed !== null ? `failed ${plural(failed, "time")}` : undefined,
-          exit,
-        },
-      ];
-    });
-    const only = items.length === 1 ? items[0] : undefined;
+      if (name && failed !== null && failed > (worstFailed ?? -1)) {
+        worstName = name;
+        worstFailed = failed;
+      }
+    }
     return {
       headline:
         `${plural(failing, "flow")} failing` +
         (windowDays !== null ? ` in the last ${windowDays} days` : ""),
       secondary:
-        failedTotal !== null
-          ? `${plural(failedTotal, "failed run")}`
-          : undefined,
-      // One failing flow with an address: go straight to it.
-      action: only?.exit
-        ? { kind: "link", label: "Open flow", exit: only.exit }
-        : expandOrNone("Show flows", items),
-      items,
+        worstName && worstFailed !== null
+          ? `“${worstName}” failed ${plural(worstFailed, "time")}`
+          : failedTotal !== null
+            ? plural(failedTotal, "failed run")
+            : undefined,
+      action: openPage("runs"),
+      items: [],
     };
   },
 
@@ -242,44 +260,24 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
     const aged = num(s.detail, "count") ?? 0;
     const idle = num(s.detail, "idleCount") ?? 0;
     const threshold = num(s.detail, "thresholdHours");
-    // Run ids alone do not address a run (the id space differs per flow), so
-    // these are names + ages with no link rather than a guessed one.
-    const items: NeedsYouItem[] = [
-      ...list(s.detail, "oldest").flatMap((r, i) => {
-        const name = str(r, "flowName");
-        const age = num(r, "ageHours");
-        if (!name) return [];
-        return [
-          {
-            id: str(r, "id") ?? `aged-${i}`,
-            label: name,
-            meta: age !== null ? `running ${formatAgeHours(age)}` : undefined,
-          },
-        ];
-      }),
-      ...list(s.detail, "idlest").flatMap((r, i) => {
-        const name = str(r, "flowName");
-        const idleMinutes = num(r, "idleMinutes");
-        if (!name) return [];
-        return [
-          {
-            id: `idle-${str(r, "id") ?? i}`,
-            label: name,
-            meta:
-              idleMinutes !== null
-                ? `no progress for ${Math.round(idleMinutes)}m`
-                : "no recent progress",
-          },
-        ];
-      }),
-    ];
+    const oldest = list(s.detail, "oldest")[0];
+    const oldestName = str(oldest, "flowName");
+    const oldestAge = num(oldest, "ageHours");
     const headline =
       aged > 0
         ? `${plural(aged, "run")} still going` +
           (threshold !== null ? ` after ${threshold}h` : "") +
           (idle > 0 ? `, ${idle} more idle` : "")
         : `${plural(idle, "run")} running but idle`;
-    return { headline, action: expandOrNone("Show runs", items), items };
+    return {
+      headline,
+      secondary:
+        oldestName && oldestAge !== null
+          ? `Oldest: “${oldestName}”, ${formatAgeHours(oldestAge)}`
+          : undefined,
+      action: openPage("sessions"),
+      items: [],
+    };
   },
 
   agent_activity(s) {
@@ -292,7 +290,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
           ? `${plural(over, "agent")} hit the daily proposal limit`
           : `${plural(near, "agent")} close to the daily proposal limit`,
       secondary: "Reviewing their proposals frees the queue",
-      action: { kind: "link", label: "Review", exit: REVIEW_QUEUE },
+      action: openPage("agents"),
       items: [],
     };
   },
@@ -335,6 +333,9 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
                 id: str(k, "profileId") ?? `kind-${i}`,
                 label: name,
                 meta: "no records",
+                exit: consoleRoute(
+                  navHref("kinds", { focus: str(k, "profileId") ?? undefined })
+                ),
               },
             ]
           : [];
@@ -347,8 +348,10 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
               {
                 id,
                 label: name,
-                meta: "automation never ran",
-                exit: openIn({ kind: "object", objectKind: "automation", id }),
+                meta: "rule never ran",
+                exit: consoleRoute(
+                  navHref("rules", { filter: "never-ran", focus: id })
+                ),
               },
             ]
           : [];
@@ -357,61 +360,44 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
     return {
       headline: "Some of the pod could be tidied up",
       secondary: s.headline,
+      // Two pages own these (empty kinds → Kinds, idle rules → Rules), so the
+      // row opens in place and each item links to its own page.
       action: expandOrNone("Show items", items),
       items,
     };
   },
 
   schema_contract(s) {
-    const items: NeedsYouItem[] = [
-      ...list(s.detail, "undeclaredLinks").flatMap((l, i) => {
-        const profile = str(l, "profileSlug");
-        const property = str(l, "propertySlug");
-        return profile && property
-          ? [
-              {
-                id: `link-${i}`,
-                label: `${profile} · ${property}`,
-                meta: "not declared by the seed",
-              },
-            ]
-          : [];
-      }),
-      ...list(s.detail, "retirements").flatMap((r, i) => {
-        const state = str(r, "state");
-        const profile = str(r, "profileSlug");
-        const property = str(r, "propertySlug");
-        if (state !== "pending" && state !== "ambiguous") return [];
-        return profile && property
-          ? [
-              {
-                id: `retire-${i}`,
-                label: `${profile} · ${property}`,
-                meta: "retirement not applied",
-              },
-            ]
-          : [];
-      }),
-    ];
+    // Kinds lists the schema differences field by field; the row only says
+    // that they exist and takes the reader there.
     return {
       headline: "The system schema differs from the seed",
       secondary: s.headline,
-      action: expandOrNone("Show differences", items),
-      items,
+      action: openPage("kinds"),
+      items: [],
     };
   },
 };
 
 function sectionRow(s: DiagnoseSection): NeedsYouRow {
   const tone = s.status === "degraded" ? "degraded" : "attention";
+  const page = DIAGNOSE_DESTINATION[s.key];
   const body = SECTION_ROWS[s.key]?.(s) ?? {
     // Unknown key, or a known key whose detail no longer has the fields we
-    // read: the server's own headline, no link.
+    // read: the server's own headline — linked to the page that owns the
+    // section when the nav places it, otherwise not linked at all.
     headline: s.headline,
-    action: { kind: "none" } as const,
+    action: page ? openPage(page) : ({ kind: "none" } as const),
     items: [],
   };
   return { key: s.key, tone, ...body };
+}
+
+/** Whether a viewer may open the page this section's row would lead to. */
+function sectionVisibleTo(key: string, audience: NavAudience): boolean {
+  const page = DIAGNOSE_DESTINATION[key];
+  // A key the nav does not place has no link, so any viewer may read it.
+  return !page || navVisibleTo(navItem(page), audience);
 }
 
 // ── The two admin alerts the old Alerts card read ───────────────────────────
@@ -429,12 +415,9 @@ function issuerRow(issuers: PendingIssuer[]): NeedsYouRow | null {
     action: {
       kind: "link",
       label: "Review",
-      // Land on the Trusted Issuers sub-tab; with one issuer, focus its row.
-      exit: consoleRoute(
-        only
-          ? `/trust-keys?section=issuers&focus=${encodeURIComponent(only.id)}`
-          : "/trust-keys?section=issuers"
-      ),
+      // A pending issuer is a decision, so it lands in Review's issuer
+      // filter; with one issuer, focus its row.
+      exit: consoleRoute(pendingIssuerHref(only?.id)),
     },
     items: [],
   };
@@ -450,7 +433,7 @@ function syncRow(errors: SyncError[]): NeedsYouRow | null {
       ? `Sync with ${only.label} is failing`
       : `${errors.length} sync peers are failing`,
     secondary: only ? only.error.slice(0, 80) : undefined,
-    // /connectors lists connector connections, not sync peers, so no page
+    // Sources lists connector connections, not sync peers, so no page
     // owns a peer: the row opens in place to show who is failing and why.
     action: { kind: "expand", label: "Show peers" },
     items: errors.map((e) => ({ id: e.id, label: e.label, meta: e.error })),
@@ -467,18 +450,27 @@ function importance(key: string): number {
  * Rank everything that needs the owner: severity first (degraded before
  * attention), then section importance. Capped at `NEEDS_YOU_CAP`; the rest
  * is counted in `hiddenCount`.
+ *
+ * `audience: "member"` (D8) drops the sections whose page only an admin can
+ * open — a row whose one action is a /forbidden is not something the reader
+ * can act on. The admin alerts are the caller's to omit: members cannot read
+ * issuers or sync peers at all.
  */
 export function buildNeedsYou({
   sections,
   pendingIssuers = [],
   syncErrors = [],
+  audience = "admin",
 }: {
   sections: DiagnoseSection[];
   pendingIssuers?: PendingIssuer[];
   syncErrors?: SyncError[];
+  audience?: NavAudience;
 }): NeedsYou {
   const rows = [
-    ...sections.filter((s) => s.status !== "ok").map(sectionRow),
+    ...sections
+      .filter((s) => s.status !== "ok" && sectionVisibleTo(s.key, audience))
+      .map(sectionRow),
     issuerRow(pendingIssuers),
     syncRow(syncErrors),
   ]
@@ -494,7 +486,7 @@ export function buildNeedsYou({
     hiddenCount: Math.max(0, rows.length - NEEDS_YOU_CAP),
     hiddenRows: rows.slice(NEEDS_YOU_CAP),
     passing: sections
-      .filter((s) => s.status === "ok")
+      .filter((s) => s.status === "ok" && sectionVisibleTo(s.key, audience))
       .map((s) => ({ key: s.key, headline: s.headline })),
   };
 }

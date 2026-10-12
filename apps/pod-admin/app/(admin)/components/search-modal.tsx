@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * `SearchModal` — Pod Admin global search palette (⌘K).
+ * `SearchModal` — Pod Console global search palette (⌘K).
  *
  * Categories indexed:
- *   • Workspaces       → `trpc.workspaces.adminListAll`
- *   • People (humans)  → `trpc.workspaces.listPodMembers`
+ *   • Spaces           → `trpc.workspaces.adminListAll`
+ *   • Members (humans) → `trpc.workspaces.listPodMembers`
  *   • Agents           → `trpc.system.listUsers({ type: "agent" })`
  *   • Trusted issuers  → `trpc.trustedIssuers.list`
  *   • API keys         → `trpc.apiKeys.adminListAll` (stub: surfaces names only)
@@ -13,13 +13,17 @@
  *   • Proposals        → `trpc.proposals.list` (reviewable scope, every status)
  *   • Audit events     → `trpc.system.listAuditLogs` (stub: most recent 25)
  *
- * Selection navigates to the appropriate tab with `?focus=<id>` (and, when
- * needed, `?section=<sub-tab>`) so the receiver can scroll the row into
- * view + apply the temporary highlight ring. A workspace-scoped API key
- * goes to `/workspaces/<id>?tab=api-keys&focus=<id>` (the pod-wide Trust &
- * Keys list skips workspace keys, so focusing one there would show nothing).
- * The one receiver that does NOT honour `?focus=` is `/entities`, so an entity
- * is linked without it.
+ * Where a result goes, and the words for its group and chip, come from
+ * `SEARCH_DESTINATION` (lib/console-nav.ts) — the palette never names a page
+ * itself. Selection lands on the receiver with `?focus=<id>` so it can scroll
+ * the row into view + apply the temporary highlight ring. Two routes are
+ * decided per row: a PENDING issuer is a decision and goes to Review, and a
+ * workspace-scoped API key goes to `/workspaces/<id>?tab=api-keys&focus=<id>`
+ * (the pod-wide Keys list skips workspace keys, so focusing one there would
+ * show nothing).
+ *
+ * A member (D8) only searches what they can open — proposals, in Review. The
+ * other categories' reads are admin procedures and are never sent.
  *
  * Keyboard model:
  *   ⌘K / Ctrl+K  — toggle open
@@ -57,22 +61,23 @@ import {
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import {
+  navItem,
+  navLabel,
+  navVisibleTo,
+  pendingIssuerHref,
+  SEARCH_DESTINATION,
+  type SearchCategory,
+} from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
+import { useConsoleRole } from "./side-nav-role";
 
 interface SearchModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type ResultCategory =
-  | "workspace"
-  | "person"
-  | "agent"
-  | "issuer"
-  | "api-key"
-  | "entity"
-  | "proposal"
-  | "audit";
+type ResultCategory = SearchCategory;
 
 interface SearchResult {
   id: string;
@@ -85,19 +90,26 @@ interface SearchResult {
 
 // ─── Category presentation ──────────────────────────────────────────
 
-const CATEGORY_META: Record<
-  ResultCategory,
-  { label: string; tab: string; Icon: LucideIcon }
-> = {
-  workspace: { label: "Workspaces", tab: "Workspaces", Icon: Building2 },
-  person: { label: "People", tab: "People", Icon: CircleUser },
-  agent: { label: "Agents", tab: "People", Icon: Bot },
-  issuer: { label: "Trusted issuers", tab: "Trust & Keys", Icon: ShieldCheck },
-  "api-key": { label: "API keys", tab: "Trust & Keys", Icon: KeyRound },
-  entity: { label: "Entities", tab: "Entities", Icon: Database },
-  proposal: { label: "Proposals", tab: "Audit", Icon: ClipboardCheck },
-  audit: { label: "Audit events", tab: "Audit", Icon: Mailbox },
+const CATEGORY_ICON: Record<ResultCategory, LucideIcon> = {
+  workspace: Building2,
+  person: CircleUser,
+  agent: Bot,
+  issuer: ShieldCheck,
+  "api-key": KeyRound,
+  entity: Database,
+  proposal: ClipboardCheck,
+  audit: Mailbox,
 };
+
+/** Group heading, row chip (the destination page's nav word) and icon. */
+function categoryMeta(category: ResultCategory) {
+  const dest = SEARCH_DESTINATION[category];
+  return {
+    label: dest.label,
+    tab: navLabel(dest.nav),
+    Icon: CATEGORY_ICON[category],
+  };
+}
 
 // Per-bucket truncation so a noisy category doesn't crowd the others. Shared
 // with the server-side `entities.adminList` limit so its page and the bucket
@@ -123,6 +135,17 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const role = useConsoleRole();
+  // Only the categories whose destination this viewer may open: a result
+  // that lands on /forbidden is not a result.
+  const reachable = useMemo(
+    () =>
+      CATEGORY_ORDER.filter((c) =>
+        navVisibleTo(navItem(SEARCH_DESTINATION[c].nav), role)
+      ),
+    [role]
+  );
+  const can = (c: ResultCategory) => isOpen && reachable.includes(c);
 
   // Reset internal state every time the modal opens — operators expect a
   // clean slate, not whatever they typed last time.
@@ -144,27 +167,28 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   // ─── Queries (cached 30s, only loaded while modal is open) ──────
 
   const wsQuery = trpc.workspaces.adminListAll.useQuery(undefined, {
-    enabled: isOpen,
+    // Also names a proposal's workspace, so it runs for any admin search.
+    enabled: can("workspace"),
     staleTime: 30_000,
   });
 
   const peopleQuery = trpc.workspaces.listPodMembers.useQuery(undefined, {
-    enabled: isOpen,
+    enabled: can("person"),
     staleTime: 30_000,
   });
 
   const agentsQuery = trpc.system.listUsers.useQuery(
     { type: "agent", limit: 200 },
-    { enabled: isOpen, staleTime: 30_000 }
+    { enabled: can("agent"), staleTime: 30_000 }
   );
 
   const issuersQuery = trpc.trustedIssuers.list.useQuery(undefined, {
-    enabled: isOpen,
+    enabled: can("issuer"),
     staleTime: 30_000,
   });
 
   const apiKeysQuery = trpc.apiKeys.adminListAll.useQuery(undefined, {
-    enabled: isOpen,
+    enabled: can("api-key"),
     staleTime: 30_000,
   });
 
@@ -176,21 +200,20 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
       limit: query.trim() ? PER_CATEGORY_WHEN_QUERIED : PER_CATEGORY_DEFAULT,
       offset: 0,
     },
-    { enabled: isOpen, staleTime: 15_000 }
+    { enabled: can("entity"), staleTime: 15_000 }
   );
 
   // `workspaceId` OMITTED — the server then floors on the viewer's lens ∪ what
   // they authored (`scope-conditions.ts`), which is every proposal they may
-  // already review. `null` would have meant pod-wide only. Audit → Proposals
-  // omits it too, so a result found here can always be focused there.
+  // already review. `null` would have meant pod-wide only.
   const proposalsQuery = trpc.proposals.list.useQuery(
     { status: "all", limit: 100 },
-    { enabled: isOpen, staleTime: 15_000 }
+    { enabled: can("proposal"), staleTime: 15_000 }
   );
 
   const auditQuery = trpc.system.listAuditLogs.useQuery(
     { limit: 25 },
-    { enabled: isOpen, staleTime: 15_000 }
+    { enabled: can("audit"), staleTime: 15_000 }
   );
 
   // ─── Build flat result list ──────────────────────────────────────
@@ -218,7 +241,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "workspace",
         primary: ws.name,
         secondary: `${ws.memberCount} member${ws.memberCount === 1 ? "" : "s"} · ${ws.type}`,
-        href: `/workspaces?focus=${encodeURIComponent(ws.id)}`,
+        href: SEARCH_DESTINATION.workspace.href(ws.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -235,7 +258,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "person",
         primary: p.name ?? p.email,
         secondary: `${p.email} · ${p.primaryRole} · ${p.workspaceCount} ws`,
-        href: `/people?focus=${encodeURIComponent(p.id)}`,
+        href: SEARCH_DESTINATION.person.href(p.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -253,7 +276,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "agent",
         primary: a.name ?? a.email,
         secondary: `${meta.agentType ?? "agent"} · ${a.workspaceMembershipCount} ws`,
-        href: `/people?focus=${encodeURIComponent(a.id)}`,
+        href: SEARCH_DESTINATION.agent.href(a.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -275,13 +298,18 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "issuer",
         primary: i.displayName,
         secondary: `${i.issuerUrl} · ${resolveStatusLabel(i.status)}`,
-        href: `/trust-keys?section=issuers&focus=${encodeURIComponent(i.id)}`,
+        // Pending = a decision, which lives in Review; decided ones are
+        // listed under Pod security.
+        href:
+          i.status === "pending"
+            ? pendingIssuerHref(i.id)
+            : SEARCH_DESTINATION.issuer.href(i.id),
       });
       if (bucket.length >= cap) break;
     }
     matches.push(...bucket);
 
-    // API keys — routed BY SCOPE. Trust & Keys → API keys skips every
+    // API keys — routed BY SCOPE. The pod-wide Keys list skips every
     // workspace-scoped key (`hubId` `workspace:<id>`), so linking one there
     // lands the operator on a page that filters it out; those go to the
     // workspace's own API-keys tab instead.
@@ -300,7 +328,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         secondary: `${k.keyPrefix}… · ${k.isActive ? "active" : "revoked"}`,
         href: scopedWorkspaceId
           ? `/workspaces/${encodeURIComponent(scopedWorkspaceId)}?tab=api-keys&focus=${encodeURIComponent(k.id)}`
-          : `/trust-keys?section=api-keys&focus=${encodeURIComponent(k.id)}`,
+          : SEARCH_DESTINATION["api-key"].href(k.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -317,7 +345,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "entity",
         primary: e.title ?? noun,
         secondary: `${noun} · ${e.workspaceName ?? "Pod-wide"}`,
-        href: "/entities",
+        href: SEARCH_DESTINATION.entity.href(e.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -348,7 +376,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "proposal",
         primary: title,
         secondary: `${resolveStatusLabel(p.status)} · ${workspaceLabel} · ${new Date(p.createdAt).toLocaleString()}`,
-        href: `/audit?section=proposals&focus=${encodeURIComponent(p.id)}`,
+        href: SEARCH_DESTINATION.proposal.href(p.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -366,7 +394,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         category: "audit",
         primary: `${ev.action} · ${ev.subjectType}`,
         secondary: new Date(ev.timestamp).toLocaleString(),
-        href: `/audit?section=activity&focus=${encodeURIComponent(ev.id)}`,
+        href: SEARCH_DESTINATION.audit.href(ev.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -450,14 +478,16 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                 size="md"
                 radius="md"
                 variant="flat"
-                placeholder="Search this pod… workspaces, people, entities, issuers, proposals, audit events"
+                placeholder={`Search this pod… ${reachable
+                  .map((c) => SEARCH_DESTINATION[c].label.toLowerCase())
+                  .join(", ")}`}
                 value={query}
                 onValueChange={setQuery}
                 onKeyDown={handleKeyDown}
                 startContent={
                   <Search className="h-3.5 w-3.5 text-foreground/45" />
                 }
-                aria-label="Pod admin search"
+                aria-label="Pod Console search"
                 classNames={{
                   inputWrapper: "h-10 bg-transparent shadow-none",
                   input: "text-[13.5px]",
@@ -467,10 +497,13 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
 
             <div className="max-h-[60vh] overflow-y-auto py-2">
               {results.length === 0 ? (
-                <SearchEmpty hasQuery={query.trim().length > 0} />
+                <SearchEmpty
+                  hasQuery={query.trim().length > 0}
+                  categories={reachable}
+                />
               ) : (
                 groupedResults.map((g) => {
-                  const meta = CATEGORY_META[g.category];
+                  const meta = categoryMeta(g.category);
                   return (
                     <div key={g.category} className="px-2 pb-1">
                       <div className="px-2 py-1 text-[10.5px] font-medium uppercase tracking-wider text-foreground/45">
@@ -526,7 +559,7 @@ function SearchRow({
   onSelect: (r: SearchResult) => void;
   onHover: () => void;
 }) {
-  const meta = CATEGORY_META[result.category];
+  const meta = categoryMeta(result.category);
   const Icon = meta.Icon;
 
   return (
@@ -564,16 +597,21 @@ function SearchRow({
   );
 }
 
-function SearchEmpty({ hasQuery }: { hasQuery: boolean }) {
+function SearchEmpty({
+  hasQuery,
+  categories,
+}: {
+  hasQuery: boolean;
+  categories: ResultCategory[];
+}) {
   return (
     <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
-      <p className="text-[12.5px] text-foreground/55">
-        {hasQuery ? "No matches." : "Type to search across pod admin."}
+      <p className="text-[12.5px] text-foreground/65">
+        {hasQuery ? "No matches." : "Type to search across the pod."}
       </p>
       {!hasQuery && (
-        <p className="text-[11px] text-foreground/45">
-          Workspaces · People · Trusted issuers · API keys · Entities ·
-          Proposals · Audit events
+        <p className="text-[11px] text-foreground/65">
+          {categories.map((c) => SEARCH_DESTINATION[c].label).join(" · ")}
         </p>
       )}
     </div>

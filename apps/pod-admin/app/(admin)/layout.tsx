@@ -1,15 +1,16 @@
 import { headers } from "next/headers";
 import type { ReactNode } from "react";
-import { TabStrip } from "./components/tab-strip";
+import { CONSOLE_ROLE_HEADER, parseConsoleRole } from "../../lib/route-policy";
 import { AdminShell } from "./components/admin-shell";
 
 /**
- * `(admin)` layout — wraps every operator surface in TopNav + TabStrip.
+ * `(admin)` layout — wraps every console page in TopNav + the side nav.
  *
- * Server-renders the chrome and pulls operator identity from headers
- * injected by `middleware.ts` (`x-pod-admin-email` etc.). The TopNav
- * itself is a client component because its refresh + sign-out actions
- * need browser APIs; we pass the email + pod host via props.
+ * Server-renders the chrome and pulls the viewer's identity and role from
+ * headers the proxy injects (`x-pod-admin-email`, `x-pod-console-role`).
+ * The role only shapes the nav (members see Home + Review, D8); every read
+ * behind the pages is gated server-side regardless. The shell is a client
+ * component because its refresh, search and drawer need browser APIs.
  */
 
 export default async function AdminLayout({
@@ -19,15 +20,21 @@ export default async function AdminLayout({
 }) {
   const h = await headers();
   const operatorEmail = h.get("x-pod-admin-email") ?? undefined;
+  const operatorName = h.get("x-pod-admin-name") ?? undefined;
+  const role = parseConsoleRole(h.get(CONSOLE_ROLE_HEADER));
 
   // Pod host — read from the inbound `host` header (works in any deploy
   // shape: dev :4040, prod *.synap.live, custom domain).
   const podHost = h.get("host") ?? undefined;
 
   return (
-    <AdminShell operatorEmail={operatorEmail} podHost={podHost}>
-      <TabStrip />
-      <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+    <AdminShell
+      operatorEmail={operatorEmail}
+      operatorName={operatorName}
+      podHost={podHost}
+      role={role}
+    >
+      {children}
     </AdminShell>
   );
 }

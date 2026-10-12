@@ -58,8 +58,8 @@ const jetMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Pod Admin",
-  description: "Operator-facing pod administration surface.",
+  title: "Pod Console",
+  description: "Operate your pod: what needs you, what runs, who has access.",
 };
 
 // A managed Pod can move from a warm hostname to its claimed hostname without
