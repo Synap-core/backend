@@ -286,6 +286,43 @@ describe("stdio servers are never spawned before approval", () => {
   });
 });
 
+describe("listTools: a failed read is an error, never 'no tools'", () => {
+  it("the IS answering non-2xx → BAD_GATEWAY", async () => {
+    const id = await seedStdio(WS, true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("boom", { status: 503 }))
+    );
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "BAD_GATEWAY",
+    });
+  });
+
+  it("the IS unreachable → BAD_GATEWAY", async () => {
+    const id = await seedStdio(WS, true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      })
+    );
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "BAD_GATEWAY",
+    });
+  });
+
+  it("positive control: a server with no tools reads as an empty list", async () => {
+    const id = await seedStdio(WS, true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ tools: [] })))
+    );
+    await expect(caller(WS_MEMBER).listTools({ id })).resolves.toEqual({
+      tools: [],
+    });
+  });
+});
+
 describe("list masks env for callers who cannot manage the row", () => {
   const ENV = { API_TOKEN: "sk-live-secret" };
   const envOf = async (user: string, id: string) =>

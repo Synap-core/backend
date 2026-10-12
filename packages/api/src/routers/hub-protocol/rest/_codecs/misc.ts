@@ -69,6 +69,18 @@ export const ListMcpServersQuerySchema = z
 
 // ── Agent users ─────────────────────────────────────────────────────────────
 
+/** One live connection of an agent (`liveAgentConnections`) — per computer. */
+export const AgentConnectionSchema = z
+  .object({
+    keyId: z.string(),
+    instanceId: z.string().nullable(),
+    instanceLabel: z.string().nullable(),
+    displayName: z.string(),
+    createdAt: z.string(),
+    lastUsedAt: z.string().nullable(),
+  })
+  .openapi("AgentConnection");
+
 /** Wire shape of an agent user row (subset — what the hub returns to IS). */
 export const WireAgentUserSchema = z
   .object({
@@ -94,6 +106,8 @@ export const WireAgentUserSchema = z
       })
       .nullable()
       .optional(),
+    /** `?mine=1` only: the agent's live connections, one per computer. */
+    connections: z.array(AgentConnectionSchema).optional(),
   })
   .passthrough()
   .openapi("AgentUser");

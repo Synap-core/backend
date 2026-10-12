@@ -359,8 +359,11 @@ export const mcpServersRouter = router({
           workspaceId: server.workspaceId ?? undefined,
         });
 
+      // A failed read is an ERROR, never "this server has no tools": the
+      // caller (the tools list) would otherwise render a calm, wrong empty.
+      let res: Response;
       try {
-        const res = await fetch(`${hubUrl}/api/mcp/tools`, {
+        res = await fetch(`${hubUrl}/api/mcp/tools`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -381,14 +384,28 @@ export const mcpServersRouter = router({
             ],
           }),
         });
-        if (!res.ok) return { tools: [] };
-        const data = (await res.json()) as {
-          tools?: Array<{ name: string; description: string }>;
-        };
-        return { tools: data.tools ?? [] };
-      } catch {
-        return { tools: [] };
+      } catch (err) {
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: "Could not reach the intelligence service to list tools.",
+          cause: err,
+        });
       }
+      if (!res.ok)
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message: `The intelligence service could not list this server's tools (HTTP ${res.status}).`,
+        });
+      const data = (await res.json().catch(() => null)) as {
+        tools?: Array<{ name: string; description: string }>;
+      } | null;
+      if (!data)
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message:
+            "The intelligence service answered the tools list unreadably.",
+        });
+      return { tools: data.tools ?? [] };
     }),
 
   /**
