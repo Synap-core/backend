@@ -1,16 +1,9 @@
 "use client";
 
 /**
- * Audit → shared filter bar.
- *
- * Sits sticky at the top of the body and feeds three sub-tabs:
- *   • Activity log    — `system.listAuditLogs` (subjectType + action + userId)
- *   • Proposals       — client-filtered `proposals.list`
- *   • Approval queue  — `proposals.list({ status: "pending" })`
- *
- * State is owned by the parent page and threaded through props so the bar
- * is one component, not three. Sub-tabs read whatever filters they care
- * about and ignore the rest.
+ * Audit log → filter bar for the activity log (`system.listAuditLogs`:
+ * subjectType + action + userId). State is owned by the parent page and
+ * threaded through props.
  *
  * Date range default = last 7 days. Workspace filter is multi-select but
  * the underlying procedure (`listAuditLogs`) only takes a single workspace
