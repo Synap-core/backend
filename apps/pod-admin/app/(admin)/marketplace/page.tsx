@@ -29,7 +29,7 @@ import {
 } from "../../../lib/marketplace";
 import { PageHeader } from "../components/page-header";
 import { ResourceRowEmpty, ResourceRowError } from "../components/resource-row";
-import { kindIcon, kindLabel } from "./_lib/kind-icon";
+import { kindIcon, kindLabel } from "../../_lib/object/kind-icon";
 
 const PAGE_SIZE = 60;
 

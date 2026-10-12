@@ -10,33 +10,74 @@
  * Note the labels are NOT written here: `cell` renders as "Card" because the
  * registry says so (NORTH-STAR §5 — "cell" is the engine's word, never the
  * user's). A local label map would fork that the moment it existed.
+ *
+ * Shared by every object surface (console pages, `/open` receivers, the
+ * marketplace). `BY_NAME` covers the registry's non-entity kinds — every kind
+ * an `/open` link or a console object page can name — plus the commonest
+ * entity profiles; anything else draws the registry's own fallback.
  */
 
 import {
+  BookOpen,
+  Bot,
   Boxes,
   Box,
+  CheckSquare,
+  Database,
+  FileText,
+  FolderKanban,
+  GitPullRequest,
   GraduationCap,
   LayoutDashboard,
   LayoutGrid,
+  MessageSquare,
+  Play,
+  Rss,
+  SquareCode,
   SquareDashedBottomCode,
+  User,
+  Wrench,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import {
   resolveObjectIcon,
   resolveObjectNoun,
+  type ProfileIdentityInput,
 } from "@synap-core/types/vocabulary";
 
 const BY_NAME: Record<string, LucideIcon> = {
-  LayoutDashboard,
+  BookOpen,
+  Bot,
   Boxes,
-  GraduationCap,
-  LayoutGrid,
-  SquareDashedBottomCode,
   Box,
+  CheckSquare,
+  Database,
+  FileText,
+  FolderKanban,
+  GitPullRequest,
+  GraduationCap,
+  LayoutDashboard,
+  LayoutGrid,
+  MessageSquare,
+  Play,
+  Rss,
+  SquareCode,
+  SquareDashedBottomCode,
+  User,
+  Wrench,
+  Zap,
 };
 
-export function kindIcon(kind: string): LucideIcon {
-  return BY_NAME[resolveObjectIcon(kind)] ?? Box;
+/**
+ * The icon for a kind. `profile` lets an entity draw its own profile's icon
+ * (`profiles.uiHints.icon`) when that icon is one this bundle carries.
+ */
+export function kindIcon(
+  kind: string,
+  profile?: ProfileIdentityInput | null
+): LucideIcon {
+  return BY_NAME[resolveObjectIcon(kind, profile)] ?? Box;
 }
 
 export function kindLabel(kind: string): string {
