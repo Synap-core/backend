@@ -168,6 +168,11 @@ export function resolveAutomationEventFingerprintId(input: {
     data.eventId,
     data.messageId,
     data.id,
+    // A lifecycle MOVE (`entity.transition`): one id per move
+    // (`StatusTransition.transitionId`), so a stage worker is idempotent per
+    // (thing, transition event) — a redelivery collapses, and the same A→S
+    // move made twice is two moves. Named, not left to the hash below.
+    data.transitionId,
     // Webhook redelivery often repeats the same body under the same subscription.
     data.subscriptionId && data.payload != null
       ? `${String(data.subscriptionId)}:${stableJsonHash(data.payload)}`
