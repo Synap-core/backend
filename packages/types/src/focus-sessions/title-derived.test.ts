@@ -180,3 +180,78 @@ describe("titleSourcePatch", () => {
     ).toBe(true);
   });
 });
+
+describe("derived names never read as cut (c-auto-titles, plan 9992207a)", () => {
+  const LONG =
+    "Every new title and knowledge entry on a personal pod is short and specific, and the backlog is repaired";
+
+  it("a nameless work session is named from its goal, shortened at a clause", () => {
+    const t = buildDerivedSessionTitle({ kind: "goal", goal: LONG });
+    expect(t.length).toBeLessThanOrEqual(GENERATED_TITLE_MAX);
+    expect(t).not.toMatch(/…$/);
+    expect(LONG.startsWith(t)).toBe(true);
+    expect(buildDerivedSessionTitle({ kind: "goal", goal: "  " })).toBe(
+      "Work session"
+    );
+  });
+
+  it("a run with no subject is named by its instance date, kept whole", () => {
+    const at = new Date("2026-10-12T09:00:00Z");
+    expect(
+      buildDerivedSessionTitle({
+        kind: "run",
+        name: "Daily client briefing",
+        at,
+      })
+    ).toBe("Daily client briefing — 12 Oct");
+    const long = buildDerivedSessionTitle({
+      kind: "run",
+      name: 'When a post enters "Briefed", propose running "Produce content" for that post',
+      at,
+    });
+    expect(long.endsWith(" — 12 Oct")).toBe(true);
+    expect(long.length).toBeLessThanOrEqual(GENERATED_TITLE_MAX);
+    expect(long).not.toMatch(/…/);
+  });
+
+  it("a subject outranks the date", () => {
+    expect(
+      buildDerivedSessionTitle({
+        kind: "run",
+        name: "Client onboarding",
+        subject: "Harbor Goods",
+        at: new Date("2026-10-12T09:00:00Z"),
+      })
+    ).toBe("Client onboarding · Harbor Goods");
+  });
+
+  it("a receipt named by a proposal title takes the quoted object, not the verb", () => {
+    expect(
+      buildDerivedSessionTitle({
+        kind: "receipt",
+        doing: 'Create Knowledge "Grants deny by default for every agent key"',
+      })
+    ).toBe("Grants deny by default for every agent key");
+    // Words that only resemble the shape are left alone.
+    expect(
+      buildDerivedSessionTitle({
+        kind: "receipt",
+        doing: "Create a launch plan",
+      })
+    ).toBe("Create a launch plan");
+  });
+
+  it("no derived or generated name ends in an ellipsis", () => {
+    const names = [
+      buildDerivedSessionTitle({ kind: "capture", label: LONG }),
+      buildDerivedSessionTitle({ kind: "import", label: LONG }),
+      buildDerivedSessionTitle({ kind: "receipt", doing: LONG }),
+      buildDerivedSessionTitle({ kind: "run", name: LONG, subject: "Acme" }),
+      sanitizeGeneratedTitle(LONG)!,
+    ];
+    for (const n of names) {
+      expect(n).not.toMatch(/…$/);
+      expect(n.length).toBeLessThanOrEqual(GENERATED_TITLE_MAX);
+    }
+  });
+});

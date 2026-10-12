@@ -30,6 +30,7 @@
  * degraded clears the marker and records `restructuredAt`.
  */
 
+import { shortenTitle, TITLE_SOFT_MAX } from "@synap-core/types/titles";
 import { createHash } from "crypto";
 import {
   DocumentRepository,
@@ -168,13 +169,15 @@ export class IntakeSourceNotFoundError extends Error {
 const TITLE_MAX = 120;
 
 function deriveTitle(input: StageIntakeSourceInput): string {
-  if (input.title?.trim()) return input.title.trim().slice(0, TITLE_MAX);
+  // Prose is shortened at a clause or word (never mid-word, no "…"); a URL,
+  // path or file name is an identifier and keeps its own spelling.
+  if (input.title?.trim()) return shortenTitle(input.title, TITLE_MAX);
   if (input.kind === "url" && input.url) return input.url.slice(0, TITLE_MAX);
   if (input.kind === "import_item" && input.path)
     return input.path.slice(0, TITLE_MAX);
   if (input.file?.filename) return input.file.filename.slice(0, TITLE_MAX);
   const firstLine = (input.text ?? "").trim().split("\n")[0] ?? "";
-  return firstLine.slice(0, TITLE_MAX) || "Captured source";
+  return shortenTitle(firstLine, TITLE_SOFT_MAX) || "Captured source";
 }
 
 export function computeIntakeContentHash(input: {

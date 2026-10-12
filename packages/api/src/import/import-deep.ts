@@ -14,6 +14,7 @@
  * payload for an `import.graph` proposal.
  */
 
+import { shortenTitle } from "@synap-core/types/titles";
 import type {
   CompositeCreateEntityOp,
   CompositeProposalOperation,
@@ -565,10 +566,10 @@ export async function deepStructureImportItems(
     for (const e of res.entities) {
       const rawTitle = String(e.title ?? items[i].title ?? "Untitled");
       const titleIsBody = rawTitle.length > 120; // fallback "whole note" entity
+      // A whole-note fallback names itself by its first line, shortened at a
+      // clause or word — never cut mid-word, never "…" (c-auto-titles).
       const title =
-        rawTitle.split("\n")[0].slice(0, 80).trim() ||
-        items[i].title ||
-        "Untitled";
+        shortenTitle(rawTitle.split("\n")[0]) || items[i].title || "Untitled";
       const slug = opts.validSlugs.has(e.profileSlug) ? e.profileSlug : "note";
       const key = `${slug}|${normTitle(title)}`;
 

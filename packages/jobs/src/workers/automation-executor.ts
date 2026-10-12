@@ -481,9 +481,12 @@ async function executeAutomationFlow(params: {
       userId: ownerId,
       workspaceId,
       goal: automation.name || `Automation run ${runId}`,
+      // Name + instance ("Daily client briefing — 12 Oct"): a recurring
+      // automation's run sessions are told apart by date, never by a cut name.
       title: buildDerivedSessionTitle({
         kind: "run",
         name: automation.name || "Automation run",
+        at: new Date(),
       }),
       source: "automation",
       automationId,

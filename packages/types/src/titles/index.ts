@@ -9,3 +9,4 @@ export {
   type TitleLintIssue,
   type LintTitleOptions,
 } from "./lint.js";
+export { shortenTitle } from "./shorten.js";

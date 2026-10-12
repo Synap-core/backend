@@ -314,10 +314,13 @@ export function buildRunSessionName(
   playbookName: string,
   subjectTitle?: string | null
 ): string {
+  // With no subject, the instance date names the run ("Plan next content —
+  // 12 Oct"); with one, the subject does.
   return buildDerivedSessionTitle({
     kind: "run",
     name: playbookName,
     subject: subjectTitle,
+    at: new Date(),
   });
 }
 

@@ -15,6 +15,7 @@
  * pod and IS deploy in either order), and the structure request's `comments`.
  */
 
+import { shortenTitle } from "@synap-core/types/titles";
 import {
   db,
   messages,
@@ -397,7 +398,9 @@ export async function readRestructureRoom(args: {
     .split("\n")
     .map((l) => l.replace(/^#+\s*/, "").trim())
     .find((l) => l !== "");
-  const noteTitle = noteLine?.slice(0, SOURCE_NOTE_TITLE_MAX);
+  const noteTitle = noteLine
+    ? shortenTitle(noteLine, SOURCE_NOTE_TITLE_MAX)
+    : undefined;
   const settled = room.rows
     .flatMap((view): SettledCaptureRecord[] =>
       view.state === "filed" ||

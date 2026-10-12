@@ -13,6 +13,7 @@
  */
 
 import { decodeHtmlEntities } from "../text/html-entities.js";
+import { shortenTitle } from "../titles/shorten.js";
 
 /** Stored bound of `focus_sessions.title` (varchar). Doors refuse longer. */
 export const SESSION_TITLE_MAX = 200;
@@ -161,7 +162,7 @@ export function sanitizeGeneratedTitle(
   URL_RE.lastIndex = 0;
   UUID_RE.lastIndex = 0;
   if (URL_RE.test(line) || UUID_RE.test(line)) return null;
-  return clip(line, GENERATED_TITLE_MAX);
+  return shortenTitle(line, GENERATED_TITLE_MAX) || null;
 }
 
 /**
@@ -223,9 +224,52 @@ const DERIVED_LABEL_PREFIX = {
   import: /^Import\s+/,
 } as const;
 
+/**
+ * A proposal title used as a receipt's "doing": `Create Knowledge "<title>"`.
+ * The receipt is named by the quoted object, not by a second copy of the verb
+ * and kind (live 2026-10-12: 'Create Knowledge "SHIPPED (uncommitted)…'). Same
+ * anchoring discipline as above: the exact shape `buildObjectActionTitle`
+ * writes, never a loose match on a person's words.
+ */
+const PROPOSAL_TITLE_RE =
+  /^(?:Create|Update|Delete|Archive|Restore|Link|Move|Rename)\s+[A-Z][\w-]*(?:\s[\w-]+)?\s+["“](.+?)["”]?$/;
+
+/** "12 Oct" — the instance a recurring run is named by (UTC, so it is stable). */
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+function instanceLabel(at: Date | string | null | undefined): string | null {
+  if (at === null || at === undefined) return null;
+  const d = typeof at === "string" ? new Date(at) : at;
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+}
+
 export type DerivedSessionTitleInput =
-  /** A playbook or automation execution, optionally about one subject. */
-  | { kind: "run"; name: string; subject?: string | null }
+  /**
+   * A playbook or automation execution, optionally about one subject. With no
+   * subject, `at` names the instance ("Daily client briefing — 12 Oct"), so
+   * a recurring run's sessions are told apart.
+   */
+  | {
+      kind: "run";
+      name: string;
+      subject?: string | null;
+      at?: Date | string | null;
+    }
+  /** A work session nobody named: its goal's first line. */
+  | { kind: "goal"; goal: string | null | undefined }
   /** Intake: the captured content's own label (an entity title, a first line, a URL). */
   | { kind: "capture"; label: string | null | undefined }
   /** Enrichment / import of one object, named by that object. */
@@ -245,15 +289,32 @@ export function buildDerivedSessionTitle(
 ): string {
   switch (input.kind) {
     case "run": {
-      const base = readableLabel(input.name) || "Playbook run";
       const subject = readableLabel(input.subject);
-      return clip(subject ? `${base} · ${subject}` : base, GENERATED_TITLE_MAX);
+      const instance = subject ? null : instanceLabel(input.at);
+      // The instance suffix is kept whole: the NAME gives way, never the date.
+      const suffix = subject
+        ? ` · ${subject}`
+        : instance
+          ? ` — ${instance}`
+          : "";
+      const base =
+        shortenTitle(
+          readableLabel(input.name),
+          Math.max(20, GENERATED_TITLE_MAX - (instance ? suffix.length : 0))
+        ) || "Playbook run";
+      return shortenTitle(`${base}${suffix}`, GENERATED_TITLE_MAX) || base;
+    }
+    case "goal": {
+      return (
+        shortenTitle(readableLabel(input.goal), GENERATED_TITLE_MAX) ||
+        "Work session"
+      );
     }
     case "capture": {
       const label = readableLabel(input.label)
         .replace(DERIVED_LABEL_PREFIX.capture, "")
         .trim();
-      return clip(label || "Capture", GENERATED_TITLE_MAX);
+      return shortenTitle(label, GENERATED_TITLE_MAX) || "Capture";
     }
     case "enrich":
     case "import": {
@@ -261,13 +322,16 @@ export function buildDerivedSessionTitle(
       const label = readableLabel(input.label)
         .replace(DERIVED_LABEL_PREFIX[input.kind], "")
         .trim();
-      return clip(label ? `${verb} ${label}` : verb, GENERATED_TITLE_MAX);
+      return label
+        ? shortenTitle(`${verb} ${label}`, GENERATED_TITLE_MAX)
+        : verb;
     }
     case "receipt": {
-      const doing = readableLabel(input.doing);
-      if (doing) return clip(doing, GENERATED_TITLE_MAX);
+      const raw = readableLabel(input.doing);
+      const doing = raw.match(PROPOSAL_TITLE_RE)?.[1]?.trim() || raw;
+      if (doing) return shortenTitle(doing, GENERATED_TITLE_MAX);
       const agent = readableLabel(input.agentLabel);
-      return clip(
+      return shortenTitle(
         agent ? `Changes by ${agent}` : "Agent changes",
         GENERATED_TITLE_MAX
       );

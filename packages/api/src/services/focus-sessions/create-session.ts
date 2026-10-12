@@ -80,6 +80,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
   canAutoRetitle,
+  buildDerivedSessionTitle,
 } from "@synap-core/types/focus-sessions";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
@@ -753,13 +754,23 @@ export async function createFocusSession(
       if (raced.exact) return { deduped: raced.exact, session: undefined };
     }
 
+    // No session is stored nameless (plan 9992207a, c-auto-titles): with no
+    // title given, the pod derives one from the goal (or the playbook) and
+    // marks it `derived`, so the background titler may still improve it and a
+    // person's or agent's own title always wins.
+    const derivedTitle = title
+      ? null
+      : playbook
+        ? buildDerivedSessionTitle({ kind: "run", name: playbook.name })
+        : buildDerivedSessionTitle({ kind: "goal", goal });
+
     const fields = {
       workspaceId,
       projectId,
       // Only ever set together with the track's own project (see above).
       ...(trackId ? { trackId, trackStage } : {}),
       subjectEntityId,
-      title,
+      title: title ?? derivedTitle,
       goal,
       templateId,
       playbookId: playbook?.id ?? null,
@@ -830,10 +841,10 @@ export async function createFocusSession(
           // goal — keeping it would leave the session called after something
           // else (live: a research session inherited "[dogfood] the Research
           // pack is enabled…" from the write that opened the receipt). With no
-          // explicit title, the derived name is dropped, so lists fall back to
-          // the new goal's first line until the titler names it. A title a
-          // person or agent chose is never touched.
-          title: title ?? (adoptKeepsTitle ? undefined : null),
+          // explicit title, the old derived name is replaced by one derived
+          // from the NEW goal (still `derived`, so the titler may improve it).
+          // A title a person or agent chose is never touched.
+          title: title ?? (adoptKeepsTitle ? undefined : derivedTitle),
           workspaceId: workspaceId ?? undefined,
           projectId: projectId ?? undefined,
           subjectEntityId: subjectEntityId ?? undefined,
@@ -880,13 +891,19 @@ export async function createFocusSession(
           // explicit title is its author's (agent or person), which automation
           // never renames. D8: conditional, so an untitled human session keeps
           // the column default.
-          ...(clientKey || title || paramResolution || isProbeWriteContext()
+          ...(clientKey ||
+          title ||
+          derivedTitle ||
+          paramResolution ||
+          isProbeWriteContext()
             ? {
                 metadata: stampProbeMarker({
                   ...(clientKey ? { clientKey } : {}),
                   ...(title
                     ? titleSourcePatch(agentUserId ? "agent" : "human")
-                    : {}),
+                    : derivedTitle
+                      ? titleSourcePatch("derived")
+                      : {}),
                   // @see the adopt branch above.
                   ...(paramResolution
                     ? {
