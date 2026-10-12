@@ -380,6 +380,94 @@ describe("readRestructureRoom — what a re-read of a capture session sends", ()
     });
   });
 
+  it("names every settled record (earlier rounds too) and the room's note, never the note as a comment", async () => {
+    const sessionId = await seedCapture();
+    const { channelId } = await persistCaptureResult({
+      sessionId,
+      userId: USER,
+      proposals: [
+        ...PROPOSALS,
+        { tempId: "t3", profileSlug: "note", title: "Dropped" },
+      ],
+      dedupCandidates: {},
+      dedupSkipped: false,
+    });
+    // The note relay posted before structuring: the first plain owner message.
+    await q(
+      `insert into messages (channel_id, role, content, user_id, previous_hash, hash, timestamp)
+       values ($1, 'user', $2, $3, '', 'h', now() - interval '1 hour')`,
+      [channelId, "# Sovereign data\nwrite the post", USER]
+    );
+    await q(
+      `update messages set metadata = jsonb_set(metadata, '{capturePart,rows,2,dismissed}', 'true')
+       where metadata -> 'capturePart' ->> 'kind' = 'capture_result'`
+    );
+    await q(
+      `insert into messages (channel_id, role, content, user_id, previous_hash, hash, metadata, timestamp)
+       values ($1, 'system', 'Filed 1', $2, '', 'h', $3::jsonb, now() + interval '1 second')`,
+      [
+        channelId,
+        USER,
+        JSON.stringify({
+          capturePart: {
+            kind: "capture_filed",
+            v: 1,
+            sessionId,
+            round: 1,
+            rows: [
+              {
+                tempId: "t1",
+                entityId: "e-1",
+                proposalId: null,
+                outcome: "created",
+                title: "Sovereign data post",
+              },
+            ],
+            truncated: false,
+            workspaceId: null,
+            projectId: null,
+          },
+        }),
+      ]
+    );
+    // Round 2 no longer mentions the filed post: it is carried, still settled.
+    await q(
+      `insert into messages (channel_id, role, content, user_id, previous_hash, hash, metadata, timestamp)
+       values ($1, 'assistant', 'Structured', $2, '', 'h', $3::jsonb, now() + interval '2 seconds')`,
+      [
+        channelId,
+        USER,
+        JSON.stringify({
+          capturePart: {
+            kind: "capture_result",
+            v: 1,
+            sessionId,
+            round: 2,
+            rows: [
+              {
+                tempId: "t1",
+                profileSlug: "task",
+                title: "Draft the outline",
+                why: null,
+                updatesExisting: false,
+                dismissed: false,
+              },
+            ],
+            truncated: false,
+            notice: null,
+          },
+        }),
+      ]
+    );
+
+    const round = await readRestructureRoom({ sessionId, userId: USER });
+    expect(round?.settled).toEqual([
+      { profileSlug: "post", title: "Sovereign data post", outcome: "filed" },
+    ]);
+    expect(round?.noteTitle).toBe("Sovereign data");
+    expect(round?.comments).toEqual([]);
+  });
+
   it("another user's session reads as no room", async () => {
     const sessionId = await seedCapture();
     expect(await readRestructureRoom({ sessionId, userId: OTHER })).toBe(null);

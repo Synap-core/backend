@@ -1051,6 +1051,22 @@ export class IntelligenceHubClient {
           properties?: Record<string, unknown>;
         }>;
         /**
+         * Records this capture already settled — filed, waiting for approval
+         * or rejected. The structurer must not propose them again. Pod-built
+         * from the room; an older IS ignores it.
+         */
+        settledEntities?: Array<{
+          profileSlug: string;
+          title: string;
+          outcome: "filed" | "awaiting_approval" | "rejected";
+        }>;
+        /**
+         * The note this capture structures is itself already kept (relay saves
+         * it as its own record): never propose it back as a record. An older
+         * IS ignores it.
+         */
+        sourceNote?: { profileSlug: string; title: string };
+        /**
          * Routing self-improvement memory: recent user corrections (negatives —
          * the AI's pick was moved) + confirmed routes (positives). Rendered as
          * few-shot examples in the workspace-routing prompt so the model learns

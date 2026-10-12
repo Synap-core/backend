@@ -1768,7 +1768,8 @@ const captureBaseRouter = router({
       // A re-read of a capture room takes every comment the owner wrote since
       // the last round, read from the room itself (never client-supplied), and
       // — unless the caller sent its own — that round's open rows as the
-      // records to refine rather than re-invent.
+      // records to refine rather than re-invent; plus the records it already
+      // settled and the note it holds, neither of which may come back.
       const roomRound = input.sessionId
         ? await readRestructureRoom({
             sessionId: input.sessionId,
@@ -1795,6 +1796,17 @@ const captureBaseRouter = router({
           previousEntities: anchorPreviousEntity
             ? [anchorPreviousEntity, ...(previousEntities ?? [])]
             : previousEntities,
+          ...(roomRound?.settled?.length
+            ? { settledEntities: roomRound.settled }
+            : {}),
+          ...(roomRound?.noteTitle
+            ? {
+                sourceNote: {
+                  profileSlug: FALLBACK_CAPTURE_KIND,
+                  title: roomRound.noteTitle,
+                },
+              }
+            : {}),
           routingMemory,
           ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },

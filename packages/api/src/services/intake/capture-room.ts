@@ -336,13 +336,30 @@ export async function planCaptureCommentTurn(args: {
   };
 }
 
+/** Settled records a re-read names, newest round first. */
+export const RESTRUCTURE_SETTLED_MAX = 20;
+/** A source note's title — the first line, as relay names the note it saves. */
+const SOURCE_NOTE_TITLE_MAX = 80;
+
+/** A record the room already settled: the re-read must not propose it again. */
+export interface SettledCaptureRecord {
+  profileSlug: string;
+  title: string;
+  outcome: "filed" | "awaiting_approval" | "rejected";
+}
+
 /**
- * What a re-read of a capture session takes from its room: the owner's
- * comments since the last round, and — only when there are comments — that
- * round's still-open rows, so the structurer keeps a record the comments do not
- * touch (same tempId, title, kind). Filed, waiting and rejected rows are left
- * out: they are settled and must not be proposed again. `null` when the session
- * is not the caller's or has no room.
+ * What a re-read of a capture session takes from its room:
+ *  - `comments`: the owner's comments since the last round (never the note);
+ *  - `previousEntities`: only when there are comments, that round's still
+ *    suggested rows, so the structurer keeps a record the comments do not
+ *    touch (same tempId, title, kind);
+ *  - `settled`: every record already filed, waiting for approval or rejected
+ *    (earlier rounds included) — told to the structurer as "do not propose
+ *    these again";
+ *  - `noteTitle`: the first line of the room's note, when the room holds one —
+ *    the note is already kept, so it must not come back as a suggestion.
+ * `null` when the session is not the caller's or has no room.
  */
 export async function readRestructureRoom(args: {
   sessionId: string;
@@ -356,6 +373,8 @@ export async function readRestructureRoom(args: {
     title: string;
     properties?: Record<string, unknown>;
   }>;
+  settled?: SettledCaptureRecord[];
+  noteTitle?: string;
 } | null> {
   const database = args.database ?? db;
   const [session] = await database
@@ -374,8 +393,32 @@ export async function readRestructureRoom(args: {
     ownerId: args.userId,
     database,
   });
+  const noteLine = room.note?.text
+    .split("\n")
+    .map((l) => l.replace(/^#+\s*/, "").trim())
+    .find((l) => l !== "");
+  const noteTitle = noteLine?.slice(0, SOURCE_NOTE_TITLE_MAX);
+  const settled = room.rows
+    .flatMap((view): SettledCaptureRecord[] =>
+      view.state === "filed" ||
+      view.state === "awaiting_approval" ||
+      view.state === "rejected"
+        ? [
+            {
+              profileSlug: view.row.profileSlug,
+              title: view.row.title,
+              outcome: view.state,
+            },
+          ]
+        : []
+    )
+    .slice(0, RESTRUCTURE_SETTLED_MAX);
+  const context = {
+    ...(settled.length > 0 ? { settled } : {}),
+    ...(noteTitle ? { noteTitle } : {}),
+  };
   if (!room.isCaptureRoom || room.commentsSinceResult.length === 0) {
-    return { comments: [] };
+    return { comments: [], ...context };
   }
   const open = room.rows
     .filter((view) => view.state === "suggested" && !view.carried)
@@ -394,6 +437,7 @@ export async function readRestructureRoom(args: {
           })),
         }
       : {}),
+    ...context,
   };
 }
 

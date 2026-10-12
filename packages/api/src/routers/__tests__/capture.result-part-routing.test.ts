@@ -391,6 +391,30 @@ describe("capture.structure — a re-read takes the room's comments", () => {
     expect(h.isInputs[0]).not.toHaveProperty("comments");
   });
 
+  it("sends the records the room settled and the note it holds, comments or not", async () => {
+    h.room = {
+      comments: [],
+      settled: [
+        { profileSlug: "task", title: "Call Marie", outcome: "filed" },
+        { profileSlug: "event", title: "Dentist", outcome: "rejected" },
+      ],
+      noteTitle: "Call Marie, dentist Tue",
+    };
+    await reread();
+    const hints = h.isInputs[0]!.hints as {
+      settledEntities?: unknown;
+      sourceNote?: unknown;
+    };
+    expect(hints.settledEntities).toEqual([
+      { profileSlug: "task", title: "Call Marie", outcome: "filed" },
+      { profileSlug: "event", title: "Dentist", outcome: "rejected" },
+    ]);
+    expect(hints.sourceNote).toEqual({
+      profileSlug: "note",
+      title: "Call Marie, dentist Tue",
+    });
+  });
+
   it("the caller's own previousEntities win over the room's", async () => {
     h.room = {
       comments: ["x"],
