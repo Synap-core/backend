@@ -447,6 +447,8 @@ export function emitFacetSideEffects(opts: {
   origin?: SideEffectPayload["origin"];
   /** The proposal that authorized this facet write — origin is derived from it the same way `recordDomainMutation` does. */
   proposalId?: string | null;
+  /** The bulk run (import / capture apply) this attach belongs to — `data.batchId`. */
+  batchId?: string | null;
 }): void {
   const commonWs = opts.workspaceId;
   // Origin is resolved INSIDE the fire-and-forget chain, like recordDomainMutation.
@@ -473,6 +475,7 @@ export function emitFacetSideEffects(opts: {
         ...(opts.changedKeys && opts.changedKeys.length > 0
           ? { changedKeys: opts.changedKeys }
           : {}),
+        ...(opts.batchId ? { batchId: opts.batchId } : {}),
         ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
         ...(opts.contextEntityTitle
           ? { contextEntityTitle: opts.contextEntityTitle }
@@ -527,6 +530,7 @@ export function registerFacetAttachEmitter(): void {
         context?.automationContext as SideEffectPayload["automationContext"],
       origin: context?.origin,
       proposalId: context?.proposalId ?? null,
+      batchId: context?.batchId ?? null,
     });
   });
 }

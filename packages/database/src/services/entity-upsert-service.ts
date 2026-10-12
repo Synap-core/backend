@@ -68,6 +68,12 @@ export interface EntityUpsertInput {
    * so a first sync of 200 contacts never starts 200 processes.
    */
   origin?: "sync";
+  /**
+   * The bulk run this record belongs to (one import / capture apply). A role
+   * attached by it announces the batch, so a propose-mode activator files ONE
+   * proposal for the run (`proposeRulePlaybookRun`), not one per record.
+   */
+  batchId?: string;
   profileSlug: string;
   title: string;
   properties: Record<string, unknown>;
@@ -156,7 +162,8 @@ export class EntityUpsertService {
     properties: Record<string, unknown>,
     workspaceId: string | null,
     userId: string,
-    origin: EntityUpsertInput["origin"]
+    origin: EntityUpsertInput["origin"],
+    batchId: EntityUpsertInput["batchId"]
   ): Promise<void> {
     try {
       await this.facetRepo.attach(
@@ -169,6 +176,7 @@ export class EntityUpsertService {
           skipValidation: true,
           emitContext: {
             ...(origin ? { origin } : {}),
+            ...(batchId ? { batchId } : {}),
             fallbackWorkspaceId: workspaceId,
           },
         },
@@ -205,7 +213,8 @@ export class EntityUpsertService {
       input.properties,
       input.workspaceId,
       input.userId,
-      input.origin
+      input.origin,
+      input.batchId
     );
   }
 
@@ -392,6 +401,7 @@ export class EntityUpsertService {
         // create's role adapter — its announcement must say sync too.
         facetEmitContext: {
           ...(input.origin ? { origin: input.origin } : {}),
+          ...(input.batchId ? { batchId: input.batchId } : {}),
           fallbackWorkspaceId: input.workspaceId,
         },
       },
@@ -425,7 +435,8 @@ export class EntityUpsertService {
         input.properties,
         input.workspaceId,
         input.userId,
-        input.origin
+        input.origin,
+        input.batchId
       );
     }
 

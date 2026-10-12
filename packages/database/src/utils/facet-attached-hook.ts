@@ -38,6 +38,12 @@ export interface FacetAttachContext {
    * needs a workspace): the caller's governance lens.
    */
   fallbackWorkspaceId?: string | null;
+  /**
+   * ONE bulk run (an import, a capture graph apply) attaching many roles. It
+   * rides the attach event as `data.batchId`, so a propose-mode activator
+   * files ONE proposal for the whole batch instead of one per record.
+   */
+  batchId?: string | null;
 }
 
 export interface FacetAttachedEvent {

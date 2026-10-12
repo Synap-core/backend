@@ -301,6 +301,10 @@ export async function executePlaybookRun(
       sessionId: automationContext.focusSessionId,
       stepRunId: attribution?.stepRunId,
       nodeId: attribution?.nodeId,
+      // ONE bulk run (an import attaching 101 leads) → ONE proposal: the
+      // attach event names its batch (`data.batchId`, the facet door). Absent
+      // = a single event, filed exactly as before.
+      ...batchOf(context.trigger.payload),
     });
     return proposed.deduped
       ? {
@@ -520,5 +524,26 @@ export async function executePlaybookRun(
     runId: result.run?.id,
     sessionId: result.session.id,
     status: result.run?.status ?? "running",
+  };
+}
+
+/**
+ * The batch an event belongs to (`data.batchId`, stamped by the facet door for
+ * an import / capture apply) and the kind or role it names (`data.profileSlug`)
+ * — or nothing for a single event.
+ */
+function batchOf(payload: Record<string, unknown>): {
+  batchId?: string;
+  batchSubjectKind?: string;
+} {
+  const data = (payload.data ?? {}) as Record<string, unknown>;
+  const batchId =
+    typeof data.batchId === "string" && data.batchId ? data.batchId : null;
+  if (!batchId) return {};
+  return {
+    batchId,
+    ...(typeof data.profileSlug === "string" && data.profileSlug
+      ? { batchSubjectKind: data.profileSlug }
+      : {}),
   };
 }

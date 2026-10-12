@@ -4884,6 +4884,10 @@ const captureBaseRouter = router({
       const propDefRepo = new PropertyDefRepository(database);
       const upsertService = new EntityUpsertService(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
+      // ONE batch: every role this apply attaches announces it, so a
+      // propose-mode activator ("Qualify a lead") files ONE proposal for the
+      // whole graph instead of one per record.
+      const batchId = randomUUID();
 
       // Provenance for rows this batch CREATES (materializeEntity invariant 4:
       // no silent 'human' default). ctx.agentUserId is set only by the
@@ -5019,6 +5023,7 @@ const captureBaseRouter = router({
             userId,
             provenance,
             projectId: ctx.projectId,
+            batchId,
           });
           tempToReal[entity.tempId] = result.entity.id;
           created.push({

@@ -61,6 +61,9 @@ export async function handleLinkedInBulkImport(
 
   const db = await getDb();
   const upsertSvc = new EntityUpsertService(db, eventRepository);
+  // ONE batch per import: a role this import attaches announces it, so a
+  // propose-mode activator files ONE proposal for the import, not one per row.
+  const batchId = randomUUID();
 
   // D1: an imported LinkedIn connection is a pod-wide person that was merely
   // *seen* in this workspace — route placement through the one door (source ws
@@ -119,6 +122,7 @@ export async function handleLinkedInBulkImport(
           // each contact); 'ai_agent' would be a lie (no agent involved).
           // createdByUserId still attributes the owning user.
           provenance: { createdByKind: "system", createdByUserId: userId },
+          batchId,
         });
 
         if (result.action === "created") created++;

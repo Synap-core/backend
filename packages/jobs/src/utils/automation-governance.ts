@@ -58,6 +58,10 @@ import { emitSideEffects } from "@synap/events";
 import { broadcastNotification } from "./realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
 import { requiredPermissionFor } from "@synap/governance-policy";
+import {
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "automation-governance" });
 
@@ -925,17 +929,17 @@ export async function proposeRulePlaybookRun(opts: {
   sessionId?: string;
   stepRunId?: string;
   nodeId?: string;
-}): Promise<{ proposalId: string; deduped: boolean }> {
-  const {
-    ownerId,
-    workspaceId,
-    automationId,
-    automationRunId,
-    playbookId,
-    playbookName,
-    params,
-    subjectId,
-  } = opts;
+  /**
+   * The bulk run the triggering event belongs to (`data.batchId` on a role
+   * attach, stamped by the facet door for one import / capture apply). Every
+   * subject of ONE batch lands in ONE pending proposal for this rule — see
+   * {@link coalesceIntoBatchProposal}. Absent = a single event, filed alone.
+   */
+  batchId?: string;
+  /** The kind or role the batch's subjects are (`data.profileSlug`) — for its words. */
+  batchSubjectKind?: string;
+}): Promise<{ proposalId: string; deduped: boolean; coalesced?: boolean }> {
+  const { workspaceId, automationId, playbookName, subjectId } = opts;
 
   const [pending] = await db
     .select({ id: proposals.id })
@@ -947,17 +951,170 @@ export async function proposeRulePlaybookRun(opts: {
         eq(proposals.proposalType, "run"),
         eq(proposals.status, ProposalStatus.PENDING),
         drizzleSql`${proposals.data}->>'automationId' = ${automationId}`,
-        drizzleSql`coalesce(${proposals.data}->'data'->>'subjectId', '') = ${subjectId ?? ""}`
+        // A subject already pending alone, or already inside a batch proposal.
+        drizzleSql`(coalesce(${proposals.data}->'data'->>'subjectId', '') = ${subjectId ?? ""}
+          OR coalesce(${proposals.data}->'data'->'subjectIds', '[]'::jsonb) @> jsonb_build_array(${subjectId ?? ""}::text))`
       )
     )
     .limit(1);
   if (pending) return { proposalId: pending.id, deduped: true };
 
+  // ONE batch, ONE proposal: under a lock on (rule, batch), join the batch's
+  // pending proposal if one exists — else file it below, still under the lock,
+  // so two records of one import racing here cannot both file.
+  if (opts.batchId && subjectId) {
+    const out = await db.transaction(async (tx) => {
+      await tx.execute(
+        drizzleSql`select pg_advisory_xact_lock(hashtext(${`playbook-run-batch:${automationId}:${opts.batchId}`}))`
+      );
+      const joined = await coalesceIntoBatchProposal(tx, {
+        workspaceId,
+        automationId,
+        batchId: opts.batchId!,
+        subjectId,
+        playbookName,
+        batchSubjectKind: opts.batchSubjectKind,
+      });
+      if (joined) return { ...joined, announce: async () => {} };
+      return fileRulePlaybookRunProposal(opts, tx);
+    });
+    await out.announce();
+    return {
+      proposalId: out.proposalId,
+      deduped: out.deduped,
+      ...("coalesced" in out ? { coalesced: true } : {}),
+    };
+  }
+  const filed = await fileRulePlaybookRunProposal(opts, db);
+  await filed.announce();
+  return { proposalId: filed.proposalId, deduped: filed.deduped };
+}
+
+/**
+ * The words of a batch proposal — what the person reads in the queue: how many
+ * of what, and what approving does. Recomputed on every join, so the count is
+ * always the batch's real size.
+ */
+export function batchRunReasoning(input: {
+  count: number;
+  subjectKind?: string;
+  playbookName?: string;
+}): string {
+  const noun = input.subjectKind
+    ? (input.count === 1
+        ? resolveObjectNoun(input.subjectKind)
+        : resolveObjectNounPlural(input.subjectKind)
+      ).toLowerCase()
+    : input.count === 1
+      ? "record"
+      : "records";
+  const what = input.playbookName ? `"${input.playbookName}"` : "this playbook";
+  return `${input.count} new ${noun} arrived together and matched this rule — approving starts ${what} on each; rejecting starts none.`;
+}
+
+type BatchTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Add `subjectId` to the PENDING proposal this rule filed for this batch, if
+ * there is one. Returns null when there is none (the caller files it).
+ * Caller holds the (rule, batch) advisory lock.
+ */
+async function coalesceIntoBatchProposal(
+  tx: BatchTx,
+  input: {
+    workspaceId: string;
+    automationId: string;
+    batchId: string;
+    subjectId: string;
+    playbookName?: string;
+    batchSubjectKind?: string;
+  }
+): Promise<{ proposalId: string; deduped: boolean; coalesced: true } | null> {
+  const [batch] = await tx
+    .select({ id: proposals.id, data: proposals.data })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.workspaceId, input.workspaceId),
+        eq(proposals.targetType, "playbook"),
+        eq(proposals.proposalType, "run"),
+        eq(proposals.status, ProposalStatus.PENDING),
+        drizzleSql`${proposals.data}->>'automationId' = ${input.automationId}`,
+        drizzleSql`${proposals.data}->>'batchId' = ${input.batchId}`
+      )
+    )
+    .limit(1);
+  if (!batch) return null;
+  const outer = (batch.data ?? {}) as Record<string, unknown>;
+  const inner = (outer.data ?? {}) as Record<string, unknown>;
+  const subjectIds = readBatchSubjectIds(inner);
+  if (subjectIds.includes(input.subjectId)) {
+    return { proposalId: batch.id, deduped: true, coalesced: true };
+  }
+  subjectIds.push(input.subjectId);
+  await tx
+    .update(proposals)
+    .set({
+      data: {
+        ...outer,
+        data: { ...inner, subjectIds },
+        reasoning: batchRunReasoning({
+          count: subjectIds.length,
+          subjectKind: input.batchSubjectKind,
+          playbookName: input.playbookName,
+        }),
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(proposals.id, batch.id));
+  logger.info(
+    { proposalId: batch.id, batchId: input.batchId, count: subjectIds.length },
+    "Propose-mode rule: subject joined its batch proposal"
+  );
+  return { proposalId: batch.id, deduped: false, coalesced: true };
+}
+
+/**
+ * A run proposal's subjects: `subjectIds` (a batch) or the one `subjectId`.
+ * The ONE reader — the approval executor fans out over exactly this list.
+ */
+export function readBatchSubjectIds(inner: Record<string, unknown>): string[] {
+  if (Array.isArray(inner.subjectIds)) {
+    return inner.subjectIds.filter(
+      (v): v is string => typeof v === "string" && v.length > 0
+    );
+  }
+  return typeof inner.subjectId === "string" && inner.subjectId
+    ? [inner.subjectId]
+    : [];
+}
+
+async function fileRulePlaybookRunProposal(
+  opts: Parameters<typeof proposeRulePlaybookRun>[0],
+  executor: typeof db | BatchTx
+): Promise<{
+  proposalId: string;
+  deduped: boolean;
+  announce: () => Promise<void>;
+}> {
+  const {
+    ownerId,
+    workspaceId,
+    automationId,
+    automationRunId,
+    playbookId,
+    playbookName,
+    params,
+    subjectId,
+  } = opts;
+
   // Attribution: an agent-owned rule proposes AS that agent (the Reactions
   // queue, the scorecard and the approval replay all read `agentUserId`); a
   // human-owned rule's proposal is the human's own standing instruction, so it
   // carries no agent — the same split `openRunSession` makes for run sessions.
-  const [ownerRow] = await db
+  // Read on the caller's executor: inside the batch transaction a second
+  // connection would wait on the lock this one holds.
+  const [ownerRow] = await executor
     .select({ userType: users.userType })
     .from(users)
     .where(eq(users.id, ownerId))
@@ -976,52 +1133,66 @@ export async function proposeRulePlaybookRun(opts: {
     ...(opts.agentType ? { agentType: opts.agentType } : {}),
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
     ...(opts.trackId ? { trackId: opts.trackId } : {}),
+    // A batch proposal lists its subjects; `subjectId` stays the first, so a
+    // batch of one reads (and runs) exactly like a single proposal.
+    ...(opts.batchId && subjectId ? { subjectIds: [subjectId] } : {}),
   };
 
-  const { proposal, deduped } = await insertPendingProposal({
-    workspaceId,
-    targetType: "playbook",
-    targetId,
-    proposalType: "run",
-    data: {
-      targetType: "playbook",
-      targetId,
-      changeType: "run",
-      data: payload,
-      source: "automation",
-      // The rule that asked — the dedup key above and the Rules page's
-      // "proposals waiting" read.
-      automationId,
-      ...(automationRunId ? { automationRunId } : {}),
-      ...(agentUserId ? { agentUserId, authorshipMode: "autonomous" } : {}),
-      reasoning:
-        "A rule set to propose matched — it asks before starting this playbook.",
-      correlationId,
-    },
-    createdBy: ownerId,
-    agentUserId,
-    subjectUserId: ownerId,
-    correlationId,
-    sessionId: opts.sessionId ?? null,
-    stepRunId: opts.stepRunId ?? null,
-    nodeId: opts.nodeId ?? null,
-  });
-
-  if (!deduped) {
-    await announceProposal({
-      proposalId: proposal.id,
-      userId: ownerId,
+  const { proposal, deduped } = await insertPendingProposal(
+    {
       workspaceId,
       targetType: "playbook",
       targetId,
-      changeType: "run",
+      proposalType: "run",
+      data: {
+        targetType: "playbook",
+        targetId,
+        changeType: "run",
+        data: payload,
+        source: "automation",
+        // The rule that asked — the dedup key above and the Rules page's
+        // "proposals waiting" read.
+        automationId,
+        ...(automationRunId ? { automationRunId } : {}),
+        ...(agentUserId ? { agentUserId, authorshipMode: "autonomous" } : {}),
+        ...(opts.batchId ? { batchId: opts.batchId } : {}),
+        reasoning: opts.batchId
+          ? batchRunReasoning({
+              count: 1,
+              subjectKind: opts.batchSubjectKind,
+              playbookName,
+            })
+          : "A rule set to propose matched — it asks before starting this playbook.",
+        correlationId,
+      },
+      createdBy: ownerId,
+      agentUserId,
+      subjectUserId: ownerId,
       correlationId,
-    });
-  }
+      sessionId: opts.sessionId ?? null,
+      stepRunId: opts.stepRunId ?? null,
+      nodeId: opts.nodeId ?? null,
+    },
+    executor
+  );
 
   logger.info(
     { proposalId: proposal.id, automationId, subjectId, deduped },
     "Propose-mode rule filed a playbook/run proposal"
   );
-  return { proposalId: proposal.id, deduped };
+  // Announced by the caller AFTER its transaction commits — never a
+  // notification about a row a reader cannot see yet.
+  const announce = deduped
+    ? async () => {}
+    : () =>
+        announceProposal({
+          proposalId: proposal.id,
+          userId: ownerId,
+          workspaceId,
+          targetType: "playbook",
+          targetId,
+          changeType: "run",
+          correlationId,
+        });
+  return { proposalId: proposal.id, deduped, announce };
 }
