@@ -29,7 +29,6 @@ import {
   upsertOutcomes,
 } from "../../../services/focus-sessions/outcome-declarations.js";
 import { z } from "@hono/zod-openapi";
-import { TRPCError } from "@trpc/server";
 import {
   sessionCriteriaSchema,
   sessionEvidenceSchema,
@@ -126,6 +125,7 @@ import {
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  errCode,
   hasScope,
   httpStatusForTrpcError,
   isUuid,
@@ -1010,8 +1010,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           : undefined;
     } catch (err) {
       // An unknown slug is "no such vocabulary", never an empty list.
-      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
-        return c.json({ error: err.message }, 404);
+      if (errCode(err) === "NOT_FOUND") {
+        return c.json(
+          { error: err instanceof Error ? err.message : "Not found" },
+          404
+        );
       }
       throw err;
     }

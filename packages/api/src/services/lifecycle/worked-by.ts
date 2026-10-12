@@ -17,6 +17,8 @@
  *
  * Floor: `sessionReadableWhere` — a card never names a session its viewer
  * cannot open. A failed liveness read THROWS (never "quiet").
+ *
+ * SESSION-KIND-LENS-EXEMPT: returns `{sessionId, kind, live}` MARKS per thing, never a session row; triage is irrelevant to "is someone on it" and the worker/session kind is derived here from the automation stamp.
  */
 import {
   db,
