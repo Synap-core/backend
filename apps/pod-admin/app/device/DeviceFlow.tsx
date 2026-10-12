@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ReceiverShell } from "../_lib/receiver-shell";
-import { formatRelative } from "../(admin)/trust-keys/_lib/format";
+import { formatRelative } from "../../lib/format";
 import {
   approveDecision,
   decidedRead,

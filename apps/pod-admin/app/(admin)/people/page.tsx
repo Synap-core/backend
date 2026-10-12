@@ -49,6 +49,7 @@ import {
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { PageHeader } from "../components/page-header";
 import { useOperatorEmail } from "../components/admin-shell";
 import { ConfirmModal } from "../components/confirm-modal";
 import { DetailDrawer } from "../components/detail-drawer";
@@ -61,7 +62,8 @@ import {
 import { SectionCard } from "../components/section-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatExpiresAt, formatRelative } from "./_lib/helpers";
+import { formatExpiresAt } from "./_lib/helpers";
+import { formatRelative } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
 import { ExitFallback } from "../../../lib/exit-link";
 
@@ -125,11 +127,7 @@ export default function PeoplePage() {
 function PeopleFallback() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          People
-        </h1>
-      </header>
+      <PageHeader title="People" />
       <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
     </div>
   );
@@ -165,26 +163,22 @@ function PeopleInner() {
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-            People
-          </h1>
-          <p className="text-[13px] text-foreground/55">
-            Pod users, agents, and pending signups.
-          </p>
-        </div>
-        <Button
-          color="primary"
-          variant="solid"
-          radius="md"
-          size="sm"
-          startContent={<Plus className="h-3.5 w-3.5" />}
-          onPress={inviteDisclosure.onOpen}
-        >
-          Add people
-        </Button>
-      </header>
+      <PageHeader
+        title="People"
+        description="Pod users, agents, and pending signups."
+        actions={
+          <Button
+            color="primary"
+            variant="solid"
+            radius="md"
+            size="sm"
+            startContent={<Plus className="h-3.5 w-3.5" />}
+            onPress={inviteDisclosure.onOpen}
+          >
+            Add people
+          </Button>
+        }
+      />
 
       <div className="flex flex-col gap-4">
         <PodAdminsSection

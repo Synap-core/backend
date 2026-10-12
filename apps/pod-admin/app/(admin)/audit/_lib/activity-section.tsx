@@ -41,7 +41,11 @@ import {
   type AuditFilters,
   type WorkspaceSummary,
 } from "./filter-bar";
-import { formatRelative, formatTimestamp, shortId } from "./format";
+import {
+  formatRelative,
+  formatTimestamp,
+  shortId,
+} from "../../../../lib/format";
 
 interface AuditEvent {
   id: string;

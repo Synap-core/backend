@@ -48,7 +48,7 @@ import {
 } from "../../components/resource-row";
 import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
-import { formatRelative } from "./format";
+import { formatRelative } from "../../../../lib/format";
 import { BROKER_TRUST_QUERY_KEY } from "./broker-trust";
 import { BrokerTrustPanel } from "./broker-trust-panel";
 
@@ -440,7 +440,7 @@ function IssuerRow({
 
   const secondary = [
     issuer.issuerUrl,
-    `added ${formatRelative(issuer.firstContactedAt ?? issuer.createdAt)}`,
+    `added ${formatRelative(issuer.firstContactedAt ?? issuer.createdAt, { empty: "never" })}`,
   ].join(" · ");
 
   return (

@@ -60,7 +60,7 @@ import {
 import { SectionCard } from "../../components/section-card";
 import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
-import { formatRelative, shortId } from "./format";
+import { formatRelative, shortId } from "../../../../lib/format";
 import {
   GrantRolePicker,
   keyMintFromRole,

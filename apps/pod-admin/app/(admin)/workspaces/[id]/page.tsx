@@ -4,16 +4,16 @@
  * Workspace detail page — /workspaces/[id]
  *
  * 4 tabs: Overview · Members · API Keys · Connections
- * Tab state encoded in ?tab=... URL param (same pattern as trust-keys page).
+ * Tab state encoded in ?tab=... URL param (see UrlTabs).
  */
 
-import { Tab, Tabs } from "@heroui/react";
 import { ArrowLeft } from "lucide-react";
-import { Suspense } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, type ReactNode } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { trpc } from "../../../../lib/trpc";
 import { StatusPill } from "../../components/status-pill";
-import { formatRelative } from "../../people/_lib/helpers";
+import { UrlTabs } from "../../components/url-tabs";
+import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import { ExitLink } from "../../../../lib/exit-link";
 import { OverviewTab } from "./_lib/overview-tab";
@@ -38,16 +38,6 @@ type Workspace = {
   updatedAt: Date | string;
   archivedAt?: Date | string | null;
 };
-
-type WorkspaceTab =
-  "overview" | "members" | "api-keys" | "connections" | "governance";
-const TABS: WorkspaceTab[] = [
-  "overview",
-  "members",
-  "api-keys",
-  "connections",
-  "governance",
-];
 
 /* The workspace's contents live in the desktop app. `ExitLink` carries the
    download fallback, because a `synap://` that does not resolve fails in
@@ -121,23 +111,6 @@ function DetailFallback() {
 function WorkspaceDetailInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const raw = searchParams.get("tab");
-  const activeTab: WorkspaceTab = (TABS as string[]).includes(raw ?? "")
-    ? (raw as WorkspaceTab)
-    : "overview";
-
-  function setTab(next: string | number) {
-    const value = String(next);
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (value === "overview") params.delete("tab");
-    else params.set("tab", value);
-    const qs = params.toString();
-    router.replace(qs ? `/workspaces/${id}?${qs}` : `/workspaces/${id}`, {
-      scroll: false,
-    });
-  }
 
   const wsQuery = trpc.workspaces.adminGet.useQuery(
     { id },
@@ -146,6 +119,8 @@ function WorkspaceDetailInner() {
 
   const ws = wsQuery.data as Workspace | undefined;
   const status = ws ? deriveStatus(ws) : null;
+  const body = (loaded: ReactNode) =>
+    loaded || (wsQuery.isLoading ? <TabSkeleton /> : null);
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
@@ -221,66 +196,37 @@ function WorkspaceDetailInner() {
           Could not load workspace: {wsQuery.error.message}
         </p>
       ) : (
-        <Tabs
-          aria-label="Workspace sections"
-          variant="underlined"
-          selectedKey={activeTab}
-          onSelectionChange={setTab}
-          classNames={{
-            tabList:
-              "gap-4 px-0 border-b border-foreground/[0.05] rounded-none",
-            tab: "px-1 h-10",
-            cursor: "bg-primary",
-            tabContent:
-              "text-foreground/55 group-data-[selected=true]:text-foreground text-[12.5px] font-medium",
-          }}
-        >
-          <Tab key="overview" title="Overview">
-            <div className="pt-5">
-              {ws ? (
-                <OverviewTab ws={ws} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="members" title="Members">
-            <div className="pt-5">
-              {ws ? (
-                <MembersTab workspaceId={ws.id} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="api-keys" title="API keys">
-            <div className="pt-5">
-              {ws ? (
-                <ApiKeysTab workspaceId={ws.id} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="connections" title="Connections">
-            <div className="pt-5">
-              {ws ? (
-                <ConnectionsTab workspaceId={ws.id} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="governance" title="Governance">
-            <div className="pt-5">
-              {ws ? (
-                <GovernanceTab ws={ws} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-        </Tabs>
+        <UrlTabs
+          param="tab"
+          ariaLabel="Workspace sections"
+          tabs={[
+            {
+              key: "overview",
+              label: "Overview",
+              content: body(ws && <OverviewTab ws={ws} />),
+            },
+            {
+              key: "members",
+              label: "Members",
+              content: body(ws && <MembersTab workspaceId={ws.id} />),
+            },
+            {
+              key: "api-keys",
+              label: "API keys",
+              content: body(ws && <ApiKeysTab workspaceId={ws.id} />),
+            },
+            {
+              key: "connections",
+              label: "Connections",
+              content: body(ws && <ConnectionsTab workspaceId={ws.id} />),
+            },
+            {
+              key: "governance",
+              label: "Governance",
+              content: body(ws && <GovernanceTab ws={ws} />),
+            },
+          ]}
+        />
       )}
     </div>
   );

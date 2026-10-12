@@ -31,6 +31,7 @@ import {
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { PageHeader } from "../components/page-header";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -39,7 +40,7 @@ import {
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatRelative } from "../people/_lib/helpers";
+import { formatRelative } from "../../../lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -72,11 +73,7 @@ export default function EntitiesPage() {
 function EntitiesFallback() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Entities
-        </h1>
-      </header>
+      <PageHeader title="Entities" />
       <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
     </div>
   );
@@ -255,34 +252,29 @@ function EntitiesInner() {
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-            Entities
-          </h1>
-          <p className="text-[13px] text-foreground/55">
-            All entities on this pod. Deletions are permanent and cannot be
-            undone.
-          </p>
-        </div>
-        {someSelected && (
-          <div className="flex items-center gap-2">
-            <span className="text-[12.5px] text-foreground/55">
-              {selectedIds.size} selected
-            </span>
-            <Button
-              color="danger"
-              variant="flat"
-              radius="md"
-              size="sm"
-              startContent={<Trash2 className="h-3.5 w-3.5" />}
-              onPress={() => setConfirmBulkDelete(true)}
-            >
-              Delete selected
-            </Button>
-          </div>
-        )}
-      </header>
+      <PageHeader
+        title="Entities"
+        description="All entities on this pod. Deletions are permanent and cannot be undone."
+        actions={
+          someSelected && (
+            <>
+              <span className="text-[12.5px] text-foreground/55">
+                {selectedIds.size} selected
+              </span>
+              <Button
+                color="danger"
+                variant="flat"
+                radius="md"
+                size="sm"
+                startContent={<Trash2 className="h-3.5 w-3.5" />}
+                onPress={() => setConfirmBulkDelete(true)}
+              >
+                Delete selected
+              </Button>
+            </>
+          )
+        }
+      />
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-end gap-3">

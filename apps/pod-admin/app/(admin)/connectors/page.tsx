@@ -35,6 +35,7 @@ import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { openIn } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { PageHeader } from "../components/page-header";
 import { DetailDrawer } from "../components/detail-drawer";
 import { HandoffCard } from "../components/handoff-card";
 import {
@@ -46,6 +47,7 @@ import { SectionCard } from "../components/section-card";
 import type { StatusKind } from "../components/status-pill";
 import { StatusPill } from "../components/status-pill";
 import { useFocusRow } from "../components/use-focus-row";
+import { formatRelative } from "../../../lib/format";
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
@@ -62,11 +64,7 @@ export default function ConnectorsPage() {
 function ConnectorsFallback() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Connectors
-        </h1>
-      </header>
+      <PageHeader title="Connectors" />
       <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
     </div>
   );
@@ -75,15 +73,10 @@ function ConnectorsFallback() {
 function ConnectorsInner() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Connectors
-        </h1>
-        <p className="text-[13px] text-foreground/55">
-          External services connected to this pod. Per-workspace configuration
-          happens in the desktop app — Pod Admin shows the aggregate health.
-        </p>
-      </header>
+      <PageHeader
+        title="Connectors"
+        description="External services connected to this pod. Per-workspace configuration happens in the desktop app — Pod Admin shows the aggregate health."
+      />
 
       <div className="flex flex-col gap-6">
         <ProviderHealthGrid />
@@ -531,7 +524,7 @@ function PerWorkspaceGridSection() {
                         </Td>
                         <Td className="text-foreground/55 tabular">
                           {row.lastSyncedAt
-                            ? formatRelative(new Date(row.lastSyncedAt))
+                            ? formatRelative(row.lastSyncedAt)
                             : "—"}
                         </Td>
                         <Td>
@@ -716,17 +709,6 @@ function feedStatusKind(status: string): StatusKind {
     default:
       return "unknown";
   }
-}
-
-function formatRelative(date: Date): string {
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return "just now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
 }
 
 // Suppress unused-import warnings for icons referenced by lookup only.

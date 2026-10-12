@@ -8,7 +8,7 @@
 import { useMemo } from "react";
 import { trpc } from "../../../../../lib/trpc";
 import { SectionCard } from "../../../components/section-card";
-import { formatRelative } from "../../../people/_lib/helpers";
+import { formatRelative } from "../../../../../lib/format";
 
 interface Workspace {
   id: string;

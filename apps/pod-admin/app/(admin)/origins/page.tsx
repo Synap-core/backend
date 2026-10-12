@@ -10,6 +10,7 @@ import {
   ShieldOff,
 } from "lucide-react";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import { PageHeader } from "../components/page-header";
 import { ConfirmModal } from "../components/confirm-modal";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -142,23 +143,15 @@ export default function ApplicationConnectionsPage() {
 
   return (
     <div className="max-w-[1100px] px-6 py-6">
-      <header className="mb-6 max-w-2xl">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          App origins
-        </h1>
-        <p className="mt-1 text-[13px] leading-5 text-foreground/60">
-          Allowlist which browser website addresses (origins) may call this Pod.
-          By default no external site can reach the Pod API. Approving an origin
-          is transport only — it does not grant data access or membership, and
-          it is separate from Trusted issuers (who may sign identity tokens)
-          under Trust &amp; Keys.
+      <PageHeader
+        title="App origins"
+        description="Allowlist which browser website addresses (origins) may call this Pod. By default no external site can reach the Pod API. Approving an origin is transport only — it does not grant data access or membership, and it is separate from Trusted issuers (who may sign identity tokens) under Trust & Keys."
+      />
+      {revokeError ? (
+        <p className="-mt-3 mb-6 text-sm text-danger" role="alert">
+          {revokeError}
         </p>
-        {revokeError ? (
-          <p className="mt-3 text-sm text-danger" role="alert">
-            {revokeError}
-          </p>
-        ) : null}
-      </header>
+      ) : null}
 
       {/* 1 — What's working: approved browser origins, first. */}
       <section className="space-y-3" aria-labelledby="approved-connections">
