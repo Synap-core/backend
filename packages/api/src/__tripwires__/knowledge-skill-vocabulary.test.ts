@@ -19,8 +19,14 @@ describe("tripwire: Knowledge skill vocabulary", () => {
     expect(body, "source skill must name knowledgeForm").toContain(
       "knowledgeForm"
     );
-    expect(body, "source skill must name insight").toContain("insight");
-    expect(body, "source skill must name caution").toContain("caution");
+    // The narrowed forms (plan 9992207a, c-knowledge-schema): fact | caution |
+    // convention. `insight` survives only as the legacy alias, named as such.
+    for (const form of ["fact", "caution", "convention"]) {
+      expect(body, `source skill must name ${form}`).toContain(`\`${form}\``);
+    }
+    expect(body, "insight is taught only as a legacy alias").not.toMatch(
+      /"knowledgeForm":\s*"insight"/
+    );
     expect(
       body,
       "source skill must teach the canonical Markdown body door"
@@ -37,8 +43,10 @@ describe("tripwire: Knowledge skill vocabulary", () => {
   it("keeps the generated skill aligned with the source contract", () => {
     const body = readFileSync(generatedPath, "utf8");
     expect(body).toContain("knowledgeForm");
-    expect(body).toContain("insight");
-    expect(body).toContain("caution");
+    for (const form of ["fact", "caution", "convention"]) {
+      expect(body).toContain(`\`${form}\``);
+    }
+    expect(body).not.toMatch(/"knowledgeForm":\s*"insight"/);
     expect(body).toContain("--content");
     expect(body).toContain(
       "Decisions and sources remain linked first-class entities"

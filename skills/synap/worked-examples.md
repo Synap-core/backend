@@ -57,15 +57,14 @@
 You are authoring this text yourself — it is not a file you have. Don't create
 a `file`/`document`-kind entity and stuff the Markdown into it.
 
-1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=knowledge&workspaceId=…` → none
+1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=note&workspaceId=…` → none
 2. Create a CONTENT-kind entity carrying the plan as `content` (the doc auto-materializes):
 
    ```json
    POST /api/hub/entities
    { "userId": "{userId}", "workspaceId": "{wsId}",
-     "profileSlug": "knowledge",
+     "profileSlug": "note",
      "title": "Q3 launch strategic plan",
-     "properties": { "knowledgeForm": "insight" },
      "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
    }
    ```

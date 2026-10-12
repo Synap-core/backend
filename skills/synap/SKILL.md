@@ -694,7 +694,7 @@ synap create entity --profile=knowledge --name="Hono static route ordering" \
 
 synap create entity --profile=knowledge --name="Verify library APIs at runtime" \
   --workspace=<id> \
-  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' \
+  --props='{"knowledgeForm":"fact","ek_claim":"Code-read is not runtime-true for library APIs"}' \
   --content=$'Validate the installed version before depending on an API.' --json
 
 # A Decision is its own lifecycle entity; link it to the supporting Knowledge.
@@ -710,7 +710,7 @@ synap capture --global "Always fix the canonical path, never a workaround" \
 synap ask "hono routing caution" --json
 ```
 
-`knowledge` has exactly one canonical `knowledgeForm`: `insight` or `caution`. It is workspace-scoped, so the active workspace supplies the domain. The optional `ek_claim` is a short summary; readable long form belongs in the entity's linked Markdown document. A formal **Decision** has its own rationale/lifecycle entity, and a **Reference** is source material linked as evidence — neither is a Knowledge form. The legacy `synap capture --type gotcha|lesson|decision|reference` command is still accepted for compatibility, but new automation must use the canonical entity properties above. Retrieve everything with `synap ask`.
+`knowledge` has exactly one canonical `knowledgeForm`: `fact`, `caution` or `convention` (a legacy `insight` is read as `fact`). It is workspace-scoped, so the active workspace supplies the domain. `ek_claim` (the "Claim") is required — the full sentence; the title is its short handle, never the claim cut off. Readable long form belongs in the entity's linked Markdown document. Status reports, decisions, open problems (`issue`) and ideas are not knowledge — see `writing-titles.md`. A formal **Decision** has its own rationale/lifecycle entity, and a **Reference** is source material linked as evidence — neither is a Knowledge form. The legacy `synap capture --type gotcha|lesson|decision|reference` command is still accepted for compatibility, but new automation must use the canonical entity properties above. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
 **Open (the one display door):**
@@ -1887,15 +1887,14 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 You are authoring this text yourself — it is not a file you have. Don't create
 a `file`/`document`-kind entity and stuff the Markdown into it.
 
-1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=knowledge&workspaceId=…` → none
+1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=note&workspaceId=…` → none
 2. Create a CONTENT-kind entity carrying the plan as `content` (the doc auto-materializes):
 
    ```json
    POST /api/hub/entities
    { "userId": "{userId}", "workspaceId": "{wsId}",
-     "profileSlug": "knowledge",
+     "profileSlug": "note",
      "title": "Q3 launch strategic plan",
-     "properties": { "knowledgeForm": "insight" },
      "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
    }
    ```
