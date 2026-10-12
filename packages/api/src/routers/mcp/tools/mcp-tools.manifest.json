@@ -4086,23 +4086,48 @@
               "properties": {
                 "on": {
                   "type": "string",
-                  "enum": ["created", "enters_status"]
+                  "enum": [
+                    "created",
+                    "enters_status",
+                    "count",
+                    "schedule",
+                    "manual"
+                  ]
                 },
                 "status": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 200
                 },
+                "cron": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "min": {
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 10000
+                },
+                "size": {
+                  "type": "string",
+                  "enum": ["per_thing", "per_moment"]
+                },
                 "mode": {
                   "default": "propose",
                   "type": "string",
                   "enum": ["run", "propose"]
+                },
+                "maxPendingApprovals": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200
                 }
               },
               "required": ["on"],
               "additionalProperties": false
             },
-            "description": "When the process starts on its subject kind: [{ on: 'created' | 'enters_status', status? (with enters_status), mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
+            "description": "Stage workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, mode: 'propose' (default) | 'run' }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
           },
           "humanOnlyStatuses": {
             "maxItems": 50,
