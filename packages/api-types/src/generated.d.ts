@@ -3156,7 +3156,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "playbook" | "automation" | "human";
+			data: "playbook" | "automation" | "agent" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3171,7 +3171,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "playbook" | "automation" | "human";
+			$type: "playbook" | "automation" | "agent" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3277,7 +3277,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
+			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3739,7 +3739,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "capability" | "human" | "evidence" | "judge";
+			data: "human" | "evidence" | "capability" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4536,7 +4536,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "draft" | "paused";
+			data: "active" | "paused" | "archived" | "draft";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4558,7 +4558,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "project" | "session";
+			data: "session" | "project";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4573,7 +4573,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "project" | "session";
+			$type: "session" | "project";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -8674,10 +8674,10 @@ export interface ExpectedOutput {
 	 * unmet required outcome at a stage gate, never a `complete_session` warning.
 	 * Filled, it is `done` and counts as produced like any other slot.
 	 *
-	 * CLIENT-DECLARABLE, like `owner`: set where the slot is declared
-	 * (playbook, stage, the session's own declaration), and kept by a patch that
-	 * is silent about it. It closes nothing — a filled optional slot is `done`
-	 * only through the usual doors.
+	 * A BIRTH declaration: set where the slot is declared (playbook, stage,
+	 * the session's own declaration) and kept by the birth sanitizer; a patch
+	 * can never change it on a stored slot (`SERVER_STAMPED_OUTPUT_FIELDS`), so
+	 * an agent cannot excuse itself from a required deliverable after the fact.
 	 */
 	optional?: boolean;
 	/**
@@ -16582,7 +16582,13 @@ export type SignalKind =
  * bare PROJECT scope only — the one scope that counts it — so the project
  * badge and the project list are one number over one predicate (W2 review).
  */
- | "session-review";
+ | "session-review"
+/**
+ * One capture that still owes the person something (founder, 2026-10-12):
+ * an OPEN question, or suggestions nobody filed or refused. The door opens
+ * the capture thread (the session's `room` view); `captureStatus` says which.
+ */
+ | "capture";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -16745,6 +16751,12 @@ export interface Signal {
 	 */
 	notificationType?: string;
 	/**
+	 * `capture` only: what the capture owes — `needs_answer` (an open question)
+	 * or `suggested` (rows nobody filed or refused). The capture-list status
+	 * vocabulary (`deriveCaptureStatus`), so one word names it everywhere.
+	 */
+	captureStatus?: "needs_answer" | "suggested";
+	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
 	 * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -16842,7 +16854,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "liveness" | "outputs" | "activity" | "events";
+export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "captures" | "liveness" | "outputs" | "activity" | "events";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -19756,7 +19768,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -19810,7 +19822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20508,7 +20520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20562,7 +20574,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20610,7 +20622,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20664,7 +20676,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20726,7 +20738,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "skipped" | "error" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20780,7 +20792,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "error" | "pending" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -23966,7 +23978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				cursor?: string | undefined;
 				limit?: number | undefined;
-				status?: "structured" | "not_structured" | "saved_without_ai" | "needs_answer" | "suggested" | undefined;
+				status?: "structured" | "needs_answer" | "suggested" | "not_structured" | "saved_without_ai" | undefined;
 			} | undefined;
 			output: {
 				items: CaptureItem[];
@@ -34756,7 +34768,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "normal" | "low" | "high" | "urgent";
+					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -42292,6 +42304,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				decisions: number;
 				notifications: number;
 				review: number;
+				captures: number;
 				drafts: number;
 				draftsTruncated: boolean;
 				suggestions: number;
@@ -42313,6 +42326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					decisions: number;
 					notifications: number;
 					review: number;
+					captures: number;
 					drafts: number;
 					draftsTruncated: boolean;
 					suggestions: number;
