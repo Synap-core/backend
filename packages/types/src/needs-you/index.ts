@@ -150,7 +150,7 @@ export interface RepeatableSignal {
  *   - `rule-run` → `repeatCount` (one rule, N runs in the window);
  *   - anything else → 1. A `draft-asks` row's `count` is its number of
  *     DISTINCT asks — "asks you 3 things", never "×3" of one thing — and an
- *     owed slot is never a repeat.
+ *     owed slot or an `access-request` is never a repeat.
  */
 export function repeatOf(signal: RepeatableSignal): number {
   const n =
@@ -384,6 +384,27 @@ export function needsYouCountsLabel(counts: readonly NeedsYouCount[]): string {
  * the five newest are the ones worth a glance.
  */
 export const SUGGESTIONS_CAP = 5;
+
+/**
+ * WHO is asking for access, on an `access-request` row — a pod-level request
+ * that is not a proposal: an external service asking to be a TRUSTED ISSUER
+ * (it would sign identity tokens this pod accepts), or an APPLICATION asking
+ * that its browser origin may call this pod. Pod admins only; the pod reads
+ * them from their own tables (`trusted_issuers`, application connection
+ * requests), so they need no notification to exist.
+ *
+ * Carried on the row because they are two of the trust signals a reviewer
+ * decides on — the asker's name and where it asks from — and a tray must be
+ * able to say them without a second read.
+ */
+export interface NeedsYouAccessRequest {
+  /** What would be granted: issuer trust, or an application's browser origin. */
+  subject: "issuer" | "application";
+  /** The asker's display name (the issuer's host, the app's name). */
+  name: string;
+  /** Where it asks from: the issuer URL, or the app's requested origin. */
+  from: string;
+}
 
 /** The needs-you pages' context strip — see `./context.ts`. */
 export {

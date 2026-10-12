@@ -50,6 +50,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: drizzle(client), getEventRepository: () => repo };
 });
 
+// The access-request halves (pod admins): pinned by their own PGlite suite
+// (`access-requests.pglite.test.ts`); empty here, as for a member.
+vi.mock("../services/signals/access-requests.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  listPendingIssuers: async () => ({ rows: [], truncated: false }),
+  listPendingAppRequests: async () => ({ rows: [], truncated: false }),
+}));
 vi.mock("../services/projects/project-needs-you.js", () => ({
   listSessionsAwaitingReview: async () => ({ sessions: [], truncated: false }),
 }));
@@ -393,11 +400,17 @@ describe("F2 — Happened spends its page on lines that render", () => {
     // The lifecycle lines carry their own words and door (the app by its
     // public id — never the internal uuid).
     const [approved, revoked] = p.happened.rows.slice(3);
-    expect(approved!.event).toMatchObject({ action: "approve", objectKind: "app" });
+    expect(approved!.event).toMatchObject({
+      action: "approve",
+      objectKind: "app",
+    });
     expect(approved!.event?.line?.text).toBeTruthy();
     expect(approved!.title).toBe(approved!.event?.line?.text);
     expect(approved!.target).toEqual({ kind: "app", id: "app_f2" });
-    expect(revoked!.event).toMatchObject({ action: "revoke", objectKind: "apiKey" });
+    expect(revoked!.event).toMatchObject({
+      action: "revoke",
+      objectKind: "apiKey",
+    });
     expect(revoked!.event?.line?.text).toMatch(/Vercel production/);
     expect(p.happened.hasMore).toBe(false);
   });

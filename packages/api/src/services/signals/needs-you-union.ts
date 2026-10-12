@@ -40,6 +40,7 @@ import { needsYouTotal } from "@synap-core/types/units";
 import {
   SUGGESTIONS_CAP,
   type GroupableSignal,
+  type NeedsYouAccessRequest,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -120,7 +121,40 @@ export type SignalKind =
    * an OPEN question, or suggestions nobody filed or refused. The door opens
    * the capture thread (the session's `room` view); `captureStatus` says which.
    */
-  | "capture";
+  | "capture"
+  /**
+   * One pod-level ACCESS REQUEST that is not a proposal (pod admins only,
+   * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
+   * or an app's pending connection request (`target.kind:
+   * "connection-request"`). Who asks and from where ride in `access`.
+   */
+  | "access-request";
+
+/**
+ * Every {@link SignalKind}, as a value — what `signals.list({ kinds })`
+ * validates against. Held equal to the union below at compile time.
+ */
+export const SIGNAL_KINDS = [
+  "proposal-cluster",
+  "notification",
+  "event",
+  "activity",
+  "live-session",
+  "rule-run",
+  "output",
+  "owed-slot",
+  "draft-asks",
+  "session-review",
+  "capture",
+  "access-request",
+] as const satisfies readonly SignalKind[];
+
+type _SignalKindsListed =
+  Exclude<SignalKind, (typeof SIGNAL_KINDS)[number]> extends never
+    ? true
+    : never;
+const _signalKindsListed: _SignalKindsListed = true;
+void _signalKindsListed;
 
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
@@ -220,9 +254,11 @@ export interface Signal {
   ask?: SlotAsk;
   /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
-   * cluster (which derives it through `proposalClassFields`, the one door).
-   * Absent on every other kind — a notification, an event or an owed slot has
-   * no class. In particular an owed slot does NOT get a sixth `ProposalClass`
+   * cluster (which derives it through `proposalClassFields`, the one door) —
+   * and `access` on an `access-request`, which is the same decision (who may
+   * act) reached without a proposal, so a surface filing decisions by class
+   * files both in one lane. Absent on every other kind — a notification, an
+   * event or an owed slot has no class. In particular an owed slot does NOT get a sixth `ProposalClass`
    * invented for it: `class` is a PROPOSAL's decision class, consumed as an
    * ordering over proposals, and an obligation is not a decision. Its absent
    * `lifetimeHours` already carries the only thing a surface needs to know —
@@ -289,6 +325,19 @@ export interface Signal {
    * vocabulary (`deriveCaptureStatus`), so one word names it everywhere.
    */
   captureStatus?: "needs_answer" | "suggested";
+  /**
+   * `access-request` only: who asks for access and from where — two of the
+   * trust signals a reviewer decides on, carried so a tray can say them
+   * without a second read (`NeedsYouAccessRequest`).
+   */
+  access?: NeedsYouAccessRequest;
+  /**
+   * `proposal-cluster` only: the member proposal ids the cluster sampled
+   * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
+   * decision over the row acts on; a surface batches a cluster only when
+   * `proposalIds.length === count`, never a sample standing for more.
+   */
+  proposalIds?: string[];
   /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
    * everything a session owes the person (its owed slots, its draft-asks row,
@@ -357,6 +406,8 @@ const KIND_SPECIFIC_SIGNAL_FIELDS = [
   "event",
   "notificationType",
   "captureStatus",
+  "access",
+  "proposalIds",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -592,6 +643,7 @@ export function signalFromCluster(
     // (proposalType + targetType are both fingerprint inputs).
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
+    proposalIds: cluster.sampleProposalIds,
     // A cluster filed ENTIRELY under one session the viewer can read belongs
     // to that session's block, so a needs-you page shows the session ONCE (its card counts the
     // decision beside its owed slots). A cluster spanning sessions, or with a
@@ -1110,6 +1162,121 @@ export function signalFromUnfinishedCapture(
   };
 }
 
+/** A pending trusted issuer, as `listPendingIssuers` reads it. */
+export interface PendingIssuerSignalInput {
+  id: string;
+  displayName: string;
+  issuerUrl: string;
+  createdAt: Date;
+}
+
+/** An app connection request waiting on an owner, as `listPendingAppRequests` reads it. */
+export interface PendingAppRequestSignalInput {
+  id: string;
+  displayName: string;
+  requestedOrigin: string;
+  createdAt: Date;
+  /** The handoff lease: past it the request is expired, never decidable. */
+  expiresAt: Date;
+}
+
+/** The access-request half of the union. Absent ⇒ none (not an admin, or a lens). */
+export interface AccessRequestsInput {
+  issuers: readonly PendingIssuerSignalInput[];
+  applications: readonly PendingAppRequestSignalInput[];
+}
+
+/**
+ * The fields every access-request row shares. The title goes through the
+ * vocabulary SSOT like a cluster's ("Connect App "Acme CRM"") — what
+ * approving it WILL do, imperative — and the class is `access` (who may act).
+ */
+function accessRequestSignal(args: {
+  id: string;
+  target: SignalTarget;
+  access: NeedsYouAccessRequest;
+  occurredAt: Date;
+  lifetimeHours: number | null;
+  now: Date;
+}): Signal {
+  return {
+    id: args.id,
+    kind: "access-request",
+    title: buildObjectActionTitle({
+      action: "connect",
+      objectKind: args.access.subject,
+      objectName: args.access.name,
+      mood: "imperative",
+    }),
+    count: 1,
+    occurredAt: args.occurredAt,
+    target: args.target,
+    // A pending permission DECISION — exactly what `governance` means.
+    category: "governance",
+    class: "access",
+    lifetimeHours: args.lifetimeHours,
+    access: args.access,
+    groupKey: null,
+    ageBucket: ageBucketOf(args.occurredAt, args.now),
+    repeatCount: 1,
+  };
+}
+
+/** A pending issuer → one row; it waits until someone decides (no lifetime). */
+export function signalFromPendingIssuer(
+  row: PendingIssuerSignalInput,
+  now: Date = new Date()
+): Signal {
+  return accessRequestSignal({
+    id: `access:issuer:${row.id}`,
+    target: { kind: "issuer", id: row.id },
+    access: { subject: "issuer", name: row.displayName, from: row.issuerUrl },
+    occurredAt: row.createdAt,
+    lifetimeHours: null,
+    now,
+  });
+}
+
+/**
+ * An app's connection request → one row. Its door is the request (the
+ * pod-admin review page is `/connection-requests/<id>`), never the app: no
+ * app exists until it is approved. It stops being answerable at its lease,
+ * stated as the lifetime from `occurredAt`, so a tray's countdown ends
+ * exactly at `expiresAt`.
+ */
+export function signalFromAppRequest(
+  row: PendingAppRequestSignalInput,
+  now: Date = new Date()
+): Signal {
+  return accessRequestSignal({
+    id: `access:application:${row.id}`,
+    target: { kind: "connection-request", id: row.id },
+    access: {
+      subject: "application",
+      name: row.displayName,
+      from: row.requestedOrigin,
+    },
+    occurredAt: row.createdAt,
+    lifetimeHours: Math.max(
+      0,
+      (row.expiresAt.getTime() - row.createdAt.getTime()) / 3_600_000
+    ),
+    now,
+  });
+}
+
+/** Every access-request row, issuers then apps (the union orders them). */
+export function signalsFromAccessRequests(
+  input: AccessRequestsInput | undefined,
+  now: Date = new Date()
+): Signal[] {
+  if (!input) return [];
+  return [
+    ...input.issuers.map((r) => signalFromPendingIssuer(r, now)),
+    ...input.applications.map((r) => signalFromAppRequest(r, now)),
+  ];
+}
+
 /** The session ids behind an owed page. */
 export function owedSessionIdsOf(
   owedSlots: readonly OwedSlotSignalInput[]
@@ -1125,9 +1292,10 @@ export function owedSessionIdsOf(
  *   - it is proposal-sourced, or points at a proposal a cluster already
  *     represents (the proposal dedupe, see the file docblock);
  *   - its type is `"informational"` in the registry. It is news, not an ask
- *     (no registry row is tagged this way today — an agent's plain room
- *     `update` produces no notification at all, per founder decision F,
- *     2026-09-25 — but the role stays available for a future news-only type);
+ *     — or news about an ask another half already draws:
+ *     `system.issuer_pending_approval` announces the pending issuer the
+ *     access-request half reads from its table, so the notification stays in
+ *     the bell and the TABLE row is the ask (one item, one row);
  *   - its type is a `"session-pointer"` (`session.needs_you`) and the session
  *     has an owed slot. The slot row IS that need, so the pointer folds into
  *     it: one entry per session, counted once;
@@ -1255,7 +1423,8 @@ export function unionProposed(args: {
 
 /**
  * The `needs-you` union — BLOCKING: owed slots, sessions awaiting review,
- * pending proposal clusters and deduped, folded unread notifications — ONE
+ * captures, access requests (pod admins), pending proposal clusters and
+ * deduped, folded unread notifications — ONE
  * list in ONE order ({@link orderNeedsYou}). Pure — feed it the doors' rows
  * and it decides membership and order.
  *
@@ -1309,6 +1478,8 @@ export function unionNeedsYou(args: {
   reviewSessions?: readonly ReviewSessionSignalInput[];
   /** Captures that owe an answer or a filing decision. Absent ⇒ none. */
   unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
+  /** Pending issuers + app connection requests (pod admins). Absent ⇒ none. */
+  accessRequests?: AccessRequestsInput;
   /** The clock `ageBucket` is measured against. Absent ⇒ now. */
   now?: Date;
 }): Signal[] {
@@ -1320,6 +1491,7 @@ export function unionNeedsYou(args: {
     ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
     ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
     ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
+    ...signalsFromAccessRequests(args.accessRequests, now),
     ...args.clusters.map((c) =>
       signalFromCluster(
         c,
@@ -1520,9 +1692,10 @@ export function orderNeedsYou(input: readonly Signal[]): Signal[] {
  * query; nothing has to run a second count, and the counting rule is not forked
  * to produce the second number.
  *
- * `decisions` / `notifications` / `blocked` / `review` / `captures` are the
- * PARTS the badge is made of, and `needsYou === decisions + notifications +
- * blocked + review + captures` by construction (asserted in `signals.union.test.ts`). `suggestions` and
+ * `decisions` / `notifications` / `blocked` / `review` / `captures` /
+ * `requests` are the PARTS the badge is made of, and `needsYou === decisions +
+ * notifications + blocked + review + captures + requests` by construction
+ * (asserted in `signals.union.test.ts`). `suggestions` and
  * `drafts` are shipped alongside and are deliberately NOT parts: both are
  * PROPOSED (lens grammar, founder-approved 2026-10-04 — "AI suggestions +
  * agent drafts = Proposed"), and ignoring them costs nothing. `review` —
@@ -1580,6 +1753,10 @@ export function countNeedsYou(args: {
   reviewSessionIds?: readonly string[];
   /** The capture scan hit its cap, so `captures` is a floor. */
   capturesTruncated?: boolean;
+  /** The SAME input `unionNeedsYou` takes — one row per request. */
+  accessRequests?: AccessRequestsInput;
+  /** An access-request scan hit its cap, so `requests` is a floor. */
+  accessRequestsTruncated?: boolean;
 }): {
   needsYou: number;
   distinct: number;
@@ -1593,6 +1770,11 @@ export function countNeedsYou(args: {
   review: number;
   /** Captures that owe an answer or a filing decision (`capture` rows). */
   captures: number;
+  /**
+   * Pending issuers + app connection requests (`access-request` rows) — 0 for
+   * anyone but a pod admin, and under any lens (they live in no space).
+   */
+  requests: number;
   /**
    * Undecided agent drafts that ask you something — ONE per draft, however
    * many asks it holds, exactly the `draft-asks` rows the `proposed` lens
@@ -1625,7 +1807,8 @@ export function countNeedsYou(args: {
     owedSlots: args.owedSlots,
     reviewSessions: (args.reviewSessionIds ?? []).map((id) => ({ id })),
   }).length;
-  // The SAME fold the list renders, counted — never a second rule.
+  // The SAME rows the list renders, counted — never a second rule.
+  const requests = signalsFromAccessRequests(args.accessRequests).length;
   const drafts = args.draftAsks
     ? signalsFromDraftAsks(args.draftAsks).length
     : 0;
@@ -1635,7 +1818,8 @@ export function countNeedsYou(args: {
     needsYou:
       needsYouTotal({ owed: blocked, decisions, review }) +
       notifications +
-      captures,
+      captures +
+      requests,
     distinct: decisions,
     decisions,
     notifications,
@@ -1644,10 +1828,12 @@ export function countNeedsYou(args: {
       args.notificationsTruncated ||
       args.owedTruncated ||
       (args.reviewTruncated ?? false) ||
-      (args.capturesTruncated ?? false),
+      (args.capturesTruncated ?? false) ||
+      (args.accessRequestsTruncated ?? false),
     blocked,
     review,
     captures,
+    requests,
     drafts,
     draftsTruncated: args.draftAsksTruncated ?? false,
     suggestions: Math.min(buckets.suggestions.length, SUGGESTIONS_CAP),

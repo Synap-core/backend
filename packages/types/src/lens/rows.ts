@@ -17,6 +17,7 @@ import {
   needsYouCountsLabel,
   repeatLabel,
   type GroupableSignal,
+  type NeedsYouAccessRequest,
   type NeedsYouRow,
 } from "../needs-you/index.js";
 import type { UnitStateInput } from "../units/state.js";
@@ -124,6 +125,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   lifetimeHours?: number | null;
   /** `capture`: what the capture owes — an answer, or a filing decision. */
   captureStatus?: "needs_answer" | "suggested" | null;
+  /** `access-request`: who asks for access, and from where. */
+  access?: NeedsYouAccessRequest | null;
 }
 
 /** A work-broke notification ({@link FAILURE_NOTIFICATION_TYPES}): a failed run, not an ask. */
@@ -263,6 +266,17 @@ function itemShape(
         objectKind: "capture",
         reason: s.captureStatus ? resolveStatusLabel(s.captureStatus) : null,
         verb: verb(s.captureStatus === "needs_answer" ? "answer" : "file"),
+      };
+    case "access-request":
+      // Someone outside asks to be let in (an issuer, an app's origin): a
+      // decision, worn like a pending proposal. The noun is WHAT would be
+      // trusted, never the request record; the pod names the asker in the
+      // title, so no chip repeats it.
+      return {
+        state: { pendingDecisions: 1 },
+        objectKind: s.access?.subject ?? "application",
+        reason: null,
+        verb: verb("review"),
       };
     case "draft-asks":
       return {

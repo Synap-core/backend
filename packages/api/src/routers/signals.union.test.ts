@@ -176,6 +176,7 @@ describe("needs-you union", () => {
       notifications: 0,
       review: 0,
       captures: 0,
+      requests: 0,
       drafts: 0,
       draftsTruncated: false,
       suggestions: 0,
@@ -617,5 +618,137 @@ describe("countNeedsYou — THE needs-you rule's REVIEW population (N1)", () => 
         reviewTruncated: true,
       }).truncated
     ).toBe(true);
+  });
+});
+
+describe("access requests — pending issuers and app connection requests", () => {
+  const NOW = new Date("2026-10-12T12:00:00Z");
+  const accessRequests = {
+    issuers: [
+      {
+        id: "iss-1",
+        displayName: "auth.example.com",
+        issuerUrl: "https://auth.example.com",
+        createdAt: new Date("2026-10-12T08:00:00Z"),
+      },
+    ],
+    applications: [
+      {
+        id: "req-1",
+        displayName: "Acme CRM",
+        requestedOrigin: "https://crm.acme.test",
+        createdAt: new Date("2026-10-12T11:00:00Z"),
+        expiresAt: new Date("2026-10-12T11:30:00Z"),
+      },
+    ],
+  };
+
+  it("each is ONE access-class row naming who asks, from where, with an honest door", () => {
+    const signals = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [],
+      accessRequests,
+      now: NOW,
+    });
+    const [app, issuer] = signals;
+    expect(issuer).toMatchObject({
+      id: "access:issuer:iss-1",
+      kind: "access-request",
+      title: 'Connect Trusted issuer "auth.example.com"',
+      target: { kind: "issuer", id: "iss-1" },
+      category: "governance",
+      class: "access",
+      lifetimeHours: null,
+      access: {
+        subject: "issuer",
+        name: "auth.example.com",
+        from: "https://auth.example.com",
+      },
+      groupKey: null,
+      repeatCount: 1,
+    });
+    // The door is the REQUEST (no app exists before approval), and the
+    // countdown ends exactly at the handoff lease.
+    expect(app).toMatchObject({
+      target: { kind: "connection-request", id: "req-1" },
+      title: 'Connect App "Acme CRM"',
+      access: { subject: "application", from: "https://crm.acme.test" },
+      lifetimeHours: 0.5,
+    });
+  });
+
+  it("`requests` is a part: the parts still sum to the one number, and it equals the rows", () => {
+    const counted = countNeedsYou({
+      distinctClusters: 1,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots: [owed()],
+      owedTruncated: false,
+      accessRequests,
+    });
+    expect(counted.requests).toBe(2);
+    expect(counted.needsYou).toBe(
+      counted.decisions +
+        counted.notifications +
+        counted.blocked +
+        counted.review +
+        counted.captures +
+        counted.requests
+    );
+    expect(
+      countNeedsYou({
+        distinctClusters: 0,
+        clustersTruncated: false,
+        clusters: [],
+        notifications: [],
+        notificationsTruncated: false,
+        owedSlots: [],
+        owedTruncated: false,
+        accessRequests,
+        accessRequestsTruncated: true,
+      }).truncated
+    ).toBe(true);
+  });
+
+  it("the issuer's 'needs approval' NOTIFICATION is bell news, never a second needs-you row", () => {
+    // Bug 1 (2026-10-12): the notification was the only trace of the ask —
+    // no door, never cleared. The table row is the ask now.
+    const issuerNotif = notif({
+      id: "n-iss",
+      type: "system.issuer_pending_approval",
+      sourceType: "system",
+      sourceId: "iss-1",
+      title: "New external issuer needs approval",
+    });
+    const signals = unionNeedsYou({
+      clusters: [],
+      notifications: [issuerNotif],
+      owedSlots: [],
+      accessRequests,
+      now: NOW,
+    });
+    expect(signals.filter((s) => s.kind === "notification")).toEqual([]);
+    expect(
+      countNeedsYou({
+        distinctClusters: 0,
+        clustersTruncated: false,
+        clusters: [],
+        notifications: [issuerNotif],
+        notificationsTruncated: false,
+        owedSlots: [],
+        owedTruncated: false,
+      }).notifications
+    ).toBe(0);
+  });
+
+  it("a cluster carries its sampled member ids — what a batch decision acts on", () => {
+    expect(signalFromCluster(cluster()).proposalIds).toEqual([
+      "prop-1",
+      "prop-2",
+      "prop-3",
+    ]);
   });
 });

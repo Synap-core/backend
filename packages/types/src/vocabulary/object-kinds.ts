@@ -59,6 +59,7 @@ export type ObjectCategory =
   | "command"
   | "tool"
   | "application"
+  | "issuer"
   | "agent"
   | "proposal"
   | "notification"
@@ -431,6 +432,18 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(11),
     label: "App",
     labelPlural: "Apps",
+  },
+  // A trusted issuer — an outside service whose signed identity tokens the pod
+  // accepts (sign-in, provisioning). Inbound trust like an application, so it
+  // shares that hue; its own category because it is not an app: it never
+  // calls the pod with a grant, it vouches for who is calling.
+  issuer: {
+    kind: "issuer",
+    category: "issuer",
+    icon: "BadgeCheck",
+    color: ID(11),
+    label: "Trusted issuer",
+    labelPlural: "Trusted issuers",
   },
 
   // ── Graph-only kinds ──

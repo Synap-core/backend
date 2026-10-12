@@ -135,8 +135,10 @@ export interface PlaceableSignal {
  * `needsYou: "status"` role, held equal by
  * `api/src/notifications/__tests__/status-banner-parity.test.ts` (the api
  * registry is the typed per-type table; the parity test stops the two drifting).
- * A `system`-CATEGORY type that is NOT here — `workspace.invite`,
- * `system.issuer_pending_approval` — is an ask, hence Blocking.
+ * A `system`-CATEGORY type that is NOT here — `workspace.invite` — is an ask,
+ * hence Blocking. (`system.issuer_pending_approval` is classified the same way
+ * when an older pod still sends it; a current pod sends the pending issuer as
+ * an `access-request` row instead and keeps that notification in the bell.)
  */
 export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "pod.storage_warning",
