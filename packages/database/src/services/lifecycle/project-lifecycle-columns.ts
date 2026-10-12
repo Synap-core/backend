@@ -9,9 +9,13 @@
  * never a guessed category. Idempotent — it only touches rows whose columns
  * differ from the projection.
  *
- * ONE statement builder, two callers:
+ * ONE statement builder, three callers:
  *  - the `projectLifecycleColumns` conversion op (boot; every declared
  *    lifecycle; heals any drift);
+ *  - the conversion ENGINE after every op that changed data, scoped to the
+ *    profiles that op touches (a value remap / role fold writes the
+ *    projection; this keeps the columns — the truth — in step, even for an
+ *    op the operator runs long after the boot-time projection was ledgered);
  *  - `declareLifecycle` when a profile newly declares one (that profile and
  *    every profile inheriting from it).
  *
@@ -23,7 +27,28 @@ import { PgDialect } from "drizzle-orm/pg-core";
 
 const CATEGORIES = sql`('open','active','paused','done','lost')`;
 
-function declarations(rootProfileId: string | null): SQL {
+/**
+ * Which profiles to (re)project: one root and everything inheriting from it,
+ * every profile carrying one of these slugs (and its heirs), or the whole pod.
+ */
+export type LifecycleProjectionScope =
+  string | null | { profileSlugs: readonly string[] };
+
+function scopeFilter(scope: LifecycleProjectionScope): SQL {
+  if (scope === null) return sql``;
+  if (typeof scope === "string") {
+    return sql`WHERE c.profile_id IN (SELECT profile_id FROM chain WHERE ancestor_id = ${scope})`;
+  }
+  const slugs = scope.profileSlugs.length
+    ? sql.join(
+        scope.profileSlugs.map((s) => sql`${s}`),
+        sql`, `
+      )
+    : sql`NULL`;
+  return sql`WHERE c.profile_id IN (SELECT ch.profile_id FROM chain ch JOIN profiles sp ON sp.id = ch.ancestor_id WHERE sp.slug IN (${slugs}))`;
+}
+
+function declarations(scope: LifecycleProjectionScope): SQL {
   return sql`
     WITH RECURSIVE chain AS (
       SELECT id AS profile_id, id AS ancestor_id, 0 AS depth FROM profiles
@@ -38,11 +63,7 @@ function declarations(rootProfileId: string | null): SQL {
         FROM chain c
         JOIN profile_properties pp ON pp.profile_id = c.ancestor_id AND pp.is_lifecycle
         JOIN property_defs pd ON pd.id = pp.property_def_id
-       ${
-         rootProfileId
-           ? sql`WHERE c.profile_id IN (SELECT profile_id FROM chain WHERE ancestor_id = ${rootProfileId})`
-           : sql``
-       }
+       ${scopeFilter(scope)}
        ORDER BY c.profile_id, c.depth
     )`;
 }
@@ -64,12 +85,12 @@ function projected(table: "entities" | "entity_facets"): SQL {
 
 /** UPDATE statements for both tables, each returning the rows it changed. */
 export function lifecycleProjectionStatements(
-  rootProfileId: string | null = null
+  scope: LifecycleProjectionScope = null
 ): Array<{ table: "entities" | "entity_facets"; statement: SQL }> {
   return (["entities", "entity_facets"] as const).map((table) => ({
     table,
     statement: sql`
-      ${declarations(rootProfileId)}
+      ${declarations(scope)}
       UPDATE ${sql.raw(table)} x
          SET status = v.val, status_category = v.cat
         FROM (${projected(table)}) v
@@ -84,16 +105,14 @@ const dialect = new PgDialect();
 
 /** The same statements as text + params, for a postgres.js `Sql` caller. */
 export function lifecycleProjectionQueries(
-  rootProfileId: string | null = null
+  scope: LifecycleProjectionScope = null
 ): Array<{
   table: "entities" | "entity_facets";
   text: string;
   params: unknown[];
 }> {
-  return lifecycleProjectionStatements(rootProfileId).map(
-    ({ table, statement }) => {
-      const q = dialect.sqlToQuery(statement);
-      return { table, text: q.sql, params: q.params };
-    }
-  );
+  return lifecycleProjectionStatements(scope).map(({ table, statement }) => {
+    const q = dialect.sqlToQuery(statement);
+    return { table, text: q.sql, params: q.params };
+  });
 }

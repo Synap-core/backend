@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { LIFECYCLE_PROJECTION_TEST_SCHEMA } from "./lifecycle-projection-test-schema.js";
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "postgres";
 import { runConversions } from "./engine.js";
@@ -131,13 +132,13 @@ const q = async (text: string, params: unknown[] = []) =>
 
 beforeAll(async () => {
   db = new PGlite();
-  await db.exec(SCHEMA);
+  await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
   sql = makePgliteSql(db);
 }, 120_000);
 
 beforeEach(async () => {
   await db.exec(
-    `DROP TABLE IF EXISTS "_conversions"; TRUNCATE profiles, entities, entity_facets;`
+    `DROP TABLE IF EXISTS "_conversions"; TRUNCATE profiles, entities, entity_facets, property_defs, profile_properties;`
   );
 });
 
@@ -363,5 +364,124 @@ describe("w12 renameProfile — pipeline names only the view", () => {
       [id]
     );
     expect(p).toEqual({ slug: "sales-motion", display_name: "Sales motion" });
+  });
+});
+
+describe("w12 ops keep the lifecycle columns right (M2)", () => {
+  /** Declare `key` as the profile's lifecycle, options keyed with a category. */
+  async function declare(
+    profileId: string,
+    key: string,
+    options: Array<[string, string]>
+  ) {
+    const [def] = await q(
+      `INSERT INTO property_defs (slug, constraints) VALUES ($1, $2) RETURNING id`,
+      [
+        key,
+        JSON.stringify({
+          enumOptions: options.map(([k, category]) => ({ key: k, category })),
+        }),
+      ]
+    );
+    await q(
+      `INSERT INTO profile_properties (profile_id, property_def_id, is_lifecycle) VALUES ($1, $2, true)`,
+      [profileId, def.id]
+    );
+  }
+  /** The columns as the boot-time projection left them: the OLD value. */
+  const stale = (table: string, id: string, status: string) =>
+    q(`UPDATE ${table} SET status = $2, status_category = NULL WHERE id = $1`, [
+      id,
+      status,
+    ]);
+  const cols = async (table: string, id: string) =>
+    (
+      await q(`SELECT status, status_category FROM ${table} WHERE id = $1`, [
+        id,
+      ])
+    )[0];
+  const facetCols = async (entityId: string, slug: string) =>
+    (
+      await q(
+        `SELECT f.status, f.status_category FROM entity_facets f JOIN profiles p ON p.id = f.profile_id
+          WHERE f.entity_id = $1 AND p.slug = $2 AND f.deleted_at IS NULL`,
+        [entityId, slug]
+      )
+    )[0];
+
+  it("the deal stage fold re-projects status + category on the deal", async () => {
+    const deal = await profile("deal", "kind", "system");
+    await declare(deal, "commercialStage", [
+      ["draft", "open"],
+      ["proposed", "active"],
+      ["won", "done"],
+      ["lost", "lost"],
+    ]);
+    const d1 = await entity(deal, "deal", { stage: "proposal" });
+    const d2 = await entity(deal, "deal", { stage: "closed-won" });
+    await stale("entities", d1, "proposal");
+    await stale("entities", d2, "closed-won");
+
+    const s = await run(["w12.deal.system-stage-commercial-fold"]);
+    expect(errorsOf(s), errorsOf(s).join("\n")).toEqual([]);
+    expect(await cols("entities", d1)).toEqual({
+      status: "proposed",
+      status_category: "active",
+    });
+    expect(await cols("entities", d2)).toEqual({
+      status: "won",
+      status_category: "done",
+    });
+  });
+
+  it("the churned fold and the lead remaps re-project the facets they write", async () => {
+    const company = await profile("company", "kind", "system");
+    const person = await profile("person", "kind", "system");
+    const churned = await profile("churned", "role");
+    const client = await profile("client", "role");
+    await profile("partner", "role");
+    const lead = await profile("lead", "role");
+    await declare(client, "clientStatus", [
+      ["active", "active"],
+      ["churned", "lost"],
+    ]);
+    await declare(lead, "leadStage", [
+      ["new", "open"],
+      ["engaged", "active"],
+      ["disqualified", "lost"],
+    ]);
+
+    const c = await entity(company, "company");
+    await facet(c, churned, {});
+    const cf = await facet(c, client, { clientStatus: "active" });
+    await stale("entity_facets", cf, "active");
+    const l1 = await entity(person, "person");
+    const lf1 = await facet(l1, lead, { leadStage: "prospect" });
+    await stale("entity_facets", lf1, "prospect");
+    const l2 = await entity(person, "person");
+    const lf2 = await facet(l2, lead, {
+      leadStage: "prospect",
+      lifecycleStage: "engaged",
+    });
+    await stale("entity_facets", lf2, "prospect");
+
+    const s = await run([
+      "w12.role.churned-into-status",
+      "w12.lead.lifecycle-stage-fold",
+      "w12.lead.legacy-stage-values",
+    ]);
+    expect(errorsOf(s), errorsOf(s).join("\n")).toEqual([]);
+    expect(await facetCols(c, "client")).toEqual({
+      status: "churned",
+      status_category: "lost",
+    });
+    expect(await facetCols(l1, "lead")).toEqual({
+      status: "new",
+      status_category: "open",
+    });
+    expect(await facetCols(l2, "lead")).toEqual({
+      status: "engaged",
+      status_category: "active",
+    });
   });
 });

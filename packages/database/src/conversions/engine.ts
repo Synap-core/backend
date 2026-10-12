@@ -46,7 +46,11 @@ import {
   buildValueMapJson,
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
-import { lifecycleProjectionQueries } from "../services/lifecycle/project-lifecycle-columns.js";
+import {
+  lifecycleProjectionQueries,
+  type LifecycleProjectionScope,
+} from "../services/lifecycle/project-lifecycle-columns.js";
+import { EVERY_PROFILE, opProfileSlugs } from "./data-changes.js";
 import {
   classifyRelationDefCopies,
   type RelationDefMeaning,
@@ -470,7 +474,13 @@ export async function runConversions(
       } else {
         const plan: FieldPlanRow[] = [];
         const counts = await sql.begin(async (tx) => {
-          const c = await applyOp(tx as unknown as Sql, op, options, plan);
+          const applied = await applyOp(
+            tx as unknown as Sql,
+            op,
+            options,
+            plan
+          );
+          const c = await reprojectAfterOp(tx as unknown as Sql, op, applied);
           await recordLedger(tx as unknown as Sql, op.opKey, c, null);
           return c;
         });
@@ -2598,11 +2608,40 @@ export async function computeCounts(
   }
 }
 
+/**
+ * Keep the lifecycle COLUMNS (the truth) in step with an op that changed data
+ * (backend review F12). An op writes `properties` — a value remap, a role
+ * folded into a status, a profile merge — and only the projection builder
+ * knows which of those keys is a declared lifecycle. So every op that changed
+ * anything re-projects the profiles it touches (`opProfileSlugs`, derived per
+ * op type), in the SAME transaction. The boot-time `projectLifecycleColumns`
+ * op is ledgered once, so an operator running a deferred op later would
+ * otherwise leave the columns stale for good. Idempotent: only rows whose
+ * columns differ from the projection are touched.
+ */
+async function reprojectAfterOp(
+  tx: Sql,
+  op: ConversionOp,
+  counts: OpCounts
+): Promise<OpCounts> {
+  if (op.op === "projectLifecycleColumns") return counts;
+  if (Object.values(counts).every((v) => !v)) return counts;
+  const slugs = opProfileSlugs(op);
+  const re = await applyProjectLifecycleColumns(
+    tx,
+    slugs === EVERY_PROFILE ? null : { profileSlugs: slugs }
+  );
+  return { ...counts, ...re };
+}
+
 /** Fill the lifecycle columns from the read projection (one builder, see the op). */
-async function applyProjectLifecycleColumns(tx: Sql): Promise<OpCounts> {
+async function applyProjectLifecycleColumns(
+  tx: Sql,
+  scope: LifecycleProjectionScope = null
+): Promise<OpCounts> {
   let projected = 0;
   let uncategorized = 0;
-  for (const q of lifecycleProjectionQueries()) {
+  for (const q of lifecycleProjectionQueries(scope)) {
     // Re-enter the compiled statement through the TAGGED-template door every
     // `Sql` here supports (postgres.js and the PGlite shims alike): split on
     // its `$n` placeholders and pass the params in placeholder order.

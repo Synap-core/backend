@@ -25,6 +25,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { LIFECYCLE_PROJECTION_TEST_SCHEMA } from "./lifecycle-projection-test-schema.js";
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "postgres";
 import { runConversions, computeCounts } from "./engine.js";
@@ -157,7 +158,7 @@ const USER = "22222222-2222-2222-2222-222222222222";
  */
 async function setupPod() {
   const db = new PGlite();
-  await db.exec(SCHEMA);
+  await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
   const q = async (text: string, params: unknown[] = []) =>
     (await db.query(text, params)).rows as any[];
 
@@ -475,7 +476,7 @@ describe("same-scope mergeInto — stranding refusal (L3)", () => {
 
   async function pod() {
     const db = new PGlite();
-    await db.exec(SCHEMA);
+    await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
     const q = async (text: string, params: unknown[] = []) =>
       (await db.query(text, params)).rows as any[];
     const [wsNote] = await q(
@@ -617,7 +618,7 @@ describe("cross-scope mergeInto into a SYSTEM canonical (intoScope:'system')", (
 
   async function pod() {
     const db = new PGlite();
-    await db.exec(SCHEMA);
+    await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
     const q = async (text: string, params: unknown[] = []) =>
       (await db.query(text, params)).rows as any[];
     // Decoy: a shared `decision` row created FIRST (earliest created_at).
@@ -806,7 +807,7 @@ describe("cross-scope mergeInto — same-slug role twin (w2b.merge.partner-twin-
     const { CONVERSION_MANIFEST } = await import("./manifest.js");
     const { selectManifestOps } = await import("./select.js");
     const db = new PGlite();
-    await db.exec(SCHEMA);
+    await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
     const q = async (text: string, params: unknown[] = []) =>
       (await db.query(text, params)).rows as any[];
     const [shared] = await q(
