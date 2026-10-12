@@ -5580,6 +5580,20 @@ export interface OpCounts {
 	facetsRemapped?: number;
 	/** foldRoleIntoStatus: entities whose existing target-role facet(s) received the status. */
 	facetsFolded?: number;
+	/** foldBookingDealIntoLead: untouched booking deals turned into a lead. */
+	dealsConverted?: number;
+	/** foldBookingDealIntoLead: booking deals someone edited — kept for a person to decide. */
+	dealsKeptEdited?: number;
+	/** foldBookingDealIntoLead: untouched booking deals with no linked person — kept. */
+	dealsKeptNoPerson?: number;
+	/** foldBookingDealIntoLead: existing leads moved forward to the booking status. */
+	leadsAdvanced?: number;
+	/** foldBookingDealIntoLead: existing leads whose lifecycle is not declared — left as they are. */
+	leadsUnjudged?: number;
+	/** foldBookingDealIntoLead: attended_by / works_at edges created. */
+	relationsCreated?: number;
+	/** foldBookingDealIntoLead (destructive tail): converted deals soft-deleted. */
+	entitiesArchived?: number;
 	/** projectLifecycleColumns: rows whose lifecycle columns were filled from the projection. */
 	lifecycleColumnsProjected?: number;
 	/** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
@@ -8684,10 +8698,10 @@ export interface ExpectedOutput {
 	 * unmet required outcome at a stage gate, never a `complete_session` warning.
 	 * Filled, it is `done` and counts as produced like any other slot.
 	 *
-	 * A BIRTH declaration: set where the slot is declared (playbook, stage,
-	 * the session's own declaration) and kept by the birth sanitizer; a patch
-	 * can never change it on a stored slot (`SERVER_STAMPED_OUTPUT_FIELDS`), so
-	 * an agent cannot excuse itself from a required deliverable after the fact.
+	 * CLIENT-DECLARABLE, like `owner`: set where the slot is declared
+	 * (playbook, stage, the session's own declaration), and kept by a patch that
+	 * is silent about it. It closes nothing — a filled optional slot is `done`
+	 * only through the usual doors.
 	 */
 	optional?: boolean;
 	/**
@@ -18035,7 +18049,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 					}[] | undefined;
 				} | null | undefined;
-				workspaceChoice?: "removed" | "ignored" | "accepted" | "changed" | undefined;
+				workspaceChoice?: "removed" | "changed" | "ignored" | "accepted" | undefined;
 				aiProjectId?: string | null | undefined;
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
@@ -31947,6 +31961,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationDefId: string | null;
 					targetProfileId: string | null;
 				};
+			};
+			meta: object;
+		}>;
+		changeLifecycleOptions: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				options: Record<string, unknown>[];
+				remap?: Record<string, string> | undefined;
+			};
+			output: {
+				status: "changed";
+				remapped: number;
+			} | {
+				status: "unchanged";
 			};
 			meta: object;
 		}>;
