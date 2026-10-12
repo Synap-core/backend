@@ -753,6 +753,30 @@ export const PROPERTY_VALUE_TYPES: string[] = Object.values(PropertyValueType);
  * because a reason may legitimately be a paragraph — it only rules out a
  * document.
  */
+/**
+ * PAGING for the list doors (plan 9992207a, c-paging). MCP schemas are
+ * advisory, so a page size or offset from the model is clamped here, never
+ * trusted: a non-number reads as the default, a page is at least 1 row.
+ * The doors fetch `limit + 1` rows to answer "is there another page?", so a
+ * max sits one under the underlying read's own cap.
+ */
+export const ENTITIES_PAGE_MAX = 999; // entities.list caps limit at 1000
+export const SESSIONS_PAGE_MAX = 50;
+
+export function pageLimit(raw: unknown, fallback: number, max: number): number {
+  const n =
+    typeof raw === "number" && Number.isFinite(raw)
+      ? Math.trunc(raw)
+      : fallback;
+  return Math.min(Math.max(n, 1), max);
+}
+
+export function pageOffset(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0
+    ? Math.trunc(raw)
+    : 0;
+}
+
 export const REASONING_MAX_CHARS = 2000;
 
 export function readReasoning(

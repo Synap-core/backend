@@ -44,6 +44,9 @@ import {
   McpToolContext,
   CallToolResult,
   McpHandlerMap,
+  pageLimit,
+  pageOffset,
+  ENTITIES_PAGE_MAX,
 } from "./shared.js";
 
 /**
@@ -180,7 +183,9 @@ export const readHandlers: McpHandlerMap = {
     const profileSlug =
       (args.profileSlug as string | undefined) ||
       (args.type as string | undefined);
-    const result = await caller.entities.getEntities({
+    const limit = pageLimit(args.limit, 50, ENTITIES_PAGE_MAX);
+    const offset = pageOffset(args.offset);
+    const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
       ...(args.workspaceId ? { workspaceId: args.workspaceId as string } : {}),
@@ -189,8 +194,17 @@ export const readHandlers: McpHandlerMap = {
       ...(args.projectId ? { projectId: args.projectId as string } : {}),
       // Kind + Facets: narrow to entities carrying a live facet of this role.
       ...(args.facetSlug ? { facetSlug: args.facetSlug as string } : {}),
-      limit: (args.limit as number) || 50,
+      // PAGING (plan 9992207a, c-paging): one row past the page tells whether
+      // another page exists — the hub forwarder returns rows, not a total.
+      limit: limit + 1,
+      offset,
     });
+    const hasMore = page.length > limit;
+    const result = hasMore ? page.slice(0, limit) : page;
+    const paging = {
+      offset,
+      ...(hasMore ? { nextOffset: offset + limit } : {}),
+    };
     // HONEST EMPTY: a bare [] reads as "none exist" — but this call is LENSED
     // (profileSlug/workspace/project/facet). An agent that concludes "the user
     // has no X" from a scoped-empty is the ExaSearch "not accessible" mistake
@@ -213,6 +227,7 @@ export const readHandlers: McpHandlerMap = {
       return ok({
         entities: result,
         count: result.length,
+        ...paging,
         ...(note ? { note } : {}),
       });
     }
@@ -221,6 +236,7 @@ export const readHandlers: McpHandlerMap = {
         toLeanEntity
       ),
       count: result.length,
+      ...paging,
       detail: "lean",
       note: note ?? ENTITIES_LEAN_NOTE,
     });

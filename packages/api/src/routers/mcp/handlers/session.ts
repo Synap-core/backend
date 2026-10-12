@@ -38,6 +38,9 @@ import {
   McpToolContext,
   CallToolResult,
   McpHandlerMap,
+  pageLimit,
+  pageOffset,
+  SESSIONS_PAGE_MAX,
 } from "./shared.js";
 
 const UUID_RE =
@@ -721,16 +724,20 @@ export const sessionHandlers: McpHandlerMap = {
         sessionKindWhere(kindArg as (typeof SESSION_KINDS)[number])
       );
     }
-    const rawLimit =
-      typeof args.limit === "number" && Number.isFinite(args.limit)
-        ? args.limit
-        : 20;
-    const sessions = await db
+    // PAGING (plan 9992207a, c-paging): `offset` walks past the 50-row page;
+    // one row past it tells whether another page exists. `id` breaks ties so
+    // two sessions started in the same instant never swap between pages.
+    const limit = pageLimit(args.limit, 20, SESSIONS_PAGE_MAX);
+    const offset = pageOffset(args.offset);
+    const page = await db
       .select()
       .from(focusSessions)
       .where(and(...conditions))
-      .orderBy(desc(focusSessions.startedAt))
-      .limit(Math.min(Math.max(Math.trunc(rawLimit), 1), 50));
+      .orderBy(desc(focusSessions.startedAt), desc(focusSessions.id))
+      .limit(limit + 1)
+      .offset(offset);
+    const hasMore = page.length > limit;
+    const sessions = hasMore ? page.slice(0, limit) : page;
     // Derived lineage for the whole page in ONE query (never N+1, never a
     // column) — the same projection the tRPC `focusSessions.list` uses.
     //
@@ -751,6 +758,8 @@ export const sessionHandlers: McpHandlerMap = {
         attachTriage(await attachParentSessionIds(sessions))
       ),
       count: sessions.length,
+      offset,
+      ...(hasMore ? { nextOffset: offset + limit } : {}),
     });
   },
   synap_update_session: async (

@@ -535,7 +535,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Supports limit (default 50). Returns lean rows by default; use synap_get_entity or detail:'full' for full values.",
+          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default; use synap_get_entity or detail:'full' for full values.",
         inputSchema: {
           type: "object",
           properties: {
@@ -568,7 +568,17 @@ export const tools = {
               description:
                 "Kind + Facets filter — only return entities carrying a live facet of this role-profile slug (e.g. 'client', 'investor'). Use synap_list_profiles to find role slugs (profileKind='role').",
             },
-            limit: { type: "number", default: 50 },
+            limit: {
+              type: "number",
+              default: 50,
+              description: "Page size, 1–999.",
+            },
+            offset: {
+              type: "number",
+              default: 0,
+              description:
+                "Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page.",
+            },
           },
           required: [],
         },
@@ -2334,7 +2344,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List YOUR focus sessions, newest first — read-only. Use it to see what work is open before starting something new (don't start a second session for work that already has one), or to find a session you closed earlier. Filter by status and/or narrow to a workspace or project.",
+          "List YOUR focus sessions, newest first — read-only. Use it to see what work is open before starting something new (don't start a second session for work that already has one), or to find a session you closed earlier. Filter by status and/or narrow to a workspace or project. Pages of up to 50: a reply with `nextOffset` has more — pass it back as `offset`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2387,7 +2397,17 @@ export const tools = {
               description:
                 "Which population. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' (default) = no filter. Every row carries its own `kind` either way.",
             },
-            limit: { type: "number", default: 20 },
+            limit: {
+              type: "number",
+              default: 20,
+              description: "Page size, 1–50.",
+            },
+            offset: {
+              type: "number",
+              default: 0,
+              description:
+                "Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page.",
+            },
           },
           required: [],
         },
