@@ -21,6 +21,8 @@ import { randomUUID } from "node:crypto";
 vi.setConfig({ testTimeout: 180_000 });
 
 const h = vi.hoisted(() => ({
+  bulkCalls: [] as string[][],
+  pending: new Map<string, number>(),
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
@@ -39,6 +41,12 @@ vi.mock("@synap/database", async (importOriginal) => {
   const mocked = {
     ...actual,
     getDb: async () => db,
+    // Its SQL is proven in database `worker-enablement.pglite.test.ts`; here
+    // it reads the fixture's pending map and records each call.
+    countWorkerPendingApprovalsBulk: async (ids: readonly string[]) => {
+      h.bulkCalls.push([...ids]);
+      return new Map(ids.map((id) => [id, h.pending.get(id) ?? 0]));
+    },
     ProfileResolutionService: class {
       async getEffectiveLifecycle() {
         return { propertySlug: "commercialStage" };
@@ -103,9 +111,6 @@ vi.mock("../playbook-activators.js", async (importOriginal) => ({
     outcomes: [],
   })),
 }));
-vi.mock("../../rules/lineage.js", () => ({
-  readRuleAutomationIds: vi.fn(async () => []),
-}));
 vi.mock("../../projects/load-visible-project.js", () => ({
   loadVisibleProject: vi.fn(async (_db: unknown, id: string) => ({ id })),
 }));
@@ -128,11 +133,16 @@ import {
   podMembers,
   projectMembers,
   users,
+  links,
+  automations,
+  proposals,
+  focusSessions,
 } from "@synap/database";
 import {
   WORKER_SCOPE_OVERLAP,
   assertNoWorkerOverlap,
   enableWorker,
+  listEnabledWorkers,
   setWorkerPaused,
 } from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
@@ -182,6 +192,10 @@ beforeAll(async () => {
     podMembers,
     projectMembers,
     users,
+    links,
+    automations,
+    proposals,
+    focusSessions,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -213,7 +227,9 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await h.client!.exec("delete from skills;");
+  await h.client!.exec(
+    "delete from skills; delete from links; delete from automations; delete from proposals; delete from focus_sessions;"
+  );
   vi.mocked(updateRuleGoverned).mockClear();
 });
 
@@ -509,5 +525,86 @@ describe("assertNoWorkerOverlap — FB2 item 4: the approval of an agent's enabl
     expect(
       await assertNoWorkerOverlap({ seed: { template: "pack:x", key: KEY } })
     ).toBeUndefined();
+  });
+});
+
+describe("listEnabledWorkers — FB2 item 9: a constant number of reads", () => {
+  /** A rule's live behaviour: an automation + the activates edge. */
+  async function behaviour(ruleId: string, status: string) {
+    const automationId = randomUUID();
+    await q(
+      `insert into automations (id, created_by, name, status) values ($1, $2, 'a', $3)`,
+      [automationId, USER, status]
+    );
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata) values ($1, 'skill', $2, 'automation', $3, 'activates', '{}'::jsonb)`,
+      [randomUUID(), ruleId, automationId]
+    );
+    return automationId;
+  }
+  function pendingIn(automationId: string, n: number) {
+    h.pending.set(automationId, n);
+  }
+  /** Statements PGlite runs while `fn` does. */
+  async function readsDuring(fn: () => Promise<unknown>) {
+    const client = h.client as unknown as {
+      query: (...a: unknown[]) => Promise<unknown>;
+    };
+    const real = client.query.bind(client);
+    let n = 0;
+    client.query = (...a: unknown[]) => {
+      n++;
+      return real(...a);
+    };
+    try {
+      await fn();
+    } finally {
+      client.query = real;
+    }
+    return n;
+  }
+
+  it("each row carries its active automation and its pending count", async () => {
+    const space = await spaceRule(false);
+    const spaceAuto = await behaviour(space, "active");
+    await behaviour(space, "archived");
+    await pendingIn(spaceAuto, 2);
+    const p1 = await projectRule(randomUUID(), P1);
+    await behaviour(p1, "archived");
+    const paused = await projectRule(randomUUID(), P2, true);
+    const rows = await listEnabledWorkers({ userId: USER });
+    const by = Object.fromEntries(rows.map((r) => [r.ruleId, r]));
+    expect(by[space]).toMatchObject({
+      state: "running",
+      automationId: spaceAuto,
+      pendingApprovals: 2,
+    });
+    expect(by[p1]).toMatchObject({ automationId: null, pendingApprovals: 0 });
+    expect(by[paused]).toMatchObject({ state: "paused", automationId: null });
+    expect(
+      (await listEnabledWorkers({ userId: USER, liveOnly: true })).map(
+        (r) => r.ruleId
+      )
+    ).toEqual([space]);
+  });
+
+  it("five enablements cost the same reads as one (no per-rule query)", async () => {
+    h.bulkCalls.length = 0;
+    const one = await projectRule(randomUUID(), P1);
+    await pendingIn(await behaviour(one, "active"), 1);
+    const base = await readsDuring(() => listEnabledWorkers({ userId: USER }));
+    expect(base).toBeGreaterThan(0);
+    for (let i = 0; i < 4; i++) {
+      const r = await projectRule(randomUUID(), randomUUID());
+      await pendingIn(await behaviour(r, "active"), 1);
+    }
+    const rows = await listEnabledWorkers({ userId: USER });
+    expect(rows).toHaveLength(5);
+    expect(rows.every((r) => r.pendingApprovals === 1)).toBe(true);
+    expect(await readsDuring(() => listEnabledWorkers({ userId: USER }))).toBe(
+      base
+    );
+    // One pending read per list, over every live automation at once.
+    expect(h.bulkCalls.at(-1)).toHaveLength(5);
   });
 });

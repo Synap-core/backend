@@ -41,7 +41,7 @@ import {
   playbooks,
   automations,
   skills,
-  countWorkerPendingApprovals,
+  countWorkerPendingApprovalsBulk,
   userVisibleWhere,
 } from "@synap/database";
 import type { PlaybookActivator } from "@synap/playbooks";
@@ -57,7 +57,7 @@ import {
 } from "../../schemas/playbook-process.js";
 import { createRuleGoverned } from "../rules/create.js";
 import { updateRuleGoverned } from "../rules/update.js";
-import { readRuleAutomationIds } from "../rules/lineage.js";
+import { readRuleHealthBulk } from "../rules/lineage.js";
 import {
   templateRuleHash,
   type TemplateRuleDecl,
@@ -74,6 +74,7 @@ import {
   parseWorkerEnablementKey,
   readSubjectProfile,
   rulesOfSeedTemplate,
+  rulesOfSeedTemplates,
   workerEnablementKey,
   workerSeedTemplate,
 } from "./playbook-activators.js";
@@ -192,15 +193,35 @@ function enablementOf(
   return null;
 }
 
-async function activeAutomationOf(ruleId: string): Promise<string | null> {
-  const ids = await readRuleAutomationIds(ruleId);
-  if (ids.length === 0) return null;
-  const [row] = await db
-    .select({ id: automations.id })
-    .from(automations)
-    .where(and(inArray(automations.id, ids), eq(automations.status, "active")))
-    .limit(1);
-  return row?.id ?? null;
+/**
+ * The ACTIVE automation of each rule (null when none), in two reads: the
+ * rules' activates-edges (`readRuleHealthBulk`, the lineage store) and the
+ * automations among them that are active.
+ */
+async function activeAutomationsOf(
+  ruleIds: readonly string[]
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>(ruleIds.map((id) => [id, null]));
+  if (ruleIds.length === 0) return out;
+  const health = await readRuleHealthBulk([...out.keys()]);
+  const all = [
+    ...new Set([...health.values()].flatMap((h) => h.automationIds)),
+  ];
+  if (all.length === 0) return out;
+  const active = new Set(
+    (
+      await db
+        .select({ id: automations.id })
+        .from(automations)
+        .where(
+          and(inArray(automations.id, all), eq(automations.status, "active"))
+        )
+    ).map((r) => r.id)
+  );
+  for (const [ruleId, h] of health) {
+    out.set(ruleId, h.automationIds.find((id) => active.has(id)) ?? null);
+  }
+  return out;
 }
 
 /**
@@ -239,12 +260,27 @@ export async function listEnabledWorkers(input: {
     playbookId: input.playbookId,
     profileSlug: input.profileSlug,
   });
-  const out: EnabledWorker[] = [];
+  // Three reads for the whole list, whatever its size (backend F13): every
+  // seed namespace's rules, the live rules' active automations, and their
+  // pending approvals.
+  const rulesByTemplate = await rulesOfSeedTemplates(
+    pbs.flatMap((pb) => [
+      activatorSeedTemplate(pb.id),
+      workerSeedTemplate(pb.id),
+    ])
+  );
+  const found: Array<{
+    pb: PlaybookRow;
+    process: ReturnType<typeof readPlaybookProcess>;
+    row: { id: string; meta: RuleMetadata };
+    en: NonNullable<ReturnType<typeof enablementOf>>;
+    paused: boolean;
+  }> = [];
   for (const pb of pbs) {
     const process = readPlaybookProcess(pb.subjectProfile);
     const rows = [
-      ...(await rulesOfSeedTemplate(activatorSeedTemplate(pb.id))),
-      ...(await rulesOfSeedTemplate(workerSeedTemplate(pb.id))),
+      ...(rulesByTemplate.get(activatorSeedTemplate(pb.id)) ?? []),
+      ...(rulesByTemplate.get(workerSeedTemplate(pb.id)) ?? []),
     ];
     for (const row of rows) {
       const en = enablementOf(pb.id, row.meta);
@@ -253,33 +289,40 @@ export async function listEnabledWorkers(input: {
         continue;
       const paused = row.meta.draft === true;
       if (input.liveOnly && paused) continue;
-      const automationId = paused ? null : await activeAutomationOf(row.id);
-      if (input.liveOnly && !automationId) continue;
-      const activator =
-        process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
-        null;
-      out.push({
-        ruleId: row.id,
-        playbookId: pb.id,
-        playbookName: pb.name,
-        activatorKey: en.activatorKey,
-        activator,
-        profileSlug: process.profileSlug,
-        size: activator ? effectiveWorkerSize(activator) : "per_thing",
-        mode: activator?.mode ?? "propose",
-        scope: en.scope,
-        projectId: en.projectId,
-        trackId: en.trackId,
-        state: paused ? "paused" : "running",
-        automationId,
-        pendingApprovals: automationId
-          ? await countWorkerPendingApprovals(automationId)
-          : 0,
-        maxPendingApprovals:
-          activator?.maxPendingApprovals ??
-          DEFAULT_WORKER_MAX_PENDING_APPROVALS,
-      });
+      found.push({ pb, process, row, en, paused });
     }
+  }
+  const automationOf = await activeAutomationsOf(
+    found.filter((f) => !f.paused).map((f) => f.row.id)
+  );
+  const pending = await countWorkerPendingApprovalsBulk(
+    [...automationOf.values()].filter((id): id is string => !!id)
+  );
+  const out: EnabledWorker[] = [];
+  for (const { pb, process, row, en, paused } of found) {
+    const automationId = paused ? null : (automationOf.get(row.id) ?? null);
+    if (input.liveOnly && !automationId) continue;
+    const activator =
+      process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
+      null;
+    out.push({
+      ruleId: row.id,
+      playbookId: pb.id,
+      playbookName: pb.name,
+      activatorKey: en.activatorKey,
+      activator,
+      profileSlug: process.profileSlug,
+      size: activator ? effectiveWorkerSize(activator) : "per_thing",
+      mode: activator?.mode ?? "propose",
+      scope: en.scope,
+      projectId: en.projectId,
+      trackId: en.trackId,
+      state: paused ? "paused" : "running",
+      automationId,
+      pendingApprovals: automationId ? (pending.get(automationId) ?? 0) : 0,
+      maxPendingApprovals:
+        activator?.maxPendingApprovals ?? DEFAULT_WORKER_MAX_PENDING_APPROVALS,
+    });
   }
   return out;
 }

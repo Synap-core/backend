@@ -33,6 +33,7 @@ import {
   countWorkerIrreversibleSendsToday,
   countWorkerIrreversibleSentToday,
   countWorkerPendingApprovals,
+  countWorkerPendingApprovalsBulk,
   listHeldWorkerRuns,
   listWorkerTargetsInFlight,
   workerAutomationOfSession,
@@ -129,6 +130,35 @@ describe("countWorkerPendingApprovals", () => {
     await proposal({ type: "playbook/run", data: { automationId: A } });
     await proposal({ type: "playbook/run", data: { automationId: B } });
     expect(await countWorkerPendingApprovals(A)).toBe(3);
+  });
+
+  /**
+   * backend F13: the bulk read equals the single read for every enablement.
+   * Rows rule out: a proposal both in A's session AND naming A counted twice;
+   * another enablement's proposal leaking in; an asked id with nothing
+   * missing from the map.
+   */
+  it("the bulk count equals the single count, per enablement", async () => {
+    const mine = await session(A);
+    const theirs = await session(B);
+    await proposal({ sessionId: mine });
+    await proposal({
+      sessionId: mine,
+      type: "playbook/run",
+      data: { automationId: A },
+    });
+    await proposal({ type: "playbook/run", data: { automationId: A } });
+    await proposal({ sessionId: mine, status: "approved" });
+    await proposal({ sessionId: theirs });
+    await proposal({ type: "playbook/run", data: { automationId: B } });
+    const NONE = randomUUID();
+    const bulk = await countWorkerPendingApprovalsBulk([A, B, NONE]);
+    expect(Object.fromEntries(bulk)).toEqual({
+      [A]: await countWorkerPendingApprovals(A),
+      [B]: await countWorkerPendingApprovals(B),
+      [NONE]: 0,
+    });
+    expect(bulk.get(A)).toBe(3);
   });
 });
 

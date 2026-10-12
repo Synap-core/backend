@@ -60,6 +60,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   // database `worker-enablement.pglite.test.ts`); zero here.
   (mocked as Record<string, unknown>).countWorkerPendingApprovals = async () =>
     0;
+  (mocked as Record<string, unknown>).countWorkerPendingApprovalsBulk = async (
+    ids: readonly string[]
+  ) => new Map(ids.map((id) => [id, 0]));
   Object.defineProperty(mocked, "db", {
     get: () => holder.db,
     enumerable: true,

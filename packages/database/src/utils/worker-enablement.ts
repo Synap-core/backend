@@ -88,6 +88,41 @@ export async function countWorkerPendingApprovals(
 }
 
 /**
+ * {@link countWorkerPendingApprovals} for MANY enablements in one read (the
+ * worker list, backend F13). Same population: a pending proposal filed inside
+ * one of the enablement's sessions, or a propose-mode `playbook/run` naming
+ * it — one proposal counted once per enablement it belongs to. Every asked id
+ * is in the result (0 when none).
+ */
+export async function countWorkerPendingApprovalsBulk(
+  automationIds: readonly string[]
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>(automationIds.map((id) => [id, 0]));
+  if (automationIds.length === 0) return out;
+  const ids = [...out.keys()];
+  const viaSession = sql<
+    string | null
+  >`${focusSessions.metadata}->>'automationId'`;
+  const viaData = sql<string | null>`${proposals.data}->>'automationId'`;
+  const rows = await db
+    .select({ viaSession, viaData })
+    .from(proposals)
+    .leftJoin(focusSessions, eq(focusSessions.id, proposals.sessionId))
+    .where(
+      and(
+        eq(proposals.status, "pending"),
+        or(inArray(viaSession, ids), inArray(viaData, ids))
+      )
+    );
+  for (const r of rows) {
+    for (const id of new Set([r.viaSession, r.viaData])) {
+      if (id && out.has(id)) out.set(id, out.get(id)! + 1);
+    }
+  }
+  return out;
+}
+
+/**
  * Things this enablement is ALREADY working: worker targets with no result
  * yet, of its sessions still in flight (`WORKER_IN_FLIGHT_SESSION_STATUSES`). A per_moment run excludes them, so
  * a thing is never in two of one worker's batches at once.

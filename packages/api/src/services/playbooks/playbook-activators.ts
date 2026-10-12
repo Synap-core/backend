@@ -145,21 +145,41 @@ export function parseWorkerEnablementKey(key: string): {
 export async function rulesOfSeedTemplate(
   template: string
 ): Promise<Array<{ id: string; meta: RuleMetadata }>> {
+  return (await rulesOfSeedTemplates([template])).get(template) ?? [];
+}
+
+/**
+ * {@link rulesOfSeedTemplate} for MANY namespaces in one read (the worker
+ * list reads two per playbook — backend F13). Every asked template is in the
+ * result, `[]` when it has no rule.
+ */
+export async function rulesOfSeedTemplates(
+  templates: readonly string[]
+): Promise<Map<string, Array<{ id: string; meta: RuleMetadata }>>> {
+  const out = new Map<string, Array<{ id: string; meta: RuleMetadata }>>(
+    templates.map((t) => [t, []])
+  );
+  if (templates.length === 0) return out;
   const rows = await db
     .select({ id: skills.id, metadata: skills.metadata })
     .from(skills)
     .where(
       and(
         eq(skills.category, RULE_CATEGORY),
-        drizzleSql`${skills.metadata}->'rule'->'seed'->>'template' = ${template}`
+        inArray(
+          drizzleSql<string>`${skills.metadata}->'rule'->'seed'->>'template'`,
+          [...out.keys()]
+        )
       )
     );
-  const out: Array<{ id: string; meta: RuleMetadata }> = [];
   for (const row of rows) {
     const meta = readRuleMetadata(row.metadata as Record<string, unknown>);
     // Re-checked on the parsed stamp: a row whose JSON matched but whose
-    // stamp does not parse to this namespace is not ours to converge.
-    if (meta?.seed?.template === template) out.push({ id: row.id, meta });
+    // stamp does not parse to an asked namespace is not ours to converge.
+    const template = meta?.seed?.template;
+    if (meta && template && out.has(template)) {
+      out.get(template)!.push({ id: row.id, meta });
+    }
   }
   return out;
 }
