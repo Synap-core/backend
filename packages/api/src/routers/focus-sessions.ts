@@ -32,6 +32,10 @@ import {
   sessionListConditions,
   type SessionListQuery,
 } from "../services/focus-sessions/session-list-conditions.js";
+import {
+  resolveSessionSubject,
+  sessionSubjectInputSchema,
+} from "../services/focus-sessions/session-subject.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
@@ -660,6 +664,14 @@ export const focusSessionsRouter = router({
          */
         order: z.enum(["started", "open_first"]).default("started"),
         /**
+         * Only sessions ON these things (`session-subject.ts`): their subject
+         * entity, or a worker session targeting one. `{ profileSlug }` = every
+         * thing of a kind / carrying a role (the board's rule); `{ entityIds }`
+         * = those things. Worker sessions are `run`-kind: pass `kind: "all"`
+         * to list them beside the person's work.
+         */
+        subject: sessionSubjectInputSchema.optional(),
+        /**
          * Only sessions run FROM this playbook definition (the session's own
          * `playbookId` column). Pair with `kind: "run"` or `kind: "all"` — the
          * default `work` lens excludes playbook-linked sessions except the
@@ -702,6 +714,9 @@ export const focusSessionsRouter = router({
           trackId: input.trackId,
           // Shared sessions (human roster of the room) list too — decision C.
           roster: rosterReadFor(ctx),
+          subject: input.subject
+            ? await resolveSessionSubject(input.subject)
+            : undefined,
         },
         input.limit,
         input.order
@@ -785,6 +800,14 @@ export const focusSessionsRouter = router({
         /** Only sessions filed in this track — see `SessionListQuery.trackId`. */
         trackId: z.string().uuid().optional(),
         /**
+         * Only sessions ON these things (`session-subject.ts`): their subject
+         * entity, or a worker session targeting one. `{ profileSlug }` = every
+         * thing of a kind / carrying a role (the board's rule); `{ entityIds }`
+         * = those things. Worker sessions are `run`-kind: pass `kind: "all"`
+         * to list them beside the person's work.
+         */
+        subject: sessionSubjectInputSchema.optional(),
+        /**
          * Attach `live` on every row — the D1 liveness facts the "working
          * right now" rule (`isSessionWorkingNow`) reads, the same batched
          * read `list` attaches under `nextMove`, BOUNDED to the working
@@ -798,6 +821,9 @@ export const focusSessionsRouter = router({
     .query(async ({ ctx, input }) => {
       assertTrackedRunsKind(input);
       const scope = resolveScope(ctx, input);
+      const subject = input.subject
+        ? await resolveSessionSubject(input.subject)
+        : undefined;
       const rows = await db
         .select()
         .from(focusSessions)
@@ -816,6 +842,7 @@ export const focusSessionsRouter = router({
               includeTrackedRuns: input.includeTrackedRuns,
               trackId: input.trackId,
               roster: rosterReadFor(ctx),
+              subject,
             })
           )
         )

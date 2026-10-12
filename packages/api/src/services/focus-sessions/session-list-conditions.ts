@@ -13,8 +13,9 @@
  *     and `kind: "work"`. Hub REST (the agent door) passes `"all"` for both,
  *     because an agent looking for the session it just opened wants exactly
  *     the rows a person's default lens hides.
- *   - EXTRA narrowing a door owns alone (Hub REST's `subjectEntityId`) is pushed
- *     by that door on top of what this returns.
+ *   - The SUBJECT narrow ("sessions on these things", `session-subject.ts`)
+ *     is resolved by the door (a slug lookup is async) and passed in here, so
+ *     tRPC and Hub REST read the same predicate.
  *   - ORDERING and PAGING belong to the door: this returns conditions, not a
  *     query.
  *
@@ -49,6 +50,7 @@ import {
 } from "./session-kind.js";
 import type { SessionStatus } from "./session-statuses.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { sessionSubjectWhere, type SessionSubject } from "./session-subject.js";
 
 /** Triage lens: `default` hides undecided agent drafts, `triage` shows only them. */
 export type SessionLens = "default" | "triage" | "all";
@@ -100,6 +102,13 @@ export interface SessionListQuery {
    * what every owner-directed count (needs-you, owed) must read.
    */
   roster?: boolean;
+  /**
+   * Only sessions ON these things — their subject, or a worker session
+   * targeting one (`sessionSubjectWhere`). Resolved by the door
+   * (`resolveSessionSubject`). A worker's sessions are `run`-kind: pair with
+   * `kind: "all"` to see them beside the person's work.
+   */
+  subject?: SessionSubject;
 }
 
 /**
@@ -136,6 +145,7 @@ export function sessionListConditions({
   includeTrackedRuns,
   trackId,
   roster,
+  subject,
 }: SessionListQuery): SQL[] {
   const conditions: SQL[] = [
     sessionReadableWhere({ userId: requireUserId(userId), roster }),
@@ -150,6 +160,9 @@ export function sessionListConditions({
   }
   if (trackId) {
     conditions.push(eq(focusSessions.trackId, trackId));
+  }
+  if (subject) {
+    conditions.push(sessionSubjectWhere(subject));
   }
 
   // STATUS and its recency windows. See `session-status-filter.ts` for why a
