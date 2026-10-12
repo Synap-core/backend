@@ -39,6 +39,8 @@ import {
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { getTrack } from "../services/tracks/tracks-service.js";
 import { listEnabledWorkers } from "../services/playbooks/workers.js";
+import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import {
   countThingsByProfileAndStatus,
   groupThingsByStatus,
@@ -68,6 +70,14 @@ const lifecycleWire = z.object({
   options: z.array(lifecycleOptionWire),
 });
 
+const workedByWire = z.object({
+  sessionId: z.string(),
+  /** `worker` = an automation's session (a stage worker), else a person's/agent's session. */
+  kind: z.enum(["session", "worker"]),
+  /** Working RIGHT NOW (`isSessionWorkingNow`, the rail's "Working now" rule). */
+  live: z.boolean(),
+});
+
 const boardItemWire = z.object({
   id: z.string(),
   /** A role board's facet — what a role status move (`updateFacet`) targets; null on a kind board. */
@@ -79,6 +89,12 @@ const boardItemWire = z.object({
   enteredAt: z.string().nullable(),
   /** Time-in-column origin: `enteredAt`, else when it took the role / was created. */
   since: z.string(),
+  /**
+   * Who is on this thing — open sessions on it (its subject, or a worker
+   * targeting it), live first, at most `WORKED_BY_CAP`. Present only when the
+   * board was read with `workedBy: true`; `[]` = nobody on it.
+   */
+  workedBy: z.array(workedByWire).optional(),
 });
 
 const boardColumnWire = z.object({
@@ -247,6 +263,12 @@ export const lifecycleRouter = router({
         column: z.string().min(1).optional(),
         cursor: z.string().optional(),
         limit: z.number().int().min(1).max(100).default(25),
+        /**
+         * Also project `workedBy` on every returned item (design C's "being
+         * worked" mark): ONE batched read for the page (`loadWorkedBy`).
+         * Opt-in — the same pattern as `focusSessions.list({ nextMove })`.
+         */
+        workedBy: z.boolean().optional(),
       })
     )
     .output(boardWire)
@@ -415,6 +437,20 @@ export const lifecycleRouter = router({
         });
         shownColumns = [{ ...col, items: page.items }];
         nextCursor = page.hasMore ? String(offset + input.limit) : null;
+      }
+
+      if (input.workedBy) {
+        const marks = await loadWorkedBy(
+          { userId: ctx.userId, roster: rosterReadFor(ctx) },
+          shownColumns.flatMap((c) => c.items.map((i) => i.id))
+        );
+        shownColumns = shownColumns.map((c) => ({
+          ...c,
+          items: c.items.map((i) => ({
+            ...i,
+            workedBy: marks.get(i.id) ?? [],
+          })),
+        }));
       }
 
       return {
