@@ -313,6 +313,7 @@ describe("resolveObjectNoun", () => {
     // too. These pairs used to be a hand-mirrored table guarded by a drift test
     // in synap-app; there is now ONE table, so they are asserted here.
     expect(resolveObjectNoun("focus_session")).toBe("Session");
+    expect(resolveObjectNoun("ui-design")).toBe("UI design");
     expect(resolveObjectNoun("focus_sessions")).toBe("Session");
     expect(resolveObjectNoun("entity_facet")).toBe("Facet");
     expect(resolveObjectNoun("entity_facets")).toBe("Facet");

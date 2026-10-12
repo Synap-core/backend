@@ -618,6 +618,9 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // holds its own key and hosts agents. "Machine" is the code word; the person
   // reads "Computer".
   machine: "Computer",
+  // A pod `ui-design` (the design canvas kind): the acronym is the one thing
+  // the sentence-caser cannot know, so it humanized to "Ui design".
+  "ui-design": "UI design",
 };
 
 /**
