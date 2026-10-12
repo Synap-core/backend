@@ -174,6 +174,10 @@ describe("startHere", () => {
       oldestDays: 6,
       oldestLink: "https://pod.example/open/prop-old",
       lens: "authored",
+    });    // Before any write: the title rules (c-system-skill).
+    expect(s.learnMore).toEqual({
+      skill: "system/synap/lenses",
+      writing: "system/synap/writing-titles",
     });
   });
 

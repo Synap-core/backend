@@ -16,6 +16,14 @@ import {
 } from "./profile-ranking.js";
 import type { StartHere } from "./discover.js";
 
+/**
+ * The skill orient points at BEFORE a write: title rules and what counts as
+ * knowledge (plan 9992207a, c-system-skill). An MCP-only agent otherwise has no
+ * way to learn them — `ask "naming conventions"` returned nothing and no skill
+ * covered titles, while every receipt now carries `titleLint`.
+ */
+export const ORIENT_WRITING_SKILL = "system/synap/writing-titles";
+
 /** Open sessions read before reporting "at least N". */
 export const OPEN_SESSIONS_READ_CAP = 10;
 /** Sessions handed to the calling agent, listed. */
@@ -318,7 +326,7 @@ export async function buildStartHere(p: {
     sessionsOwingGrade,
     topKinds,
     actions,
-    learnMore: { skill: p.learnMoreSkill },
+    learnMore: { skill: p.learnMoreSkill, writing: ORIENT_WRITING_SKILL },
     // ROUTING (founder, 2026-09-28): product problems go to the Synap TEAM via
     // the CP MCP `report_to_synap` tool (synap-control-plane-api
     // lib/agent-tickets.ts); only what THIS user must act on is a `finding`.

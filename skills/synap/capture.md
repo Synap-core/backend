@@ -8,6 +8,11 @@ entities[]  → you already know the kind + fields
 entities[] + relations[]  → a graph; refs link things that don't exist yet, reviewed as ONE proposal
 ```
 
+**Titles and kinds:** each entity's title is linted — the receipt's `titleLint`
+(per `ref`) names what to rewrite, and `validate: true` shows it before you
+write. Status reports, decisions, open bugs and ideas are not `knowledge`; see
+`writing-titles.md` for the routing rule.
+
 There is no wrong door to pick, because there is one door. `text` alone is the old "capture"; `entities[]` is the old "rich create"; `entities[] + relations[]` is the composite graph. All three go through `synap_capture`.
 
 ## One call → one receipt (no plan-and-commit)

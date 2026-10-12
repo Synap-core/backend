@@ -200,7 +200,8 @@ export interface StartHere {
         lens: string;
       }
     | StartHereUnavailable;
-  learnMore: { skill: string };
+  /** `skill` = concept depth; `writing` = title rules + knowledge routing. */
+  learnMore: { skill: string; writing: string };
   /**
    * The standing ask, carried by the pod rather than by a prompt: file what
    * broke before you finish. Constant text — it is an INSTRUCTION, not state,

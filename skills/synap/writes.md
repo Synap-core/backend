@@ -19,6 +19,11 @@ writes one entity with per-entity governance and REJECTS a name collision unless
 graph and DEDUP-MERGES instead of rejecting. Pick by whether you want a partial
 write to be possible, not by how structured your data feels.
 
+**Every title is linted.** Both doors return `titleLint` in the receipt when a
+title breaks the rubric (too long, cut off, status words, ids, a placeholder…);
+the title is stored as sent, so rewrite it. Over 200 characters the write is
+refused. Title rules and what counts as knowledge: `writing-titles.md`.
+
 ### Create an entity (one exact typed entity)
 
 Before this call, use `/discover?userId=…&profileSlugs=<kind>` to read the

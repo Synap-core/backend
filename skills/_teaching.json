@@ -249,6 +249,23 @@
       "capability": null
     }
   },
+  "synap/writing-titles": {
+    "teachesTools": [
+      "synap_capture",
+      "create_entity",
+      "update_entity",
+      "entity.create",
+      "entity.update"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Title ≤ 80 chars, the lasting claim; evidence and status go in properties. Knowledge = fact | caution | convention; status, decisions, issues, ideas go to their own kinds.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/document-embeds": {
     "teachesTools": [
       "create_document",

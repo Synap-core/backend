@@ -15,6 +15,7 @@ linking-principle.md
 governance-rules.md
 capabilities.md
 writes.md
+writing-titles.md
 document-embeds.md
 creative-loop.md
 graph-gardening.md
