@@ -63,6 +63,8 @@ export interface StoredEnumOption {
   category?: string;
   tone?: string;
   humanOnly?: boolean;
+  /** Days in this option before a thing is stuck (`utils/lifecycle-model.ts`). */
+  stuckAfterDays?: number;
 }
 
 /** The authoring shape a template property arrives in. */
@@ -119,6 +121,14 @@ export function normalizeEnumOptions(
     if (typeof raw.tone === "string" && raw.tone.trim())
       opt.tone = raw.tone.trim();
     if (raw.humanOnly === true) opt.humanOnly = true;
+    // Kept when it is a positive whole number; its VALIDITY for the option's
+    // category is the lifecycle declaration's job, like the category's.
+    if (
+      typeof raw.stuckAfterDays === "number" &&
+      Number.isInteger(raw.stuckAfterDays) &&
+      raw.stuckAfterDays > 0
+    )
+      opt.stuckAfterDays = raw.stuckAfterDays;
     out.push(opt);
   }
   return out.length ? out : undefined;

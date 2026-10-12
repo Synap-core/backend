@@ -292,6 +292,8 @@ export {
   LIFECYCLE_CATEGORIES,
   TERMINAL_LIFECYCLE_CATEGORIES,
   isLifecycleCategory,
+  isStuckAfterDays,
+  STUCK_AFTER_DAYS_MAX,
   parseLifecycleOptions,
   findLifecycleOption,
   classifyLifecycleMove,

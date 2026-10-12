@@ -192,6 +192,44 @@ export async function groupThingsByStatus(params: {
 }
 
 /**
+ * STUCK counts (surfaces W1.5): per status that declares a rule, the visible
+ * things sitting in it longer than its `stuckAfterDays` — time in column
+ * (`enteredAt`, else when it took the role / was created) older than now − N
+ * days. The SAME base set and time-in-column read as the board; a status with
+ * no rule is not counted (the caller reports it as "no rule", never 0).
+ * A failed read THROWS.
+ */
+export async function countStuckThings(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  rules: ReadonlyArray<{ status: string; days: number }>;
+}): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (params.subject.profileIds.length === 0 || params.rules.length === 0)
+    return out;
+  const { t, since } = thingsInColumns({ ...params, order: "newest" });
+  const stuck = drizzleSql.join(
+    params.rules.map(
+      (r) =>
+        drizzleSql`(${t.status} = ${r.status} AND ${since} < now() - make_interval(days => ${r.days}::int))`
+    ),
+    drizzleSql` OR `
+  );
+  const rows = await db
+    .select({
+      status: t.status,
+      n: drizzleSql<number>`cast(count(*) as integer)`,
+    })
+    .from(t)
+    .where(drizzleSql`(${stuck})`)
+    .groupBy(t.status);
+  for (const r of rows) {
+    if (r.status !== null) out.set(r.status as string, Number(r.n));
+  }
+  return out;
+}
+
+/**
  * ONE column of the same set, paged (the pipeline's "Show all N"): the things
  * whose status is `column.statuses` — or, for the unclassified column, any
  * status OUTSIDE `column.declared` (NULL included) — in the board's own order

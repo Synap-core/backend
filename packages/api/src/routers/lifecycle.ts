@@ -42,6 +42,7 @@ import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 import {
+  countStuckThings,
   countTerminalEntriesByBucket,
   countThingsByProfileAndStatus,
   groupThingsByStatus,
@@ -62,6 +63,8 @@ const lifecycleOptionWire = z.object({
   category: categorySchema,
   tone: z.string(),
   humanOnly: z.boolean(),
+  /** Days in this option before a thing is stuck; null = no stuck rule. */
+  stuckAfterDays: z.number().nullable(),
 });
 
 const lifecycleWire = z.object({
@@ -91,6 +94,12 @@ const boardItemWire = z.object({
   /** Time-in-column origin: `enteredAt`, else when it took the role / was created. */
   since: z.string(),
   /**
+   * In its column longer than the option's `stuckAfterDays` (time in column
+   * from `since`). Always false in a column with no stuck rule — and in the
+   * unclassified column, which has no option.
+   */
+  stuck: z.boolean(),
+  /**
    * Who is on this thing — open sessions on it (its subject, or a worker
    * targeting it), live first, at most `WORKED_BY_CAP`. Present only when the
    * board was read with `workedBy: true`; `[]` = nobody on it.
@@ -107,6 +116,12 @@ const boardColumnWire = z.object({
   items: z.array(boardItemWire),
   /** done/lost columns count only what entered within the window. */
   windowed: z.boolean(),
+  /**
+   * Things in this column past its option's `stuckAfterDays` — the WHOLE
+   * column, not just the listed items. Null = the option declares no stuck
+   * rule (a surface omits the count; it is not zero).
+   */
+  stuck: z.number().nullable(),
 });
 
 const boardWire = z.object({
@@ -216,6 +231,7 @@ function toLifecycleWire(
       category: o.category,
       tone: lifecycleOptionTone(o),
       humanOnly: o.humanOnly === true,
+      stuckAfterDays: o.stuckAfterDays ?? null,
     })),
   };
 }
@@ -403,7 +419,23 @@ export const lifecycleRouter = router({
       const terminalKeys = lifecycle.options
         .filter((o) => isTerminalLifecycleCategory(o.category))
         .map((o) => o.key);
-      const [groups, allCounts] = await Promise.all([
+      // STUCK: the option's own rule (declared once, on the lifecycle), never
+      // a client-side guess. Terminal options never carry one.
+      const stuckDays = new Map(
+        lifecycle.options.flatMap((o) =>
+          o.stuckAfterDays !== null && !isTerminalLifecycleCategory(o.category)
+            ? [[o.key, o.stuckAfterDays] as const]
+            : []
+        )
+      );
+      const now = Date.now();
+      const stuckOf = (status: string | null, sinceIso: string): boolean => {
+        const days = status === null ? undefined : stuckDays.get(status);
+        return (
+          days !== undefined && Date.parse(sinceIso) < now - days * 86_400_000
+        );
+      };
+      const [groups, allCounts, stuckCounts] = await Promise.all([
         groupThingsByStatus({
           subject,
           conditions,
@@ -419,6 +451,11 @@ export const lifecycleRouter = router({
           profileIds: subject.profileIds,
           conditions,
         }),
+        countStuckThings({
+          subject,
+          conditions,
+          rules: [...stuckDays].map(([status, days]) => ({ status, days })),
+        }),
       ]);
 
       const byStatus = new Map(groups.map((g) => [g.status, g]));
@@ -429,8 +466,13 @@ export const lifecycleRouter = router({
             key: o.key,
             category: o.category,
             count: g?.count ?? 0,
-            items: (g?.items ?? []).map((i) => ({ ...i, status: o.key })),
+            items: (g?.items ?? []).map((i) => ({
+              ...i,
+              status: o.key,
+              stuck: stuckOf(o.key, i.since),
+            })),
             windowed: isTerminalLifecycleCategory(o.category),
+            stuck: stuckDays.has(o.key) ? (stuckCounts.get(o.key) ?? 0) : null,
           };
         }
       );
@@ -446,10 +488,13 @@ export const lifecycleRouter = router({
           category: null,
           count: stray.reduce((n, g) => n + g.count, 0),
           items: stray
-            .flatMap((g) => g.items.map((i) => ({ ...i, status: g.status })))
+            .flatMap((g) =>
+              g.items.map((i) => ({ ...i, status: g.status, stuck: false }))
+            )
             .sort((a, b) => a.since.localeCompare(b.since))
             .slice(0, input.firstN),
           windowed: false,
+          stuck: null,
         });
       }
 
@@ -487,6 +532,7 @@ export const lifecycleRouter = router({
                 count: 0,
                 items: [],
                 windowed: false,
+                stuck: null,
               }
             : null);
         if (!col) {
@@ -508,7 +554,18 @@ export const lifecycleRouter = router({
           offset,
           limit: input.limit,
         });
-        shownColumns = [{ ...col, items: page.items }];
+        shownColumns = [
+          {
+            ...col,
+            items: page.items.map((i) => ({
+              ...i,
+              stuck:
+                col.key === UNCLASSIFIED_STATUS
+                  ? false
+                  : stuckOf(col.key, i.since),
+            })),
+          },
+        ];
         nextCursor = page.hasMore ? String(offset + input.limit) : null;
       }
 

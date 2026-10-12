@@ -36,6 +36,11 @@ export interface LifecycleOption {
   /** A `UnitTone` token. Absent ⇒ {@link LIFECYCLE_CATEGORY_TONE}. */
   tone?: string;
   humanOnly?: boolean;
+  /**
+   * Days in this option before a thing is STUCK. Absent ⇒ no stuck rule (a
+   * surface omits its Stuck count). Never on a done/lost option.
+   */
+  stuckAfterDays?: number;
 }
 
 export interface LifecycleDeclaration {

@@ -7,6 +7,9 @@
  *    (an IS turn running) first; capped; absent unless asked.
  *  - `throughput` — things that entered done / lost per bucket, read from
  *    the transition log over the board's visible things; zeros filled.
+ *  - `stuck` — the option's `stuckAfterDays` against time in column: a
+ *    column count over the WHOLE column (not the listed items), an item mark,
+ *    null/false where the option declares no rule.
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it), plus the
  * worker backlog counts (proven in database `worker-enablement` suites).
@@ -52,7 +55,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         return {
           propertySlug: "commercialStage",
           options: [
-            { key: "draft", category: "open" },
+            { key: "draft", category: "open", stuckAfterDays: 7 },
             { key: "negotiating", category: "active" },
             { key: "won", category: "done" },
             { key: "lost", category: "lost" },
@@ -328,5 +331,74 @@ describe("lifecycle.throughput", () => {
         "month"
       ).toISOString()
     ).toBe("2026-10-01T00:00:00.000Z");
+  });
+});
+
+describe("lifecycle.board — stuck", () => {
+  it("counts the whole column past the option's rule, marks items, and says null where there is no rule", async () => {
+    const DAY = 86_400_000;
+    const thing = async (
+      title: string,
+      status: string,
+      createdDaysAgo: number
+    ) => {
+      const id = randomUUID();
+      await q(
+        `insert into entities (id, user_id, type, profile_id, title, status, properties, created_at)
+         values ($1,$2,'deal',$3,$4,$5,'{}'::jsonb,$6)`,
+        [
+          id,
+          USER,
+          DEAL,
+          title,
+          status,
+          new Date(Date.now() - createdDaysAgo * DAY).toISOString(),
+        ]
+      );
+      return id;
+    };
+    // Two drafts never moved, created 20 and 30 days ago → stuck (7 days).
+    const old1 = await thing("Old draft 1", "draft", 20);
+    await thing("Old draft 2", "draft", 30);
+    // Created long ago but ENTERED draft yesterday → not stuck.
+    const back = await thing("Back to draft", "draft", 40);
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id)
+       values (gen_random_uuid(), $1, 'entity.transition.completed', $2, 'entity', $3::jsonb, $4)`,
+      [
+        new Date(Date.now() - DAY).toISOString(),
+        back,
+        JSON.stringify({ to: "draft", role: null }),
+        USER,
+      ]
+    );
+    // An old negotiation: its option has no rule.
+    await thing("Old talks", "negotiating", 90);
+
+    // firstN 1: the count must cover the whole column, not the listed item.
+    const board = await caller().board({ profileSlug: "deal", firstN: 1 });
+    const draft = board.columns.find((c) => c.key === "draft")!;
+    expect(draft.stuck).toBe(2);
+    expect(draft.items).toHaveLength(1);
+    // time_in_column order: the longest-sitting draft first, and it is stuck.
+    expect(draft.items[0]!.stuck).toBe(true);
+    const talks = board.columns.find((c) => c.key === "negotiating")!;
+    expect(talks.stuck).toBeNull();
+    expect(talks.items.every((i) => i.stuck === false)).toBe(true);
+    expect(board.columns.find((c) => c.key === "won")!.stuck).toBeNull();
+    expect(
+      board.lifecycle.options.find((o) => o.key === "draft")!.stuckAfterDays
+    ).toBe(7);
+
+    // The paged column read marks items the same way.
+    const page = await caller().board({
+      profileSlug: "deal",
+      column: "draft",
+      limit: 50,
+    });
+    const marks = new Map(page.columns[0]!.items.map((i) => [i.id, i.stuck]));
+    expect(marks.get(old1)).toBe(true);
+    expect(marks.get(back)).toBe(false);
+    expect(A && marks.get(A)).toBe(false);
   });
 });

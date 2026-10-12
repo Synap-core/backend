@@ -42,6 +42,13 @@ export interface LifecycleOption {
   tone?: string;
   /** Only a person may move a thing INTO this option (no rule can widen it). */
   humanOnly?: boolean;
+  /**
+   * A thing sitting in this option longer than this many days is STUCK (an
+   * intent surface's "Stuck" count, a card's mark). Optional: absent ⇒ the
+   * option has no stuck rule and nothing guesses one. Open/active/paused
+   * options only — a done or lost thing has finished, it cannot be stuck.
+   */
+  stuckAfterDays?: number;
 }
 
 export interface LifecycleDeclaration {
@@ -61,6 +68,19 @@ export interface EffectiveLifecycle extends LifecycleDeclaration {
   /** The profile whose link declares it (the leaf, or an ancestor). */
   declaredOnProfileId: string;
   unclassified: string[];
+}
+
+/** The longest stuck threshold an option may declare (ten years). */
+export const STUCK_AFTER_DAYS_MAX = 3650;
+
+/** A valid `stuckAfterDays`: a whole number of days, 1…{@link STUCK_AFTER_DAYS_MAX}. */
+export function isStuckAfterDays(v: unknown): v is number {
+  return (
+    typeof v === "number" &&
+    Number.isInteger(v) &&
+    v >= 1 &&
+    v <= STUCK_AFTER_DAYS_MAX
+  );
 }
 
 export function isLifecycleCategory(v: unknown): v is LifecycleCategory {
@@ -111,6 +131,21 @@ export function parseLifecycleOptions(raw: unknown): {
       opt.label = o.label.trim();
     if (typeof o.tone === "string" && o.tone.trim()) opt.tone = o.tone.trim();
     if (o.humanOnly === true) opt.humanOnly = true;
+    if (o.stuckAfterDays !== undefined) {
+      // A bad threshold is reported (an authoring door refuses it) but never
+      // drops the option: a stored lifecycle still reads every column.
+      if (!isStuckAfterDays(o.stuckAfterDays)) {
+        errors.push(
+          `option "${key}" stuckAfterDays must be a whole number of days from 1 to ${STUCK_AFTER_DAYS_MAX}`
+        );
+      } else if (TERMINAL_LIFECYCLE_CATEGORIES.includes(o.category)) {
+        errors.push(
+          `option "${key}" is ${o.category}: a finished thing cannot be stuck (stuckAfterDays is for open, active or paused options)`
+        );
+      } else {
+        opt.stuckAfterDays = o.stuckAfterDays;
+      }
+    }
     options.push(opt);
   });
   return { options, errors };

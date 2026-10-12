@@ -232,7 +232,8 @@ export async function changeLifecycleOptions(
         b.category === o.category &&
         b.label === o.label &&
         b.tone === o.tone &&
-        Boolean(b.humanOnly) === Boolean(o.humanOnly)
+        Boolean(b.humanOnly) === Boolean(o.humanOnly) &&
+        b.stuckAfterDays === o.stuckAfterDays
       );
     });
   if (same) return { status: "unchanged" };
