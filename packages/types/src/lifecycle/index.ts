@@ -140,8 +140,10 @@ export {
   stepsFromLifecycle,
   stepsFromTrackStages,
   currentStep,
+  offPathChoices,
   type StepPosition,
   type StepMark,
+  type StepChoice,
 } from "./steps.js";
 
 export {

@@ -164,3 +164,41 @@ export function currentStep(steps: readonly StepMark[]): StepMark | null {
     steps.find((s) => s.position === "current" || s.position === "off") ?? null
   );
 }
+
+/**
+ * A status a thing can be MOVED INTO that the strip does not draw: the paused
+ * and lost options (off the main path, drawn only when current). The "Other
+ * status…" picker beside a strip lists these (D2), so a deal can be marked
+ * lost or a lead put on hold from the thing itself. `tone` is the option's own
+ * mark (a FILL token).
+ */
+export interface StepChoice {
+  key: string;
+  label: string;
+  tone: UnitTone;
+  category: LifecycleCategory;
+  /** Only a person may move a thing INTO this status (the person glyph). */
+  humanOnly?: boolean;
+}
+
+/** The off-path options (paused / lost) other than the current one, in declared order. */
+export function offPathChoices(
+  decl: { readonly options: readonly LifecycleOption[] } | null | undefined,
+  currentKey: string | null | undefined
+): StepChoice[] {
+  if (!decl) return [];
+  return decl.options
+    .filter(
+      (o) => !MAIN_PATH_CATEGORIES.includes(o.category) && o.key !== currentKey
+    )
+    .map((o) => {
+      const choice: StepChoice = {
+        key: o.key,
+        label: lifecycleOptionLabel(o),
+        tone: lifecycleOptionTone(o),
+        category: o.category,
+      };
+      if (o.humanOnly) choice.humanOnly = true;
+      return choice;
+    });
+}
