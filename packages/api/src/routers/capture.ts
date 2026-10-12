@@ -2489,13 +2489,9 @@ const captureBaseRouter = router({
               intentText: inputText,
               doors: {
                 matchPlaybooks: (match) =>
-                  playbooksRouter
-                    .createCaller(lensCtx as never)
-                    .matchForEntity(match),
+                  playbooksRouter.createCaller(lensCtx).matchForEntity(match),
                 matchRules: (match) =>
-                  automationsRouter
-                    .createCaller(lensCtx as never)
-                    .matchForEntity(match),
+                  automationsRouter.createCaller(lensCtx).matchForEntity(match),
               },
             });
           } catch (err) {

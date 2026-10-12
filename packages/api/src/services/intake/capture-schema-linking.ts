@@ -2,13 +2,13 @@
  * Schema linking for a capture: which kinds the structurer may pick, across
  * EVERY space the person can see (D1, founder-approved 2026-10-12).
  *
- * The kind list used to come from the space the capture STARTED in, while the
- * landing space is chosen FROM the kind — so a kind living in another space
- * (`post` in Content, captured from Builder) could never be picked and never
- * reach its space. Now every visible kind is offered by name + one-line
- * description (cheap), and only the best-ranked few carry their full property
- * hints (the expensive part). Placement (`resolveWorkspacePlacement`) is
- * unchanged: it already lands a kind in the space that holds it.
+ * The landing space is chosen FROM the kind, so the kind list cannot be the
+ * starting space's: a kind living in another space (`post` in Content,
+ * captured from Builder) must be pickable to reach its space. Every visible
+ * kind is offered by name (cheap), the best-ranked carry a one-line
+ * description, and only the top few their full property hints (the expensive
+ * part). Placement (`resolveWorkspacePlacement`) lands a kind in the space
+ * that holds it.
  *
  * Ranking is the catalog ranking `understandQuery` uses (`scoreProfileCatalog`),
  * plus the description words a note shares with a kind, plus a nudge for kinds

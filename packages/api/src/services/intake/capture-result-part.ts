@@ -90,9 +90,8 @@ export interface CaptureResultProposal {
 /**
  * Every key of the structurer's entity (the SOURCE of a row), classified.
  * A new key on the IS wire listed in neither set makes `_SourceClassified`
- * `never` and stops the build — the projection can no longer drop a field
- * nobody decided about (description, roles and confidence were dropped this
- * way until D10).
+ * `never` and stops the build — the projection cannot drop a field nobody
+ * decided about.
  */
 type StructureEntity = NonNullable<
   Awaited<ReturnType<IntelligenceHubClient["structure"]>>
@@ -409,10 +408,13 @@ export function topDedupCandidates(
     if (!Array.isArray(list)) continue;
     let best: NonNullable<CaptureResultRow["candidate"]> | null = null;
     for (const c of list as ReadonlyArray<Record<string, unknown> | null>) {
+      // A candidate the chip cannot name ("Updates …") is no candidate.
+      const title = typeof c?.title === "string" ? c.title.trim() : "";
       if (
         !c ||
         typeof c.entityId !== "string" ||
         !c.entityId ||
+        !title ||
         typeof c.score !== "number" ||
         !Number.isFinite(c.score)
       ) {
@@ -422,10 +424,7 @@ export function topDedupCandidates(
       if (best && best.score >= score) continue;
       best = {
         entityId: c.entityId.slice(0, L.routingIdMaxChars),
-        title: (typeof c.title === "string" ? c.title : "").slice(
-          0,
-          L.titleMaxChars
-        ),
+        title: title.slice(0, L.titleMaxChars),
         score,
       };
     }
