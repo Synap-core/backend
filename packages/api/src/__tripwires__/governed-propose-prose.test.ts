@@ -252,6 +252,21 @@ const ACKNOWLEDGED: Ack[] = [
       "wrong and the case must be re-examined.",
   },
   {
+    file: "routers/proposals/executors/entity-transition.ts",
+    message: "An approved status move was proposed again.",
+    reason:
+      "Not a governed-write door: this is the APPROVAL executor of " +
+      "`entity/transition`. It calls `moveStatus` with `approvedProposalId: " +
+      "input.proposalId`, and `moveStatus` (services/lifecycle/move-status.ts) " +
+      "runs `checkPermissionOrPropose` only when `!input.approvedProposalId` — " +
+      "so neither a content proposal nor a join gate can come back here. The " +
+      "string is a defensive INTERNAL_SERVER_ERROR for that impossible case, " +
+      "never prose an agent reads as a pending write. This scanner cannot read " +
+      "the argument, so the entry records why. If the executor ever stops " +
+      "passing approvedProposalId, this reason is false and the case must be " +
+      "re-examined.",
+  },
+  {
     file: "routers/workspaces/invites.ts",
     message: "Member addition requires approval.",
     reason:
