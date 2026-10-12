@@ -24,6 +24,9 @@ import {
  * - public_submit: credentialless public-door writes (`/api/hub/public/*` POST)
  * - device_auth: the unauthenticated device-flow START (`POST /setup/device`),
  *   IP-keyed — a terminal has no credential yet (MACHINE-IDENTITY-PLAN W2)
+ * - key_state: `GET /auth/key-state`, auth-SKIPPED (it answers a key that does
+ *   not authenticate), so IP-keyed — a random Bearer per request must not buy
+ *   a fresh `crud` budget
  * - crud: everything else
  */
 export type RateLimitClass =
@@ -35,6 +38,7 @@ export type RateLimitClass =
   | "public_read"
   | "public_submit"
   | "device_auth"
+  | "key_state"
   | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -55,7 +59,7 @@ export function getRateLimitClassConfig(): Record<
   // Public-door classes carry their own nested budgets (getPublicDoorRateConfig).
   Exclude<
     RateLimitClass,
-    "free" | "public_read" | "public_submit" | "device_auth"
+    "free" | "public_read" | "public_submit" | "device_auth" | "key_state"
   >,
   { max: number; windowMs: number; retryAfter: string }
 > {
@@ -137,6 +141,15 @@ export function classifyRateLimitPath(
   // protocol (`interval`/`slow_down`) and gated by the device code.
   if (p === "/api/hub/setup/device" || p === "/api/hub-protocol/setup/device") {
     return "device_auth";
+  }
+
+  // The holder's key-state door skips auth (its key may not work — that is
+  // the question), so its budget is per IP, never per presented Bearer.
+  if (
+    p === "/api/hub/auth/key-state" ||
+    p === "/api/hub-protocol/auth/key-state"
+  ) {
+    return "key_state";
   }
 
   // free — probes that must never burn budget
@@ -293,6 +306,27 @@ export function getDeviceAuthRateConfig(): {
   );
   return {
     max: parsePositiveInt(process.env.RATE_LIMIT_DEVICE_AUTH_MAX, 10),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
+  };
+}
+
+/**
+ * `/auth/key-state` budget, per IP: 30 requests / 10 min. A CLI asks once
+ * when its key fails; a burst beyond this is enumeration or load, not a
+ * person. Keyed WITHOUT the Authorization header.
+ */
+export function getKeyStateRateConfig(): {
+  max: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_KEY_STATE_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_KEY_STATE_MAX, 30),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };

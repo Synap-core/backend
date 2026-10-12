@@ -19,6 +19,7 @@ import {
   buildPublicDoorKey,
   clientIp,
   getDeviceAuthRateConfig,
+  getKeyStateRateConfig,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -277,6 +278,33 @@ const deviceAuthRateLimiter = rateLimiter({
   ),
 });
 
+const keyStateRate = getKeyStateRateConfig();
+
+/**
+ * Holder key-state (`GET /auth/key-state`): auth-skipped, so IP-ONLY — never
+ * the Authorization header, or a made-up Bearer per request would buy a fresh
+ * bucket each time (the global `crud` class keys on the Bearer hash).
+ * Loopback keeps the local bypass.
+ */
+const keyStateRateLimiter = rateLimiter({
+  windowMs: keyStateRate.windowMs,
+  limit: keyStateRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: (c: Context): string => {
+    const ip = clientIp(c);
+    if (
+      ip === "127.0.0.1" ||
+      ip === "::1" ||
+      ip === "localhost" ||
+      (process.env.NODE_ENV === "development" && ip === "unknown")
+    ) {
+      return "localhost-bypass-key_state-" + Math.random();
+    }
+    return `key_state:ip:${ip}`;
+  },
+  handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -316,6 +344,8 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       });
     case "device_auth":
       return deviceAuthRateLimiter(c, next);
+    case "key_state":
+      return keyStateRateLimiter(c, next);
     case "crud":
     default:
       return crudRateLimiter(c, next);
