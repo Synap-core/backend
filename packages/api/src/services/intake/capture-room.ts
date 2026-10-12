@@ -29,6 +29,7 @@ import {
   inArray,
   gte,
   lte,
+  notInArray,
   asc,
   links,
   drizzleSql,
@@ -42,6 +43,8 @@ import {
   resolveCaptureChipStateLabel,
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import type { AnyColumn } from "drizzle-orm";
 import { readSessionRunManifest } from "./record-session-run-manifest.js";
 import { loadSourceRows } from "../focus-sessions/rerun-session.js";
 import {
@@ -257,11 +260,42 @@ export function withCaptureTurnEntries(
 }
 
 /**
+ * THE "is a capture room" predicate, as SQL over a channel id column: the room
+ * holds a capture part. Nothing else marks a capture — a note session relay
+ * opens with `focusSessions.create` carries no intake stamp, so any marker on
+ * the session would miss it. `deriveCaptureRoomState(...).isCaptureRoom` is
+ * the same rule over messages already read.
+ */
+export function capturePartInRoom(channelId: AnyColumn) {
+  return drizzleSql`exists (select 1 from ${messages} where ${messages.channelId} = ${channelId} and ${messages.deletedAt} is null and ${messages.metadata} ? 'capturePart')`;
+}
+
+/** Does this room hold a capture part? One indexed probe. */
+export async function roomHoldsCapturePart(args: {
+  channelId: string;
+  database?: typeof db;
+}): Promise<boolean> {
+  const database = args.database ?? db;
+  const [row] = await database
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channelId, args.channelId),
+        isNull(messages.deletedAt),
+        drizzleSql`${messages.metadata} ? 'capturePart'`
+      )
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
  * Whether a person's message in a room should run a capture turn, and the
  * entries it carries. Only the session OWNER's plain comment in a room that
  * holds capture parts qualifies; anything else answers `null` and the send
- * door's normal restraint applies. Never throws: a failed read is logged by
- * the caller and the comment still stands.
+ * door's normal restraint applies. A failed read THROWS; the send door logs it
+ * and the comment still stands, with no capture turn.
  */
 export async function planCaptureCommentTurn(args: {
   channelId: string;
@@ -272,6 +306,9 @@ export async function planCaptureCommentTurn(args: {
   entries: NonNullable<TurnContext["entries"]>;
 } | null> {
   const database = args.database ?? db;
+  if (!(await roomHoldsCapturePart({ channelId: args.channelId, database }))) {
+    return null;
+  }
   const [session] = await database
     .select({ id: focusSessions.id, userId: focusSessions.userId })
     .from(focusSessions)
@@ -463,8 +500,9 @@ export async function listUnfinishedCaptures(args: {
       and(
         eq(focusSessions.userId, args.userId),
         isNotNull(focusSessions.channelId),
-        drizzleSql`${focusSessions.metadata} -> 'intake' ->> 'door' = 'capture'`,
-        gte(focusSessions.updatedAt, since)
+        notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES]),
+        gte(focusSessions.updatedAt, since),
+        capturePartInRoom(focusSessions.channelId)
       )
     )
     .orderBy(desc(focusSessions.updatedAt))
