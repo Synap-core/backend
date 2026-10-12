@@ -13,6 +13,9 @@ export { isLikelyUUID };
 // so `@synap-core/types` didn't provide `deriveGovernanceGrantOptions` at the
 // package root and the browser failed to load.
 export * from "./governance-grant-options.js";
+// The governance policy's own sentences — so a reader never shows them as a
+// proposer's reasoning (see the file header).
+export * from "./governance-policy-sentences.js";
 // A reviewer's note on a decided proposal (`proposals.comments`).
 export * from "./review-comment.js";
 
