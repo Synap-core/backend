@@ -134,6 +134,7 @@ describe("emitLifecycleTransition", () => {
     expect(h.emitted[1]).toMatchObject({
       action: "update",
       data: {
+        transitionId: "t1",
         "changed.commercialStage": true,
         "previous.commercialStage": "draft",
         commercialStage: "negotiating",

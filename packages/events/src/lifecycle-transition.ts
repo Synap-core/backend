@@ -205,6 +205,10 @@ export async function emitLifecycleTransition(
       automationContext: opts.automationContext,
       data: {
         profileSlug: t.profileSlug ?? undefined,
+        // The matcher's fingerprint names it: two identical A→S moves are two
+        // claims for a hand-written "updated" rule, a redelivery one (review
+        // item 10). Without it both moves hashed to the same payload.
+        transitionId: t.transitionId,
         changedKeys: [t.property],
         [`changed.${t.property}`]: true,
         [`previous.${t.property}`]: t.from,
