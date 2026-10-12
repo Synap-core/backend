@@ -293,7 +293,12 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   file_entities: { imperative: "File", past: "Filed" },
   // Filing a captured record (a capture chip's accept): the proposal it was
   // becomes the thing. "File" on the button, "Filed" on the chip and receipt.
-  file: { imperative: "File", past: "Filed", progressive: "Filing" },
+  file: {
+    imperative: "File",
+    past: "Filed",
+    progressive: "Filing",
+    present: "Files",
+  },
   unfile_entities: { imperative: "Unfile", past: "Unfiled" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so

@@ -156,6 +156,7 @@ describe("resolveActionPresent — what a pending choice does", () => {
     expect(resolveActionPresent("update")).toBe("Updates");
     expect(resolveActionPresent("link")).toBe("Links");
     expect(resolveActionPresent("entity.create")).toBe("Creates");
+    expect(resolveActionPresent("file")).toBe("Files");
   });
   it("keeps the imperative where no present is curated", () => {
     expect(resolveActionPresent("archive")).toBe(resolveActionLabel("archive"));
