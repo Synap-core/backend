@@ -3055,13 +3055,13 @@ One row per server in `mcp_servers`, scoped to a space (`workspaceId`) or pod-wi
 lowercase `a-z0-9-`, unique per space; the IS names each tool `mcp_<slug>_<tool>`, so a space's server
 overrides a pod-wide one with the same slug.
 
-| Field        | Meaning                                                                                       |
-| ------------ | --------------------------------------------------------------------------------------------- |
-| `transport`  | `http` (needs `url`) or `stdio` (needs `command` + `args`, runs on the IS host)               |
-| `auth`       | http only: `{ credentialRef: "vault://<id>", header: "Authorization", prefix: "Bearer " }`    |
-| `toolPolicy` | `{ default: "governed" or "inline", inline: ["tool_a", …] }`; absent = governed               |
-| `approved`   | false by default; the supply-chain gate                                                       |
-| `enabled`    | the owner's on/off switch                                                                     |
+| Field        | Meaning                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| `transport`  | `http` (needs `url`) or `stdio` (needs `command` + `args`, runs on the IS host)            |
+| `auth`       | http only: `{ credentialRef: "vault://<id>", header: "Authorization", prefix: "Bearer " }` |
+| `toolPolicy` | `{ default: "governed" or "inline", inline: ["tool_a", …] }`; absent = governed            |
+| `approved`   | false by default; the supply-chain gate                                                    |
+| `enabled`    | the owner's on/off switch                                                                  |
 
 ### Secrets never sit on the row
 
