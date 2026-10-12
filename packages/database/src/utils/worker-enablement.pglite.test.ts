@@ -26,9 +26,11 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { proposals } from "../schema/proposals.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
+import { automationRuns, automationStepRuns } from "../schema/automations.js";
 import {
   countWorkerIrreversibleSendsToday,
   countWorkerPendingApprovals,
+  listHeldWorkerRuns,
   listWorkerTargetsInFlight,
 } from "./worker-enablement.js";
 
@@ -61,7 +63,13 @@ const B = randomUUID(); // another enablement
 
 beforeEach(async () => {
   client = new PGlite();
-  for (const t of [proposals, focusSessions, links])
+  for (const t of [
+    proposals,
+    focusSessions,
+    links,
+    automationRuns,
+    automationStepRuns,
+  ])
     await client.exec(ddlFor(t as unknown as PgTable));
   holder.db = drizzle(client);
 });
@@ -165,5 +173,94 @@ describe("countWorkerIrreversibleSendsToday", () => {
     });
     expect(await countWorkerIrreversibleSendsToday(A, now)).toBe(2);
     expect(await countWorkerIrreversibleSendsToday(B, now)).toBe(0);
+  });
+});
+
+/**
+ * arch F12: a backlog skip HOLDS the fire. Rows rule out: a plain skip (no
+ * `held` mark) taken for a hold; a hold superseded by a LATER run of the same
+ * automation for the same subject (its release, or a fresh fire) offered
+ * again; another enablement's hold; an EARLIER run of the subject hiding a
+ * later hold (the supersede check must look forward only).
+ */
+describe("listHeldWorkerRuns", () => {
+  async function run(o: {
+    automationId: string;
+    subject: string | null;
+    at: string;
+    output?: Record<string, unknown>;
+  }) {
+    const id = randomUUID();
+    await client.query(
+      `insert into automation_runs (id, automation_id, subject_entity_id, trigger_payload, status, started_at)
+       values ($1, $2, $3, $4::jsonb, 'completed', $5)`,
+      [id, o.automationId, o.subject, JSON.stringify({ eventType: "x" }), o.at]
+    );
+    if (o.output) {
+      await client.query(
+        `insert into automation_step_runs (id, run_id, node_id, status, output)
+         values ($1, $2, 'run', 'completed', $3::jsonb)`,
+        [randomUUID(), id, JSON.stringify(o.output)]
+      );
+    }
+    return id;
+  }
+  const HELD = {
+    status: "skipped",
+    reason: "approvals_backlog",
+    held: true,
+    producerAgentUserId: "agent-1",
+  };
+
+  it("held fires nothing superseded, oldest first, with their producer", async () => {
+    const t1 = randomUUID();
+    const t2 = randomUUID();
+    const t3 = randomUUID();
+    const t4 = randomUUID();
+    await run({ automationId: A, subject: t1, at: "2026-10-12T01:00:00Z" });
+    const h1 = await run({
+      automationId: A,
+      subject: t1,
+      at: "2026-10-12T02:00:00Z",
+      output: HELD,
+    });
+    const h2 = await run({
+      automationId: A,
+      subject: t2,
+      at: "2026-10-12T01:30:00Z",
+      output: { ...HELD, producerAgentUserId: undefined },
+    });
+    // superseded: a later run of the same subject exists
+    await run({
+      automationId: A,
+      subject: t3,
+      at: "2026-10-12T01:00:00Z",
+      output: HELD,
+    });
+    await run({ automationId: A, subject: t3, at: "2026-10-12T03:00:00Z" });
+    // a plain skip is not a hold
+    await run({
+      automationId: A,
+      subject: t4,
+      at: "2026-10-12T01:00:00Z",
+      output: { status: "skipped", reason: "approvals_backlog" },
+    });
+    // another enablement's hold
+    await run({
+      automationId: B,
+      subject: t4,
+      at: "2026-10-12T01:00:00Z",
+      output: HELD,
+    });
+    const held = await listHeldWorkerRuns(A, 10);
+    expect(held.map((h) => h.runId)).toEqual([h2, h1]);
+    expect(held[1]).toMatchObject({
+      subjectEntityId: t1,
+      producerAgentUserId: "agent-1",
+      triggerPayload: { eventType: "x" },
+    });
+    expect(held[0]!.producerAgentUserId).toBeNull();
+    expect(await listHeldWorkerRuns(A, 1)).toHaveLength(1);
+    expect(await listHeldWorkerRuns(A, 0)).toEqual([]);
   });
 });

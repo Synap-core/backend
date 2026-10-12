@@ -38,6 +38,7 @@ vi.mock("@synap/database", () => ({
   entities: {},
   events: {},
   countWorkerPendingApprovals: vi.fn(async () => h.pending),
+  WORKER_HELD_OUTPUT_KEY: "held",
 }));
 vi.mock("../../../utils/automation-governance.js", () => ({
   guardProducerEffect: vi.fn(async () => ({ proceed: true })),
@@ -121,11 +122,12 @@ describe("B. a propose-mode worker is held by its backlog", () => {
       automationContext
     );
 
-  it("at maxPendingApprovals waiting: files nothing, says approvals_backlog", async () => {
+  it("at maxPendingApprovals waiting: files nothing, HOLDS the fire (approvals_backlog)", async () => {
     h.pending = 4;
     expect(await fire()).toEqual({
       status: "skipped",
       reason: "approvals_backlog",
+      held: true,
     });
     expect(h.proposeMock).not.toHaveBeenCalled();
     expect(h.runnerMock).not.toHaveBeenCalled();
@@ -135,5 +137,52 @@ describe("B. a propose-mode worker is held by its backlog", () => {
     h.pending = 3;
     expect(await fire()).toEqual({ status: "proposed", proposalId: "prop-1" });
     expect(h.proposeMock).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * arch F12: a backlog skip is a HOLD, not a drop. The step output is what
+ * `listHeldWorkerRuns` reads back on drain; the producer rides along so the
+ * release is governed against the same agent.
+ */
+describe("C. a run-mode worker held by its backlog is marked held", () => {
+  it("the spine's approvals_backlog skip → held, with the producer", async () => {
+    h.runnerMock.mockResolvedValueOnce({
+      run: null,
+      session: null,
+      skipped: "approvals_backlog",
+    } as never);
+    expect(
+      await executePlaybookRun(
+        { playbookId: "pb-1", worker: { ...SPEC, size: "per_thing" } },
+        context(),
+        "ws-1",
+        "user-1",
+        automationContext,
+        "agent-7"
+      )
+    ).toEqual({
+      status: "skipped",
+      reason: "approvals_backlog",
+      held: true,
+      producerAgentUserId: "agent-7",
+    });
+  });
+
+  it("any other skip is not a hold", async () => {
+    h.runnerMock.mockResolvedValueOnce({
+      run: null,
+      session: null,
+      skipped: "stale_transition",
+    } as never);
+    expect(
+      await executePlaybookRun(
+        { playbookId: "pb-1", worker: { ...SPEC, size: "per_thing" } },
+        context(),
+        "ws-1",
+        "user-1",
+        automationContext
+      )
+    ).toEqual({ status: "skipped", reason: "stale_transition" });
   });
 });

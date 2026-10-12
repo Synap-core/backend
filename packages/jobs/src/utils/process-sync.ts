@@ -54,6 +54,10 @@
  *     ONE door — whose own gate on the target stage can pause it again. Without
  *     `onFail` the run stays paused, exactly as before.
  *
+ *  3. WORKER BACKLOG DRAIN. A decided (approved / rejected) proposal of a
+ *     worker enablement may make room under its `maxPendingApprovals`: the
+ *     fires the backlog HELD are released once (`worker-backlog-release.ts`).
+ *
  * Non-fatal per session: one session's failure is reported and never stops the
  * others, nor the automation matching that follows in the same hop.
  */
@@ -88,6 +92,10 @@ import {
 } from "@synap/events";
 import { advanceSessionStageViaSlot } from "./stage-advance.js";
 import { loadSessionProcess } from "./session-process.js";
+import {
+  releaseHeldWorkerRuns,
+  workerAutomationOfProposal,
+} from "./worker-backlog-release.js";
 
 const logger = createLogger({ module: "process-sync" });
 
@@ -131,6 +139,7 @@ export type ProcessSyncOutcome =
       entityId: string;
       result: "done" | "skipped";
     }
+  | { kind: "backlog_released"; automationId: string; runIds: string[] }
   | { kind: "failed"; sessionId: string; reason: string };
 
 /** Entry point, called once per matched event by the trigger hop. */
@@ -147,7 +156,13 @@ export async function syncProcessOnEvent(
     ];
   }
   if (ev.eventType === "proposal.rejected.completed") {
-    return applyRejectedGateOnFail(ev);
+    return [
+      ...(await applyRejectedGateOnFail(ev)),
+      ...(await releaseWorkerBacklog(ev)),
+    ];
+  }
+  if (ev.eventType === "proposal.approved.completed") {
+    return releaseWorkerBacklog(ev);
   }
   return [];
 }
@@ -246,6 +261,30 @@ async function settleWorkerTargets(
     }
   }
   return out;
+}
+
+/**
+ * 3 — a decided proposal may drain a worker's approvals backlog: release the
+ * fires it HELD (`worker-backlog-release.ts`). Nothing for a proposal that is
+ * not a worker's.
+ */
+async function releaseWorkerBacklog(
+  ev: ProcessSyncEvent
+): Promise<ProcessSyncOutcome[]> {
+  try {
+    const automationId = await workerAutomationOfProposal(ev.subjectId);
+    if (!automationId) return [];
+    const released = await releaseHeldWorkerRuns(automationId);
+    return released.length > 0
+      ? [{ kind: "backlog_released", automationId, runIds: released }]
+      : [];
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: ev.subjectId },
+      "worker backlog not released (non-fatal) — the next decision retries"
+    );
+    return [];
+  }
 }
 
 /** The one room line that tells the worker a thing left its hands. */

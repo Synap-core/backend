@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   /** The result writer: first verdict wins, keyed session:entity. */
   stamps: new Map<string, Record<string, unknown>>(),
   posts: [] as Array<Record<string, unknown>>,
+  released: [] as string[],
   T: {
     focusSessions: { __t: "fs" },
     proposals: { __t: "p" },
@@ -34,6 +35,16 @@ const h = vi.hoisted(() => ({
     entityFacets: { __t: "f" },
     users: { __t: "u", id: "users.id" },
   },
+}));
+
+vi.mock("../worker-backlog-release.js", () => ({
+  workerAutomationOfProposal: vi.fn(async (id: string) =>
+    id === "p-worker" ? "auto-w" : null
+  ),
+  releaseHeldWorkerRuns: vi.fn(async (a: string) => {
+    h.released.push(a);
+    return ["run-r"];
+  }),
 }));
 
 vi.mock("@synap/database", () => ({
@@ -494,5 +505,42 @@ describe("worker targets (work model L4/L5): a move settles the thing in each wo
     const out = await syncProcessOnEvent(move());
     expect(out).toEqual([]);
     expect(h.advances).toEqual([]);
+  });
+});
+
+/**
+ * arch F12: a decided proposal of a worker drains its backlog — the fires it
+ * HELD are released (the release itself: worker-backlog-release.pglite).
+ */
+describe("a decided worker proposal releases the held fires", () => {
+  beforeEach(() => {
+    h.released = [];
+    h.proposal = null;
+  });
+  for (const eventType of [
+    "proposal.approved.completed",
+    "proposal.rejected.completed",
+  ]) {
+    it(`${eventType} of a worker's proposal → release`, async () => {
+      const out = await syncProcessOnEvent({
+        eventType,
+        subjectId: "p-worker",
+        userId: "u1",
+      });
+      expect(h.released).toEqual(["auto-w"]);
+      expect(out).toContainEqual({
+        kind: "backlog_released",
+        automationId: "auto-w",
+        runIds: ["run-r"],
+      });
+    });
+  }
+  it("a proposal that is not a worker's → nothing", async () => {
+    await syncProcessOnEvent({
+      eventType: "proposal.approved.completed",
+      subjectId: "p-other",
+      userId: "u1",
+    });
+    expect(h.released).toEqual([]);
   });
 });

@@ -10,6 +10,7 @@ import {
   entities,
   events,
   countWorkerPendingApprovals,
+  WORKER_HELD_OUTPUT_KEY,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
 import {
@@ -271,10 +272,7 @@ export async function executePlaybookRun(
         (await countWorkerPendingApprovals(automationContext.automationId)) >=
         max
       ) {
-        return {
-          status: "skipped",
-          reason: WORKER_SKIP_REASONS.approvalsBacklog,
-        };
+        return heldByBacklog(producerAgentUserId);
       }
     }
     const proposed = await proposeRulePlaybookRun({
@@ -499,6 +497,8 @@ export async function executePlaybookRun(
   // failed automation — and do not stamp a session onto the firing event,
   // because no session exists.
   if (result.session == null) {
+    if (data.worker && result.skipped === WORKER_SKIP_REASONS.approvalsBacklog)
+      return heldByBacklog(producerAgentUserId);
     return {
       status: "skipped",
       reason: result.skipped ?? "no-subject",
@@ -524,6 +524,25 @@ export async function executePlaybookRun(
     runId: result.run?.id,
     sessionId: result.session.id,
     status: result.run?.status ?? "running",
+  };
+}
+
+/**
+ * A worker fire its approvals backlog HOLDS (arch F12). The step output is
+ * the hold: `listHeldWorkerRuns` (`@synap/database`) finds it, and the
+ * release (`utils/worker-backlog-release.ts`) re-runs it once the backlog
+ * drains — an event-triggered fire has no next tick, so a plain skip dropped
+ * the thing for good. The producer rides along so the release is governed
+ * against the same agent the first fire was.
+ */
+function heldByBacklog(
+  producerAgentUserId: string | null | undefined
+): Record<string, unknown> {
+  return {
+    status: "skipped",
+    reason: WORKER_SKIP_REASONS.approvalsBacklog,
+    [WORKER_HELD_OUTPUT_KEY]: true,
+    ...(producerAgentUserId ? { producerAgentUserId } : {}),
   };
 }
 

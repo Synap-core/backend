@@ -18,6 +18,7 @@ import { db } from "../client-pg.js";
 import { proposals } from "../schema/proposals.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
+import { automationRuns, automationStepRuns } from "../schema/automations.js";
 
 /** `links.metadata.role` of a worker's `session --targets--> entity` edge. */
 export const WORKER_TARGET_LINK_ROLE = "worker_target" as const;
@@ -131,4 +132,73 @@ export async function countWorkerIrreversibleSendsToday(
       )
     );
   return Number(row?.n ?? 0);
+}
+
+/**
+ * A worker fire HELD by its approvals backlog (arch F12): the `playbook_run`
+ * step answered `{ status: "skipped", reason: "approvals_backlog", held:
+ * true }`. A per_thing worker on an event has no next tick — its claim on
+ * that event is spent — so the thing would be dropped for good. A held fire
+ * is RELEASED (re-run once with its own trigger) when the backlog drains.
+ */
+export interface HeldWorkerRun {
+  runId: string;
+  workspaceId: string | null;
+  subjectEntityId: string | null;
+  triggerEventId: string | null;
+  triggerPayload: Record<string, unknown>;
+  /** The agent that produced the held trigger, carried to the release. */
+  producerAgentUserId: string | null;
+}
+
+/** The step-output marker of a held fire (`steps/playbook-run.ts`, jobs). */
+export const WORKER_HELD_OUTPUT_KEY = "held" as const;
+
+/**
+ * This enablement's held fires that nothing has superseded: no LATER run of
+ * the same automation for the same subject (a release, or a fresh fire of the
+ * same thing, is that later run). Oldest first. A released fire that is held
+ * again is a new held run, so it is offered again at the next drain.
+ */
+export async function listHeldWorkerRuns(
+  automationId: string,
+  limit: number
+): Promise<HeldWorkerRun[]> {
+  if (limit <= 0) return [];
+  const rows = await db
+    .select({
+      runId: automationRuns.id,
+      workspaceId: automationRuns.workspaceId,
+      subjectEntityId: automationRuns.subjectEntityId,
+      triggerEventId: automationRuns.triggerEventId,
+      triggerPayload: automationRuns.triggerPayload,
+      producer: sql<
+        string | null
+      >`${automationStepRuns.output}->>'producerAgentUserId'`,
+    })
+    .from(automationStepRuns)
+    .innerJoin(automationRuns, eq(automationRuns.id, automationStepRuns.runId))
+    .where(
+      and(
+        eq(automationRuns.automationId, automationId),
+        sql`${automationStepRuns.output}->>'reason' = 'approvals_backlog'`,
+        sql`${automationStepRuns.output}->>${WORKER_HELD_OUTPUT_KEY} = 'true'`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM automation_runs later
+          WHERE later.automation_id = ${automationRuns.automationId}
+            AND later.subject_entity_id IS NOT DISTINCT FROM ${automationRuns.subjectEntityId}
+            AND later.started_at > ${automationRuns.startedAt}
+        )`
+      )
+    )
+    .orderBy(automationRuns.startedAt)
+    .limit(limit);
+  return rows.map((r) => ({
+    runId: r.runId,
+    workspaceId: r.workspaceId ?? null,
+    subjectEntityId: r.subjectEntityId ?? null,
+    triggerEventId: r.triggerEventId ?? null,
+    triggerPayload: (r.triggerPayload ?? {}) as Record<string, unknown>,
+    producerAgentUserId: r.producer ?? null,
+  }));
 }
