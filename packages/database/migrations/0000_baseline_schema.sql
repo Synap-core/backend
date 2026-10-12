@@ -4997,3 +4997,13 @@ CREATE INDEX IF NOT EXISTS "entities_profile_status_category_idx"
   ON "entities" ("profile_id", "status_category") WHERE "deleted_at" IS NULL;
 CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_category_idx"
   ON "entity_facets" ("profile_id", "status_category") WHERE "deleted_at" IS NULL;
+
+-- 0323: (profile_id, status) for the board / lifecycle.list value groups, and
+-- the worker reads' focus_sessions(metadata->>'automationId') expression index.
+CREATE INDEX IF NOT EXISTS "entities_profile_status_idx"
+  ON "entities" ("profile_id", "status") WHERE "deleted_at" IS NULL;
+CREATE INDEX IF NOT EXISTS "entity_facets_profile_status_idx"
+  ON "entity_facets" ("profile_id", "status") WHERE "deleted_at" IS NULL;
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_automation_id
+  ON focus_sessions ((metadata->>'automationId'))
+  WHERE (metadata->>'automationId') IS NOT NULL;

@@ -85,6 +85,10 @@ export const entityFacets = pgTable(
     profileStatusCategoryIdx: index("entity_facets_profile_status_category_idx")
       .on(table.profileId, table.statusCategory)
       .where(sql`${table.deletedAt} IS NULL`),
+    // The board / lifecycle.list group by status VALUE (0323).
+    profileStatusIdx: index("entity_facets_profile_status_idx")
+      .on(table.profileId, table.status)
+      .where(sql`${table.deletedAt} IS NULL`),
     // Re-attach after soft-detach must succeed — partial unique index only
     // covers live rows. Matches migration 0174's COALESCE-sentinel index.
     entityProfileCtxWsUniq: uniqueIndex(

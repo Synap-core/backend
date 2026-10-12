@@ -319,6 +319,11 @@ export const focusSessions = pgTable(
     automationRunIdIdx: index("idx_focus_sessions_automation_run_id")
       .on(sql`(${table.metadata}->>'automationRunId')`)
       .where(sql`(metadata->>'automationRunId') IS NOT NULL`),
+    // "Which sessions did this enablement open?" (0323): the worker reads
+    // (worker-enablement.ts, listEnabledWorkers) match and group on it.
+    automationIdIdx: index("idx_focus_sessions_automation_id")
+      .on(sql`(${table.metadata}->>'automationId')`)
+      .where(sql`(metadata->>'automationId') IS NOT NULL`),
   })
 );
 
