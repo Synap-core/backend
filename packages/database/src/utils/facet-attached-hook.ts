@@ -25,8 +25,12 @@ const logger = createLogger({ module: "facet-attached-hook" });
 /** What the caller knows that the facet row cannot carry. All optional. */
 export interface FacetAttachContext {
   sessionId?: string | null;
-  /** `"sync"`: a bulk mirror — the matcher skips it unless a rule opts in. */
-  origin?: "sync";
+  /**
+   * `"sync"`: a bulk mirror. `"merge"`: a role MOVED onto the surviving entity
+   * of a merge — not a new role. Event automations skip both unless a rule
+   * opts in (`AUTOMATION_ORIGIN_OPT_INS`, the matcher); listeners still see it.
+   */
+  origin?: "sync" | "merge";
   /** The proposal that authorized the attach (origin derives from it). */
   proposalId?: string | null;
   /** Automation chain tracking (cycle guard) — opaque here. */

@@ -277,23 +277,49 @@ interface TriggerMatchPayload {
    */
   producerAgentUserId?: string | null;
   /**
-   * `"sync"` when the event is a bulk mirror of an external source (see
-   * `SideEffectPayload.origin`). Event automations skip it unless
-   * `triggerConfig.includeSyncOrigin === true` — `shouldSkipSyncOrigin`.
+   * WHERE the event came from, when that changes who reacts (see
+   * `SideEffectPayload.origin`): `"sync"` (a bulk mirror) or `"merge"` (a role
+   * moved onto a merge's survivor). Event automations skip both unless opted
+   * in — {@link AUTOMATION_ORIGIN_OPT_INS}.
    */
-  origin?: "sync";
+  origin?: "sync" | "merge";
 }
 
 /**
- * A sync-origin event does NOT fire an event automation
- * unless that automation opted in. Search-index + embedding are reactors, not
- * automations, so they are untouched by this. Pure — exported for the test.
+ * THE ONE skip list: every event origin an automation does NOT fire on by
+ * default, each with the trigger-config flag that opts a rule back in. A new
+ * origin is a new row here — never a second skip check. `satisfies` makes an
+ * origin added to the payload type without a row a type error.
  */
-export function shouldSkipSyncOrigin(
+export const AUTOMATION_ORIGIN_OPT_INS = {
+  /** A bulk mirror of an external source — 200 contacts must not start 200 runs. */
+  sync: "includeSyncOrigin",
+  /** A role MOVED onto a merge's survivor is not a new role (no re-qualifying). */
+  merge: "includeMergeOrigin",
+} as const satisfies Record<
+  NonNullable<TriggerMatchPayload["origin"]>,
+  keyof AutomationTriggerConfig
+>;
+
+/**
+ * An event from a skipped origin does NOT fire an event automation unless that
+ * automation opted in ({@link AUTOMATION_ORIGIN_OPT_INS}). Search-index and
+ * embedding are reactors, not automations, so they are untouched by this.
+ * Pure — exported for the test.
+ */
+export function shouldSkipOrigin(
   origin: TriggerMatchPayload["origin"],
-  config: Pick<AutomationTriggerConfig, "includeSyncOrigin"> | null | undefined
+  config:
+    | Pick<
+        AutomationTriggerConfig,
+        (typeof AUTOMATION_ORIGIN_OPT_INS)[keyof typeof AUTOMATION_ORIGIN_OPT_INS]
+      >
+    | null
+    | undefined
 ): boolean {
-  return origin === "sync" && config?.includeSyncOrigin !== true;
+  if (!origin) return false;
+  const optIn = AUTOMATION_ORIGIN_OPT_INS[origin];
+  return optIn ? config?.[optIn] !== true : false;
 }
 
 /**
@@ -959,7 +985,7 @@ export function matchingTriggerView(
 
 function rawTriggerMatches(input: TriggerMatchInput): boolean {
   const { eventType, data, config, messageEnvelope, scopeFacts } = input;
-  if (shouldSkipSyncOrigin(input.origin, config)) return false;
+  if (shouldSkipOrigin(input.origin, config)) return false;
   if (!matchPattern(eventType, config.eventPattern)) return false;
   if (!matchFilters(data, config.filters)) return false;
   if (!matchTriggerSpecificFilters(eventType, data, config, messageEnvelope))

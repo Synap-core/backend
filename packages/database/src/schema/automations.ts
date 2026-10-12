@@ -185,6 +185,12 @@ export interface AutomationTriggerConfig {
    */
   includeSyncOrigin?: boolean;
   /**
+   * Fire on events whose `origin` is `"merge"` — a role moved onto the
+   * surviving entity of a merge. Default (absent/false): skipped, like sync:
+   * merging two duplicate people must not re-propose "Qualify a lead".
+   */
+  includeMergeOrigin?: boolean;
+  /**
    * The connection (`secrets` row id) this automation's capability steps run
    * against. Passed as `connectionSelector.connectionId` to every capability
    * node that does not name its own selector/connection.

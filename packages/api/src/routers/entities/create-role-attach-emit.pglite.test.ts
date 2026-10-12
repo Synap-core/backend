@@ -285,4 +285,82 @@ describe("a role attach is announced once, from every path (R1)", () => {
     await settle();
     expect(attaches()).toHaveLength(1);
   }, 60_000);
+
+  // A role MOVED by a merge is not a new role. The announcement still goes
+  // out (listeners see the role arrive), marked `origin: "merge"`; the
+  // activator a role's `created` compiles to does not fire on it — so merging
+  // two duplicate people, one of them a lead, files no "Qualify a lead".
+  it("merge: a lead moved onto the survivor is announced as merge, and the activator does not fire", async () => {
+    const { mergeEntities } = await import("@synap/database");
+    const { automationTriggerMatches } =
+      await import("@synap/jobs/workers/automation-trigger-matcher.js");
+    const { playbookActivatorSentence, toBackendTrigger } =
+      await import("@synap-core/types/automations");
+    const winnerId = randomUUID();
+    const loserId = randomUUID();
+    for (const [id, title] of [
+      [winnerId, "Ada Lovelace"],
+      [loserId, "Ada Lovelace (dup)"],
+    ] as const) {
+      await client.query(
+        `insert into entities (id, user_id, type, title, profile_id, properties)
+         values ($1, $2, 'person', $3, $4, '{}'::jsonb)`,
+        [id, USER, title, personProfileId]
+      );
+    }
+    const { FacetRepository } = await import("@synap/database");
+    const repo = new FacetRepository(
+      database as never,
+      { append: async () => undefined } as never
+    );
+    await repo.attach(
+      { entityId: loserId, profileSlug: "lead", userId: USER },
+      USER
+    );
+    await settle();
+    vi.mocked(emitSideEffects).mockClear();
+
+    await mergeEntities(
+      database as never,
+      {
+        winnerId,
+        loserId,
+        userId: USER,
+      } as never
+    );
+    await settle();
+
+    const moved = attaches();
+    expect(moved).toHaveLength(1);
+    expect(moved[0]!.data).toMatchObject({
+      entityId: winnerId,
+      profileSlug: "lead",
+    });
+    expect(moved[0]!.origin).toBe("merge");
+
+    // The rule "Qualify a lead" compiles to, against that exact event.
+    const sentence = playbookActivatorSentence({
+      playbookId: randomUUID(),
+      profileSlug: "lead",
+      on: "created",
+      profileKind: "role",
+      mode: "propose",
+    });
+    const { triggerConfig } = toBackendTrigger(
+      sentence.trigger!,
+      sentence.conditions
+    );
+    const fires = (config: Record<string, unknown>) =>
+      automationTriggerMatches({
+        eventType: "entity_facet.attach.completed",
+        data: moved[0]!.data,
+        config: config as never,
+        messageEnvelope: undefined,
+        scopeFacts: { entityId: winnerId, projectIds: null },
+        origin: moved[0]!.origin as never,
+      });
+    expect(fires(triggerConfig)).toBe(false);
+    // Opting in is the ONE way back — the same table that holds sync.
+    expect(fires({ ...triggerConfig, includeMergeOrigin: true })).toBe(true);
+  }, 60_000);
 });

@@ -78,10 +78,15 @@ export interface SideEffectPayload {
    * Search index and embedding ignore it, so mirrored records stay searchable.
    * Pinned by `__tests__/side-effects.sync-origin.test.ts`.
    *
+   * `"merge"` = a role MOVED onto the surviving entity of a merge (the facet
+   * door's attach, `entity-merge-service.ts`). Not a new role: event
+   * automations skip it unless opted in (`triggerConfig.includeMergeOrigin`);
+   * webhooks and notifications still deliver it — something did arrive.
+   *
    * TOP-LEVEL, never `data.origin`: `data` is the automation-visible payload and
    * feeds the event fingerprint.
    */
-  origin?: "sync";
+  origin?: "sync" | "merge";
 }
 
 // Re-export the reactor registry surface so future reactions can register
