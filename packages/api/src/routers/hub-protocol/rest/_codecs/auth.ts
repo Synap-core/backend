@@ -64,3 +64,42 @@ export const AuthErrorEnvelopeSchema = z
     keyIdPrefix: z.string().optional(),
   })
   .openapi("AuthErrorEnvelope");
+
+/**
+ * Wire shape of `GET /api/hub/auth/key-state` — the HOLDER's view of the key it
+ * presents, whether or not that key authenticates (`services/key-holder-state.ts`).
+ * An unknown secret answers `{ state: "unknown" }` and nothing else.
+ */
+export const KeyHolderStateSchema = z
+  .object({
+    state: z.enum([
+      "active",
+      "awaiting_approval",
+      "revoked",
+      "expired",
+      "unknown",
+    ]),
+    keyIdPrefix: z.string().optional(),
+    keyId: z.string().uuid().optional(),
+    agentType: z.string().nullable().optional(),
+    instanceId: z.string().nullable().optional(),
+    createdAt: z.string().datetime().optional(),
+    expiresAt: z.string().datetime().nullable().optional(),
+    approvalUrl: z
+      .string()
+      .optional()
+      .describe("awaiting_approval: the page where the owner approves it."),
+    revokedAt: z.string().datetime().nullable().optional(),
+    revokedReason: z.string().nullable().optional(),
+    replacedBy: z
+      .object({
+        createdAt: z.string().datetime(),
+        instanceId: z.string().nullable(),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "revoked by replacement: when the replacing connection was created, and on which instance."
+      ),
+  })
+  .openapi("KeyHolderState");

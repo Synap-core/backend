@@ -103,22 +103,7 @@ import {
   httpStatusForTrpcError,
   requireUuidParam,
 } from "./_shared.js";
-import { toPodAdminOrigin } from "../../../utils/pod-admin-origin.js";
-
-/**
- * Where a person approves a pending agent key: the pod-admin app (already
- * Kratos-authed there), not a page on the API origin. Reverse-proxy-safe: the
- * pod's PUBLIC_URL first — the request URL is the internal (often http://) one
- * behind nginx.
- */
-function approvalPageUrl(
-  requestUrl: string,
-  keyId: string,
-  agentType: string
-): string {
-  const origin = process.env.PUBLIC_URL || new URL(requestUrl).origin;
-  return `${toPodAdminOrigin(origin)}/approve-agent/${keyId}?agentType=${encodeURIComponent(agentType)}`;
-}
+import { agentApprovalPageUrl as approvalPageUrl } from "../../../utils/pod-admin-origin.js";
 
 /**
  * Agent types an AGENT key (`api_key_surface`) may provision without a

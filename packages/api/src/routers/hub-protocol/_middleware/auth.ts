@@ -140,6 +140,10 @@ export const hubAuthMiddleware = async (
     // the edge (`device_auth`); collection is gated by the device code.
     "/setup/device",
     "/setup/device/token",
+    // The holder's view of a key that may NOT authenticate (awaiting approval,
+    // replaced, expired) — it reads the bearer itself and answers only about
+    // the presented secret (`services/key-holder-state.ts`).
+    "/auth/key-state",
   ];
   // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
   // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the

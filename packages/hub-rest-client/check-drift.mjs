@@ -22,6 +22,7 @@ const SERVER_ONLY = new Set([
   "/health",
   "/manifest",
   "/auth/status",
+  "/auth/key-state", // CLI doctor reads it directly (works for a key that does not authenticate)
   "/events",
   "/events/stream",
   "/background-tasks",

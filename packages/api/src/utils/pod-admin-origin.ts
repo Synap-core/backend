@@ -28,3 +28,19 @@ export function toPodAdminOrigin(origin: string): string {
     return origin;
   }
 }
+
+/**
+ * Where a person approves a pending agent key: the pod-admin app (already
+ * Kratos-authed there), not a page on the API origin. Reverse-proxy-safe: the
+ * pod's PUBLIC_URL first — the request URL is the internal (often http://) one
+ * behind nginx. ONE builder: the setup door's `reviewUrl` and the holder's
+ * key-state answer (`/auth/key-state`) both call it.
+ */
+export function agentApprovalPageUrl(
+  requestUrl: string,
+  keyId: string,
+  agentType: string
+): string {
+  const origin = process.env.PUBLIC_URL || new URL(requestUrl).origin;
+  return `${toPodAdminOrigin(origin)}/approve-agent/${keyId}?agentType=${encodeURIComponent(agentType)}`;
+}

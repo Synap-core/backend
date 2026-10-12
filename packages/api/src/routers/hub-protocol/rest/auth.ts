@@ -10,6 +10,12 @@
  * `/api/hub/*` — there's no "ping with junk credentials and get a hint"
  * path, because that would leak which keys exist on the pod.
  *
+ * `GET /auth/key-state` is the ONE exception, on purpose: it answers the
+ * holder of a key that does NOT authenticate — awaiting approval, replaced,
+ * expired — so a CLI can say which fix applies. It is looked up by the
+ * presented secret only (`services/key-holder-state.ts`); a secret the pod
+ * never issued gets `{ state: "unknown" }`, at the cost of today's 401.
+ *
  * (`POST /auth/exchange`, the RFC 7523 JWT-Bearer grant that minted a Kratos
  * session, was deleted in W6 2026-10-11: Kratos v1.3.1 has no admin
  * session-create route, so it never succeeded. Every client signs in through
@@ -19,8 +25,9 @@
 import { createRoute } from "@hono/zod-openapi";
 import { db, apiKeys, users, eq } from "@synap/database";
 
-import { shortenKeyId } from "../../../utils/auth-error.js";
-import { AuthStatusSchema } from "./_codecs/auth.js";
+import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
+import { describeKeyForHolder } from "../../../services/key-holder-state.js";
+import { AuthStatusSchema, KeyHolderStateSchema } from "./_codecs/auth.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
@@ -144,6 +151,46 @@ export function registerAuthRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
       ) as never;
+    }
+  });
+
+  const keyStateRoute = createRoute({
+    method: "get",
+    path: "/auth/key-state",
+    tags: ["Auth"],
+    summary: "Why the presented key does or does not work (holder only)",
+    description:
+      "Answers the HOLDER of the bearer key — valid or not — with its state: " +
+      "`active`, `awaiting_approval` (+ the approval page), `revoked` (+ when, " +
+      "why, and when/where a replacing connection was created), `expired`, or " +
+      "`unknown` for a secret this pod never issued. Looked up by the secret " +
+      "only; reveals nothing about any key the caller does not hold.",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: "The presented key's state.",
+        content: { "application/json": { schema: KeyHolderStateSchema } },
+      },
+      401: { $ref: "#/components/responses/Unauthorized" },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  // Auth-skipped (`_middleware/auth.ts` skipAuthPaths): the key under question
+  // may not authenticate — that is the point. It reads the bearer itself.
+  app.openapi(keyStateRoute, async (c) => {
+    const header = c.req.header("authorization") ?? "";
+    const match = header.match(/^Bearer\s+(.+)$/i);
+    const token = match?.[1]?.trim();
+    if (!token) return authErrorResponse(c, "no_auth") as never;
+    try {
+      return c.json(await describeKeyForHolder(token, c.req.url), 200);
+    } catch (err) {
+      logger.error({ err }, "/auth/key-state lookup failed");
+      return c.json({ error: "Could not read this key's state" }, 500);
     }
   });
 }
