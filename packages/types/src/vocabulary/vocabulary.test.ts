@@ -9,6 +9,7 @@ import {
   sentenceCaseLabel,
   resolveActionLabel,
   resolveActionProgressive,
+  resolveActionPresent,
   resolveObjectNoun,
   OBJECT_NOUNS,
   buildObjectActionTitle,
@@ -147,6 +148,18 @@ describe("resolveActionProgressive — the in-flight verb", () => {
       "Frobnicate thing"
     );
     expect(resolveActionProgressive(null)).toBe("");
+  });
+});
+
+describe("resolveActionPresent — what a pending choice does", () => {
+  it("reads the curated present for the capture decisions", () => {
+    expect(resolveActionPresent("update")).toBe("Updates");
+    expect(resolveActionPresent("link")).toBe("Links");
+    expect(resolveActionPresent("entity.create")).toBe("Creates");
+  });
+  it("keeps the imperative where no present is curated", () => {
+    expect(resolveActionPresent("archive")).toBe(resolveActionLabel("archive"));
+    expect(resolveActionPresent(undefined)).toBe("");
   });
 });
 

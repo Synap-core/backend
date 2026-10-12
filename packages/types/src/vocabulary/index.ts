@@ -111,6 +111,12 @@ export interface ActionVerb {
    * never as a third `VerbMood` (proposal titles have no "in flight" reading).
    */
   progressive?: string;
+  /**
+   * What a pending choice DOES, said of the thing ("Updates Marie") — a
+   * caption describing a row's effect. Optional and curated like
+   * `progressive`; read through {@link resolveActionPresent}.
+   */
+  present?: string;
 }
 
 export type VerbMood = "imperative" | "past";
@@ -121,8 +127,8 @@ export type VerbMood = "imperative" | "past";
  * absent falls back to {@link humanizeToken}, which is always safe.
  */
 export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
-  create: { imperative: "Create", past: "Created" },
-  update: { imperative: "Update", past: "Updated" },
+  create: { imperative: "Create", past: "Created", present: "Creates" },
+  update: { imperative: "Update", past: "Updated", present: "Updates" },
   delete: { imperative: "Delete", past: "Deleted" },
   archive: { imperative: "Archive", past: "Archived" },
   restore: { imperative: "Restore", past: "Restored" },
@@ -157,7 +163,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // A key here earns its place by being emitted, not by being well-formed.
   received: { imperative: "Receive", past: "Received" },
   merge: { imperative: "Merge", past: "Merged", progressive: "Merging" },
-  link: { imperative: "Link", past: "Linked" },
+  link: { imperative: "Link", past: "Linked", present: "Links" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
   // "Add to <session>" (a capture offered to a running session) — `add`
@@ -456,6 +462,22 @@ export function resolveActionLabel(
   const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
   const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
   return verb ? verb[mood] : humanizeToken(action);
+}
+
+/**
+ * What a pending choice does, said of the thing ("Updates", "Links") — the
+ * caption under a row whose action is decided but not yet taken. A row
+ * without a curated `present` keeps its imperative rather than guessing a
+ * conjugation nobody curated.
+ */
+export function resolveActionPresent(
+  action: string | null | undefined
+): string {
+  if (!action) return "";
+  const key = action.toLowerCase();
+  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+  const verb = ACTION_VERBS[key] ?? ACTION_VERBS[tail];
+  return verb?.present ?? resolveActionLabel(action, "imperative");
 }
 
 /**

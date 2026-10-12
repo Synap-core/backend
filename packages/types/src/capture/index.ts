@@ -626,6 +626,7 @@ export function readCapturePart(
 }
 
 export * from "./progress.js";
+export * from "./room-state.js";
 export {
   isExplicitCapturePrefix,
   stripCapturePrefix,
