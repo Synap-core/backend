@@ -40,6 +40,24 @@ describe("viewPendingAccess", () => {
     expect(approveLabel(v.full)).toBe("Approve");
   });
 
+  // Rules out the full-access sentence repeating the danger chip.
+  it("full access: the chip says it once; other grants keep their line", () => {
+    const v = viewPendingAccess({
+      ...base,
+      grants: [{ permissions: ["*"] }, { permissions: ["proposal"] }],
+    });
+    expect(v.fullLabel).not.toBeNull();
+    expect(v.lines).toHaveLength(1);
+    expect(v.lines[0]).toContain("Read, create, update and delete");
+  });
+
+  // Rules out ticking "Also disconnect" without the button saying so.
+  it("the approve button names how many it disconnects", () => {
+    expect(approveLabel(false, 1, 2)).toBe("Approve · disconnect 2");
+    expect(approveLabel(true, 1, 1)).toBe("Approve full access · disconnect 1");
+    expect(approveLabel(false, 1, 0)).toBe("Approve");
+  });
+
   it("an un-narrowed * grant is full access; a narrowed one is not", () => {
     expect(
       viewPendingAccess({ ...base, grants: [{ permissions: ["*"] }] }).full

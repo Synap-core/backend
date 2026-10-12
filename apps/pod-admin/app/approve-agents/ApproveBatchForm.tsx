@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ReceiverShell } from "../_lib/receiver-shell";
-import { Button, CardBody, CardHeader, Skeleton } from "@heroui/react";
-import { AlertTriangle, Bot, Check, X } from "lucide-react";
+import { Button, CardBody, CardHeader, Chip, Skeleton } from "@heroui/react";
+import { AlertTriangle, Bot, Check, Laptop, X } from "lucide-react";
 import { resolveServiceMark } from "@synap-core/types/service-marks";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { publicPodUrl } from "../../lib/public-pod-url";
@@ -15,6 +15,7 @@ import {
   type PendingAccess,
 } from "../approve-agent/[keyId]/pending-access";
 import { PendingAccessBlock } from "../approve-agent/[keyId]/PendingAccessBlock";
+import { UNLABELLED_COMPUTER } from "../approve-agent/[keyId]/other-connections";
 
 /** `superseded`: a newer request from the same computer is waiting — never offered. */
 type KeyStatus =
@@ -278,17 +279,31 @@ export function ApproveBatchForm({
             <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
               {keys.map((k) => (
                 <div key={k.keyId} className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <Row
-                        label={agentLabel(k)}
-                        value={
-                          k.status === "pending"
-                            ? (k.instanceLabel ?? "Waiting for you")
-                            : resolveStatusLabel(statusToken(k.status))
-                        }
-                      />
+                  {/* Who + which computer on the left; its state is a mark
+                      on the right — never a computer name in the status slot. */}
+                  <div className="flex items-start gap-2">
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <p className="truncate text-small text-foreground/85">
+                        {agentLabel(k)}
+                      </p>
+                      <p
+                        className="flex min-w-0 items-center gap-1 text-tiny text-foreground/65"
+                        title={k.instanceLabel?.trim() || UNLABELLED_COMPUTER}
+                      >
+                        <Laptop aria-hidden className="h-3 w-3 shrink-0" />
+                        <span className="truncate">
+                          {k.instanceLabel?.trim() || UNLABELLED_COMPUTER}
+                        </span>
+                      </p>
                     </div>
+                    <Chip
+                      size="sm"
+                      variant="flat"
+                      color={k.status === "active" ? "success" : "default"}
+                      className="shrink-0"
+                    >
+                      {resolveStatusLabel(statusToken(k.status))}
+                    </Chip>
                     {k.status === "pending" && (
                       <Button
                         size="sm"
@@ -330,14 +345,20 @@ export function ApproveBatchForm({
               ))}
             </div>
 
+            <p className="text-tiny text-foreground/65">
+              Approving replaces only each computer&apos;s earlier connection;
+              its other computers stay connected.
+            </p>
+
             {actionError && <Notice title={actionError} />}
 
-            <div className="flex gap-2.5">
+            {/* Stacked below 400px, as on the single approval page. */}
+            <div className="flex flex-col gap-2.5 min-[400px]:flex-row">
               <Button
                 color="primary"
                 radius="md"
                 size="md"
-                className="flex-1 font-medium"
+                className="w-full font-medium min-[400px]:w-auto min-[400px]:flex-1"
                 isDisabled={isBusy || pending.length === 0 || !accessRead}
                 isLoading={busy === "approve"}
                 onPress={() => void approveAll()}
@@ -356,6 +377,7 @@ export function ApproveBatchForm({
                   variant="flat"
                   radius="md"
                   size="md"
+                  className="w-full min-[400px]:w-auto"
                   isDisabled={isBusy}
                   isLoading={busy === "reject-all"}
                   onPress={() => void rejectAll()}

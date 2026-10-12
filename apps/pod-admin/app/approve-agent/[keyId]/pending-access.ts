@@ -67,22 +67,36 @@ export function viewPendingAccess(a: PendingAccess): PendingAccessView {
     summarizeGrant(g, { expiresAt: a.expiresAt })
   );
   // A `*` grant narrowed to a workspace is bounded; its line says where.
-  const full = summaries.some((s) => s.full && s.where.length === 0);
+  const unbounded = (s: (typeof summaries)[number]) =>
+    s.full && s.where.length === 0;
+  const full = summaries.some(unbounded);
   return {
     full,
     fullLabel: full ? "Full access: everything you can do" : null,
-    lines: summaries.map((s) => [s.what, ...s.where].join(" · ")),
+    // The danger chip already says full access: its grant's sentence would
+    // only repeat it. Every other grant keeps its line.
+    lines: summaries
+      .filter((s) => !unbounded(s))
+      .map((s) => [s.what, ...s.where].join(" · ")),
     when,
     expired,
     scopeLabels,
   };
 }
 
-/** The approve button names what it hands over. */
-export function approveLabel(fullAccess: boolean, count = 1): string {
+/**
+ * The approve button names what it hands over — and, when the person ticked
+ * other connections to switch off, that it disconnects them too.
+ */
+export function approveLabel(
+  fullAccess: boolean,
+  count = 1,
+  disconnect = 0
+): string {
   if (count > 1)
     return fullAccess
       ? `Approve all ${count}, full access included`
       : `Approve all ${count}`;
-  return fullAccess ? "Approve full access" : "Approve";
+  const base = fullAccess ? "Approve full access" : "Approve";
+  return disconnect > 0 ? `${base} · disconnect ${disconnect}` : base;
 }

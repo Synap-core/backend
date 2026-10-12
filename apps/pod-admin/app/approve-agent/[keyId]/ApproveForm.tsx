@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { Button, CardBody, CardHeader } from "@heroui/react";
-import { Bot, Check, X } from "lucide-react";
+import { Bot, Check, Laptop, X } from "lucide-react";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import {
@@ -15,6 +15,8 @@ import {
 import { PendingAccessBlock } from "./PendingAccessBlock";
 import {
   approveBody,
+  approvedOutcome,
+  newerRequestHref,
   viewConnections,
   type ConnectionFacts,
   type ConnectionsView,
@@ -30,7 +32,7 @@ type DetailsRead =
 type Step =
   | { kind: "idle" }
   | { kind: "working"; action: "approve" | "reject" }
-  | { kind: "approved" }
+  | { kind: "approved"; outcome: { title: string; rows: string[] } }
   | { kind: "rejected" }
   | { kind: "error"; message: string };
 
@@ -110,7 +112,21 @@ export function ApproveForm({
             (detail as { error?: string }).error || `Error (${res.status})`
           );
         }
-        setStep({ kind: action === "approve" ? "approved" : "rejected" });
+        setStep(
+          action === "approve"
+            ? {
+                kind: "approved",
+                // What this approval did, as the page offered it.
+                outcome:
+                  details.state === "ok"
+                    ? approvedOutcome(details.connections, chosen)
+                    : {
+                        title: `${resolveServiceName(agentType)} connected`,
+                        rows: [],
+                      },
+              }
+            : { kind: "rejected" }
+        );
       } catch (err) {
         setStep({
           kind: "error",
@@ -118,13 +134,16 @@ export function ApproveForm({
         });
       }
     },
-    [keyId, podUrl, details, chosen]
+    [keyId, podUrl, details, chosen, agentType]
   );
 
   const busy = step.kind === "working";
   const agentName = resolveServiceName(agentType);
   const connections = details.state === "ok" ? details.connections : null;
   const superseded = connections?.superseded === true;
+  const disconnectCount = connections
+    ? approveBody(connections, chosen).alsoDisconnect.length
+    : 0;
 
   return (
     <ReceiverShell podHost={podHost} identity={identity} width="sm">
@@ -145,20 +164,26 @@ export function ApproveForm({
             Agent access request
           </p>
           <h1 className="font-heading text-2xl font-medium leading-tight tracking-tight text-foreground">
-            Approve {connections?.title ?? agentName}
+            {step.kind === "approved"
+              ? step.outcome.title
+              : `Approve ${connections?.title ?? agentName}`}
           </h1>
-          {connections?.requested ? (
+          {step.kind !== "approved" && connections?.requested ? (
             <p className="text-tiny text-foreground/65">
               {connections.requested}
             </p>
           ) : null}
-          <p className="text-small leading-relaxed text-foreground/65">
-            A{" "}
-            <code className="font-mono text-foreground/80">synap connect</code>{" "}
-            session wants to register{" "}
-            <span className="font-medium text-foreground">{agentName}</span> as
-            an agent on your pod.
-          </p>
+          {step.kind !== "approved" && (
+            <p className="text-small leading-relaxed text-foreground/65">
+              A{" "}
+              <code className="font-mono text-foreground/80">
+                synap connect
+              </code>{" "}
+              session wants to register{" "}
+              <span className="font-medium text-foreground">{agentName}</span>{" "}
+              as an agent on your pod.
+            </p>
+          )}
         </div>
       </CardHeader>
 
@@ -199,34 +224,43 @@ export function ApproveForm({
                 view={connections}
                 chosen={chosen}
                 onChosen={setChosen}
+                newerHref={newerRequestHref(connections, agentType)}
                 isDisabled={busy}
               />
             )}
 
-            <div className="flex gap-2.5">
-              <Button
-                color="primary"
-                radius="md"
-                size="md"
-                className="flex-1 font-medium"
-                // Never approve blind: wait until what it asks for is read.
-                // A superseded request is never offered: its newer one is.
-                isDisabled={busy || details.state !== "ok" || superseded}
-                isLoading={busy && step.action === "approve"}
-                onPress={() => act("approve")}
-                startContent={
-                  busy && step.action === "approve" ? undefined : (
-                    <Check className="h-3.5 w-3.5" />
-                  )
-                }
-              >
-                {approveLabel(details.state === "ok" && details.view.full)}
-              </Button>
+            <div className="flex flex-col gap-2.5 min-[400px]:flex-row">
+              {/* A superseded request is never offered: its newer one is. */}
+              {!superseded && (
+                <Button
+                  color="primary"
+                  radius="md"
+                  size="md"
+                  // Stacked below 400px: full width, never a flex-basis-0
+                  // sliver of a column.
+                  className="w-full font-medium min-[400px]:w-auto min-[400px]:flex-1"
+                  // Never approve blind: wait until what it asks for is read.
+                  isDisabled={busy || details.state !== "ok"}
+                  isLoading={busy && step.action === "approve"}
+                  onPress={() => act("approve")}
+                  startContent={
+                    busy && step.action === "approve" ? undefined : (
+                      <Check className="h-3.5 w-3.5" />
+                    )
+                  }
+                >
+                  {approveLabel(
+                    details.state === "ok" && details.view.full,
+                    1,
+                    disconnectCount
+                  )}
+                </Button>
+              )}
               <Button
                 variant="flat"
                 radius="md"
                 size="md"
-                className="flex-1"
+                className="w-full min-[400px]:w-auto min-[400px]:px-6"
                 isDisabled={busy}
                 isLoading={busy && step.action === "reject"}
                 onPress={() => act("reject")}
@@ -238,12 +272,32 @@ export function ApproveForm({
         )}
 
         {step.kind === "approved" && (
-          <Outcome
-            tone="success"
-            icon={<Check className="h-6 w-6" strokeWidth={2.2} />}
-            title="Approved"
-            message="You can close this tab. Your terminal will carry on."
-          />
+          <div className="flex flex-col gap-3">
+            <Outcome
+              tone="success"
+              icon={<Check className="h-6 w-6" strokeWidth={2.2} />}
+              title="Approved"
+              message="You can close this tab. Your terminal will carry on."
+            />
+            {step.outcome.rows.length > 0 && (
+              <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+                {step.outcome.rows.map((row) => (
+                  <p
+                    key={row}
+                    className="flex items-center gap-1.5 text-small text-foreground/85"
+                  >
+                    <Laptop
+                      aria-hidden
+                      className="h-3.5 w-3.5 shrink-0 text-foreground/65"
+                    />
+                    <span className="min-w-0 truncate" title={row}>
+                      {row}
+                    </span>
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
         )}
 
         {step.kind === "rejected" && (

@@ -11,6 +11,7 @@
  * Pure: the page renders exactly what this returns. An older pod sends no
  * `connections`; that reads as `known: false`, never as "no other computer".
  */
+import { resolveServiceMark } from "@synap-core/types/service-marks";
 import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
 
 /** One of the agent's other live connections, as the pod sends it. */
@@ -27,6 +28,8 @@ export interface OtherConnection {
 
 /** The connection facts on the details answer (absent from an older pod). */
 export interface ConnectionFacts {
+  agentType?: string | null;
+  agentName?: string | null;
   displayName?: string;
   instanceLabel?: string | null;
   createdAt?: string;
@@ -35,7 +38,14 @@ export interface ConnectionFacts {
 }
 
 /** The words for a connection made by a CLI that sent no computer name. */
-export const UNLABELLED_COMPUTER = "unlabelled (older CLI)";
+export const UNLABELLED_COMPUTER = "unlabelled";
+
+/** "3 Oct 2026" — the same day format the grant expiry uses. */
+const DAY_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
 
 export interface ConnectionRow {
   keyId: string;
@@ -43,11 +53,18 @@ export interface ConnectionRow {
   computer: string;
   /** "last used 5m ago" / "never used". */
   lastUsed: string;
+  /**
+   * "connected 3 Oct 2026" — what tells two unlabelled connections apart
+   * (both the row and its checkbox's accessible name carry it).
+   */
+  connected: string;
 }
 
 export interface ConnectionsView {
   /** The pod sent the facts (an older pod does not). */
   known: boolean;
+  /** The agent's product name: "Claude Code". */
+  agent: string;
   /** "Claude Code on devbox" — the connection being approved. */
   title: string | null;
   /** "Requested 3m ago" for the request itself. */
@@ -58,6 +75,13 @@ export interface ConnectionsView {
   others: ConnectionRow[];
   /** A newer request from this computer is waiting: this one is not offered. */
   superseded: boolean;
+  /** The newer request's key, to link to (null when not superseded). */
+  supersededBy: string | null;
+}
+
+function connectedOn(iso: string): string {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? "" : `connected ${DAY_FORMAT.format(at)}`;
 }
 
 function toRow(c: OtherConnection): ConnectionRow {
@@ -67,18 +91,61 @@ function toRow(c: OtherConnection): ConnectionRow {
     lastUsed: c.lastUsedAt
       ? `last used ${formatRelative(c.lastUsedAt)}`
       : "never used",
+    connected: connectedOn(c.createdAt),
   };
+}
+
+/**
+ * The agent's product name, as the pod names it (`agentProductName`,
+ * agent-connect.ts): the service registry's name for a known agent type,
+ * else the agent's own name, else the humanized type.
+ */
+function agentProduct(f: ConnectionFacts): string {
+  const mark = resolveServiceMark(f.agentType, "mono");
+  if (mark.known) return mark.name;
+  if (f.agentName?.trim()) return f.agentName.trim();
+  return mark.name;
 }
 
 export function viewConnections(f: ConnectionFacts): ConnectionsView {
   const list = Array.isArray(f.connections) ? f.connections : null;
   return {
     known: list !== null,
+    agent: agentProduct(f),
     title: f.displayName?.trim() || null,
     requested: f.createdAt ? `Requested ${formatRelative(f.createdAt)}` : null,
     replaced: (list ?? []).filter((c) => c.sameComputer).map(toRow),
     others: (list ?? []).filter((c) => !c.sameComputer).map(toRow),
     superseded: !!f.supersededBy,
+    supersededBy: f.supersededBy?.keyId ?? null,
+  };
+}
+
+/** The newer request's own approval page (null when not superseded). */
+export function newerRequestHref(
+  view: ConnectionsView,
+  agentType: string
+): string | null {
+  if (!view.supersededBy) return null;
+  return `/approve-agent/${encodeURIComponent(
+    view.supersededBy
+  )}?agentType=${encodeURIComponent(agentType)}`;
+}
+
+/** What the success screen says happened: heading + one row per change. */
+export function approvedOutcome(
+  view: ConnectionsView,
+  chosen: readonly string[]
+): { title: string; rows: string[] } {
+  const sent = new Set(approveBody(view, chosen).alsoDisconnect);
+  return {
+    title: `${view.title ?? view.agent} connected`,
+    rows: [
+      ...view.replaced.map((r) => `Replaced: ${r.computer}`),
+      ...view.others
+        .filter((r) => sent.has(r.keyId))
+        .map((r) => `Disconnected: ${r.computer}`),
+    ],
   };
 }
 
