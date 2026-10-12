@@ -497,9 +497,10 @@ describe("lensHeaderModel", () => {
     });
     expect(m.allClear).toBe(false);
     expect(m.doors.find((d) => d.section === "blocking")!.count).toBeNull();
-    // An unknown count is named without a number — never "0 need you".
+    // An unknown count reads as unknown — never "0 need you", never a bare
+    // "Needs you" that looks like a section title (WP.7).
     expect(m.doors.find((d) => d.section === "blocking")!.text).toBe(
-      "Needs you"
+      "\u2013 need you"
     );
     expect(m.narrative.map((p) => p.key)).toEqual(["produced"]);
     expect(m.state.state).toBe("unmeasured");
@@ -687,7 +688,7 @@ describe("lensHeaderModel", () => {
 });
 
 describe("header doors point only at sections that are on the page", () => {
-  it("a READ zero omits its door; an unknown (null) keeps it, numberless", () => {
+  it("a READ zero omits its door; an unknown (null) keeps it, marked unknown", () => {
     // Disagreeing rules: "always three doors" draws Happening 0 (a door to an
     // omitted section); "omit falsy" also drops the null door — but a failed
     // section still draws (with its retry), so its door must stay.
@@ -701,7 +702,7 @@ describe("header doors point only at sections that are on the page", () => {
         section: "blocking",
         label: "Needs you",
         count: null,
-        text: "Needs you",
+        text: "\u2013 need you",
       },
       { section: "produced", label: "Produced", count: 2, text: "2 delivered" },
     ]);

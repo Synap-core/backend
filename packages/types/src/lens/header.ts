@@ -285,16 +285,23 @@ export function lensNextMove(
   };
 }
 
+/**
+ * The mark an UNKNOWN count wears in a door ("– need you"): a count that was
+ * not read reads as not known — never a bare label ("Needs you") that looks
+ * like a section title, never a calm zero. Hosts draw it muted.
+ */
+export const LENS_UNKNOWN_COUNT = "\u2013";
+
 /** The strip's words for one lens-section count door. */
 export function lensCountDoorText(
   section: "blocking" | "happening" | "produced",
   count: number | null
 ): string {
-  if (count === null) return LENS_SECTION_LABELS[section];
+  const n = count ?? LENS_UNKNOWN_COUNT;
   if (section === "blocking")
-    return `${count} ${count === 1 ? "needs" : "need"} you`;
-  if (section === "produced") return `${count} delivered`;
-  return `${count} running`;
+    return `${n} ${count === 1 ? "needs" : "need"} you`;
+  if (section === "produced") return `${n} delivered`;
+  return `${n} running`;
 }
 
 export interface LensHeaderModel<X extends string = never> {

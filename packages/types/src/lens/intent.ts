@@ -8,11 +8,12 @@
  *
  * Each count is a door (needs you → the rail's Needs you, being worked → its
  * Working now, in pipeline → the board, done → the board's done column). A
- * READ zero omits its door; an unknown count (null) keeps it, wordless. The
+ * READ zero omits its door; an unknown count (null) keeps it, marked "–". The
  * ONE fact is the kind's goal (a stated KPI, `lensKpiFact`), never a date.
  */
 import { resolveUnitState } from "../units/state.js";
 import {
+  LENS_UNKNOWN_COUNT,
   lensCountDoorText,
   lensNextMove,
   type LensCountDoor,
@@ -65,13 +66,11 @@ export function lensIntentDoorText(
     case "blocking":
       return lensCountDoorText("blocking", count);
     case "happening":
-      return count === null ? "Being worked" : `${count} being worked`;
+      return `${count ?? LENS_UNKNOWN_COUNT} being worked`;
     case "pipeline":
-      return count === null ? "Pipeline" : `${count} in pipeline`;
+      return `${count ?? LENS_UNKNOWN_COUNT} in pipeline`;
     case "produced":
-      return count === null
-        ? "Done"
-        : `${count} done ${windowWords(windowDays)}`;
+      return `${count ?? LENS_UNKNOWN_COUNT} done ${windowWords(windowDays)}`;
   }
 }
 

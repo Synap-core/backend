@@ -54,15 +54,21 @@ describe("lensIntentHeaderModel", () => {
     expect(m.allClear).toBe(true);
   });
 
-  it("an UNKNOWN needs-you keeps its door wordless and is never All clear", () => {
+  it("an UNKNOWN needs-you reads as unknown (\u2013), never a bare label, never All clear", () => {
     const m = lensIntentHeaderModel({
       counts: { ...counts, needsYou: null },
     });
     expect(m.doors[0]).toMatchObject({
       section: "blocking",
       count: null,
-      text: "Needs you",
+      text: "\u2013 need you",
     });
+    // Every intent door says unknown the same way (WP.7).
+    expect(lensIntentDoorText("happening", null)).toBe("\u2013 being worked");
+    expect(lensIntentDoorText("pipeline", null)).toBe("\u2013 in pipeline");
+    expect(lensIntentDoorText("produced", null, 30)).toBe(
+      "\u2013 done in the last 30 days"
+    );
     expect(m.allClear).toBe(false);
     // a live agent outranks the unknown (the shared order); without one, unmeasured
     expect(m.state.state).toBe("working");
