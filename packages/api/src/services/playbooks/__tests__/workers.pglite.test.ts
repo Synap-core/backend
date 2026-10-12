@@ -105,6 +105,7 @@ vi.mock("../../rules/update.js", () => ({
   ),
 }));
 vi.mock("../playbook-activators.js", async (importOriginal) => ({
+  // NB: `convergeActivatorsAtBoot` calls the module's OWN pass, not this mock.
   ...(await importOriginal<Record<string, unknown>>()),
   applyPlaybookActivators: vi.fn(async () => ({
     status: "applied",
@@ -137,6 +138,7 @@ import {
   automations,
   proposals,
   focusSessions,
+  playbookAutomations,
 } from "@synap/database";
 import {
   WORKER_SCOPE_OVERLAP,
@@ -146,6 +148,10 @@ import {
   setWorkerPaused,
 } from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
+import {
+  ACTIVATOR_COMPILE_VERSION,
+  convergeActivatorsAtBoot,
+} from "../playbook-activators.js";
 import { createRuleGoverned } from "../../rules/create.js";
 
 const USER = "user-1";
@@ -196,6 +202,7 @@ beforeAll(async () => {
     automations,
     proposals,
     focusSessions,
+    playbookAutomations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -606,5 +613,74 @@ describe("listEnabledWorkers — FB2 item 9: a constant number of reads", () => 
     );
     // One pending read per list, over every live automation at once.
     expect(h.bulkCalls.at(-1)).toHaveLength(5);
+  });
+});
+
+describe("convergeActivatorsAtBoot — D4: once per compile version", () => {
+  async function playbook(o: {
+    activators: unknown[];
+    status?: string;
+    metadata?: unknown;
+  }) {
+    const id = randomUUID();
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile, metadata)
+       values ($1, 'P', $2, $3, $4, 'g', $5::jsonb, $6::jsonb)`,
+      [
+        id,
+        o.status ?? "active",
+        WS,
+        USER,
+        JSON.stringify({ profileSlug: "deal", activators: o.activators }),
+        JSON.stringify(o.metadata ?? {}),
+      ]
+    );
+    return id;
+  }
+  const rulesOf = async (pbId: string) =>
+    (
+      await q<{ n: number }>(
+        `select count(*)::int as n from skills where metadata->'rule'->'seed'->>'template' = $1`,
+        [`playbook-activator:${pbId}`]
+      )
+    ).rows[0]!.n;
+  const versionOf = async (pbId: string) =>
+    (
+      await q<{ v: string | null }>(
+        `select metadata->'activatorRules'->>'compileVersion' as v from playbooks where id = $1`,
+        [pbId]
+      )
+    ).rows[0]!.v;
+
+  it("converges the playbooks behind the compile version and stamps them; skips the current and the paused", async () => {
+    const CREATED = [{ on: "created", mode: "propose" }];
+    const behind = await playbook({ activators: CREATED });
+    const current = await playbook({
+      activators: CREATED,
+      metadata: {
+        activatorRules: {
+          template: "x",
+          rules: {},
+          compileVersion: ACTIVATOR_COMPILE_VERSION,
+        },
+      },
+    });
+    // The memory's version only counts for ITS template: here it does.
+    await q(
+      `update playbooks set metadata = jsonb_set(metadata, '{activatorRules,template}', to_jsonb($2::text)) where id = $1`,
+      [current, `playbook-activator:${current}`]
+    );
+    const paused = await playbook({ activators: CREATED, status: "paused" });
+
+    const r = await convergeActivatorsAtBoot();
+    expect(r.failed).toBe(0);
+    expect(await rulesOf(behind)).toBe(1);
+    expect(await versionOf(behind)).toBe(String(ACTIVATOR_COMPILE_VERSION));
+    expect(await rulesOf(current)).toBe(0);
+    expect(await rulesOf(paused)).toBe(0);
+
+    await q(`delete from playbooks where id = any($1::uuid[])`, [
+      [behind, current, paused],
+    ]);
   });
 });

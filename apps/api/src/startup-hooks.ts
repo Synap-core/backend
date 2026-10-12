@@ -34,7 +34,7 @@ import {
   ensureCoreRenderers,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
-  convergeEntersStatusActivators,
+  convergeActivatorsAtBoot,
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
   backfillCapabilityEmits,
@@ -660,21 +660,19 @@ export async function runStartupHooks(): Promise<void> {
     );
   }
 
-  // enters_status activators follow the lifecycle transition event (work
-  // model L2): recompile pod-local playbooks' activator rules through the
+  // Activators compiled at an older compile version (D4: every activator now
+  // carries the worker spec), and enters_status ones whose subject lifecycle
+  // may have moved: recompile pod-local playbooks' activator rules through the
   // governed rule door (installed ones converged in the reconcile above).
   try {
-    const r = await convergeEntersStatusActivators();
+    const r = await convergeActivatorsAtBoot();
     if (r.failed > 0) {
-      logger.warn(
-        r,
-        "Some enters_status activators did not converge (non-fatal)"
-      );
+      logger.warn(r, "Some playbook activators did not converge (non-fatal)");
     }
   } catch (err) {
     logger.warn(
       { err },
-      "Failed to converge enters_status activators on startup (non-fatal)"
+      "Failed to converge playbook activators on startup (non-fatal)"
     );
   }
 

@@ -212,6 +212,7 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
 }));
 
 import {
+  ACTIVATOR_COMPILE_VERSION,
   activatorRuleDecl,
   applyPlaybookActivators,
   workerEnablementKey,
@@ -767,11 +768,20 @@ describe("stage workers (work model L4)", () => {
     expect(config).not.toHaveProperty("__mode");
   });
 
-  it("a plain created / enters_status activator carries NO worker spec (installed rules keep their hash)", async () => {
+  it("D4: a plain created / enters_status activator carries the worker spec too", async () => {
     setPlaybook(TWO);
     await run();
-    expect(configOf(0)).not.toHaveProperty("__worker");
-    expect(configOf(1)).not.toHaveProperty("__worker");
+    expect(configOf(0).__worker).toEqual({
+      key: "created",
+      size: "per_thing",
+      profileSlug: "post",
+    });
+    expect(configOf(1).__worker).toEqual({
+      key: "enters_status:published",
+      size: "per_thing",
+      profileSlug: "post",
+      status: "published",
+    });
   });
 
   it("a MANUAL worker compiles no rule", async () => {
@@ -873,5 +883,144 @@ describe("stage workers (work model L4)", () => {
       reason: "disabled by a person — left off",
     });
     expect((rule.metadata.rule as Row).draft).toBe(true);
+  });
+});
+
+/**
+ * D4 — the compile version. An installed rule compiled before every activator
+ * carried the worker spec (compile version 1) re-converges ONCE, through the
+ * same three-way as any pass. Rows rule out: an untouched v1 rule left
+ * without its spec; an owner-EDITED v1 rule rewritten; a PAUSED one armed or
+ * recompiled; a DELETED one recreated; a version stamped by a pass that did
+ * not converge.
+ */
+describe("D4: rules compiled before the worker spec re-converge once", () => {
+  /** The decl as compile version 1 wrote it: no `__worker` on the node. */
+  function v1Decl(activator: Row) {
+    const decl = activatorRuleDecl({
+      activator: activator as never,
+      playbookId: PB,
+      playbookName: "Repurpose",
+      profileSlug: "post",
+      statusProperty: "post-status",
+      subject: { profileKind: "kind", lifecycleProperty: null },
+    }) as { key: string; intent: string; sentence: Row };
+    const sentence = JSON.parse(JSON.stringify(decl.sentence)) as {
+      actions: Array<{ config: Row }>;
+    };
+    delete sentence.actions[0]!.config.__worker;
+    return { key: decl.key, intent: decl.intent, sentence };
+  }
+  /** An installed v1 rule + the playbook's memory of it (no version). */
+  function installV1(activator: Row, edit?: (rule: Row) => void) {
+    const d = v1Decl(activator);
+    const id = `rule-v1-${++store.seq}`;
+    const rule: Row = {
+      v: 1,
+      intent: d.intent,
+      scope: { kind: "workspace", workspaceId: "ws-1" },
+      sentence: d.sentence,
+      seed: {
+        template: `playbook-activator:${PB}`,
+        key: d.key,
+        hash: templateRuleHash(d),
+      },
+      behaviours: [],
+    };
+    edit?.(rule);
+    store.rules.push({ id, automationId: `auto-${id}`, metadata: { rule } });
+    return { id, key: d.key };
+  }
+  function remember(rules: Record<string, { ruleId: string }>) {
+    store.playbook!.metadata = {
+      activatorRules: { template: `playbook-activator:${PB}`, rules },
+    };
+  }
+  const memory = () =>
+    (store.playbook!.metadata as Row).activatorRules as {
+      compileVersion?: number;
+    };
+
+  it("an untouched v1 rule is recompiled with the spec, once; the version is stamped", async () => {
+    setPlaybook(TWO);
+    const a = installV1(TWO[0]!);
+    const b = installV1(TWO[1]!);
+    remember({ [a.key]: { ruleId: a.id }, [b.key]: { ruleId: b.id } });
+    expect(ACTIVATOR_COMPILE_VERSION).toBe(2);
+
+    const first = await run();
+    expect(first.outcomes.map((o) => o.status)).toEqual(["updated", "updated"]);
+    for (const id of [a.id, b.id]) {
+      const rule = store.rules.find((r) => r.id === id)!.metadata.rule as {
+        sentence: { actions: Array<{ config: Row }> };
+      };
+      expect(rule.sentence.actions[0]!.config.__worker).toBeDefined();
+    }
+    expect(memory().compileVersion).toBe(2);
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+
+    vi.mocked(updateRuleGoverned).mockClear();
+    const second = await run();
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    expect(second.outcomes.every((o) => o.status === "unchanged")).toBe(true);
+  });
+
+  it("an owner-EDITED v1 rule is kept as the owner left it", async () => {
+    setPlaybook([TWO[1]!]);
+    const e = installV1(TWO[1]!, (rule) => {
+      rule.intent = "When a post is published, tell me first.";
+    });
+    remember({ [e.key]: { ruleId: e.id } });
+    const res = await run();
+    expect(res.outcomes[0]).toMatchObject({ key: e.key, ruleId: e.id });
+    expect(["kept", "conflict"]).toContain(res.outcomes[0]!.status);
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    const rule = store.rules[0]!.metadata.rule as {
+      intent: string;
+      sentence: { actions: Array<{ config: Row }> };
+    };
+    expect(rule.intent).toBe("When a post is published, tell me first.");
+    expect(rule.sentence.actions[0]!.config.__worker).toBeUndefined();
+  });
+
+  it("a PAUSED v1 rule stays paused and uncompiled; a DELETED one is not recreated", async () => {
+    setPlaybook(TWO);
+    const paused = installV1(TWO[0]!, (rule) => {
+      rule.draft = true;
+    });
+    remember({
+      [paused.key]: { ruleId: paused.id },
+      "enters_status:published": { ruleId: "rule-gone" },
+    });
+    const res = await run();
+    expect(res.outcomes.map((o) => [o.key, o.status])).toEqual([
+      ["created", "owner_choice"],
+      ["enters_status:published", "owner_choice"],
+    ]);
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    const rule = store.rules[0]!.metadata.rule as Row;
+    expect(rule.draft).toBe(true);
+  });
+
+  it("a pass that did not converge stamps no version", async () => {
+    // An enters_status activator with no status property anywhere: denied.
+    store.playbook = {
+      id: PB,
+      name: "Repurpose",
+      status: "active",
+      workspaceId: "ws-1",
+      metadata: {},
+      subjectProfile: {
+        profileSlug: "post",
+        activators: [{ on: "enters_status", status: "published", mode: "run" }],
+      },
+    };
+    const res = await run();
+    expect(res.outcomes[0]!.status).toBe("denied");
+    expect(
+      ((store.playbook!.metadata as Row).activatorRules as Row | undefined)
+        ?.compileVersion
+    ).toBeUndefined();
   });
 });

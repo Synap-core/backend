@@ -218,14 +218,14 @@ export interface ApplyPlaybookActivatorsResult {
  * the sentence are a function of the activator and the playbook, so the hash
  * (and therefore idempotence) is stable across passes.
  *
- * STAGE WORKERS (work model L4). The compiled node carries a worker spec
- * (`PlaybookRunWorkerSpec`: size, status, threshold, backlog limit) when the
- * activator is a worker shape — `count` / `schedule`, a `per_moment` size, a
- * declared `maxPendingApprovals` — or when it is compiled for a PROJECT
- * (`scope`, the `workers.enable` door). A plain space-wide `created` /
- * `enters_status` activator compiles with NO spec, byte-identical to before
- * workers existed, so no installed rule's seed hash moves (they run without
- * the worker gate, as they always have). A per_moment worker's node runs
+ * STAGE WORKERS (work model L4). EVERY compiled node carries a worker spec
+ * (`PlaybookRunWorkerSpec`: size, status, threshold, backlog limit), so every
+ * enablement — the space-wide one each install keeps included — runs behind
+ * the worker floors: the approvals backlog, the stale-transition check and the
+ * irreversible-send ceiling (D4). Until compile version 2
+ * (`ACTIVATOR_COMPILE_VERSION`) a plain space-wide `created` /
+ * `enters_status` activator compiled with NO spec; the version bump makes
+ * each such untouched rule re-converge once. A per_moment worker's node runs
  * (`mode` omitted) and carries the declared mode as `writes`: "propose"
  * makes every agent write inside the batch a proposal. `manual` compiles NO
  * rule (it is a button over the enablement's filter).
@@ -255,31 +255,23 @@ export function activatorRuleDecl(input: {
   const size = effectiveWorkerSize(a);
   const perMoment = size === "per_moment";
   const verb = a.mode === "propose" && !perMoment ? "propose running" : "run";
-  const isWorker =
-    !!input.scope ||
-    a.on === "count" ||
-    a.on === "schedule" ||
-    perMoment ||
-    a.maxPendingApprovals !== undefined;
-  const worker = isWorker
-    ? {
-        key,
-        size,
-        profileSlug,
-        ...(a.status ? { status: a.status } : {}),
-        ...(a.on === "count" && a.min !== undefined ? { minCount: a.min } : {}),
-        ...(a.maxPendingApprovals !== undefined
-          ? { maxPendingApprovals: a.maxPendingApprovals }
-          : {}),
-        ...(perMoment ? { writes: a.mode } : {}),
-      }
-    : undefined;
+  const worker = {
+    key,
+    size,
+    profileSlug,
+    ...(a.status ? { status: a.status } : {}),
+    ...(a.on === "count" && a.min !== undefined ? { minCount: a.min } : {}),
+    ...(a.maxPendingApprovals !== undefined
+      ? { maxPendingApprovals: a.maxPendingApprovals }
+      : {}),
+    ...(perMoment ? { writes: a.mode } : {}),
+  };
   const common = {
     playbookId,
     profileSlug,
     // A batch RUNS; whether its writes propose rides on `worker.writes`.
     mode: perMoment ? ("run" as const) : a.mode,
-    ...(worker ? { worker } : {}),
+    worker,
     ...(input.scope ? { projectId: input.scope.projectId } : {}),
     ...(input.scope?.trackId ? { trackId: input.scope.trackId } : {}),
   };
@@ -396,10 +388,31 @@ export async function readSubjectProfile(
   };
 }
 
+/**
+ * The activator COMPILER's version (backend-rules "version the coverage"). A
+ * seed hash says "this rule is the compile of its declaration", but only as
+ * the compiler of its day saw it: when the compiler starts writing something
+ * new, an installed rule's stamp is still that older compile's. Each playbook
+ * remembers the version its last converged pass compiled at
+ * (`ActivatorMemory.compileVersion`); the boot pass converges every playbook
+ * still behind, ONCE — through the same three-way as any pass, so an owner's
+ * edit is kept, a pause left paused, a deletion not undone.
+ *
+ *   1 — before D4: a plain space-wide created / enters_status activator
+ *       compiled with no worker spec (absent memory reads as 1);
+ *   2 — every activator carries the worker spec (D4).
+ *
+ * Bump it whenever `activatorRuleDecl` starts writing a different decl for an
+ * unchanged declaration.
+ */
+export const ACTIVATOR_COMPILE_VERSION = 2;
+
 /** One playbook's memory of the rules its activators produced (see header). */
 interface ActivatorMemory {
   template: string;
   rules: Record<string, { ruleId: string; retired?: true }>;
+  /** The compile version of the last pass that converged (absent = 1). */
+  compileVersion?: number;
 }
 
 /** The `playbooks.metadata` key that holds {@link ActivatorMemory}. */
@@ -411,7 +424,9 @@ function readActivatorMemory(
 ): ActivatorMemory {
   const raw = (metadata as Record<string, unknown> | null)?.[
     ACTIVATOR_MEMORY_KEY
-  ] as { template?: unknown; rules?: unknown } | undefined;
+  ] as
+    | { template?: unknown; rules?: unknown; compileVersion?: unknown }
+    | undefined;
   const rules: ActivatorMemory["rules"] = {};
   if (
     raw?.template === template &&
@@ -427,7 +442,15 @@ function readActivatorMemory(
         };
     }
   }
-  return { template, rules };
+  return {
+    template,
+    rules,
+    ...(raw?.template === template &&
+    typeof raw.compileVersion === "number" &&
+    Number.isInteger(raw.compileVersion)
+      ? { compileVersion: raw.compileVersion }
+      : {}),
+  };
 }
 
 /** Passes over one playbook, serialized in-process (see CONCURRENCY). */
@@ -491,7 +514,7 @@ async function applyOnce(input: {
 
   const template = activatorSeedTemplate(pb.id);
   const memory = readActivatorMemory(pb.metadata, template);
-  const memoryBefore = JSON.stringify(memory.rules);
+  const memoryBefore = JSON.stringify(memory);
   const agent = input.agentUserId ? { agentUserId: input.agentUserId } : {};
   const scope = pb.workspaceId
     ? { kind: "workspace" as const, workspaceId: pb.workspaceId }
@@ -854,7 +877,13 @@ async function applyOnce(input: {
   }
 
   await syncActivatorLinks(pb.id, [...liveRuleIds]);
-  if (JSON.stringify(memory.rules) !== memoryBefore) {
+  // The compile version is a marker: stamped only by a pass where every
+  // declared activator converged. A failed or refused one is retried at the
+  // next boot (an unchanged decl writes nothing, so a retry costs a read).
+  if (!outcomes.some((o) => o.status === "failed" || o.status === "denied")) {
+    memory.compileVersion = ACTIVATOR_COMPILE_VERSION;
+  }
+  if (JSON.stringify(memory) !== memoryBefore) {
     await db
       .update(playbooks)
       .set({
@@ -897,10 +926,11 @@ export async function convergePlaybookActivatorsSafely(input: {
 }
 
 /**
- * BOOT: converge every live playbook that declares an `enters_status`
- * activator — the recompile of rules compiled before `enters_status` followed
- * the transition event (2026-10-11), and of rules whose subject profile has
- * since declared (or retired) its lifecycle.
+ * BOOT: converge every live playbook that declares activators and is either
+ *   - compiled at an older `ACTIVATOR_COMPILE_VERSION` (its memory says so,
+ *     or has none) — the once-per-version re-convergence (D4), or
+ *   - declares an `enters_status` activator — the recompile of rules whose
+ *     subject profile has since declared (or retired) its lifecycle.
  *
  * Not a conversion op: the recompile IS the activator convergence above —
  * the governed rule door, the three-way seed stamp (an owner-edited rule is
@@ -909,10 +939,11 @@ export async function convergePlaybookActivatorsSafely(input: {
  * playbooks already reach this pass on every boot (the installed-playbook
  * reconcile); this covers pod-local ones (`synap_create_playbook`), which
  * otherwise converge only on their next write. Idempotent: an unchanged decl
- * writes nothing. Attributed like the template reconcile: the space owner, or
+ * writes nothing, and a converged playbook stamps the version so the next
+ * boot skips it. Attributed like the template reconcile: the space owner, or
  * the playbook's creator for a pod-wide one.
  */
-export async function convergeEntersStatusActivators(): Promise<{
+export async function convergeActivatorsAtBoot(): Promise<{
   playbooks: number;
   failed: number;
 }> {
@@ -927,7 +958,11 @@ export async function convergeEntersStatusActivators(): Promise<{
     .where(
       and(
         eq(playbooks.status, "active"),
-        drizzleSql`${playbooks.subjectProfile}->'activators' @> '[{"on":"enters_status"}]'::jsonb`
+        drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`,
+        drizzleSql`(
+          ${playbooks.subjectProfile}->'activators' @> '[{"on":"enters_status"}]'::jsonb
+          OR coalesce((${playbooks.metadata}->${ACTIVATOR_MEMORY_KEY}->>'compileVersion')::int, 1) < ${ACTIVATOR_COMPILE_VERSION}
+        )`
       )
     );
   let failed = 0;
@@ -939,7 +974,7 @@ export async function convergeEntersStatusActivators(): Promise<{
       failed++;
       logger.error(
         { err, playbookId: row.id },
-        "enters_status activators did not converge at boot — the next write or boot retries"
+        "activators did not converge at boot — the next write or boot retries"
       );
     }
   }

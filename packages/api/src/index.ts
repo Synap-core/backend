@@ -476,7 +476,7 @@ export {
   reconcileWorkspacePlaybooksToTemplate,
   type WorkspacePlaybooksReconcileReport,
 } from "./services/playbooks/reconcile-installed-playbooks.js";
-export { convergeEntersStatusActivators } from "./services/playbooks/playbook-activators.js";
+export { convergeActivatorsAtBoot } from "./services/playbooks/playbook-activators.js";
 export {
   reconcileInstalledPacks,
   type InstalledPackReconcileOutcome,
