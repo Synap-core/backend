@@ -65,6 +65,7 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import {
   listProjectsUsingWorkspace,
   listProjectsUsingWorkspaces,
@@ -1099,6 +1100,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       data: {
         name: workspaceName ?? templateName ?? "untitled",
         definition,
+        contents: summarizePackageContents(definition),
         workspaceName,
         templateId,
         workspaceType,

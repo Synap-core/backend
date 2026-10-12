@@ -88,7 +88,6 @@ describe("the DOORS list is every caller of execFieldsChanged", () => {
   const callers = sourceFiles(apiSrc)
     .filter((f) => !f.endsWith("skill-exec-fields.ts"))
     .filter((f) => CALL.test(readFileSync(f, "utf8")))
-    .map((f) => join(f))
     .sort();
 
   it("finds the callers it hunts (non-vacuity)", () => {

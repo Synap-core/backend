@@ -18,6 +18,7 @@ import {
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
 import { installedTemplateSpace } from "../../../services/installed-template-space.js";
+import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
@@ -788,13 +789,12 @@ export function registerPackagesRoutes(app: HubHono): void {
           body._meta?.slug ??
           "untitled",
         ...(existingSpace
-          ? {
-              id: existingSpace.id,
-              existingWorkspaceId: existingSpace.id,
-              operation: "template_update",
-            }
+          ? { id: existingSpace.id, operation: "template_update" }
           : {}),
         definition: body,
+        // What layer 2 brings (playbooks, automations + status, capabilities,
+        // MCP servers) — so the approval card shows it, not just a name.
+        contents: summarizePackageContents(body),
         workspaceName,
         templateId: body._meta?.slug,
         packageSlug: body._meta?.slug,
@@ -875,14 +875,18 @@ export function registerPackagesRoutes(app: HubHono): void {
     // meaning "seed fully" (never skipped).
     let postWorkspaceOutcome:
       "created" | "reconciled" | "unchanged" | undefined;
+    let pendingVersionStamp: string | undefined;
     try {
       const core = await materializeWorkspaceCore({
         definition: body as unknown as WorkspaceDefinitionInput,
         userId,
         agentUserId,
         selfSlug: body._meta?.slug,
-        // Idempotent-create passthrough — the EXACT args this door passed to
-        // createWorkspaceFromDefinitionIdempotent before (Hub never defers).
+        // Stamp only what was earned: a re-hit that reconciles layer 1 to a
+        // newer template hands the version back (`pendingVersionStamp`) and
+        // it is stamped below only once the post-workspace layers converged —
+        // the same rule as the approve path (executors/workspace.ts).
+        deferVersionStamp: true,
         proposalId: idempotencyKey,
         workspaceName,
         templateId: body._meta?.slug ?? undefined,
@@ -951,6 +955,7 @@ export function registerPackagesRoutes(app: HubHono): void {
         // Hub never passes deferCreate, so the core never returns "resolved".
         workspaceId = core.workspaceId;
         postWorkspaceOutcome = core.created.outcome;
+        pendingVersionStamp = core.created.pendingVersionStamp;
         result.workspace = {
           status: "created",
           workspaceId: core.workspaceId,
@@ -1091,6 +1096,21 @@ export function registerPackagesRoutes(app: HubHono): void {
         scopes: c.get("scopes") ?? [],
       });
       Object.assign(result, post);
+      // The version layer 1 deferred: written only when layer 2 landed
+      // (nothing errored, nothing still proposed), so the next update still
+      // sees the drift otherwise.
+      if (pendingVersionStamp) {
+        const { postWorkspaceLayersConverged } =
+          await import("../../../services/capabilities/install-layers.js");
+        if (postWorkspaceLayersConverged(post)) {
+          const { stampWorkspacePackageVersion } =
+            await import("../../../services/workspace-creation-service.js");
+          await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
+          result.versionStamped = true;
+        } else {
+          result.versionStamped = false;
+        }
+      }
     } else if (workspaceId && body.playbooks?.length) {
       // "unchanged" says the version STAMP matches — not that every playbook
       // the template declares exists. A stamp written by a pass that did not

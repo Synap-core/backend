@@ -45,6 +45,7 @@ import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import {
   withWorkspaceProposalIdLock,
   reconcileWorkspaceIfStale,
+  stampWorkspacePackageVersion,
 } from "../../services/workspace-creation-service.js";
 import { resolveWorkspaceExtends } from "../../services/workspace-composition.js";
 import type { ResolvedPackageDependency } from "../../services/package-dependency-resolver.js";
@@ -62,6 +63,7 @@ import {
 } from "../../services/definition-seeds.js";
 import {
   summarizePostWorkspaceLayers,
+  postWorkspaceLayersConverged,
   installedTrackTemplates,
   type InstalledTrackTemplate,
 } from "../../services/capabilities/install-layers.js";
@@ -860,6 +862,10 @@ export const definitionEngineProcedures = {
           packageSlug: input.packageSlug,
           currentSettings,
           userId: ctx.userId,
+          // Stamp only what was earned: the new version is written below,
+          // once layer 2 converged (same rule as the approve path and the
+          // Hub `/packages/apply` door).
+          deferVersionStamp: true,
         });
         let report: ReconcileReport | undefined;
         // Sync the post-workspace layers only when the template ACTUALLY drifted
@@ -954,6 +960,18 @@ export const definitionEngineProcedures = {
             });
             layers.push(...summarizePostWorkspaceLayers(post));
             trackTemplates = installedTrackTemplates(post);
+            // The version layer 1 deferred: stamped only when layer 2 landed
+            // (nothing errored, nothing still proposed); otherwise the next
+            // reinstall still sees the drift and re-applies.
+            if (
+              outcome.pendingVersionStamp &&
+              postWorkspaceLayersConverged(post)
+            ) {
+              await stampWorkspacePackageVersion(
+                workspaceId,
+                outcome.pendingVersionStamp
+              );
+            }
           } catch (err) {
             // A1 — THE CHANNEL THAT WAS MISSING NOW EXISTS. Historical note kept
             // deliberately: this catch is still non-fatal (the workspace really

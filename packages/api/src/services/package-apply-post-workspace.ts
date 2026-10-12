@@ -529,10 +529,14 @@ async function applyPackagePostWorkspaceInner(
           cap.params ?? {},
           ctx
         );
+        // A governed write inside it that only FILED a proposal created
+        // nothing yet: report it `proposed`, so a version stamp that requires
+        // layer 2 to have landed (`postWorkspaceLayersConverged`) holds off.
         caps.push({
           key: r.capabilityKey,
-          status: "created",
+          status: r.proposals.length > 0 ? "proposed" : "created",
           created: r.created,
+          ...(r.proposals.length > 0 ? { proposals: r.proposals } : {}),
         });
       } catch (e) {
         caps.push({
@@ -585,7 +589,7 @@ async function applyPackagePostWorkspaceInner(
           // Template definitions are declarative ownership, not a one-time
           // seed. Reconcile refreshes the same workflow row so a pod never
           // silently keeps an obsolete graph after a template upgrade.
-          await caller.update({
+          const updated = await caller.update({
             id: existing.id,
             workspaceId,
             name: a.name,
@@ -615,7 +619,20 @@ async function applyPackagePostWorkspaceInner(
                 : undefined;
             })(),
           } as never);
-          autos.push({ name: a.name, status: "updated", id: existing.id });
+          // An agent's change to an existing automation goes to review: the
+          // row is untouched until a person approves it.
+          const proposalId = (updated as { proposalId?: string } | undefined)
+            ?.proposalId;
+          autos.push(
+            (updated as { status?: string } | undefined)?.status === "proposed"
+              ? {
+                  name: a.name,
+                  status: "proposed",
+                  id: existing.id,
+                  proposalId,
+                }
+              : { name: a.name, status: "updated", id: existing.id }
+          );
           continue;
         }
         const r = await caller.create({
@@ -635,11 +652,20 @@ async function applyPackagePostWorkspaceInner(
           agentUserId,
           source: "intelligence",
         } as never);
-        autos.push({
-          name: a.name,
-          status: "created",
-          id: (r as { id?: string }).id,
-        });
+        const created = r as {
+          id?: string | null;
+          status?: string;
+          proposalId?: string | null;
+        };
+        autos.push(
+          created.status === "proposed"
+            ? {
+                name: a.name,
+                status: "proposed",
+                proposalId: created.proposalId ?? undefined,
+              }
+            : { name: a.name, status: "created", id: created.id ?? undefined }
+        );
       } catch (e) {
         autos.push({
           name: a.name,
@@ -864,7 +890,12 @@ async function applyPackagePostWorkspaceInner(
           loop.params ?? {},
           ctx
         );
-        loops.push({ key: r.loopKey, status: "created", created: r.created });
+        loops.push({
+          key: r.loopKey,
+          status: r.proposals.length > 0 ? "proposed" : "created",
+          created: r.created,
+          ...(r.proposals.length > 0 ? { proposals: r.proposals } : {}),
+        });
       } catch (e) {
         loops.push({
           key: loop.templateKey ?? "inline",

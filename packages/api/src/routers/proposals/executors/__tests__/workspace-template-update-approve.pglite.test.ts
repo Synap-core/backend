@@ -34,6 +34,7 @@ const h = vi.hoisted(() => ({
   },
   templates: new Map<string, Record<string, unknown>>(),
   gateCalls: [] as Array<Record<string, unknown>>,
+  freshSlugs: new Set<string>(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -100,6 +101,33 @@ vi.mock(
       typeof import("../../../../services/workspace-creation-service.js")
     >()),
     checkOneSpacePerDomain: async () => ({ action: "create" }),
+    // A FRESH create's layer-1 engine runs on the database package's own
+    // client (not this PGlite): stand it in with the row it would write. The
+    // re-hit path (no fresh create) still runs the real function.
+    createWorkspaceFromDefinitionIdempotent: async (
+      input: Record<string, unknown>
+    ) => {
+      const actual =
+        await import("../../../../services/workspace-creation-service.js");
+      const slug = input.packageSlug as string | undefined;
+      if (!slug || !h.freshSlugs.has(slug))
+        return (
+          (await vi.importActual(
+            "../../../../services/workspace-creation-service.js"
+          )) as typeof actual
+        ).createWorkspaceFromDefinitionIdempotent(input as never);
+      const id = randomUUID();
+      await h.client!.query(
+        `insert into workspaces (id, name, owner_id, package_slug, provisioning_proposal_id, settings)
+         values ($1,$2,$3,$4,$4,'{"provisioningStatus":"active"}'::jsonb)`,
+        [id, input.workspaceName, input.userId, slug]
+      );
+      await h.client!.query(
+        `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+        [randomUUID(), id, input.userId]
+      );
+      return { workspaceId: id, created: true, outcome: "created" };
+    },
   })
 );
 // The gate's one rule that matters here: a floored write by an AGENT files a
@@ -114,6 +142,11 @@ vi.mock("../../../../utils/permission-check.js", async (importOriginal) => {
     checkPermissionOrPropose: vi.fn(
       async (opts: { agentUserId?: string } & Record<string, unknown>) => {
         h.gateCalls.push(opts);
+        // `automation.create` is in DEFAULT_AUTO_APPROVE: an agent's create
+        // applies, and the automations door's draft floor is what keeps it
+        // from firing. Every other agent write proposes.
+        if (opts.subjectType === "automation" && opts.action === "create")
+          return { allowed: true };
         return opts.agentUserId
           ? { proposalId: randomUUID(), proposalType: "create" }
           : { allowed: true };
@@ -218,12 +251,12 @@ function buildApp(): HubHono {
  * the way `createProposal` stores a gated write (`{ data: <gate data> }`) and
  * hand back the row the approve executor reads.
  */
-async function agentUpdate(slug: string) {
+async function agentUpdate(slug: string, body?: Record<string, unknown>) {
   h.gateCalls.length = 0;
   const res = await buildApp().request("/packages/apply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(h.templates.get(slug)!.packageDefinition),
+    body: JSON.stringify(body ?? h.templates.get(slug)!.packageDefinition),
   });
   const reply = (await res.json()) as Record<string, unknown>;
   expect(reply.status, JSON.stringify(reply)).toBe("proposed");
@@ -320,7 +353,6 @@ describe("an agent's template update of an installed space", () => {
     expect(data).toMatchObject({
       name: "Builder",
       operation: "template_update",
-      existingWorkspaceId: ws,
       source: "packages.apply",
     });
     expect(buildProposalSummary("workspace", "update", data)).toBe(
@@ -374,5 +406,254 @@ describe("an agent's template update of an installed space", () => {
     // Still the old stamp: the next `market update` sees the drift and retries.
     expect(await stampOf(ws)).toBe("h-v1");
     expect(result.versionStamped).toBe(false);
+  });
+});
+
+/**
+ * Approver authority covers ONLY what the server resolved from the catalog.
+ * Anything the agent wrote into its own proposal body — inline automations
+ * above all — keeps the agent's governance on approval: an automation lands as
+ * a draft (the automations door's agent floor), a floored write re-proposes.
+ * Otherwise an agent could ride a same-version "update" (no catalog body comes
+ * back) or a fresh create to land an ACTIVE trigger as the person.
+ */
+describe("layer 2 from the agent's own body keeps the agent's governance", () => {
+  // A complete agent automation (the AI data contract the automations door
+  // requires), so it can actually land and its STATUS is what is under test.
+  const PING = {
+    name: "Ping on every entity",
+    triggerType: "manual",
+    triggerConfig: {},
+    flowDefinition: {
+      nodes: [
+        {
+          id: "n1",
+          type: "trigger",
+          position: { x: 0, y: 0 },
+          data: { triggerType: "manual", label: "Manual", config: {} },
+        },
+      ],
+      edges: [],
+    },
+    status: "active",
+    metadata: {
+      dataContract: {
+        version: 1,
+        mode: "react",
+        gets: [
+          {
+            id: "manual-input",
+            label: "Manual request",
+            origin: "manual",
+            event: "Operator starts the automation",
+            nodeIds: ["n1"],
+          },
+        ],
+        stores: [],
+        reacts: [
+          {
+            id: "run-process",
+            label: "Run the process",
+            kind: "process",
+            nodeIds: ["n1"],
+          },
+        ],
+      },
+    },
+  };
+
+  async function automationRows(ws: string) {
+    const { rows } = await q<{
+      name: string;
+      status: string;
+      trigger_config: Record<string, unknown>;
+    }>(
+      `select name, status, trigger_config from automations where workspace_id = $1 order by name`,
+      [ws]
+    );
+    return rows;
+  }
+
+  /** The catalog at the version the space already has: no body comes back. */
+  function templateSameVersion(slug: string) {
+    return {
+      version: "h-v1",
+      workspaceDefinition: { workspaceName: "Dev", profiles: [] },
+      packageDefinition: {
+        _meta: { slug, version: "h-v1" },
+        workspaceName: "Dev",
+        profiles: [],
+        playbooks: [EXISTING],
+      },
+    };
+  }
+
+  it("(a) a same-version update carrying an inline ACTIVE automation lands it as a draft, not active", async () => {
+    const slug = "builder-inline-auto";
+    const tpl = templateSameVersion(slug);
+    h.templates.set(slug, tpl);
+    const ws = await installedSpace(slug);
+    const { row } = await agentUpdate(slug, {
+      ...tpl.packageDefinition,
+      automations: [PING],
+    });
+
+    const result = (await approve(row)) as unknown as Record<string, unknown>;
+
+    expect(result).toMatchObject({ success: true, primaryId: ws });
+    // It landed — as a draft, never firing until a person turns it on.
+    const autos = await automationRows(ws);
+    expect(autos.map((a) => [a.name, a.status])).toEqual([
+      [PING.name, "draft"],
+    ]);
+  });
+
+  it("(a') a same-name automation is not silently overwritten by the agent's inline copy", async () => {
+    const slug = "builder-inline-overwrite";
+    const tpl = templateSameVersion(slug);
+    h.templates.set(slug, tpl);
+    const ws = await installedSpace(slug);
+    await q(
+      `insert into automations (id, workspace_id, created_by, name, trigger_type, trigger_config, flow_definition, status)
+       values ($1,$2,$3,$4,'manual','{"kept":true}'::jsonb,'{"nodes":[],"edges":[]}'::jsonb,'paused')`,
+      [randomUUID(), ws, OWNER, PING.name]
+    );
+    const { row } = await agentUpdate(slug, {
+      ...tpl.packageDefinition,
+      automations: [{ ...PING, triggerConfig: { hijacked: true } }],
+    });
+
+    await approve(row);
+
+    const [auto] = await automationRows(ws);
+    expect(auto?.trigger_config).toEqual({ kept: true });
+    expect(auto?.status).toBe("paused");
+    // The change went to review instead, as the agent's own proposal.
+    expect(
+      h.gateCalls.some(
+        (c) =>
+          c.subjectType === "automation" &&
+          c.action === "update" &&
+          c.agentUserId === AGENT
+      )
+    ).toBe(true);
+  });
+
+  it("(c) a fresh create carrying an inline ACTIVE automation lands it as a draft", async () => {
+    const slug = "fresh-inline-auto";
+    h.freshSlugs.add(slug);
+    // Not in the catalog, not installed: a fresh create from the agent's body.
+    const { gate, row } = await agentUpdate(slug, {
+      _meta: { slug, version: "f-v1" },
+      workspaceName: "Fresh Inline",
+      profiles: [],
+      automations: [PING],
+    });
+    expect(gate.action).toBe("create");
+
+    const result = (await approve(row)) as unknown as Record<string, unknown>;
+    const ws = result.primaryId as string;
+    expect(ws).toBeTruthy();
+
+    const autos = await automationRows(ws);
+    expect(autos).toHaveLength(1);
+    expect(autos[0]!.status).toBe("draft");
+  });
+
+  it("the filed proposal carries what the package contains, for the approval card", async () => {
+    const slug = "builder-contents";
+    const tpl = templateSameVersion(slug);
+    h.templates.set(slug, tpl);
+    await installedSpace(slug);
+    const { data } = await agentUpdate(slug, {
+      ...tpl.packageDefinition,
+      automations: [PING],
+      capabilities: [
+        { templateKey: "github" },
+        {
+          definition: {
+            key: "docs-mcp",
+            name: "Docs MCP",
+            mcpServers: [
+              {
+                slug: "docs",
+                name: "Docs",
+                transport: "http",
+                url: "https://mcp.example.test/docs",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(data.contents).toEqual({
+      playbooks: [{ name: EXISTING.name }],
+      automations: [
+        { name: PING.name, status: "active", triggerType: "manual" },
+      ],
+      capabilities: [
+        { key: "github", source: "template" },
+        { key: "docs-mcp", name: "Docs MCP", source: "inline" },
+      ],
+      mcpServers: [
+        {
+          slug: "docs",
+          name: "Docs",
+          transport: "http",
+          url: "https://mcp.example.test/docs",
+          capabilityKey: "docs-mcp",
+        },
+      ],
+    });
+  });
+});
+
+/**
+ * The DIRECT Hub door (a person's own `market update`, no proposal) follows
+ * the same stamp rule: layer 1's new version is written only once layer 2
+ * landed. It used to stamp right after layer 1, so a playbook the update
+ * failed to create was then reported "up to date" forever.
+ */
+describe("a person's direct template update stamps only what landed", () => {
+  function humanApp(): HubHono {
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("/*", async (c, next) => {
+      c.set("userId", OWNER);
+      c.set("scopes", ["hub-protocol.write", "hub-protocol.read"]);
+      await next();
+    });
+    registerPackagesRoutes(app);
+    return app;
+  }
+  const apply = async (slug: string) => {
+    const res = await humanApp().request("/packages/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(h.templates.get(slug)!.packageDefinition),
+    });
+    return (await res.json()) as Record<string, unknown>;
+  };
+
+  it("layer 2 landed → the new version is stamped", async () => {
+    const slug = "direct-ok";
+    h.templates.set(slug, templateV2(slug, ADDED));
+    const ws = await installedSpace(slug);
+    const reply = await apply(slug);
+    expect(await playbookNames(ws)).toContain("Design to implementation");
+    expect(reply.versionStamped).toBe(true);
+    expect(await stampOf(ws)).toBe("h-v2");
+  });
+
+  it("layer 2 did NOT land → the old version stays, so the next update retries", async () => {
+    const slug = "direct-broken";
+    const { params: _dropped, ...broken } = ADDED;
+    void _dropped;
+    h.templates.set(slug, templateV2(slug, broken));
+    const ws = await installedSpace(slug);
+    const reply = await apply(slug);
+    expect(await playbookNames(ws)).toEqual(["Evaluate Feature"]);
+    expect(reply.versionStamped).toBe(false);
+    expect(await stampOf(ws)).toBe("h-v1");
   });
 });

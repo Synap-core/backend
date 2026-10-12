@@ -34,7 +34,6 @@ const logger = createLogger({ module: "proposal-approve-executors-workspace" });
  */
 async function executeTemplateApplyApproval({
   proposal,
-  payload,
   userId,
   input,
   deps,
@@ -165,7 +164,6 @@ async function executeTemplateApplyApproval({
   // Stamp the produced workspaceId onto the proposal row so clients/revert
   // can recover it (ProposalMaterializedRecord has no workspaceIds field —
   // store as a sibling lifecycle key next to materialized).
-  void payload;
   const updatedData = {
     ...((proposal.data as Record<string, unknown> | null | undefined) ?? {}),
     materializedWorkspaceId: workspaceId,
@@ -230,13 +228,19 @@ async function executeTemplateApplyApproval({
           typeof applyPackagePostWorkspace
         >[0]["body"],
         userId,
-        // The APPROVER is the authority: a person approved this package,
-        // its layers included, so they apply as the approver — never as
-        // the proposing agent, which re-filed every floored write (a new
-        // playbook) as a second proposal and left the approved update
-        // without it. The agent is still enrolled, so its follow-on writes
-        // don't collapse to join proposals.
-        enrollAgentUserId: proposal.agentUserId ?? undefined,
+        // Approver authority covers ONLY what the server resolved from the
+        // catalog (`resolvedPackage`, the CP cache / bundle body for the
+        // slug): a person approved that package, so its new playbook lands
+        // instead of re-filing as a second proposal. Anything else is the
+        // AGENT's own body (a fresh create, a same-version re-hit, a private
+        // template) and keeps the agent's governance — an automation lands
+        // as a draft, a floored write proposes — or an agent could plant an
+        // ACTIVE trigger, or overwrite a same-name one, as the person. The
+        // agent is enrolled either way, so its follow-on writes don't
+        // collapse to join proposals.
+        ...(resolvedPackage
+          ? { enrollAgentUserId: proposal.agentUserId ?? undefined }
+          : { agentUserId: proposal.agentUserId ?? undefined }),
         scopes: [],
       });
     } catch (e) {
@@ -246,11 +250,12 @@ async function executeTemplateApplyApproval({
       // gets a fixed message, not the interpolated exception text (E1).
       logger.warn(
         { proposalId: input.proposalId, err: (e as Error).message },
-        "workspace create: package layers failed post-workspace"
+        "template apply approve: package layers failed post-workspace"
       );
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: "Workspace created, but applying its package layers failed.",
+        message:
+          "The space is in place, but applying its package layers failed.",
       });
     }
   }
@@ -319,9 +324,7 @@ export function registerWorkspaceExecutors(): void {
   // back to the proposal row id so re-approve is always stable.
   registerProposalExecutor({
     key: "workspace/create",
-    async execute(args) {
-      return executeTemplateApplyApproval(args);
-    },
+    execute: executeTemplateApplyApproval,
   });
 
   // ── workspace / join ───────────────────────────────────────────────────────

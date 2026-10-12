@@ -27,6 +27,7 @@ import {
   archivedUsesTargetRemovable,
 } from "../../../utils/project-workspace.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
+import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import { updateSpaceBriefGoverned } from "../../../services/space-brief-door.js";
 import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-materialized.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
@@ -315,6 +316,7 @@ export const workspaceHandlers: McpHandlerMap = {
       data: {
         name,
         definition,
+        contents: summarizePackageContents(definition),
         workspaceName: name,
         proposalId: idempotencyKey,
         ...(packageSlug ? { packageSlug, templateId: packageSlug } : {}),
