@@ -45,7 +45,8 @@ vi.mock("../index.js", async () => {
   const { Server } = await import("@modelcontextprotocol/sdk/server/index.js");
   const { CallToolRequestSchema, ListToolsRequestSchema } =
     await import("@modelcontextprotocol/sdk/types.js");
-  const { getRequestClientKey } = await import("@synap/database");
+  const { getRequestClientKey, getRequestConversationCwd } =
+    await import("@synap/database");
   return {
     groundingBudgetBytes: () => 0,
     createMCPServer: () => {
@@ -57,7 +58,15 @@ vi.mock("../index.js", async () => {
         tools: [],
       }));
       server.setRequestHandler(CallToolRequestSchema, async () => ({
-        content: [{ type: "text", text: String(getRequestClientKey()) }],
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              key: String(getRequestClientKey()),
+              cwd: getRequestConversationCwd() ?? null,
+            }),
+          },
+        ],
       }));
       return server;
     },
@@ -81,7 +90,9 @@ async function post(body: unknown, extra: Record<string, string> = {}) {
   });
 }
 
-async function clientKeyOfCall(extra: Record<string, string> = {}) {
+async function contextOfCall(
+  extra: Record<string, string> = {}
+): Promise<{ key: string; cwd: string | null }> {
   const res = await post(
     {
       jsonrpc: "2.0",
@@ -96,7 +107,11 @@ async function clientKeyOfCall(extra: Record<string, string> = {}) {
   const body = (await res.json()) as {
     result: { content: Array<{ text: string }> };
   };
-  return body.result.content[0].text;
+  return JSON.parse(body.result.content[0].text);
+}
+
+async function clientKeyOfCall(extra: Record<string, string> = {}) {
+  return (await contextOfCall(extra)).key;
 }
 
 describe("MCP conversation identity (Mcp-Session-Id)", () => {
@@ -133,5 +148,18 @@ describe("MCP conversation identity (Mcp-Session-Id)", () => {
 
   it("no Mcp-Session-Id → the key alone is the client (option A)", async () => {
     expect(await clientKeyOfCall()).toBe("key:key-1");
+  });
+
+  // A LOCAL agent's client (the synap stdio bridge) names its OWN conversation
+  // — the id a person can reopen — and it outranks the transport id.
+  it("X-Synap-Conversation outranks Mcp-Session-Id and carries the cwd", async () => {
+    const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
+    expect(
+      await contextOfCall({
+        "mcp-session-id": "conv-A",
+        "x-synap-conversation": CC,
+        "x-synap-conversation-cwd": "/Users/a/code/synap",
+      })
+    ).toEqual({ key: `key:key-1|conv:${CC}`, cwd: "/Users/a/code/synap" });
   });
 });
