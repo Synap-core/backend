@@ -1244,7 +1244,9 @@ interface WorkerBatch {
  *      waiting on a person (the softer, earlier limit above the per-agent
  *      pending cap, so a batch never hits that refusal halfway);
  *   2. `volume_ceiling` — the enablement used today's irreversible-send
- *      ceiling (`WORKER_IRREVERSIBLE_DAILY_CEILING`, a system constant);
+ *      ceiling (`WORKER_IRREVERSIBLE_DAILY_CEILING`, a system constant): sent
+ *      today plus still pending. This only stops a NEW run; every send inside
+ *      one is checked again at the send door (`worker-send-ceiling.ts`);
  *   3. `stale_transition` — a per_thing worker on a status: the subject is no
  *      longer in it (it moved on between the event and this run). Where the
  *      status lives decides what is read: a DECLARED lifecycle's status

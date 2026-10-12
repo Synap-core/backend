@@ -89,6 +89,7 @@ export function registerMessagingExecutors(): void {
         // dispatch directly, exactly once — no double-gate on re-entry.
         const {
           success: sent,
+          error,
           errorClass,
           providerRef,
         } = await sendExternalMessage({
@@ -97,13 +98,15 @@ export function registerMessagingExecutors(): void {
           body,
           userId,
           alreadyApproved: true,
+          // The session it was asked in: a worker's send ceiling counts by it.
+          sessionId: proposal.sessionId ?? null,
         });
         if (!sent) {
           logger.warn(
             { proposalId: input.proposalId, threadId, platform },
             "messaging.external.send: connector reported not-sent"
           );
-          return { delivered: false, errorClass, providerRef };
+          return { delivered: false, reason: error, errorClass, providerRef };
         }
         return { delivered: true };
       });

@@ -19,6 +19,7 @@ import { proposals } from "../schema/proposals.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
 import { automationRuns, automationStepRuns } from "../schema/automations.js";
+import { events } from "../schema/events.js";
 
 /** `links.metadata.role` of a worker's `session --targets--> entity` edge. */
 export const WORKER_TARGET_LINK_ROLE = "worker_target" as const;
@@ -95,24 +96,66 @@ export async function listWorkerTargetsInFlight(
 }
 
 /**
- * Irreversible sends this enablement's sessions asked for since the start of
- * the UTC day — every such proposal that sent or still may (pending ones
- * count: approving them would spend the ceiling; rejected, withdrawn,
- * expired and failed ones sent nothing).
+ * `events.source` of every external-dispatch audit row — the api's
+ * `EXTERNAL_DISPATCH_SOURCE` (`connectors/external-dispatch-constants.ts`),
+ * which this package cannot import. The send-ceiling test pins them equal.
+ */
+export const WORKER_SEND_EVENT_SOURCE = "external-dispatch" as const;
+
+function utcDayStart(now: Date): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+/**
+ * Irreversible sends this enablement's sessions MADE since the start of the
+ * UTC day: the external-dispatch audit rows (`recordExternalAction`, api)
+ * stamped with one of its sessions. That row is written for every send that
+ * reached the far side — an auto-executed one and an approved one alike, as
+ * long as the door was handed the session (the approval executors pass the
+ * proposal's). A messaging send always counts; a provider call counts unless
+ * its HTTP method is a read (GET/HEAD/OPTIONS). LIMIT: a GraphQL query is a
+ * POST, so it counts as a send — the over-count is the safe side of a ceiling.
+ */
+export async function countWorkerIrreversibleSentToday(
+  automationId: string,
+  now: Date = new Date()
+): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`cast(count(*) as integer)` })
+    .from(events)
+    .where(
+      and(
+        eq(events.source, WORKER_SEND_EVENT_SOURCE),
+        gte(events.timestamp, utcDayStart(now)),
+        sql`${events.data}->>'status' = 'sent'`,
+        or(
+          sql`${events.type} LIKE '%.send.completed'`,
+          sql`(${events.type} LIKE '%.action.completed' AND upper(coalesce(${events.data}->>'method', '')) NOT IN ('GET', 'HEAD', 'OPTIONS'))`
+        ),
+        inArray(events.sessionId, enablementSessions(automationId))
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * Irreversible sends that spend this enablement's ceiling for today: those
+ * already made today ({@link countWorkerIrreversibleSentToday}) plus those
+ * still waiting on a person (a pending irreversible proposal filed by one of
+ * its sessions, whenever it was filed — approving it would send today).
+ * Rejected, withdrawn, expired and failed proposals sent nothing; an approved
+ * one is counted by the send it made.
  *
- * LIMIT, measured by reading the doors: an agent whose sends a person widened
- * to auto-execute files NO proposal, so its sends are not counted here. The
- * per-send audit row (`recordExternalAction`) carries no session id to count
- * by. Until it does, the ceiling holds every send that goes through review —
- * the default for an irreversible key (rung 9).
+ * What a new send must stay under: the run-start gate and the send door ask
+ * this. An approval replay asks the SENT count only — its own proposal is one
+ * of the pending ones.
  */
 export async function countWorkerIrreversibleSendsToday(
   automationId: string,
   now: Date = new Date()
 ): Promise<number> {
-  const dayStart = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  );
   const [row] = await db
     .select({ n: sql<number>`cast(count(*) as integer)` })
     .from(proposals)
@@ -121,17 +164,37 @@ export async function countWorkerIrreversibleSendsToday(
         inArray(proposals.proposalType, [
           ...WORKER_IRREVERSIBLE_PROPOSAL_TYPES,
         ]),
-        notInArray(proposals.status, [
-          "rejected",
-          "withdrawn",
-          "expired",
-          "approval_failed",
-        ]),
-        gte(proposals.createdAt, dayStart),
+        eq(proposals.status, "pending"),
         inArray(proposals.sessionId, enablementSessions(automationId))
       )
     );
-  return Number(row?.n ?? 0);
+  return (
+    Number(row?.n ?? 0) +
+    (await countWorkerIrreversibleSentToday(automationId, now))
+  );
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The enablement (automation id) whose worker started this session, or null
+ * when the session is not a worker's — or is not a session id at all.
+ */
+export async function workerAutomationOfSession(
+  sessionId: string
+): Promise<string | null> {
+  if (!UUID_RE.test(sessionId)) return null;
+  const [row] = await db
+    .select({
+      automationId: sql<
+        string | null
+      >`${focusSessions.metadata}->>'automationId'`,
+    })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  return row?.automationId ?? null;
 }
 
 /**

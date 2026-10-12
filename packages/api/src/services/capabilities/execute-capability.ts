@@ -822,6 +822,7 @@ export async function executeCapability(input: {
     workspaceId,
     connectionSelector: input.connectionSelector ?? null,
     agentUserId: input.agentUserId ?? null,
+    sessionId: input.sessionId ?? null,
   });
   if (ran.kind !== "run") {
     if (ran.kind === "error") {
@@ -1153,6 +1154,7 @@ async function runDirectWriteVerbOnce(opts: {
       workspaceId: opts.workspaceId,
       connectionSelector: opts.connectionSelector,
       agentUserId: opts.agentUserId,
+      sessionId: opts.sessionId ?? null,
     });
   } catch (err) {
     // Ambiguous throw (the side effect may have reached the far side): KEEP the
@@ -1495,6 +1497,11 @@ async function runResolvedSkillInner(
      * explicit auto exec-mode grant on the verb itself.
      */
     agentUserId?: string | null;
+    /**
+     * The focus session the run is part of, handed to the send doors so a
+     * stage worker's send ceiling sees the send (worker-send-ceiling.ts).
+     */
+    sessionId?: string | null;
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
@@ -1533,6 +1540,7 @@ async function runResolvedSkillInner(
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       agentUserId: ctx.agentUserId ?? null,
+      sessionId: ctx.sessionId ?? null,
       // The verb identity is known HERE and was previously dropped at the
       // handler boundary. Handlers that create durable objects need it to stamp
       // provenance (channel origin), so it is threaded rather than re-derived.
@@ -1555,6 +1563,7 @@ async function runResolvedSkillInner(
       userId: ctx.userId,
       workspaceId: ctx.workspaceId ?? undefined,
       connectionSelector: ctx.connectionSelector ?? null,
+      sessionId: ctx.sessionId ?? null,
     });
     // executeProviderVerb flattens a provider FAILURE back to its `{success:false,
     // error}` envelope (execute-provider-verb.ts). Surface it as `kind:"error"` so

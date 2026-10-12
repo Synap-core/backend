@@ -5,13 +5,12 @@
  *    counted; the propose-mode `playbook/run` half (no session) dropped;
  *  - in flight: a target with a result still "in flight"; a closed session's
  *    target excluded forever; an INPUT edge (role "input") taken for a target;
- *  - ceiling: yesterday's send, a rejected send, a reversible proposal type
- *    counted toward today's irreversible ceiling.
+ *  - ceiling: see its describe block.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 
-vi.setConfig({ testTimeout: 120_000 });
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 const holder = vi.hoisted(() => ({ db: undefined as unknown }));
 vi.mock("../client-pg.js", () => ({
   get db() {
@@ -27,11 +26,15 @@ import { proposals } from "../schema/proposals.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
 import { automationRuns, automationStepRuns } from "../schema/automations.js";
+import { events } from "../schema/events.js";
 import {
   countWorkerIrreversibleSendsToday,
+  countWorkerIrreversibleSentToday,
   countWorkerPendingApprovals,
   listHeldWorkerRuns,
   listWorkerTargetsInFlight,
+  workerAutomationOfSession,
+  WORKER_SEND_EVENT_SOURCE,
 } from "./worker-enablement.js";
 
 function ddlFor(table: PgTable): string {
@@ -69,6 +72,7 @@ beforeEach(async () => {
     links,
     automationRuns,
     automationStepRuns,
+    events,
   ])
     await client.exec(ddlFor(t as unknown as PgTable));
   holder.db = drizzle(client);
@@ -140,39 +144,96 @@ describe("listWorkerTargetsInFlight", () => {
   });
 });
 
-describe("countWorkerIrreversibleSendsToday", () => {
-  it("today's irreversible sends of this enablement's sessions that sent or may still send", async () => {
+/**
+ * The ceiling (FB2 item 3). The SENT half reads the external-dispatch audit
+ * rows of the enablement's sessions; the PENDING half reads proposals still
+ * waiting. Rows rule out: an approved proposal counted twice (its send row
+ * already counts it); yesterday's PENDING send dropped (approving it sends
+ * today); a read-method provider call, a failed send, yesterday's send,
+ * another session's send or a non-dispatch event counted as a send.
+ */
+describe("countWorkerIrreversibleSendsToday / SentToday", () => {
+  async function sent(e: {
+    sessionId: string | null;
+    type?: string;
+    status?: string;
+    method?: string;
+    source?: string;
+    at?: string;
+  }) {
+    await client.query(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, source, session_id)
+       values ($1, $2, $3, 'c', 'x', $4::jsonb, $5, $6)`,
+      [
+        randomUUID(),
+        e.at ?? "2026-10-12T10:00:00.000Z",
+        e.type ?? "gmail.send.completed",
+        JSON.stringify({
+          status: e.status ?? "sent",
+          ...(e.method ? { method: e.method } : {}),
+        }),
+        e.source ?? WORKER_SEND_EVENT_SOURCE,
+        e.sessionId,
+      ]
+    );
+  }
+
+  it("sent today by this enablement's sessions + its sends still pending", async () => {
     const mine = await session(A);
+    const theirs = await session(B);
     const now = new Date("2026-10-12T15:00:00.000Z");
+    // sent half — 2 count
+    await sent({ sessionId: mine });
+    await sent({
+      sessionId: mine,
+      type: "nango.action.completed",
+      method: "post",
+    });
+    await sent({
+      sessionId: mine,
+      type: "nango.action.completed",
+      method: "GET",
+    });
+    await sent({ sessionId: mine, status: "failed" });
+    await sent({ sessionId: mine, at: "2026-10-11T23:00:00.000Z" });
+    await sent({ sessionId: theirs });
+    await sent({ sessionId: null });
+    await sent({ sessionId: mine, source: "api" });
+    // pending half — 2 count
+    await proposal({ sessionId: mine, type: "messaging.external.send" });
     await proposal({
       sessionId: mine,
-      type: "messaging.external.send",
-      createdAt: "2026-10-12T01:00:00.000Z",
+      type: "provider.action",
+      createdAt: "2026-10-11T08:00:00.000Z",
     });
     await proposal({
       sessionId: mine,
       type: "provider.action",
       status: "approved",
-      createdAt: "2026-10-12T02:00:00.000Z",
     });
     await proposal({
       sessionId: mine,
       type: "messaging.external.send",
       status: "rejected",
-      createdAt: "2026-10-12T03:00:00.000Z",
     });
-    await proposal({
-      sessionId: mine,
-      type: "messaging.external.send",
-      createdAt: "2026-10-11T23:00:00.000Z",
-    });
-    await proposal({
-      sessionId: mine,
-      type: "update",
-      createdAt: "2026-10-12T04:00:00.000Z",
-    });
-    expect(await countWorkerIrreversibleSendsToday(A, now)).toBe(2);
-    expect(await countWorkerIrreversibleSendsToday(B, now)).toBe(0);
+    await proposal({ sessionId: mine, type: "update" });
+    await proposal({ sessionId: theirs, type: "messaging.external.send" });
+
+    expect(await countWorkerIrreversibleSentToday(A, now)).toBe(2);
+    expect(await countWorkerIrreversibleSendsToday(A, now)).toBe(4);
+    expect(await countWorkerIrreversibleSendsToday(B, now)).toBe(2);
+  });
+
+  it("names the worker of a session, and nothing for a plain or bogus one", async () => {
+    const mine = await session(A);
+    const plain = randomUUID();
+    await client.query(
+      `insert into focus_sessions (id, status, metadata) values ($1, 'active', '{}'::jsonb)`,
+      [plain]
+    );
+    expect(await workerAutomationOfSession(mine)).toBe(A);
+    expect(await workerAutomationOfSession(plain)).toBeNull();
+    expect(await workerAutomationOfSession("not-a-uuid")).toBeNull();
   });
 });
 

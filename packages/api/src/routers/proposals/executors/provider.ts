@@ -87,6 +87,8 @@ export function registerProviderExecutors(): void {
           // bypass the capability-execution gate (no re-propose) — exactly once.
           alreadyApproved: true,
           sourceProposalId: input.proposalId,
+          // The session it was asked in: a worker's send ceiling counts by it.
+          sessionId: proposal.sessionId ?? null,
         });
         if (!executed) {
           logger.warn(

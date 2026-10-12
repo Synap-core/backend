@@ -132,6 +132,8 @@ export function registerCapabilityExecutors(): void {
           // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
           alreadyApproved: true,
           sourceProposalId: input.proposalId,
+          // The session it was asked in: a worker's send ceiling counts by it.
+          sessionId: proposal.sessionId ?? null,
         });
         if (!executed) {
           logger.warn(
@@ -185,6 +187,7 @@ export function registerCapabilityExecutors(): void {
           {
             userId,
             workspaceId: (data.workspaceId as string | undefined) ?? null,
+            sessionId: proposal.sessionId ?? null,
           }
         );
         if (runOutcome.kind !== "run") {
@@ -340,6 +343,7 @@ export function registerCapabilityExecutors(): void {
           workspaceId: proposal.workspaceId ?? null,
           connectionSelector:
             (data.connectionSelector as ConnectionSelector | null) ?? null,
+          sessionId: proposal.sessionId ?? null,
         });
         if (runOutcome.kind === "not_found") {
           logger.warn(

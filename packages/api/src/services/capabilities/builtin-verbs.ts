@@ -123,6 +123,11 @@ export interface BuiltinVerbContext {
    */
   verbId?: string | null;
   verbName?: string | null;
+  /**
+   * The focus session the run is part of, when the caller knows it. Handed to
+   * the send door so a stage worker's send ceiling sees the send.
+   */
+  sessionId?: string | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -2989,6 +2994,7 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
     // ungranted); an owner run (no agentUserId) skips the gate byte-identically.
     agentUserId: ctx.agentUserId ?? null,
     workspaceId: ctx.workspaceId,
+    sessionId: ctx.sessionId ?? null,
   });
 
   return {
