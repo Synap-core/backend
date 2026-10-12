@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stepsFromTrackStages } from "../lifecycle/steps.js";
 import { deriveTrackStages } from "./track.js";
 import {
   TRACK_MOVE_ON_REQUIRES_MET_CRITERIA,
@@ -32,10 +33,30 @@ const stagesAt = (current: string | null, counts?: Record<string, number>) =>
   deriveTrackStages(SNAPSHOT, current, counts);
 
 const HISTORY = [
-  { stageKey: "audit", fromStage: null, enteredAt: "2026-10-01T00:00:00Z", actor: "u1" },
-  { stageKey: "decide", fromStage: "audit", enteredAt: "2026-10-02T00:00:00Z", actor: "u1" },
-  { stageKey: "audit", fromStage: "decide", enteredAt: "2026-10-03T00:00:00Z", actor: "u2" },
-  { stageKey: "decide", fromStage: "audit", enteredAt: "2026-10-04T00:00:00Z", actor: "agent-7" },
+  {
+    stageKey: "audit",
+    fromStage: null,
+    enteredAt: "2026-10-01T00:00:00Z",
+    actor: "u1",
+  },
+  {
+    stageKey: "decide",
+    fromStage: "audit",
+    enteredAt: "2026-10-02T00:00:00Z",
+    actor: "u1",
+  },
+  {
+    stageKey: "audit",
+    fromStage: "decide",
+    enteredAt: "2026-10-03T00:00:00Z",
+    actor: "u2",
+  },
+  {
+    stageKey: "decide",
+    fromStage: "audit",
+    enteredAt: "2026-10-04T00:00:00Z",
+    actor: "agent-7",
+  },
 ];
 
 const ALL_PASS: TrackStepEvidence = {
@@ -48,19 +69,34 @@ const ALL_PASS: TrackStepEvidence = {
 };
 
 describe("trackStepRail / trackSelectedStepKey", () => {
-  it("numbers the steps, marks the current one with the shared tone", () => {
+  it("numbers the steps, marks the current one with the shared step tone (a done step is grey, as on the strips)", () => {
     const rail = trackStepRail(stagesAt("decide"));
-    expect(rail.map((r) => [r.number, r.position, r.tone, r.isCurrent])).toEqual([
-      [1, "done", "success", false],
+    expect(
+      rail.map((r) => [r.number, r.position, r.tone, r.isCurrent])
+    ).toEqual([
+      [1, "done", "textSecondary", false],
       [2, "active", "primary", true],
       [3, "not_started", "textMuted", false],
     ]);
-    expect(rail.filter((r) => r.isSelected).map((r) => r.key)).toEqual(["decide"]);
+    expect(rail.filter((r) => r.isSelected).map((r) => r.key)).toEqual([
+      "decide",
+    ]);
+  });
+
+  it("the rail and the strip draw one track's steps in the SAME tones (ui F2)", () => {
+    const stages = stagesAt("decide");
+    const strip = new Map(
+      stepsFromTrackStages(stages).map((s) => [s.key, s.tone])
+    );
+    for (const item of trackStepRail(stages))
+      expect(item.tone).toBe(strip.get(item.key));
   });
 
   it("selects a requested pinned step; an unknown request falls to the current step", () => {
     const stages = stagesAt("decide");
-    expect(trackStepRail(stages, "audit").find((r) => r.isSelected)?.key).toBe("audit");
+    expect(trackStepRail(stages, "audit").find((r) => r.isSelected)?.key).toBe(
+      "audit"
+    );
     expect(trackSelectedStepKey(stages, "nope")).toBe("decide");
     expect(trackSelectedStepKey(stagesAt(null), null)).toBe("audit");
     expect(trackSelectedStepKey([], "audit")).toBeNull();
@@ -79,8 +115,20 @@ describe("trackStepEvidenceSessionId", () => {
   it("prefers the latest CLOSED session over a newer open one", () => {
     const rows = [
       row("open-new", "active", "decide", null, "2026-10-09T00:00:00Z"),
-      row("closed-old", "closed", "decide", "2026-10-03T00:00:00Z", "2026-10-03T00:00:00Z"),
-      row("closed-new", "closed", "decide", "2026-10-05T00:00:00Z", "2026-10-05T00:00:00Z"),
+      row(
+        "closed-old",
+        "closed",
+        "decide",
+        "2026-10-03T00:00:00Z",
+        "2026-10-03T00:00:00Z"
+      ),
+      row(
+        "closed-new",
+        "closed",
+        "decide",
+        "2026-10-05T00:00:00Z",
+        "2026-10-05T00:00:00Z"
+      ),
     ];
     expect(trackStepEvidenceSessionId(rows, "decide")).toBe("closed-new");
   });
@@ -89,7 +137,13 @@ describe("trackStepEvidenceSessionId", () => {
     const rows = [
       row("cancelled", "cancelled", "decide", null, "2026-10-09T00:00:00Z"),
       row("failed", "failed", "decide", null, "2026-10-09T00:00:00Z"),
-      row("elsewhere", "closed", "audit", "2026-10-09T00:00:00Z", "2026-10-09T00:00:00Z"),
+      row(
+        "elsewhere",
+        "closed",
+        "audit",
+        "2026-10-09T00:00:00Z",
+        "2026-10-09T00:00:00Z"
+      ),
       row("open-old", "active", "decide", null, "2026-10-02T00:00:00Z"),
       row("open-new", "paused", "decide", null, "2026-10-04T00:00:00Z"),
     ];
@@ -109,10 +163,30 @@ describe("trackStepCard", () => {
       ],
     })!;
     expect(card.criteria).toEqual([
-      { key: "options", label: "Three options compared", required: true, state: "met" },
-      { key: "owner_ok", label: "Owner signed off", required: true, state: "unmet" },
-      { key: "nice_to_have", label: "Risks listed", required: false, state: "unmeasured" },
-      { key: "no_statement", label: "No statement", required: true, state: "unmeasured" },
+      {
+        key: "options",
+        label: "Three options compared",
+        required: true,
+        state: "met",
+      },
+      {
+        key: "owner_ok",
+        label: "Owner signed off",
+        required: true,
+        state: "unmet",
+      },
+      {
+        key: "nice_to_have",
+        label: "Risks listed",
+        required: false,
+        state: "unmeasured",
+      },
+      {
+        key: "no_statement",
+        label: "No statement",
+        required: true,
+        state: "unmeasured",
+      },
     ]);
     expect(card.criteriaRead).toBe("measured");
     expect(card.goal).toBe("Pick the direction");
@@ -140,21 +214,34 @@ describe("trackStepCard", () => {
       at: "2026-10-04T00:00:00Z",
       fromStage: { key: "audit", name: "Audit" },
     });
-    const first = trackStepCard(stagesAt("decide"), "audit", HISTORY.slice(0, 2), null)!;
+    const first = trackStepCard(
+      stagesAt("decide"),
+      "audit",
+      HISTORY.slice(0, 2),
+      null
+    )!;
     expect(first.enteredBy?.fromStage).toBeNull();
   });
 
   it("a step not yet reached has no `enteredBy`, even with an old entry", () => {
     // The track moved back to audit; decide's old entry is history, not now.
-    const card = trackStepCard(stagesAt("audit"), "decide", HISTORY.slice(0, 3), null)!;
+    const card = trackStepCard(
+      stagesAt("audit"),
+      "decide",
+      HISTORY.slice(0, 3),
+      null
+    )!;
     expect(card.position).toBe("not_started");
     expect(card.enteredBy).toBeNull();
   });
 
   it("sessionsCount is the pod's count, `null` when not counted (never 0)", () => {
-    expect(trackStepCard(stagesAt("decide"), "decide", [], null)!.sessionsCount).toBeNull();
     expect(
-      trackStepCard(stagesAt("decide", { decide: 3 }), "decide", [], null)!.sessionsCount
+      trackStepCard(stagesAt("decide"), "decide", [], null)!.sessionsCount
+    ).toBeNull();
+    expect(
+      trackStepCard(stagesAt("decide", { decide: 3 }), "decide", [], null)!
+        .sessionsCount
     ).toBe(3);
     expect(
       trackStepCard(stagesAt("decide", {}), "build", [], null)!.sessionsCount
@@ -228,9 +315,10 @@ describe("trackMoveOn (D6a)", () => {
   });
 
   it("not offered on a step the track does not stand on, nor on a closed track", () => {
-    expect(trackMoveOn(stagesAt("decide"), card(null, "decide", "audit"), active).block).toBe(
-      "not_current"
-    );
+    expect(
+      trackMoveOn(stagesAt("decide"), card(null, "decide", "audit"), active)
+        .block
+    ).toBe("not_current");
     for (const status of ["completed", "archived"]) {
       const move = trackMoveOn(stagesAt("decide"), card(ALL_PASS), { status });
       expect(move.offered).toBe(false);
@@ -239,9 +327,10 @@ describe("trackMoveOn (D6a)", () => {
   });
 
   it("a PAUSED track may still move on (the pod allows it)", () => {
-    expect(trackMoveOn(stagesAt("decide"), card(ALL_PASS), { status: "paused" }).enabled).toBe(
-      true
-    );
+    expect(
+      trackMoveOn(stagesAt("decide"), card(ALL_PASS), { status: "paused" })
+        .enabled
+    ).toBe(true);
   });
 });
 
@@ -255,9 +344,11 @@ describe("trackStepGateLabel", () => {
 
   it("the card's gate feeds it: decide is check-gated, audit is not", () => {
     const stages = stagesAt("decide");
-    expect(trackStepGateLabel(trackStepCard(stages, "decide", [], null)!.gate)).toBe(
-      "A check clears entry"
-    );
-    expect(trackStepGateLabel(trackStepCard(stages, "audit", [], null)!.gate)).toBeNull();
+    expect(
+      trackStepGateLabel(trackStepCard(stages, "decide", [], null)!.gate)
+    ).toBe("A check clears entry");
+    expect(
+      trackStepGateLabel(trackStepCard(stages, "audit", [], null)!.gate)
+    ).toBeNull();
   });
 });

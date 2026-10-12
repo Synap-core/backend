@@ -139,6 +139,7 @@ export {
   stepTone,
   stepsFromLifecycle,
   stepsFromTrackStages,
+  trackStageStepTone,
   currentStep,
   offPathChoices,
   type StepPosition,

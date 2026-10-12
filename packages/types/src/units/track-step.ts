@@ -38,10 +38,10 @@
 
 import type { EvaluationVerdict } from "../focus-sessions/verdict.js";
 import { humanizeToken } from "../vocabulary/index.js";
+import { trackStageStepTone } from "../lifecycle/steps.js";
 import type { UnitTone } from "./state.js";
 import {
   isTrackClosed,
-  trackStageTone,
   type TrackStage,
   type TrackStagePosition,
 } from "./track.js";
@@ -56,7 +56,8 @@ export interface TrackStepRailItem {
   /** Where the track stands relative to this step. */
   position: TrackStagePosition;
   /**
-   * The mark's tone ({@link trackStageTone}) — a FILL, never text ink. The
+   * The mark's tone ({@link trackStageStepTone}, the ONE step tone rule the
+   * strips use: a passed step is grey, not green) — a FILL, never text ink. The
    * glyph is the surface's stage mark by `position` (relay `StageMark`):
    * a step's current position is a place, not a running turn.
    */
@@ -97,7 +98,7 @@ export function trackStepRail(
     name: stage.name,
     number: i + 1,
     position: stage.position,
-    tone: trackStageTone(stage.position),
+    tone: trackStageStepTone(stage.position),
     isCurrent: stage.position === "active",
     isSelected: stage.key === selected,
   }));
@@ -259,18 +260,20 @@ export function trackStepCard(
       ? evidence.evaluations.map((e) => [e.criterionKey, e.verdict])
       : []
   );
-  const criteria = (stage.criteria ?? []).map(
-    (c): TrackStepCriterion => {
-      const verdict = verdicts.get(c.key);
-      return {
-        key: c.key,
-        label: criterionLabel(c),
-        required: c.required !== false,
-        state:
-          verdict === "pass" ? "met" : verdict === "fail" ? "unmet" : "unmeasured",
-      };
-    }
-  );
+  const criteria = (stage.criteria ?? []).map((c): TrackStepCriterion => {
+    const verdict = verdicts.get(c.key);
+    return {
+      key: c.key,
+      label: criterionLabel(c),
+      required: c.required !== false,
+      state:
+        verdict === "pass"
+          ? "met"
+          : verdict === "fail"
+            ? "unmet"
+            : "unmeasured",
+    };
+  });
 
   let entry: (typeof history)[number] | null = null;
   if (stage.position !== "not_started") {
@@ -387,10 +390,22 @@ export function trackMoveOn(
   // ── D6 policy: the ONE branch ──
   if (TRACK_MOVE_ON_REQUIRES_MET_CRITERIA) {
     if (card.criteriaRead === "unavailable") {
-      return { next, offered: true, enabled: false, missing, block: "criteria_unreadable" };
+      return {
+        next,
+        offered: true,
+        enabled: false,
+        missing,
+        block: "criteria_unreadable",
+      };
     }
     if (missing.length > 0) {
-      return { next, offered: true, enabled: false, missing, block: "criteria_unmet" };
+      return {
+        next,
+        offered: true,
+        enabled: false,
+        missing,
+        block: "criteria_unmet",
+      };
     }
   }
   return { next, offered: true, enabled: true, missing, block: null };
