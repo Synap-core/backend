@@ -84,7 +84,8 @@ import {
 } from "../../routers/skills.js";
 import {
   skillExecFieldsChanged,
-  mcpServerExecFieldsChanged,
+  execFieldsChanged,
+  MCP_SERVER_RE_APPROVAL_FIELDS,
   allowedHostsChanged,
   readOnlyWidened,
 } from "./skill-exec-fields.js";
@@ -96,6 +97,7 @@ import {
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { requireServerManager } from "../../utils/workspace-role.js";
 import {
   interpolateDeep,
   interpolateString,
@@ -104,6 +106,15 @@ import {
 } from "../_shared/interpolate.js";
 
 const logger = createLogger({ module: "create-capability-from-definition" });
+
+/** The `mcp_servers` columns the re-apply demotion compares — derived from the list. */
+const MCP_EXEC_COLUMNS = Object.fromEntries(
+  MCP_SERVER_RE_APPROVAL_FIELDS.map((f) => [f, mcpServersTable[f]])
+) as {
+  [
+    K in (typeof MCP_SERVER_RE_APPROVAL_FIELDS)[number]
+  ]: (typeof mcpServersTable)[K];
+};
 
 // Param interpolation (`{{var}}` scheme) is shared via services/_shared/interpolate.
 
@@ -287,8 +298,8 @@ export interface CapabilityAutomationDef {
 /**
  * An MCP server the capability registers so agents get live tools and
  * `mcp://<slug>` tools can resolve. Idempotent on (workspaceId, slug).
- * Installing a trusted package may set `approved: true` (the install IS the
- * trust decision); default is false (owner must approve under Settings).
+ * Writing one needs `requireServerManager` for its scope; a row always lands
+ * UNapproved — the owner approves it under Settings.
  */
 export interface CapabilityMcpServerDef {
   slug: string;
@@ -302,7 +313,11 @@ export interface CapabilityMcpServerDef {
   args?: string[];
   env?: Record<string, string>;
   enabled?: boolean;
-  /** Default false — supply-chain gate. Trusted public MCP packs may set true. */
+  /**
+   * IGNORED by the applier. A definition is caller-supplied (inline bodies
+   * reach here unchanged) and carries no trustworthy provenance, so it can
+   * never approve its own server. Kept so existing templates still parse.
+   */
   approved?: boolean;
   /**
    * http: authenticate with a vault secret (0257). `credentialRef` is a
@@ -597,6 +612,15 @@ export async function createCapabilityFromDefinition(
   // checked BEFORE anything is written (see `assertVaultPlaceholdersDeclared`).
   assertVaultPlaceholdersDeclared(def);
 
+  // An MCP server row is a COMMAND the Intelligence Service may spawn, so
+  // writing one needs the same role as the settings door
+  // (`routers/mcp-servers.ts`). Checked before ANY write, so a refused install
+  // leaves no half-seeded vault secret behind.
+  const mcpDefs = (def as CapabilityDefinitionWithPlaybooks).mcpServers ?? [];
+  if (mcpDefs.length > 0) {
+    await requireServerManager(userId, connWorkspaceId ?? null);
+  }
+
   const proposals: string[] = [];
 
   // 1. Vault secrets — reuse the SAME server-side encryption the
@@ -643,7 +667,6 @@ export async function createCapabilityFromDefinition(
   //     resolve. Idempotent on (workspace scope, slug). Scope mirrors tools:
   //     pod-scoped capability → null workspaceId; else active workspace.
   const createdMcpServers: CreateCapabilityResult["created"]["mcpServers"] = [];
-  const mcpDefs = (def as CapabilityDefinitionWithPlaybooks).mcpServers ?? [];
   for (const m of mcpDefs) {
     if (m.transport === "http" && !m.url) {
       throw new Error(
@@ -656,17 +679,7 @@ export async function createCapabilityFromDefinition(
       );
     }
     const [existingMcp] = await db
-      .select({
-        id: mcpServersTable.id,
-        approved: mcpServersTable.approved,
-        // Every MCP_SERVER_RE_APPROVAL_FIELDS column — the demotion below
-        // compares the template against these by VALUE.
-        command: mcpServersTable.command,
-        args: mcpServersTable.args,
-        env: mcpServersTable.env,
-        url: mcpServersTable.url,
-        transport: mcpServersTable.transport,
-      })
+      .select({ id: mcpServersTable.id, ...MCP_EXEC_COLUMNS })
       .from(mcpServersTable)
       .where(
         and(
@@ -678,23 +691,24 @@ export async function createCapabilityFromDefinition(
       )
       .limit(1);
 
+    // Every execution-defining column, written by both branches below and
+    // compared by the re-apply demotion — the field list types the patch, so
+    // a field added to the list and not written here fails to compile.
+    const execPatch = {
+      transport: m.transport,
+      command: m.command ?? null,
+      args: m.args ?? [],
+      url: m.url ?? null,
+      env: m.env ?? {},
+      auth: resolveMcpAuth(m.auth, m.slug),
+    } satisfies Record<(typeof MCP_SERVER_RE_APPROVAL_FIELDS)[number], unknown>;
+
     if (existingMcp) {
-      // The patch mirrors the `.set({...})` projection below exactly — a field
-      // this comparator reads must be a field that update actually writes.
-      const execPatch = {
-        transport: m.transport,
-        command: m.command ?? null,
-        args: m.args ?? [],
-        url: m.url ?? null,
-        env: m.env ?? {},
-      };
       // SAME rule as `mcpServersRouter.update`: a re-apply that re-points an
-      // approved server (new url / command / args / env / transport) demotes
-      // it, so a template can never swap what an owner approved while keeping
-      // the approval. Demotion WINS over a template `approved: true` — on
-      // re-apply that flag would otherwise re-approve the new endpoint
-      // unattended. Compared by VALUE, so an unchanged re-apply never demotes.
-      const execChanged = mcpServerExecFieldsChanged(
+      // approved server demotes it. Compared by VALUE, so an unchanged
+      // re-apply keeps the owner's approval.
+      const execChanged = execFieldsChanged(
+        MCP_SERVER_RE_APPROVAL_FIELDS,
         execPatch,
         existingMcp as unknown as Record<string, unknown>
       );
@@ -704,16 +718,9 @@ export async function createCapabilityFromDefinition(
           name: m.name,
           description: m.description ?? null,
           ...execPatch,
-          // Converge to the template on re-apply (0257).
-          auth: resolveMcpAuth(m.auth, m.slug),
           toolPolicy: m.toolPolicy ?? null,
           enabled: m.enabled !== false,
-          // Demote on an execution change; otherwise only ever promote.
-          ...(execChanged
-            ? { approved: false }
-            : m.approved === true
-              ? { approved: true }
-              : {}),
+          ...(execChanged ? { approved: false } : {}),
           metadata: {
             ...((m.metadata as Record<string, unknown>) ?? {}),
             sourceCapability: def.key,
@@ -734,15 +741,10 @@ export async function createCapabilityFromDefinition(
           slug: m.slug,
           name: m.name,
           description: m.description ?? null,
-          transport: m.transport,
-          command: m.command ?? null,
-          args: m.args ?? [],
-          url: m.url ?? null,
-          env: m.env ?? {},
-          auth: resolveMcpAuth(m.auth, m.slug),
+          ...execPatch,
           toolPolicy: m.toolPolicy ?? null,
           enabled: m.enabled !== false,
-          approved: m.approved === true,
+          approved: false,
           metadata: {
             ...((m.metadata as Record<string, unknown>) ?? {}),
             sourceCapability: def.key,

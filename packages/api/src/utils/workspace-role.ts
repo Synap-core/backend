@@ -78,6 +78,46 @@ export async function isPodAdmin(userId: string): Promise<boolean> {
 }
 
 /**
+ * May `userId` manage an MCP server row in this scope? Workspace row → owner or
+ * admin of that workspace; pod-wide row (`workspaceId` null) → pod admin.
+ */
+export async function canManageMcpServer(
+  userId: string,
+  workspaceId: string | null
+): Promise<boolean> {
+  if (!workspaceId) return isPodAdmin(userId);
+  return isSpaceManageRole(await getWorkspaceRole(userId, workspaceId));
+}
+
+/**
+ * THE management gate for an `mcp_servers` row — every door that writes one
+ * (the settings router and the capability applier) calls it. Same scope rule as
+ * `canManageMcpServer`; `level: "owner"` narrows a workspace row to its owner
+ * (approval). Throws FORBIDDEN.
+ */
+export async function requireServerManager(
+  userId: string,
+  workspaceId: string | null,
+  level: "admin" | "owner" = "admin"
+): Promise<void> {
+  if (!workspaceId) {
+    await requirePodAdmin(userId);
+    return;
+  }
+  const role = await getWorkspaceRole(userId, workspaceId);
+  if (level === "owner") {
+    if (role !== "owner") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Only workspace owners can approve MCP server tool access.",
+      });
+    }
+    return;
+  }
+  requireAdminRole(role);
+}
+
+/**
  * Materialize the pod's owner/admins as members of `workspaceId` — idempotently.
  *
  * "Pod admins" here is the canonical `isPodAdmin` notion: members of the

@@ -23,45 +23,25 @@ import {
   MCP_SERVER_RE_APPROVAL_FIELDS,
 } from "../services/capabilities/skill-exec-fields.js";
 import {
-  getWorkspaceRole,
-  requireAdminRole,
-  requirePodAdmin,
+  canManageMcpServer,
+  requireServerManager,
 } from "../utils/workspace-role.js";
 
+/** What a caller who cannot manage a row sees in place of each env value. */
+const MASKED_ENV_VALUE = "••••";
+
 /**
- * THE management gate for an MCP server row — every mutation here calls it.
- *
- *   - workspace row → owner/admin of that workspace (`level: "owner"` narrows
- *     it to owner, for approval);
- *   - pod-wide row (`workspaceId` null) → pod owner/admin (`requirePodAdmin`).
- *
- * The pod-wide branch is the reason this exists. `setApproved`, `ping` and
- * `delete` used to check a role ONLY when the row had a workspace, so on a
- * pod-wide server any signed-in user passed straight through. Approval is what
- * lets the Intelligence Service inject the server's tools
- * (`hub-protocol/rest/mcp-servers.ts` serves only approved+enabled rows), so a
- * non-admin approving a pod-wide server was arbitrary tool injection.
+ * A stdio server runs a COMMAND on the Intelligence Service. Nothing may spawn
+ * it — not even a ping or a tool listing — until an owner has approved it.
  */
-async function requireServerManager(
-  userId: string,
-  workspaceId: string | null,
-  level: "admin" | "owner" = "admin"
-): Promise<void> {
-  if (!workspaceId) {
-    await requirePodAdmin(userId);
-    return;
+function assertSpawnable(server: { transport: string; approved: boolean }) {
+  if (server.transport === "stdio" && !server.approved) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This MCP server runs a local command — approve this server first.",
+    });
   }
-  const role = await getWorkspaceRole(userId, workspaceId);
-  if (level === "owner") {
-    if (role !== "owner") {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Only workspace owners can approve MCP server tool access.",
-      });
-    }
-    return;
-  }
-  requireAdminRole(role);
 }
 
 const McpServerWriteSchema = z.object({
@@ -107,7 +87,30 @@ export const mcpServersRouter = router({
           : isNull(mcpServers.workspaceId),
         orderBy: asc(mcpServers.name),
       });
-      return { servers };
+      // `env` carries credentials. Every member may SEE a server (its status,
+      // its tools); only someone who may manage that row sees the values.
+      const userId = requireUserId(ctx.userId);
+      const manages = new Map<string | null, boolean>();
+      for (const s of servers) {
+        if (!manages.has(s.workspaceId)) {
+          manages.set(
+            s.workspaceId,
+            await canManageMcpServer(userId, s.workspaceId)
+          );
+        }
+      }
+      return {
+        servers: servers.map((s) =>
+          manages.get(s.workspaceId)
+            ? s
+            : {
+                ...s,
+                env: Object.fromEntries(
+                  Object.keys(s.env ?? {}).map((k) => [k, MASKED_ENV_VALUE])
+                ),
+              }
+        ),
+      };
     }),
 
   /**
@@ -276,6 +279,7 @@ export const mcpServersRouter = router({
         });
       }
       await requireServerManager(userId, server.workspaceId);
+      assertSpawnable(server);
 
       const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
         await resolveIntelligenceService({
@@ -347,6 +351,7 @@ export const mcpServersRouter = router({
           message: "MCP server not found.",
         });
       }
+      assertSpawnable(server);
 
       const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
         await resolveIntelligenceService({

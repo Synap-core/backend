@@ -25,6 +25,12 @@ vi.mock("../../utils/permission-check.js", () => ({
 vi.mock("../../utils/workspace-write-access.js", () => ({
   assertWorkspaceWrite: vi.fn(async () => undefined),
 }));
+// The MCP-server role gate is exercised on real tables in
+// create-from-definition.mcp-reapproval.pglite.test.ts; this file stubs the db.
+vi.mock("../../utils/workspace-role.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  requireServerManager: vi.fn(async () => undefined),
+}));
 vi.mock("./cp-template-client.js", () => ({
   fetchCPCapabilityTemplate: vi.fn(async () => null),
 }));

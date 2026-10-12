@@ -6,7 +6,9 @@
  * promote, never demote"), so a re-applied (or drifted) template could swap
  * what an owner had approved and the IS would keep injecting its tools.
  * `mcpServersRouter.update` already demoted on the same change; both doors now
- * call the ONE rule `mcpServerExecFieldsChanged` (`skill-exec-fields.ts`).
+ * call the ONE rule `execFieldsChanged(MCP_SERVER_RE_APPROVAL_FIELDS, …)`
+ * (`skill-exec-fields.ts`). A definition can never approve its own server, and
+ * only a server manager for the row's scope may write one at all.
  *
  * Driven through the real `createCapabilityFromDefinition` against a PGlite
  * `mcp_servers` table generated from the Drizzle schema, asserting the ROW.
@@ -103,7 +105,17 @@ const SERVER = {
   url: "https://mcp.example.test/mcp",
 };
 
-function apply(server: Record<string, unknown>) {
+const WS_ADMIN = "33333333-0000-0000-0000-000000000001";
+const WS_MEMBER = "33333333-0000-0000-0000-000000000002";
+const POD_ADMIN_WS = "44444444-4444-4444-4444-444444444444";
+
+function apply(
+  server: Record<string, unknown>,
+  as: { userId: string; workspaceId: string | null } = {
+    userId: UID,
+    workspaceId: WS,
+  }
+) {
   return createCapabilityFromDefinition(
     {
       key: "remote-tools",
@@ -115,7 +127,7 @@ function apply(server: Record<string, unknown>) {
       mcpServers: [server],
     } as never,
     {},
-    { userId: UID, workspaceId: WS, authenticated: true } as never
+    { ...as, authenticated: true } as never
   );
 }
 const theRow = async () =>
@@ -144,6 +156,19 @@ beforeAll(async () => {
     await h.client!.exec(ddlFor(v));
   }
   expect(seen.has("mcp_servers")).toBe(true);
+  // UID owns WS (the happy path below); WS_ADMIN is an admin, WS_MEMBER a plain
+  // member. Nobody here is a pod admin of the `pod-admin` system workspace.
+  await h.client!.query(
+    `insert into workspaces (id, name, system_slug) values ($1, 'WS', null), ($2, 'Pod admin', 'pod-admin')`,
+    [WS, POD_ADMIN_WS]
+  );
+  await h.client!.query(
+    `insert into workspace_members (id, workspace_id, user_id, role) values
+       (gen_random_uuid(), $1, $2, 'owner'),
+       (gen_random_uuid(), $1, $3, 'admin'),
+       (gen_random_uuid(), $1, $4, 'member')`,
+    [WS, UID, WS_ADMIN, WS_MEMBER]
+  );
 }, 120_000);
 
 beforeEach(async () => {
@@ -167,8 +192,8 @@ describe("applier re-apply vs an approved MCP server", () => {
   });
 
   it("a template `approved: true` does NOT re-approve a re-pointed server", async () => {
-    await apply({ ...SERVER, approved: true });
-    expect((await theRow())[0]!.approved).toBe(true);
+    await apply(SERVER);
+    await ownerApproves();
 
     await apply({
       ...SERVER,
@@ -186,5 +211,54 @@ describe("applier re-apply vs an approved MCP server", () => {
     await apply({ ...SERVER, name: "Renamed" });
 
     expect((await theRow())[0]!.approved).toBe(true);
+  });
+});
+
+describe("who may write an MCP server row through the applier", () => {
+  it("a plain workspace MEMBER is refused and no row is written", async () => {
+    await expect(
+      apply(SERVER, { userId: WS_MEMBER, workspaceId: WS })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await theRow()).toHaveLength(0);
+  });
+
+  it("a member cannot overwrite an existing approved row either", async () => {
+    await apply(SERVER);
+    await ownerApproves();
+    await expect(
+      apply(
+        { ...SERVER, url: "https://evil.example.test/mcp" },
+        { userId: WS_MEMBER, workspaceId: WS }
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await theRow())[0]).toMatchObject({
+      url: SERVER.url,
+      approved: true,
+    });
+  });
+
+  it("a pod-wide row needs a pod admin — a workspace OWNER is refused", async () => {
+    await expect(
+      apply(SERVER, { userId: UID, workspaceId: null })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await theRow()).toHaveLength(0);
+  });
+
+  it("an inline `approved: true` from a workspace ADMIN lands UNapproved", async () => {
+    await apply(
+      { ...SERVER, approved: true },
+      { userId: WS_ADMIN, workspaceId: WS }
+    );
+    expect(await theRow()).toEqual([
+      expect.objectContaining({ approved: false }),
+    ]);
+  });
+
+  it("a definition's `approved: true` never approves — not even from the owner", async () => {
+    await apply({ ...SERVER, approved: true });
+    expect((await theRow())[0]!.approved).toBe(false);
+    // …nor promotes an existing unapproved row on an unchanged re-apply.
+    await apply({ ...SERVER, approved: true });
+    expect((await theRow())[0]!.approved).toBe(false);
   });
 });

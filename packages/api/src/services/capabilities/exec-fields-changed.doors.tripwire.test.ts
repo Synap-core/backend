@@ -23,18 +23,23 @@
  * same columns and must demote by the same list.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { execFieldsChanged } from "./skill-exec-fields.js";
 
-const routers = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "routers"
-);
+const here = dirname(fileURLToPath(import.meta.url));
+const apiSrc = join(here, "..", "..");
+const routers = join(apiSrc, "routers");
+const mcpSample = {
+  command: "npx",
+  args: ["-y", "server"],
+  env: { A: "1", B: "2" },
+  url: "https://example.test/mcp",
+  transport: "stdio",
+  auth: { credentialRef: "vault://x", header: "Authorization" },
+} as Record<string, unknown>;
 
 const DOORS = [
   {
@@ -53,20 +58,62 @@ const DOORS = [
   },
   {
     file: "mcp-servers.ts",
-    fieldsFile: join(
-      dirname(fileURLToPath(import.meta.url)),
-      "skill-exec-fields.ts"
-    ),
+    fieldsFile: join(here, "skill-exec-fields.ts"),
     listName: "MCP_SERVER_RE_APPROVAL_FIELDS",
-    sample: {
-      command: "npx",
-      args: ["-y", "server"],
-      env: { A: "1", B: "2" },
-      url: "https://example.test/mcp",
-      transport: "stdio",
-    } as Record<string, unknown>,
+    sample: mcpSample,
+  },
+  {
+    // The capability applier rewrites the same mcp_servers columns on re-apply.
+    file: "../services/capabilities/create-from-definition.ts",
+    fieldsFile: join(here, "skill-exec-fields.ts"),
+    listName: "MCP_SERVER_RE_APPROVAL_FIELDS",
+    sample: mcpSample,
   },
 ] as const;
+
+/** Every non-test .ts under `dir`, recursively. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) return e.name === "node_modules" ? [] : sourceFiles(p);
+    return /\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) ? [p] : [];
+  });
+}
+
+describe("the DOORS list is every caller of execFieldsChanged", () => {
+  // DERIVED, not trusted: a new door that demotes through the shared rule
+  // joins the scan by existing. `skill-exec-fields.ts` is the rule's own home
+  // (its skill wrapper is pinned by skill-exec-fields.tripwire.test.ts).
+  const CALL = /(?<![\w.])execFieldsChanged\(/;
+  const callers = sourceFiles(apiSrc)
+    .filter((f) => !f.endsWith("skill-exec-fields.ts"))
+    .filter((f) => CALL.test(readFileSync(f, "utf8")))
+    .map((f) => join(f))
+    .sort();
+
+  it("finds the callers it hunts (non-vacuity)", () => {
+    expect(callers.length).toBeGreaterThanOrEqual(3);
+    expect(CALL.test("const execChanged = execFieldsChanged(")).toBe(true);
+    expect(CALL.test("skillExecFieldsChanged(")).toBe(false);
+  });
+
+  // Callers that are NOT approval doors, each with the reason and where it is
+  // pinned instead. A caller must be in DOORS or here — never in neither.
+  const NOT_APPROVAL_DOORS: Record<string, string> = {
+    [join(apiSrc, "services/cells/define-cell.ts")]:
+      "demotes a cell's trustLevel on an externalHosts change, not `approved` — " +
+      "pinned by define-cell.external-hosts.test.ts",
+  };
+
+  it("classifies each one as a door or a named non-door", () => {
+    expect(callers).toEqual(
+      [
+        ...DOORS.map((d) => join(routers, d.file)),
+        ...Object.keys(NOT_APPROVAL_DOORS),
+      ].sort()
+    );
+  });
+});
 
 /** The `<listName> = [...] as const` literal, read out of the source. */
 function declaredFields(src: string, file: string, listName: string): string[] {

@@ -57,6 +57,9 @@ import {
   mcpServers,
   workspaces,
   workspaceMembers,
+  podMembers,
+  projectMembers,
+  users,
 } from "@synap/database/schema";
 import { mcpServersRouter } from "./mcp-servers.js";
 
@@ -91,6 +94,7 @@ const POD_ADMIN = "user-pod-admin";
 const WS_OWNER = "user-ws-owner";
 const WS_ADMIN = "user-ws-admin";
 const NOBODY = "user-plain"; // signed in, member of nothing relevant
+const WS_MEMBER = "user-ws-member"; // plain member of WS — sees rows, manages none
 
 const caller = (userId: string) =>
   mcpServersRouter.createCaller({ authenticated: true, userId } as never);
@@ -116,6 +120,10 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(mcpServers as never));
   await h.client!.exec(ddlFor(workspaces as never));
   await h.client!.exec(ddlFor(workspaceMembers as never));
+  // Read by the scopedDb visibility predicate (`list` / `listTools`).
+  await h.client!.exec(ddlFor(podMembers as never));
+  await h.client!.exec(ddlFor(projectMembers as never));
+  await h.client!.exec(ddlFor(users as never));
   await h.client!.query(
     `insert into workspaces (id, name, system_slug) values ($1, 'Pod admin', 'pod-admin'), ($2, 'WS', null)`,
     [POD_ADMIN_WS, WS]
@@ -124,7 +132,8 @@ beforeAll(async () => {
     `insert into workspace_members (id, workspace_id, user_id, role) values
        ($1, $4, $5, 'admin'),
        ($2, $6, $7, 'owner'),
-       ($3, $6, $8, 'admin')`,
+       ($3, $6, $8, 'admin'),
+       ($9, $6, $10, 'member')`,
     [
       randomUUID(),
       randomUUID(),
@@ -134,6 +143,8 @@ beforeAll(async () => {
       WS,
       WS_OWNER,
       WS_ADMIN,
+      randomUUID(),
+      WS_MEMBER,
     ]
   );
 }, 120_000);
@@ -226,5 +237,80 @@ describe("workspace MCP server keeps its workspace gate", () => {
     });
     await caller(WS_ADMIN).delete({ id });
     expect(await row(id)).toBeUndefined();
+  });
+});
+
+/** A stdio server — the transport that SPAWNS a process on the IS. */
+async function seedStdio(
+  workspaceId: string | null,
+  approved: boolean,
+  env: Record<string, string> = {}
+) {
+  const id = randomUUID();
+  await h.client!.query(
+    `insert into mcp_servers (id, workspace_id, slug, name, transport, command, env, approved, enabled)
+     values ($1, $2, $3, 'S', 'stdio', 'npx', $4, $5, true)`,
+    [id, workspaceId, `s-${id.slice(0, 8)}`, JSON.stringify(env), approved]
+  );
+  return id;
+}
+
+describe("stdio servers are never spawned before approval", () => {
+  it("ping of an UNapproved stdio server → PRECONDITION_FAILED, no IS call", async () => {
+    const id = await seedStdio(WS, false);
+    await expect(caller(WS_ADMIN).ping({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringMatching(/approve this server first/i),
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("ping of an APPROVED stdio server reaches the IS", async () => {
+    const id = await seedStdio(WS, true);
+    await caller(WS_ADMIN).ping({ id });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("listTools of an UNapproved stdio server → PRECONDITION_FAILED, no IS call", async () => {
+    const id = await seedStdio(WS, false);
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("listTools of an APPROVED stdio server reaches the IS", async () => {
+    const id = await seedStdio(WS, true);
+    await caller(WS_MEMBER).listTools({ id });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("list masks env for callers who cannot manage the row", () => {
+  const ENV = { API_TOKEN: "sk-live-secret" };
+  const envOf = async (user: string, id: string) =>
+    (await caller(user).list({ workspaceId: WS })).servers.find(
+      (s) => s.id === id
+    )?.env;
+
+  it("a plain member sees the keys, never the values", async () => {
+    const id = await seedStdio(WS, true, ENV);
+    const env = await envOf(WS_MEMBER, id);
+    expect(env).toEqual({ API_TOKEN: "••••" });
+    expect(JSON.stringify(env)).not.toContain("sk-live-secret");
+  });
+
+  it("a workspace admin sees the values", async () => {
+    const id = await seedStdio(WS, true, ENV);
+    expect(await envOf(WS_ADMIN, id)).toEqual(ENV);
+  });
+
+  it("a pod-wide row: a workspace admin is masked, a pod admin is not", async () => {
+    const id = await seedStdio(null, true, ENV);
+    expect(await envOf(WS_ADMIN, id)).toEqual({ API_TOKEN: "••••" });
+    const podAdmin = (
+      await caller(POD_ADMIN).list({ workspaceId: null })
+    ).servers.find((s) => s.id === id)?.env;
+    expect(podAdmin).toEqual(ENV);
   });
 });
