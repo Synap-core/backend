@@ -15,6 +15,7 @@ import {
   lifecycleColumnsFor,
 } from "../services/lifecycle/lifecycle-columns.js";
 import { FacetRepository } from "./facet-repository.js";
+import type { FacetAttachContext } from "../utils/facet-attached-hook.js";
 import type { EntityFacet } from "../schema/entity-facets.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
 import {
@@ -74,6 +75,13 @@ export class EntityCreateRejectedError extends PropertyValidationError {
 }
 
 export interface CreateEntityInput {
+  /**
+   * When the profile is a ROLE (the role adapter attaches it as a facet):
+   * what the caller knows about that attach — session, sync origin, the
+   * authorizing proposal, its lens. Rides the attach announcement.
+   */
+  facetEmitContext?: FacetAttachContext;
+
   /**
    * Pin the new row's id instead of letting the DB mint one. Used by the
    * proposal materializer so the created entity's id equals the event
@@ -571,7 +579,11 @@ export class EntityRepository extends BaseRepository<
       });
       if (attachedFacet) {
         const outerFacetRepo = new FacetRepository(this.db, this.eventRepo);
-        await outerFacetRepo.emitAttachCompletedEvent(attachedFacet, userId);
+        await outerFacetRepo.emitAttachCompletedEvent(
+          attachedFacet,
+          userId,
+          data.facetEmitContext
+        );
       }
     } else {
       const [row] = await this.db

@@ -15,6 +15,7 @@ import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import { emitDomainEventToRealtime } from "./utils/domain-event-bridge.js";
 import { syncRealtimeHook } from "./utils/sync-realtime-hook.js";
+import { registerFacetAttachEmitter } from "./routers/entities/helpers.js";
 
 const logger = createLogger({ module: "event-broadcasting" });
 
@@ -31,6 +32,11 @@ export function setupEventBroadcasting(): void {
     logger.warn("Event broadcasting already setup, skipping");
     return;
   }
+
+  // The facet door's attach announcement (R1): every NEW role attach, from
+  // any path, fans out as `entity_facet.attach` once. Process-global, like
+  // the hooks below — this process also runs every pg-boss worker.
+  registerFacetAttachEmitter();
 
   // Hook 1: SSE broadcast — stream all events to connected clients
   const broadcastHook: EventHook = (event) => {

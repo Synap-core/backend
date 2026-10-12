@@ -676,6 +676,9 @@ export async function upsertSyncGraph(
       workspaceId: ctx.workspaceId,
       userId: ctx.owner,
       provenance: { createdByKind: "system", createdByUserId: ctx.owner },
+      // A role this mirror attaches is announced as sync, like every other
+      // write of this run (`recordSyncWrite`).
+      origin: "sync",
     });
     refToId.set(e.ref, res.entity.id);
     if (res.action === "created") {

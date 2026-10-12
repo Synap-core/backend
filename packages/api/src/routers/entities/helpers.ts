@@ -22,6 +22,7 @@ import {
   type FacetVisibilityScope,
   facetVisibilityConditions,
   drizzleSql,
+  registerFacetAttachedEmitter,
 } from "@synap/database";
 import { entities, profiles, entityFacets } from "@synap/database/schema";
 import { type Entity } from "@synap-core/types";
@@ -497,6 +498,35 @@ export function emitFacetSideEffects(opts: {
         ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
       },
       ...(origin ? { origin } : {}),
+    });
+  });
+}
+
+/**
+ * THE attach announcement, wired into the facet door at boot
+ * (`registerFacetAttachedEmitter`, @synap/database): every NEW facet row —
+ * whichever path attached it (this router, capture/sync upsert, the role
+ * adapter of a create, merge, the team bridge, the materializer) — fans out
+ * as `entity_facet.attach` + the parent refresh, exactly once. A role's
+ * `created` activator fires on it (R1).
+ */
+export function registerFacetAttachEmitter(): void {
+  registerFacetAttachedEmitter(async ({ facet, userId, context }) => {
+    emitFacetSideEffects({
+      action: "attach",
+      entityId: facet.entityId,
+      facetId: facet.id,
+      profileSlug: await resolveFacetProfileSlug(facet.profileId),
+      status: facet.status,
+      userId,
+      workspaceId: facet.workspaceId ?? context?.fallbackWorkspaceId ?? null,
+      sessionId: context?.sessionId ?? null,
+      entityTitle: context?.entityTitle ?? null,
+      contextEntityTitle: context?.contextEntityTitle ?? null,
+      automationContext:
+        context?.automationContext as SideEffectPayload["automationContext"],
+      origin: context?.origin,
+      proposalId: context?.proposalId ?? null,
     });
   });
 }

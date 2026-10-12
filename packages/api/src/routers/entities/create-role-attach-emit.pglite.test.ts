@@ -1,17 +1,20 @@
 /**
- * R1 — creating a thing AS a role (`profileSlug: "lead"`) reaches the
- * automation matcher as the role's ATTACH (`entity_facet.attach`), the event a
- * role's `created` activator compiles to. Driven through the real
- * `entities.create` door on PGlite, reading what the door hands to
- * `emitSideEffects` (the matcher's fan-out).
+ * R1 — a role ATTACH reaches the automation matcher (`entity_facet.attach`,
+ * the event a role's `created` activator compiles to) from EVERY path, once:
+ * the facet door (`FacetRepository.attach`) announces each NEW row through the
+ * boot-wired emitter (`registerFacetAttachEmitter`). Driven on PGlite through
+ * the real doors, reading what reaches `emitSideEffects` (the fan-out).
  *
- * Why: the create door's role adapter attaches the facet through the
- * repository, whose event reaches the fact bus only. Before R1 nothing told
- * the matcher a lead had landed — "Qualify a lead" could never start from a
- * lead created this way.
+ * Paths: the router create AS a role (its adapter attaches in a transaction
+ * and announces after commit), capture/sync's `EntityUpsertService`, and a
+ * direct door call (merge, the team bridge, the materializer all call it so).
+ * Discriminating rows: the router path announces EXACTLY once (a router emit
+ * beside the door's would double it); an idempotent re-attach announces
+ * nothing; a sync upsert's attach carries `origin: "sync"` (or a first sync
+ * of 200 contacts would start 200 processes).
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const holder = vi.hoisted(() => ({
@@ -139,21 +142,56 @@ async function freshDb() {
   return { client, database };
 }
 
-describe("entities.create as a ROLE emits the role's attach (R1)", () => {
-  it("profileSlug: lead → entity_facet.attach reaches the matcher fan-out, with the role and the parent", async () => {
-    const { client, database } = await freshDb();
-    const personId = randomUUID();
+type Emit = {
+  subjectType: string;
+  action: string;
+  data: Record<string, unknown>;
+  origin?: string;
+};
+const attaches = (): Emit[] =>
+  vi
+    .mocked(emitSideEffects)
+    .mock.calls.map((c) => c[0] as Emit)
+    .filter((p) => p.subjectType === "entity_facet" && p.action === "attach");
+/** The fan-out is fire-and-forget behind an origin lookup. */
+const settle = () => new Promise((r) => setTimeout(r, 30));
+
+describe("a role attach is announced once, from every path (R1)", () => {
+  let client: PGlite;
+  let database: Database;
+  let personProfileId: string;
+
+  beforeAll(async () => {
+    ({ client, database } = await freshDb());
+    personProfileId = randomUUID();
     const leadId = randomUUID();
     await client.query(
       `insert into profiles (id, slug, display_name, profile_kind, entity_scope, user_id, scope)
        values ($1, 'person', 'Person', 'kind', 'pod', $3, 'system'),
               ($2, 'lead', 'Lead', 'role', 'pod', $3, 'system')`,
-      [personId, leadId, USER]
+      [personProfileId, leadId, USER]
     );
     await client.query(
       `update profiles set applicable_kinds = '{person}' where id = $1`,
       [leadId]
     );
+    // The live-row unique index (migration 0174) is what makes a re-attach
+    // idempotent; the drizzle-derived DDL above carries no indexes.
+    await client.exec(
+      `create unique index entity_facets_entity_profile_ctx_ws_uniq
+         on entity_facets (entity_id, profile_id,
+           coalesce(context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid),
+           coalesce(workspace_id, '00000000-0000-0000-0000-000000000000'::uuid))
+         where deleted_at is null`
+    );
+    const { registerFacetAttachEmitter } = await import("./helpers.js");
+    registerFacetAttachEmitter();
+    // Every schema table on PGlite: ~3s alone, ~30s on a loaded machine.
+  }, 120_000);
+
+  beforeEach(() => vi.mocked(emitSideEffects).mockClear());
+
+  it("router: entities.create AS a lead announces the attach EXACTLY once", async () => {
     const { entitiesRouter } = await import("../entities.js");
     const caller = entitiesRouter.createCaller({
       db: database,
@@ -161,34 +199,90 @@ describe("entities.create as a ROLE emits the role's attach (R1)", () => {
       userId: USER,
       workspaceId: null,
     } as never);
-    vi.mocked(emitSideEffects).mockClear();
     const res = (await caller.create({
       profileSlug: "lead",
       title: "Ada Lovelace",
       forceCreate: true,
     } as never)) as { status: string; id: string };
     expect(res.status).toBe("created");
-    // The fan-out is fire-and-forget behind an origin lookup.
-    await new Promise((r) => setTimeout(r, 20));
-    const attach = vi
-      .mocked(emitSideEffects)
-      .mock.calls.map(
-        (c) =>
-          c[0] as {
-            subjectType: string;
-            action: string;
-            data: Record<string, unknown>;
-          }
-      )
-      .find((p) => p.subjectType === "entity_facet" && p.action === "attach");
-    expect(
-      attach,
-      "the role's attach never reached the matcher fan-out"
-    ).toBeDefined();
-    expect(attach!.data).toMatchObject({
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]!.data).toMatchObject({
       entityId: res.id,
       profileSlug: "lead",
     });
-    // Every schema table on PGlite: ~3s alone, ~30s on a loaded machine.
-  }, 120_000);
+  }, 60_000);
+
+  it("capture/sync upsert of a lead announces it; a SYNC upsert says so", async () => {
+    const { EntityUpsertService } = await import("@synap/database");
+    const svc = new EntityUpsertService(
+      database as never,
+      { append: async () => undefined } as never
+    );
+    const res = await svc.upsert({
+      profileSlug: "lead",
+      title: "Grace Hopper",
+      properties: {},
+      source: "contacts",
+      externalId: `ext-${randomUUID()}`,
+      signals: [],
+      workspaceId: null,
+      userId: USER,
+      provenance: { createdByKind: "system", createdByUserId: USER },
+    } as never);
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]!.data).toMatchObject({
+      entityId: res.entity.id,
+      profileSlug: "lead",
+    });
+    expect(attaches()[0]!.origin).toBeUndefined();
+
+    vi.mocked(emitSideEffects).mockClear();
+    await svc.upsert({
+      profileSlug: "lead",
+      title: "Katherine Johnson",
+      properties: {},
+      source: "contacts",
+      externalId: `ext-${randomUUID()}`,
+      signals: [],
+      workspaceId: null,
+      userId: USER,
+      provenance: { createdByKind: "system", createdByUserId: USER },
+      origin: "sync",
+    } as never);
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]!.origin).toBe("sync");
+  }, 60_000);
+
+  it("a direct door attach (merge / team bridge / materializer) announces it; a re-attach does not", async () => {
+    const { FacetRepository } = await import("@synap/database");
+    const personId = randomUUID();
+    await client.query(
+      `insert into entities (id, user_id, type, title, profile_id, properties)
+       values ($1, $2, 'person', 'Mary Jackson', $3, '{}'::jsonb)`,
+      [personId, USER, personProfileId]
+    );
+    const repo = new FacetRepository(
+      database as never,
+      { append: async () => undefined } as never
+    );
+    await repo.attach(
+      { entityId: personId, profileSlug: "lead", userId: USER },
+      USER
+    );
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]!.data).toMatchObject({
+      entityId: personId,
+      profileSlug: "lead",
+    });
+    await repo.attach(
+      { entityId: personId, profileSlug: "lead", userId: USER },
+      USER
+    );
+    await settle();
+    expect(attaches()).toHaveLength(1);
+  }, 60_000);
 });

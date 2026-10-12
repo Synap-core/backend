@@ -382,11 +382,23 @@ export const facetProcs = {
           agentUserId: actingAgentUserId,
           sourceProposalId: ctx.governanceProposalId,
           correlationId,
+          // The door announces a NEW attach itself (`notifyFacetAttached` →
+          // `emitFacetSideEffects`, wired at boot) — every attach path, not
+          // only this router. This is what it cannot know on its own.
+          emitContext: {
+            sessionId: ctx.sessionId ?? null,
+            origin: ctx.origin,
+            proposalId: ctx.governanceProposalId,
+            automationContext: input.automationContext,
+            entityTitle: parent.title,
+            contextEntityTitle: contextEntityTitle ?? null,
+            fallbackWorkspaceId: governanceWorkspaceId,
+          },
         },
         ctx.userId
       );
 
-      // 4. .completed + emit chain
+      // 4. .completed (the emit chain is the door's — see above)
       await auditLog({
         subjectType: "entity_facet",
         action: "attach",
@@ -399,24 +411,6 @@ export const facetProcs = {
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: { entityId: input.entityId, facetId: facet.id },
-      });
-
-      const profileSlug =
-        input.profileSlug ?? (await resolveFacetProfileSlug(facet.profileId));
-      emitFacetSideEffects({
-        action: "attach",
-        entityId: input.entityId,
-        facetId: facet.id,
-        profileSlug,
-        status: facet.status,
-        userId: ctx.userId,
-        workspaceId: facet.workspaceId ?? governanceWorkspaceId,
-        sessionId: ctx.sessionId ?? null,
-        entityTitle: parent.title,
-        contextEntityTitle,
-        automationContext: input.automationContext,
-        origin: ctx.origin,
-        proposalId: ctx.governanceProposalId,
       });
 
       return {
