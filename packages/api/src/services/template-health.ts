@@ -29,7 +29,11 @@ import {
   type CatalogSyncStamp,
   templateApplyUnfinished,
 } from "@synap/database";
-import { cpCatalogCache } from "@synap/database/schema";
+import {
+  cpCatalogCache,
+  proposals,
+  ProposalStatus,
+} from "@synap/database/schema";
 import {
   alwaysSkillBudgetWarning,
   alwaysSkillOverBudget,
@@ -419,6 +423,58 @@ export function overlayHealthFor(
   });
 }
 
+/**
+ * Per workspace whose last template apply is waiting on approval
+ * (`settings.templateApply.state === "awaiting-approval"`, written by
+ * `finishTemplateApply`): the ids of its proposals that are STILL PENDING —
+ * read live, one query for the whole set, never trusted from the stored array.
+ * Once they are approved or rejected the space drops out of this map and reads
+ * as plain drift (the next `synap templates update` finishes it). A workspace
+ * absent from the map has nothing waiting. Throws on a failed read: "could not
+ * read" is never folded into "nothing waiting".
+ */
+export async function awaitingApprovalByWorkspace(
+  rows: Array<{ id: string; settings: unknown }>
+): Promise<Map<string, string[]>> {
+  const UUID =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const recorded = rows.map((r) => {
+    const t = (r.settings as { templateApply?: unknown } | null)
+      ?.templateApply as { state?: unknown; proposals?: unknown } | null;
+    const ids =
+      t?.state === "awaiting-approval" && Array.isArray(t.proposals)
+        ? t.proposals.filter(
+            (p): p is string => typeof p === "string" && UUID.test(p)
+          )
+        : [];
+    return { id: r.id, ids };
+  });
+  const wanted = [...new Set(recorded.flatMap((r) => r.ids))];
+  const out = new Map<string, string[]>();
+  if (wanted.length === 0) return out;
+  const pending = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        inArray(proposals.id, wanted),
+        eq(proposals.status, ProposalStatus.PENDING)
+      )
+    );
+  const live = new Set(pending.map((p) => p.id));
+  for (const r of recorded) {
+    const still = r.ids.filter((id) => live.has(id));
+    if (still.length > 0) out.set(r.id, still);
+  }
+  return out;
+}
+
+/** The plain sentence for a space whose update waits on the person's approval. */
+export function awaitingApprovalWarning(proposalIds: string[]): string {
+  const n = proposalIds.length;
+  return `Waiting on your approval of ${n} proposal${n === 1 ? "" : "s"}, then run \`synap templates update\`.`;
+}
+
 /** One workspace's identity + its template health — the MCP `template_health` row shape. */
 export interface WorkspaceTemplateHealth extends TemplateHealth {
   workspaceId: string;
@@ -426,6 +482,12 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
   packageSlug: string | null;
   /** The overlays composed onto this space, each with its own standing. */
   overlays: OverlayTemplateHealth[];
+  /**
+   * The proposals this space's last template apply is waiting on, LIVE
+   * (`awaitingApprovalByWorkspace`): still pending, by id. `[]` when nothing
+   * waits — including once they were approved or rejected (plain drift then).
+   */
+  awaitingApproval: string[];
   /**
    * Non-fatal template problems in this space — a retired / unlisted template
    * (`lifecycleWarning`, first), then each overlay's warning, and an `always` skill whose body is over the
@@ -503,6 +565,7 @@ export async function listWorkspaceTemplateHealth(
     active.flatMap((r) => templateSlugsOf(r.settings))
   );
   const warningsByWs = await alwaysSkillWarningsByWorkspace(active);
+  const waitingByWs = await awaitingApprovalByWorkspace(active);
   return active.map((r) => {
     const s = (r.settings ?? {}) as {
       packageSlug?: unknown;
@@ -518,13 +581,18 @@ export async function listWorkspaceTemplateHealth(
       r.settings
     );
     const overlays = overlayHealthFor(r.settings, catalog);
+    const awaitingApproval = waitingByWs.get(r.id) ?? [];
     return {
       workspaceId: r.id,
       workspaceName: r.name,
       packageSlug: pkgSlug,
       ...health,
       overlays,
+      awaitingApproval,
       warnings: [
+        ...(awaitingApproval.length > 0
+          ? [awaitingApprovalWarning(awaitingApproval)]
+          : []),
         ...(health.lifecycleWarning ? [health.lifecycleWarning] : []),
         ...overlays.flatMap((o) =>
           o.lifecycleWarning ? [o.lifecycleWarning] : []

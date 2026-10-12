@@ -9,6 +9,9 @@
  *  (1) a FRESH install whose layer 2 only proposes: no version stamp, the
  *      space is "active" with `templateApply: awaiting-approval` naming the
  *      proposal, and template health reads it DRIFTED;
+ *  (1b) health — MCP `template_health` and the Hub `GET /workspaces` the CLI
+ *      reads — says the space waits on approval of THAT proposal, read live:
+ *      once it is decided the warning is gone and the space is plain drift;
  *  (2) the same space, FAILED, then re-applied once the playbook can land: the
  *      wrapper resumes it, layer 2 converges, and the finisher stamps the
  *      version, marks it "active" and clears the record — health current.
@@ -154,6 +157,7 @@ import * as schema from "@synap/database/schema";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import { registerPackagesRoutes } from "./packages.js";
+import { registerWorkspacesRoutes } from "./workspaces.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 import { listWorkspaceTemplateHealth } from "../../../services/template-health.js";
 
@@ -175,7 +179,20 @@ function buildApp(): HubHono {
     await next();
   });
   registerPackagesRoutes(app);
+  registerWorkspacesRoutes(app);
   return app;
+}
+
+/** The space's row as the Hub `GET /workspaces` door (the CLI's read) serves it. */
+async function hubRow(id: string): Promise<Record<string, any>> {
+  const res = await buildApp().request("/workspaces");
+  const body = (await res.json()) as {
+    workspaces?: Array<Record<string, any>>;
+  };
+  expect(res.status, JSON.stringify(body)).toBe(200);
+  const row = body.workspaces?.find((w) => w.id === id);
+  expect(row, JSON.stringify(body)).toBeDefined();
+  return row!;
 }
 
 async function apply() {
@@ -248,6 +265,47 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     });
     const [health] = await listWorkspaceTemplateHealth([id]);
     expect(health).toMatchObject({ stamped: false, drifted: true });
+  });
+
+  it("(1b) health names the proposal it waits on — read live, plain drift once decided", async () => {
+    const { id } = await space();
+    // The governed create filed this proposal (the gate is stubbed here, so
+    // the row is written as the real gate would).
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status)
+       values ($1,$2,'playbook',$3,'playbook.create','{"name":"Qualify a lead"}'::jsonb,'pending')`,
+      [h.filedProposalId, id, randomUUID()]
+    );
+    const warning =
+      "Waiting on your approval of 1 proposal, then run `synap templates update`.";
+    const [waiting] = await listWorkspaceTemplateHealth([id]);
+    expect(waiting).toMatchObject({
+      drifted: true,
+      awaitingApproval: [h.filedProposalId],
+    });
+    expect(waiting!.warnings).toContain(warning);
+    expect(await hubRow(id)).toMatchObject({
+      drifted: true,
+      awaitingApproval: [h.filedProposalId],
+      awaitingApprovalWarning: warning,
+    });
+
+    // Decided (approved here; rejected reads the same): the stored array still
+    // names it, but nothing waits any more — plain drift.
+    await q(`update proposals set status = 'approved' where id = $1`, [
+      h.filedProposalId,
+    ]);
+    const [decided] = await listWorkspaceTemplateHealth([id]);
+    expect(decided).toMatchObject({ drifted: true, awaitingApproval: [] });
+    expect(decided!.warnings).not.toContain(warning);
+    expect(await hubRow(id)).toMatchObject({
+      drifted: true,
+      awaitingApproval: [],
+      awaitingApprovalWarning: null,
+    });
+    expect((await space()).settings.templateApply.proposals).toEqual([
+      h.filedProposalId,
+    ]);
   });
 
   it("(2) a failed space resumed and converged: stamped, active, record cleared, health current", async () => {
