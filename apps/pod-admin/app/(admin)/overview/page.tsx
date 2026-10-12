@@ -1,116 +1,584 @@
 "use client";
 
 /**
- * Overview tab — the home of the Pod Admin shell.
+ * Overview — the console's home. It answers "what needs me?" first.
  *
- * Five cards in a responsive 2-column grid (single-column on small):
+ *   1. Status line   — one sentence from `diagnose.global` + the admin alerts.
+ *   2. Needs you     — the non-ok diagnose sections plus pending trusted
+ *                      issuers and failing sync peers, ranked and capped
+ *                      (`_lib/needs-you.ts`). Passing checks collapse into
+ *                      one disclosure.
+ *   3. Approval queue — pending proposals, each a door to `/proposal/<id>`.
+ *   4. Pod at a glance — sync, backups and contents as three compact rows.
  *
- *   1. Sync     — pod-to-pod replication state.
- *   2. Backups  — last/next backup, success/failure.
- *   3. Contents — how much this pod holds (entities, documents, users).
- *   4. Alerts   — urgent issues across the pod (max 5; "View all" link).
- *   5. Approval queue — pending proposals the viewer may review.
- *
- * Each card pulls its own data via tRPC; queries run in parallel and a
- * loading state never blocks adjacent cards from rendering. Every card
- * shows only what its procedure actually returns — a card that advertises
- * a number nobody computes teaches the reader the app is broken, exactly
- * as a permanently disabled button does.
+ * Every band owns its queries and its loading/error state: one failing read
+ * must never blank the page. Every number shown is one a procedure actually
+ * returns — a card that advertises a number nobody computes teaches the
+ * reader the app is broken, exactly as a permanently disabled button does.
  */
 
 import { Button } from "@heroui/react";
 import {
+  Activity,
   AlertTriangle,
+  Bot,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
   Clock,
   Database,
   GitBranch,
   HardDrive,
-  KeyRound,
+  Layers,
   Mailbox,
+  PackageCheck,
   ShieldQuestion,
+  Sparkles,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
+import {
+  buildObjectActionTitle,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 import Link from "next/link";
+import { useState } from "react";
 
+import { ExitFallback } from "../../../lib/exit-link";
+import {
+  formatRelative,
+  humanizeBytes,
+  truncateMiddle,
+} from "../../../lib/format";
+import { openIn, type Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
+import { PageHeader } from "../components/page-header";
+import { RecoveryCodesNudge } from "../components/recovery-codes-nudge";
 import {
   ResourceRow,
   ResourceRowEmpty,
+  ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
-import { RecoveryCodesNudge } from "../components/recovery-codes-nudge";
-import type { StatusKind } from "../components/status-pill";
-import { StatusPill } from "../components/status-pill";
+import { StatusPill, type StatusKind } from "../components/status-pill";
+import {
+  buildNeedsYou,
+  statusLine,
+  type HealthStatus,
+  type NeedsYouRow,
+} from "./_lib/needs-you";
+
+/**
+ * `diagnose.global` runs ~a dozen aggregate reads server-side; it is a health
+ * snapshot, not a live feed. Two minutes keeps tab switches free without
+ * letting the page drift far from what the pod reports.
+ */
+const DIAGNOSE_STALE_MS = 120_000;
 
 export default function OverviewPage() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Overview
-        </h1>
-        <p className="text-[13px] text-foreground/55">
-          Operational health at a glance. Drill into any tab for detail.
-        </p>
-      </header>
+      <PageHeader
+        title="Overview"
+        description="What needs you, then the pod at a glance."
+      />
 
       <RecoveryCodesNudge />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <SyncCard />
-        <BackupsCard />
-        <ContentsCard />
-        <AlertsCard />
+      <NeedsYouBand />
+
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <ApprovalQueueCard />
+        <GlanceCard />
       </div>
     </div>
   );
 }
 
-// ─── 1. Sync ──────────────────────────────────────────────────────────
+// ─── 1–2. Status line + Needs you ─────────────────────────────────────
 
-function SyncCard() {
+const SECTION_ICONS: Record<string, LucideIcon> = {
+  review_backlog: Mailbox,
+  capabilities: PackageCheck,
+  failed_flows: AlertTriangle,
+  stuck_runs: Clock,
+  sync_error: GitBranch,
+  trusted_issuer: ShieldQuestion,
+  agent_activity: Bot,
+  duplicate_proposals: Layers,
+  review_queue: Activity,
+  quality_by_prompt_version: Sparkles,
+  schema_hygiene: Wrench,
+  schema_contract: Database,
+};
+
+const TONE_PILL: Record<HealthStatus, { kind: StatusKind; label: string }> = {
+  ok: { kind: "healthy", label: "All good" },
+  attention: { kind: "stale", label: "Worth a look" },
+  degraded: { kind: "down", label: "Act now" },
+};
+
+function NeedsYouBand() {
+  const diagnose = trpc.diagnose.global.useQuery(undefined, {
+    staleTime: DIAGNOSE_STALE_MS,
+  });
+  // The two signals the old Alerts card read. Admin-gated
+  // (`podAdminProcedure`), which this whole route already is.
+  const issuers = trpc.trustedIssuers.list.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const sync = trpc.sync.getStatus.useQuery(undefined, { staleTime: 60_000 });
+
+  const needsYou = buildNeedsYou({
+    sections: diagnose.data?.sections ?? [],
+    pendingIssuers: (issuers.data ?? [])
+      .filter((i) => i.status === "pending")
+      .map((i) => ({ id: i.id, issuerUrl: i.issuerUrl ?? null })),
+    syncErrors: (sync.data ?? []).flatMap((p) =>
+      p.syncState?.lastError
+        ? [
+            {
+              id: p.id,
+              label: p.label ?? p.peerPodUrl,
+              error: String(p.syncState.lastError),
+            },
+          ]
+        : []
+    ),
+  });
+
+  // Each source that failed is named, with its own retry, under whatever the
+  // others produced.
+  const failures: Array<{ key: string; message: string; retry: () => void }> =
+    [];
+  if (diagnose.isError) {
+    failures.push({
+      key: "diagnose",
+      message: "Couldn't run the pod health checks.",
+      retry: () => void diagnose.refetch(),
+    });
+  }
+  if (issuers.isError) {
+    failures.push({
+      key: "issuers",
+      message: "Couldn't load trusted issuers.",
+      retry: () => void issuers.refetch(),
+    });
+  }
+  if (sync.isError) {
+    failures.push({
+      key: "sync",
+      message: "Couldn't load sync peers.",
+      retry: () => void sync.refetch(),
+    });
+  }
+
+  const loading = diagnose.isLoading || issuers.isLoading || sync.isLoading;
+  // A status line computed without the health checks would say "All good"
+  // about a pod nobody checked — so it waits for diagnose, and says so when
+  // diagnose failed.
+  const line = diagnose.data
+    ? statusLine(diagnose.data.status, needsYou)
+    : null;
+
+  return (
+    <>
+      <div className="mb-4 flex min-h-8 flex-wrap items-center gap-3">
+        {diagnose.isLoading ? (
+          <div className="h-4 w-64 rounded bg-foreground/10 shimmer-pulse" />
+        ) : line ? (
+          <>
+            <StatusPill
+              kind={TONE_PILL[line.tone].kind}
+              label={TONE_PILL[line.tone].label}
+            />
+            <p className="text-[13px] text-foreground">{line.sentence}</p>
+          </>
+        ) : (
+          <p className="text-[13px] text-foreground/65">
+            Pod health is unknown right now.
+          </p>
+        )}
+      </div>
+
+      <SectionCard title="Needs you" hint="Ranked: most urgent first">
+        {loading && needsYou.rows.length === 0 ? (
+          <ResourceRowSkeleton count={3} />
+        ) : (
+          <>
+            {needsYou.rows.length === 0 && failures.length === 0 && (
+              <div className="flex flex-col items-center gap-2 px-3 py-6">
+                <CircleCheck
+                  className="h-5 w-5 text-status-healthy"
+                  strokeWidth={2}
+                  aria-hidden
+                />
+                <p className="text-[12.5px] text-foreground/65">
+                  Nothing needs you.
+                </p>
+              </div>
+            )}
+            {needsYou.rows.length > 0 && (
+              <div className="-mx-2">
+                {needsYou.rows.map((row) => (
+                  <NeedsYouRowView key={row.key} row={row} />
+                ))}
+              </div>
+            )}
+            {needsYou.hiddenCount > 0 && (
+              <p className="mt-2 px-1 text-[11.5px] text-foreground/65">
+                +{needsYou.hiddenCount} more, less urgent
+              </p>
+            )}
+            <DesktopFallbackOnce rows={needsYou.rows} />
+            {failures.map((f) => (
+              <ResourceRowError
+                key={f.key}
+                message={f.message}
+                onRetry={f.retry}
+              />
+            ))}
+            <PassingChecks passing={needsYou.passing} />
+          </>
+        )}
+      </SectionCard>
+    </>
+  );
+}
+
+function NeedsYouRowView({ row }: { row: NeedsYouRow }) {
+  const [open, setOpen] = useState(false);
+  // Only the urgent rows wear a pill: the list is already ranked, and at
+  // 360px a pill on every row leaves the headline no room.
+  const pill = row.tone === "degraded" ? TONE_PILL.degraded : undefined;
+
+  let action = null;
+  if (row.action.kind === "link") {
+    action = <ActionLink exit={row.action.exit} label={row.action.label} />;
+  } else if (row.action.kind === "expand") {
+    action = (
+      <Button
+        size="sm"
+        variant="flat"
+        radius="md"
+        aria-expanded={open}
+        onPress={() => setOpen((v) => !v)}
+        endContent={
+          <ChevronDown
+            className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        }
+      >
+        {row.action.label}
+      </Button>
+    );
+  }
+
+  return (
+    <div>
+      <ResourceRow
+        Icon={SECTION_ICONS[row.key] ?? AlertTriangle}
+        primary={row.headline}
+        secondary={row.secondary}
+        status={pill}
+        actions={action}
+      />
+      {open && row.items.length > 0 && (
+        <ul className="mb-2 ml-10 mr-3 flex flex-col gap-1">
+          {row.items.map((item) => (
+            <li
+              key={item.id}
+              className="flex flex-wrap items-baseline justify-between gap-x-3 text-[12.5px]"
+            >
+              {item.exit ? (
+                <ItemLink exit={item.exit} label={item.label} />
+              ) : (
+                <span className="truncate text-foreground">{item.label}</span>
+              )}
+              {item.meta && (
+                <span className="text-foreground/65">{item.meta}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The row's one primary action. A console route navigates in place via
+ * `Link`; an `openIn` desktop exit is a plain anchor (the `synap://` handler
+ * is the OS's, not Next's), with its fallback offered once beneath the list.
+ */
+function ActionLink({ exit, label }: { exit: Exit; label: string }) {
+  return (
+    <Button
+      as={exit.isDesktopLink ? "a" : Link}
+      href={exit.href}
+      size="sm"
+      variant="flat"
+      radius="md"
+      endContent={<ChevronRight className="h-3 w-3" />}
+    >
+      {label}
+    </Button>
+  );
+}
+
+const ITEM_LINK_CLASS =
+  "truncate rounded-sm text-foreground hover:underline " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+
+function ItemLink({ exit, label }: { exit: Exit; label: string }) {
+  return exit.isDesktopLink ? (
+    <a href={exit.href} className={ITEM_LINK_CLASS}>
+      {label}
+    </a>
+  ) : (
+    <Link href={exit.href} className={ITEM_LINK_CLASS}>
+      {label}
+    </Link>
+  );
+}
+
+/** "Get the desktop app", once, when any row or item hands off to it. */
+function DesktopFallbackOnce({ rows }: { rows: NeedsYouRow[] }) {
+  const desktopExit = rows
+    .flatMap((r) => [
+      r.action.kind === "link" ? r.action.exit : undefined,
+      ...r.items.map((i) => i.exit),
+    ])
+    .find((e): e is Exit => Boolean(e?.isDesktopLink));
+  if (!desktopExit) return null;
+  return (
+    <div className="mt-1 flex justify-end px-1">
+      <ExitFallback exit={desktopExit} />
+    </div>
+  );
+}
+
+function PassingChecks({
+  passing,
+}: {
+  passing: Array<{ key: string; headline: string }>;
+}) {
+  const [open, setOpen] = useState(false);
+  if (passing.length === 0) return null;
+  return (
+    <div className="mt-3 border-t border-foreground/[0.05] pt-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-1 text-[12.5px] text-foreground/65 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      >
+        <CircleCheck
+          className="h-3.5 w-3.5 text-status-healthy"
+          strokeWidth={2}
+          aria-hidden
+        />
+        {passing.length} check{passing.length === 1 ? "" : "s"} passing
+        <ChevronDown
+          className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`}
+          aria-hidden
+        />
+      </button>
+      {open && (
+        <ul className="mt-1 flex flex-col gap-1 px-1 pb-1">
+          {passing.map((p) => (
+            <li key={p.key} className="text-[12.5px] text-foreground/65">
+              {p.headline}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─── 3. Approval queue ────────────────────────────────────────────────
+
+function ApprovalQueueCard() {
+  // `workspaceId` is OMITTED, not `null`. `null` means "pod-wide only", which
+  // hid every workspace-scoped proposal — nearly the whole queue, since almost
+  // every governed AI write is workspace-scoped. Omitted, the server falls to
+  // `proposalUserFloor`: the viewer's own lens ∪ what they authored. Same
+  // entitlement, honest count.
+  const { data, isLoading, isError, refetch } = trpc.proposals.list.useQuery(
+    { status: "pending", limit: 25 },
+    { staleTime: 30_000 }
+  );
+
+  // The row carries only `workspaceId`; `proposals.list` resolves author and
+  // target names but no workspace name. Without it a cross-workspace queue
+  // reads as an undifferentiated pile.
+  const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const workspaceNames = new Map(
+    (workspaces.data ?? []).map((w) => [w.id, w.name] as const)
+  );
+
+  // Proposals only. Pending Kratos signups are NOT in this queue and the
+  // card must not imply they are — there is no identity-introspection
+  // procedure, so a reader who trusted this card would miss every signup.
+
+  const pending = data?.items ?? [];
+
+  return (
+    <SectionCard
+      title="Approval queue"
+      hint="Proposals awaiting your review"
+      actions={
+        pending.length > 0 ? (
+          <Button
+            as={Link}
+            href="/audit?section=queue"
+            size="sm"
+            variant="flat"
+            radius="md"
+            endContent={<ChevronRight className="h-3 w-3" />}
+          >
+            Open queue
+          </Button>
+        ) : null
+      }
+    >
+      {isLoading ? (
+        <ResourceRowSkeleton count={3} />
+      ) : isError || !data ? (
+        <ResourceRowError
+          message="Couldn't load proposals."
+          onRetry={() => void refetch()}
+        />
+      ) : pending.length === 0 ? (
+        <ResourceRowEmpty message="Nothing waiting for your review." />
+      ) : (
+        <div className="-mx-2">
+          {pending.slice(0, 4).map((proposal) => {
+            const workspaceLabel =
+              proposal.workspaceId == null
+                ? "Pod-wide"
+                : (workspaceNames.get(proposal.workspaceId) ?? "Workspace");
+            return (
+              // Each row opens the self-service review page — the queue was
+              // a list of names you could read but not act on.
+              <Link
+                key={proposal.id}
+                href={
+                  openIn({
+                    kind: "object",
+                    objectKind: "proposal",
+                    id: proposal.id,
+                  }).href
+                }
+                className="block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-content2/50"
+              >
+                <ResourceRow
+                  Icon={Mailbox}
+                  // The row has no `title` column — the old read of one fell
+                  // back to a UUID slice on every row. Labelled through the
+                  // ONE vocabulary door, as the search palette does.
+                  primary={buildObjectActionTitle({
+                    action: proposal.proposalType,
+                    objectKind: proposal.targetType,
+                    objectName: proposal.targetName ?? undefined,
+                  })}
+                  secondary={[
+                    resolveObjectNoun(proposal.targetType),
+                    workspaceLabel,
+                    proposal.createdAt
+                      ? formatRelative(proposal.createdAt)
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  status={{ kind: "stale", label: "Pending" }}
+                />
+              </Link>
+            );
+          })}
+          {pending.length > 4 && (
+            <p className="mt-2 px-3 text-[11.5px] text-foreground/65">
+              +{pending.length - 4} more
+            </p>
+          )}
+        </div>
+      )}
+    </SectionCard>
+  );
+}
+
+// ─── 4. Pod at a glance ───────────────────────────────────────────────
+
+function GlanceCard() {
+  return (
+    <SectionCard title="Pod at a glance" hint="Sync, backups and contents">
+      <div className="-mx-2">
+        <SyncRow />
+        <BackupsRow />
+        <ContentsRow />
+      </div>
+    </SectionCard>
+  );
+}
+
+function GlanceError({
+  Icon,
+  label,
+  onRetry,
+}: {
+  Icon: LucideIcon;
+  label: string;
+  onRetry: () => void;
+}) {
+  return (
+    <ResourceRow
+      Icon={Icon}
+      primary={label}
+      secondary="Couldn't load."
+      status={{ kind: "unknown", label: "Unknown" }}
+      actions={
+        <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
+          Retry
+        </Button>
+      }
+    />
+  );
+}
+
+function SyncRow() {
   // `sync.getStatus` returns one row per peer; we summarise to a single
-  // health verdict for the dashboard. Behind = peer with `status="error"`
-  // OR `lastError != null`. Disconnected = `enabled=false`. Healthy = all
-  // remaining peers report status="idle" or "syncing".
+  // health verdict. Behind = peer with `status="error"` OR `lastError !=
+  // null`. Disconnected = `enabled=false`. Healthy = all remaining peers
+  // report status="idle" or "syncing".
   const { data, isLoading, isError, refetch } = trpc.sync.getStatus.useQuery(
     undefined,
     { staleTime: 60_000 }
   );
 
-  if (isLoading) {
-    return (
-      <SectionCard title="Sync" hint="Pod-to-pod replication">
-        <CardLoadingPanel />
-      </SectionCard>
-    );
-  }
+  if (isLoading) return <ResourceRowSkeleton count={1} />;
   if (isError) {
     return (
-      <SectionCard title="Sync" hint="Pod-to-pod replication">
-        <CardErrorPanel
-          message="Couldn't load sync status."
-          onRetry={() => void refetch()}
-        />
-      </SectionCard>
+      <GlanceError
+        Icon={GitBranch}
+        label="Sync"
+        onRetry={() => void refetch()}
+      />
     );
   }
 
   const peers = data ?? [];
   if (peers.length === 0) {
     return (
-      <SectionCard title="Sync" hint="Pod-to-pod replication">
-        <CardSummary
-          icon={GitBranch}
-          headline="No peers configured"
-          subline="This pod is standalone."
-          status={{ kind: "unknown", label: "Idle" }}
-        />
-      </SectionCard>
+      <ResourceRow
+        Icon={GitBranch}
+        primary="Sync · no peers"
+        secondary="This pod is standalone."
+        status={{ kind: "unknown", label: "Idle" }}
+      />
     );
   }
 
@@ -140,497 +608,99 @@ function SyncCard() {
   if (lastSyncAt) subline += ` · last sync ${formatRelative(lastSyncAt)}`;
 
   return (
-    <SectionCard
-      title="Sync"
-      hint="Pod-to-pod replication"
-      actions={<StatusPill kind={kind} label={headline} />}
-    >
-      <CardSummary icon={GitBranch} headline={headline} subline={subline} />
-    </SectionCard>
+    <ResourceRow
+      Icon={GitBranch}
+      primary={`Sync · ${headline}`}
+      secondary={subline}
+      status={{ kind, label: headline }}
+    />
   );
 }
 
-// ─── 2. Backups ───────────────────────────────────────────────────────
-
-function BackupsCard() {
+function BackupsRow() {
   const { data, isLoading, isError, refetch } =
     trpc.system.getBackupStatus.useQuery(undefined, { staleTime: 60_000 });
 
-  if (isLoading) {
-    return (
-      <SectionCard title="Backups" hint="Snapshot schedule and recent runs">
-        <CardLoadingPanel />
-      </SectionCard>
-    );
-  }
+  if (isLoading) return <ResourceRowSkeleton count={1} />;
   if (isError || !data) {
     return (
-      <SectionCard title="Backups" hint="Snapshot schedule and recent runs">
-        <CardErrorPanel
-          message="Couldn't load backup status."
-          onRetry={() => void refetch()}
-        />
-      </SectionCard>
+      <GlanceError
+        Icon={HardDrive}
+        label="Backups"
+        onRetry={() => void refetch()}
+      />
     );
   }
 
-  // Map backup status to a status-pill kind. "ok" → healthy, "stale"
-  // → stale, "never"/"error" → down/unknown.
-  let kind: StatusKind = "unknown";
-  let pillLabel = "Unknown";
-  switch (data.status) {
-    case "ok":
-      kind = "healthy";
-      pillLabel = "Healthy";
-      break;
-    case "stale":
-      kind = "stale";
-      pillLabel = "Stale";
-      break;
-    case "error":
-      kind = "down";
-      pillLabel = "Error";
-      break;
-    case "never":
-      kind = "unknown";
-      pillLabel = "Never";
-      break;
-  }
+  // "ok" → healthy, "stale" → stale, "error" → down, "never" → unknown.
+  const pill: Record<
+    typeof data.status,
+    { kind: StatusKind; label: string; headline: string }
+  > = {
+    ok: { kind: "healthy", label: "Healthy", headline: "Backups healthy" },
+    stale: { kind: "stale", label: "Stale", headline: "Backups stale" },
+    error: { kind: "down", label: "Error", headline: "Backups failing" },
+    never: {
+      kind: "unknown",
+      label: "Never",
+      headline: "No backups configured",
+    },
+  };
+  const { kind, label, headline } = pill[data.status];
 
   if (data.status === "never") {
     return (
-      <SectionCard
-        title="Backups"
-        hint="Snapshot schedule and recent runs"
-        actions={<StatusPill kind={kind} label={pillLabel} />}
-      >
-        <CardSummary
-          icon={HardDrive}
-          headline="No backups configured"
-          subline="Configure pod backups via your hosting provider."
-        />
-      </SectionCard>
+      <ResourceRow
+        Icon={HardDrive}
+        primary={headline}
+        secondary="Configure pod backups via your hosting provider."
+        status={{ kind, label }}
+      />
     );
   }
 
-  const last = data.lastBackupAt
-    ? formatRelative(
-        data.lastBackupAt instanceof Date
-          ? data.lastBackupAt
-          : new Date(data.lastBackupAt)
-      )
-    : "—";
-  const size = data.sizeBytes != null ? humanizeBytes(data.sizeBytes) : null;
-  const location = data.location ? truncateMiddle(data.location, 36) : null;
-
-  const sublineParts: string[] = [`last ${last}`];
-  if (size) sublineParts.push(size);
-  if (location) sublineParts.push(location);
+  const sublineParts: string[] = [`last ${formatRelative(data.lastBackupAt)}`];
+  if (data.sizeBytes != null) sublineParts.push(humanizeBytes(data.sizeBytes));
+  if (data.location) sublineParts.push(truncateMiddle(data.location, 36));
 
   return (
-    <SectionCard
-      title="Backups"
-      hint="Snapshot schedule and recent runs"
-      actions={<StatusPill kind={kind} label={pillLabel} />}
-    >
-      <CardSummary
-        icon={HardDrive}
-        headline={
-          data.status === "ok"
-            ? "Backups healthy"
-            : data.status === "stale"
-              ? "Backups stale"
-              : "Backups failing"
-        }
-        subline={sublineParts.join(" · ")}
-      />
-    </SectionCard>
+    <ResourceRow
+      Icon={HardDrive}
+      primary={headline}
+      secondary={sublineParts.join(" · ")}
+      status={{ kind, label }}
+    />
   );
 }
 
-function humanizeBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
-}
-
-function truncateMiddle(s: string, max: number): string {
-  if (s.length <= max) return s;
-  const half = Math.floor((max - 1) / 2);
-  return `${s.slice(0, half)}…${s.slice(s.length - half)}`;
-}
-
-// ─── 3. Contents ──────────────────────────────────────────────────────
-
-function ContentsCard() {
+function ContentsRow() {
   // Named for what it can actually answer. `system.getDataPodStats` returns
   // five row counts (users, agents, workspaces, entities, documents) and
-  // nothing about bytes — no disk, no vector-index size. This card was
-  // titled "Capacity" and closed with a line promising disk and vector
-  // usage "once the capacity procedure ships": the same defect as a
-  // disabled button naming a missing procedure, in prose.
+  // nothing about bytes — no disk, no vector-index size. This was titled
+  // "Capacity" and closed with a line promising disk and vector usage "once
+  // the capacity procedure ships": the same defect as a disabled button
+  // naming a missing procedure, in prose.
   const { data, isLoading, isError, refetch } =
     trpc.system.getDataPodStats.useQuery(undefined, { staleTime: 30_000 });
 
-  if (isLoading) {
-    return (
-      <SectionCard title="Contents" hint="What this pod holds">
-        <CardLoadingPanel />
-      </SectionCard>
-    );
-  }
+  if (isLoading) return <ResourceRowSkeleton count={1} />;
   if (isError || !data) {
     return (
-      <SectionCard title="Contents" hint="What this pod holds">
-        <CardErrorPanel
-          message="Couldn't load pod stats."
-          onRetry={() => void refetch()}
-        />
-      </SectionCard>
+      <GlanceError
+        Icon={Database}
+        label="Contents"
+        onRetry={() => void refetch()}
+      />
     );
   }
 
   const totalRecords = data.entityCount + data.documentCount;
 
   return (
-    <SectionCard title="Contents" hint="What this pod holds">
-      <CardSummary
-        icon={Database}
-        headline={`${totalRecords.toLocaleString()} records`}
-        subline={`${data.entityCount.toLocaleString()} entities · ${data.documentCount.toLocaleString()} documents · ${data.workspaceCount.toLocaleString()} workspaces · ${data.userCount.toLocaleString()} users`}
-      />
-    </SectionCard>
+    <ResourceRow
+      Icon={Database}
+      primary={`${totalRecords.toLocaleString()} records`}
+      secondary={`${data.entityCount.toLocaleString()} entities · ${data.documentCount.toLocaleString()} documents · ${data.workspaceCount.toLocaleString()} workspaces · ${data.userCount.toLocaleString()} users`}
+    />
   );
 }
-
-// ─── 4. Alerts ────────────────────────────────────────────────────────
-
-function AlertsCard() {
-  // Aggregate from real signals we can read today:
-  //   • trustedIssuers.list — flag any in `pending` status
-  //   • sync.getStatus — flag peers with `lastError`
-  // These shapes are admin-gated (`podAdminProcedure`) and run only for
-  // the operator viewing this page.
-  const issuersQuery = trpc.trustedIssuers.list.useQuery(undefined, {
-    staleTime: 60_000,
-  });
-  const syncQuery = trpc.sync.getStatus.useQuery(undefined, {
-    staleTime: 60_000,
-  });
-
-  const isLoading = issuersQuery.isLoading || syncQuery.isLoading;
-  const isError = issuersQuery.isError || syncQuery.isError;
-
-  type Alert = {
-    id: string;
-    icon: LucideIcon;
-    primary: string;
-    secondary: string;
-    status: { kind: StatusKind; label: string };
-    href: string;
-  };
-
-  const alerts: Alert[] = [];
-
-  if (issuersQuery.data) {
-    for (const issuer of issuersQuery.data) {
-      const i = issuer as unknown as {
-        id: string;
-        issuerUrl?: string;
-        status?: string;
-      };
-      if (i.status === "pending") {
-        alerts.push({
-          id: `issuer-${i.id}`,
-          icon: ShieldQuestion,
-          primary: "Trusted issuer awaiting approval",
-          secondary: i.issuerUrl ?? i.id,
-          status: { kind: "stale", label: "Pending" },
-          // Land on the Trusted Issuers sub-tab + scroll/highlight the
-          // pending issuer row.
-          href: `/trust-keys?section=issuers&focus=${encodeURIComponent(i.id)}`,
-        });
-      }
-    }
-  }
-
-  if (syncQuery.data) {
-    for (const peer of syncQuery.data) {
-      const lastError = peer.syncState?.lastError;
-      if (lastError) {
-        alerts.push({
-          id: `peer-${peer.id}`,
-          icon: AlertTriangle,
-          primary: peer.label ?? peer.peerPodUrl,
-          secondary: String(lastError).slice(0, 80),
-          status: { kind: "down", label: "Sync error" },
-          href: `/connectors?focus=${encodeURIComponent(peer.id)}`,
-        });
-      }
-    }
-  }
-
-  return (
-    <SectionCard
-      title="Alerts"
-      hint="Things that need an operator's attention"
-      actions={
-        alerts.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
-            {alerts.length} open
-          </span>
-        ) : null
-      }
-    >
-      {isLoading ? (
-        <ResourceRowSkeleton count={3} />
-      ) : isError ? (
-        <CardErrorPanel
-          message="Couldn't load alerts."
-          onRetry={() => {
-            void issuersQuery.refetch();
-            void syncQuery.refetch();
-          }}
-        />
-      ) : alerts.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 px-3 py-6">
-          <CircleCheck
-            className="h-5 w-5 text-status-healthy"
-            strokeWidth={2}
-            aria-hidden
-          />
-          <p className="text-[12.5px] text-foreground/55">No alerts</p>
-        </div>
-      ) : (
-        <>
-          <div className="-mx-2">
-            {alerts.slice(0, 5).map((a) => (
-              <Link
-                key={a.id}
-                href={a.href}
-                className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-md"
-              >
-                <ResourceRow
-                  Icon={a.icon}
-                  primary={a.primary}
-                  secondary={a.secondary}
-                  status={a.status}
-                />
-              </Link>
-            ))}
-          </div>
-          {alerts.length > 5 && (
-            <div className="mt-2 flex justify-end">
-              <span className="text-[11.5px] text-foreground/45">
-                +{alerts.length - 5} more
-              </span>
-            </div>
-          )}
-        </>
-      )}
-    </SectionCard>
-  );
-}
-
-// ─── 5. Approval queue ────────────────────────────────────────────────
-
-function ApprovalQueueCard() {
-  // `workspaceId` is OMITTED, not `null`. `null` means "pod-wide only", which
-  // hid every workspace-scoped proposal — nearly the whole queue, since almost
-  // every governed AI write is workspace-scoped. Omitted, the server falls to
-  // `proposalUserFloor`: the viewer's own lens ∪ what they authored. Same
-  // entitlement, honest count.
-  const { data, isLoading, isError, refetch } = trpc.proposals.list.useQuery(
-    { status: "pending", limit: 25 },
-    { staleTime: 30_000 }
-  );
-
-  // The row carries only `workspaceId`; `proposals.list` resolves author and
-  // target names but no workspace name. Without it a cross-workspace queue
-  // reads as an undifferentiated pile.
-  const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
-    staleTime: 60_000,
-  });
-  const workspaceNames = new Map(
-    (workspaces.data ?? []).map((w) => [w.id, w.name] as const)
-  );
-
-  // Proposals only. Pending Kratos signups are NOT in this queue and the
-  // card must not imply they are — there is no identity-introspection
-  // procedure, so a reader who trusted this card would miss every signup.
-
-  if (isLoading) {
-    return (
-      <SectionCard title="Approval queue" hint="Proposals awaiting your review">
-        <ResourceRowSkeleton count={3} />
-      </SectionCard>
-    );
-  }
-  if (isError || !data) {
-    return (
-      <SectionCard title="Approval queue" hint="Proposals awaiting your review">
-        <CardErrorPanel
-          message="Couldn't load proposals."
-          onRetry={() => void refetch()}
-        />
-      </SectionCard>
-    );
-  }
-
-  const pending = data.items ?? [];
-
-  return (
-    <SectionCard
-      title="Approval queue"
-      hint="Proposals awaiting your review"
-      actions={
-        pending.length > 0 ? (
-          <Button
-            as={Link}
-            href="/audit?section=queue"
-            size="sm"
-            variant="flat"
-            radius="md"
-            endContent={<ChevronRight className="h-3 w-3" />}
-          >
-            Review
-          </Button>
-        ) : null
-      }
-    >
-      {pending.length === 0 ? (
-        <ResourceRowEmpty message="Nothing waiting for your review." />
-      ) : (
-        <div className="-mx-2">
-          {pending.slice(0, 4).map((p) => {
-            const proposal = p as unknown as {
-              id: string;
-              title?: string | null;
-              targetType?: string | null;
-              workspaceId?: string | null;
-              createdAt?: string | Date | null;
-            };
-            const workspaceLabel =
-              proposal.workspaceId == null
-                ? "Pod-wide"
-                : (workspaceNames.get(proposal.workspaceId) ?? "Workspace");
-            return (
-              <ResourceRow
-                key={proposal.id}
-                Icon={Mailbox}
-                primary={
-                  proposal.title ?? `Proposal ${proposal.id.slice(0, 8)}`
-                }
-                secondary={[
-                  proposal.targetType ?? "—",
-                  workspaceLabel,
-                  proposal.createdAt
-                    ? formatRelative(new Date(proposal.createdAt))
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                status={{ kind: "stale", label: "Pending" }}
-              />
-            );
-          })}
-          {pending.length > 4 && (
-            <p className="mt-2 px-3 text-[11.5px] text-foreground/45">
-              +{pending.length - 4} more
-            </p>
-          )}
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
-// ─── Shared card UI ───────────────────────────────────────────────────
-
-function CardSummary({
-  icon: Icon,
-  headline,
-  subline,
-  status,
-}: {
-  icon: LucideIcon;
-  headline: string;
-  subline?: string;
-  status?: { kind: StatusKind; label: string };
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <span
-        aria-hidden
-        className="
-          glass-icon
-          flex h-9 w-9 shrink-0 items-center justify-center
-        "
-        style={{ background: "rgba(52, 211, 153, 0.12)" }}
-      >
-        <Icon className="h-4 w-4 text-foreground/85" strokeWidth={2} />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-[14px] font-medium text-foreground">
-          {headline}
-        </span>
-        {subline && (
-          <span className="text-[11.5px] text-foreground/55">{subline}</span>
-        )}
-      </div>
-      {status && <StatusPill kind={status.kind} label={status.label} />}
-    </div>
-  );
-}
-
-function CardLoadingPanel() {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="h-9 w-9 shrink-0 rounded-md bg-foreground/10 shimmer-pulse" />
-      <div className="flex flex-1 flex-col gap-1.5">
-        <div className="h-3 w-1/3 rounded bg-foreground/10 shimmer-pulse" />
-        <div className="h-2.5 w-1/2 rounded bg-foreground/[0.07] shimmer-pulse" />
-      </div>
-    </div>
-  );
-}
-
-function CardErrorPanel({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry?: () => void;
-}) {
-  return (
-    <div className="flex items-center gap-2 text-[12.5px] text-status-down">
-      <KeyRound className="h-3.5 w-3.5" strokeWidth={2} aria-hidden />
-      <span>{message}</span>
-      {onRetry && (
-        <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
-          Retry
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function formatRelative(date: Date): string {
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return "just now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-// Suppress unused-import warnings for icons referenced by lookup only.
-void Clock;
