@@ -277,6 +277,13 @@ export function computeCanReviewApprovalFromFacts(args: {
   if (!isOwner && proposal.agentUserId) {
     isOwner = facts.agentCreatedByUserId === userId;
     isAgentOwner = isOwner;
+  } else if (isOwner && proposal.agentUserId) {
+    // An agent KEY writes with its human's user id (`ctx.userId` = the human),
+    // so on the canonical path `data.sourceId` matches the human while an agent
+    // proposed the write. That human owns the agent; they did not propose this
+    // themselves — "You proposed this." was a false sentence. Display only: the
+    // verdict is the same owner rung either way.
+    isAgentOwner = true;
   }
 
   // AGENT-CLASS FLOOR (B): only ever NARROWS. `isOwner` is true here because
