@@ -167,6 +167,25 @@ describe("writeStageSubjectStatus — the status door (work model L2)", () => {
     expect(out.status).toBe("failed");
     expect(h.update).not.toHaveBeenCalled();
   });
+
+  it("a kind that DECLARES another lifecycle refuses the second ladder — never a plain write (arch F2)", async () => {
+    h.move.mockResolvedValue({
+      status: "refused",
+      code: "NOT_THE_LIFECYCLE",
+      reason: '"post-status" is not the lifecycle of post ("status" is)',
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "draft",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+    });
+    expect(out.status).toBe("failed");
+    expect((out as { reason: string }).reason).toMatch(
+      /point its statusProperty at the declared lifecycle/
+    );
+    expect(h.update).not.toHaveBeenCalled();
+  });
 });
 
 describe("writeStageSubjectStatus", () => {

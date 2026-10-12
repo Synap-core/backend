@@ -327,6 +327,16 @@ export {
   type ClaimedTransition,
 } from "./services/lifecycle/transition-outbox.js";
 export {
+  LifecycleDefChangeError,
+  LIFECYCLE_DEF_PROTECTED,
+  checkLifecycleDefUpdate,
+  lifecycleProfilesOfDef,
+  reprojectLifecycleProfiles,
+  changeLifecycleOptions,
+  assertNotLifecycleDef,
+  type ChangeLifecycleOptionsResult,
+} from "./services/lifecycle/lifecycle-def-guard.js";
+export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
   columnsForValue,

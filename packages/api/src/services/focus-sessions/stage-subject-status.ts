@@ -174,12 +174,14 @@ export async function writeStageSubjectStatus(input: {
     // governance floor (a human-only / closing option proposes for an agent),
     // one transition event. The playbook's own `humanOnlyStatuses` still
     // force a proposal (OR-ed, never a downgrade).
+    // A kind that DECLARES a lifecycle has one ladder: a playbook whose
+    // statusProperty is another field is refused (NOT_THE_LIFECYCLE, with
+    // guidance, via `fromMove`) — never written as a plain property beside it
+    // (review arch F2). Only a kind with NO lifecycle takes the legacy path.
     const move = await moveStatus({ ...moveInput, workspaceId: wsId });
-    const isTheLifecycle = !(
-      move.status === "refused" &&
-      (move.code === "NO_LIFECYCLE" || move.code === "NOT_THE_LIFECYCLE")
-    );
-    if (isTheLifecycle) return fromMove(move, proc.statusProperty, value);
+    const undeclared =
+      move.status === "refused" && move.code === "NO_LIFECYCLE";
+    if (!undeclared) return fromMove(move, proc.statusProperty, value);
 
     // The kind declares no lifecycle: `statusProperty` is a plain property,
     // written through the governed entity-update door as before —
@@ -252,8 +254,15 @@ function fromMove(
         status: "failed",
         reason: `the subject's status moved meanwhile (now "${move.actual ?? "none"}")`,
       };
-    case "denied":
     case "refused":
+      return {
+        status: "failed",
+        reason:
+          move.code === "NOT_THE_LIFECYCLE"
+            ? `${move.reason}. This process moves "${property}"; point its statusProperty at the declared lifecycle instead of running a second status ladder.`
+            : move.reason,
+      };
+    case "denied":
       return { status: "failed", reason: move.reason };
   }
 }
