@@ -186,7 +186,8 @@ function ddlFor(table: PgTable): string {
   });
   return `create table "${cfg.name}" (${columns.join(", ")});`;
 }
-const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
+const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
+  h.client!.query<T>(sql, params);
 
 beforeAll(async () => {
   for (const t of [
