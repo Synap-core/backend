@@ -41489,6 +41489,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cursor?: string | undefined;
 				limit?: number | undefined;
 				workedBy?: boolean | undefined;
+				card?: boolean | undefined;
 				projectId?: string | undefined;
 				trackId?: string | undefined;
 				workspaceId?: string | null | undefined;
@@ -41524,6 +41525,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "session" | "worker";
 							live: boolean;
 						}[] | undefined;
+						card?: {
+							profileSlug: string | null;
+							properties: Record<string, unknown>;
+						} | undefined;
 					}[];
 					windowed: boolean;
 					stuck: number | null;
