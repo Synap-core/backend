@@ -18,6 +18,16 @@ deterministic). Amends `CAPTURE_IMPORT_ARCHITECTURE.md` §0/§2.
 Rule for clients: **a capture is what you write; an import is a batch you
 didn't write.** A share appends to the open import when one is open.
 
+> **Superseded 2026-10-13** by [`CAPTURE_LIBRARY_PLAN.md`](CAPTURE_LIBRARY_PLAN.md) §1:
+> the line is **authorship, not cardinality**. Capture = the person's words (typed or
+> dictated, even with a URL inside); everything the person brings in (one link, one
+> photo, one file included) goes to the **Library**, a standing lens over staged
+> items; a note typed at share time is a capture linked to the item. The rule is
+> `routeIntake()` in `@synap-core/types/intake-route`; the old capture paths for
+> links and files are listed in `DEPRECATED_INTAKE_PATHS` (plan §2). Clients still
+> route by the old rule until wave L4. The AI's capture door (MCP `synap_capture`)
+> is unchanged.
+
 ## 2. The three steps
 
 1. **Collect** — items are STAGED without reading content: title, source

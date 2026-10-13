@@ -365,6 +365,12 @@ export interface CaptureStructureInput {
    * Binary/text source normalized to text by IS before structuring. Shape
    * MIRRORS the server's `file` field (and `CaptureExecuteInput.file` below) —
    * `content` is base64/utf8 per `encoding`.
+   *
+   * @deprecated intake path `cli.capture.url` (a person's CLI / Raycast use) —
+   *   a file a person brings belongs to the Library (`/library/add`, wave L4).
+   *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+   *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+   *   capture with an agent key) is kept — founder 2026-10-13.
    */
   file?: {
     content: string;
@@ -372,7 +378,21 @@ export interface CaptureStructureInput {
     filename?: string;
     encoding?: "base64" | "utf8";
   };
+  /**
+   * @deprecated intake path `cli.capture.url` (a person's CLI / Raycast use) — a link a person brings belongs
+   *   to the Library (`/library/add`, wave L4).
+   *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+   *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+   *   capture with an agent key) is kept — founder 2026-10-13.
+   */
   url?: string;
+  /**
+   * @deprecated intake path `cli.capture.url` (a person's CLI / Raycast use) — a saved page a person brings
+   *   belongs to the Library (`/library/add`, wave L4).
+   *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+   *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+   *   capture with an agent key) is kept — founder 2026-10-13.
+   */
   html?: string;
   context?: string;
   /** Extraction bias (e.g. lead-capture channel intake hint). */

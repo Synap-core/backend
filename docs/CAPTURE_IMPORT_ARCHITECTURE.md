@@ -45,8 +45,18 @@ Concretely:
 
 ## 2. Capture vs Import — the boundary (settled)
 
-Two intents, two mechanisms, ONE governance + ONE materializer. **A capture is
-what you write; an import is a batch you didn't write.**
+Two intents, two mechanisms, ONE governance + ONE materializer.
+
+> **Superseded 2026-10-13** by [`CAPTURE_LIBRARY_PLAN.md`](CAPTURE_LIBRARY_PLAN.md) §1:
+> the line is **authorship, not cardinality**. **Capture = the person's words** (typed or
+> dictated, even with a URL inside); **Library = everything the person brings in**, one
+> link / photo / file included; a note typed at share time is a capture linked to the
+> item. The rule is `routeIntake()` in `@synap-core/types/intake-route`. The old rule
+> ("a capture is what you write; an import is a batch you didn't write", which kept a
+> single shared page or file on capture) is retired; capture's url/file/html arms are
+> deprecated for the person's doors (`DEPRECATED_INTAKE_PATHS`, plan §2). The AI's
+> capture door (MCP `synap_capture`, Hub capture with an agent key) is unchanged. The
+> table below still describes the code as it runs today (wave L1 changes no behaviour).
 
 |                       | **Capture** (read now)                                   | **Import** (stage → curate → build)                                                                  |
 | --------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
