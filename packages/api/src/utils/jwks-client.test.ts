@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getByUrl: vi.fn(),
+  consumeReceipt: vi.fn(),
   httpsRequest: vi.fn(),
   resolvePublicIssuerEndpoint: vi.fn(),
 }));
@@ -11,6 +12,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@synap/database", () => ({
   TrustedIssuerService: class {
     getByUrl = mocks.getByUrl;
+  },
+  consumeFederatedAssertionReceipt: mocks.consumeReceipt,
+  TRUSTED_ISSUER_CAPABILITIES: {
+    USER_EXCHANGE: "auth:exchange-user",
+    IDENTITY_LINK: "identity:link-user",
+    MEMBERSHIP_GRANT: "membership:grant",
+    SOURCE_CONFIG_WRITE: "source-config:write",
   },
 }));
 
@@ -42,6 +50,7 @@ vi.mock("./issuer-url-safety.js", () => ({
 import {
   clearJtiCache,
   clearJwksCache,
+  controlPlaneIssuerScopes,
   verifyCpJwt,
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
@@ -121,6 +130,7 @@ describe("trusted issuer JWT verification", () => {
     clearJtiCache();
     mocks.getByUrl.mockReset();
     mocks.httpsRequest.mockReset();
+    mocks.consumeReceipt.mockReset().mockResolvedValue("consumed");
     mocks.resolvePublicIssuerEndpoint.mockReset().mockResolvedValue({
       issuerUrl,
       hostname: "issuer.example.test",
@@ -354,7 +364,163 @@ describe("trusted issuer JWT verification", () => {
     ).resolves.not.toBeNull();
   });
 
-  it("keeps the old CP verifier name as a source-compatible alias", () => {
-    expect(verifyCpJwt).toBe(verifyIssuerJwt);
+  it("retired the audience-less CP verifier: it rejects even a valid token", async () => {
+    const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    installJwksResponse(publicKey.export({ format: "jwk" }));
+    const token = jwt.sign(
+      { iss: issuerUrl, type: "invite-accept", jti: crypto.randomUUID() },
+      privateKey,
+      { algorithm: "ES256", expiresIn: "5m", keyid: "issuer-key" }
+    );
+    expect(verifyCpJwt).not.toBe(verifyIssuerJwt);
+    await expect(verifyCpJwt(token, issuerUrl)).resolves.toBeNull();
+    await expect(verifyCpJwt(token)).resolves.toBeNull();
+    expect(mocks.httpsRequest).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECURITY-KEYS-2026-10-13 C2/C3: the ONE door binds issuer + audience +
+// purpose + durable single use.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("issuer→pod token door (aud, purpose, durable jti)", () => {
+  const CP_ENTRY = {
+    id: "00000000-0000-4000-8000-0000000000cp",
+    status: "approved",
+    allowedScopes: [
+      "auth:exchange-user",
+      "identity:link-user",
+      "membership:grant",
+      "source-config:write",
+    ],
+  };
+  let keys: ReturnType<typeof crypto.generateKeyPairSync>;
+
+  function sign(
+    claims: Record<string, unknown>,
+    expiresIn: string | null = "5m"
+  ) {
+    return jwt.sign(
+      { iss: issuerUrl, jti: crypto.randomUUID(), ...claims },
+      keys.privateKey,
+      {
+        algorithm: "ES256",
+        keyid: "issuer-key",
+        ...(expiresIn ? { expiresIn } : {}),
+      } as jwt.SignOptions
+    );
+  }
+
+  beforeEach(() => {
+    clearJwksCache();
+    clearJtiCache();
+    keys = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    mocks.getByUrl.mockReset().mockResolvedValue(CP_ENTRY);
+    mocks.httpsRequest.mockReset();
+    mocks.consumeReceipt.mockReset().mockResolvedValue("consumed");
+    mocks.resolvePublicIssuerEndpoint.mockReset().mockResolvedValue({
+      issuerUrl,
+      hostname: "issuer.example.test",
+      hostHeader: "issuer.example.test",
+      address: "93.184.216.34",
+      family: 4,
+      port: 443,
+      jwksPath: "/.well-known/jwks.json",
+    });
+    installJwksResponse(keys.publicKey.export({ format: "jwk" }));
+  });
+
+  const opts = () => ({
+    audience: podUrl,
+    requiredScope: controlPlaneIssuerScopes(),
+    expectedType: "sync-setup",
+  });
+
+  it("accepts a CP token for this pod and consumes its jti DURABLY under the registry entry", async () => {
+    const token = sign({ type: "sync-setup", aud: podUrl });
+    const jti = (jwt.decode(token) as { jti: string; exp: number }).jti;
+
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toMatchObject({
+      type: "sync-setup",
+    });
+    expect(mocks.consumeReceipt).toHaveBeenCalledTimes(1);
+    expect(mocks.consumeReceipt).toHaveBeenCalledWith({
+      issuerId: CP_ENTRY.id,
+      jti,
+      expiresAt: expect.any(Date),
+    });
+  });
+
+  it("refuses a replay the durable receipt has already seen (survives restarts)", async () => {
+    mocks.consumeReceipt.mockResolvedValue("replayed");
+    const token = sign({ type: "sync-setup", aud: podUrl });
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+  });
+
+  it("fails closed when the receipt store is down", async () => {
+    mocks.consumeReceipt.mockRejectedValue(new Error("db down"));
+    const token = sign({ type: "sync-setup", aud: podUrl });
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+  });
+
+  it("refuses a token minted with NO audience (the pre-fix CP shape)", async () => {
+    const token = sign({ type: "sync-setup" });
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+    expect(mocks.consumeReceipt).not.toHaveBeenCalled();
+  });
+
+  it("refuses a token minted for ANOTHER pod (cross-pod replay)", async () => {
+    const token = sign({
+      type: "sync-setup",
+      aud: "https://other-pod.example.test",
+    });
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+    expect(mocks.consumeReceipt).not.toHaveBeenCalled();
+  });
+
+  it("refuses one purpose presented as another, without burning its jti", async () => {
+    const token = sign({ type: "oidc-config-push", aud: podUrl });
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+    const untyped = sign({ aud: podUrl });
+    await expect(verifyTrustedIssuerJwt(untyped, opts())).resolves.toBeNull();
+    expect(mocks.consumeReceipt).not.toHaveBeenCalled();
+  });
+
+  it("accepts any type of an expected set", async () => {
+    const token = sign({ type: "addon_activate", aud: podUrl });
+    await expect(
+      verifyTrustedIssuerJwt(token, {
+        ...opts(),
+        expectedType: ["agent_setup", "addon_activate"],
+      })
+    ).resolves.not.toBeNull();
+  });
+
+  it("requires EVERY scope of an array — an app-connection issuer (no issuer-wide scope) is not the CP", async () => {
+    mocks.getByUrl.mockResolvedValue({ ...CP_ENTRY, allowedScopes: [] });
+    const token = sign({ type: "sync-setup", aud: podUrl });
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+    mocks.getByUrl.mockResolvedValue({
+      ...CP_ENTRY,
+      allowedScopes: ["auth:exchange-user", "identity:link-user"],
+    });
+    const token2 = sign({ type: "sync-setup", aud: podUrl });
+    await expect(verifyTrustedIssuerJwt(token2, opts())).resolves.toBeNull();
+    expect(mocks.httpsRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses a token with no exp when it must be single-use", async () => {
+    const token = sign({ type: "sync-setup", aud: podUrl }, null);
+    await expect(verifyTrustedIssuerJwt(token, opts())).resolves.toBeNull();
+    expect(mocks.consumeReceipt).not.toHaveBeenCalled();
+  });
+
+  it("the low-level verifier refuses a missing audience or issuer before any fetch", async () => {
+    const token = sign({ type: "sync-setup", aud: podUrl });
+    await expect(verifyIssuerJwt(token, issuerUrl, "")).resolves.toBeNull();
+    await expect(verifyIssuerJwt(token, "", podUrl)).resolves.toBeNull();
+    expect(mocks.httpsRequest).not.toHaveBeenCalled();
   });
 });

@@ -68,7 +68,10 @@ import {
   NOTIFICATION_EVENT_TYPE_MAP,
   NOTIFICATION_EVENT_SOURCE,
 } from "../../../notifications/notification-event-map.js";
-import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
+import {
+  podAudience,
+  verifyTrustedIssuerJwt,
+} from "../../../utils/jwks-client.js";
 import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
 import {
   integrationHubIdFromIssuerUrl,
@@ -336,16 +339,22 @@ async function authenticateServiceSetupRequest(
             };
           }
           try {
-            const payload = await verifyIssuerJwt<{
-              type: string;
-              email?: string;
-              name?: string;
-            }>(token, iss);
-            if (
-              payload &&
-              (payload.type === "agent_setup" ||
-                payload.type === "addon_activate")
-            ) {
+            // The ONE issuer door: approved + `setup.agent` + aud = this pod +
+            // purpose + single-use jti (no audience = no JWT path).
+            const audience = podAudience();
+            const payload = audience
+              ? await verifyTrustedIssuerJwt<{
+                  type: string;
+                  email?: string;
+                  name?: string;
+                }>(token, {
+                  pinnedIssuer: iss,
+                  audience,
+                  requiredScope: "setup.agent",
+                  expectedType: ["agent_setup", "addon_activate"],
+                })
+              : null;
+            if (payload) {
               return { ok: true, authMethod: "jwt", jwtIssuerUrl: iss };
             }
           } catch {
@@ -360,7 +369,7 @@ async function authenticateServiceSetupRequest(
 
   // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
   const provisioningToken = process.env.PROVISIONING_TOKEN;
-  if (provisioningToken && token === provisioningToken) {
+  if (provisioningToken && safeTokenEqual(token, provisioningToken)) {
     return { ok: true, authMethod: "provisioning_token", jwtIssuerUrl };
   }
 
@@ -556,16 +565,22 @@ export function registerSetupRoutes(app: HubHono): void {
             }
 
             try {
-              const payload = await verifyIssuerJwt<{
-                type: string;
-                email?: string;
-                name?: string;
-              }>(token, iss);
-              if (
-                payload &&
-                (payload.type === "agent_setup" ||
-                  payload.type === "addon_activate")
-              ) {
+              // The ONE issuer door: approved + `setup.agent` + aud = this
+              // pod + purpose + single-use jti (no audience = no JWT path).
+              const audience = podAudience();
+              const payload = audience
+                ? await verifyTrustedIssuerJwt<{
+                    type: string;
+                    email?: string;
+                    name?: string;
+                  }>(token, {
+                    pinnedIssuer: iss,
+                    audience,
+                    requiredScope: "setup.agent",
+                    expectedType: ["agent_setup", "addon_activate"],
+                  })
+                : null;
+              if (payload) {
                 authenticated = true;
                 authMethod = "jwt";
                 jwtIssuerUrl = iss;
@@ -583,7 +598,7 @@ export function registerSetupRoutes(app: HubHono): void {
     // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
     if (!authenticated) {
       const provisioningToken = process.env.PROVISIONING_TOKEN;
-      if (provisioningToken && token === provisioningToken) {
+      if (provisioningToken && safeTokenEqual(token, provisioningToken)) {
         authenticated = true;
         authMethod = "provisioning_token";
       }
@@ -1913,7 +1928,11 @@ export function registerSetupRoutes(app: HubHono): void {
     const token = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7).trim()
       : null;
-    if (!token || !provisioningToken || token !== provisioningToken) {
+    if (
+      !token ||
+      !provisioningToken ||
+      !safeTokenEqual(token, provisioningToken)
+    ) {
       return c.json(
         { error: "Unauthorized — PROVISIONING_TOKEN required" },
         401

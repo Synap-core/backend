@@ -7,9 +7,12 @@
  * generator on the pod then reads them out of `pod_settings` to render the
  * Kratos `oidc` provider config.
  *
- * Auth: a **CP-signed assertion**, verified with `verifyIssuerJwt` against the
- * trusted issuer this pod already pins (the same trust `/api/federation/exchange`
- * uses). NOT the Hub key — a pod holds no durable secret it can share with the
+ * Auth: a **CP-signed assertion**, verified through the ONE issuer door
+ * `verifyTrustedIssuerJwt`: an APPROVED registry issuer holding the Control
+ * Plane scope set, `aud` = this pod's PUBLIC_URL, `type` = `oidc-config-push`,
+ * single-use jti. The OIDC `issuer` written into Kratos must BE that approved
+ * issuer — before 2026-10-13 any HTTPS host could sign this push for itself
+ * and repoint the pod's "cp" sign-in provider (SECURITY-KEYS C2). NOT the Hub key — a pod holds no durable secret it can share with the
  * CP, and the pod's stored hub key has drifted from the CP's copy; the CP's
  * ES256 signing key is the credential the pod verifiably trusts. This route is
  * therefore listed in `skipAuthPaths` (it does its own verification) — mirroring
@@ -33,13 +36,19 @@ import {
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
-import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
+import {
+  controlPlaneIssuerScopes,
+  podAudience,
+  verifyTrustedIssuerJwt,
+} from "../../../utils/jwks-client.js";
 
 const RequestSchema = z.object({ assertion: z.string().min(1) });
 
 /** The signed CP→pod OIDC-config payload (carried inside the assertion). */
 interface OidcConfigAssertion {
   type: string;
+  /** The verified token issuer (the approved registry entry). */
+  iss: string;
   podOrigin: string;
   clientId: string;
   clientSecret: string;
@@ -65,7 +74,8 @@ export function registerFederationRoutes(app: HubHono): void {
       "Persists the control-plane-minted OIDC client (inside a CP-signed " +
       "assertion) into pod_settings.settings.federationOidcClient so the pod's " +
       "Kratos can federate sign-in through the CP. Authenticated by the CP's " +
-      "issuer signature (verifyIssuerJwt), not the Hub key. Idempotent.",
+      "issuer signature (approved issuer, aud = this pod), not the Hub key. " +
+      "Idempotent.",
     request: {
       body: RequestSchema,
     },
@@ -77,7 +87,8 @@ export function registerFederationRoutes(app: HubHono): void {
       400: { description: "Invalid body", schema: ErrorSchema },
       401: { description: "Assertion did not verify", schema: ErrorSchema },
       403: {
-        description: "Assertion is for a different pod",
+        description:
+          "Assertion is for a different pod, or names an OIDC issuer other than its signer",
         schema: ErrorSchema,
       },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -99,20 +110,57 @@ export function registerFederationRoutes(app: HubHono): void {
       );
     }
 
-    // Authenticate the push by verifying the CP's signature (the trusted issuer
-    // this pod pins), NOT a hub key.
-    const payload = await verifyIssuerJwt<OidcConfigAssertion>(
-      parsed.data.assertion
+    // Fail closed: without its own public URL the pod cannot check the token's
+    // audience, so it cannot know the push was minted for it.
+    const audience = podAudience();
+    if (!audience) {
+      return c.json(
+        {
+          error: "PUBLIC_URL is not configured; OIDC config push refused",
+          code: "POD_AUDIENCE_UNKNOWN",
+        },
+        500
+      );
+    }
+    // Authenticate the push through the ONE issuer door: approved Control
+    // Plane issuer + aud = this pod + purpose + single-use jti. NOT a hub key.
+    const payload = await verifyTrustedIssuerJwt<OidcConfigAssertion>(
+      parsed.data.assertion,
+      {
+        audience,
+        requiredScope: controlPlaneIssuerScopes(),
+        expectedType: "oidc-config-push",
+      }
     );
-    if (!payload || payload.type !== "oidc-config-push") {
-      return c.json({ error: "Unauthorized" }, 401);
+    if (!payload) {
+      return c.json(
+        {
+          error: "OIDC config assertion did not verify",
+          code: "ASSERTION_UNVERIFIED",
+        },
+        401
+      );
+    }
+    // The sign-in provider Kratos will trust must be the issuer that signed
+    // this push (and that the owner approved) — never a URL the token names.
+    if (payload.issuer !== payload.iss) {
+      logger.warn(
+        { issuer: payload.issuer, signer: payload.iss },
+        "OIDC config push: OIDC issuer is not the approved signing issuer"
+      );
+      return c.json(
+        {
+          error: "Assertion names an OIDC issuer other than its signer",
+          code: "OIDC_ISSUER_MISMATCH",
+        },
+        403
+      );
     }
     // Bind the assertion to THIS pod: a CP assertion minted for another pod must
-    // never configure this one.
-    const myOrigin = process.env.PUBLIC_URL
-      ? normalizeOrigin(process.env.PUBLIC_URL)
-      : null;
-    if (myOrigin && normalizeOrigin(payload.podOrigin) !== myOrigin) {
+    // never configure this one (the aud check above already does; podOrigin is
+    // the payload's own statement of the same target, kept as a second bind).
+    const myOrigin = normalizeOrigin(audience);
+    if (normalizeOrigin(payload.podOrigin) !== myOrigin) {
       logger.warn(
         { podOrigin: payload.podOrigin, myOrigin },
         "OIDC config push: assertion pod mismatch"

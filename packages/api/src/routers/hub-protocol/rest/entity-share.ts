@@ -5,12 +5,15 @@
  * top-level auth middleware skip-lists this path.
  */
 
-import { config } from "@synap-core/core";
 import { db, eq } from "@synap/database";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
-import { verifyCpJwt } from "../../../utils/jwks-client.js";
+import {
+  controlPlaneIssuerScopes,
+  podAudience,
+  verifyTrustedIssuerJwt,
+} from "../../../utils/jwks-client.js";
 
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 import { findUserDefaultWorkspaceId } from "../../../utils/user-default-workspace.js";
@@ -33,16 +36,35 @@ export function registerEntityShareRoutes(app: HubHono): void {
       return c.json({ error: "Authorization header required" }, 401);
     }
 
-    const cpUrl = config.server.controlPlaneUrl;
-    const payload = await verifyCpJwt<{
+    // The ONE issuer door: approved Control Plane issuer + aud = this pod +
+    // purpose + single-use jti. The CP signs `aud: <recipient pod URL>`
+    // (CP routes/shares.ts), so a delivery minted for one pod is refused here.
+    const audience = podAudience();
+    if (!audience) {
+      return c.json(
+        {
+          error: "PUBLIC_URL is not configured; share delivery refused",
+          code: "POD_AUDIENCE_UNKNOWN",
+        },
+        500
+      );
+    }
+    const payload = await verifyTrustedIssuerJwt<{
       sub: string;
       email: string;
       type: string;
       aud: string;
-    }>(rawToken, cpUrl);
+    }>(rawToken, {
+      audience,
+      requiredScope: controlPlaneIssuerScopes(),
+      expectedType: "entity-share-deliver",
+    });
 
-    if (!payload || payload.type !== "entity-share-deliver") {
-      return c.json({ error: "Invalid or expired CP token" }, 401);
+    if (!payload) {
+      return c.json(
+        { error: "Invalid or expired CP token", code: "CP_TOKEN_UNVERIFIED" },
+        401
+      );
     }
 
     const body = (await c.req.json()) as {

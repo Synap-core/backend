@@ -2,19 +2,23 @@
  * JWKS Client — verifies ES256 JWTs issued by an external issuer.
  *
  * Flow:
- *   1. Resolve issuer URL: use a pinned issuer if provided (allowlist mode),
- *      or fall back to the `iss` claim in the JWT itself (OIDC-style discovery).
- *   2. Fetch /.well-known/jwks.json from the resolved issuer URL on first use.
+ *   1. The issuer is ALWAYS pinned by the caller (never discovered from the
+ *      token's own unverified `iss` — that let any HTTPS host sign for itself,
+ *      SECURITY-KEYS-2026-10-13 C2).
+ *   2. Fetch /.well-known/jwks.json from the pinned issuer URL on first use.
  *   3. Cache the issuer's ES256 signing keys in memory and refresh on an
  *      unknown `kid`, so normal signing-key rotation remains available.
- *   4. Verify incoming JWT signature + issuer claim.
- *   5. Track used `jti` claims to prevent replay attacks (LRU, 15 min TTL).
+ *   4. Verify signature + issuer + expiry + REQUIRED audience.
+ *   5. Consume the `jti` (durably, per issuer, in the trusted door).
  *
- * `verifyTrustedIssuerJwt` establishes authorization through the Pod-local
- * `trusted_issuers` registry. `verifyIssuerJwt` is a lower-level cryptographic
- * verifier; privileged entry points should use the trusted variant unless they
- * already enforce an equivalent issuer policy. Neither uses environment-based
- * implicit trust.
+ * THE ONE DOOR for an issuer→pod token (Control Plane or any other approved
+ * issuer) is `verifyTrustedIssuerJwt`: approved registry entry + required
+ * capability scope(s) + `aud` = this pod + expected purpose `type` + durable
+ * single-use `jti` (RFC 8725 §3.10–3.12). `verifyIssuerJwt` is the lower-level
+ * cryptographic step; only routes that run their own registry check AND their
+ * own durable receipt (federation bootstrap / identity-link) may call it, and
+ * the tripwire `__tripwires__/issuer-jwt-one-door.test.ts` lists them.
+ * Neither uses environment-based implicit trust.
  */
 
 import crypto, { type JsonWebKey as CryptoJsonWebKey } from "crypto";
@@ -22,7 +26,11 @@ import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import jwt from "jsonwebtoken";
 import { createLogger } from "@synap-core/core";
-import { TrustedIssuerService } from "@synap/database";
+import {
+  TrustedIssuerService,
+  TRUSTED_ISSUER_CAPABILITIES,
+  consumeFederatedAssertionReceipt,
+} from "@synap/database";
 import {
   normalizeIssuerUrl,
   resolvePublicIssuerEndpoint,
@@ -345,53 +353,35 @@ function readUnverifiedKeyId(token: string): string | null {
 /**
  * Verify a JWT issued by an external issuer using ES256 (ECDSA P-256).
  *
+ * LOW-LEVEL. Routes use {@link verifyTrustedIssuerJwt}; this is called directly
+ * only by routes that already resolved an APPROVED registry entry themselves
+ * and persist their own durable receipt (see the tripwire allowlist).
+ *
  * Returns the decoded payload if valid, or null if:
- *   - Issuer URL cannot be resolved (no pinned issuer and no HTTPS iss claim)
+ *   - the pinned issuer or the audience is missing / not canonical
  *   - JWKS fetch fails
  *   - Signature / issuer / expiry / audience check fails
- *   - jti has already been used (replay attack)
+ *   - jti is missing, or has already been used (in-memory guard)
  *
- * Issuer resolution (OIDC-style):
- *   - If `pinnedIssuer` is provided: use it as the JWKS source AND enforce that the
- *     token's `iss` matches it (allowlist / trust-pinning mode).
- *   - If no issuer is pinned: decode the JWT without verification,
- *     extract the `iss` claim, and use it as the JWKS source. The `iss` must
- *     be an HTTPS URL. Callers that need a specific issuer can pin it.
- *
- * Pass `audience` when the token was signed with an `aud` claim (for example,
- * a Pod-specific issuer assertion). Omit for tokens that have no audience claim.
+ * Both `pinnedIssuer` and `audience` are REQUIRED: an unpinned issuer meant
+ * "trust whichever host the token names" and an omitted audience meant "a
+ * token minted for another pod is valid here" (SECURITY-KEYS C2/C3).
  *
  * Callers should treat null as an unverified assertion and deny the privileged
  * operation that required it.
  */
 export async function verifyIssuerJwt<T extends object>(
   token: string,
-  pinnedIssuer?: string | undefined,
-  audience?: string,
+  pinnedIssuer: string,
+  audience: string,
   options?: { consumeJti?: boolean }
 ): Promise<T | null> {
-  // ── Resolve issuer URL ────────────────────────────────────────────────────
-  let rawIssuerUrl = pinnedIssuer;
-
-  if (!rawIssuerUrl) {
-    // Decode without verification to read the iss claim (standard OIDC pattern)
-    const iss = readUnverifiedIssuerClaim(token);
-    if (!iss) {
-      logger.debug("verifyIssuerJwt: cannot decode token — skipping");
-      return null;
-    }
-    if (!iss.startsWith("https://")) {
-      logger.debug(
-        { iss },
-        "verifyIssuerJwt: iss is not an HTTPS URL and no issuer was pinned — cannot verify"
-      );
-      return null;
-    }
-    rawIssuerUrl = iss;
-    logger.debug(
-      { issuerUrl: rawIssuerUrl },
-      "verifyIssuerJwt: resolved issuer URL from iss claim"
+  const rawIssuerUrl = pinnedIssuer;
+  if (!rawIssuerUrl || !audience) {
+    logger.warn(
+      "verifyIssuerJwt: pinned issuer and audience are both required — token rejected"
     );
+    return null;
   }
 
   // An issuer identifier is a database key as well as a JWT claim. Requiring
@@ -421,7 +411,7 @@ export async function verifyIssuerJwt<T extends object>(
     const payload = jwt.verify(token, publicKeyPem, {
       algorithms: ["ES256"],
       issuer: issuerUrl,
-      ...(audience ? { audience } : {}),
+      audience,
     }) as T & { jti?: string };
 
     // JTI replay check — reject tokens whose ID has been seen before.
@@ -479,7 +469,18 @@ export async function verifyIssuerJwt<T extends object>(
  *   3. Fetch that approved issuer's JWKS, then verify signature, issuer,
  *      expiry, audience, and jti.
  *
- * Returns null on any rejection (verify failure, unknown issuer, non-approved status).
+ * Returns null on any rejection (verify failure, unknown issuer, non-approved
+ * status, missing scope, wrong purpose `type`, missing `exp`, replayed `jti`).
+ *
+ * Purpose separation (RFC 8725 §3.11): `expectedType` is checked INSIDE the
+ * door, before the jti is consumed, so a token minted for one purpose (say a
+ * `sync-setup`) can never be presented as another (an `oidc-config-push`) and
+ * a mistyped token never burns its jti.
+ *
+ * Replay (RFC 8725 §3.10): unless `consumeJti: false`, the jti is consumed in
+ * the durable `federated_assertion_receipts` table keyed by the approved
+ * registry entry — single-use across restarts and processes, not a 500-entry
+ * in-memory map. A receipt store fault REJECTS (fail closed).
  *
  * Issuer pinning: when `opts.pinnedIssuer` is omitted, the token's unverified
  * `iss` selects a registry entry first. Its JWKS endpoint is fetched only
@@ -501,8 +502,17 @@ export async function verifyTrustedIssuerJwt<T extends object>(
   opts: {
     pinnedIssuer?: string;
     audience: string;
-    /** Optional registry scope required by this specific endpoint. */
-    requiredScope?: string;
+    /**
+     * Registry scope(s) this endpoint requires. An array requires ALL of them
+     * (`controlPlaneIssuerScopes()` = "the issuer this pod approved as its
+     * Control Plane").
+     */
+    requiredScope?: string | readonly string[];
+    /**
+     * The purpose the token must carry in its `type` claim (one value, or any
+     * of a set). Checked before the jti is consumed.
+     */
+    expectedType?: string | readonly string[];
     /** Use only when this endpoint persists a durable JTI receipt itself. */
     consumeJti?: boolean;
   }
@@ -575,23 +585,74 @@ export async function verifyTrustedIssuerJwt<T extends object>(
       );
       return null;
     }
+    const requiredScopes =
+      opts.requiredScope === undefined
+        ? []
+        : typeof opts.requiredScope === "string"
+          ? [opts.requiredScope]
+          : [...opts.requiredScope];
     if (
-      opts.requiredScope &&
+      requiredScopes.length > 0 &&
       (!Array.isArray(entry.allowedScopes) ||
-        !entry.allowedScopes.includes(opts.requiredScope))
+        !requiredScopes.every((scope) => entry.allowedScopes.includes(scope)))
     ) {
       logger.warn(
-        { issuerUrl, requiredScope: opts.requiredScope },
+        { issuerUrl, requiredScope: requiredScopes },
         "verifyTrustedIssuerJwt: issuer is not approved for the required scope — rejected"
       );
       return null;
     }
 
     // The registry grants this issuer permission to make us fetch its JWKS.
-    // verifyIssuerJwt then verifies the signature and enforces the exact iss.
-    return await verifyIssuerJwt<T>(token, issuerUrl, opts.audience, {
-      consumeJti: opts.consumeJti,
+    // verifyIssuerJwt then verifies the signature and enforces the exact iss
+    // and the audience. The jti is consumed below, durably, never here.
+    const payload = await verifyIssuerJwt<T>(token, issuerUrl, opts.audience, {
+      consumeJti: false,
     });
+    if (!payload) return null;
+    const claims = payload as T & {
+      type?: unknown;
+      jti?: unknown;
+      exp?: unknown;
+    };
+
+    if (opts.expectedType !== undefined) {
+      const expected =
+        typeof opts.expectedType === "string"
+          ? [opts.expectedType]
+          : opts.expectedType;
+      if (typeof claims.type !== "string" || !expected.includes(claims.type)) {
+        logger.warn(
+          { issuerUrl, expectedType: expected },
+          "verifyTrustedIssuerJwt: token purpose (type) does not match this endpoint — rejected"
+        );
+        return null;
+      }
+    }
+
+    if (opts.consumeJti === false) return payload;
+
+    if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp)) {
+      logger.warn(
+        { issuerUrl },
+        "verifyTrustedIssuerJwt: token has no exp — a single-use receipt needs one — rejected"
+      );
+      return null;
+    }
+    // verifyIssuerJwt already refused a token without a jti.
+    const receipt = await consumeFederatedAssertionReceipt({
+      issuerId: entry.id,
+      jti: claims.jti as string,
+      expiresAt: new Date(claims.exp * 1_000),
+    });
+    if (receipt !== "consumed") {
+      logger.warn(
+        { issuerUrl, receipt },
+        "verifyTrustedIssuerJwt: token jti already used (or expired) — rejected"
+      );
+      return null;
+    }
+    return payload;
   } catch (err) {
     logger.warn(
       { err, issuerUrl },
@@ -602,10 +663,44 @@ export async function verifyTrustedIssuerJwt<T extends object>(
 }
 
 /**
- * @deprecated Use {@link verifyIssuerJwt}. Kept while legacy Pod routes
- * migrate to generic trusted-issuer terminology.
+ * The registry scopes that identify "the issuer this pod approved as its
+ * Control Plane": both doors that approve the CP grant exactly this set —
+ * owner bootstrap (`approveBootstrapIssuer`, apps/api federation.ts) and the
+ * boot seed (`seedControlPlaneIssuer`, CP `FEDERATION_ISSUER_SCOPES`). A
+ * third-party application issuer is approved with NO issuer-wide scope, so
+ * requiring this set keeps CP-only purposes (OIDC config push, sync setup,
+ * share delivery) out of any other approved issuer's reach.
+ *
+ * A function, not a module constant, so importing this file never reads
+ * `@synap/database` at load time (route tests mock that module partially).
  */
-export const verifyCpJwt = verifyIssuerJwt;
+export function controlPlaneIssuerScopes(): readonly string[] {
+  return [
+    TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+    TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
+    TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
+    TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
+  ];
+}
+
+/**
+ * @deprecated RETIRED — always rejects. It verified a CP token with no
+ * audience and, when CONTROL_PLANE_URL was unset, against whatever issuer the
+ * token named (SECURITY-KEYS-2026-10-13 C3). Its last callers
+ * (`workspaces/invites.ts` acceptInviteViaCp / rejectInviteViaCp) receive a
+ * token type no Control Plane mints (`invite-accept`: zero signers in any
+ * repo), so failing closed breaks no live caller. Migrate a caller to
+ * {@link verifyTrustedIssuerJwt} (audience + expectedType + scopes) instead.
+ */
+export async function verifyCpJwt<T extends object>(
+  _token: string,
+  _pinnedIssuer?: string | undefined
+): Promise<T | null> {
+  logger.error(
+    "verifyCpJwt is retired (no audience, no registry) — token rejected; use verifyTrustedIssuerJwt"
+  );
+  return null;
+}
 
 /**
  * @deprecated Use {@link verifyTrustedIssuerJwt}. Kept while legacy Pod routes

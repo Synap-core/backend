@@ -15,7 +15,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { createLogger, config } from "@synap-core/core";
+import { createLogger } from "@synap-core/core";
 import {
   db,
   syncPeers,
@@ -48,7 +48,11 @@ import {
   workspaceMembers,
   propertyDefs,
 } from "@synap/database/schema";
-import { verifyCpJwt } from "../utils/jwks-client.js";
+import {
+  controlPlaneIssuerScopes,
+  podAudience,
+  verifyTrustedIssuerJwt,
+} from "../utils/jwks-client.js";
 import { invalidateSyncPeerCache } from "../utils/sync-realtime-hook.js";
 import {
   recordPeerGeneration,
@@ -1592,21 +1596,66 @@ const removePeerInputSchema = z.object({
   peerUrl: httpsUrl,
 });
 
+/** The signed `sync-setup` claims (CP `routes/pods.ts` link/unlink/promote). */
+interface SyncSetupClaims {
+  type: "sync-setup";
+  podId: string;
+  action: "add" | "remove" | "promote";
+  /** The peer this pod must add/remove — signed, so the body cannot swap it. */
+  peerUrl?: unknown;
+}
+
+function trimUrl(u: string): string {
+  return u.replace(/\/+$/, "");
+}
+
 /**
- * Verify a CP-signed JWT from the Authorization header.
- * Returns the decoded payload or null if invalid.
+ * Verify the CP-signed `sync-setup` JWT through the ONE issuer door and bind
+ * it to THIS pod (aud) and to the peer URL in the body (signed `peerUrl`).
+ *
+ * Before 2026-10-13 this used the bare verifier with no audience — a token
+ * minted for one pod replayed at any other pod (and, without
+ * CONTROL_PLANE_URL, from any issuer) could add a peer at an attacker URL and
+ * stream the pod's events to it (SECURITY-KEYS C3). Fails closed when the pod
+ * has no PUBLIC_URL or no approved Control Plane issuer.
  */
-async function verifyCpAuth<T extends object>(
-  authHeader: string | null
-): Promise<T | null> {
+async function verifyCpSyncSetup(
+  authHeader: string | null,
+  /** The action this endpoint performs; null = any (read-only /status). */
+  action: "add" | "remove" | "promote" | null,
+  /** Required for add/remove: the body peer URL must be the signed one. */
+  bodyPeerUrl?: string
+): Promise<SyncSetupClaims | null> {
   if (!authHeader) return null;
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
+  const audience = podAudience();
+  if (!audience) {
+    logger.error("sync-setup refused: PUBLIC_URL not configured (no audience)");
+    return null;
+  }
 
-  const token = match[1].trim();
-  // Pass cpUrl as optional allowlist — if set, only tokens from that issuer
-  // are accepted. If unset, verifyCpJwt reads the issuer from the token's iss claim.
-  return verifyCpJwt<T>(token, config.server.controlPlaneUrl);
+  const payload = await verifyTrustedIssuerJwt<SyncSetupClaims>(
+    match[1].trim(),
+    {
+      audience,
+      requiredScope: controlPlaneIssuerScopes(),
+      expectedType: "sync-setup",
+    }
+  );
+  if (!payload || (action !== null && payload.action !== action)) return null;
+  if (bodyPeerUrl === undefined) return payload;
+  if (
+    typeof payload.peerUrl !== "string" ||
+    trimUrl(payload.peerUrl) !== trimUrl(bodyPeerUrl)
+  ) {
+    logger.warn(
+      { cpPodId: payload.podId },
+      "sync-setup refused: body peerUrl is not the signed peerUrl"
+    );
+    return null;
+  }
+  return payload;
 }
 
 /**
@@ -1615,16 +1664,6 @@ async function verifyCpAuth<T extends object>(
  * Auth: CP-signed JWT with type "sync-setup"
  */
 app.post("/setup-peer", async (c) => {
-  const payload = await verifyCpAuth<{
-    type: string;
-    podId: string;
-    action: string;
-  }>(c.req.header("authorization") ?? null);
-
-  if (!payload || payload.type !== "sync-setup" || payload.action !== "add") {
-    return c.json({ error: "Unauthorized — invalid or missing CP JWT" }, 401);
-  }
-
   let body: unknown;
   try {
     body = await c.req.json();
@@ -1641,6 +1680,21 @@ app.post("/setup-peer", async (c) => {
   }
 
   const { peerUrl, direction, authToken, label } = parsed.data;
+
+  const payload = await verifyCpSyncSetup(
+    c.req.header("authorization") ?? null,
+    "add",
+    peerUrl
+  );
+  if (!payload) {
+    return c.json(
+      {
+        error: "Unauthorized — invalid or missing CP JWT",
+        code: "SYNC_SETUP_UNVERIFIED",
+      },
+      401
+    );
+  }
 
   // Delegate to shared helper — same logic used by the operator tRPC path
   const peerId = await upsertSyncPeer({
@@ -1665,20 +1719,6 @@ app.post("/setup-peer", async (c) => {
  * Auth: CP-signed JWT with type "sync-setup"
  */
 app.delete("/setup-peer", async (c) => {
-  const payload = await verifyCpAuth<{
-    type: string;
-    podId: string;
-    action: string;
-  }>(c.req.header("authorization") ?? null);
-
-  if (
-    !payload ||
-    payload.type !== "sync-setup" ||
-    payload.action !== "remove"
-  ) {
-    return c.json({ error: "Unauthorized — invalid or missing CP JWT" }, 401);
-  }
-
   let body: unknown;
   try {
     body = await c.req.json();
@@ -1695,6 +1735,21 @@ app.delete("/setup-peer", async (c) => {
   }
 
   const { peerUrl } = parsed.data;
+
+  const payload = await verifyCpSyncSetup(
+    c.req.header("authorization") ?? null,
+    "remove",
+    peerUrl
+  );
+  if (!payload) {
+    return c.json(
+      {
+        error: "Unauthorized — invalid or missing CP JWT",
+        code: "SYNC_SETUP_UNVERIFIED",
+      },
+      401
+    );
+  }
 
   // Find and remove all peers matching this URL
   const peers = await db
@@ -1811,12 +1866,12 @@ app.get("/health", async (c) => {
  */
 app.get("/status", async (c) => {
   // Authenticate with CP JWT or peer token
-  const payload = await verifyCpAuth<{
-    type: string;
-    podId: string;
-  }>(c.req.header("authorization") ?? null);
+  const payload = await verifyCpSyncSetup(
+    c.req.header("authorization") ?? null,
+    null
+  );
 
-  if (!payload || payload.type !== "sync-setup") {
+  if (!payload) {
     // Also allow peer token auth (same as /health authenticated path)
     const authHeader = c.req.header("authorization") ?? "";
     const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i);
@@ -1942,17 +1997,12 @@ app.get("/status", async (c) => {
  * automatically detect this on next sync and adjust accordingly.
  */
 app.post("/promote", async (c) => {
-  const payload = await verifyCpAuth<{
-    type: string;
-    podId: string;
-    action: string;
-  }>(c.req.header("authorization") ?? null);
+  const payload = await verifyCpSyncSetup(
+    c.req.header("authorization") ?? null,
+    "promote"
+  );
 
-  if (
-    !payload ||
-    payload.type !== "sync-setup" ||
-    payload.action !== "promote"
-  ) {
+  if (!payload) {
     return c.json(
       { error: "Unauthorized — requires CP JWT with action: promote" },
       401
