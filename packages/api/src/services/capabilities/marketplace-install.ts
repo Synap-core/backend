@@ -47,7 +47,7 @@
  * `GET {source}/api/marketplace/cells?q=<key>` (the same live endpoint
  * `routers/cells.ts`'s `install` mutation already fetches from).
  *
- * Sources (Pod Console D11): every target names ONE catalog source — omitted
+ * Sources: every target names ONE catalog source — omitted
  * means the official Synap source, never "whichever source has the slug". A
  * package from a source a person added is installed only as its trust level
  * allows (`decideMarketInstall`): its definition is fetched anonymously from
@@ -55,8 +55,10 @@
  * confirms code and network reach explicitly, an agent proposes only where
  * that source opted in, a showcase source never installs, and everything it
  * installs is stamped `<sourceId>/<slug>` so it can never converge onto — or
- * be reconciled as — Synap's own package. The by-key Control Plane fallbacks
- * below are official-only.
+ * be reconciled as — Synap's own package. Nor may it overwrite anything the
+ * pod already has under the same name (`assertNoTakeover`), and an approved
+ * proposal installs only the exact listing it disclosed (`listingSha256`).
+ * The by-key Control Plane fallbacks below are official-only.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -75,8 +77,15 @@ import {
 import {
   capabilities,
   cpCatalogCache,
+  mcpServers,
+  ProfileScope,
   profiles,
+  propertyDefs,
+  secrets,
+  skills as skillsTable,
+  tools as toolsTable,
   views,
+  widgetDefinitions,
 } from "@synap/database/schema";
 import type {
   CatalogListing,
@@ -127,6 +136,7 @@ import {
   type MarketAcknowledgement,
 } from "./market-risk.js";
 import { officialCatalogCondition } from "./catalog-cache-query.js";
+import { interpolateDeep } from "../_shared/interpolate.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -183,6 +193,39 @@ export async function lookupCatalogEntry(
     });
   }
   return row ?? null;
+}
+
+/** Resolve whether a catalog entry is already installed — HONEST per kind: a
+ *  cheap natural-key check for capability/cell, `undefined` (never a fabricated
+ *  guess) when the check would require scanning every workspace's provenance. */
+export async function resolveInstalledFlag(
+  kind: CatalogKind,
+  slug: string
+): Promise<boolean | undefined> {
+  if (kind === "capability") {
+    const [row] = await db
+      .select({ id: capabilities.id })
+      .from(capabilities)
+      .where(drizzleSql`${capabilities.metadata}->>'templateKey' = ${slug}`)
+      .limit(1);
+    return !!row;
+  }
+  if (kind === "cell") {
+    // Cache slug scheme is `${packageSlug}/${cellKey}` (cp-catalog-sync.ts);
+    // the installed typeKey scheme is `cell:${packageSlug}:${cellKey}` (the
+    // SAME scheme POST /cells/install and defineCell use).
+    if (!slug.includes("/")) return undefined;
+    const [pkgSlug, cellKey] = slug.split("/");
+    const [row] = await db
+      .select({ id: widgetDefinitions.id })
+      .from(widgetDefinitions)
+      .where(eq(widgetDefinitions.typeKey, `cell:${pkgSlug}:${cellKey}`))
+      .limit(1);
+    return !!row;
+  }
+  // automation/template: no cheap natural-key check today (would require
+  // scanning every workspace's provenance) — honest `undefined`, never faked.
+  return undefined;
 }
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -507,9 +550,9 @@ export interface ApplyMarketInstallInput {
   kind: CatalogKind;
   slug: string;
   /**
-   * The catalog source (provider base URL) the target is listed under. Omit
-   * when only one source offers this slug; required once several do (see
-   * `lookupCatalogEntry`).
+   * The catalog source id the target is listed under (`synap`, or a source a
+   * pod admin added). Omitted: Synap's official catalog — never another
+   * source that happens to list the same slug (see `lookupCatalogEntry`).
    */
   source?: string | null;
   version?: string | null;
@@ -517,6 +560,14 @@ export interface ApplyMarketInstallInput {
   userId: string;
   workspaceId: string | null;
   agentUserId?: string | null;
+  /**
+   * Set only when an approved `capability.install` proposal installs: the
+   * listing digest disclosed when it was filed (null when it carried none).
+   * The install is refused when the source now lists anything else — a
+   * reviewer approves what they were shown, never what the source serves
+   * later.
+   */
+  proposedListingSha256?: string | null;
   /** Stamp uses / seed filing onto this project. */
   projectId?: string;
   /** Human-typed engagement name — mint/reuse Project (agents must use projectId). */
@@ -537,65 +588,367 @@ export interface ApplyMarketInstallInput {
   verifiedDefinition?: Record<string, unknown>;
 }
 
+type Bag = Record<string, unknown>;
+
+function bagOf(value: unknown): Bag | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Bag)
+    : null;
+}
+
+function bagsOf(value: unknown): Bag[] {
+  return Array.isArray(value)
+    ? value.map(bagOf).filter((b): b is Bag => b !== null)
+    : [];
+}
+
+function textOf(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+/** Where a capability's rows land: pod-wide (null), one space, or not known yet. */
+type ClaimScope = string | null | "any";
+
+interface CapabilityClaim {
+  /** As published — a literal here is the author's, not the person's. */
+  raw: Bag;
+  /** As the applier will see it, `{{params}}` filled in. */
+  def: Bag;
+  scope: ClaimScope;
+}
+
 /**
- * A package from a source a person added may not replace a capability this
- * pod already has, nor take a key Synap's own catalog uses: a capability is
- * keyed by name, and the applier would re-apply its tools onto the existing
- * row — credentials and all.
+ * One capability a package would apply, as `createCapabilityFromDefinition`
+ * will see it: interpolated with the same params (the definition's own
+ * `name`/`key`, declared defaults, then the caller's), matched in the scope
+ * its rows land in — pod-wide when every skill is pod-scoped, else the space.
  */
-async function assertNoCapabilityTakeover(
+function capabilityClaim(
+  raw: Bag,
+  params: Record<string, unknown>,
+  workspaceId: ClaimScope
+): CapabilityClaim {
+  const effective: Record<string, unknown> = { name: raw.name, key: raw.key };
+  for (const p of bagsOf(raw.params)) {
+    const name = textOf(p.name);
+    if (name && p.default !== undefined) effective[name] = p.default;
+  }
+  Object.assign(effective, params);
+  const skillScopes = bagsOf(raw.skills).map((sk) => sk.scope ?? "pod");
+  const podScoped =
+    skillScopes.length > 0 && skillScopes.every((sc) => sc === "pod");
+  return {
+    raw,
+    def: interpolateDeep(raw, effective),
+    scope: podScoped ? null : workspaceId,
+  };
+}
+
+/**
+ * The capabilities a definition applies: the definition itself for a
+ * capability package, and every inline `capabilities[].definition` a
+ * template's living layer carries. A template's space is decided while it
+ * installs (a new one, or one it composes onto), so its space-scoped rows are
+ * checked against EVERY space — closed, never a guess.
+ */
+function capabilityClaims(
+  kind: CatalogKind,
+  definition: Bag,
+  params: Record<string, unknown>,
+  workspaceId: string | null
+): CapabilityClaim[] {
+  const claims =
+    kind === "capability"
+      ? [capabilityClaim(definition, params, workspaceId)]
+      : [];
+  for (const cap of bagsOf(definition.capabilities)) {
+    const def = bagOf(cap.definition);
+    if (!def) continue;
+    claims.push(
+      capabilityClaim(
+        def,
+        bagOf(cap.params) ?? {},
+        kind === "template" ? "any" : workspaceId
+      )
+    );
+  }
+  return claims;
+}
+
+/** The scope condition for a `workspace_id` column; none for "any". */
+function inScope(column: Parameters<typeof isNull>[0], scope: ClaimScope) {
+  if (scope === "any") return undefined;
+  return scope === null ? isNull(column) : eq(column, scope);
+}
+
+function refuseTakeover(
+  source: CatalogSource,
+  what: string,
+  name: string,
+  where = "already exists on this pod"
+): never {
+  throw new TRPCError({
+    code: "CONFLICT",
+    message: `This package brings ${what} "${name}", which ${where}. A package from ${source.name} can't replace it.`,
+    cause: { code: "MARKET_CAPABILITY_TAKEOVER", item: what, key: name },
+  });
+}
+
+/**
+ * A package from a source a person added may only ADD to this pod — never
+ * overwrite what is already here. The capability applier matches existing
+ * rows by natural key and re-applies onto them (credentials, code and
+ * approvals included): a capability by key, an MCP server by slug, a tool by
+ * credential ref (by name when it has none), a skill by name, a secret by
+ * name. Any such clash in the scope the applier would write refuses the
+ * install, naming the item — as does a capability key Synap's own catalog
+ * uses, and a published literal `vault://` link (it would hand an existing
+ * credential to the package's own tools).
+ *
+ * A template's profiles reuse the pod-wide kind of the same slug; their new
+ * fields land as space overlays, but a declared lifecycle, or options for a
+ * field the pod-wide kind already has, would change that kind for every
+ * space (`assertNoPodWideKindChange`). Refused the same way.
+ */
+async function assertNoTakeover(
   source: CatalogSource,
   kind: CatalogKind,
+  definition: Record<string, unknown>,
+  target: {
+    params: Record<string, unknown>;
+    workspaceId: string | null;
+    userId: string;
+  }
+): Promise<void> {
+  const claims = capabilityClaims(
+    kind,
+    definition,
+    target.params,
+    target.workspaceId
+  );
+
+  // Capability keys: installed on this pod, or used by Synap's catalog. A
+  // capability package may also nest its definition under `capability`.
+  const keys = [
+    ...new Set(
+      [
+        ...claims.map((c) => c.def),
+        ...(kind === "capability" ? [bagOf(definition.capability)] : []),
+      ].flatMap((d) => textOf(d?.key) ?? [])
+    ),
+  ];
+  if (keys.length > 0) {
+    const [installed] = await db
+      .select({
+        key: drizzleSql<string>`${capabilities.metadata}->>'templateKey'`,
+      })
+      .from(capabilities)
+      .where(
+        inArray(
+          drizzleSql<string>`${capabilities.metadata}->>'templateKey'`,
+          keys
+        )
+      )
+      .limit(1);
+    if (installed) refuseTakeover(source, "a capability called", installed.key);
+    const [official] = await db
+      .select({ key: cpCatalogCache.slug })
+      .from(cpCatalogCache)
+      .where(
+        and(
+          officialCatalogCondition(),
+          eq(cpCatalogCache.kind, "capability"),
+          inArray(cpCatalogCache.slug, keys)
+        )
+      )
+      .limit(1);
+    if (official) {
+      refuseTakeover(
+        source,
+        "a capability called",
+        official.key,
+        "Synap's catalog uses"
+      );
+    }
+  }
+
+  for (const { raw, def, scope } of claims) {
+    // A literal link in the PUBLISHED definition. A person's own pick arrives
+    // through a `{{param}}`, which the raw definition does not hold.
+    for (const v of bagsOf(raw.vault)) {
+      if (textOf(v.value)?.trim().startsWith("vault://")) {
+        refuseTakeover(
+          source,
+          "a link to the secret",
+          textOf(v.name) ?? textOf(v.ref) ?? "unnamed",
+          "is already in this pod's vault"
+        );
+      }
+    }
+    const vaultDefs = bagsOf(def.vault);
+    const secretNames = vaultDefs.flatMap((v) => textOf(v.name) ?? []);
+    if (secretNames.length > 0) {
+      const [hit] = await db
+        .select({ name: secrets.name })
+        .from(secrets)
+        .where(
+          and(
+            eq(secrets.userId, target.userId),
+            inArray(secrets.name, secretNames),
+            inScope(secrets.workspaceId, scope),
+            isNull(secrets.deletedAt)
+          )
+        )
+        .limit(1);
+      if (hit) refuseTakeover(source, "a secret called", hit.name);
+    }
+
+    const mcpSlugs = bagsOf(def.mcpServers).flatMap(
+      (m) => textOf(m.slug) ?? []
+    );
+    if (mcpSlugs.length > 0) {
+      const [hit] = await db
+        .select({ slug: mcpServers.slug })
+        .from(mcpServers)
+        .where(
+          and(
+            inArray(mcpServers.slug, mcpSlugs),
+            inScope(mcpServers.workspaceId, scope)
+          )
+        )
+        .limit(1);
+      if (hit) refuseTakeover(source, "an MCP server called", hit.slug);
+    }
+
+    // A tool whose credential is one of the package's OWN secrets gets that
+    // new secret (a reused one was refused above), so it cannot match.
+    const ownRefs = new Set(vaultDefs.flatMap((v) => textOf(v.ref) ?? []));
+    const toolRefs: string[] = [];
+    const toolNames: string[] = [];
+    for (const t of bagsOf(def.tools)) {
+      const ref = textOf(t.credentialRef);
+      const name = textOf(t.name);
+      if (ref) {
+        if (!ownRefs.has(ref)) toolRefs.push(ref);
+      } else if (name) {
+        toolNames.push(name);
+      }
+    }
+    if (toolRefs.length > 0) {
+      const [hit] = await db
+        .select({ name: toolsTable.name })
+        .from(toolsTable)
+        .where(
+          and(
+            inArray(toolsTable.credentialRef, toolRefs),
+            inScope(toolsTable.workspaceId, scope)
+          )
+        )
+        .limit(1);
+      if (hit)
+        refuseTakeover(source, "a tool using the same connection as", hit.name);
+    }
+    if (toolNames.length > 0) {
+      const [hit] = await db
+        .select({ name: toolsTable.name })
+        .from(toolsTable)
+        .where(
+          and(
+            inArray(toolsTable.name, toolNames),
+            inScope(toolsTable.workspaceId, scope)
+          )
+        )
+        .limit(1);
+      if (hit) refuseTakeover(source, "a tool called", hit.name);
+    }
+
+    const skillNames = bagsOf(def.skills).flatMap(
+      (sk) => textOf(sk.name) ?? []
+    );
+    if (skillNames.length > 0) {
+      const [hit] = await db
+        .select({ name: skillsTable.name })
+        .from(skillsTable)
+        .where(
+          and(
+            inArray(skillsTable.name, skillNames),
+            inScope(skillsTable.workspaceId, scope)
+          )
+        )
+        .limit(1);
+      if (hit) refuseTakeover(source, "a skill called", hit.name);
+    }
+  }
+
+  if (kind === "template") await assertNoPodWideKindChange(source, definition);
+}
+
+/** See `assertNoTakeover`: a template may not change a pod-wide kind. */
+async function assertNoPodWideKindChange(
+  source: CatalogSource,
   definition: Record<string, unknown>
 ): Promise<void> {
-  const keys = new Set<string>();
-  const keyOf = (def: unknown): string | null => {
-    const d = (def ?? {}) as { key?: unknown; capability?: { key?: unknown } };
-    const key = d.capability?.key ?? d.key;
-    return typeof key === "string" && key ? key : null;
-  };
-  if (kind === "capability") {
-    const k = keyOf(definition);
-    if (k) keys.add(k);
+  const withLifecycle = new Set<string>();
+  const withOptions = new Map<string, string[]>();
+  for (const p of bagsOf(definition.profiles)) {
+    const slug = textOf(p.slug);
+    if (!slug) continue;
+    if (p.lifecycle) withLifecycle.add(slug);
+    const fields = [
+      ...bagsOf(p.properties).filter(
+        (f) =>
+          (Array.isArray(f.enumValues) && f.enumValues.length > 0) ||
+          (Array.isArray(f.enumOptions) && f.enumOptions.length > 0)
+      ),
+      ...bagsOf(p.propertyDefs).filter((f) => {
+        const options = bagOf(f.constraints)?.enum;
+        return Array.isArray(options) && options.length > 0;
+      }),
+    ].flatMap((f) => textOf(f.slug) ?? []);
+    if (fields.length > 0) withOptions.set(slug, fields);
   }
-  for (const cap of Array.isArray(definition.capabilities)
-    ? (definition.capabilities as Array<{ definition?: unknown }>)
-    : []) {
-    const k = cap?.definition ? keyOf(cap.definition) : null;
-    if (k) keys.add(k);
-  }
-  if (keys.size === 0) return;
-  const list = [...keys];
-  const [installed] = await db
-    .select({
-      key: drizzleSql<string>`${capabilities.metadata}->>'templateKey'`,
-    })
-    .from(capabilities)
-    .where(
-      inArray(
-        drizzleSql<string>`${capabilities.metadata}->>'templateKey'`,
-        list
-      )
-    )
-    .limit(1);
-  const [official] = await db
-    .select({ key: cpCatalogCache.slug })
-    .from(cpCatalogCache)
+  const slugs = [...new Set([...withLifecycle, ...withOptions.keys()])];
+  if (slugs.length === 0) return;
+  const podWide = await db
+    .select({ id: profiles.id, slug: profiles.slug })
+    .from(profiles)
     .where(
       and(
-        officialCatalogCondition(),
-        eq(cpCatalogCache.kind, "capability"),
-        inArray(cpCatalogCache.slug, list)
+        inArray(profiles.slug, slugs),
+        inArray(profiles.scope, [ProfileScope.SYSTEM, ProfileScope.SHARED])
       )
     )
-    .limit(1);
-  const taken = installed?.key ?? official?.key;
-  if (taken) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: `This package brings a capability called "${taken}", which ${installed ? "is already installed on this pod" : "Synap's catalog uses"}. A package from ${source.name} can't replace it.`,
-      cause: { code: "MARKET_CAPABILITY_TAKEOVER", key: taken },
-    });
+    .limit(slugs.length);
+  for (const shared of podWide) {
+    if (withLifecycle.has(shared.slug)) {
+      refuseTakeover(
+        source,
+        "a lifecycle for the kind",
+        shared.slug,
+        "every space on this pod shares"
+      );
+    }
+    const fields = withOptions.get(shared.slug);
+    if (!fields?.length) continue;
+    const [field] = await db
+      .select({ slug: propertyDefs.slug })
+      .from(propertyDefs)
+      .where(
+        and(
+          eq(propertyDefs.profileId, shared.id),
+          isNull(propertyDefs.workspaceId),
+          inArray(propertyDefs.slug, fields)
+        )
+      )
+      .limit(1);
+    if (field) {
+      refuseTakeover(
+        source,
+        `new options for "${field.slug}" on the kind`,
+        shared.slug,
+        "every space on this pod shares"
+      );
+    }
   }
 }
 
@@ -627,6 +980,18 @@ export async function applyMarketInstall(
   // The identity everything this install creates is stamped with.
   const pslug = provenanceSlug(source, input.slug);
 
+  // An approved proposal installs exactly the listing its reviewer was shown.
+  if (
+    input.proposedListingSha256 !== undefined &&
+    (input.proposedListingSha256 ?? null) !== (entry?.listing?.sha256 ?? null)
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `The package "${entry?.name ?? input.slug}" changed since it was proposed, so nothing was installed — propose it again.`,
+      cause: { code: "MARKET_LISTING_CHANGED" },
+    });
+  }
+
   // A source a person added: the trust gate runs HERE too, so an approved
   // proposal re-checks it (a source blocked or turned showcase since the
   // proposal was filed installs nothing). The approver is a person.
@@ -657,7 +1022,11 @@ export async function applyMarketInstall(
       });
     }
     listed = input.verifiedDefinition ?? (await resolveListedDefinition(entry));
-    await assertNoCapabilityTakeover(source, input.kind, listed);
+    await assertNoTakeover(source, input.kind, listed, {
+      params: input.params ?? {},
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+    });
   }
   const supplied = input.definition ?? listed;
 
@@ -1667,8 +2036,10 @@ export async function runMarketInstall(
         // automation/template with no cache row); the approve-executor re-resolves
         // the definition via applyMarketInstall, so version here is informational.
         version: input.version ?? entry?.version ?? null,
-        // The source the approval installs from (re-checked then).
+        // The source the approval installs from (re-checked then), and the
+        // exact listing disclosed here: approval refuses any other.
         source: source.id,
+        listingSha256: entry?.listing?.sha256 ?? null,
         params: input.params ?? {},
         ...(notices.length > 0 ? { risks: notices } : {}),
         ...(input.projectId ? { projectId: input.projectId } : {}),
