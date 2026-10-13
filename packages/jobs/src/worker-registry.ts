@@ -261,6 +261,15 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "shared",
   },
   {
+    id: "library-light-read",
+    name: "Library Light Read",
+    description:
+      "On save of a Library item: reads its text cheaply (public page, typed text, file extract / OCR / transcript under a daily per-person AI budget), writes a short summary and action chips (date, receipt, contact, task) to documents.metadata.importRead, and indexes it for search. Never structures or files anything. Over budget = an 'over budget' mark, read later by the hourly sweep.",
+    triggers: ["queue:library-light-read", "cron:17 * * * *"],
+    outputs: ["documents.metadata.importRead", "search-index"],
+    category: "ai",
+  },
+  {
     id: "webhook-broker",
     name: "Webhook Broker",
     description: "Delivers events to external webhook subscribers",

@@ -96,6 +96,12 @@ import {
   handleImportCorpus,
   IMPORT_CORPUS_QUEUE,
 } from "./import-corpus-worker.js";
+import {
+  handleLibraryLightRead,
+  handleLibraryLightReadSweep,
+  LIBRARY_LIGHT_READ_QUEUE,
+  LIBRARY_LIGHT_READ_SWEEP_QUEUE,
+} from "./library-light-read-worker.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -310,6 +316,9 @@ const ALL_QUEUES = [
   FEED_SOURCE_ITEMS_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
   IMPORT_CORPUS_QUEUE,
+  // The Library light read (one item) + its hourly re-enqueue sweep.
+  LIBRARY_LIGHT_READ_QUEUE,
+  LIBRARY_LIGHT_READ_SWEEP_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -761,6 +770,19 @@ export async function registerAllWorkers(): Promise<void> {
     handleImportCorpus(job)
   );
   logger.info("Registered worker: import-corpus");
+
+  // Library light read (on save — text, summary, action chips; handler slot
+  // filled by the api layer at boot, IoC) + the hourly sweep that re-enqueues
+  // items not read yet or held over budget.
+  await boss.work(LIBRARY_LIGHT_READ_QUEUE, async ([job]: any[]) =>
+    handleLibraryLightRead(job)
+  );
+  await boss.work(LIBRARY_LIGHT_READ_SWEEP_QUEUE, async () =>
+    handleLibraryLightReadSweep()
+  );
+  logger.info(
+    "Registered workers: library-light-read, library-light-read-sweep"
+  );
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.
