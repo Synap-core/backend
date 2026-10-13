@@ -63,6 +63,24 @@ describe("server-owned workspace settings", () => {
     ).toEqual({ theme: "light", exposurePolicy: stored.exposurePolicy });
   });
 
+  it("intent (homes A10) has ONE writer: a settings save neither plants nor erases it", () => {
+    const stored = {
+      intent: { label: "Sales", produces: ["deal"], source: "template" },
+    };
+    const forked = { label: "Mine", produces: ["post"], source: "template" };
+    expect(stripServerOwnedSettings({ theme: "dark", intent: forked })).toEqual(
+      { theme: "dark" }
+    );
+    // The client projection carries intent back on every save: kept as stored.
+    expect(
+      preserveServerOwnedSettings({ theme: "light", intent: forked }, stored)
+    ).toEqual({ theme: "light", intent: stored.intent });
+    expect(preserveServerOwnedSettings({ theme: "light" }, stored)).toEqual({
+      theme: "light",
+      intent: stored.intent,
+    });
+  });
+
   it("a workspace that never had them does not gain them", () => {
     expect(
       preserveServerOwnedSettings(

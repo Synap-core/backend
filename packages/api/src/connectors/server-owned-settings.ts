@@ -2,8 +2,9 @@
  * Workspace settings keys that belong to the SERVER, not to whoever edits the
  * workspace.
  *
- * `controlPlane` is written by the provisioning flow (its `podId`, `tier`) and
- * `nango` is the legacy plaintext connector credential. `workspaces.update`
+ * `controlPlane` is written by the provisioning flow (its `podId`, `tier`),
+ * `nango` is the legacy plaintext connector credential, and `intent` is the
+ * template's (install / reconcile only). `workspaces.update`
  * REPLACES the settings blob and clients receive a projection with these keys
  * stripped — so a client round-trip would both erase them and, worse, let any
  * editor plant a `controlPlane.url` / `nango.host` of their choosing.
@@ -20,6 +21,14 @@ export const SERVER_OWNED_WORKSPACE_SETTINGS_KEYS = [
   // `WorkspaceRepository.setExposurePolicy`; the repository's generic writers
   // strip it too (`withoutExposurePolicy`, @synap/database).
   "exposurePolicy",
+  // Homes A10 — what the space PRODUCES. ONE writer: the template install /
+  // reconcile (`projectTemplateIntent` → `settings.intent`, @synap/database),
+  // which writes through the repository, never this door. Clients DO read it
+  // (`CLIENT_SAFE_WORKSPACE_SETTINGS_KEYS` lists it), so a settings save sends
+  // it back: stripped and carried over from the stored row, never refused —
+  // a refusal would fail every round-trip, a pass-through would let an editor
+  // fork a template's intent the next reconcile then overwrites.
+  "intent",
 ] as const;
 
 /** The client's settings with every server-owned key removed. */
