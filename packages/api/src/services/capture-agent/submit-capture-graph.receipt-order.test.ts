@@ -103,7 +103,14 @@ describe("submitCaptureGraph auto-apply — receipt is inserted BEFORE materiali
     vi.restoreAllMocks();
     // Pod-wide graph: `membershipRole` short-circuits to "owner", so no
     // workspace-membership DB read is needed to reach the auto-apply branch.
-    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue({
+      workspaceId: null,
+      rung: 6,
+      reason: "no entity's kind or role implies a workspace → pod-wide",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    });
     vi.spyOn(
       ProfileResolutionService.prototype,
       "resolveProfile"

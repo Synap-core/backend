@@ -78,7 +78,14 @@ describe("submitCaptureGraph — the receipt reports the STORED row", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     dbUpdates.length = 0;
-    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue({
+      workspaceId: null,
+      rung: 6,
+      reason: "no entity's kind or role implies a workspace → pod-wide",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    });
     vi.spyOn(
       ProfileResolutionService.prototype,
       "resolveProfile"

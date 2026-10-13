@@ -396,11 +396,26 @@ export function acceptEntityCreatePlacement(input: {
 
 /**
  * When a composite graph has no explicit workspace/lens, derive one from its
- * ontology slugs via the ONE placement door (`resolveWorkspacePlacement`).
+ * entities via the ONE placement door (`resolveWorkspacePlacement`), PER
+ * ENTITY (D14): each entity resolves on its OWN kind and roles, never as a
+ * facet of another entity's kind.
+ *
+ * Who votes is what the graph's workspace would actually lens: a
+ * workspace-scope kind votes with its kind + its roles (the graph home pins
+ * it); a pod-scope kind votes only with the roles it wears (the facet lens is
+ * the one thing the graph home decides for it) and not at all when it wears
+ * none. An entity whose own resolve is ambiguous (>1 candidate) blocks
+ * placement.
+ *
+ * Unanimous definite votes → placed (rung = the weakest voter's, reason
+ * names why). Split votes or any ambiguous entity → ABSTAIN: `workspaceId`
+ * null, `candidates` = every workspace a voter named, most entities first.
+ * No vote at all → rung 6, pod-wide. The returned `workspaceId` is always
+ * the ACCEPTED lens (null unless placed) — callers read it directly.
  *
  * Call only when the caller's `workspaceId` is already `null` — an explicit
- * lens always wins and must not be overridden here. Empty `routingSlugs` →
- * null immediately. Errors propagate so callers keep their own log context.
+ * lens always wins and must not be overridden here. Errors propagate so
+ * callers keep their own log context.
  *
  * Shared by `submitCaptureGraph` and `ImportOrchestrator.resolveGraphPlacement`.
  */
@@ -408,42 +423,134 @@ export async function resolveGraphWorkspaceFromSlugs(
   db: Db,
   input: {
     userId: string;
-    /**
-     * Deduped profile + facet slugs collected from the graph. First entry is
-     * the kindSlug; the rest are facetSlugs (order is stable for tests, not
-     * otherwise significant — the door unions them for ontology lookup).
-     */
-    routingSlugs: string[];
+    /** One entry per graph entity: its own kind and the roles it wears. */
+    entities: Array<{ kindSlug: string; facetSlugs?: string[] }>;
     /** Optional focus-session signal for rung 3. */
     sessionId?: string | null;
   }
-): Promise<string | null> {
-  if (input.routingSlugs.length === 0) return null;
-  // A graph's lens is the PROCESS HOME of its workspace-scoped rows
-  // (stampScopeAwareHomesOnOps never pins a pod kind to it). So the graph is
-  // "workspace"-scoped for the rung-3 guard as soon as ANY of its slugs is, and
-  // "pod" only when every slug is pod-wide — an all-pod graph captured inside
-  // a session then stays pod-wide instead of taking the session's workspace.
-  let graphScope: "pod" | "workspace" | undefined;
-  if (input.sessionId) {
-    const scopes = new ProfileResolutionService(db);
-    graphScope = "pod";
-    for (const slug of input.routingSlugs) {
-      if ((await scopes.getEntityScope(slug, null)) === "workspace") {
-        graphScope = "workspace";
-        break;
-      }
+): Promise<WorkspacePlacement> {
+  const scopes = new ProfileResolutionService(db);
+  // Entities with the same kind + roles resolve once; their count still votes.
+  const groups = new Map<
+    string,
+    { kindSlug: string; facetSlugs: string[]; count: number }
+  >();
+  for (const e of input.entities) {
+    if (!e.kindSlug) continue;
+    const facetSlugs = [...new Set(e.facetSlugs ?? [])].filter(Boolean).sort();
+    const key = [e.kindSlug, ...facetSlugs].join("\u0000");
+    const g = groups.get(key);
+    if (g) g.count++;
+    else groups.set(key, { kindSlug: e.kindSlug, facetSlugs, count: 1 });
+  }
+
+  const votes = new Map<
+    string,
+    { count: number; kinds: Set<string>; reasons: Set<string>; rung: number }
+  >();
+  const ambiguous: Array<{
+    kindSlug: string;
+    count: number;
+    candidates: WorkspaceCandidate[];
+  }> = [];
+  for (const g of groups.values()) {
+    const entityScope = await scopes.getEntityScope(g.kindSlug, null);
+    // A pod kind's own slug never votes (the graph home never pins it).
+    if (entityScope === "pod" && g.facetSlugs.length === 0) continue;
+    const placement = await resolveWorkspacePlacement(db, {
+      userId: input.userId,
+      ...(entityScope === "workspace" ? { kindSlug: g.kindSlug } : {}),
+      facetSlugs: g.facetSlugs,
+      entityScope,
+      ambientWorkspaceId: null,
+      ...(input.sessionId ? { context: { sessionId: input.sessionId } } : {}),
+    });
+    const placed = acceptDeterministicGraphWorkspace(placement);
+    if (placed) {
+      const v = votes.get(placed) ?? {
+        count: 0,
+        kinds: new Set<string>(),
+        reasons: new Set<string>(),
+        rung: placement.rung,
+      };
+      v.count += g.count;
+      v.kinds.add(g.kindSlug);
+      v.reasons.add(placement.reason);
+      v.rung = Math.max(v.rung, placement.rung);
+      votes.set(placed, v);
+    } else if (placement.candidates.length > 0) {
+      ambiguous.push({
+        kindSlug: g.kindSlug,
+        count: g.count,
+        candidates: placement.candidates,
+      });
     }
   }
-  const placement = await resolveWorkspacePlacement(db, {
-    userId: input.userId,
-    kindSlug: input.routingSlugs[0],
-    facetSlugs: input.routingSlugs.slice(1),
-    ambientWorkspaceId: null,
-    ...(graphScope ? { entityScope: graphScope } : {}),
-    ...(input.sessionId ? { context: { sessionId: input.sessionId } } : {}),
-  });
-  return acceptDeterministicGraphWorkspace(placement);
+
+  if (votes.size === 0 && ambiguous.length === 0) {
+    return {
+      workspaceId: null,
+      rung: 6,
+      reason: "no entity's kind or role implies a workspace → pod-wide",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    };
+  }
+
+  const memberMap = votes.size
+    ? await loadRoutableMemberWorkspaces(db, input.userId)
+    : new Map<string, MemberWorkspace>();
+  const nameOf = (id: string) => memberMap.get(id)?.name ?? "";
+
+  if (votes.size === 1 && ambiguous.length === 0) {
+    const [[id, v]] = [...votes];
+    return {
+      workspaceId: id,
+      rung: v.rung as ResolutionRung,
+      reason: `every placed entity agrees on workspace '${nameOf(id)}': ${[...v.reasons].join("; ")}`,
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    };
+  }
+
+  // Split → abstain. Candidates ranked by how many entities named them.
+  const tally = new Map<
+    string,
+    { name: string; count: number; kinds: Set<string> }
+  >();
+  for (const [id, v] of votes) {
+    tally.set(id, {
+      name: nameOf(id),
+      count: v.count,
+      kinds: new Set(v.kinds),
+    });
+  }
+  for (const a of ambiguous) {
+    for (const c of a.candidates) {
+      const t = tally.get(c.id) ?? {
+        name: c.name,
+        count: 0,
+        kinds: new Set<string>(),
+      };
+      t.count += a.count;
+      t.kinds.add(a.kindSlug);
+      tally.set(c.id, t);
+    }
+  }
+  const ranked = [...tally].sort((x, y) => y[1].count - x[1].count);
+  const detail = ranked
+    .map(([, t]) => `'${t.name}' (${t.count}: ${[...t.kinds].join(", ")})`)
+    .join(", ");
+  return {
+    workspaceId: null,
+    rung: 6,
+    reason: `entities disagree on a workspace — ${detail} → staying pod-wide`,
+    confidence: 1,
+    candidates: ranked.map(([id, t]) => ({ id, name: t.name })),
+    ask: false,
+  };
 }
 
 // ── The door ────────────────────────────────────────────────────────────────
