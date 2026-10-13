@@ -12,8 +12,7 @@
  */
 
 import Link from "next/link";
-import { Fragment, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import type { ReactNode } from "react";
 import type { ProfileIdentityInput } from "@synap-core/types/vocabulary";
 import {
   StatusPill,
@@ -67,23 +66,28 @@ export function ObjectHeader({
         <nav aria-label="Breadcrumb">
           <ol className="flex flex-wrap items-center gap-1 text-[12px] text-foreground/65">
             {breadcrumb.map((crumb, i) => (
-              <Fragment key={`${crumb.label}-${i}`}>
+              <li
+                key={`${crumb.label}-${i}`}
+                className="flex min-w-0 items-center gap-1"
+              >
                 {i > 0 && (
-                  <ChevronRight aria-hidden className="h-3 w-3 shrink-0" />
+                  <span aria-hidden className="text-foreground/40">
+                    /
+                  </span>
                 )}
-                <li className="min-w-0 truncate">
-                  {crumb.href ? (
-                    <Link
-                      href={crumb.href}
-                      className="rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                    >
-                      {crumb.label}
-                    </Link>
-                  ) : (
-                    <span aria-current="page">{crumb.label}</span>
-                  )}
-                </li>
-              </Fragment>
+                {crumb.href ? (
+                  <Link
+                    href={crumb.href}
+                    className="truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  >
+                    {crumb.label}
+                  </Link>
+                ) : (
+                  <span aria-current="page" className="truncate">
+                    {crumb.label}
+                  </span>
+                )}
+              </li>
             ))}
           </ol>
         </nav>
@@ -93,19 +97,19 @@ export function ObjectHeader({
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <span
             aria-hidden
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-content3 text-foreground"
           >
-            <Icon className="h-5 w-5" strokeWidth={2} />
+            <Icon className="h-5 w-5" strokeWidth={1.75} />
           </span>
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
-              {nounLine}
-            </p>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <h1 className="min-w-0 break-words text-balance font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
                 {title}
               </h1>
               {status && <StatusPill kind={status.kind} label={status.label} />}
+              <span className="text-[12.5px] text-foreground/65">
+                {nounLine}
+              </span>
             </div>
             {summary && (
               <p className="max-w-2xl text-[13px] leading-relaxed text-foreground/65">
