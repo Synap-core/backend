@@ -35,6 +35,7 @@ import {
   eq,
   inArray,
   isNull,
+  isNotNull,
   drizzleSql,
   declaredLifecycleProfilesStatement,
 } from "@synap/database";
@@ -72,6 +73,7 @@ import { asksYouSessionIds } from "../signals/needs-you-owed.js";
 import {
   newBoardLensMemo,
   resolveBoardLens,
+  resolveProfileLifecycle,
   type BoardLensMemo,
 } from "./board-lens.js";
 import {
@@ -126,8 +128,23 @@ export interface SpaceIntent {
   produces: ProducedKind[];
 }
 
+/** Pod-wide things of a produced slug no stored intent claims (X1). */
+export interface PodWideCount {
+  profileSlug: string;
+  label: string;
+  plural: string;
+  count: number;
+}
+
 export interface HomeRead {
   spaces: SpaceIntent[];
+  /**
+   * POD-WIDE things (no space: `workspace_id` NULL — a pod-scope kind's row,
+   * a shared role's facet) of produced slugs that NO space's stored intent
+   * claims, counted ONCE here instead of in every space card. null = the
+   * read failed (never "none"). See `podWideOwners`.
+   */
+  podWide: PodWideCount[] | null;
   needsYou: {
     total: number | null;
     bySpace: Array<{ workspaceId: string; count: number | null }>;
@@ -446,6 +463,8 @@ async function readProducedKind(
     asksYou: ReadonlySet<string> | null;
     needsYou: number | null;
     memo: BoardLensMemo;
+    /** This space counts the slug's POD-WIDE rows (`podWideOwners`). */
+    podWideHere: boolean;
   }
 ): Promise<ProducedKind | null> {
   let lens;
@@ -468,7 +487,17 @@ async function readProducedKind(
       return null;
     throw err;
   }
-  const { lifecycle, conditions, subject } = lens;
+  const { lifecycle, subject } = lens;
+  // A space card counts the things that LIVE in it; pod-wide rows (no space)
+  // only in the ONE space that owns the slug at pod level (X1).
+  const conditions: SQL[] = input.podWideHere
+    ? lens.conditions
+    : [
+        ...lens.conditions,
+        (subject.kind === "role"
+          ? isNotNull(entityFacets.workspaceId)
+          : isNotNull(entities.workspaceId)) as SQL,
+      ];
   const now = Date.now();
   const since = new Date(now - HOME_WINDOW_DAYS * 86_400_000);
   const terminalKeys = new Set(
@@ -622,6 +651,94 @@ async function readProducedKind(
 
 // ─── lifecycle.home ──────────────────────────────────────────────────────────
 
+/**
+ * WHO COUNTS A SLUG'S POD-WIDE THINGS (homes X1). A pod-wide row — a
+ * pod-scope kind's entity with no space, a shared role's facet stored with no
+ * space — lives in NO space, so it may be counted in at most ONE card: the
+ * first space (by name, the order `lifecycle.moving` names a pod-wide facet's
+ * space by) whose STORED intent produces the slug. That space declared it
+ * makes the thing; an INFERRED producer only proved it holds some. A slug no
+ * stored intent claims has its pod-wide rows counted once at pod level
+ * (`HomeRead.podWide`). Before this every space whose lens reaches pod-wide
+ * rows counted them all — 105 pod-wide decisions inflated four cards.
+ */
+function podWideOwners(
+  intents: ReadonlyArray<{
+    space: { id: string; name: string };
+    source: "template" | "inferred";
+    produces: string[];
+  }>
+): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const i of [...intents]
+    .filter((i) => i.source === "template")
+    .sort((a, b) => a.space.name.localeCompare(b.space.name))) {
+    for (const slug of i.produces)
+      if (!owners.has(slug)) owners.set(slug, i.space.id);
+  }
+  return owners;
+}
+
+/** `HomeRead.podWide`: pod-wide things of the unowned produced slugs. */
+async function countPodWide(
+  userId: string,
+  slugs: string[],
+  projectId: string | undefined,
+  words: Map<string, { label: string; plural: string }>,
+  memo: BoardLensMemo
+): Promise<PodWideCount[]> {
+  const out: PodWideCount[] = [];
+  for (const slug of slugs) {
+    let p;
+    try {
+      p = await resolveProfileLifecycle(slug, null, memo);
+    } catch (err) {
+      // Unknown / undeclared = no pipeline, the card's own rule.
+      if (
+        err instanceof TRPCError &&
+        (err.code === "NOT_FOUND" || err.code === "PRECONDITION_FAILED")
+      )
+        continue;
+      throw err;
+    }
+    const conditions: SQL[] =
+      p.profileKind === "role"
+        ? [
+            ...(await roleVisibilityConditions({
+              userId,
+              lensWorkspaceId: undefined,
+              projectId,
+            })),
+            isNull(entityFacets.workspaceId) as SQL,
+          ]
+        : [
+            ...kindVisibilityConditions({
+              userId,
+              lensWorkspaceId: undefined,
+              explicitWorkspace: false,
+              projectId,
+              podScopeKind: false,
+            }),
+            isNull(entities.workspaceId) as SQL,
+          ];
+    const rows = await countThingsByProfileAndStatus({
+      kind: p.profileKind,
+      profileIds: p.profileIds,
+      conditions,
+    });
+    const count = rows.reduce((n, r) => n + r.count, 0);
+    if (count === 0) continue;
+    const w = words.get(slug);
+    out.push({
+      profileSlug: slug,
+      label: w?.label ?? slug,
+      plural: w?.plural ?? slug,
+      count,
+    });
+  }
+  return out;
+}
+
 /** Produced-kind reads in flight at once — a pod with 17 spaces stays polite. */
 export const HOME_KIND_CONCURRENCY = 6;
 
@@ -718,6 +835,7 @@ export async function readHome(
   // Every (space, produced kind) is ~3 queries (Q-S4 ratchet in
   // lifecycle.homes.pglite): bounded in flight, the slug rows read once.
   const memo = newBoardLensMemo();
+  const owners = podWideOwners(intents);
   const pairs = intents.flatMap((i, idx) =>
     i.produces.map((profileSlug) => ({ i, idx, profileSlug }))
   );
@@ -731,7 +849,14 @@ export async function readHome(
       asksYou: open?.asks ?? null,
       needsYou: byKind[pair.idx]!.get(pair.profileSlug) ?? null,
       memo,
+      podWideHere: owners.get(pair.profileSlug) === pair.i.space.id,
     })
+  );
+  const unowned = [...new Set(pairs.map((p) => p.profileSlug))].filter(
+    (slug) => !owners.has(slug)
+  );
+  const podWide = await settle("pod-wide", () =>
+    countPodWide(ctx.userId, unowned, input.projectId, words, memo)
   );
   const out = intents.map((i, idx): SpaceIntent => {
     const produced = read.filter(
@@ -754,7 +879,7 @@ export async function readHome(
       liveOf(b) - liveOf(a) ||
       a.name.localeCompare(b.name)
   );
-  return { spaces: out, needsYou: { total, bySpace } };
+  return { spaces: out, podWide, needsYou: { total, bySpace } };
 }
 
 // ─── lifecycle.moving ────────────────────────────────────────────────────────

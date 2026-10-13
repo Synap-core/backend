@@ -32,6 +32,8 @@ vi.setConfig({ testTimeout: 120_000 });
 const DEAL = "11111111-1111-4111-8111-111111111111";
 const LEAD = "22222222-2222-4222-8222-222222222222";
 const PERSON = "33333333-3333-4333-8333-333333333333";
+/** A POD-SCOPE kind with a lifecycle (homes X1: rows with no space). */
+const DECISION = "44444444-4444-4444-8444-444444444444";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -73,6 +75,16 @@ vi.mock("@synap/database", async (importOriginal) => {
               { key: "new", category: "open" },
               { key: "qualified", category: "active" },
               { key: "converted", category: "done" },
+            ],
+            unclassified: [],
+          };
+        }
+        if (profileId === "44444444-4444-4444-8444-444444444444") {
+          return {
+            propertySlug: "decisionStatus",
+            options: [
+              { key: "proposed", category: "open" },
+              { key: "accepted", category: "done" },
             ],
             unclassified: [],
           };
@@ -551,6 +563,88 @@ describe("lifecycle.home", () => {
     } finally {
       h.failLiveness = false;
       await q(`update focus_sessions set status = 'closed'`);
+    }
+  });
+});
+
+describe("lifecycle.home — pod-wide things count ONCE (homes X1)", () => {
+  async function decisionRow(ws: string | null): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, profile_id, title, status, status_category, properties, created_at)
+       values ($1,$2,$3,'decision',$4,'D','proposed','open','{}'::jsonb,now())`,
+      [id, USER, ws, DECISION]
+    );
+    return id;
+  }
+  const total = (
+    sp:
+      | {
+          produces: Array<{
+            profileSlug: string;
+            columns: Array<{ count: number }>;
+          }>;
+        }
+      | undefined
+  ) =>
+    sp?.produces
+      .find((p) => p.profileSlug === "decision")
+      ?.columns.reduce((n, c) => n + c.count, 0);
+
+  it("a pod-wide row counts in the first STORED producer only; inferred spaces and other producers never; unowned ⇒ podWide", async () => {
+    await q(
+      `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'decision','Decision','Decisions','kind','pod',true)`,
+      [DECISION]
+    );
+    await q(
+      `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,gen_random_uuid(),true)`,
+      [DECISION]
+    );
+    const intent = (label: string) => ({
+      settings: {
+        intent: { label, produces: ["decision"], source: "template" },
+      },
+    });
+    const beta = await space("Beta decisions", intent("Beta"));
+    const alpha = await space("Alpha decisions", intent("Alpha"));
+    const rows: string[] = [];
+    try {
+      for (let i = 0; i < 3; i++) rows.push(await decisionRow(null)); // pod-wide
+      rows.push(await decisionRow(alpha));
+      rows.push(await decisionRow(beta), await decisionRow(beta));
+      rows.push(await decisionRow(MISC)); // MISC infers `decision`
+
+      const home = await caller().home();
+      const of = (id: string) => home.spaces.find((s) => s.workspaceId === id);
+      expect(total(of(alpha))).toBe(1 + 3); // the owner: first by name
+      expect(total(of(beta))).toBe(2); // its own only
+      expect(total(of(MISC))).toBe(1); // inferred: its own only
+      expect(home.podWide).toEqual([]); // owned ⇒ never counted twice
+
+      // No stored producer left: the pod-wide rows are counted ONCE, at pod level.
+      await q(
+        `update workspaces set archived_at = now() where id = any($1::uuid[])`,
+        [[alpha, beta]]
+      );
+      const unowned = await caller().home();
+      expect(total(unowned.spaces.find((s) => s.workspaceId === MISC))).toBe(1);
+      expect(unowned.podWide).toEqual([
+        {
+          profileSlug: "decision",
+          label: "Decision",
+          plural: "Decisions",
+          count: 3,
+        },
+      ]);
+    } finally {
+      await q(
+        `update entities set deleted_at = now() where id = any($1::uuid[])`,
+        [rows]
+      );
+      await q(
+        `update workspaces set archived_at = now() where id = any($1::uuid[])`,
+        [[alpha, beta]]
+      );
     }
   });
 });
