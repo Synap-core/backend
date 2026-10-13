@@ -199,3 +199,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function nonEmpty(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
+
+export {
+  resolveEntityMedia,
+  resolvePresentationFamily,
+  type MediaEntityInput,
+  type ResolvedEntityMedia,
+} from "./resolve-media.js";
