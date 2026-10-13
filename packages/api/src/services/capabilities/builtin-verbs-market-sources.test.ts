@@ -1,11 +1,13 @@
 /**
- * `market.search` / `market.install` and catalog sources (Pod Console D11):
+ * `market.search` / `market.install` and catalog sources:
  *   - search reads Synap plus trusted sources that let agents propose — a
  *     showcase or opted-out source's listings never reach an agent unless it
  *     names that source, and a blocked source is never read;
  *   - an added source's entry says where it comes from and how it installs;
  *   - install reads a source-qualified id (`acme/crm`) as that source, a bare
- *     slug as Synap's, and never reads a cell's package segment as a source.
+ *     slug as Synap's, and never reads a cell's package segment as a source;
+ *   - from an added source only an agent gets through this door (it
+ *     proposes); a person's own key is sent to the Pod Console.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -21,9 +23,14 @@ vi.mock("./catalog-cache-query.js", () => ({
 }));
 vi.mock("./marketplace-install.js", () => ({
   runMarketInstall: (...a: unknown[]) => m.run(...a),
+  resolveInstalledFlag: async () => undefined,
 }));
 vi.mock("./market-sources.js", () => ({
   listMarketSources: (...a: unknown[]) => m.views(...a),
+  resolveMarketSource: async (name?: string | null) => ({
+    id: name ?? "synap",
+    official: !name || name === "synap",
+  }),
 }));
 
 import { BUILTIN_VERBS } from "./builtin-verbs.js";
@@ -139,6 +146,50 @@ describe("market.install — which source", () => {
     );
     expect(m.run).toHaveBeenLastCalledWith(
       expect.objectContaining({ slug: "acme/bar", source: undefined })
+    );
+  });
+});
+
+describe("market.install — who may install from an added source", () => {
+  const PERSON_KEY = { userId: "u-1", workspaceId: null, agentUserId: null };
+
+  it("a person's own key is refused for an added source — nothing runs", async () => {
+    for (const params of [
+      { slug: "crm", kind: "template", source: "acme" },
+      { slug: "acme/crm", kind: "template" },
+    ]) {
+      await expect(
+        BUILTIN_VERBS["market.install"]!(params, PERSON_KEY as never)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(m.run).not.toHaveBeenCalled();
+  });
+
+  it("a person's own key still installs from Synap's catalog; an agent still proposes", async () => {
+    m.run.mockResolvedValue({ status: "installed" });
+    await BUILTIN_VERBS["market.install"]!(
+      { slug: "crm", kind: "template" },
+      PERSON_KEY as never
+    );
+    expect(m.run).toHaveBeenLastCalledWith(
+      expect.objectContaining({ source: undefined, agentUserId: null })
+    );
+    await BUILTIN_VERBS["market.install"]!(
+      { slug: "crm", kind: "template", source: "acme" },
+      CTX as never
+    );
+    expect(m.run).toHaveBeenLastCalledWith(
+      expect.objectContaining({ source: "acme", agentUserId: "agent-1" })
+    );
+  });
+});
+
+describe("market.search — the source filter", () => {
+  it("names a source by id or by its cache key, like marketplace.list", async () => {
+    m.query.mockResolvedValue([]);
+    await BUILTIN_VERBS["market.search"]!({ source: CP }, CTX as never);
+    expect(m.query).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sources: [CP] })
     );
   });
 });

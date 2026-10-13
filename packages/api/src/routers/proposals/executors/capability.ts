@@ -520,6 +520,10 @@ export function registerCapabilityExecutors(): void {
         // The source the proposal was filed against — the approval installs
         // that row, not whichever source happens to share the slug.
         source: typeof data.source === "string" ? data.source : undefined,
+        // …and only the listing it disclosed: a source that changed the
+        // package since is refused ("propose it again").
+        proposedListingSha256:
+          typeof data.listingSha256 === "string" ? data.listingSha256 : null,
         version: data.version as string | null | undefined,
         params: (data.params ?? {}) as Record<string, unknown>,
         userId,

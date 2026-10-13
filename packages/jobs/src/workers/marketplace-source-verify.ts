@@ -17,7 +17,14 @@
  *      CHANGE (blocks the source until a person re-approves); one that does
  *      not verify is a bad signature (the last verified copy stays);
  *   4. expiry — an index past its `expires` is refused (a frozen copy cannot
- *      be replayed forever).
+ *      be replayed forever), and so is one whose `expires` is more than
+ *      `MARKETPLACE_INDEX_MAX_LIFETIME_DAYS` ahead (a source re-signs at least
+ *      that often, so a copy captured today is dead within a month);
+ *   5. freshness — once the pod accepted an index, an index that expires
+ *      EARLIER than it is refused: the pod never steps back to an older,
+ *      still-valid copy a mirror or a man-in-the-middle replays. `expires` is
+ *      the index's own clock, so it is the monotonic stamp (the format carries
+ *      no separate issue time).
  *
  * Ed25519 via Node's built-in `crypto` — no dependency.
  */
@@ -81,12 +88,18 @@ export function verifyEd25519(
   }
 }
 
+/** How far ahead an index may say it stays valid. */
+export const MARKETPLACE_INDEX_MAX_LIFETIME_DAYS = 31;
+const MAX_LIFETIME_MS =
+  MARKETPLACE_INDEX_MAX_LIFETIME_DAYS * 24 * 60 * 60 * 1000;
+
 export type IndexRejection =
   | "too_large"
   | "invalid"
   | "unsigned"
   | "bad_signature"
   | "expired"
+  | "replayed"
   | "key_changed";
 
 export type IndexVerdict =
@@ -117,6 +130,11 @@ export interface VerifyIndexInput {
   requireSignature: boolean;
   /** Once added, a source keeps its id — an index naming another is refused. */
   expectedSourceId?: string;
+  /**
+   * `expires` of the last index the pod accepted from this source; an index
+   * that expires earlier is an older copy and is refused.
+   */
+  lastAcceptedExpires?: string | null;
   now: Date;
   /** Override for tests only. */
   maxBytes?: number;
@@ -206,10 +224,32 @@ export function verifyIndex(input: VerifyIndexInput): IndexVerdict {
     );
   }
 
-  if (new Date(index.expires).getTime() <= input.now.getTime()) {
+  const expires = new Date(index.expires).getTime();
+  if (expires <= input.now.getTime()) {
     return reject(
       "expired",
       `The index expired on ${index.expires} — the source has to publish a fresh one.`
+    );
+  }
+  if (expires - input.now.getTime() > MAX_LIFETIME_MS) {
+    return reject(
+      "invalid",
+      `The index says it stays valid until ${index.expires}, more than ${MARKETPLACE_INDEX_MAX_LIFETIME_DAYS} days ahead. A source signs a fresh index at least every ${MARKETPLACE_INDEX_MAX_LIFETIME_DAYS} days.`
+    );
+  }
+  // A floor further ahead than any index may now reach was accepted before
+  // the lifetime cap existed; honouring it would lock the source out.
+  const floor = input.lastAcceptedExpires
+    ? new Date(input.lastAcceptedExpires).getTime()
+    : Number.NaN;
+  if (
+    Number.isFinite(floor) &&
+    floor - input.now.getTime() <= MAX_LIFETIME_MS &&
+    expires < floor
+  ) {
+    return reject(
+      "replayed",
+      "The source served an older copy of its index than the one this pod already has, so the pod kept the newer one."
     );
   }
 

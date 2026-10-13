@@ -1,5 +1,5 @@
 /**
- * The install door enforces a source's trust level (Pod Console D11). Real
+ * The install door enforces a source's trust level. Real
  * sha256 + content versions, the real trust rule and the real verifier; only
  * the database rows, the settings snapshot, the network and the appliers are
  * stand-ins. Every refusal also proves nothing was fetched or installed.
@@ -13,18 +13,32 @@
  *               content version is refused; a supplied definition never
  *               installs as another source's package;
  *   identity  — what an added source installs is stamped `<source>/<slug>`
- *               and may not take over a capability key.
+ *               and may not take over anything the pod already has: a
+ *               capability key, a tool (by credential or name), an MCP server,
+ *               a skill, a secret, or a pod-wide kind's lifecycle / options;
+ *   approval  — an approved proposal installs only the listing it disclosed.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHash } from "node:crypto";
 import type * as Database from "@synap/database";
-import { capabilities as capabilitiesTable } from "@synap/database/schema";
+import type * as SourceFetch from "@synap/jobs/workers/marketplace-source-fetch.js";
+import {
+  cpCatalogCache,
+  capabilities as capabilitiesTable,
+  mcpServers,
+  profiles,
+  propertyDefs,
+  secrets,
+  skills,
+  tools,
+} from "@synap/database/schema";
 import { appliedPackageVersion } from "../applied-package-version.js";
 
 const h = vi.hoisted(() => ({
   row: null as Record<string, unknown> | null,
-  takenCapability: [] as Array<{ key: string }>,
+  /** What the pod already holds, per table (an existing-row lookup's answer). */
+  existing: new Map<unknown, Array<Record<string, unknown>>>(),
   snapshot: { sources: [], official: null, status: {} } as Record<
     string,
     unknown
@@ -60,25 +74,41 @@ vi.mock("../../utils/permission-check.js", () => ({
 vi.mock("../../utils/tier-check.js", () => ({
   assertPackageTierAccess: h.tier,
 }));
+// Every source fetch goes through the test's network stand-in (the module's
+// own default is the public-address-only fetch).
+vi.mock(
+  "@synap/jobs/workers/marketplace-source-fetch.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof SourceFetch>();
+    return {
+      ...actual,
+      fetchDefinitionBytes: (url: string, max: number) =>
+        actual.fetchDefinitionBytes(url, max, h.fetch),
+    };
+  }
+);
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof Database>();
   return {
     ...actual,
     db: {
-      select: () => {
+      // A whole-row read of the cache is the catalog lookup; a projected one
+      // is the "does Synap's catalog use this key" check.
+      select: (fields?: unknown) => {
         let table: unknown;
+        const rows = () =>
+          table === cpCatalogCache && !fields
+            ? h.row
+              ? [h.row]
+              : []
+            : (h.existing.get(table) ?? []);
         const chain = {
           from: (t: unknown) => {
             table = t;
             return chain;
           },
           where: () => chain,
-          limit: async () =>
-            table === capabilitiesTable
-              ? h.takenCapability
-              : h.row
-                ? [h.row]
-                : [],
+          limit: async () => rows(),
         };
         return chain;
       },
@@ -166,7 +196,7 @@ beforeEach(() => {
   h.propose.mockClear();
   h.tier.mockClear();
   h.fetch.mockReset();
-  h.takenCapability = [];
+  h.existing = new Map();
   vi.stubGlobal("fetch", h.fetch);
   h.row = cellRow();
   useSource();
@@ -359,6 +389,233 @@ describe("integrity", () => {
   });
 });
 
+/** List `definition` from Acme under (kind, slug), digest and version intact. */
+function listFromAcme(kind: string, slug: string, definition: unknown) {
+  const bytes = Buffer.from(JSON.stringify(definition));
+  serve(bytes);
+  h.row = cellRow({
+    kind,
+    slug,
+    name: slug,
+    version: appliedPackageVersion(definition as Record<string, unknown>),
+    listing: {
+      definitionUrl: DEF_URL,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    },
+  });
+}
+
+describe("takeover — an added source only ADDS", () => {
+  const CAP = {
+    key: "acme-mail",
+    name: "Acme mail",
+    vault: [{ ref: "token", name: "Acme token", value: "{{token}}" }],
+    mcpServers: [
+      { slug: "acme-mcp", transport: "http", url: "https://mcp.acme.test" },
+    ],
+    tools: [
+      { name: "acme-api", credentialRef: "token" },
+      { name: "gmail-bridge", credentialRef: "nango://google-mail" },
+      { name: "{{name}} helper" },
+    ],
+    skills: [{ name: "acme.send", scope: "pod" }],
+  };
+  const installCap = (over: Record<string, unknown> = {}) =>
+    runMarketInstall({
+      kind: "capability",
+      slug: "acme-mail",
+      source: "acme",
+      ...PERSON,
+      acknowledge: ACK,
+      params: { token: "t" },
+      ...over,
+    });
+
+  beforeEach(() => listFromAcme("capability", "acme-mail", CAP));
+
+  it("installs when nothing clashes", async () => {
+    expect((await installCap()).status).toBe("installed");
+  });
+
+  const clashes: Array<[string, unknown, Record<string, unknown>]> = [
+    ["a capability key", capabilitiesTable, { key: "acme-mail" }],
+    ["an MCP server slug", mcpServers, { slug: "acme-mcp" }],
+    ["a tool's credential", tools, { name: "Gmail" }],
+    ["a tool's name", tools, { name: "Acme mail helper" }],
+    ["a skill's name", skills, { name: "acme.send" }],
+    ["a secret's name", secrets, { name: "Acme token" }],
+  ];
+  for (const [label, table, row] of clashes) {
+    it(`refuses a clash on ${label}, naming it — nothing applied`, async () => {
+      h.existing.set(table, [row]);
+      const err = (await installCap().catch((e) => e)) as {
+        code: string;
+        message: string;
+        cause: { code: string };
+      };
+      expect(err.code).toBe("CONFLICT");
+      expect(err.cause.code).toBe("MARKET_CAPABILITY_TAKEOVER");
+      expect(err.message).toContain(String(Object.values(row)[0]));
+      expect(err.message).toContain("Acme can't replace it");
+    });
+  }
+
+  it("refuses a key Synap's catalog uses", async () => {
+    h.existing.set(cpCatalogCache, [{ key: "acme-mail" }]);
+    expect(await refusal(installCap())).toEqual({
+      code: "CONFLICT",
+      cause: "MARKET_CAPABILITY_TAKEOVER",
+    });
+  });
+
+  it("refuses a published literal link to an existing secret", async () => {
+    listFromAcme("capability", "acme-mail", {
+      ...CAP,
+      vault: [
+        {
+          ref: "token",
+          name: "Acme token",
+          value: "vault://00000000-0000-4000-8000-000000000001",
+        },
+      ],
+    });
+    expect(await refusal(installCap())).toEqual({
+      code: "CONFLICT",
+      cause: "MARKET_CAPABILITY_TAKEOVER",
+    });
+  });
+
+  it("the same rule holds on an approved proposal (the approval path)", async () => {
+    h.existing.set(skills, [{ name: "acme.send" }]);
+    expect(
+      await refusal(
+        applyMarketInstall({
+          kind: "capability",
+          slug: "acme-mail",
+          source: "acme",
+          ...PERSON,
+          proposedListingSha256: (h.row!.listing as { sha256: string }).sha256,
+        })
+      )
+    ).toEqual({ code: "CONFLICT", cause: "MARKET_CAPABILITY_TAKEOVER" });
+  });
+
+  it("a template's inline capabilities are checked too", async () => {
+    listFromAcme("template", "crm", {
+      workspaceName: "CRM",
+      capabilities: [{ definition: CAP, params: { token: "t" } }],
+    });
+    h.existing.set(mcpServers, [{ slug: "acme-mcp" }]);
+    expect(
+      await refusal(
+        runMarketInstall({
+          kind: "template",
+          slug: "crm",
+          source: "acme",
+          ...PERSON,
+          acknowledge: ACK,
+        })
+      )
+    ).toEqual({ code: "CONFLICT", cause: "MARKET_CAPABILITY_TAKEOVER" });
+  });
+
+  it("a template may not give a pod-wide kind a lifecycle or new options for its fields", async () => {
+    const installCrm = () =>
+      runMarketInstall({
+        kind: "template",
+        slug: "crm",
+        source: "acme",
+        ...PERSON,
+        acknowledge: ACK,
+      });
+    h.existing.set(profiles, [{ id: "p-deal", slug: "deal" }]);
+
+    listFromAcme("template", "crm", {
+      profiles: [{ slug: "deal", lifecycle: { property: "stage" } }],
+    });
+    expect(await refusal(installCrm())).toEqual({
+      code: "CONFLICT",
+      cause: "MARKET_CAPABILITY_TAKEOVER",
+    });
+
+    listFromAcme("template", "crm", {
+      profiles: [
+        {
+          slug: "deal",
+          properties: [
+            {
+              slug: "stage",
+              valueType: "string",
+              enumValues: ["won", "pwned"],
+            },
+          ],
+        },
+      ],
+    });
+    h.existing.set(propertyDefs, [{ slug: "stage" }]);
+    expect(await refusal(installCrm())).toEqual({
+      code: "CONFLICT",
+      cause: "MARKET_CAPABILITY_TAKEOVER",
+    });
+  });
+});
+
+describe("approval — the listing the reviewer was shown", () => {
+  const approve = (proposedListingSha256: string | null) =>
+    applyMarketInstall({
+      kind: "cell",
+      slug: "charts/bar",
+      source: "acme",
+      ...PERSON,
+      proposedListingSha256,
+    });
+
+  it("the proposal records the listing digest it disclosed", async () => {
+    useSource({ agentsMayPropose: true });
+    await install({ ...AGENT });
+    expect(
+      (h.propose.mock.calls[0]![0] as { data: Record<string, unknown> }).data
+        .listingSha256
+    ).toBe(SHA);
+  });
+
+  it("installs when the source still lists exactly that package", async () => {
+    await approve(SHA);
+    expect(h.installCell).toHaveBeenCalled();
+  });
+
+  it("refuses — 'propose it again' — when the package changed since, or the proposal carried no digest", async () => {
+    for (const digest of ["0".repeat(64), null]) {
+      const err = (await approve(digest).catch((e) => e)) as {
+        code: string;
+        message: string;
+        cause: { code: string };
+      };
+      expect(err.code).toBe("PRECONDITION_FAILED");
+      expect(err.cause.code).toBe("MARKET_LISTING_CHANGED");
+      expect(err.message).toContain("propose it again");
+    }
+    expect(h.fetch).not.toHaveBeenCalled();
+    expect(h.installCell).not.toHaveBeenCalled();
+  });
+
+  it("an official proposal with no digest on either side is unchanged", async () => {
+    h.snapshot = { sources: [], official: null, status: {} };
+    h.row = cellRow({
+      source: process.env.CONTROL_PLANE_URL ?? "https://api.synap.live",
+      listing: null,
+      definition: CELL,
+    });
+    await applyMarketInstall({
+      kind: "cell",
+      slug: "charts/bar",
+      ...PERSON,
+      proposedListingSha256: null,
+    });
+    expect(h.installCell).toHaveBeenCalled();
+  });
+});
+
 describe("identity", () => {
   it("a capability from an added source may not take over an existing key", async () => {
     const cap = { key: "gmail", tools: [] };
@@ -373,7 +630,7 @@ describe("identity", () => {
         sha256: createHash("sha256").update(bytes).digest("hex"),
       },
     });
-    h.takenCapability = [{ key: "gmail" }];
+    h.existing.set(capabilitiesTable, [{ key: "gmail" }]);
     expect(
       await refusal(
         runMarketInstall({

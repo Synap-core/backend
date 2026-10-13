@@ -17,14 +17,19 @@
  *                installs (confirming code / network reach from a trusted
  *                source), an agent proposes where allowed. Any other key is
  *                refused.
- *   sources.*  — where the catalog comes from (Pod Console D11). Reading is for
- *                pod admins; CHANGING a source (add, trust, key re-approval,
- *                switch, remove) is for a signed-in PERSON who administers the
- *                pod — never an agent, never a key.
+ *   sources.*  — where the catalog comes from. Reading is for pod admins;
+ *                CHANGING a source (add, trust, key re-approval, switch,
+ *                remove) is for a signed-in PERSON who administers the pod —
+ *                never an agent, never a key.
+ *
+ * An agent, an app or any other key reads only the catalog an agent may act
+ * on (Synap's, and trusted sources that let agents propose) — the rule
+ * `market.search` applies — and never the list of sources itself.
  */
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { createLogger } from "@synap-core/core";
 import {
   db,
   drizzleSql,
@@ -63,6 +68,7 @@ import { queryCatalogCache } from "../services/capabilities/catalog-cache-query.
 import {
   lookupCatalogEntry,
   resolveCatalogDefinition,
+  resolveInstalledFlag,
   runMarketInstall,
   type MarketInstallOutcome,
 } from "../services/capabilities/marketplace-install.js";
@@ -81,6 +87,8 @@ import {
 } from "../services/capabilities/market-risk.js";
 import { resolvePreflightComposeTarget } from "../services/preflight-compose-target.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
+
+const logger = createLogger({ module: "marketplace-router" });
 
 const kindSchema = z.enum(
   CATALOG_KINDS as unknown as [CatalogKind, ...CatalogKind[]]
@@ -240,18 +248,35 @@ async function assertMember(workspaceId: string, userId: string) {
   }
 }
 
-/**
- * A signed-in PERSON — not an agent, not an API key, not a Hub key. Which
- * sources this pod trusts is a person's decision, so the server refuses every
- * other principal whatever role it holds.
- */
-function assertPersonSession(ctx: {
+interface CallerShape {
   agentUserId?: string | null;
   session?: unknown;
   keyType?: string | null;
   isHubProtocol?: boolean;
-}): void {
-  if (ctx.agentUserId || !ctx.session || ctx.keyType || ctx.isHubProtocol) {
+}
+
+/** A signed-in PERSON — not an agent, not an API key, not a Hub key. */
+function isPersonSession(ctx: CallerShape): boolean {
+  return !(ctx.agentUserId || !ctx.session || ctx.keyType || ctx.isHubProtocol);
+}
+
+/**
+ * Which sources a caller may read the catalog of: a person, every source; an
+ * agent, an app or any key, only Synap's and the trusted sources that let
+ * agents propose (the same rule as `market.search`).
+ */
+function readableBy(ctx: CallerShape, view: MarketSourceView): boolean {
+  return (
+    isPersonSession(ctx) || view.source.official || view.source.agentsMayPropose
+  );
+}
+
+/**
+ * Which sources this pod trusts is a person's decision, so the server refuses
+ * every other principal whatever role it holds.
+ */
+function assertPersonSession(ctx: CallerShape): void {
+  if (!isPersonSession(ctx)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message:
@@ -334,9 +359,18 @@ function findAdded(
   return found;
 }
 
-/** Sync right after a change; a failure is the source's status, not the person's error. */
+/**
+ * Sync right after a change; a failure is the source's status, not the
+ * person's error. A failure that could not even be recorded (the settings
+ * read failed) is logged, never lost.
+ */
 async function syncQuietly(id: string): Promise<void> {
-  await syncCatalogSourceNow(id).catch(() => undefined);
+  await syncCatalogSourceNow(id).catch((err: unknown) => {
+    logger.warn(
+      { err, source: id },
+      "Marketplace source sync after a change failed"
+    );
+  });
 }
 
 const sourcesRouter = router({
@@ -492,7 +526,8 @@ const sourcesRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (input.id === OFFICIAL_SOURCE_ID) {
         const { views } = await sourcesWithViews();
-        if (input.enabled && views[0]?.source.lockedOff) {
+        const official = views.find((v) => v.source.official);
+        if (input.enabled && official?.source.lockedOff) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message:
@@ -649,12 +684,13 @@ export const marketplaceRouter = router({
         })
         .optional()
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const limit = input?.limit ?? 60;
       const offset = input?.cursor ?? 0;
       const query = input?.query?.trim() || undefined;
       const { views, wire } = await sourcesWithViews();
-      const serving = views.filter(
+      const readable = views.filter((v) => readableBy(ctx, v));
+      const serving = readable.filter(
         (v) =>
           !v.gate.blocked &&
           (!input?.source ||
@@ -706,7 +742,9 @@ export const marketplaceRouter = router({
           kind,
           objectKind: OBJECT_KIND[kind],
         })),
-        sources: wire,
+        // The sources themselves are a person's view (who added them, their
+        // keys, the ones agents may not use).
+        sources: isPersonSession(ctx) ? wire : [],
       };
     }),
 
@@ -715,7 +753,7 @@ export const marketplaceRouter = router({
    * now is reported in `definitionError` beside the cached row, so the page
    * still shows what the pod knows. A showcase entry is never fetched.
    */
-  get: protectedProcedure.input(targetSchema).query(async ({ input }) => {
+  get: protectedProcedure.input(targetSchema).query(async ({ ctx, input }) => {
     const entry = await lookupCatalogEntry(
       input.kind,
       input.slug,
@@ -729,7 +767,7 @@ export const marketplaceRouter = router({
     }
     const { views } = await sourcesWithViews();
     const view = views.find((v) => v.source.cacheKey === entry.source);
-    if (!view) {
+    if (!view || !readableBy(ctx, view)) {
       throw new TRPCError({
         code: "NOT_FOUND",
         message: `"${input.slug}" is not in this pod's catalog.`,
@@ -751,9 +789,7 @@ export const marketplaceRouter = router({
       }
     }
     const installed = view.source.official
-      ? await import("../services/capabilities/builtin-verbs.js").then((m) =>
-          m.resolveInstalledFlag(input.kind, input.slug)
-        )
+      ? await resolveInstalledFlag(input.kind, input.slug)
       : undefined;
     return {
       source: view.source.id,
@@ -771,7 +807,7 @@ export const marketplaceRouter = router({
       version: entry.version,
       tier: entry.tier,
       vendor: entry.vendor,
-      /** `undefined` when the pod cannot tell cheaply — never a guess. */
+      /** `null` when the pod cannot tell cheaply — never a guess. */
       installed: installed ?? null,
       /** What a person can do with it here: install, open the publisher's site, or nothing. */
       installMode: decision.allow,
@@ -799,11 +835,28 @@ export const marketplaceRouter = router({
         input.slug,
         input.source
       );
+      // The source the entry is listed under. With no cache row, only Synap's
+      // catalog re-resolves by key — an added source serves nothing it did
+      // not list, so it is NOT_FOUND, never Synap's view of the slug.
       const { views } = await sourcesWithViews();
-      const view =
-        views.find((v) =>
-          entry ? v.source.cacheKey === entry.source : v.source.official
-        ) ?? views[0]!;
+      const view = entry
+        ? views.find((v) => v.source.cacheKey === entry.source)
+        : views.find((v) =>
+            input.source
+              ? v.source.id === input.source ||
+                v.source.cacheKey === input.source
+              : v.source.official
+          );
+      if (
+        !view ||
+        (!entry && !view.source.official) ||
+        !readableBy(ctx, view)
+      ) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `"${input.slug}" is not in this pod's catalog.`,
+        });
+      }
       const decision = decideMarketInstall(view.gate, "person");
       if (decision.allow === "open_site") {
         throw new TRPCError({

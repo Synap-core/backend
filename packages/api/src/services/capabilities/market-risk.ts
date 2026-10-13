@@ -7,7 +7,9 @@
  * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
  * template's nested cells and capabilities are found as well as a lone cell's.
  * It discloses what the definition DECLARES — it is not a sandbox and does not
- * promise the absence of anything it did not find.
+ * promise the absence of anything it did not find. The walk is bounded; a
+ * definition too large or too deep to read to the end is reported `incomplete`
+ * and then FAILS CLOSED: code and network reach are both treated as present.
  *
  * A package from a TRUSTED third-party source needs an extra, explicit
  * confirm for code and for network reach (`requiredAcknowledgements`); the
@@ -21,7 +23,17 @@ export interface MarketRisks {
   networkHosts: string[];
   /** Credentials, providers and servers it asks to connect. */
   connectors: string[];
+  /**
+   * Set (true) only when the walk ran out of budget before it read the whole
+   * definition, so the lists above may be missing entries. Code and network
+   * reach then count as present (`requiredAcknowledgements`).
+   */
+  incomplete?: true;
 }
+
+/** The sentence a person and a reviewer read when the walk could not finish. */
+export const INCOMPLETE_RISK_NOTICE =
+  "This package is too large to inspect fully.";
 
 /** Which extra confirms an install needs. */
 export interface MarketAcknowledgement {
@@ -70,9 +82,13 @@ export function assessMarketRisks(definition: unknown): MarketRisks {
   const hosts = new Set<string>();
   const connectors = new Set<string>();
   let nodes = 0;
+  let incomplete = false;
 
   const walk = (value: unknown, depth: number): void => {
-    if (++nodes > MAX_NODES || depth > MAX_DEPTH) return;
+    if (++nodes > MAX_NODES || depth > MAX_DEPTH) {
+      incomplete = true;
+      return;
+    }
     if (typeof value === "string") {
       const host = hostOf(value);
       if (host) hosts.add(host);
@@ -119,6 +135,7 @@ export function assessMarketRisks(definition: unknown): MarketRisks {
     code: [...code].sort(),
     networkHosts: [...hosts].sort(),
     connectors: [...connectors].sort(),
+    ...(incomplete ? { incomplete: true as const } : {}),
   };
 }
 
@@ -127,8 +144,8 @@ export function requiredAcknowledgements(
   risks: MarketRisks
 ): Required<MarketAcknowledgement> {
   return {
-    code: risks.code.length > 0,
-    network: risks.networkHosts.length > 0,
+    code: risks.incomplete || risks.code.length > 0,
+    network: risks.incomplete || risks.networkHosts.length > 0,
   };
 }
 
@@ -141,13 +158,20 @@ export function missingAcknowledgements(
   const missing: string[] = [];
   if (need.code && given?.code !== true) {
     missing.push(
-      `It runs code (${risks.code.join(", ")}) — confirm that you accept that.`
+      risks.code.length > 0
+        ? `It runs code (${risks.code.join(", ")}) — confirm that you accept that.`
+        : "It may run code — confirm that you accept that."
     );
   }
   if (need.network && given?.network !== true) {
     missing.push(
-      `It can reach ${risks.networkHosts.join(", ")} — confirm that you accept that.`
+      risks.networkHosts.length > 0
+        ? `It can reach ${risks.networkHosts.join(", ")} — confirm that you accept that.`
+        : "It may reach the network — confirm that you accept that."
     );
+  }
+  if (missing.length > 0 && risks.incomplete) {
+    missing.unshift(INCOMPLETE_RISK_NOTICE);
   }
   return missing;
 }
@@ -155,6 +179,7 @@ export function missingAcknowledgements(
 /** One-line disclosures a reviewer reads on a proposal or a preflight. */
 export function riskNotices(risks: MarketRisks): string[] {
   const out: string[] = [];
+  if (risks.incomplete) out.push(INCOMPLETE_RISK_NOTICE);
   if (risks.code.length > 0) out.push(`Runs code: ${risks.code.join(", ")}.`);
   if (risks.networkHosts.length > 0) {
     out.push(`Can reach: ${risks.networkHosts.join(", ")}.`);

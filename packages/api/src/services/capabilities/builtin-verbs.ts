@@ -44,7 +44,6 @@ import {
   relations,
   type messages,
   documents,
-  capabilities,
   getWorkspaceMembership,
   insertChannelMessage,
   getEffectiveFacets,
@@ -55,9 +54,7 @@ import {
   MessageAuthorType,
   getActingAgentUserId,
 } from "@synap/database";
-import { widgetDefinitions } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
-import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../context.js";
 // Type-only imports (erased at runtime). The heavy access layer + the channel
 // util are LAZY-imported inside the read/write handlers (mirroring how
@@ -2157,39 +2154,6 @@ const entityFacetListHandler: BuiltinVerbHandler = async (params, ctx) => {
 // entries. Both read/write the pod-local `cp_catalog_cache` (Wave 3a), never a
 // live Control-Plane fetch on the hot path.
 
-/** Resolve whether a catalog entry is already installed — HONEST per kind: a
- *  cheap natural-key check for capability/cell, `undefined` (never a fabricated
- *  guess) when the check would require scanning every workspace's provenance. */
-export async function resolveInstalledFlag(
-  kind: CatalogKind,
-  slug: string
-): Promise<boolean | undefined> {
-  if (kind === "capability") {
-    const [row] = await db
-      .select({ id: capabilities.id })
-      .from(capabilities)
-      .where(drizzleSql`${capabilities.metadata}->>'templateKey' = ${slug}`)
-      .limit(1);
-    return !!row;
-  }
-  if (kind === "cell") {
-    // Cache slug scheme is `${packageSlug}/${cellKey}` (cp-catalog-sync.ts);
-    // the installed typeKey scheme is `cell:${packageSlug}:${cellKey}` (the
-    // SAME scheme POST /cells/install and defineCell use).
-    if (!slug.includes("/")) return undefined;
-    const [pkgSlug, cellKey] = slug.split("/");
-    const [row] = await db
-      .select({ id: widgetDefinitions.id })
-      .from(widgetDefinitions)
-      .where(eq(widgetDefinitions.typeKey, `cell:${pkgSlug}:${cellKey}`))
-      .limit(1);
-    return !!row;
-  }
-  // automation/template: no cheap natural-key check today (would require
-  // scanning every workspace's provenance) — honest `undefined`, never faked.
-  return undefined;
-}
-
 const marketSearchParams = z.object({
   query: z.string().max(200).optional(),
   kind: z
@@ -2217,6 +2181,7 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
   const input = marketSearchParams.parse(params);
   const { queryCatalogCache } = await import("./catalog-cache-query.js");
   const { listMarketSources } = await import("./market-sources.js");
+  const { resolveInstalledFlag } = await import("./marketplace-install.js");
   const { qualifiedPackageId } =
     await import("@synap-core/types/marketplace-source");
   // Only sources that may serve right now; by default only those an agent
@@ -2226,7 +2191,7 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
     (v) =>
       !v.gate.blocked &&
       (input.source
-        ? v.source.id === input.source
+        ? v.source.id === input.source || v.source.cacheKey === input.source
         : v.source.official || v.source.agentsMayPropose)
   );
   if (input.source && views.length === 0) {
@@ -2362,6 +2327,7 @@ const toolRequestHandler: BuiltinVerbHandler = async (params, ctx) => {
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);
   const { runMarketInstall } = await import("./marketplace-install.js");
+  const { resolveMarketSource } = await import("./market-sources.js");
   // A source-qualified id (`acme/crm`) names its source; a bare slug is
   // Synap's. Only a prefix naming a source on this pod is read as one, and
   // never for a cell (whose own slug is `<package>/<cell>`).
@@ -2377,6 +2343,18 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
     );
     slug = parsed.slug;
     source = parsed.source ?? undefined;
+  }
+  // Same rule as the console's `marketplace.install`: from a source a person
+  // added, a person installs only from the Pod Console (where they see and
+  // confirm what it brings) and an agent proposes. This door cannot tell a
+  // person's own key from a script's, so only an agent gets through it.
+  if (!ctx.agentUserId && !(await resolveMarketSource(source)).official) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "A package from a source you added installs from the Pod Console's Marketplace, where you confirm what it brings.",
+      cause: { code: "MARKET_SOURCE_REFUSED", source },
+    });
   }
   return runMarketInstall({
     slug,
