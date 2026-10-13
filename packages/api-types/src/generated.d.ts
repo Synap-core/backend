@@ -17117,7 +17117,9 @@ export type BrandResolution = {
  * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
  * template's nested cells and capabilities are found as well as a lone cell's.
  * It discloses what the definition DECLARES — it is not a sandbox and does not
- * promise the absence of anything it did not find.
+ * promise the absence of anything it did not find. The walk is bounded; a
+ * definition too large or too deep to read to the end is reported `incomplete`
+ * and then FAILS CLOSED: code and network reach are both treated as present.
  *
  * A package from a TRUSTED third-party source needs an extra, explicit
  * confirm for code and for network reach (`requiredAcknowledgements`); the
@@ -17130,6 +17132,12 @@ export interface MarketRisks {
 	networkHosts: string[];
 	/** Credentials, providers and servers it asks to connect. */
 	connectors: string[];
+	/**
+	 * Set (true) only when the walk ran out of budget before it read the whole
+	 * definition, so the lists above may be missing entries. Code and network
+	 * reach then count as present (`requiredAcknowledgements`).
+	 */
+	incomplete?: true;
 }
 export type MarketInstallOutcome = {
 	status: "installed";
