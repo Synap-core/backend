@@ -16,6 +16,8 @@
  * own template identity (it is the base template's to declare).
  */
 import { describe, it, expect, vi } from "vitest";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const h = vi.hoisted(() => ({
   row: null as null | Record<string, unknown>,
@@ -36,6 +38,21 @@ import { PackageApplySchema } from "../routers/hub-protocol/rest/packages.js";
 import { definitionEngineProcedures } from "../routers/workspaces/definition-engine.js";
 import { overlayDefinitionForIdentifiedBase } from "../services/compose-overlay.js";
 import { resolveWorkspaceTemplate } from "../services/capabilities/resolve-workspace-template.js";
+import { projectTemplateIntent } from "@synap/database";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const WT_DEFINE = join(
+  here,
+  "../../../../../synap-app/packages/workspace-templates/src/define.ts"
+);
+type Define = {
+  toPackageDefinition: (slug: string) => Record<string, unknown>;
+  toWorkspaceDefinition: (slug: string) => {
+    definition: Record<string, unknown>;
+  };
+};
+const define = async () =>
+  (await import(/* @vite-ignore */ WT_DEFINE)) as Define;
 
 const WS = "00000000-0000-4000-8000-000000000001";
 const INTENT = {
@@ -52,9 +69,9 @@ const inputOf = (name: "createFromDefinition" | "reconcileFromDefinition") =>
   )._def.inputs[0]!;
 
 describe("template intent — every install door carries it", () => {
-  // NOT COVERED, measured: this definition object is `.passthrough()`, so
-  // deleting its `intent` declaration stays green (verified); the case catches
-  // the passthrough going away, not the typed declaration.
+  // Measured: this definition object is `.passthrough()` AND declares
+  // `intent`, so removing either one alone stays green; removing both is red
+  // (verified). The case pins that the door carries it, not which half does.
   it("tRPC createFromDefinition keeps it", () => {
     const parsed = inputOf("createFromDefinition").parse({
       definition: { workspaceName: "CRM", description: "d", intent: INTENT },
@@ -108,5 +125,32 @@ describe("template intent — every install door carries it", () => {
     } as never) as { intent?: unknown; profiles?: unknown };
     expect(def.intent).toBeUndefined();
     expect(def.profiles).toEqual([]);
+  });
+
+  // END TO END from the SOLD templates, through the real converters: the
+  // catalog's own declaration arrives at the stored shape on both doors.
+  it("the real crm package (Hub door) carries its intent top-level, never in _meta", async () => {
+    const pkg = (await define()).toPackageDefinition("crm");
+    expect((pkg._meta as Record<string, unknown>).intent).toBeUndefined();
+    const body = PackageApplySchema.parse(pkg) as { intent?: unknown };
+    expect(projectTemplateIntent(body.intent)).toEqual({
+      label: "Sales",
+      produces: expect.arrayContaining(["lead", "client", "deal"]),
+      source: "template",
+    });
+  });
+
+  it("the real builder workspace definition (tRPC door) carries its intent", async () => {
+    const { definition } = (await define()).toWorkspaceDefinition(
+      "builder-workspace"
+    );
+    const parsed = inputOf("createFromDefinition").parse({ definition }) as {
+      definition: { intent?: unknown };
+    };
+    expect(projectTemplateIntent(parsed.definition.intent)).toEqual({
+      label: "Product",
+      produces: ["devplane_feature", "devplane_story", "ui-design"],
+      source: "template",
+    });
   });
 });
