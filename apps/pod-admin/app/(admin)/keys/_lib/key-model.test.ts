@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CATEGORY_LABEL,
   categorize,
+  holderHref,
   holderName,
   keyStatus,
   normalizeScopes,
@@ -128,5 +129,26 @@ describe("normalizeScopes", () => {
     expect(normalizeScopes("a, b,,c ")).toEqual(["a", "b", "c"]);
     expect(normalizeScopes(null)).toEqual([]);
     expect(normalizeScopes("")).toEqual([]);
+  });
+});
+
+describe("holderHref", () => {
+  it("opens a computer's key on its computer (the key's holder id)", () => {
+    expect(
+      holderHref(
+        key({ userId: "c 1", holder: { kind: "computer", name: "devbox" } })
+      )
+    ).toBe("/computers/c%201");
+  });
+
+  it("is null for every other holder, and for a computer key with no holder id", () => {
+    for (const kind of ["app", "agent", "person"] as const)
+      expect(
+        holderHref(key({ userId: "u", holder: { kind, name: "x" } }))
+      ).toBeNull();
+    expect(
+      holderHref(key({ holder: { kind: "computer", name: "devbox" } }))
+    ).toBeNull();
+    expect(holderHref(key({ userId: "u", holder: null }))).toBeNull();
   });
 });

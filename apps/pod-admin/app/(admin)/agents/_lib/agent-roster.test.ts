@@ -4,6 +4,7 @@ import {
   agentReviewHref,
   agentsByCreator,
   buildAgentRoster,
+  hostComputerHref,
   keyCountsLine,
   originLine,
   reachErrorSentence,
@@ -44,6 +45,18 @@ describe("buildAgentRoster — status and sentence", () => {
     expect(v.status).toEqual({ kind: "healthy", label: "Active" });
     expect(v.sentence).toBe("Seen 1d ago on devbox-01.");
     expect(v.needsReview).toBe(false);
+  });
+
+  it("names the computer it runs on instead of its key's host label", () => {
+    const v = only(
+      row({
+        activeKeys: 1,
+        lastSeenAt: "2026-10-11T12:00:00Z",
+        host: "cli:devbox-01",
+        hostComputer: { id: "c1", name: "Build box" },
+      })
+    );
+    expect(v.sentence).toBe("Seen 1d ago on Build box.");
   });
 
   it("seen long ago: quiet, never green", () => {
@@ -199,6 +212,16 @@ describe("agentReviewHref", () => {
       "/review?type=access&focus=p1"
     );
     expect(agentReviewHref(row({}))).toBe("/review?type=access");
+  });
+});
+
+describe("hostComputerHref", () => {
+  it("lands on the computer's row in Computers; null off a computer", () => {
+    expect(
+      hostComputerHref(row({ hostComputer: { id: "c 1", name: "devbox" } }))
+    ).toBe("/computers?focus=c%201");
+    expect(hostComputerHref(row({ hostComputer: null }))).toBeNull();
+    expect(hostComputerHref(row({}))).toBeNull();
   });
 });
 

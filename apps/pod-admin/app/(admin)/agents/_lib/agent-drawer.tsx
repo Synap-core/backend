@@ -32,6 +32,7 @@ import { FactsGrid, type Fact } from "../../../_lib/object/facts-grid";
 import {
   agentReviewHref,
   agentsByCreator,
+  hostComputerHref,
   keyCountsLine,
   originLine,
   reachErrorSentence,
@@ -125,12 +126,26 @@ function Facts({
   const reach = resolveAgentReachMark(row);
   const origin = originLine(row.origin);
   const owner = ownerName(row.createdByUserId);
+  const computerHref = hostComputerHref(row);
   const facts: Fact[] = [
     ...(owner ? [{ label: "Answers to", value: owner }] : []),
     ...(origin ? [{ label: "Came from", value: origin }] : []),
-    ...(view.mark.host
-      ? [{ label: "Last machine", value: view.mark.host, mono: true }]
-      : []),
+    // The computer it runs on is the object; the key's host label is only
+    // the fallback for an agent that is not on one.
+    ...(row.hostComputer && computerHref
+      ? [
+          {
+            label: "Runs on",
+            value: (
+              <Link href={computerHref} className="hover:underline">
+                {row.hostComputer.name}
+              </Link>
+            ),
+          },
+        ]
+      : view.mark.host
+        ? [{ label: "Last machine", value: view.mark.host, mono: true }]
+        : []),
     { label: "Keys", value: keyCountsLine(row) },
     ...(reach
       ? [
@@ -474,7 +489,8 @@ function Actions({
               {siblings.length > 1 ? "Including: " : "That is: "}
               {siblings.map((s) => s.name ?? s.id).join(", ")}
               {". "}
-              Agents in spaces you cannot see are removed too.
+              Agents in spaces you cannot see are removed too, and so are the
+              computers {creator} connected (listed under Computers).
             </p>
             <p className="mt-2">
               Data these agents already wrote stays on the pod — this removes

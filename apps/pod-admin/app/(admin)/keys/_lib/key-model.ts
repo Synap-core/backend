@@ -5,6 +5,7 @@
  */
 
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
 
 /**
@@ -101,6 +102,17 @@ export const CATEGORY_LABEL: Record<KeyCategory, string> = {
 export function holderName(k: UnifiedKey): string | null {
   if (!k.holder || k.holder.kind === "person") return null;
   return k.holder.name?.trim() || null;
+}
+
+/**
+ * The page of the key's holder, when it has one in the console: a computer's
+ * key opens its computer (the key's `userId` IS the computer). null for every
+ * other key — the row then stays a row.
+ */
+export function holderHref(k: UnifiedKey): string | null {
+  if (k.holder?.kind === "computer" && k.userId)
+    return `${navHref("computers")}/${encodeURIComponent(k.userId)}`;
+  return null;
 }
 
 export function keyStatus(apiKey: {

@@ -33,6 +33,7 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -49,6 +50,7 @@ import { formatRelative, shortId } from "../../../../lib/format";
 import {
   CATEGORY_LABEL,
   categorize,
+  holderHref,
   holderName,
   keyStatus,
   normalizeScopes,
@@ -449,6 +451,9 @@ function KeyRow({
   onRotate?: () => void;
   onDelete?: () => void;
 }) {
+  const router = useRouter();
+  // A computer's key opens its computer, where its lifetime and agents are.
+  const holderPage = holderHref(apiKey);
   const status = keyStatus(apiKey);
   const scopes = normalizeScopes(apiKey.scope);
   const lastUsed = apiKey.lastUsedAt
@@ -480,6 +485,7 @@ function KeyRow({
       primary={apiKey.keyName}
       secondary={`[${CATEGORY_LABEL[category]}] ${secondary}`}
       status={status}
+      onSelect={holderPage ? () => router.push(holderPage) : undefined}
       actions={
         hasActions ? (
           <Dropdown>

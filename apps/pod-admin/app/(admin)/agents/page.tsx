@@ -57,7 +57,11 @@ export default function AgentsPage() {
 }
 
 function AgentsInner() {
-  const list = trpc.agentUsers.list.useQuery({}, { staleTime: 30_000 });
+  // Computers have their own page (Computers); their agents stay here.
+  const list = trpc.agentUsers.list.useQuery(
+    { includeComputers: false },
+    { staleTime: 30_000 }
+  );
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   // Standings and owner names enrich rows; a failed read leaves them out
   // rather than failing the roster.

@@ -37,6 +37,8 @@ export interface AgentRosterRowLike
   pendingProposalId?: string | null;
   /** `/approve-agents?keys=…` for its pending keys, when the viewer may approve them. */
   approveUrl?: string | null;
+  /** The computer it runs on (`host_user_id`), named by the pod. */
+  hostComputer?: { id: string; name: string } | null;
 }
 
 /** The slice of a `diagnose.agents` standing this page reads. */
@@ -93,6 +95,13 @@ export function agentReviewHref(row: AgentRosterRowLike): string {
   });
 }
 
+/** Where the computer an agent runs on is listed; null when it runs on none. */
+export function hostComputerHref(row: AgentRosterRowLike): string | null {
+  return row.hostComputer
+    ? navHref("computers", { focus: row.hostComputer.id })
+    : null;
+}
+
 /** Why the pod cannot hand this agent work, as a sentence. */
 const REACH_ERROR_SENTENCE: Record<string, string> = {
   ambiguous:
@@ -119,7 +128,10 @@ export function agentStatusSentence(
   mark: AgentMark,
   relative: (iso: string) => string
 ): string {
-  const on = mark.host ? ` on ${mark.host}` : "";
+  // The computer it runs on, by its name, beats the label of the key it
+  // was last seen with — one "on …", never both.
+  const where = row.hostComputer?.name ?? mark.host;
+  const on = where ? ` on ${where}` : "";
   switch (mark.kind) {
     case "builtIn":
       return "Built into the pod — it needs no key.";
