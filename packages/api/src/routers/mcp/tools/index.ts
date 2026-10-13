@@ -1096,6 +1096,11 @@ export const tools = {
               description:
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
           },
           required: ["entityId"],
         },
@@ -1291,6 +1296,11 @@ export const tools = {
               description:
                 "Optional UUID of an EXISTING entity — attach the stored blob to it as provenance instead of creating a new `file` entity.",
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
             expectedLabel: {
               type: "string",
               description:
@@ -1355,7 +1365,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at', 'belongs_to_project'. The default slugs resolve pod-wide, so no `workspaceId` is needed for them; a workspace may add or override slugs. A slug that names no relation def is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
+          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at'. To file an entity into a project use synap_file_into_project — `belongs_to_project` is refused here. The default slugs resolve pod-wide, so no `workspaceId` is needed for them; a workspace may add or override slugs. A slug that names no relation def is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1375,7 +1385,7 @@ export const tools = {
               // agent following this schema got a 400. These are real defaults
               // from `database/src/utils/default-relation-defs.ts`.
               description:
-                "Relation type — an existing relation-def slug (e.g. 'relates_to', 'references', 'mentions', 'parent_of', 'belongs_to_project', 'works_at')",
+                "Relation type — an existing relation-def slug (e.g. 'relates_to', 'references', 'mentions', 'parent_of', 'works_at')",
               default: "relates_to",
             },
             workspaceId: {
@@ -4857,6 +4867,41 @@ export const tools = {
             },
           },
           required: ["name"],
+        },
+      },
+      {
+        name: "synap_update_skill",
+        annotations: {
+          title: "Update skill",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name` — by `slug` (the ref synap_load_skill resolves) or `id`. Use it when a skill you authored goes stale; never create a second skill under a new slug as a twin. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body is UNAPPROVED until the owner approves it again — that prose lands in future agents' prompts — so do not report it as live.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            slug: {
+              type: "string",
+              description: "The skill's slug (e.g. 'biz/business-plan').",
+            },
+            id: {
+              type: "string",
+              description: "The skill's UUID — instead of `slug`.",
+            },
+            body: {
+              type: "string",
+              description:
+                "The full new Markdown body — it REPLACES the old one, so send the whole text, not a diff.",
+            },
+            description: {
+              type: "string",
+              description: "One line: what it does + when to use it.",
+            },
+            name: { type: "string", description: "New display name." },
+          },
+          required: [],
         },
       },
       {

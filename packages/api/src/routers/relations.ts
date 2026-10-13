@@ -380,8 +380,10 @@ function rejectExposureEdge(type: string, refusedDoor: string): void {
   // exposure type FAILS TYPECHECK until its sanctioned writer is named here.
   const doors: Record<ExposureRelationType, string> = {
     [VISIBLE_TO]: "relations.exposeToAnchor (anchor-admin gated)",
+    // Name a door the CALLER can reach: an agent sees this message, and an
+    // internal function name sent it searching (ticket 2ef2fbeb).
     [BELONGS_TO_PROJECT]:
-      "linkEntityToProject (@synap/database — the project-membership door, which verifies the project exists and is visible)",
+      "synap_file_into_project (tRPC projects.fileEntities) — the project-membership door, which verifies the project exists and is visible",
   };
   throw new TRPCError({
     code: "FORBIDDEN",

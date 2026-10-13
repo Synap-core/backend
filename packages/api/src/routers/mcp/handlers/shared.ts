@@ -39,6 +39,7 @@ import {
 import {
   logger,
   getUserMemberWorkspaceIds,
+  isUuid,
 } from "../../hub-protocol/rest/_shared.js";
 import { listMemberWorkspaces } from "../../../utils/workspace-membership.js";
 import { openLink } from "../../../utils/deep-links.js";
@@ -434,6 +435,7 @@ import {
   requestClientKey,
   type WorkSessionResolution,
 } from "../../../services/focus-sessions/resolve-work-session.js";
+import { resolveRoomSession } from "../../../services/messaging/room-session.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -595,10 +597,23 @@ export async function resolveSessionHandle(
   if (await isReadOnlyTool(toolName)) return undefined;
   // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
   // dropped here rather than `as`-cast blindly.
-  const explicit =
+  let explicit =
     typeof args.sessionId === "string" && args.sessionId.trim() !== ""
       ? args.sessionId
       : undefined;
+  // A post into a session's OWN room names that session: the channel identifies
+  // it as surely as a `sessionId` would. Without this, a post to the room the
+  // caller was handed by start_session fell to the ambiguous rung whenever
+  // another session was open, and was filed under none of them.
+  if (
+    !explicit &&
+    toolName === "synap_post_message" &&
+    typeof args.channelId === "string" &&
+    isUuid(args.channelId)
+  ) {
+    const room = await resolveRoomSession(args.channelId);
+    if (room && room.userId === userId) explicit = room.id;
+  }
   const r = await resolveWorkSession({
     userId,
     explicitSessionId: explicit,
