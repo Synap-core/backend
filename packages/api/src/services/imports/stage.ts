@@ -268,9 +268,8 @@ async function prepare(item: ImportStageItemInput): Promise<Prepared> {
   };
 }
 
-/** Images, video and audio are importable as files (Build hands them to the extractor). */
-async function isImportableMime(mimeType: string): Promise<boolean> {
-  if (/^(image|video|audio)\//.test(mimeType)) return true;
+/** The upload door's allowlist (images, video and audio included) — the one rule for an import file. */
+export async function isImportableMime(mimeType: string): Promise<boolean> {
   const { isAllowedMimeType } = await import("../../routers/file-upload.js");
   return isAllowedMimeType(mimeType);
 }
@@ -398,8 +397,11 @@ async function adoptOne(args: {
         ? { itemId: doc.id, deduplicated: true }
         : { refused: "document_in_other_import" as const };
     }
-    if (!args.claimRoom()) return { refused: "import_full" as const };
     const mimeType = doc.mimeType ?? prepared.source.mimeType;
+    if (!mimeType || !(await isImportableMime(mimeType))) {
+      return { refused: "file_type_not_allowed" as const };
+    }
+    if (!args.claimRoom()) return { refused: "import_full" as const };
     const source: ImportItemSource = {
       ...prepared.source,
       ...(mimeType ? { mimeType } : {}),

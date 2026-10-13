@@ -29,7 +29,7 @@ import {
   readItemMetadata,
   toItemView,
 } from "./read-model.js";
-import { IMPORT_COLLECT_DOOR } from "./stage.js";
+import { IMPORT_COLLECT_DOOR, isImportableMime } from "./stage.js";
 import {
   assertImportOpen,
   loadImportSession,
@@ -74,6 +74,7 @@ export async function attachImportItemFile(args: {
   if (!itemRow || !meta) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
   }
+  let mimeType = args.mimeType;
   const sourceBase = (contentHash: string): IntakeSourceMetadata => ({
     version: 1,
     kind: "file",
@@ -81,9 +82,18 @@ export async function attachImportItemFile(args: {
     sessionId: session.id,
     door: IMPORT_COLLECT_DOOR,
     filename: args.filename,
-    mimeType: args.mimeType,
+    mimeType,
     pending: IMPORT_STAGED_MARKER,
   });
+
+  const refuseType = async (type: string) => {
+    if (!(await isImportableMime(type))) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Files of type ${type} cannot be imported.`,
+      });
+    }
+  };
 
   let fileDocumentId: string;
   let sizeBytes: number;
@@ -108,6 +118,9 @@ export async function attachImportItemFile(args: {
     if (!doc?.storageKey) {
       throw new TRPCError({ code: "NOT_FOUND", message: "File not found" });
     }
+    // The stored type is the truth; the request's is only a label.
+    mimeType = doc.mimeType ?? args.mimeType;
+    await refuseType(mimeType);
     const docMeta = (doc.metadata ?? {}) as Record<string, unknown>;
     const owner = docMeta[INTAKE_SOURCE_METADATA_KEY] as
       IntakeSourceMetadata | undefined;
@@ -132,6 +145,7 @@ export async function attachImportItemFile(args: {
     fileDocumentId = doc.id;
     sizeBytes = doc.size;
   } else if (args.contentBase64) {
+    await refuseType(mimeType);
     const buffer = Buffer.from(args.contentBase64, "base64");
     if (buffer.length === 0) {
       throw new TRPCError({
@@ -173,7 +187,7 @@ export async function attachImportItemFile(args: {
     source: {
       ...meta.source,
       filename: args.filename,
-      mimeType: args.mimeType,
+      mimeType,
       sizeBytes,
       documentId: fileDocumentId,
     },

@@ -134,6 +134,7 @@ import { curateImport } from "../curate.js";
 import { groupImport } from "../group.js";
 import { buildImportGroup, type ImportBuildDeps } from "../build.js";
 import { discardImport } from "../discard.js";
+import { attachImportItemFile } from "../attach.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
 
 const USER = "user-import-1";
@@ -365,6 +366,25 @@ describe("stage", () => {
     );
     expect(await listed()).toContain(id);
     expect(await inDocuments()).toContain(id);
+  });
+
+  it("refuses to adopt an uploaded document whose stored type the upload door refuses", async () => {
+    const { rows } = await q<{ id: string }>(
+      `insert into documents (user_id, title, type, storage_url, storage_key, mime_type, size, metadata)
+       values ($1, 'x', 'pdf', 'mem://k', 'k', 'application/x-msdownload', 2, '{}'::jsonb) returning id`,
+      [USER]
+    );
+    const { outcome } = await openAndStage([
+      {
+        kind: "file",
+        filename: "a.pdf",
+        mimeType: "application/pdf",
+        documentId: rows[0]!.id,
+      },
+    ]);
+    expect(outcome.refused).toEqual([
+      { index: 0, reason: "file_type_not_allowed" },
+    ]);
   });
 
   it("refuses to open an import in a space the caller cannot write", async () => {
@@ -665,6 +685,51 @@ describe("build", () => {
     });
     expect(seen[0]!.instructions).toBe('Group "Notes": Make todos');
     expect(seen[0]!.text).toContain("IGNORE ALL RULES");
+  });
+});
+
+describe("attachFile", () => {
+  it("refuses a file type the upload door refuses — inline or by the stored type", async () => {
+    const { sessionId, outcome } = await openAndStage([
+      { kind: "url", url: "https://www.instagram.com/reel/abc" },
+    ]);
+    const itemId = outcome.staged[0]!.itemId;
+    await expect(
+      attachImportItemFile({
+        userId: USER,
+        sessionId,
+        itemId,
+        filename: "reel.exe",
+        mimeType: "application/x-msdownload",
+        contentBase64: Buffer.from("MZ").toString("base64"),
+      })
+    ).rejects.toThrow(/cannot be imported/);
+    // An uploaded document is judged by its STORED type, not the label sent.
+    const { rows } = await q<{ id: string }>(
+      `insert into documents (user_id, title, type, storage_url, storage_key, mime_type, size, metadata)
+       values ($1, 'x', 'pdf', 'mem://k', 'k', 'application/x-msdownload', 2, '{}'::jsonb) returning id`,
+      [USER]
+    );
+    await expect(
+      attachImportItemFile({
+        userId: USER,
+        sessionId,
+        itemId,
+        filename: "reel.mp4",
+        mimeType: "video/mp4",
+        documentId: rows[0]!.id,
+      })
+    ).rejects.toThrow(/cannot be imported/);
+    // An allowed type attaches.
+    const attached = await attachImportItemFile({
+      userId: USER,
+      sessionId,
+      itemId,
+      filename: "reel.mp4",
+      mimeType: "video/mp4",
+      contentBase64: Buffer.from("bytes").toString("base64"),
+    });
+    expect(attached.contentStatus).toBe("file");
   });
 });
 
