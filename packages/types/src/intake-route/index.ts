@@ -248,6 +248,8 @@ export const DEPRECATED_INTAKE_PATHS: readonly DeprecatedIntakePath[] = [
   // ── browser ───────────────────────────────────────────────────────────
   {
     ...BASE,
+    // The browser routes this to the Library now (wave L4, FE-2).
+    stage: "redirected",
     id: "browser.saveLink.capture",
     host: "browser",
     reason:
@@ -258,6 +260,8 @@ export const DEPRECATED_INTAKE_PATHS: readonly DeprecatedIntakePath[] = [
   },
   {
     ...BASE,
+    // The browser routes this to the Library now (wave L4, FE-2).
+    stage: "redirected",
     id: "browser.smartCapture",
     host: "browser",
     reason:
