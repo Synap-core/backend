@@ -230,6 +230,35 @@ export interface LibraryRunActionResult {
   status: "proposed" | "applied";
 }
 
+/** Result of `library.curate`: what changed, so a client can reconcile its optimistic state. */
+export interface LibraryCurateResult {
+  /** Ids of groups made by `group.create` ops, in op order. */
+  createdGroupIds: string[];
+  changedGroupIds: string[];
+  changedItemIds: string[];
+}
+
+/** Result of `library.group`: one group and the first page of its items. */
+export interface LibraryGroupResult {
+  group: LibraryGroupView;
+  items: LibraryItemView[];
+  nextCursor?: string;
+}
+
+/** One of the person's captures (their own words) found by `library.search`. */
+export interface LibraryCaptureHit {
+  /** The capture's source document id (`captures.get`). */
+  id: string;
+  title: string;
+  createdAt: string;
+}
+
+/** Result of `library.search`: ONE search over Capture (your words) and the Library. */
+export interface LibrarySearchResult {
+  captures: LibraryCaptureHit[];
+  items: LibraryItemView[];
+}
+
 /** Hard limits shared by every Library door. */
 export const LIBRARY_LIMITS = {
   /** Items accepted by one `library.add` call. */
