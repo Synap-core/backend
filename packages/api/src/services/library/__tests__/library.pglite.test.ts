@@ -408,6 +408,27 @@ describe("curate", () => {
     expect(page.items.find((i) => i.id === a)!.note).toBeUndefined();
   });
 
+  it("archiving a group prunes it from every item's suggestions", async () => {
+    const r = await keep(["https://example.com/s1", "https://example.com/s2"]);
+    const [s1, s2] = r.staged.map((s) => s.itemId);
+    const trips = await newGroup("Trips", []);
+    const books = await newGroup("Books", []);
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importCuration,suggestedGroupIds}', $2::jsonb) where id = ANY($1::uuid[])`,
+      [[s1, s2], JSON.stringify([trips, books])]
+    );
+    // The op names NO item: the pod finds the ones still suggesting it.
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.archive", groupId: trips }],
+    });
+    const { rows } = await q<{ s: string[] }>(
+      `select metadata -> 'importCuration' -> 'suggestedGroupIds' as s from documents where id = ANY($1::uuid[])`,
+      [[s1, s2]]
+    );
+    expect(rows.map((row) => row.s)).toEqual([[books], [books]]);
+  });
+
   it("is atomic: a bad op writes nothing", async () => {
     const r = await keep(["https://example.com/a"]);
     const a = r.staged[0]!.itemId;

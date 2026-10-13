@@ -146,6 +146,17 @@ export function applyLibraryCurateOps(
         suggestedGroupIds: c.suggestedGroupIds!.filter((g) => g !== groupId),
       });
     };
+    // An archived group is no longer something to suggest: drop it from every
+    // loaded item's suggestions (curateLibrary loads the items that carry it).
+    const pruneSuggestion = (groupId: string) => {
+      for (const [id, c] of state.items) {
+        if (!c.suggestedGroupIds!.includes(groupId)) continue;
+        touchItem(id, {
+          ...c,
+          suggestedGroupIds: c.suggestedGroupIds!.filter((g) => g !== groupId),
+        });
+      }
+    };
     const removeFrom = (itemId: string, groupId: string) => {
       const c = item(itemId);
       if (!c.groupIds!.includes(groupId)) return;
@@ -189,6 +200,7 @@ export function applyLibraryCurateOps(
       case "group.archive": {
         const g = group(op.groupId, true);
         if (!g.archived) touchGroup({ ...g, archived: true });
+        pruneSuggestion(g.id);
         break;
       }
       case "group.merge": {
@@ -205,6 +217,7 @@ export function applyLibraryCurateOps(
           });
         }
         touchGroup({ ...from, archived: true });
+        pruneSuggestion(from.id);
         break;
       }
       case "group.items": {
@@ -323,6 +336,27 @@ export async function curateLibrary(args: {
         .from(documents)
         .where(and(libraryItemsWhere(args.userId), inGroupSql(op.fromId)));
       for (const m of members) ids.add(m.id);
+    }
+    // …and every item still SUGGESTING a group being archived (or merged
+    // away), so the suggestion is pruned with it.
+    for (const op of args.ops) {
+      const gone =
+        op.op === "group.archive"
+          ? op.groupId
+          : op.op === "group.merge"
+            ? op.fromId
+            : null;
+      if (!gone || !groups.has(gone)) continue;
+      const suggesting = await t
+        .select({ id: documents.id })
+        .from(documents)
+        .where(
+          and(
+            libraryItemsWhere(args.userId),
+            drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'suggestedGroupIds', '[]'::jsonb) ? ${gone}`
+          )
+        );
+      for (const m of suggesting) ids.add(m.id);
     }
     const rows = await loadLibraryItemRows({
       database: t,
