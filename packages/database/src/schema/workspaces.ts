@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { users } from "./users.js";
+import type { TemplateState } from "../utils/template-state.js";
 
 export type WorkspaceSidebarSurfacePlacement =
   "main" | "side" | "floating" | "modal" | "popover" | "embed";
@@ -914,6 +915,16 @@ export interface WorkspaceSettings {
     version: string;
     installedAt: string;
   }>;
+
+  /**
+   * THE template install state (APPLY-ONE-DOOR-PLAN §2): identity, stamp,
+   * apply state, resume ledger, packs. Read ONLY through `readTemplateState`
+   * and written ONLY through `writeTemplateState` (utils/template-state.ts),
+   * which also mirrors the legacy keys below (`packageVersion`,
+   * `provisioningStatus`, `failedStep*`, `completedSteps`, `templateApply`,
+   * `installedPacks`) until W6 folds them in. Server-owned.
+   */
+  template?: TemplateState;
 
   // ─── Provenance & provisioning status ────────────────────────────────────────
   /** Who/what created this workspace: user, control-plane provisioning, or plugin seed */

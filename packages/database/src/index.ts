@@ -251,6 +251,26 @@ export {
 
 // The ONE "did the last template apply finish?" predicate (health + reconcile).
 export { templateApplyUnfinished } from "./utils/template-apply-state.js";
+export {
+  readTemplateState,
+  writeTemplateState,
+  mergeTemplateState,
+  legacyMirror,
+  templateStateSettings,
+  isTemplateApplyUnfinished,
+  isFailedInLayerTwo,
+  upsertPack,
+  removePack,
+  withPack,
+  LAYER_TWO_FAILED_STEP,
+  TEMPLATE_STATE_MIRROR_KEYS,
+  type TemplateState,
+  type TemplateStatePatch,
+  type TemplateApplyStateName,
+  type TemplatePackEntry,
+  type TemplateStateColumns,
+  type WriteTemplateStateOptions,
+} from "./utils/template-state.js";
 
 // A template's `meta.intent` → `settings.intent` (object-first homes).
 export {

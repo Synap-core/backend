@@ -212,6 +212,15 @@ export class WorkspaceRepository extends BaseRepository<
   }
 
   /**
+   * Emit `workspaces.update.completed` for a row another writer already
+   * updated (the template-state writer, utils/template-state.ts), so realtime
+   * caches and peer sync see it like any repository write.
+   */
+  async announceUpdated(workspace: Workspace, userId: string): Promise<void> {
+    await this.emitWorkspaceCompleted("update", workspace, userId);
+  }
+
+  /**
    * Shallow-merge a partial settings object into the workspace's existing settings.
    * Uses Postgres `||` JSONB operator — atomic, no read-then-write needed.
    * Top-level keys in `patch` overwrite the corresponding keys in settings.
