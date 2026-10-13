@@ -161,8 +161,7 @@ export const importCurateProcedures = {
       if (!id) {
         const opened = await openImportSession({
           userId,
-          agentUserId:
-            (ctx as { agentUserId?: string | null }).agentUserId ?? null,
+          agentUserId: ctx.agentUserId ?? null,
           workspaceId: input.workspaceId ?? ctx.workspaceId ?? null,
           projectId: input.projectId ?? null,
           title: input.title ?? null,
@@ -325,8 +324,7 @@ export const importCurateProcedures = {
       const userId = requireUserId(ctx.userId);
       return discardImport({
         userId,
-        agentUserId:
-          (ctx as { agentUserId?: string | null }).agentUserId ?? null,
+        agentUserId: ctx.agentUserId ?? null,
         sessionId: input.sessionId,
       });
     }),

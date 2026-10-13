@@ -4,8 +4,9 @@
  * its existing collections, plus the person's standing guidelines
  * (`assembleStructureContext`, the one pod-context assembler).
  *
- * ONE generation call per import, through the pod's one generation door
- * (`generateViaIS` — the IS `generate` tool, attributed and usage-recorded).
+ * ONE generation call per import, through `generateViaIS` (the IS `generate`
+ * tool). Its token usage is recorded only inside an automation run's capture
+ * scope — a tRPC call like this one is not accounted per user today.
  * An item may land in several groups.
  *
  * When the AI is unavailable or answers nothing usable, a DETERMINISTIC

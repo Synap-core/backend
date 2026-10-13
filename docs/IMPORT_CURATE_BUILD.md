@@ -27,12 +27,16 @@ didn't write.** A share appends to the open import when one is open.
    platform/host/file type, and the response says so.
 2. **Curate** — a note per group (every item inherits it); per-item
    exceptions: exclude, later, item note; move items between groups.
-3. **Build** (per group) — read only kept items (readable page, captions from
-   the device, file extraction; title-only items are not read), structure each
-   with `instructions` = item note + group note (imported text is data, never
-   instructions), match existing Templates/Tools/Rules first, then file ONE
-   `submitCaptureGraph` with `sessionId` = the import. Rules arrive switched
-   off, Templates as drafts. Undo = the import session's revert.
+3. **Build** (per group) — read only kept items (readable page, an attached
+   or staged file through the extractor; caption items have no pod reader yet
+   and are filed from their card and reported `unreadable`; title-only items
+   are not read), structure each with `instructions` = item note + group note
+   (imported text is data, never instructions), reuse a matching Template
+   (Tools and Rules are not matched yet), then file ONE `submitCaptureGraph`
+   with `sessionId` = the import. Rules arrive switched off, Templates as
+   drafts. A Build claims its group (`buildingAt`) under the session lock, so
+   a second Build of the same group is refused (`already_building`). Undo =
+   the import session's revert.
 
 ## 3. Where it lives (existing primitives only)
 
@@ -47,7 +51,9 @@ didn't write.** A share appends to the open import when one is open.
 
 Contract types: `@synap-core/types/imports` (`packages/types/src/imports/curate.ts`).
 API: the tRPC `import` router (`stage`, `list`, `get`, `group`, `curate`,
-`attachFile`, `build`, `discard`), owner-floored.
+`attachFile`, `build`, `discard`), owner-floored. Opening an import in a space
+requires write access to it (`assertWorkspaceWrite`); staged and attached
+files pass the upload door's type allowlist (`isAllowedMimeType`).
 
 ## 4. Composite ops a bundle uses
 
