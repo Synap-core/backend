@@ -487,6 +487,12 @@ export interface UnattachedLineInput {
   since: string;
 }
 
+/**
+ * At most this many subjectless sessions ride a `lifecycle.moving` answer
+ * (`min(limit, cap)`) — a nudge, not a session list. The pod reads it from here.
+ */
+export const MOVING_UNATTACHED_CAP = 10;
+
 /** The words of a subjectless session's row (homes A7) — one copy, both apps. */
 export const UNATTACHED_TITLE = "No thing yet";
 export const UNATTACHED_INVITE = "attach one";
@@ -522,6 +528,26 @@ export function unattachedRowModel(
       door: { kind: "session", id: line.sessionId },
     },
   };
+}
+
+/**
+ * THE "Moving now" list: the things (`items`, as the read ordered them) and
+ * the sessions on no thing yet (`unattached`), merged so a row that asks you
+ * is never below a calmer one — asks you, then live, then each read's own
+ * order (things before subjectless sessions within a tier). A cap over this
+ * list never buries a session that asks you under quieter things.
+ */
+export function movingNowRows(
+  items: readonly MovingItemInput[],
+  unattached: readonly UnattachedLineInput[],
+  rowOf: (item: MovingItemInput) => MovingNowRowModel
+): MovingNowRowModel[] {
+  const tier = (m: MovingNowRowModel) =>
+    m.asksYou ? 0 : m.beingWorked ? 1 : 2;
+  return [...items.map(rowOf), ...unattached.map(unattachedRowModel)]
+    .map((row, i) => ({ row, i }))
+    .sort((a, b) => tier(a.row) - tier(b.row) || a.i - b.i)
+    .map(({ row }) => row);
 }
 
 // ── The joins around the rows (ONE rule for browser and relay) ──────────────
@@ -630,10 +656,24 @@ export interface MovingSpaceChip {
 export function movingSpaceChips(
   items: readonly Pick<MovingItemInput, "workspaceId">[] | null,
   spaces: readonly SpaceIntentInput[] | null | undefined,
-  opts: { limit?: number } = {}
+  opts: {
+    limit?: number;
+    /**
+     * The same read's subjectless sessions: they are rows of the list, so
+     * "All" counts them. They carry no space, so no space chip does. A list
+     * at its cap (`min(limit, MOVING_UNATTACHED_CAP)`) makes the total unknown.
+     */
+    unattached?: readonly unknown[];
+  } = {}
 ): { total: number | null; chips: MovingSpaceChip[] } {
   const known =
     items !== null && (opts.limit === undefined || items.length < opts.limit);
+  const loose = opts.unattached ?? [];
+  const looseCap =
+    opts.limit === undefined
+      ? MOVING_UNATTACHED_CAP
+      : Math.min(opts.limit, MOVING_UNATTACHED_CAP);
+  const totalKnown = known && loose.length < looseCap;
   const counts = new Map<string, number>();
   for (const item of items ?? []) {
     if (item.workspaceId)
@@ -650,7 +690,7 @@ export function movingSpaceChips(
       count: known ? n : null,
     });
   }
-  return { total: known ? items!.length : null, chips };
+  return { total: totalKnown ? items!.length + loose.length : null, chips };
 }
 
 /** A profile as a space's "Also here" reads it (`profiles.list`). */

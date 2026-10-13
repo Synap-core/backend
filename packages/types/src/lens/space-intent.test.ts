@@ -18,6 +18,9 @@ import {
   kindBarSegments,
   movingNowRowModel,
   unattachedRowModel,
+  movingNowRows,
+  movingSpaceChips as chipsOf,
+  MOVING_UNATTACHED_CAP,
   UNATTACHED_TITLE,
   UNATTACHED_INVITE,
   spaceIntentCardModel,
@@ -629,5 +632,71 @@ describe("unattachedRowModel (homes A7)", () => {
     expect(unattachedRowModel({ ...line, asksYou: false }).row.cls).toBe(
       "happened"
     );
+  });
+});
+
+describe("movingNowRows: one list, asks-you first (homes A7)", () => {
+  const thing = (
+    id: string,
+    w: { live?: boolean; asksYou?: boolean } = {}
+  ) => ({
+    entityId: id,
+    title: id,
+    profileSlug: "post",
+    workspaceId: "w1",
+    status: null,
+    category: null,
+    work: [
+      {
+        kind: "session" as const,
+        sessionId: `s-${id}`,
+        label: id,
+        live: w.live ?? false,
+        asksYou: w.asksYou ?? false,
+        since: "2026-10-13T08:00:00Z",
+      },
+    ],
+  });
+  const loose = (
+    id: string,
+    w: { live?: boolean; asksYou?: boolean } = {}
+  ) => ({
+    sessionId: id,
+    label: id,
+    live: w.live ?? false,
+    asksYou: w.asksYou ?? false,
+    since: "2026-10-13T08:00:00Z",
+  });
+
+  it("a subjectless session that asks you rises above calmer things; ties keep each read's order, things first", () => {
+    const rows = movingNowRows(
+      [thing("a", { live: true }), thing("b"), thing("c", { asksYou: true })],
+      [loose("x"), loose("y", { asksYou: true }), loose("z", { live: true })],
+      (i) => movingNowRowModel(i)
+    );
+    expect(rows.map((r) => r.row.key)).toEqual([
+      "c",
+      "unattached:y",
+      "a",
+      "unattached:z",
+      "b",
+      "unattached:x",
+    ]);
+  });
+});
+
+describe("movingSpaceChips counts the subjectless rows in All (homes A7)", () => {
+  it("All = things + subjectless sessions; a list at the subjectless cap makes it unknown", () => {
+    const items = [{ workspaceId: "w1" }, { workspaceId: "w1" }];
+    expect(chipsOf(items, [], { limit: 100, unattached: [1, 2] }).total).toBe(
+      4
+    );
+    const full = Array.from({ length: MOVING_UNATTACHED_CAP }, (_, i) => i);
+    expect(
+      chipsOf(items, [], { limit: 100, unattached: full }).total
+    ).toBeNull();
+    expect(
+      chipsOf(items, [], { limit: 5, unattached: [1, 2, 3, 4, 5] }).total
+    ).toBeNull();
   });
 });

@@ -38,6 +38,7 @@ import {
   isSessionWorkingNow,
   SESSION_WORKING_WINDOW_MS,
 } from "@synap-core/types/run-activity";
+import { MOVING_UNATTACHED_CAP } from "@synap-core/types/lens";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import { notTriagePendingWhere } from "../focus-sessions/triage.js";
@@ -205,8 +206,8 @@ export async function loadWorkedBy(
   return out;
 }
 
-/** Subjectless sessions shown in Moving now — a nudge, not a session list. */
-export const UNATTACHED_CAP = 10;
+/** Subjectless sessions shown in Moving now — a nudge, not a session list (the shared cap). */
+export const UNATTACHED_CAP = MOVING_UNATTACHED_CAP;
 
 /** An open session ON NO thing (`loadUnattachedWork`). */
 export type UnattachedWorkRow = Omit<OpenWorkRow, "thingId">;
