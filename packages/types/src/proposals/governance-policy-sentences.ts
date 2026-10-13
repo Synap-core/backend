@@ -93,6 +93,55 @@ export function roleExceedSentence(opts: {
     : `${opts.action} ${opts.subjectType} exceeds your workspace role (${opts.role}) — proposed for a reviewer's approval`;
 }
 
+// ─── Automation defaults ─────────────────────────────────────────────────────
+//
+// The jobs-side gate (`automation-governance.ts`, `steps/output.ts`,
+// `lifecycle-move.ts`) wrote its own placeholders as `reasoning` too: a rule
+// "asks before starting this playbook", "Automation proposed updating an
+// entity." They describe the MECHANISM, never the cause — the review page now
+// names the rule as the proposal's origin, so drawing them as the WHY repeats
+// it in worse words. Same contract as above: the writers compose them with
+// these builders, the recognizer below reads the same spellings.
+
+/** A propose-mode rule matched one subject and asks before running its playbook. */
+export function ruleRunSentence(): string {
+  return "A rule set to propose matched — it asks before starting this playbook.";
+}
+
+/** A propose-mode rule's batch: several subjects arrived together. */
+export function ruleBatchRunSentence(opts: {
+  /** Who arrived: the first names ("Ada, Grace + 2 more") or a count. */
+  who: string;
+  /** What approving starts: the quoted playbook name, or "this playbook". */
+  what: string;
+}): string {
+  return `${opts.who} arrived together and matched this rule — approving starts ${opts.what} on each; rejecting starts none.`;
+}
+
+/** The automation gate's no-reason placeholder. */
+export function automationWriteSentence(): string {
+  return "This automation write matched no auto-approve rule, so it was routed here for your review.";
+}
+
+/** An automation output step's write that was proposed: "creating an entity". */
+export function automationProposedSentence(doing: string): string {
+  return `Automation proposed ${doing}.`;
+}
+
+/** An automation's lifecycle move with no reason of its own. */
+export function automationMovesSentence(property: string, to: string): string {
+  return `Automation moves ${property} to "${to}".`;
+}
+
+const RULE_BATCH_RUN_RE =
+  /^.+ arrived together and matched this rule — approving starts .+ on each; rejecting starts none\.$/;
+const AUTOMATION_PROPOSED_RE = /^Automation proposed [a-z]+ an? [a-z_ ]+\.$/;
+const AUTOMATION_MOVES_RE = /^Automation moves \S+ to ".*"\.$/;
+const AUTOMATION_FIXED: ReadonlySet<string> = new Set([
+  ruleRunSentence(),
+  automationWriteSentence(),
+]);
+
 // Tokens are single words (`create`, `focus_session`, `renderer.set`) — no space.
 const DEFAULT_APPROVAL_RE = /^\S+ \S+ requires your approval\.?$/;
 const ROLE_EXCEED_RE =
@@ -100,7 +149,9 @@ const ROLE_EXCEED_RE =
 
 /**
  * True when `text` was written by the pod, not by the proposer: the engine's
- * policy sentence, the no-reason placeholder, or the role-exceed line. A
+ * policy sentence, the no-reason placeholder, the role-exceed line, or one of
+ * the automation gate's defaults (a rule's run ask, a batch, an output step's
+ * write, a lifecycle move). A
  * reader drops it rather than drawing it as the proposer's WHY.
  */
 export function isSystemReasoning(text: string | null | undefined): boolean {
@@ -109,6 +160,10 @@ export function isSystemReasoning(text: string | null | undefined): boolean {
   return (
     isGovernancePolicySentence(t) ||
     DEFAULT_APPROVAL_RE.test(t) ||
-    ROLE_EXCEED_RE.test(t)
+    ROLE_EXCEED_RE.test(t) ||
+    AUTOMATION_FIXED.has(t) ||
+    RULE_BATCH_RUN_RE.test(t) ||
+    AUTOMATION_PROPOSED_RE.test(t) ||
+    AUTOMATION_MOVES_RE.test(t)
   );
 }

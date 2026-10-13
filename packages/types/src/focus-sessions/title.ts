@@ -14,6 +14,7 @@
 
 import { decodeHtmlEntities } from "../text/html-entities.js";
 import { shortenTitle } from "../titles/shorten.js";
+import { resolveObjectNounPlural } from "../vocabulary/index.js";
 
 /** Stored bound of `focus_sessions.title` (varchar). Doors refuse longer. */
 export const SESSION_TITLE_MAX = 200;
@@ -337,6 +338,46 @@ export function buildDerivedSessionTitle(
       );
     }
   }
+}
+
+/**
+ * The NAME a playbook run will carry, said BEFORE it exists — the title of a
+ * proposal that starts it ("Qualify a lead · Acme Corp"). The same
+ * `buildDerivedSessionTitle({ kind: "run" })` the pod names the session with
+ * when the run is approved (`buildRunSessionName`), so the proposal and the
+ * session it creates can never be named two ways.
+ *
+ * No `at`: the session is dated when it is approved, which the proposal cannot
+ * know — a subject-less run reads as its playbook's name until then.
+ *
+ * A batch (`subjectCount > 1`) starts one session per subject; it is named by
+ * the first subject and how many more ("Qualify a lead · Ada + 3 more"), or by
+ * the count when no subject resolved ("Qualify a lead · 4 sessions").
+ */
+export function buildRunSessionStartTitle(input: {
+  playbookName: string;
+  /** Resolved subject titles, in order. Unresolved ones are left out. */
+  subjectNames?: ReadonlyArray<string | null | undefined>;
+  /** How many subjects the run has (a batch); defaults to the names given. */
+  subjectCount?: number;
+}): string {
+  const names = (input.subjectNames ?? [])
+    .map((n) => readableLabel(n))
+    .filter((n) => n.length > 0);
+  const count = Math.max(input.subjectCount ?? names.length, names.length);
+  if (count <= 1) {
+    return buildDerivedSessionTitle({
+      kind: "run",
+      name: input.playbookName,
+      subject: names[0] ?? null,
+    });
+  }
+  const first = names[0];
+  return buildDerivedSessionTitle({
+    kind: "run",
+    name: input.playbookName,
+    subject: first ? `${first} + ${count - 1} more` : `${count} ${resolveObjectNounPlural("session").toLowerCase()}`,
+  });
 }
 
 /**
