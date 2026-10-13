@@ -39,6 +39,7 @@ import {
   db,
   eq,
   and,
+  or,
   drizzleSql,
   documents,
   entities,
@@ -193,12 +194,22 @@ function isUniqueViolation(err: unknown): boolean {
  * proposal will create one on approval (the governed create spreads its input,
  * `documentId` included, into `proposals.data`). Either way a second finalize
  * must not mint another entity over the same bytes.
+ *
+ * The source-file attach (`gateAndAttachStagedSourceBlob`, reached by the agent
+ * upload's `attachToEntityId`) claims a document through other fields: the
+ * entity's `properties.sourceFileDocumentId` (its `document_id` is only taken
+ * when still NULL), or a pending proposal's `data.sourceFile`. Both count.
  */
 async function isDocumentClaimed(documentId: string): Promise<boolean> {
   const [entity] = await db
     .select({ id: entities.id })
     .from(entities)
-    .where(eq(entities.documentId, documentId))
+    .where(
+      or(
+        eq(entities.documentId, documentId),
+        drizzleSql`${entities.properties}->>'sourceFileDocumentId' = ${documentId}`
+      )
+    )
     .limit(1);
   if (entity) return true;
   const [pending] = await db
@@ -207,7 +218,10 @@ async function isDocumentClaimed(documentId: string): Promise<boolean> {
     .where(
       and(
         eq(proposals.status, "pending"),
-        drizzleSql`${proposals.data}->>'documentId' = ${documentId}`
+        or(
+          drizzleSql`${proposals.data}->>'documentId' = ${documentId}`,
+          drizzleSql`${proposals.data}->'sourceFile'->>'documentId' = ${documentId}`
+        )
       )
     )
     .limit(1);

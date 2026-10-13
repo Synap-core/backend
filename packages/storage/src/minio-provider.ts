@@ -28,7 +28,7 @@ import type {
   SignedUploadOptions,
 } from "./interface.js";
 import { StorageUploadUnavailableError } from "./interface.js";
-import { buildEntityPath } from "./utils.js";
+import { attachmentDisposition, buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 
 export interface MinIOConfig {
@@ -273,6 +273,7 @@ export class MinIOStorageProvider implements IFileStorage {
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
       Key: path,
+      ResponseContentDisposition: attachmentDisposition(path),
     });
 
     return await getSignedUrl(this.publicSigner ?? this.client, command, {

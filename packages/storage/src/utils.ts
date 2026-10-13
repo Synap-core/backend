@@ -39,3 +39,23 @@ export function buildEntityPath(
 
   return `users/${userId}/${entityType}s/${entityId}.${cleanExtension}`;
 }
+
+/**
+ * The `Content-Disposition` every signed GET carries:
+ * `attachment; filename*=UTF-8''<RFC 5987-encoded basename of the key>`.
+ *
+ * Blobs are served on the POD origin (`/synap-storage/*`), the same origin as
+ * the session cookie, and stored as-is — including active types (HTML, SVG,
+ * XML). `attachment` makes a top-level navigation to a signed URL download the
+ * bytes instead of rendering them there; `<img>` / `<video>` / `<audio>`
+ * subresources ignore the header, so embedding is unaffected. Viewing an
+ * active type is the sandboxed viewer's job, never the URL's.
+ */
+export function attachmentDisposition(key: string): string {
+  const name = key.split("/").pop() || "file";
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `attachment; filename*=UTF-8''${encoded}`;
+}

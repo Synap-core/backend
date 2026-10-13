@@ -66,6 +66,7 @@ vi.mock("@synap/database", () => {
     db: { select: () => chain() },
     eq: (col: unknown) => col,
     and: vi.fn(),
+    or: vi.fn(),
     drizzleSql: vi.fn(),
     documents,
     entities,
@@ -236,14 +237,14 @@ describe("requestPresignedUpload", () => {
       size: 6 * MB,
     });
     expect(big).toMatchObject({ ok: false, status: 413 });
-    const html = await requestPresignedUpload({
+    const exe = await requestPresignedUpload({
       userId: USER,
       workspaceId: WS,
-      filename: "x.html",
-      mimeType: "text/html",
+      filename: "x.exe",
+      mimeType: "application/x-msdownload",
       size: 10,
     });
-    expect(html).toMatchObject({ ok: false, status: 415 });
+    expect(exe).toMatchObject({ ok: false, status: 415 });
     expect(h.getSignedUploadUrl).not.toHaveBeenCalled();
   });
 
@@ -423,7 +424,10 @@ describe("storeDocumentFromPresignedUpload", () => {
   });
 
   it("deletes and refuses an object whose real type is not allowed", async () => {
-    h.getMetadata.mockResolvedValueOnce({ size: 10, contentType: "text/html" });
+    h.getMetadata.mockResolvedValueOnce({
+      size: 10,
+      contentType: "application/x-msdownload",
+    });
     const r = await storeDocumentFromPresignedUpload({
       userId: USER,
       uploadToken: token,

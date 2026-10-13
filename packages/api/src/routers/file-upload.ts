@@ -51,6 +51,10 @@ const ALLOWED_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/zip",
+  // Active type, stored as-is (D10). Safe only because every signed GET is
+  // `attachment` and `/synap-storage/*` carries `CSP: sandbox`; viewing is a
+  // sandboxed `srcdoc` iframe. Tripwire: active-mime-needs-attachment-disposition.
+  "text/html",
   // Brand fonts (C4: 5 MB cap). Font files are inert data — no script vector.
   "font/woff2",
   "font/woff",
@@ -669,7 +673,7 @@ async function finishUpload(p: {
  * editor+ member row — a viewer cannot upload), plus the workspace OWNER, who
  * may hold no member row at all.
  */
-async function canWriteWorkspace(
+export async function canWriteWorkspace(
   userId: string,
   workspaceId: string
 ): Promise<boolean> {

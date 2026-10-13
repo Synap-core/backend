@@ -24,7 +24,7 @@ import type {
   FileInfo,
   SignedUploadOptions,
 } from "./interface.js";
-import { buildEntityPath } from "./utils.js";
+import { attachmentDisposition, buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 
 export interface R2Config {
@@ -173,6 +173,7 @@ export class R2StorageProvider implements IFileStorage {
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
       Key: path,
+      ResponseContentDisposition: attachmentDisposition(path),
     });
 
     return await getSignedUrl(this.client, command, { expiresIn });
