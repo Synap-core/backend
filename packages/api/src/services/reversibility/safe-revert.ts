@@ -132,7 +132,16 @@ export type RevertTarget =
  * any other column is refused (`not_owned`), never written: the record is
  * data, and data does not get to pick which columns an undo touches.
  */
-const ROW_PATCH_COLUMNS = {
+export type RowPatchTable =
+  "skill" | "rule" | "automation" | "playbook" | "view";
+
+const ROW_PATCH_COLUMNS: Record<
+  RowPatchTable,
+  {
+    table: typeof skills | typeof automations | typeof playbooks | typeof views;
+    columns: readonly string[];
+  }
+> = {
   skill: { table: skills, columns: ["name", "description", "body"] },
   rule: {
     table: skills,
@@ -144,9 +153,7 @@ const ROW_PATCH_COLUMNS = {
     columns: ["name", "description", "goalTemplate"],
   },
   view: { table: views, columns: ["name", "description", "config"] },
-} as const;
-
-export type RowPatchTable = keyof typeof ROW_PATCH_COLUMNS;
+};
 
 /** Key-order-independent JSON (jsonb does not keep key order). */
 function stableJson(value: unknown): string {
@@ -168,7 +175,7 @@ function rowPatchColumns(
 ): string[] | null {
   const spec = ROW_PATCH_COLUMNS[target.table];
   if (!spec) return null;
-  const allowed = spec.columns as readonly string[];
+  const allowed = spec.columns;
   const named = Object.keys(target.after);
   return named.every((c) => allowed.includes(c)) &&
     Object.keys(target.before).every((c) => allowed.includes(c))
