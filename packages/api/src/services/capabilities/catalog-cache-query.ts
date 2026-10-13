@@ -10,9 +10,10 @@
  * engineering bar).
  */
 
-import { getDb, and, eq, isNull } from "@synap/database";
-import { cpCatalogCache } from "@synap/database/schema";
+import { getDb, and, eq, inArray, isNull } from "@synap/database";
+import { cpCatalogCache, type CatalogListing } from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
+import { officialCatalogUrl } from "@synap/jobs/workers/cp-catalog-sync.js";
 import { rankByTerms } from "../../utils/term-match.js";
 
 // TODO(control-plane-types): adopt MarketplaceCatalogEntry from
@@ -31,6 +32,18 @@ export interface CatalogCacheEntry {
   contentHash: string | null;
   /** Full install payload — null for kinds whose list-view source omits it (see cp-catalog-sync.ts). */
   definition: Record<string, unknown> | null;
+  /** Third-party rows only: the signed listing (definition URL + digest, publisher pages). */
+  listing: CatalogListing | null;
+}
+
+/**
+ * Only the OFFICIAL catalog's rows. Every reader that is not the marketplace
+ * itself (capability templates, template health, ensure-template, the intent
+ * finder, …) reads through this, so a package from a source a person added
+ * can never stand in for Synap's own — not by slug, not by key.
+ */
+export function officialCatalogCondition() {
+  return eq(cpCatalogCache.source, officialCatalogUrl());
 }
 
 export interface QueryCatalogCacheOptions {
@@ -41,8 +54,12 @@ export interface QueryCatalogCacheOptions {
    * (the CP's live PACKAGE_TYPES name); agents should send `kind:template`.
    */
   kind?: CatalogKind | "workspace";
-  /** Exact source filter (the catalog provider base URL). Omit to search all configured sources. */
-  source?: string;
+  /**
+   * The cache keys to read (`CatalogSource.cacheKey`: the official URL, or an
+   * added source's id). Omitted: the OFFICIAL source only — a third-party row
+   * is read only by a caller that names its source.
+   */
+  sources?: string[];
   /** Cap the result count. Defaults to 20 when `query` is set; unset otherwise. */
   limit?: number;
 }
@@ -66,7 +83,11 @@ export async function queryCatalogCache(
     const kind = opts.kind === "workspace" ? "template" : opts.kind;
     conditions.push(eq(cpCatalogCache.kind, kind));
   }
-  if (opts?.source) conditions.push(eq(cpCatalogCache.source, opts.source));
+  conditions.push(
+    opts?.sources
+      ? inArray(cpCatalogCache.source, opts.sources)
+      : officialCatalogCondition()
+  );
 
   const rows = await db
     .select()
@@ -85,6 +106,7 @@ export async function queryCatalogCache(
     tags: row.tags,
     contentHash: row.contentHash,
     definition: row.definition,
+    listing: row.listing ?? null,
   }));
 
   if (opts?.query && opts.query.trim().length > 0) {
