@@ -210,15 +210,21 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
   },
 
   capabilities(s) {
-    const unapproved = num(s.detail, "unapproved");
-    if (unapproved === null) return null;
+    // Verbs, not containers: a verb's own enable is what the execution gate
+    // reads (D5) — the container flag the section used to count gated nothing.
+    const verbs = num(s.detail, "verbsAwaitingEnable");
+    if (verbs === null) return null;
+    const caps = num(s.detail, "capabilitiesAwaitingEnable");
     return {
-      headline: `${plural(unapproved, "capability", "capabilities")} installed but awaiting approval`,
-      secondary: "Approve them under Marketplace → Installed",
+      headline: `${plural(verbs, "installed verb")} not turned on`,
+      secondary:
+        (caps !== null
+          ? `In ${plural(caps, "capability", "capabilities")}. `
+          : "") + "Anything that calls them is refused until you turn them on.",
       action: {
         kind: "link",
-        label: "Review in Marketplace",
-        exit: consoleRoute(navHref("marketplace", { tab: "installed" })),
+        label: "Turn on in Marketplace",
+        exit: consoleRoute(navHref("marketplace", { tab: "tools" })),
       },
       items: [],
     };
