@@ -5796,6 +5796,11 @@ export interface ReconcileReport {
 			existingEntityScope: string;
 			declaredEntityScope: "pod" | "workspace" | null;
 		}>;
+		/**
+		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
+		 * through `setProfilePresentation`. Absent when none moved.
+		 */
+		presentations?: string[];
 	};
 	properties: {
 		/** New overlay/base property-defs added. */
@@ -42641,7 +42646,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				lens?: "proposed" | "produced" | "page" | "suggestions" | "history" | "happening" | "needs-you" | undefined;
+				lens?: "proposed" | "produced" | "page" | "suggestions" | "history" | "needs-you" | "happening" | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
 				since?: string | undefined;
@@ -42697,6 +42702,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				drafts: number;
 				draftsTruncated: boolean;
 				suggestions: number;
+			};
+			meta: object;
+		}>;
+		status: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				sessionId?: string | undefined;
+				projectId?: string | undefined;
+				trackId?: string | undefined;
+				automationId?: string | undefined;
+				profileSlug?: string | undefined;
+			} | undefined;
+			output: {
+				status: StatusBanner | null;
+				statusUnreadable: boolean;
 			};
 			meta: object;
 		}>;
