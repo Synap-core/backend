@@ -50,6 +50,19 @@ describe("scopesWithinLive", () => {
     ]);
   });
 
+  it("a partial overlap meets at the shared part, not nothing (48771076)", () => {
+    // entity.note (a kind, all verbs) ∧ entity.read (all kinds, one verb) =
+    // entity.note.read. The old cover-only meet returned [] here, so a hosted
+    // agent key was clipped to nothing and revoked.
+    expect(
+      scopesWithinLive(
+        [{ permissions: ["entity.note"] }],
+        [live(["entity.read"])],
+        null
+      )
+    ).toEqual([{ permissions: ["entity.note.read"], expiresAt: null }]);
+  });
+
   it("places intersect; disjoint places drop the grant", () => {
     expect(
       scopesWithinLive(
