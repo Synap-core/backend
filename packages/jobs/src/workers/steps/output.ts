@@ -6,6 +6,7 @@
  * idempotency-id/config/attribution preamble and the governance-gate pattern.
  */
 import { createHash, randomUUID } from "crypto";
+import { automationProposedSentence } from "@synap-core/types/proposals";
 import {
   db,
   eq,
@@ -270,7 +271,7 @@ export async function executeOutputStep(
           // existing flow.
           ...(systemData ? { systemData } : {}),
         },
-        reasoning: "Automation proposed creating an entity.",
+        policyReason: automationProposedSentence("creating an entity"),
         subjectProfileSlug: profileSlug,
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
@@ -537,7 +538,7 @@ export async function executeOutputStep(
           ...(title !== undefined ? { title } : {}),
           ...(description !== undefined ? { description } : {}),
         },
-        reasoning: "Automation proposed updating an entity.",
+        policyReason: automationProposedSentence("updating an entity"),
         subjectProfileSlug: targetEntity?.type,
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
@@ -1116,7 +1117,7 @@ export async function executeOutputStep(
         subjectType: "focus_session",
         action: "update",
         data: { id: session.id, currentStage, grantStatus, addOutput },
-        reasoning: "Automation proposed updating a focus session.",
+        policyReason: automationProposedSentence("updating a focus session"),
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
         sessionId: automationContext.focusSessionId,

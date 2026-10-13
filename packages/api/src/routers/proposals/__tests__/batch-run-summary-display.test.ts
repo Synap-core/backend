@@ -1,37 +1,46 @@
 /**
- * A batch run proposal's title (`data.summary`, composed by
- * `batchRunWords` in @synap/jobs through the vocabulary door) is what the
- * pod's display hands EVERY renderer — browser and relay read `summary`, they
- * build no title of their own for a playbook run. Pinned here because the
- * display only KEEPS a stored summary that names the object; one that did not
- * would be silently replaced by the generic `Run Template "<name>"`, losing
- * the count.
+ * A batch run proposal STARTS ONE SESSION PER SUBJECT, so the pod's display
+ * names it by the sessions it creates (`buildRunSessionStartTitle`) — not by
+ * the rule's stored `Run Template "<name>" for N new leads` sentence
+ * (`batchRunWords` in @synap/jobs), which named the mechanism. Browser and
+ * relay read `summary`, so this is the title EVERY renderer shows; the count
+ * must survive whether or not the subjects' names resolved.
  */
 import { describe, it, expect } from "vitest";
 import { batchRunWords } from "@synap/jobs/utils/automation-governance.js";
 import { proposalDisplaySummary } from "../display.js";
 
-describe("a batch run proposal reads well in the existing renderers", () => {
-  it("the display keeps the batch title, count and all", () => {
-    const { summary } = batchRunWords({
-      count: 12,
-      subjectKind: "lead",
-      playbookName: "Qualify a lead",
-    });
-    expect(summary).toBe('Run Template "Qualify a lead" for 12 new leads');
-    expect(
-      proposalDisplaySummary({
-        proposalType: "run",
-        // A stored row: `run` / `playbook` are outside the typed CRUD unions,
-        // exactly as `buildRequestFromProposal` reads them off the row.
-        request: {
-          summary,
-          changeType: "run",
-          targetType: "playbook",
-          data: {},
-        } as never,
-        targetName: "Qualify a lead",
-      })
-    ).toBe(summary);
+const subjectIds = Array.from({ length: 12 }, (_, i) => `subject-${i}`);
+
+function displayOf(runSubjectNames?: Array<string | undefined>) {
+  const { summary } = batchRunWords({
+    count: 12,
+    subjectKind: "lead",
+    playbookName: "Qualify a lead",
+  });
+  return proposalDisplaySummary({
+    proposalType: "run",
+    // A stored row: `run` / `playbook` are outside the typed CRUD unions,
+    // exactly as `buildRequestFromProposal` reads them off the row.
+    request: {
+      summary,
+      changeType: "run",
+      targetType: "playbook",
+      data: { subjectId: subjectIds[0], subjectIds },
+    } as never,
+    targetName: "Qualify a lead",
+    ...(runSubjectNames ? { runSubjectNames } : {}),
+  });
+}
+
+describe("a batch run proposal reads as the sessions it starts", () => {
+  it("names the first subject and how many more", () => {
+    expect(displayOf(["Ada", undefined, "Grace"])).toBe(
+      "Qualify a lead · Ada + 11 more"
+    );
+  });
+
+  it("keeps the count when no subject resolved", () => {
+    expect(displayOf()).toBe("Qualify a lead · 12 sessions");
   });
 });

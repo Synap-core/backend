@@ -65,6 +65,10 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
+import {
+  readRunSubjectIds,
+  ruleBatchRunSentence,
+} from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "automation-governance" });
 
@@ -129,7 +133,16 @@ export interface AutomationGovernanceOpts {
   /** "create" | "update" — the write action being governed. */
   action: string;
   data: Record<string, unknown>;
+  /** The automation author's OWN why (a step's configured reason) — drawn as
+   * the proposal's WHY. Never a sentence the pod composes. */
   reasoning?: string;
+  /**
+   * The pod's own words about the write ("Automation proposed creating an
+   * entity.", a lifecycle move's default) — stored as `policyReason` on the
+   * envelope, never as `reasoning`, so the review never draws the mechanism as
+   * the proposer's WHY.
+   */
+  policyReason?: string;
   /**
    * The write SUBJECT's entity profile slug (D3 — automation-door parity with
    * the chat door, which has carried this since `resolveAgentGovernanceDecision`
@@ -182,6 +195,7 @@ export async function checkAutomationWriteOrPropose(
     action,
     data,
     reasoning,
+    policyReason,
     subjectProfileSlug,
     automationRunId,
     correlationId,
@@ -302,7 +316,9 @@ export async function checkAutomationWriteOrPropose(
           subjectType,
           action,
           data,
-          reasoning: reasoning ?? producerGov.reason,
+          reasoning,
+          // The engine's sentence is the POLICY's words, not the proposer's.
+          policyReason: policyReason ?? producerGov.reason,
           governanceReason: producerGov.reasonCode,
           // OWNER FLOOR (0248): this branch is reached only when the automation's
           // owning principal resolved `not-agent` — i.e. `ownerId` is the HUMAN.
@@ -336,9 +352,10 @@ export async function checkAutomationWriteOrPropose(
       subjectType,
       action,
       data,
-      // gov.reason carries the per-branch default; undefined for the plain
-      // default-propose case, where proposeAutomationWrite supplies its own.
-      reasoning: reasoning ?? gov.reason,
+      reasoning,
+      // gov.reason carries the per-branch default (the POLICY's words, never
+      // the proposer's WHY); undefined for the plain default-propose case.
+      policyReason: policyReason ?? gov.reason,
       // gov.reasonCode is the STRUCTURED companion (the PROPOSE_REASON key, e.g.
       // "DAILY_WRITE_CEILING") — persisted to `governance_reason` so the review
       // UI can branch on WHY, exactly as the chat door stamps it in permission-check.
@@ -698,6 +715,8 @@ async function proposeAutomationWrite(opts: {
   action: string;
   data: Record<string, unknown>;
   reasoning?: string;
+  /** The pod's own words about the write — stored as `policyReason`. */
+  policyReason?: string;
   /** Structured governance reason (the PROPOSE_REASON key from gov.reasonCode) —
    *  persisted to `governance_reason`, mirroring the chat door. */
   governanceReason?: string;
@@ -726,6 +745,7 @@ async function proposeAutomationWrite(opts: {
     action,
     data,
     reasoning,
+    policyReason,
     governanceReason,
     automationRunId,
     correlationId,
@@ -835,9 +855,11 @@ async function proposeAutomationWrite(opts: {
       // autonomous: an agent acted on its own (no human in the loop for
       // automation runs). Mirrors deriveAuthorshipMode(undefined, agentUserId).
       authorshipMode: "autonomous",
-      reasoning:
-        reasoning ??
-        "This automation write matched no auto-approve rule, so it was routed here for your review.",
+      // No placeholder WHY: "matched no auto-approve rule" describes the
+      // mechanism, not a cause (`automationWriteSentence` in
+      // @synap-core/types/proposals recognises it on rows written before).
+      ...(reasoning ? { reasoning } : {}),
+      ...(policyReason ? { policyReason } : {}),
       correlationId: resolvedCorrelationId,
       ...(automationRunId ? { automationRunId } : {}),
     },
@@ -998,7 +1020,7 @@ export async function proposeRulePlaybookRun(opts: {
  * existing renderer reads it: the TITLE (`data.summary`, which the pod's
  * display keeps because it names the playbook) says what approving does and
  * for how many — `Run Template "Qualify a lead" for 12 new leads` — and the
- * REASONING names the first subjects. Recomputed on every join, so both always
+ * POLICY REASON (`policyReason`, never the WHY) names the first subjects. Recomputed on every join, so both always
  * tell the batch's real size.
  */
 export function batchRunWords(input: {
@@ -1007,7 +1029,7 @@ export function batchRunWords(input: {
   playbookName?: string;
   /** Titles of the first subjects, in arrival order (at most 3 are named). */
   subjectNames?: string[];
-}): { summary: string; reasoning: string } {
+}): { summary: string; policyReason: string } {
   const noun = input.subjectKind
     ? (input.count === 1
         ? resolveObjectNoun(input.subjectKind)
@@ -1029,7 +1051,8 @@ export function batchRunWords(input: {
   const what = input.playbookName ? `"${input.playbookName}"` : "this playbook";
   return {
     summary,
-    reasoning: `${who} arrived together and matched this rule — approving starts ${what} on each; rejecting starts none.`,
+    // The pod's words about the batch, not a proposer's WHY.
+    policyReason: ruleBatchRunSentence({ who, what }),
   };
 }
 
@@ -1116,14 +1139,9 @@ async function coalesceIntoBatchProposal(
  * The ONE reader — the approval executor fans out over exactly this list.
  */
 export function readBatchSubjectIds(inner: Record<string, unknown>): string[] {
-  if (Array.isArray(inner.subjectIds)) {
-    return inner.subjectIds.filter(
-      (v): v is string => typeof v === "string" && v.length > 0
-    );
-  }
-  return typeof inner.subjectId === "string" && inner.subjectId
-    ? [inner.subjectId]
-    : [];
+  // The ONE reader lives in @synap-core/types so the review names exactly the
+  // subjects this executor fans out over.
+  return readRunSubjectIds(inner);
 }
 
 async function fileRulePlaybookRunProposal(
@@ -1200,10 +1218,10 @@ async function fileRulePlaybookRunProposal(
               playbookName,
               subjectNames: await subjectNamesOf(executor, [subjectId]),
             })
-          : {
-              reasoning:
-                "A rule set to propose matched — it asks before starting this playbook.",
-            }),
+          : // No stored WHY for a single run: the review names the rule as
+            // its origin, so "a rule … asks before starting this playbook"
+            // (`ruleRunSentence`) would only repeat it in worse words.
+            {}),
         correlationId,
       },
       createdBy: ownerId,

@@ -59,6 +59,10 @@ type ProposalRow = {
   /** The `proposals.thread_id` column — the channel the proposal was filed
    * from. The frontend reads it as `originChannelId`. */
   threadId?: string | null;
+  /** The stored ENVELOPE (`proposals.data`): `{ targetType, changeType, data:
+   * <payload>, source, automationId?, … }`. Read only for envelope-level
+   * provenance (the rule that filed it), never for the payload. */
+  data?: unknown;
 };
 
 /**
@@ -102,6 +106,17 @@ export function referencedNameIds(
   ids.project = uuidOrUndefined(row.projectId);
   if (row.targetType === "automation") {
     ids.automation = uuidOrUndefined(stringProp(payload, "automationId"));
+  }
+  // The RULE that filed it — any target type. A propose-mode rule stamps
+  // `automationId` on the envelope (`fileRulePlaybookRunProposal`, the
+  // automation write gate), not on the payload; the review names it as the
+  // proposal's origin ("from rule …").
+  if (!ids.automation) {
+    const envelope =
+      row.data && typeof row.data === "object"
+        ? (row.data as Record<string, unknown>)
+        : undefined;
+    ids.automation = uuidOrUndefined(stringProp(envelope, "automationId"));
   }
   // Literal, written directly by every producer via
   // `CAPABILITY_RUN_PROPOSAL_TYPE` — not the `${subjectType}.${action}`

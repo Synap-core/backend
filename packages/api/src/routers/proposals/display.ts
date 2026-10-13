@@ -27,6 +27,7 @@ import {
   skills,
   tools,
   relations,
+  automationRuns,
   drizzleSql,
 } from "@synap/database";
 import {
@@ -86,8 +87,15 @@ import {
   isPlanBatch,
   opRef,
   PRIMARY_REF,
+  isPlaybookSessionStartProposal,
+  readRunSubjectIds,
+  isSystemReasoning,
+  GOVERNANCE_POLICY_SENTENCES,
 } from "@synap-core/types/proposals";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  buildRunSessionStartTitle,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import { planSessionEdges } from "../../services/capture-agent/capture-plan.js";
 import type {
   UpdateRequest,
@@ -229,6 +237,10 @@ export function trackFlowForRow(
   ) {
     return { flowType: "playbook", flowId: ids.playbook };
   }
+  // A rule's run on a playbook starts a session too — same flow, same record.
+  if (isPlaybookSessionStartProposal(row) && ids.playbook) {
+    return { flowType: "playbook", flowId: ids.playbook };
+  }
   if (
     row.targetType === "automation" &&
     (row.proposalType === "execute" ||
@@ -349,9 +361,38 @@ type DisplayEnrichedProposal = ProposalRow &
      * {subjectName}". Falls back to `projectName` when a session has no
      * subject (the renderer's choice, not derived here). */
     subjectName?: string;
+    /** The subject's kind (its entity `type`, a profile slug) — the first
+     * subject's, for a session-start run. Paints the subject chip's noun. */
+    subjectKind?: string;
+    /**
+     * A session-start run's subjects (`targetType: "playbook"`, `run`) — one
+     * session per subject on approval. Ids in payload order, capped at
+     * {@link RUN_SUBJECTS_RESOLVED_MAX}; `name` / `kind` are null unless the
+     * viewer may read the entity under this proposal's lens. Never a name
+     * without its id, never an id dressed as a name.
+     */
+    subjects?: Array<{ id: string; name: string | null; kind: string | null }>;
     playbookName?: string;
     projectName?: string;
+    /** The automation (rule) this proposal is about or was filed by, when the
+     * viewer may read it. */
     automationName?: string;
+    /**
+     * The RULE that filed this proposal — the envelope's `automationId`, else
+     * the automation of the envelope's `automationRunId`. Present only when
+     * the viewer may read that automation (then `automationName` is too).
+     */
+    automationId?: string;
+    /** The automation run that filed it (the envelope's `automationRunId`). */
+    automationRunId?: string;
+    /**
+     * The POD's words about this proposal — never the proposer's WHY: a
+     * producer's stored `policyReason` (an automation's "Automation proposed
+     * …"), a legacy row whose `reasoning` the pod wrote (moved here, and
+     * dropped from `request.reasoning` / `review.reasoning`), else the
+     * engine's sentence for `governanceReason`. Absent when none applies.
+     */
+    policyReason?: string;
     capabilityCallLabel?: string;
     workspaceName?: string;
     channelName?: string;
@@ -378,6 +419,33 @@ type DisplayEnrichedProposal = ProposalRow &
     governanceRuleId?: string;
     review: ProposalReviewModel;
   };
+
+/** The stored envelope (`proposals.data`) as a record — read for
+ * envelope-level provenance only (`automationId`, `automationRunId`,
+ * `policyReason`), never for the payload. */
+function envelopeOf(row: {
+  data?: unknown;
+}): Record<string, unknown> | undefined {
+  return row.data && typeof row.data === "object"
+    ? (row.data as Record<string, unknown>)
+    : undefined;
+}
+
+/** The engine's sentence for a stored `governance_reason` code, if it is one. */
+function governancePolicySentence(
+  code: string | null | undefined
+): string | undefined {
+  if (!code) return undefined;
+  return Object.prototype.hasOwnProperty.call(GOVERNANCE_POLICY_SENTENCES, code)
+    ? GOVERNANCE_POLICY_SENTENCES[
+        code as keyof typeof GOVERNANCE_POLICY_SENTENCES
+      ]
+    : undefined;
+}
+
+/** How many of a batch run's subjects one read resolves (the review caps its
+ * list well below this and offers "Show all"). */
+export const RUN_SUBJECTS_RESOLVED_MAX = 50;
 
 export async function enrichProposalsForDisplay(
   inputRows: ProposalRow[],
@@ -450,6 +518,16 @@ export async function enrichProposalsForDisplay(
       const subjectId = stringProp(payload, "subjectEntityId");
       if (subjectId && isLikelyUUID(subjectId))
         relationEndpointIds.push(subjectId);
+    }
+    // A run on a playbook starts one session per subject — the review names
+    // each, so its ids ride the SAME batched entity join (bounded per row).
+    if (isPlaybookSessionStartProposal(row)) {
+      for (const id of readRunSubjectIds(payload).slice(
+        0,
+        RUN_SUBJECTS_RESOLVED_MAX
+      )) {
+        if (isLikelyUUID(id)) relationEndpointIds.push(id);
+      }
     }
     const raw = row.data as StoredProposalData | null | undefined;
     if (isCompositeProposalData(raw)) {
@@ -581,6 +659,39 @@ export async function enrichProposalsForDisplay(
     ...rows.map((row) => row.sessionId ?? undefined),
     ...(linkEndpointIdsByType.get("session") ?? []),
   ]).filter(isLikelyUUID);
+
+  // THE RULE BEHIND IT — a propose-mode rule stamps `automationId` on the
+  // envelope, but the automation WRITE gate (`proposeAutomationWrite`) stamps
+  // only `automationRunId`. Those runs resolve to their automation here, ONE
+  // batched read floored by the `automationRuns` VisibilityRule, skipped when
+  // no row needs it; the automation's NAME then rides the floored automation
+  // batch below like every other.
+  const automationRunOnlyIds = uniqueStrings(
+    rows.map((row) => {
+      const envelope = envelopeOf(row);
+      return stringProp(envelope, "automationId")
+        ? undefined
+        : stringProp(envelope, "automationRunId");
+    })
+  ).filter(isLikelyUUID);
+  const automationIdByRunId = new Map<string, string>(
+    automationRunOnlyIds.length > 0
+      ? (
+          await db
+            .select({
+              id: automationRuns.id,
+              automationId: automationRuns.automationId,
+            })
+            .from(automationRuns)
+            .where(
+              and(
+                inArray(automationRuns.id, automationRunOnlyIds),
+                nameAccess.predicate(automationRuns)
+              )
+            )
+        ).map((run) => [run.id, run.automationId] as const)
+      : []
+  );
 
   const eventRepo = new EventRepository(sql);
   const [
@@ -828,6 +939,7 @@ export async function enrichProposalsForDisplay(
       const automationIds = uniqueStrings([
         ...namedIds("automation"),
         ...(linkEndpointIdsByType.get("automation") ?? []),
+        ...automationIdByRunId.values(),
       ]);
       return automationIds.length > 0
         ? db
@@ -1168,6 +1280,18 @@ export async function enrichProposalsForDisplay(
     }
     return meta.title ?? meta.preview ?? undefined;
   };
+  // The same lens, for the subject chip: a kind beside the name.
+  const resolveEntityKind = (
+    entityId: string,
+    allowedWorkspaceId: string | null
+  ): string | undefined => {
+    const meta = entityById.get(entityId);
+    if (!meta) return undefined;
+    if (meta.workspaceId !== null && meta.workspaceId !== allowedWorkspaceId) {
+      return undefined;
+    }
+    return meta.type ?? undefined;
+  };
 
   // TRACK RECORD — batched by flow id, like the names. Only ids whose NAME
   // resolved above are read: `playbookById` / `automationById` hold exactly the
@@ -1355,11 +1479,27 @@ export async function enrichProposalsForDisplay(
     // The ONE proposal display name — shared with the object graph's "came
     // from" rows (`graph-service`), so a lineage row and this proposal's own
     // row can never name the same decision two ways.
+    // A session-start run's subjects, resolved under THIS proposal's lens —
+    // named in the title (the session's own name) and drawn as doors.
+    const subjects = isPlaybookSessionStartProposal(row)
+      ? readRunSubjectIds(payload)
+          .slice(0, RUN_SUBJECTS_RESOLVED_MAX)
+          .map((id) => ({
+            id,
+            name: isLikelyUUID(id)
+              ? (resolveEntityTitle(id, row.workspaceId) ?? null)
+              : null,
+            kind: isLikelyUUID(id)
+              ? (resolveEntityKind(id, row.workspaceId) ?? null)
+              : null,
+          }))
+      : undefined;
     const summary = proposalDisplaySummary({
       proposalType: row.proposalType,
       request,
       targetName,
       profileSlug,
+      runSubjectNames: subjects?.map((subject) => subject.name ?? undefined),
     });
 
     // MF2: bind the workspace-scoped resolver to THIS proposal's workspace lens
@@ -1443,7 +1583,31 @@ export async function enrichProposalsForDisplay(
             const subjectId = stringProp(payload, "subjectEntityId");
             return subjectId ? resolveEntityTitleScoped(subjectId) : undefined;
           })()
-        : undefined;
+        : (subjects?.[0]?.name ?? undefined);
+    const subjectKind = subjects?.[0]?.kind ?? undefined;
+    // THE RULE BEHIND IT (see `automationIdByRunId`): named only when the
+    // viewer may read the automation — never an id alone.
+    const envelope = envelopeOf(row);
+    const automationRunId = stringProp(envelope, "automationRunId");
+    const originAutomationId = (() => {
+      const stamped = stringProp(envelope, "automationId");
+      const id = stamped ?? (automationRunId ? automationIdByRunId.get(automationRunId) : undefined);
+      return id && automationById.has(id) ? id : undefined;
+    })();
+    const automationName =
+      nameResolvers.resolveAutomationName(row, payload) ??
+      (originAutomationId ? automationById.get(originAutomationId)?.name : undefined);
+    // WHO SAID IT: the pod's words are `policyReason`, never the WHY. A row the
+    // pod wrote its own sentence into as `reasoning` (before producers moved
+    // it) has it moved here and dropped from the reasoning the review draws.
+    const systemReasoning = isSystemReasoning(request.reasoning)
+      ? request.reasoning
+      : undefined;
+    const policyReason =
+      stringProp(envelope, "policyReason") ??
+      systemReasoning ??
+      governancePolicySentence(row.governanceReason);
+    const reasoning = systemReasoning ? undefined : request.reasoning;
     // A SECRET install param's VALUE never reaches a reviewer — not in `data`,
     // not in `request.data`, and not in the review model built from it. An
     // agent may have inlined a raw key into `params`; a `secret` flag arriving
@@ -1568,15 +1732,20 @@ export async function enrichProposalsForDisplay(
         : {}),
       // NEW: Resolved names for commonly referenced IDs across proposal kinds
       ...(subjectName ? { subjectName } : {}),
+      ...(subjectKind ? { subjectKind } : {}),
+      ...(subjects && subjects.length > 0 ? { subjects } : {}),
       ...(nameResolvers.resolvePlaybookName(row, payload)
         ? { playbookName: nameResolvers.resolvePlaybookName(row, payload)! }
         : {}),
       ...(nameResolvers.resolveProjectName(row)
         ? { projectName: nameResolvers.resolveProjectName(row)! }
         : {}),
-      ...(nameResolvers.resolveAutomationName(row, payload)
-        ? { automationName: nameResolvers.resolveAutomationName(row, payload)! }
+      ...(automationName ? { automationName } : {}),
+      ...(originAutomationId ? { automationId: originAutomationId } : {}),
+      ...(automationRunId && isLikelyUUID(automationRunId)
+        ? { automationRunId }
         : {}),
+      ...(policyReason ? { policyReason } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
         ? {
             capabilityCallLabel: nameResolvers.resolveCapabilityCallLabel(
@@ -1606,6 +1775,7 @@ export async function enrichProposalsForDisplay(
         data: enrichedData,
         targetName,
         summary,
+        reasoning,
       },
       review: buildProposalReviewModel({
         row,
@@ -1614,6 +1784,7 @@ export async function enrichProposalsForDisplay(
           data: enrichedData,
           targetName,
           summary,
+          reasoning,
         },
         authorName,
         targetName,
@@ -2240,12 +2411,32 @@ export function proposalDisplaySummary(params: {
   >;
   targetName?: string;
   profileSlug?: string;
+  /** A session-start run's subject names, as resolved by the caller (payload
+   * order; `undefined` where the viewer may not read one). */
+  runSubjectNames?: ReadonlyArray<string | undefined>;
 }): string {
   const { proposalType, request, targetName, profileSlug } = params;
   const payload =
     request.data && typeof request.data === "object"
       ? (request.data as Record<string, unknown>)
       : undefined;
+  // A run on a playbook STARTS A SESSION: it is named by the session it
+  // creates — the same derivation the pod names that session with on
+  // approval (`buildRunSessionName`). Outranks any stored summary: the rule's
+  // `Run Template "…"` sentence named the mechanism, not the object.
+  if (
+    targetName &&
+    isPlaybookSessionStartProposal({
+      targetType: request.targetType,
+      proposalType,
+    })
+  ) {
+    return buildRunSessionStartTitle({
+      playbookName: targetName,
+      subjectNames: params.runSubjectNames,
+      subjectCount: readRunSubjectIds(payload).length,
+    });
+  }
   const compositeLabel = labelFromOperations(
     (payload as { operations?: unknown } | undefined)?.operations
   );

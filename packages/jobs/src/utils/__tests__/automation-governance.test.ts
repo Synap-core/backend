@@ -67,6 +67,18 @@ vi.mock("@synap/database", () => ({
   insertPendingProposal: insertPendingProposalMock,
 }));
 
+// The shared ladder is mocked at its own subpath (as the receipt suite does):
+// these tests exercise the PROPOSAL this door files, not the policy engine.
+vi.mock("@synap/database/agent-governance", () => ({
+  resolveAgentGovernanceDecision: vi.fn(async () => {
+    const verdict = decideAgentPolicyMock() as {
+      verdict: string;
+      reason?: string;
+    };
+    return { decision: verdict.verdict, reason: verdict.reason };
+  }),
+}));
+
 vi.mock("@synap/events", () => ({
   emitSideEffects: emitSideEffectsMock,
 }));
@@ -202,5 +214,44 @@ describe("checkAutomationWriteOrPropose → proposeAutomationWrite", () => {
     expect(inserted.data.correlationId).toBe("root-run-1");
     // …and the payload keys no longer sit at the TOP level (the old flat shape).
     expect(inserted.data.profileSlug).toBeUndefined();
+  });
+  /**
+   * WHO SAID IT. The pod's own sentences (an output step's "Automation proposed
+   * creating an entity.", the engine's propose reason) are stored as
+   * `policyReason`; only the automation author's own reason is `reasoning`,
+   * which the review draws as the proposer's WHY.
+   */
+  it("stores the pod's words as policyReason, never as the WHY", async () => {
+    await checkAutomationWriteOrPropose({
+      ownerId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create",
+      data: { profileSlug: "note", title: "Test" },
+      policyReason: "Automation proposed creating an entity.",
+    });
+    const inserted = insertPendingProposalMock.mock.calls[0][0] as {
+      data: Record<string, unknown>;
+    };
+    expect(inserted.data).not.toHaveProperty("reasoning");
+    expect(inserted.data.policyReason).toBe(
+      "Automation proposed creating an entity."
+    );
+  });
+
+  it("falls back to the engine's reason as policyReason; the author's reason stays the WHY", async () => {
+    await checkAutomationWriteOrPropose({
+      ownerId: "agent-1",
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create",
+      data: { profileSlug: "note", title: "Test" },
+      reasoning: "New signups need a welcome note",
+    });
+    const inserted = insertPendingProposalMock.mock.calls[0][0] as {
+      data: Record<string, unknown>;
+    };
+    expect(inserted.data.reasoning).toBe("New signups need a welcome note");
+    expect(inserted.data.policyReason).toBe("default propose");
   });
 });

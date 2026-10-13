@@ -27,6 +27,7 @@ import {
   type TransitionEmitContext,
 } from "@synap/events";
 import { checkAutomationWriteOrPropose } from "./automation-governance.js";
+import { automationMovesSentence } from "@synap-core/types/proposals";
 
 export type AutomationStatusMoveResult =
   | ApplyStatusMoveResult
@@ -92,9 +93,16 @@ export async function moveStatusFromAutomation(input: {
       to: input.to,
       reason: input.reason ?? null,
     },
-    reasoning:
-      input.reason ??
-      `Automation moves ${target.lifecycle.propertySlug} to "${input.to}".`,
+    // The rule's own reason is its WHY; the default sentence is the pod's
+    // words about the move, kept out of `reasoning`.
+    ...(input.reason
+      ? { reasoning: input.reason }
+      : {
+          policyReason: automationMovesSentence(
+            target.lifecycle.propertySlug,
+            input.to
+          ),
+        }),
     subjectProfileSlug: target.entityType ?? undefined,
     automationRunId: ctx?.automationRunId,
     correlationId: ctx?.rootRunId,

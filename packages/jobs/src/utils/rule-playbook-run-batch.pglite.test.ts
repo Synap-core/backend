@@ -146,8 +146,10 @@ describe("proposeRulePlaybookRun — one batch files ONE proposal", () => {
     expect(rows[0]!.summary).toBe(
       'Run Template "Qualify a lead" for 4 new leads'
     );
-    // The reasoning names the first subjects, and how many more.
-    expect(rows[0]!.reasoning).toBe(
+    // The pod's words name the first subjects, and how many more — as the
+    // POLICY reason, never the proposer's WHY.
+    expect(rows[0]).not.toHaveProperty("reasoning");
+    expect(rows[0]!.policyReason).toBe(
       'Ada Lovelace, Grace Hopper, Mary Jackson + 1 more arrived together and matched this rule — approving starts "Qualify a lead" on each; rejecting starts none.'
     );
   });
@@ -184,9 +186,9 @@ describe("proposeRulePlaybookRun — one batch files ONE proposal", () => {
       expect(r).not.toHaveProperty("batchId");
       expect(r).not.toHaveProperty("summary");
       expect(r.data).not.toHaveProperty("subjectIds");
-      expect(r.reasoning).toBe(
-        "A rule set to propose matched — it asks before starting this playbook."
-      );
+      // No stored WHY: the review names the rule as the origin, so the old
+      // "a rule … asks before starting this playbook" placeholder is gone.
+      expect(r).not.toHaveProperty("reasoning");
     }
   });
 
