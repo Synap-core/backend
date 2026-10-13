@@ -1003,6 +1003,71 @@ export function registerFocusSessionExecutors(): void {
       };
     },
   });
+
+  // ── focus_session / assign_agent ────────────────────────────────────────────
+  // An agent handing a session to ANOTHER agent (`agent-hand-off.ts`) lands here
+  // once a person approves it: the named agent is appended through the ONE
+  // roster door, floored on the session's OWN owner (the approver may be a
+  // different human). Idempotent — the door is, and an already-approved
+  // proposal returns before it.
+  registerProposalExecutor({
+    key: "focus_session/assign_agent",
+    async execute({ proposal, userId, input, deps }) {
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const sessionId = proposal.targetId;
+      const agentId =
+        typeof innerData.addAgentId === "string" ? innerData.addAgentId : "";
+      if (agentId.trim() === "") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Hand-off proposal ${input.proposalId} names no agent`,
+        });
+      }
+
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+        columns: { userId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Focus session ${sessionId} not found`,
+        });
+      }
+
+      const { attachSessionAgent } =
+        await import("../../../services/focus-sessions/attach-session-agent.js");
+      const attached = await attachSessionAgent({
+        sessionId,
+        agentId,
+        userId: session.userId,
+      });
+      if (attached.status === "not_found") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Focus session ${sessionId} not found`,
+        });
+      }
+
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, agentIds: attached.agentIds };
+    },
+  });
 }
 
 /**

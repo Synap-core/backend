@@ -136,6 +136,11 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import {
+  gateAgentHandOff,
+  handedOffAgentIds,
+  type AgentHandOffDecision,
+} from "../../../services/focus-sessions/agent-hand-off.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -1463,6 +1468,79 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         patch.agentUserId ??
         (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
 
+      // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster
+      // (`addAgentId`, or a NEW id inside a wholesale `agentIds`) is its own
+      // governed write, one decision per agent (`agent-hand-off.ts`). Decided
+      // BEFORE the update membrane, so an auto-approved update cannot carry it.
+      // A held (proposed) agent is dropped from this patch — approval attaches
+      // it; when nothing else was asked for, the proposal IS the answer.
+      const handOffs: AgentHandOffDecision[] = [];
+      if (agentUserId) {
+        const roster = Array.isArray(existing.agentIds) ? existing.agentIds : [];
+        const added = handedOffAgentIds(agentUserId, [
+          ...(patch.agentIds ?? []).filter((a) => !roster.includes(a.trim())),
+          ...(patch.addAgentId !== undefined ? [patch.addAgentId] : []),
+        ]);
+        for (const agentId of added) {
+          const decision = await gateAgentHandOff({
+            userId,
+            agentUserId,
+            workspaceId: existing.workspaceId,
+            sessionId: id,
+            goal: existing.goal,
+            agentId,
+            reasoning: patch.reasoning,
+          });
+          if (decision.status === "denied") {
+            return c.json({ error: decision.reason }, 403);
+          }
+          handOffs.push(decision);
+        }
+        const proposed = handOffs.filter(
+          (d): d is Extract<AgentHandOffDecision, { status: "proposed" }> =>
+            d.status === "proposed"
+        );
+        const held = proposed.map((d) => d.agentId);
+        if (held.length > 0) {
+          if (patch.agentIds !== undefined) {
+            patch.agentIds = patch.agentIds.filter(
+              (a) => !held.includes(a.trim())
+            );
+          }
+          if (
+            patch.addAgentId !== undefined &&
+            held.includes(patch.addAgentId.trim())
+          ) {
+            delete patch.addAgentId;
+          }
+          const sameRoster = (ids: readonly string[]) =>
+            ids.length === roster.length && ids.every((a) => roster.includes(a));
+          const asksForMore = Object.entries(patch).some(
+            ([key, value]) =>
+              value !== undefined &&
+              key !== "agentUserId" &&
+              key !== "reasoning" &&
+              !(key === "agentIds" && sameRoster(value as string[]))
+          );
+          if (!asksForMore) {
+            const first = proposed[0]!;
+            return jsonGoverned(c, {
+              status: "proposed",
+              message: proposedMessageFor(
+                first.proposalType,
+                "Handing this session to another agent was proposed for review"
+              ),
+              proposalId: first.proposalId,
+              summary: first.summary,
+              reviewPath: first.reviewPath,
+              reviewUrl: first.reviewUrl,
+              handOffs,
+              session: null,
+            });
+          }
+        }
+      }
+
       // Gate data: always include goal from the row (proposal summary label) plus
       // every field being patched so focus_session/update can materialize on approve.
       const perm = await checkPermissionOrPropose({
@@ -1819,6 +1897,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({
         ...updated,
         ...(warnings.length > 0 ? { warnings } : {}),
+        // Which hand-offs to other agents this patch asked for, and which are
+        // waiting on a person (not on the roster yet).
+        ...(handOffs.length > 0 ? { handOffs } : {}),
         ...(blockGuidelines ? { blockGuidelines } : {}),
         ...(nudges ? { nudges } : {}),
         // What the follow DID — which playbook, which stage, how much
