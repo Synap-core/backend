@@ -62,7 +62,7 @@ import { storage } from "@synap/storage";
 import { workspaceRuntimePrimarySurfaceSchema } from "../schemas/workspace-primary-surface.js";
 import { logger, isPodReadableWorkspace } from "./workspaces/helpers.js";
 import {
-  preserveServerOwnedSettings,
+  SERVER_OWNED_WORKSPACE_SETTINGS_KEYS,
   stripServerOwnedSettings,
 } from "../connectors/server-owned-settings.js";
 import { inviteProcedures } from "./workspaces/invites.js";
@@ -605,19 +605,12 @@ const coreProcedures = {
       }
 
       // `update` REPLACES settings and clients only ever see a projection
-      // without the server-owned keys (controlPlane, nango): take those from
-      // the stored row so a round-trip can neither erase nor plant them.
-      if (settingsToPersist) {
-        const stored = await dbConn.query.workspaces.findFirst({
-          where: eq(workspaces.id, input.id),
-          columns: { settings: true },
-        });
-        settingsToPersist = preserveServerOwnedSettings(
-          settingsToPersist,
-          stored?.settings
-        );
-      }
-
+      // without (or a stale copy of) the server-owned keys — controlPlane,
+      // nango, the template install record: the repository drops them from
+      // the blob and carries the STORED values over in the same statement, so
+      // a round-trip can neither erase nor plant them, and their promoted
+      // columns (package_slug, provisioning_*) are never nulled by a save that
+      // omitted them.
       await workspaceRepo.update(
         input.id,
         {
@@ -627,6 +620,7 @@ const coreProcedures = {
             ? { description: input.description.trim() || null }
             : {}),
           settings: settingsToPersist || undefined,
+          preserveSettingsKeys: SERVER_OWNED_WORKSPACE_SETTINGS_KEYS,
         },
         ctx.userId
       );

@@ -57,6 +57,16 @@ export interface UpdateWorkspaceInput {
    */
   description?: string | null;
   settings?: Record<string, unknown>;
+  /**
+   * Settings keys a REPLACE must never take from `settings`: whatever the blob
+   * says about them is dropped and the STORED values are carried over, in the
+   * same statement (no read-then-write window). A promoted column whose key is
+   * listed (`systemSlug`, `packageSlug`, `proposalId`, `provisioningStatus`)
+   * is left untouched rather than rewritten from the blob — so a save that
+   * omits the key can no longer null the column. The settings router passes
+   * its server-owned keys here (`SERVER_OWNED_WORKSPACE_SETTINGS_KEYS`).
+   */
+  preserveSettingsKeys?: readonly string[];
 }
 
 export class WorkspaceRepository extends BaseRepository<
@@ -135,12 +145,30 @@ export class WorkspaceRepository extends BaseRepository<
     data: UpdateWorkspaceInput,
     userId: string
   ): Promise<Workspace> {
-    const s = data.settings as WorkspaceSettings | undefined;
+    const keep = new Set(data.preserveSettingsKeys ?? []);
+    const s = data.settings
+      ? (Object.fromEntries(
+          Object.entries(
+            withoutExposurePolicy(data.settings as Record<string, unknown>)
+          ).filter(([key]) => !keep.has(key))
+        ) as WorkspaceSettings)
+      : undefined;
+    // The stored values of the preserved keys, read by the UPDATE itself.
+    const carried =
+      keep.size > 0
+        ? sql` || COALESCE((SELECT jsonb_object_agg(e.key, e.value) FROM jsonb_each(${workspaces.settings}) e WHERE e.key IN (${sql.join(
+            [...keep].map((key) => sql`${key}`),
+            sql`, `
+          )})), '{}'::jsonb)`
+        : sql``;
+    // A promoted column follows the blob only when the blob owns its key.
+    const column = <K extends keyof WorkspaceSettings>(key: K) =>
+      s && !keep.has(key as string) ? (s[key] ?? null) : undefined;
     // Identity (0308): a rename, or a settings REPLACE that sets a template
     // slug, must not take an identity another active space holds.
     const identity = {
       name: data.name ?? null,
-      packageSlug: s ? (s.packageSlug ?? null) : null,
+      packageSlug: column("packageSlug") ?? null,
     };
     await assertWorkspaceIdentityFree(this.db, { ...identity, excludeId: id });
     const [workspace] = await this.db
@@ -148,22 +176,21 @@ export class WorkspaceRepository extends BaseRepository<
       .set({
         name: data.name,
         description: data.description,
-        // REPLACE semantics, except `exposurePolicy` (server-owned): dropped
-        // from the incoming blob and carried over from the STORED row, in one
-        // atomic statement, so a settings round-trip can neither plant nor
-        // erase it.
-        settings: data.settings
-          ? sql`${JSON.stringify(
-              withoutExposurePolicy(data.settings as Record<string, unknown>)
-            )}::jsonb || CASE WHEN ${workspaces.settings} -> ${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)} IS NOT NULL THEN jsonb_build_object(${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)}, ${workspaces.settings} -> ${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)}) ELSE '{}'::jsonb END`
+        // REPLACE semantics, except `exposurePolicy` (server-owned) and the
+        // caller's `preserveSettingsKeys`: dropped from the incoming blob and
+        // carried over from the STORED row, in one atomic statement, so a
+        // settings round-trip can neither plant nor erase them.
+        settings: s
+          ? sql`${JSON.stringify(s)}::jsonb || CASE WHEN ${workspaces.settings} -> ${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)} IS NOT NULL THEN jsonb_build_object(${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)}, ${workspaces.settings} -> ${sql.raw(`'${EXPOSURE_POLICY_SETTINGS_KEY}'`)}) ELSE '{}'::jsonb END${carried}`
           : undefined,
-        // When settings is fully replaced, keep the promoted columns (0039) in sync.
+        // When settings is fully replaced, keep the promoted columns (0039) in
+        // sync — except a preserved key's column, which keeps its stored value.
         ...(s
           ? {
-              systemSlug: s.systemSlug ?? null,
-              packageSlug: s.packageSlug ?? null,
-              provisioningProposalId: s.proposalId ?? null,
-              provisioningStatus: s.provisioningStatus ?? null,
+              systemSlug: column("systemSlug"),
+              packageSlug: column("packageSlug"),
+              provisioningProposalId: column("proposalId"),
+              provisioningStatus: column("provisioningStatus"),
             }
           : {}),
         updatedAt: new Date(),
