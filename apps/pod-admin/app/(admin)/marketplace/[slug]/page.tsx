@@ -1,29 +1,33 @@
 "use client";
 
 /**
- * Package detail + install.
+ * Catalog entry detail + install — every kind, from the pod's own catalog.
  *
  * The disclosure ladder, in order, no wizard:
- *   1. What it is           — description, kind, provenance (always available)
- *   2. What it contains     — counts read off the published definition
- *   3. What it will DO here — the pod's own write-free preflight report
- *   4. Confirm              — the governed apply
+ *   1. What it is           — description, kind, source (the cached row)
+ *   2. What it contains     — counts read off the definition the install uses
+ *   3. What it will DO here — `marketplace.preflight`, nothing written
+ *   4. Confirm              — `marketplace.install`
  *
  * Step 3 is the point of the whole surface. The pod answers "these 7 profiles
- * would be created, this one conflicts with a role you already have" BEFORE
- * anything is written; skipping it would make the confirm button a dare.
+ * would be created, this one conflicts" (a space) or "adds these 3 rules to the
+ * space you pick, 1 runs on a schedule" (everything else) BEFORE anything is
+ * written; skipping it would make the confirm button a dare.
  *
- * The trust content here is the preflight report — what this install does to
- * THIS pod, checked against this pod's own catalog — plus the package's
- * provenance. There is no install count and no "Verified" badge: the first is
- * bumped by an unauthenticated endpoint and the second certifies a DNS record,
- * so neither is evidence of anything.
+ * There is no install count and no "Verified" badge: the first is bumped by an
+ * unauthenticated endpoint and the second certifies a DNS record, so neither
+ * is evidence of anything. On the result, read what the pod reported
+ * (`describeInstall`), never the absence of an error. A catalog failure is a
+ * calm message in place — never a sign-in redirect.
  *
- * On the result: read `outcome`/`status`, never the absence of an error. A
- * re-install that changed nothing says so.
+ * Where it comes from decides what Install means (enforced by the pod; this
+ * page reflects it): a showcase source's package opens the
+ * publisher's site and is never fetched; a blocked source says why; a package
+ * from a trusted source names the code and network reach it brings and asks
+ * for an explicit confirm of each before Install is enabled.
  */
 
-import { Button, Chip, Spinner } from "@heroui/react";
+import { Button, Checkbox, Input, Select, SelectItem } from "@heroui/react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -31,43 +35,61 @@ import {
   CircleAlert,
   Clock,
   Info,
-  Store,
 } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import {
-  humanizeToken,
   OBJECT_KINDS,
   OBJECT_KIND_ALIASES,
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
-import { readableDescription } from "../../../../lib/marketplace";
-import type { PackageDetail } from "../../../../lib/marketplace";
-import { openIn } from "../../../../lib/open-in";
-import { HandoffCard } from "../../components/handoff-card";
+import { trpc } from "../../../../lib/trpc";
+import { navHref } from "../../../../lib/console-nav";
+import { readableError } from "../../../../lib/format";
+import { publisherExit } from "../../../../lib/open-in";
+import { ExitLink } from "../../../../lib/exit-link";
+import {
+  readableDescription,
+  type PackageDefinition,
+} from "../../../../lib/marketplace";
 import { SectionCard } from "../../components/section-card";
-import { ResourceRowError } from "../../components/resource-row";
-import { kindIcon, kindLabel } from "../_lib/kind-icon";
+import { PageFallback, PageShell } from "../../components/page-header";
+import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
+import { ObjectHeader } from "../../../_lib/object/object-header";
+import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
+import {
+  catalogDetailHref,
+  catalogKindLabel,
+  countNoun,
+  describeInstall,
+  installBlockedHint,
+  type InstallSummary,
+} from "../_lib/catalog-model";
+import { confirmItems, installMode, riskLines } from "../_lib/sources-model";
+import { TrustChip } from "../_lib/sources-tab";
 import type {
-  AppliedResult,
-  InstallError,
+  CatalogDetail,
+  CatalogEntry,
+  MarketPreflight,
   PreflightReport,
 } from "../_lib/types";
+
+type CatalogKind = CatalogEntry["kind"];
+
+interface Target {
+  kind: CatalogKind;
+  slug: string;
+  source?: string;
+}
 
 /**
  * Which definition keys become a "what it contains" line, in reading order.
  *
  * Keys that name an OBJECT KIND carry the kind, not a label: the words come
- * from `@synap-core/types/vocabulary`, the one door. This file previously
- * hand-wrote both forms and had already forked — it said "card"/"cards" where
- * the registry says "Card"/"Cards", and "entity type" where the landing page
- * said "record type". A second label table is a fork the moment it exists, and
- * this one was correct-looking enough to survive review, which is exactly how.
- *
- * The remaining keys have NO object kind — they name parts of a definition's
- * structure, not things the product has nouns for — so they keep an explicit
- * label here. That is not a fork: there is nothing upstream to disagree with.
+ * from `@synap-core/types/vocabulary`, the one door. The remaining keys have NO
+ * object kind — they name parts of a definition's structure, not things the
+ * product has nouns for — so they keep an explicit label here.
  */
 const CONTENT_ROWS: {
   key: string;
@@ -92,10 +114,8 @@ const CONTENT_ROWS: {
 ];
 
 /**
- * The registry's own singular/plural for a kind. `resolveObjectNoun` returns
- * only the singular, and `labelPlural` lives on the registry rows, which the
- * vocabulary entry point re-exports — so both words still come from the SSOT.
- * No naive `+ "s"`: that turns "Property" into "Propertys".
+ * The registry's own singular/plural for a kind. No naive `+ "s"`: that turns
+ * "Property" into "Propertys".
  */
 function nounsFor(row: { kind?: string; noun?: string; nounPlural?: string }): {
   noun: string;
@@ -113,462 +133,471 @@ function nounsFor(row: { kind?: string; noun?: string; nounPlural?: string }): {
   return { noun, nounPlural: entry?.labelPlural ?? noun };
 }
 
+/** Next hands a dynamic segment back still encoded on some paths (`a%2Fb`). */
+function decodeSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 type Stage =
   | { kind: "idle" }
-  | { kind: "preflighting" }
-  | { kind: "plan"; report: PreflightReport }
-  | { kind: "applying"; report: PreflightReport }
-  | { kind: "applied"; result: AppliedResult }
-  | { kind: "failed"; error: InstallError };
+  | { kind: "checking" }
+  | { kind: "plan"; preflight: MarketPreflight }
+  | { kind: "installing"; preflight: MarketPreflight }
+  | { kind: "done"; summary: InstallSummary }
+  | { kind: "failed"; message: string; detail: string };
 
-export default function PackageDetailPage() {
+const FOCUS_RING =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+
+export default function CatalogEntryPage() {
+  // `useSearchParams` needs a Suspense boundary for the static build.
+  return (
+    <Suspense fallback={<PageFallback />}>
+      <CatalogEntry />
+    </Suspense>
+  );
+}
+
+function CatalogEntry() {
   const params = useParams<{ slug: string }>();
-  const slug = params?.slug ?? "";
+  const search = useSearchParams();
+  const slug = decodeSegment(params?.slug ?? "");
+  const kindParam = search.get("kind") as CatalogKind | null;
+  const source = search.get("source") ?? undefined;
 
-  const [pkg, setPkg] = useState<PackageDetail | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [stage, setStage] = useState<Stage>({ kind: "idle" });
-
-  useEffect(() => {
-    if (!slug) return;
-    let cancelled = false;
-    fetch(`/api/marketplace/packages/${encodeURIComponent(slug)}`, {
-      credentials: "include",
-    })
-      .then(async (res) => {
-        const body = (await res.json()) as
-          { package: PackageDetail } | { error: string };
-        if (!res.ok) {
-          throw new Error(
-            "error" in body ? body.error : `Catalog error ${res.status}`
-          );
-        }
-        return (body as { package: PackageDetail }).package;
-      })
-      .then((p) => {
-        if (!cancelled) setPkg(p);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled)
-          setLoadError(err instanceof Error ? err.message : "Unavailable");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [slug]);
-
-  async function callInstall(step: "preflight" | "apply") {
-    const res = await fetch("/api/marketplace/install", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slug, step }),
-    });
-    return { status: res.status, body: (await res.json()) as unknown };
-  }
-
-  async function runPreflight() {
-    setStage({ kind: "preflighting" });
-    try {
-      const { status, body } = await callInstall("preflight");
-      if (status !== 200) {
-        setStage({ kind: "failed", error: body as InstallError });
-        return;
-      }
-      setStage({ kind: "plan", report: body as PreflightReport });
-    } catch {
-      setStage({
-        kind: "failed",
-        error: { error: "Could not reach this pod." },
-      });
+  // A link that names no kind (an older bookmark) is resolved by slug: one
+  // match opens it, several are offered — never a silent pick.
+  const bySlug = trpc.marketplace.list.useQuery(
+    { query: slug, limit: 100 },
+    { enabled: !kindParam && !!slug, retry: false }
+  );
+  if (!kindParam) {
+    if (bySlug.isLoading) return <PageFallback />;
+    const matches = (bySlug.data?.entries ?? []).filter((e) => e.slug === slug);
+    if (bySlug.error || matches.length === 0) {
+      return (
+        <Failure
+          message={
+            bySlug.error
+              ? "The pod couldn't read its catalog."
+              : `"${slug}" is not in this pod's catalog.`
+          }
+          detail={bySlug.error ? errorDetail(bySlug.error) : undefined}
+          onRetry={bySlug.error ? () => void bySlug.refetch() : undefined}
+        />
+      );
     }
+    if (matches.length > 1) return <Choose matches={matches} />;
+    return <Detail target={matches[0]!} />;
   }
+  return <Detail target={{ kind: kindParam, slug, source }} />;
+}
 
-  async function runApply(report: PreflightReport) {
-    setStage({ kind: "applying", report });
-    try {
-      const { status, body } = await callInstall("apply");
-      // Read what the pod actually reported. There is no `success` field on
-      // this response, so the absence of one means nothing at all.
-      if (status === 200 || status === 201) {
-        setStage({ kind: "applied", result: body as AppliedResult });
-        return;
-      }
-      setStage({ kind: "failed", error: body as InstallError });
-    } catch {
-      setStage({
-        kind: "failed",
-        error: { error: "Could not reach this pod." },
-      });
-    }
-  }
+function Detail({ target }: { target: Target }) {
+  const entry = trpc.marketplace.get.useQuery(
+    { kind: target.kind, slug: target.slug, source: target.source },
+    { retry: false, staleTime: 60_000 }
+  );
 
-  if (loadError) {
+  if (entry.isLoading) return <PageFallback />;
+  if (entry.error || !entry.data) {
     return (
-      <div className="px-6 py-6 max-w-[900px]">
-        <BackLink />
-        <ResourceRowError message={loadError} />
-      </div>
+      <Failure
+        message={
+          readableError(entry.error?.message) ??
+          "This catalog entry is unavailable right now."
+        }
+        detail={entry.error ? errorDetail(entry.error) : undefined}
+        onRetry={() => void entry.refetch()}
+      />
     );
   }
+  const pkg = entry.data;
+  const description = readableDescription(pkg.description);
 
-  if (!pkg) {
-    return (
-      <div className="px-6 py-6 max-w-[900px]">
-        <BackLink />
-        <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/55">
-          <Spinner size="sm" /> Loading package…
+  return (
+    <PageShell className="flex flex-col gap-4">
+      {/* ── 1. What it is ─────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-2">
+        <ObjectHeader
+          kind={pkg.objectKind}
+          noun={catalogKindLabel(pkg.objectKind)}
+          title={pkg.name}
+          summary={description}
+          status={
+            pkg.installed ? { kind: "healthy", label: "Installed" } : null
+          }
+          breadcrumb={[
+            { label: "Marketplace", href: navHref("marketplace") },
+            { label: pkg.name },
+          ]}
+        />
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-foreground/65 sm:pl-14">
+          <span>From {pkg.sourceName}</span>
+          <TrustChip trust={pkg.trust} />
         </div>
       </div>
+
+      {/* ── 2. What it contains ───────────────────────────────────────── */}
+      <Contents pkg={pkg} />
+
+      {/* ── 3 + 4. What it will do here, then confirm ─────────────────── */}
+      <InstallPanel target={target} pkg={pkg} />
+
+      <AdvancedPanel
+        ids={[
+          { label: "Package id", value: pkg.id },
+          ...(pkg.version ? [{ label: "Version", value: pkg.version }] : []),
+          { label: "Source id", value: pkg.source },
+          ...(pkg.vendor ? [{ label: "Vendor id", value: pkg.vendor }] : []),
+        ]}
+      />
+    </PageShell>
+  );
+}
+
+function Contents({ pkg }: { pkg: CatalogDetail }) {
+  const definition = pkg.definition as PackageDefinition | null;
+  if (!definition) {
+    return (
+      <SectionCard title="What's in this package">
+        <p className="text-[12.5px] text-foreground/65">
+          {pkg.definitionError
+            ? `The pod couldn't fetch the full package from ${pkg.sourceName} right now.`
+            : pkg.installMode === "open_site"
+              ? `Listed for show by ${pkg.sourceName} — the pod never fetches its contents.`
+              : pkg.installMode === "refuse"
+                ? "Not fetched while this source can't install anything."
+                : "The catalog carries no definition for this entry."}
+        </p>
+      </SectionCard>
     );
   }
-
-  const Icon = kindIcon(pkg.category);
-  const contents = CONTENT_ROWS.map((row) => {
-    const value = pkg.definition?.[row.key];
+  const rows = CONTENT_ROWS.map((row) => {
+    const value = definition[row.key];
     // A capability package stores a SINGULAR `capability` object, not a
-    // `capabilities` array — 24 of the 53 published packages are that shape.
-    // Counting arrays only made every one of them report zero contents, and
-    // the empty branch below then asserted "declares no profiles, views or
-    // capabilities" about a definition this page was holding in memory. The
-    // landing detail page already folds the object form; this matches it.
-    // The array is checked for LENGTH, not just presence: `capabilities: []`
-    // alongside a singular `capability` object is a real shape here (25 shipped
-    // templates write `skills: []` present-but-empty), and testing
-    // `Array.isArray` first would let that empty array shadow the object and
-    // report 0 — the same false "declares nothing" this fold exists to prevent.
+    // `capabilities` array. The array is checked for LENGTH, not just
+    // presence: `capabilities: []` beside a singular object must not shadow it.
     const arrayCount = Array.isArray(value) ? value.length : 0;
     const hasSingularCapability =
       row.key === "capabilities" &&
-      !!pkg.definition?.capability &&
-      typeof pkg.definition.capability === "object";
+      !!definition.capability &&
+      typeof definition.capability === "object";
     const count = arrayCount > 0 ? arrayCount : hasSingularCapability ? 1 : 0;
     return { ...row, ...nounsFor(row), count };
   }).filter((row) => row.count > 0);
 
   return (
-    <div className="px-6 py-6 max-w-[900px] flex flex-col gap-4">
-      <BackLink />
-
-      {/* ── 1. What it is ─────────────────────────────────────────────── */}
-      <header className="flex flex-col gap-2">
-        <div className="flex items-start gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/70">
-            <Icon size={17} />
-          </span>
-          <div className="min-w-0 flex flex-col gap-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-                {pkg.displayName}
-              </h1>
-              <Chip
-                size="sm"
-                radius="sm"
-                variant="flat"
-                className="text-[11px]"
-              >
-                {kindLabel(pkg.category)}
-              </Chip>
-            </div>
-            <p className="font-mono text-[11.5px] text-foreground/45">
-              {pkg.slug} · {pkg.version}
-              {pkg.domain ? ` · ${pkg.domain}` : ""}
-            </p>
-          </div>
-        </div>
-
-        {readableDescription(pkg.description) && (
-          <p className="text-[13px] leading-relaxed text-foreground/70">
-            {readableDescription(pkg.description)}
+    <SectionCard
+      title="What's in this package"
+      hint="Read from the definition the install uses"
+    >
+      {rows.length === 0 ? (
+        <p className="text-[12.5px] text-foreground/65">
+          Nothing to count here — the preview below says what installing it
+          adds.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {rows.map((row) => (
+            <li
+              key={row.key}
+              className="flex items-baseline gap-2 text-[12.5px] text-foreground/70"
+            >
+              <span className="w-8 shrink-0 text-right font-medium tabular-nums text-foreground">
+                {row.count}
+              </span>
+              <span>{row.count === 1 ? row.noun : row.nounPlural}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {Array.isArray(definition.dependencies) &&
+        definition.dependencies.length > 0 && (
+          <p className="mt-3 border-t border-foreground/[0.07] pt-3 text-[12px] text-foreground/65">
+            Also pulls in:{" "}
+            {definition.dependencies.map((d) => d.slug).join(", ")}
           </p>
         )}
-
-        {pkg.tags && pkg.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {pkg.tags.map((tag) => (
-              <Chip
-                key={tag}
-                size="sm"
-                radius="sm"
-                variant="flat"
-                className="text-[11px] text-foreground/60"
-              >
-                {tag}
-              </Chip>
-            ))}
-          </div>
-        )}
-      </header>
-
-      {/* ── 2. What it contains ───────────────────────────────────────── */}
-      <SectionCard
-        title="What's in this package"
-        hint="Read from the published definition"
-      >
-        {contents.length === 0 ? (
-          <p className="text-[12.5px] text-foreground/55">
-            This package declares no profiles, views or capabilities — it
-            carries configuration only.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1.5">
-            {contents.map((row) => (
-              <li
-                key={row.key}
-                className="flex items-baseline gap-2 text-[12.5px] text-foreground/70"
-              >
-                <span className="w-8 shrink-0 text-right font-medium tabular-nums text-foreground">
-                  {row.count}
-                </span>
-                <span>{row.count === 1 ? row.noun : row.nounPlural}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {Array.isArray(pkg.definition?.dependencies) &&
-          pkg.definition.dependencies.length > 0 && (
-            <p className="mt-3 border-t border-foreground/[0.07] pt-3 text-[12px] text-foreground/55">
-              Also pulls in:{" "}
-              {pkg.definition.dependencies.map((d) => d.slug).join(", ")}
-            </p>
-          )}
-      </SectionCard>
-
-      {/* ── 3 + 4. What it will do here, then confirm ─────────────────── */}
-      <InstallPanel
-        stage={stage}
-        category={pkg.category}
-        slug={pkg.slug}
-        source={pkg.source ?? null}
-        vendorId={pkg.vendorId ?? null}
-        onPreflight={runPreflight}
-        onApply={runApply}
-        onReset={() => setStage({ kind: "idle" })}
-      />
-    </div>
+    </SectionCard>
   );
 }
 
-function BackLink() {
-  return (
-    <Link
-      href="/marketplace"
-      className="inline-flex w-fit items-center gap-1.5 text-[12px] text-foreground/55 hover:text-foreground"
-    >
-      <ArrowLeft size={13} /> Marketplace
-    </Link>
-  );
+function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
+  const mode = installMode(pkg);
+  if (mode.kind === "open_site")
+    return <PublisherSite pkg={pkg} url={mode.url} />;
+  if (mode.kind === "blocked") {
+    return (
+      <SectionCard title="Install">
+        <div className="flex items-start gap-2.5">
+          <CircleAlert size={15} className="mt-0.5 shrink-0 text-status-down" />
+          <p className="text-[12.5px] leading-relaxed text-foreground/75">
+            {mode.reason}
+          </p>
+        </div>
+      </SectionCard>
+    );
+  }
+  return <Installer target={target} pkg={pkg} />;
 }
 
 /**
- * Where a non-workspace package actually installs.
- *
- * `POST /api/marketplace/install` answers 501 for `capability | cell | view |
- * automation | skill`; only `workspace` has a web install path. Before this,
- * the page said "Not installable from here yet" — which reads as a defect in
- * the product rather than what it is: a boundary. pod-admin is the pod's front
- * desk, and installing a capability into a running workspace is desktop work.
- *
- * So: name the real destination first, and keep the CLI as a genuine second
- * option rather than the apologetic only one. Operators who live in a terminal
- * legitimately prefer it, and it is the one path that works for every kind.
- *
- * Module scope, not nested inside `InstallPanel`: a component declared in a
- * render body gets a new identity every render, so React unmounts and remounts
- * its subtree — harmless while the content is static, a real bug the moment
- * anything in here holds state or focus.
+ * A showcase listing: Install is the publisher's own page, in a new tab —
+ * never a fetch, never an install on this pod.
  */
-function KindHandoff({ category, slug }: { category: string; slug: string }) {
-  const noun = resolveObjectNoun(category);
+function PublisherSite({
+  pkg,
+  url,
+}: {
+  pkg: CatalogDetail;
+  url: string | null;
+}) {
+  const exit = publisherExit(url);
   return (
-    <div className="flex flex-col gap-3">
-      <HandoffCard
-        icon={Store}
-        title={`${noun} packages install in the desktop app`}
-        body={`Installing a ${noun.toLowerCase()} binds it to a live workspace, so it happens where that workspace is open. The pod's marketplace here is for browsing and for workspace packages.`}
-        exit={openIn({ kind: "app", appId: "marketplace" })}
-        cta="Open the marketplace in the app"
-      />
-      <div className="flex flex-col gap-1.5">
-        <p className="text-[11.5px] text-foreground/50">
-          Or install it from a terminal:
+    <SectionCard title="Install">
+      <div className="flex flex-col gap-3">
+        <p className="text-[12.5px] leading-relaxed text-foreground/75">
+          {pkg.sourceName} is listed for show only: this package installs from
+          the publisher&apos;s site, and nothing from it runs on this pod.
         </p>
-        <code className="w-fit rounded-md bg-foreground/[0.06] px-2.5 py-1.5 font-mono text-[11.5px] text-foreground/80">
-          synap market install {slug}
-        </code>
+        {exit ? (
+          <ExitLink exit={exit} label="Open the publisher's site" />
+        ) : (
+          <p className="text-[12px] text-foreground/65">
+            The publisher gave no install page.
+          </p>
+        )}
       </div>
-    </div>
+    </SectionCard>
   );
 }
 
-function InstallPanel({
-  stage,
-  category,
-  slug,
-  source,
-  vendorId,
-  onPreflight,
-  onApply,
-  onReset,
-}: {
-  stage: Stage;
-  category: string;
-  slug: string;
-  source: string | null;
-  vendorId: string | null;
-  onPreflight: () => void;
-  onApply: (report: PreflightReport) => void;
-  onReset: () => void;
-}) {
-  if (stage.kind === "applied") {
-    const { status, outcome, workspaceId } = stage.result;
-    // Report only what the pod's own response says. `outcome` is the
-    // discriminator that tells a fresh materialization apart from an idempotent
-    // re-hit; inferring "created" from a 200 would call a no-op reinstall a new
-    // workspace. `status: "pending"` means provisioning has not finished — it
-    // is in progress, not done.
-    const pending = status === "pending";
-    return (
-      <SectionCard title={pending ? "Installing" : "Installed"}>
-        <div className="flex items-start gap-2.5">
-          {pending ? (
-            <Clock size={15} className="mt-0.5 shrink-0 text-status-stale" />
-          ) : (
-            <CheckCircle2
-              size={15}
-              className="mt-0.5 shrink-0 text-status-healthy"
-            />
-          )}
-          <div className="flex flex-col gap-2">
-            <p className="text-[12.5px] leading-relaxed text-foreground/75">
-              {pending
-                ? "The workspace exists but the pod is still provisioning it. Reopen it in a moment to see the finished result."
-                : outcome === "unchanged"
-                  ? "Already installed and up to date — the pod made no changes."
-                  : outcome === "reconciled"
-                    ? "Already installed; the pod updated it to this version."
-                    : outcome === "created"
-                      ? "A new workspace was created."
-                      : "The pod accepted the install but did not say what it did — open the workspace to check."}
-            </p>
-            {workspaceId && (
-              <Link
-                href={`/workspaces/${workspaceId}`}
-                className="inline-flex w-fit items-center gap-1.5 text-[12.5px] font-medium text-primary hover:underline"
-              >
-                Open the workspace <ArrowRight size={13} />
-              </Link>
-            )}
-          </div>
-        </div>
-      </SectionCard>
-    );
+function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
+  const utils = trpc.useUtils();
+  const [stage, setStage] = useState<Stage>({ kind: "idle" });
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [accepted, setAccepted] = useState<{
+    code?: boolean;
+    network?: boolean;
+  }>({});
+  const install = trpc.marketplace.install.useMutation();
+
+  // The row's own source, so preflight and install name the exact row read.
+  const exact = { kind: target.kind, slug: target.slug, source: pkg.source };
+
+  async function check(space: string | null) {
+    setStage({ kind: "checking" });
+    try {
+      const preflight = await utils.marketplace.preflight.fetch(
+        { ...exact, workspaceId: space ?? undefined },
+        { staleTime: 0 }
+      );
+      setAccepted({});
+      setStage({ kind: "plan", preflight });
+    } catch (err) {
+      setStage({
+        kind: "failed",
+        message:
+          readableError(errorDetail(err)) ??
+          "The pod couldn't check this package. Nothing was written.",
+        detail: errorDetail(err),
+      });
+    }
   }
+
+  function chooseSpace(space: string | null) {
+    setWorkspaceId(space);
+    void check(space);
+  }
+
+  async function runInstall(preflight: MarketPreflight) {
+    setStage({ kind: "installing", preflight });
+    const params = Object.fromEntries(
+      Object.entries(values).filter(([, v]) => v.trim() !== "")
+    );
+    try {
+      const outcome = await install.mutateAsync({
+        ...exact,
+        workspaceId: workspaceId ?? undefined,
+        params: Object.keys(params).length > 0 ? params : undefined,
+        acknowledge: accepted,
+      });
+      setStage({ kind: "done", summary: describeInstall(outcome) });
+      // What an install can change: the package's own "Installed", the
+      // Installed/Tools tabs, and the spaces a template creates.
+      void Promise.all([
+        utils.marketplace.get.invalidate(),
+        utils.capabilities.invalidate(),
+        utils.workspaces.invalidate(),
+      ]);
+    } catch (err) {
+      setStage({
+        kind: "failed",
+        message:
+          readableError(errorDetail(err)) ??
+          "The install didn't go through. Nothing changed — try again.",
+        detail: errorDetail(err),
+      });
+    }
+  }
+
+  if (stage.kind === "done") return <Result summary={stage.summary} />;
 
   if (stage.kind === "failed") {
-    // A kind this front desk does not install is a BOUNDARY, not a failure —
-    // an amber note plus the surface that owns it, never a red error box and
-    // never an apology for a feature nobody is coming to build here.
-    const blockedByKind = stage.error.reason === "kind_not_installable_here";
     return (
-      <SectionCard
-        title={blockedByKind ? "Installs in the desktop app" : "Install failed"}
-      >
-        <div className="flex items-start gap-2.5">
-          <CircleAlert
-            size={15}
-            className={[
-              "mt-0.5 shrink-0",
-              blockedByKind ? "text-status-stale" : "text-status-down",
-            ].join(" ")}
-          />
-          <div className="flex flex-col gap-2 min-w-0">
-            <p className="text-[12.5px] leading-relaxed text-foreground/75">
-              {stage.error.error}
-            </p>
-            {stage.error.detail && (
-              <p className="text-[12px] text-foreground/55">
-                {stage.error.detail}
-              </p>
-            )}
-            {stage.error.conflicts && stage.error.conflicts.length > 0 && (
-              <ul className="flex flex-col gap-1 text-[12px] text-foreground/60">
-                {stage.error.conflicts.map((c) => (
-                  <li key={c.slug}>
-                    <span className="font-mono">{c.slug}</span> — this package
-                    declares it as a {c.declaredKind}, your pod already has it
-                    as a {c.existingKind}.
-                  </li>
-                ))}
-              </ul>
-            )}
-            {blockedByKind && <KindHandoff category={category} slug={slug} />}
-            {/*
-             * "Start over" belongs on BOTH branches. It used to be hidden when
-             * `blockedByKind`, which left that card with no exit at all — the
-             * only way back was a BackLink already scrolled off the top.
-             */}
-            <Button
-              size="sm"
-              radius="sm"
-              variant="flat"
-              className="w-fit"
-              onPress={onReset}
-            >
-              Start over
-            </Button>
-          </div>
+      <SectionCard title="Install didn't go through">
+        <div className="flex min-w-0 flex-col gap-2">
+          <ErrorNote message={stage.message} detail={stage.detail} />
+          <Button
+            size="sm"
+            radius="md"
+            variant="flat"
+            className="w-fit"
+            onPress={() => setStage({ kind: "idle" })}
+          >
+            Start over
+          </Button>
         </div>
       </SectionCard>
     );
   }
 
-  if (stage.kind === "plan" || stage.kind === "applying") {
-    const { report } = stage;
-    const applying = stage.kind === "applying";
+  if (stage.kind === "plan" || stage.kind === "installing") {
+    const { preflight } = stage;
+    const installing = stage.kind === "installing";
+    const missing = preflight.params.filter(
+      (p) => p.required && !p.hasDefault && !values[p.name]?.trim()
+    );
+    const confirms = confirmItems(preflight);
+    const unconfirmed = confirms.some((c) => accepted[c.key] !== true);
+    const blockedHint = installBlockedHint({
+      ok: preflight.ok,
+      missing: missing.map((p) => p.label ?? p.name),
+      unconfirmed,
+    });
+    const brings = riskLines(preflight.risks);
     return (
       <SectionCard
         title="What this will do to your pod"
         hint="Checked against this pod — nothing has been written"
       >
-        <PlanBody report={report} />
-        <Provenance source={source} vendorId={vendorId} />
-        <div className="mt-4 flex items-center gap-2 border-t border-foreground/[0.07] pt-3">
+        <div className="flex flex-col gap-3">
+          {preflight.workspace !== "creates" && (
+            <SpacePicker
+              need={preflight.workspace}
+              value={workspaceId}
+              onChange={chooseSpace}
+              isDisabled={installing}
+            />
+          )}
+          {preflight.blockers.length > 0 && (
+            <PlanGroup tone="down" heading="Before it can install">
+              {preflight.blockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </PlanGroup>
+          )}
+          {preflight.report && <PlanBody report={preflight.report} />}
+          <Adds preflight={preflight} />
+          {brings.length > 0 && (
+            <PlanGroup
+              tone={confirms.length > 0 ? "stale" : "neutral"}
+              heading="What it brings"
+            >
+              {brings.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </PlanGroup>
+          )}
+          {preflight.notices.length > 0 && (
+            <PlanGroup tone="stale" heading="Worth knowing">
+              {preflight.notices.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </PlanGroup>
+          )}
+          {preflight.params.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <p className="text-[12.5px] font-medium text-foreground">
+                It asks for
+              </p>
+              {preflight.params.map((p) => (
+                <Input
+                  key={p.name}
+                  size="sm"
+                  radius="md"
+                  variant="bordered"
+                  label={p.label ?? p.name}
+                  description={p.description ?? undefined}
+                  isRequired={p.required && !p.hasDefault}
+                  type={p.secret ? "password" : "text"}
+                  autoComplete="off"
+                  value={values[p.name] ?? ""}
+                  onValueChange={(v) =>
+                    setValues((prev) => ({ ...prev, [p.name]: v }))
+                  }
+                  isDisabled={installing}
+                  className="max-w-md"
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        {confirms.length > 0 && (
+          <div className="mt-3 flex flex-col gap-2 rounded-lg bg-status-stale/10 p-3">
+            <p className="text-[12.5px] font-medium text-foreground">
+              Before it installs — from {preflight.sourceName}, not Synap
+            </p>
+            {confirms.map((c) => (
+              <Checkbox
+                key={c.key}
+                size="sm"
+                isSelected={accepted[c.key] === true}
+                isDisabled={installing}
+                onValueChange={(v) =>
+                  setAccepted((prev) => ({ ...prev, [c.key]: v }))
+                }
+              >
+                <span className="text-[12.5px] text-foreground/80">
+                  {c.label}
+                </span>
+              </Checkbox>
+            ))}
+          </div>
+        )}
+        <Provenance pkg={pkg} />
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-foreground/[0.07] pt-3">
           <Button
             size="sm"
-            radius="sm"
+            radius="md"
             color="primary"
-            isDisabled={applying || !report.ok}
-            isLoading={applying}
-            onPress={() => onApply(report)}
+            isDisabled={installing || blockedHint !== null}
+            isLoading={installing}
+            onPress={() => void runInstall(preflight)}
           >
-            {applying ? "Installing…" : "Install"}
+            {installing ? "Installing…" : "Install"}
           </Button>
           <Button
             size="sm"
-            radius="sm"
+            radius="md"
             variant="light"
-            isDisabled={applying}
-            onPress={onReset}
+            isDisabled={installing}
+            onPress={() => setStage({ kind: "idle" })}
           >
             Cancel
           </Button>
+          {blockedHint && !installing && (
+            <p className="w-full text-[12px] text-foreground/65 sm:w-auto">
+              {blockedHint}
+            </p>
+          )}
         </div>
-      </SectionCard>
-    );
-  }
-
-  // The install door only handles workspace packages — `POST /api/marketplace/
-  // install` answers 501 for the other five kinds. `category` is known HERE, at
-  // render, so say it BEFORE offering the button. Presenting an identical CTA
-  // and an identical "you'll see exactly what changes" promise for all six
-  // kinds, then failing after the click, is what made an honest boundary read
-  // as a broken feature.
-  if (category !== "workspace") {
-    return (
-      <SectionCard title="Install" hint="This kind installs in the desktop app">
-        <KindHandoff category={category} slug={slug} />
       </SectionCard>
     );
   }
@@ -580,15 +609,124 @@ function InstallPanel({
     >
       <Button
         size="sm"
-        radius="sm"
+        radius="md"
         color="primary"
         className="w-fit"
-        isLoading={stage.kind === "preflighting"}
-        isDisabled={stage.kind === "preflighting"}
-        onPress={onPreflight}
+        isLoading={stage.kind === "checking"}
+        isDisabled={stage.kind === "checking"}
+        onPress={() => void check(workspaceId)}
       >
-        {stage.kind === "preflighting" ? "Checking…" : "Check this pod"}
+        {stage.kind === "checking" ? "Checking…" : "Check this pod"}
       </Button>
+    </SectionCard>
+  );
+}
+
+/**
+ * Where an install lands. `required` kinds go INTO a space the person picks;
+ * `optional` ones are pod-wide unless one is picked. The pod re-checks on
+ * every change, so the plan always describes the chosen space.
+ */
+function SpacePicker({
+  need,
+  value,
+  onChange,
+  isDisabled,
+}: {
+  need: MarketPreflight["workspace"];
+  value: string | null;
+  onChange: (space: string | null) => void;
+  isDisabled: boolean;
+}) {
+  const spaces = trpc.workspaces.list.useQuery(undefined, { retry: false });
+  const POD_WIDE = "__pod__";
+  return (
+    <Select
+      label={need === "required" ? "Add it to" : "Install for"}
+      size="sm"
+      radius="md"
+      variant="bordered"
+      className="max-w-md"
+      placeholder={spaces.isLoading ? "Loading spaces…" : "Choose a space"}
+      isDisabled={isDisabled || spaces.isLoading}
+      selectedKeys={value ? [value] : need === "optional" ? [POD_WIDE] : []}
+      onSelectionChange={(keys) => {
+        const picked = Array.from(keys as Set<string>)[0];
+        if (!picked) return;
+        onChange(picked === POD_WIDE ? null : picked);
+      }}
+      errorMessage={
+        spaces.error
+          ? "Couldn't list the spaces. Reload the page to try again."
+          : undefined
+      }
+      isInvalid={!!spaces.error}
+    >
+      {[
+        ...(need === "optional"
+          ? [<SelectItem key={POD_WIDE}>The whole pod</SelectItem>]
+          : []),
+        ...(spaces.data ?? []).map((s) => (
+          <SelectItem key={s.id}>{s.name}</SelectItem>
+        )),
+      ]}
+    </Select>
+  );
+}
+
+function Adds({ preflight }: { preflight: MarketPreflight }) {
+  if (preflight.adds.length === 0) return null;
+  return (
+    <>
+      {preflight.adds.map((part) => (
+        <PlanGroup
+          key={part.kind}
+          heading={`Adds ${countNoun(part.kind, part.names.length)}`}
+        >
+          {part.names.map((n) => (
+            <li key={n}>{n}</li>
+          ))}
+        </PlanGroup>
+      ))}
+    </>
+  );
+}
+
+function Result({ summary }: { summary: InstallSummary }) {
+  const pending = summary.tone === "stale";
+  return (
+    <SectionCard title={summary.proposalId ? "Sent for review" : "Installed"}>
+      <div className="flex items-start gap-2.5">
+        {pending ? (
+          <Clock size={15} className="mt-0.5 shrink-0 text-status-stale" />
+        ) : (
+          <CheckCircle2
+            size={15}
+            className="mt-0.5 shrink-0 text-status-healthy"
+          />
+        )}
+        <div className="flex flex-col gap-2">
+          <p className="text-[12.5px] leading-relaxed text-foreground/75">
+            {summary.sentence}
+          </p>
+          {summary.workspaceId && (
+            <Link
+              href={`/workspaces/${summary.workspaceId}`}
+              className={`inline-flex w-fit items-center gap-1.5 rounded-sm text-[12.5px] font-medium text-primary hover:underline ${FOCUS_RING}`}
+            >
+              Open the space <ArrowRight size={13} />
+            </Link>
+          )}
+          {summary.proposalId && (
+            <Link
+              href={navHref("review", { focus: summary.proposalId })}
+              className={`inline-flex w-fit items-center gap-1.5 rounded-sm text-[12.5px] font-medium text-primary hover:underline ${FOCUS_RING}`}
+            >
+              Open in Review <ArrowRight size={13} />
+            </Link>
+          )}
+        </div>
+      </div>
     </SectionCard>
   );
 }
@@ -600,16 +738,6 @@ function PlanBody({ report }: { report: PreflightReport }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {!report.ok && (
-        <div className="flex items-start gap-2 rounded-lg bg-status-down/10 px-3 py-2 ring-1 ring-inset ring-status-down/25">
-          <CircleAlert size={14} className="mt-0.5 shrink-0 text-status-down" />
-          <p className="text-[12px] leading-relaxed text-foreground/75">
-            This package would not apply cleanly to your pod. Installing is
-            blocked until the conflicts below are resolved.
-          </p>
-        </div>
-      )}
-
       {validationErrors.length > 0 && (
         <PlanGroup tone="down" heading="Errors in the package">
           {validationErrors.map((e) => (
@@ -701,11 +829,7 @@ function PlanBody({ report }: { report: PreflightReport }) {
         scopeConflicts.length === 0 && (
           <div className="flex items-start gap-2 text-[12.5px] text-foreground/70">
             <Info size={14} className="mt-0.5 shrink-0 text-foreground/40" />
-            <p>
-              No entity types change. The package&apos;s other contents —
-              capabilities, playbooks, automations — are applied after the
-              workspace step and are not part of this check.
-            </p>
+            <p>No entity types change.</p>
           </div>
         )}
     </div>
@@ -730,7 +854,7 @@ function PlanGroup({
   return (
     <div className="flex flex-col gap-1">
       <p className={`text-[12.5px] font-medium ${toneClass}`}>{heading}</p>
-      <ul className="flex flex-col gap-0.5 pl-3 text-[12px] text-foreground/60">
+      <ul className="flex flex-col gap-0.5 break-words pl-3 text-[12px] text-foreground/65">
         {children}
       </ul>
     </div>
@@ -738,34 +862,77 @@ function PlanGroup({
 }
 
 /**
- * Where the package came from. The catalog carries `source` plus two opaque
- * UUIDs and NO publisher name, so this says exactly that rather than dressing
- * an id up as an identity. An unnamed publisher shown as "Unknown" would still
- * be more honest than a badge, but naming the gap is better than either.
+ * Where the entry came from, in words. The catalog stores publisher ids, not
+ * names, so the vendor id and the source id live in Advanced rather than
+ * being dressed up as an identity here.
  */
-function Provenance({
-  source,
-  vendorId,
+function Provenance({ pkg }: { pkg: CatalogDetail }) {
+  return (
+    <p className="mt-3 border-t border-foreground/[0.07] pt-3 text-[12px] text-foreground/65">
+      From the {pkg.sourceName} catalog
+      {pkg.official ? "." : " — a source an admin of this pod added."}
+    </p>
+  );
+}
+
+function Choose({ matches }: { matches: CatalogEntry[] }) {
+  return (
+    <PageShell className="flex flex-col gap-4">
+      <BackLink />
+      <SectionCard title="More than one entry has this name">
+        <ul className="flex flex-col gap-1.5">
+          {matches.map((m) => (
+            <li key={`${m.source}|${m.kind}`}>
+              <Link
+                href={catalogDetailHref(m)}
+                prefetch={false}
+                className={`rounded-sm text-[12.5px] font-medium text-primary hover:underline ${FOCUS_RING}`}
+              >
+                {m.name} — {catalogKindLabel(m.objectKind)} from {m.sourceName}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </SectionCard>
+    </PageShell>
+  );
+}
+
+function Failure({
+  message,
+  detail,
+  onRetry,
 }: {
-  source: string | null;
-  vendorId: string | null;
+  message: string;
+  detail?: string;
+  onRetry?: () => void;
 }) {
   return (
-    <div className="mt-3 flex flex-col gap-1 border-t border-foreground/[0.07] pt-3">
-      <p className="text-[12px] text-foreground/55">
-        {source
-          ? `Published to the catalog by: ${humanizeToken(source)}`
-          : "The catalog records no publishing source for this package."}
-      </p>
-      {vendorId ? (
-        <p className="font-mono text-[11px] text-foreground/40">
-          vendor {vendorId}
-        </p>
-      ) : (
-        <p className="text-[11.5px] text-foreground/40">
-          No vendor is named — the catalog stores publisher ids, not names.
-        </p>
+    <PageShell className="flex flex-col gap-4">
+      <BackLink />
+      <ErrorNote message={message} detail={detail} />
+      {onRetry && (
+        <Button
+          size="sm"
+          radius="md"
+          variant="flat"
+          className="w-fit"
+          onPress={onRetry}
+        >
+          Retry
+        </Button>
       )}
-    </div>
+    </PageShell>
+  );
+}
+
+function BackLink() {
+  return (
+    <Link
+      href={navHref("marketplace")}
+      className={`inline-flex w-fit items-center gap-1.5 rounded-sm text-[12px] text-foreground/65 hover:text-foreground ${FOCUS_RING}`}
+    >
+      <ArrowLeft size={13} /> Marketplace
+    </Link>
   );
 }

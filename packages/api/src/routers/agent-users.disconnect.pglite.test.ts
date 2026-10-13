@@ -37,6 +37,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         workspaces: actual.workspaces as never,
         workspaceMembers: actual.workspaceMembers as never,
         apiKeys: actual.apiKeys as never,
+        governanceRules: actual.governanceRules as never,
       },
     }),
   };
@@ -65,6 +66,9 @@ import {
   podMembers,
   projectMembers,
   apps,
+  governanceRules,
+  links,
+  proposals,
 } from "@synap/database/schema";
 import { agentUsersRouter } from "./agent-users.js";
 import { apiKeyService } from "../services/api-keys.js";
@@ -129,6 +133,11 @@ beforeAll(async () => {
     projectMembers,
     // `apps.agent_user_id` — the roster excludes an app's own agent.
     apps,
+    // `agentUsers.governance` reads the agent's posture rules.
+    governanceRules,
+    // `list` reads each agent's dispatch binding and open connect request.
+    links,
+    proposals,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await q(
@@ -430,5 +439,105 @@ describe("agentUsers.disconnect — a revoked key stops validating NOW (W4 A3)",
     expect(atClear).not.toBeNull();
     expect((await atClear!).revoked_at).not.toBeNull();
     spy.mockRestore();
+  });
+});
+
+describe("agentUsers.governance — read only by those the agent answers to", () => {
+  it("the owner, a pod admin and the agent itself read it", async () => {
+    for (const c of [caller(OWNER), caller(ADMIN), caller(AGENT)]) {
+      expect(await c.governance({ agentUserId: AGENT })).toMatchObject({
+        askFirst: false,
+        podDefaultEnabled: false,
+      });
+    }
+  });
+
+  it("a person the agent acts for (a live key linked to them) reads it", async () => {
+    const k = await hubKey(AGENT, "active");
+    await q(`update api_keys set linked_user_id = $1 where id = $2`, [
+      STRANGER,
+      k,
+    ]);
+    await expect(
+      caller(STRANGER).governance({ agentUserId: AGENT })
+    ).resolves.toMatchObject({ askFirst: false });
+  });
+
+  it("anyone else gets NOT_FOUND — the same answer as an unknown agent", async () => {
+    await expect(
+      caller(STRANGER).governance({ agentUserId: AGENT })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(OWNER).governance({ agentUserId: randomUUID() })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // A revoked link no longer counts.
+    const k = await hubKey(AGENT, "revoked");
+    await q(`update api_keys set linked_user_id = $1 where id = $2`, [
+      STRANGER,
+      k,
+    ]);
+    await expect(
+      caller(STRANGER).governance({ agentUserId: AGENT })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("agentUsers.list — computers and the agents they host", () => {
+  type HostRow = {
+    id: string;
+    hostComputer: { id: string; name: string } | null;
+  };
+  const COMPUTER = randomUUID();
+  const HOSTED = randomUUID();
+
+  beforeAll(async () => {
+    // A computer is an agent user of type `machine`; its agent points at it.
+    await q(
+      `insert into users (id, email, name, user_type, agent_type, agent_metadata, created_by_user_id)
+         values ($1, 'computer@x', null, 'agent', 'machine', '{"hostname":"devbox"}', $3),
+                ($2, 'hosted@x', 'Claude Code', 'agent', 'claude-code', null, $3)`,
+      [COMPUTER, HOSTED, OWNER]
+    );
+    await q(`update users set host_user_id = $1 where id = $2`, [
+      COMPUTER,
+      HOSTED,
+    ]);
+  });
+
+  const listed = async (input: { includeComputers?: boolean }) =>
+    new Map(
+      (
+        (await caller(OWNER).list({
+          workspaceId: null,
+          ...input,
+        })) as HostRow[]
+      ).map((r) => [r.id, r])
+    );
+
+  it("keeps computers by default (the desktop opens one through the roster)", async () => {
+    const rows = await listed({});
+    expect(rows.has(COMPUTER)).toBe(true);
+    expect(rows.get(COMPUTER)!.hostComputer).toBeNull();
+  });
+
+  it("names the computer an agent runs on, by the roster's own rule", async () => {
+    const rows = await listed({});
+    expect(rows.get(HOSTED)!.hostComputer).toEqual({
+      id: COMPUTER,
+      name: "devbox",
+    });
+    // Not on a computer → null, never a guess.
+    expect(rows.get(AGENT)!.hostComputer).toBeNull();
+  });
+
+  it("includeComputers:false leaves computers out and keeps their agents", async () => {
+    const rows = await listed({ includeComputers: false });
+    expect(rows.has(COMPUTER)).toBe(false);
+    expect(rows.get(HOSTED)!.hostComputer).toEqual({
+      id: COMPUTER,
+      name: "devbox",
+    });
+    // An agent with no agent type is not a computer.
+    expect(rows.has(AGENT)).toBe(true);
   });
 });

@@ -29,21 +29,21 @@ const GOVERNANCE_FIELDS: ConfigFieldSpec[] = [
   {
     key: "proposalApprovalPolicy",
     label: "Proposal approval policy",
-    description: "Who can approve AI proposals in this workspace.",
+    description: "Who can approve AI proposals in this space.",
     valueType: "enum",
     enumValues: ["owner_and_admins", "any_editor", "admins_only"],
   },
   {
     key: "allowAgentCreation",
     label: "Allow agent creation",
-    description: "Whether workspace members may create custom agents.",
+    description: "Whether space members may create custom agents.",
     valueType: "boolean",
   },
   {
     key: "allowSelfServiceTwin",
     label: "Allow self-service twin",
     description:
-      "Any workspace member can create their own twin agent without admin approval.",
+      "Any space member can create their own twin agent without admin approval.",
     valueType: "boolean",
   },
   {
@@ -156,7 +156,7 @@ export function GovernanceTab({ ws }: GovernanceTabProps) {
       {/* Governance form */}
       <SectionCard
         title="AI governance"
-        hint="Controls how AI agents operate in this workspace."
+        hint="Controls how AI agents operate in this space."
       >
         <div className="pt-1">
           <ConfigForm fields={GOVERNANCE_FIELDS} form={form} />

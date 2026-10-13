@@ -168,3 +168,58 @@ describe("apiKeys.list — an old CLI key that acts as you is flagged", () => {
     expect(keys.find((k) => k.id === OWN_KEY)!.actsAsYou).toBe(false);
   });
 });
+
+describe("apiKeys.list — who holds each key", () => {
+  // An app key, a computer key and a person's own token are ALL `user_pat`;
+  // the holder is the only fact that tells them apart. Rules out: labelling
+  // an app's or a computer's key "Operator" (a human token) in the key lists.
+  it("names an app, a computer, an agent and a person as such", async () => {
+    const OWNER = "owner-h";
+    const MACHINE = "machine-h";
+    const APP_AGENT = "app-agent-h";
+    const PLAIN_AGENT = "plain-agent-h";
+    await h.client!.query(
+      `insert into users (id, email, name, user_type, agent_type) values
+         ($1, 'owner@x', 'Owner', 'human', null),
+         ($2, 'machine@x', 'Studio Mac', 'agent', 'machine'),
+         ($3, 'app@x', 'app agent', 'agent', 'app'),
+         ($4, 'agent@x', 'Claude', 'agent', 'claude')`,
+      [OWNER, MACHINE, APP_AGENT, PLAIN_AGENT]
+    );
+    await h.client!.query(
+      `insert into apps (id, owner_user_id, public_id, name, agent_user_id)
+       values (gen_random_uuid(), $1, 'app_x', 'Invoicer', $2)`,
+      [OWNER, APP_AGENT]
+    );
+    const keyOf = {
+      own: randomUUID(),
+      machine: randomUUID(),
+      app: randomUUID(),
+      agent: randomUUID(),
+    };
+    await addKey(keyOf.own, OWNER, null);
+    await addKey(keyOf.machine, MACHINE, OWNER);
+    await addKey(keyOf.app, APP_AGENT, OWNER);
+    await addKey(keyOf.agent, PLAIN_AGENT, OWNER);
+
+    const keys = await caller(OWNER).list();
+    const holder = (id: string) => keys.find((k) => k.id === id)?.holder;
+    expect(holder(keyOf.own)).toEqual({ kind: "person", name: "Owner" });
+    expect(holder(keyOf.machine)).toEqual({
+      kind: "computer",
+      name: "Studio Mac",
+    });
+    expect(holder(keyOf.app)).toEqual({
+      kind: "app",
+      name: "Invoicer",
+      appId: "app_x",
+    });
+    expect(holder(keyOf.agent)).toEqual({ kind: "agent", name: "Claude" });
+  });
+
+  it("a holder whose user row is gone reads as unknown (null)", async () => {
+    const keys = await caller(HUMAN).list();
+    // HUMAN / AGENT were never inserted as users in this file's fixtures.
+    expect(keys.find((k) => k.id === OWN_KEY)?.holder).toBeNull();
+  });
+});

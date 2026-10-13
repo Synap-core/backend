@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { redirectToLoginIfUnauthorized } from "./auth-redirect";
+
+const sessionState = vi.fn<() => Promise<"active" | "none" | "unknown">>();
+vi.mock("./kratos-flow", () => ({
+  browserSessionState: () => sessionState(),
+}));
+
+const { redirectToLoginIfUnauthorized } = await import("./auth-redirect");
 
 /**
  * The return path must carry the QUERY STRING, not just the pathname.
@@ -20,25 +26,63 @@ function stubLocation(url: string) {
   return assign;
 }
 
-afterEach(() => vi.unstubAllGlobals());
+/** Let the session check and its `.then` settle. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  sessionState.mockReset();
+});
 
 describe("redirectToLoginIfUnauthorized", () => {
-  it("preserves the query string a deep link depends on", () => {
+  it("preserves the query string a deep link depends on", async () => {
+    sessionState.mockResolvedValue("none");
     const assign = stubLocation(
       "https://pod.example/audit?section=proposals&focus=abc-123"
     );
     expect(redirectToLoginIfUnauthorized(UNAUTHORIZED)).toBe(true);
+    await settle();
     const target = new URL(assign.mock.calls[0][0], "https://pod.example");
     expect(target.searchParams.get("return")).toBe(
       "/audit?section=proposals&focus=abc-123"
     );
   });
 
-  it("works for a plain path with no query", () => {
+  it("works for a plain path with no query", async () => {
+    sessionState.mockResolvedValue("none");
     const assign = stubLocation("https://pod.example/people");
     redirectToLoginIfUnauthorized(UNAUTHORIZED);
+    await settle();
     const target = new URL(assign.mock.calls[0][0], "https://pod.example");
     expect(target.searchParams.get("return")).toBe("/people");
+  });
+
+  it("stays on the page when Kratos says the session is alive", async () => {
+    // An UNAUTHORIZED that is not a session expiry (a Hub-key door, a relayed
+    // upstream 401) must not send a signed-in person to /login.
+    sessionState.mockResolvedValue("active");
+    const assign = stubLocation("https://pod.example/marketplace?tab=tools");
+    expect(redirectToLoginIfUnauthorized(UNAUTHORIZED)).toBe(true);
+    await settle();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("stays on the page when Kratos does not answer", async () => {
+    sessionState.mockResolvedValue("unknown");
+    const assign = stubLocation("https://pod.example/marketplace");
+    redirectToLoginIfUnauthorized(UNAUTHORIZED);
+    await settle();
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("asks Kratos once for a burst of failing queries", async () => {
+    sessionState.mockResolvedValue("none");
+    const assign = stubLocation("https://pod.example/runs");
+    redirectToLoginIfUnauthorized(UNAUTHORIZED);
+    redirectToLoginIfUnauthorized(UNAUTHORIZED);
+    await settle();
+    expect(sessionState).toHaveBeenCalledTimes(1);
+    expect(assign).toHaveBeenCalledTimes(1);
   });
 
   it("ignores errors that are not UNAUTHORIZED", () => {
@@ -47,6 +91,7 @@ describe("redirectToLoginIfUnauthorized", () => {
       false
     );
     expect(assign).not.toHaveBeenCalled();
+    expect(sessionState).not.toHaveBeenCalled();
   });
 
   it("ignores a null error", () => {

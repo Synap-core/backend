@@ -1,5 +1,5 @@
 /**
- * Kratos session helpers — server-side only. Used by `middleware.ts` and
+ * Kratos session helpers — server-side only. Used by `proxy.ts` and
  * the `/login` server component to gate every page.
  *
  * Both helpers fetch over the Next.js process's network namespace, not the
@@ -8,6 +8,8 @@
  * components that talk to Kratos client-side (forbidden, top-nav sign-out,
  * the login form).
  */
+
+import { podCallerHeaders } from "./pod-caller-headers";
 
 // Server-side URL: this Next.js process to the backend. Reads POD_URL first
 // (set to `http://backend:4000` in compose), falls back to the public URL
@@ -30,60 +32,93 @@ export interface KratosWhoamiResponse {
 }
 
 /**
- * Check the inbound cookie against `${POD_URL}/.ory/kratos/public/sessions/whoami`.
- * Returns the identity on success, or null if no session.
+ * What the pod said about the inbound cookie. Three answers, because two
+ * different things stop a whoami from returning an identity:
+ *
+ *   • `none`        — Kratos looked and there is no live session (401/403, or
+ *                     an inactive one). Only this answer may send someone to
+ *                     /login.
+ *   • `unavailable` — the pod did not answer the question: unreachable, 5xx,
+ *                     or 429 from the pod-edge rate limiter (budgeted per
+ *                     session or client, see `pod-caller-headers.ts`). Reading
+ *                     a 429 as "signed out" once bounced a signed-in operator
+ *                     to /login, where the browser's own Kratos call then
+ *                     refused a new login flow (`session_already_available`).
  */
-export async function whoamiFromCookie(
-  cookieHeader: string
-): Promise<KratosIdentity | null> {
+export type SessionCheck =
+  | { state: "active"; identity: KratosIdentity }
+  | { state: "none" }
+  | { state: "unavailable"; status: number | null };
+
+/**
+ * Check the inbound request's cookie against
+ * `${POD_URL}/.ory/kratos/public/sessions/whoami`. Takes the inbound HEADERS,
+ * not just the cookie, so the call also carries the client's address.
+ */
+export async function checkSession(incoming: Headers): Promise<SessionCheck> {
   const url = `${INTERNAL_POD_URL.replace(/\/$/, "")}/.ory/kratos/public/sessions/whoami`;
 
   let res: Response;
   try {
     res = await fetch(url, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-        Cookie: cookieHeader,
-      },
-      // Defensive: middleware runs in the Edge runtime, but we use the
-      // Node.js runtime in middleware.ts to keep this fetch path stable
-      // even when Kratos is reached over private DNS.
+      headers: { Accept: "application/json", ...podCallerHeaders(incoming) },
       cache: "no-store",
     });
   } catch {
-    // Network failure — treat as unauthenticated. Caller redirects to login.
-    return null;
+    return { state: "unavailable", status: null };
   }
 
-  if (res.status === 401 || res.status === 403) return null;
-  if (!res.ok) return null;
+  if (res.status === 401 || res.status === 403) return { state: "none" };
+  if (!res.ok) return { state: "unavailable", status: res.status };
 
   let body: KratosWhoamiResponse;
   try {
     body = (await res.json()) as KratosWhoamiResponse;
   } catch {
-    return null;
+    return { state: "unavailable", status: res.status };
   }
 
-  if (!body.active) return null;
+  if (!body.active) return { state: "none" };
   return {
-    id: body.identity.id,
-    email: body.identity.traits?.email ?? "",
-    name: body.identity.traits?.name ?? null,
+    state: "active",
+    identity: {
+      id: body.identity.id,
+      email: body.identity.traits?.email ?? "",
+      name: body.identity.traits?.name ?? null,
+    },
   };
 }
 
 /**
- * Check whether the inbound session belongs to a pod admin.
+ * The answer an API route gives a caller it cannot serve, or null to proceed:
+ * 401 for no session, 503 when the pod could not say — so the page can tell
+ * "sign in again" from "try again" and never confuse the two. Every
+ * `app/api/*` route that needs a signed-in caller asks this.
+ */
+export async function apiSessionDenial(req: Request): Promise<Response | null> {
+  const check = await checkSession(req.headers);
+  if (check.state === "active") return null;
+  return check.state === "none"
+    ? Response.json({ error: "Not signed in" }, { status: 401 })
+    : Response.json(
+        { error: "Couldn't reach the pod. Try again in a few seconds." },
+        { status: 503 }
+      );
+}
+
+/**
+ * Whether the inbound session belongs to a pod admin.
  *
  * The cleanest available signal today is `trpc.sync.getStatus` (uses
  * `podAdminProcedure`) — it 200s for admins and 403s for everyone else.
- * No state-changing side effects on a GET. The tRPC URL on a pod is
- * `${podUrl}/trpc/<router>.<procedure>`; we hit the batched path so the
- * shape matches the client.
+ * No state-changing side effects on a GET. Any other answer (429, 5xx,
+ * unreachable) is `unavailable`, not "member": a rate-limited probe must not
+ * send an admin to /forbidden or shrink their nav.
  */
-export async function isPodAdmin(cookieHeader: string): Promise<boolean> {
+export async function podAdminRole(
+  incoming: Headers
+): Promise<"admin" | "member" | "unavailable"> {
   // Use the non-batched single-call form for simplicity. The tRPC HTTP
   // contract supports both — see https://trpc.io/docs/client/links/httpLink.
   const url = `${INTERNAL_POD_URL.replace(/\/$/, "")}/trpc/sync.getStatus`;
@@ -92,17 +127,14 @@ export async function isPodAdmin(cookieHeader: string): Promise<boolean> {
   try {
     res = await fetch(url, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-        Cookie: cookieHeader,
-      },
+      headers: { Accept: "application/json", ...podCallerHeaders(incoming) },
       cache: "no-store",
     });
   } catch {
-    return false;
+    return "unavailable";
   }
 
-  // 200 = pod admin. 403 = signed in but not pod admin. Anything else =
-  // treat as not admin (operator can ask their pod admin for access).
-  return res.status === 200;
+  if (res.status === 200) return "admin";
+  if (res.status === 403) return "member";
+  return "unavailable";
 }

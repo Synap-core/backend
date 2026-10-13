@@ -14,8 +14,16 @@ const payload = {
   publicId: "app_d2f2",
   name: "synap.live",
   requests: [
-    { permission: "entity.person.create", workspaceId: "ws-1", workspaceName: "Sales" },
-    { permission: "entity.note.read", workspaceId: "ws-2", workspaceName: "Finance" },
+    {
+      permission: "entity.person.create",
+      workspaceId: "ws-1",
+      workspaceName: "Sales",
+    },
+    {
+      permission: "entity.note.read",
+      workspaceId: "ws-2",
+      workspaceName: "Finance",
+    },
   ],
 };
 
@@ -45,8 +53,8 @@ describe("the review page heading", () => {
     expect(h.heading).toMatch(/^Create/);
   });
 
-  it("the page renders the lines in place of the raw payload", () => {
-    const src = readFileSync(join(__dirname, "ProposalReview.tsx"), "utf8");
+  it("the decision card (page and Review drawer) renders the lines in place of the raw payload", () => {
+    const src = readFileSync(join(__dirname, "ProposalReviewCard.tsx"), "utf8");
     expect(src).toMatch(/proposalHeading\(p, payload\)/);
     expect(src).toMatch(/appConnect \? \(/);
     expect(src).toMatch(/appConnect\.lines\.map/);

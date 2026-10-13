@@ -12,15 +12,14 @@
  * forwarded, and `decision` must be `approve` or `deny`.
  */
 
-import { whoamiFromCookie } from "../../../lib/kratos";
+import { apiSessionDenial } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  if (!(await whoamiFromCookie(cookie)))
-    return Response.json({ error: "Not signed in" }, { status: 401 });
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
 
   const code = new URL(req.url).searchParams.get("code")?.trim() ?? "";
   if (!code)
@@ -29,7 +28,7 @@ export async function GET(req: Request) {
   const res = await callPodQuery<unknown>(
     "apiKeys.getDeviceRequest",
     { userCode: code },
-    cookie
+    req.headers
   );
   if (!res.ok)
     return Response.json(
@@ -40,9 +39,8 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  if (!(await whoamiFromCookie(cookie)))
-    return Response.json({ error: "Not signed in" }, { status: 401 });
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
 
   const body = (await req.json().catch(() => null)) as Record<
     string,
@@ -75,7 +73,7 @@ export async function POST(req: Request) {
   const res = await callPodMutation<{ status: string }>(
     "apiKeys.decideDeviceRequest",
     input,
-    cookie
+    req.headers
   );
   if (!res.ok)
     return Response.json(

@@ -20,6 +20,8 @@ import {
   clientIp,
   getDeviceAuthRateConfig,
   getKeyStateRateConfig,
+  buildCrudIpCeilingKey,
+  isDirectLoopbackCall,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -32,7 +34,20 @@ export {
 } from "./rate-limit-classes.js";
 
 /**
- * Shared key-generator: class + Bearer-hash (or IP), with dev/localhost bypasses.
+ * Callers no limiter counts: a direct loopback call (decided on the socket —
+ * `isDirectLoopbackCall` — never on a forwarding header anyone can send), and
+ * in development any caller without an address (local fetch / Inngest).
+ */
+function isLocalCaller(c: Context, ip: string): boolean {
+  return (
+    isDirectLoopbackCall(c) ||
+    (process.env.NODE_ENV === "development" && ip === "unknown")
+  );
+}
+
+/**
+ * Shared key-generator: class + Bearer hash, Kratos session hash or IP
+ * (`buildRateLimitKey`), with dev/localhost bypasses.
  * Bypass keys are unique so they never collide with a shared bucket.
  */
 function classKeyGenerator(className: RateLimitClass) {
@@ -46,13 +61,7 @@ function classKeyGenerator(className: RateLimitClass) {
     }
 
     const ip = clientIp(c);
-
-    // In development, bypass if IP is unknown (local fetch / Inngest)
-    if (process.env.NODE_ENV === "development" && ip === "unknown") {
-      return `localhost-bypass-${className}-` + Math.random();
-    }
-
-    if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") {
+    if (isLocalCaller(c, ip)) {
       return `localhost-bypass-${className}-` + Math.random();
     }
 
@@ -60,7 +69,8 @@ function classKeyGenerator(className: RateLimitClass) {
       className,
       c.req.header("Authorization"),
       ip,
-      c.req.path
+      c.req.path,
+      c.req.header("Cookie")
     );
   };
 }
@@ -121,11 +131,51 @@ const aiAgentTurnRateLimiter = rateLimiter({
   ),
 });
 
+const crudKey = classKeyGenerator("crud");
+const crudSessionMax =
+  rateLimitClassConfig.crud.sessionMax ?? rateLimitClassConfig.crud.max;
+
+const crudIpCeiling = rateLimitClassConfig.crud.ipCeiling ?? 5 * crudSessionMax;
+
+/** The address-wide `crud` bucket, or null when this caller has none. */
+function crudIpCeilingKey(c: Context): string | null {
+  if (
+    process.env.NODE_ENV === "development" &&
+    c.req.header("x-test-user-id")
+  ) {
+    return null;
+  }
+  const ip = clientIp(c);
+  return isLocalCaller(c, ip) ? null : buildCrudIpCeilingKey(ip);
+}
+
+/**
+ * The address ceiling in FRONT of the per-key / per-session `crud` bucket.
+ * Those buckets key on credentials the limiter cannot check, so a caller who
+ * invents one per request would otherwise never be limited; this one counts
+ * every `crud` request from the address, at five busy people's worth.
+ */
+const crudIpCeilingLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.crud.windowMs,
+  limit: crudIpCeiling,
+  standardHeaders: false,
+  skip: (c) => crudIpCeilingKey(c) === null,
+  keyGenerator: (c) => crudIpCeilingKey(c) ?? "crud:ipall:none",
+  handler: classHandler(
+    "crud",
+    crudIpCeiling,
+    rateLimitClassConfig.crud.retryAfter
+  ),
+});
+
 const crudRateLimiter = rateLimiter({
   windowMs: rateLimitClassConfig.crud.windowMs,
-  limit: rateLimitClassConfig.crud.max,
+  limit: (c) =>
+    crudKey(c).startsWith("crud:session:")
+      ? crudSessionMax
+      : rateLimitClassConfig.crud.max,
   standardHeaders: "draft-7",
-  keyGenerator: classKeyGenerator("crud"),
+  keyGenerator: crudKey,
   handler: classHandler(
     "crud",
     rateLimitClassConfig.crud.max,
@@ -170,12 +220,7 @@ const calendarFeedIpRateLimiter = rateLimiter({
       return "test-bypass-calendar_feed_ip-" + Math.random();
     }
     const ip = clientIp(c);
-    if (
-      ip === "127.0.0.1" ||
-      ip === "::1" ||
-      ip === "localhost" ||
-      (process.env.NODE_ENV === "development" && ip === "unknown")
-    ) {
+    if (isLocalCaller(c, ip)) {
       return "localhost-bypass-calendar_feed_ip-" + Math.random();
     }
     return `calendar_feed_ip:${ip}`;
@@ -200,12 +245,7 @@ function publicDoorKeyGenerator(
 ) {
   return (c: Context): string => {
     const ip = clientIp(c);
-    if (
-      ip === "127.0.0.1" ||
-      ip === "::1" ||
-      ip === "localhost" ||
-      (process.env.NODE_ENV === "development" && ip === "unknown")
-    ) {
+    if (isLocalCaller(c, ip)) {
       return `localhost-bypass-public_${bucket}-` + Math.random();
     }
     return buildPublicDoorKey(bucket, ip, c.req.path);
@@ -261,12 +301,7 @@ const deviceAuthRateLimiter = rateLimiter({
   standardHeaders: "draft-7",
   keyGenerator: (c: Context): string => {
     const ip = clientIp(c);
-    if (
-      ip === "127.0.0.1" ||
-      ip === "::1" ||
-      ip === "localhost" ||
-      (process.env.NODE_ENV === "development" && ip === "unknown")
-    ) {
+    if (isLocalCaller(c, ip)) {
       return "localhost-bypass-device_auth-" + Math.random();
     }
     return `device_auth:ip:${ip}`;
@@ -292,12 +327,7 @@ const keyStateRateLimiter = rateLimiter({
   standardHeaders: "draft-7",
   keyGenerator: (c: Context): string => {
     const ip = clientIp(c);
-    if (
-      ip === "127.0.0.1" ||
-      ip === "::1" ||
-      ip === "localhost" ||
-      (process.env.NODE_ENV === "development" && ip === "unknown")
-    ) {
+    if (isLocalCaller(c, ip)) {
       return "localhost-bypass-key_state-" + Math.random();
     }
     return `key_state:ip:${ip}`;
@@ -308,7 +338,7 @@ const keyStateRateLimiter = rateLimiter({
 /**
  * Multi-class pod-edge rate limiting.
  *
- * Classifies by path, keys by Bearer token hash (or IP), and applies
+ * Classifies by path, keys by Bearer hash, Kratos session hash or IP, and applies
  * per-class windows/limits. Health/metrics are skipped (unlimited).
  */
 export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
@@ -348,7 +378,12 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       return keyStateRateLimiter(c, next);
     case "crud":
     default:
-      return crudRateLimiter(c, next);
+      // Address ceiling FIRST, then the caller's own bucket — same nested-429
+      // handling as the calendar feed.
+      return crudIpCeilingLimiter(c, async () => {
+        const limited = await crudRateLimiter(c, next);
+        if (limited instanceof Response) c.res = limited;
+      });
   }
 };
 
@@ -378,16 +413,9 @@ export const aiRateLimitMiddleware = rateLimiter({
       return "test-bypass-" + Math.random(); // Unique key every time
     }
 
-    // Bypass for localhost (Inngest, internal calls)
-    const ip =
-      c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
-
-    // In development, bypass if IP is unknown (often happens with local fetch/Inngest)
-    if (process.env.NODE_ENV === "development" && ip === "unknown") {
-      return "localhost-bypass-" + Math.random();
-    }
-
-    if (ip === "127.0.0.1" || ip === "::1" || ip === "localhost") {
+    // Bypass for local callers (Inngest, internal calls)
+    const ip = clientIp(c);
+    if (isLocalCaller(c, ip)) {
       return "localhost-bypass-" + Math.random();
     }
 

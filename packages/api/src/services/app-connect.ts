@@ -102,6 +102,56 @@ export function serializeApp(row: AppWithGrants) {
 }
 export type AppWire = ReturnType<typeof serializeApp>;
 
+/**
+ * The pod admin's reading of apps (`apps.adminList` / `apps.adminGet`): the
+ * owner's wire row plus what an admin cannot read from their own seat — its
+ * keys (`keysByApp`, batched), its OWNER, and the names of the spaces its
+ * reach and request name (`workspace_names`, the `workspaceNames` input of
+ * `appHolderAccess`). An admin is often not a member of the space an app
+ * reaches, so the names cannot come from the admin's own space list. Four
+ * queries for any number of apps.
+ */
+export async function serializeAppsForAdmin(rows: readonly AppWithGrants[]) {
+  if (rows.length === 0) return [];
+  const keys = await new AppRepository(db).keysByApp(
+    rows.map((r) => r.app.publicId)
+  );
+  const ownerIds = [...new Set(rows.map((r) => r.app.ownerUserId))];
+  const owners = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(inArray(users.id, ownerIds));
+  const ownerById = new Map(owners.map((o) => [o.id, o]));
+  const spaceIdsOf = (row: AppWithGrants): string[] => [
+    ...row.grants.flatMap((g) => g.workspaceIds ?? []),
+    ...(row.pendingRequest?.requests ?? []).map((r) => r.workspaceId),
+    ...(row.app.approvedRequests ?? []).map((r) => r.workspaceId),
+  ];
+  const spaceIds = [...new Set(rows.flatMap(spaceIdsOf))];
+  const spaces =
+    spaceIds.length > 0
+      ? await db
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(inArray(workspaces.id, spaceIds))
+      : [];
+  const spaceName = new Map(spaces.map((s) => [s.id, s.name]));
+  return rows.map((row) => {
+    const names: Record<string, string> = {};
+    for (const id of spaceIdsOf(row)) {
+      const name = spaceName.get(id);
+      if (name !== undefined) names[id] = name;
+    }
+    return {
+      ...serializeApp(row),
+      keys: keys.get(row.app.publicId) ?? [],
+      /** null when the owner's user row is gone. */
+      owner: ownerById.get(row.app.ownerUserId) ?? null,
+      workspace_names: names,
+    };
+  });
+}
+
 /** One of the owner's apps by public id; NOT_FOUND for anyone else. */
 export async function loadOwnedApp(
   publicId: string,
@@ -109,6 +159,28 @@ export async function loadOwnedApp(
 ): Promise<AppWithGrants> {
   const found = await new AppRepository(db).getByPublicId(publicId);
   if (!found || found.app.ownerUserId !== ownerUserId) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
+  }
+  return found;
+}
+
+/**
+ * The app an END act (revoke, remove for good) targets: the caller's own
+ * (`loadOwnedApp`), or — with `podAdmin`, which ONLY a `podAdminProcedure`
+ * sets (`apps.adminRevoke` / `apps.adminRemove`, the console's Apps page) —
+ * any owner's. Ending is the one lifecycle act a pod admin needs on someone
+ * else's app (a leaked key, a member who left); asking, issuing and renaming
+ * stay the owner's. Everything after the load is the same service, so an
+ * admin's revoke stops exactly what the owner's would.
+ */
+async function loadAppToEnd(
+  publicId: string,
+  callerUserId: string,
+  podAdmin: boolean | undefined
+): Promise<AppWithGrants> {
+  if (!podAdmin) return loadOwnedApp(publicId, callerUserId);
+  const found = await new AppRepository(db).getByPublicId(publicId);
+  if (!found) {
     throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
   }
   return found;
@@ -690,11 +762,18 @@ export async function issueKey(args: {
  */
 export async function revokeApp(args: {
   publicId: string;
+  /** The caller — the app's owner, unless `podAdmin`. Events name them. */
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** Lifts the owner floor — set by a `podAdminProcedure` only (`loadAppToEnd`). */
+  podAdmin?: boolean;
 }): Promise<{ publicId: string }> {
   assertOwnerCredential("revoke an app", args.actorAgentUserId);
-  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  const found = await loadAppToEnd(
+    args.publicId,
+    args.ownerUserId,
+    args.podAdmin
+  );
   const repo = new AppRepository(db);
   const withdrawn = await repo.withdrawPendingRequests(
     found.app.id,
@@ -767,11 +846,18 @@ export async function renameApp(args: {
  */
 export async function removeApp(args: {
   publicId: string;
+  /** The caller — the app's owner, unless `podAdmin`. Events name them. */
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** Lifts the owner floor — set by a `podAdminProcedure` only (`loadAppToEnd`). */
+  podAdmin?: boolean;
 }): Promise<{ publicId: string }> {
   assertOwnerCredential("remove an app", args.actorAgentUserId);
-  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  const found = await loadAppToEnd(
+    args.publicId,
+    args.ownerUserId,
+    args.podAdmin
+  );
   if (!found.app.revokedAt) {
     throw new TRPCError({
       code: "CONFLICT",

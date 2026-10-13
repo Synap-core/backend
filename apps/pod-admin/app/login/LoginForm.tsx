@@ -26,11 +26,14 @@ import {
   AlertCircle,
   KeyRound,
   Lock,
+  RefreshCw,
   UserPlus,
 } from "lucide-react";
 import {
   collectErrorMessages,
+  COOKIE_SCOPE_COPY,
   createLoginFlow,
+  existingSessionAction,
   extractInitialValues,
   fetchSelfServiceFlow,
   FLOW_RESET_ERROR_IDS,
@@ -51,12 +54,15 @@ interface LoginFormProps {
   initialFlowId: string | null;
   /** Re-authenticate an existing session (Kratos `refresh=true`). */
   refresh?: boolean;
+  /** What the server's own session check saw on this request. */
+  serverSession: "active" | "none" | "unavailable";
 }
 
 export function LoginForm({
   returnTo,
   initialFlowId,
   refresh = false,
+  serverSession,
 }: LoginFormProps) {
   const router = useRouter();
   const [flow, setFlow] = useState<KratosFlow | null>(null);
@@ -71,17 +77,27 @@ export function LoginForm({
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Signed in, but the session cookie does not reach this address: explain
+  // and offer a reload instead of a form that would loop back here.
+  const [cookieScope, setCookieScope] = useState(false);
 
-  // Use router.replace for in-app navigation (preserves the Next.js bundle)
-  // and a hard navigate as fallback when the destination is outside the app.
+  // `returnTo` is always a path on this origin (`lib/safe-return-to.ts`), so
+  // an in-app navigation is enough and keeps the Next.js bundle.
   const goReturn = useCallback(() => {
-    if (returnTo.startsWith("/")) {
-      router.replace(returnTo);
-      router.refresh();
-      return;
-    }
-    window.location.assign(returnTo);
+    router.replace(returnTo);
+    router.refresh();
   }, [returnTo, router]);
+
+  // Kratos refused a new flow because this browser is already signed in.
+  // Returns true when it left for `returnTo`; otherwise it explains why not.
+  const onExistingSession = useCallback((): boolean => {
+    if (existingSessionAction(serverSession) === "return") {
+      goReturn();
+      return true;
+    }
+    setCookieScope(true);
+    return false;
+  }, [goReturn, serverSession]);
 
   // Mount: create or fetch a flow. If Kratos signals an existing session,
   // skip the form entirely and route to `returnTo` — middleware will see the
@@ -111,7 +127,7 @@ export function LoginForm({
           // page's mount then detects the fresh session and routes on.
           const r = await createLoginFlow(window.location.href, { refresh });
           if (r.existingSession) {
-            if (!cancelled) goReturn();
+            if (!cancelled) onExistingSession();
             return;
           }
           if (!r.flow) throw new Error("Kratos returned no flow");
@@ -136,7 +152,7 @@ export function LoginForm({
     return () => {
       cancelled = true;
     };
-  }, [initialFlowId, goReturn, refresh, router]);
+  }, [initialFlowId, onExistingSession, refresh, router]);
 
   const submitFlow = useCallback(
     async (submittedValues: Record<string, string>) => {
@@ -168,7 +184,7 @@ export function LoginForm({
           // Already authenticated → navigate, do NOT recreate a flow on the
           // same URL (that's the legacy admin-ui's loop bug).
           if (r.structuralError.id === "session_already_available") {
-            goReturn();
+            onExistingSession();
             return;
           }
           if (
@@ -179,7 +195,7 @@ export function LoginForm({
               refresh,
             });
             if (fresh.existingSession) {
-              goReturn();
+              onExistingSession();
               return;
             }
             if (fresh.flow) {
@@ -198,7 +214,7 @@ export function LoginForm({
         setSubmitting(false);
       }
     },
-    [flow, goReturn, refresh]
+    [flow, goReturn, onExistingSession, refresh]
   );
 
   const classified = useMemo<SignInState>(
@@ -217,6 +233,7 @@ export function LoginForm({
 
   // The flow is answered by a state panel, not the form.
   const stateView =
+    cookieScope ||
     signIn.kind === "access_required" ||
     signIn.kind === "self_registration_disabled" ||
     (flowKind === "registration" && flow !== null);
@@ -260,11 +277,20 @@ export function LoginForm({
 
           {loading ? (
             <SignInHeader refresh={refresh} />
+          ) : cookieScope ? (
+            <RefusalPanel
+              icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
+              title={COOKIE_SCOPE_COPY.title}
+              actionLabel="Reload"
+              onAction={() => window.location.reload()}
+            >
+              <p>{COOKIE_SCOPE_COPY.body}</p>
+            </RefusalPanel>
           ) : signIn.kind === "access_required" ? (
             <RefusalPanel
               icon={<Lock className="h-5 w-5" strokeWidth={2} />}
               title="You don't have access to this pod yet."
-              onBack={backToSignIn}
+              onAction={backToSignIn}
             >
               <p>
                 The pod owner has to let you in. Open the Synap app (Relay or
@@ -284,7 +310,7 @@ export function LoginForm({
             <RefusalPanel
               icon={<UserPlus className="h-5 w-5" strokeWidth={2} />}
               title="New accounts on this pod are created by invitation or with Synap Cloud."
-              onBack={backToSignIn}
+              onAction={backToSignIn}
             />
           ) : flowKind === "registration" && flow ? (
             // pod-admin renders no sign-up form; any other registration error
@@ -342,7 +368,7 @@ export function LoginForm({
           {!loading && !refresh ? (
             <a
               href="/recovery"
-              className="self-start text-[12.5px] text-foreground/60 underline-offset-4 hover:text-foreground hover:underline"
+              className="self-start rounded-sm text-[12.5px] text-foreground/65 underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Can&apos;t sign in?
             </a>
@@ -386,16 +412,19 @@ function SignInHeader({ refresh = false }: { refresh?: boolean }) {
  * An EXPLAIN state: the user cannot fix this from the form, so say why and
  * what to do, with one way back. Not an error banner — nothing failed.
  */
+/** A sign-in state that is not an error: what is true, and the one way on. */
 function RefusalPanel({
   icon,
   title,
   children,
-  onBack,
+  onAction,
+  actionLabel = "Back to sign-in",
 }: {
   icon: React.ReactNode;
   title: string;
   children?: React.ReactNode;
-  onBack: () => void;
+  onAction: () => void;
+  actionLabel?: string;
 }) {
   return (
     <div className="flex flex-col gap-4" role="status">
@@ -420,9 +449,9 @@ function RefusalPanel({
         variant="flat"
         radius="md"
         className="min-h-11 self-start"
-        onPress={onBack}
+        onPress={onAction}
       >
-        Back to sign-in
+        {actionLabel}
       </Button>
     </div>
   );

@@ -3198,7 +3198,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "human" | "automation" | "playbook";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3213,7 +3213,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "human" | "automation" | "playbook";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3319,7 +3319,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3781,7 +3781,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4578,7 +4578,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4600,7 +4600,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "session" | "project";
+			data: "project" | "session";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4615,7 +4615,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "session" | "project";
+			$type: "project" | "session";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -5115,26 +5115,17 @@ export interface EffectiveProperty extends PropertyDef {
 	isLifecycle: boolean;
 }
 /**
- * RendererRef — what a profile or workspace stores as its renderer choice
- * for a (slot, profile) pair.
+ * RendererRef / DeclarativeBlock — MIRROR of `@synap-core/types/renderer-ref`.
  *
- * Structural mirror of `RendererTarget` from `@synap-core/renderer-runtime`.
- * Kept as a structural type in the database layer (rather than importing the
- * frontend package) so the schema package stays UI-free. The canonical type
- * lives in `@synap-core/renderer-runtime` and is re-exported by
- * `@synap-core/profile-renderer` as `RendererRef`.
+ * The canonical declaration (and its docs) lives in that module, which every
+ * surface that draws a renderer reads. This package cannot import it —
+ * `@synap-core/types` already builds against `@synap/database`, so the
+ * reverse edge is a build cycle — so the pod keeps this structural copy, and
+ * `packages/types/src/renderer-ref/pod-parity.contract.ts` holds the two
+ * EXACTLY equal at compile time. Change both, in the same commit.
  *
- * Stored as JSONB on `profiles.default_(list|detail)_renderer` and inside
- * `workspaces.settings.profileRenderers[slug]`.
- *
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
- */
-/**
- * DeclarativeBlock — a MINIMAL, bounded Block-Kit-style schema for a
- * `declarative` renderer (the config-first surface a capability page can carry
- * without a coded cell or a saved view). Intentionally small: five block kinds,
- * each a plain data shape the browser can render generically. Additive — it
- * exists ONLY to give the new `RendererRef.declarative` kind a typed `schema`.
+ * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and
+ * inside `workspaces.settings.profileRenderers[slug]`.
  */
 export type DeclarativeBlock = {
 	type: "heading";
@@ -8473,6 +8464,26 @@ export interface TrackKpi {
 	updatedBy?: string;
 }
 /**
+ * WHO is asking for access, on an `access-request` row — a pod-level request
+ * that is not a proposal: an external service asking to be a TRUSTED ISSUER
+ * (it would sign identity tokens this pod accepts), or an APPLICATION asking
+ * that its browser origin may call this pod. Pod admins only; the pod reads
+ * them from their own tables (`trusted_issuers`, application connection
+ * requests), so they need no notification to exist.
+ *
+ * Carried on the row because they are two of the trust signals a reviewer
+ * decides on — the asker's name and where it asks from — and a tray must be
+ * able to say them without a second read.
+ */
+export interface NeedsYouAccessRequest {
+	/** What would be granted: issuer trust, or an application's browser origin. */
+	subject: "issuer" | "application";
+	/** The asker's display name (the issuer's host, the app's name). */
+	name: string;
+	/** Where it asks from: the issuer URL, or the app's requested origin. */
+	from: string;
+}
+/**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
  * event into a human line.
  *
@@ -9725,9 +9736,10 @@ export interface RunGroup {
 	/**
 	 * Runs that FAILED (`failed` only — a `blocked_by_policy` run is a calm
 	 * governance outcome, not a failure) within the last
-	 * `RECENT_FAILURE_WINDOW_DAYS` (7) days —
-	 * the HEALTH number (W2 calm). A flow is "failing" iff this is > 0; a flow
-	 * that failed 271 times in June and has run clean since is not failing now.
+	 * `RECENT_FAILURE_WINDOW_DAYS` (7, `@synap-core/types/run-activity`) days,
+	 * each dated by `coalesce(completedAt, startedAt)` — the HEALTH number. A
+	 * flow is "failing" iff this is > 0; a flow that failed 271 times in June
+	 * and has run clean since is not failing now.
 	 */
 	recentFailedCount: number;
 	/** Runs still running. */
@@ -10978,6 +10990,13 @@ export interface WorkerMetadata {
 	outputs?: string[];
 	category: "table" | "shared" | "ai";
 }
+declare const MARKETPLACE_TRUST_LEVELS: readonly [
+	"official",
+	"trusted",
+	"showcase"
+];
+export type MarketplaceTrust = (typeof MARKETPLACE_TRUST_LEVELS)[number];
+export type CatalogKind = "capability" | "automation" | "template" | "cell" | "skill" | "view";
 export interface DeviceRequestView {
 	requestId: string;
 	status: "pending" | "approved" | "denied" | "consumed" | "expired";
@@ -11013,6 +11032,30 @@ export interface OAuthConsentContext {
 	/** Where the code will actually be delivered — shown so the human can judge. */
 	redirectHost: string;
 	scopes: string[];
+}
+/**
+ * API Keys Router
+ *
+ * Synchronous CRUD with inline permission checks and bcrypt hashing.
+ * SECURITY: Keys are displayed ONCE and never stored in plaintext.
+ */
+/**
+ * WHO holds a key, as a key list names it. The key's own `keyType` cannot say:
+ * an app key (`app-connect.ts`), a computer key (`machine-connect.ts`) and a
+ * person's own token are ALL `user_pat` — only the holder tells them apart.
+ *
+ *   app      — the holder is some app's own agent principal (`apps.agent_user_id`,
+ *              the same fact `notAnAppAgent` reads); `name` is the app's.
+ *   computer — an agent user with `agent_type = 'machine'`.
+ *   agent    — any other agent user.
+ *   person   — a human.
+ * `null` = the holder row is gone.
+ */
+export interface KeyHolder {
+	kind: "app" | "computer" | "agent" | "person";
+	name: string | null;
+	/** An app holder's `public_id` — what its console page is keyed by. */
+	appId?: string;
 }
 export interface QueueHealth {
 	failed: number;
@@ -13523,6 +13566,16 @@ export interface MachineView {
 	accessName: string | null;
 	agents: HostedAgentView[];
 }
+/** Who a computer belongs to: the person who approved it on `/device`. */
+export interface MachineOwnerView {
+	id: string;
+	/** Their display name, else their email. */
+	name: string;
+}
+export interface AdminMachineView extends MachineView {
+	/** null = the approver's row is gone (or was never recorded). */
+	owner: MachineOwnerView | null;
+}
 declare const TRUST_RUNGS: readonly [
 	"ask",
 	"propose",
@@ -14061,6 +14114,41 @@ export interface BrokerTrustDiagnostics {
 		kind: "control-plane" | "local";
 		reason: string | null;
 	};
+}
+/**
+ * The clients the pod's OWN OAuth authorization server registered (Path B:
+ * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
+ * and cut off as a pod admin sees them — the service behind `oauthClients.*`.
+ *
+ * A registration (`oauth_clients`, RFC 7591) is public and unauthenticated —
+ * anyone may register — so it reaches NOTHING. Reach is the key the token
+ * endpoint mints after a person consents: an `api_keys` row held by the
+ * `claude-web-direct` agent, linked to that person, carrying
+ * `instance_id = oauth:<client_id>:<user_id>` (`oauthKeyInstanceId`). Clients
+ * are read THROUGH those keys: who connected one, how many keys it holds, when
+ * one was last used.
+ *
+ * Revoke = stop every key minted for the client (and their grants) and burn
+ * any authorization code still waiting to be exchanged. The client row is
+ * KEPT: deleting it would only make the next registration a new row (claude.ai
+ * re-registers on demand) while erasing the record of what was cut off. A
+ * revoked client reaches nothing until a person consents again — the same
+ * human act that connected it the first time.
+ *
+ * Pod-wide and unfloored on purpose: the caller gates (pod admin only).
+ */
+/** One key minted for a client, as the console shows it — never the secret. */
+export interface MintedKey {
+	id: string;
+	keyName: string;
+	createdAt: Date;
+	lastUsedAt: Date | null;
+	usageCount: number;
+	isActive: boolean;
+	revokedAt: Date | null;
+	expiresAt: Date | null;
+	/** The person who consented (the key's `linked_user_id`). */
+	personId: string;
 }
 export interface SourceProviderCapabilities {
 	/** True when the provider honors and returns cursors across fetches. */
@@ -15606,6 +15694,10 @@ export interface FunnelStep {
 	category: PlaybookStageCategory;
 	count: number;
 }
+export interface RunsPage {
+	runs: UnifiedRun[];
+	nextCursor: string | null;
+}
 export interface RunGroupsPage {
 	groups: RunGroup[];
 	nextCursor: string | null;
@@ -16741,7 +16833,14 @@ export type SignalKind =
  * an OPEN question, or suggestions nobody filed or refused. The door opens
  * the capture thread (the session's `room` view); `captureStatus` says which.
  */
- | "capture";
+ | "capture"
+/**
+ * One pod-level ACCESS REQUEST that is not a proposal (pod admins only,
+ * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
+ * or an app's pending connection request (`target.kind:
+ * "connection-request"`). Who asks and from where ride in `access`.
+ */
+ | "access-request";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -16840,9 +16939,11 @@ export interface Signal {
 	ask?: SlotAsk;
 	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
-	 * cluster (which derives it through `proposalClassFields`, the one door).
-	 * Absent on every other kind — a notification, an event or an owed slot has
-	 * no class. In particular an owed slot does NOT get a sixth `ProposalClass`
+	 * cluster (which derives it through `proposalClassFields`, the one door) —
+	 * and `access` on an `access-request`, which is the same decision (who may
+	 * act) reached without a proposal, so a surface filing decisions by class
+	 * files both in one lane. Absent on every other kind — a notification, an
+	 * event or an owed slot has no class. In particular an owed slot does NOT get a sixth `ProposalClass`
 	 * invented for it: `class` is a PROPOSAL's decision class, consumed as an
 	 * ordering over proposals, and an obligation is not a decision. Its absent
 	 * `lifetimeHours` already carries the only thing a surface needs to know —
@@ -16909,6 +17010,19 @@ export interface Signal {
 	 * vocabulary (`deriveCaptureStatus`), so one word names it everywhere.
 	 */
 	captureStatus?: "needs_answer" | "suggested";
+	/**
+	 * `access-request` only: who asks for access and from where — two of the
+	 * trust signals a reviewer decides on, carried so a tray can say them
+	 * without a second read (`NeedsYouAccessRequest`).
+	 */
+	access?: NeedsYouAccessRequest;
+	/**
+	 * `proposal-cluster` only: the member proposal ids the cluster sampled
+	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
+	 * decision over the row acts on; a surface batches a cluster only when
+	 * `proposalIds.length === count`, never a sample standing for more.
+	 */
+	proposalIds?: string[];
 	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
@@ -17007,7 +17121,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "captures" | "liveness" | "outputs" | "activity" | "events";
+export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "captures" | "issuers" | "app-requests" | "liveness" | "outputs" | "activity" | "events";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -17091,6 +17205,122 @@ export type BrandResolution = {
 	/** The project asked about, if any. */
 	projectId: string | null;
 };
+/**
+ * Market risk disclosure — what a package brings that a person should see
+ * before it runs on their pod: CODE (cells, code skills), NETWORK reach (the
+ * hosts it names) and CONNECTORS (credentials, providers, MCP servers). Read
+ * off the definition the install will apply. Pure.
+ *
+ * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
+ * template's nested cells and capabilities are found as well as a lone cell's.
+ * It discloses what the definition DECLARES — it is not a sandbox and does not
+ * promise the absence of anything it did not find.
+ *
+ * A package from a TRUSTED third-party source needs an extra, explicit
+ * confirm for code and for network reach (`requiredAcknowledgements`); the
+ * install door refuses without it (marketplace-install.ts).
+ */
+export interface MarketRisks {
+	/** Names of the parts that carry code (a cell's renderer, a code skill). */
+	code: string[];
+	/** Hosts the package names: declared egress and every URL it carries. */
+	networkHosts: string[];
+	/** Credentials, providers and servers it asks to connect. */
+	connectors: string[];
+}
+export type MarketInstallOutcome = {
+	status: "installed";
+	result: Record<string, unknown>;
+} | {
+	status: "proposed";
+	proposalId: string;
+	reviewUrl: string;
+};
+/**
+ * Where the install lands:
+ *   creates  — it builds (or converges onto) its own space (template).
+ *   required — it is added INTO a space the installer names (automation, view).
+ *   optional — pod-wide unless a space is named (capability, skill, cell).
+ */
+export type MarketWorkspaceNeed = "creates" | "required" | "optional";
+/** One kind of thing the install adds, named in the registry's own kind token. */
+export interface MarketInstallPart {
+	kind: string;
+	names: string[];
+}
+/** An install-time parameter the package declares (a capability's `params`). */
+export interface MarketInstallParam {
+	name: string;
+	label: string | null;
+	description: string | null;
+	required: boolean;
+	hasDefault: boolean;
+	/**
+	 * The value lands in the pod's vault (a `vault[].value` template names it)
+	 * — a credential, so a form masks it.
+	 */
+	secret: boolean;
+}
+export interface MarketInstallSummary {
+	workspace: MarketWorkspaceNeed;
+	adds: MarketInstallPart[];
+	/** Plain sentences a person reads before confirming. */
+	notices: string[];
+	params: MarketInstallParam[];
+}
+/** Where a source stands, in one token the console can draw. */
+export type MarketplaceSourceState = "ok" | "pending" | "unreachable" | "invalid" | "bad_signature" | "expired" | "key_changed" | "off";
+export interface MarketplaceSource {
+	id: string;
+	name: string;
+	/** The address the pod reads (the Control Plane for Synap). */
+	url: string;
+	trust: MarketplaceTrust;
+	official: boolean;
+	enabled: boolean;
+	/** Official only: `SYNAP_CATALOG_SOURCE=off` — the console cannot turn it on. */
+	lockedOff: boolean;
+	/** sha256 of the pinned key, hex; null for Synap today and an unsigned showcase. */
+	keyFingerprint: string | null;
+	agentsMayPropose: boolean;
+	addedBy: string | null;
+	addedAt: string | null;
+	/** Newest sync attempt; null when it never synced. */
+	lastSyncAt: string | null;
+	/** Listings this pod holds from it. */
+	packageCount: number;
+	state: MarketplaceSourceState;
+	/** Why nothing installs from it right now, or null. */
+	blocked: string | null;
+	/** One sentence on the last sync when it did not apply. */
+	message: string | null;
+	/** key_changed: the fingerprint the source is signed with now. */
+	pendingFingerprint: string | null;
+	/** Kept for the Catalog freshness line: every recent attempt failed to connect. */
+	unreachable: boolean;
+}
+export interface MarketplacePreflight extends MarketInstallSummary {
+	kind: CatalogKind;
+	slug: string;
+	source: string;
+	sourceName: string;
+	trust: MarketplaceTrust;
+	name: string;
+	version: string | null;
+	/** False when something below must change before the install can run. */
+	ok: boolean;
+	/** Plain sentences naming what stops the install. */
+	blockers: string[];
+	/** Template only: the write-free workspace plan (profiles, links, views). */
+	report: WorkspacePreflightReport | null;
+	/** What the package brings: code, network reach, connectors. */
+	risks: MarketRisks;
+	/** The extra confirms the install will ask for (a trusted source only). */
+	requires: {
+		code: boolean;
+		network: boolean;
+	};
+}
 /**
  * Core API Router
  */
@@ -19951,7 +20181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20703,7 +20933,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20805,7 +21035,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20921,7 +21151,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22636,6 +22866,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linkedUserId: string | null;
 				heldByAgent: boolean;
 				holderUserId: string;
+				holder: KeyHolder | null;
 				actsAsYou: boolean;
 			}[];
 			meta: object;
@@ -22647,6 +22878,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				id: string;
 				userId: string;
+				holder: KeyHolder | null;
 				keyName: string;
 				keyPrefix: string;
 				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
@@ -23413,6 +23645,112 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		remove: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				removed: boolean;
+				publicId: string;
+			};
+			meta: object;
+		}>;
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeRevoked?: boolean | undefined;
+			} | undefined;
+			output: {
+				keys: AppKeySummary[];
+				owner: {
+					id: string;
+					name: string | null;
+					email: string;
+				} | null;
+				workspace_names: Record<string, string>;
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			}[];
+			meta: object;
+		}>;
+		adminGet: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				keys: AppKeySummary[];
+				owner: {
+					id: string;
+					name: string | null;
+					email: string;
+				} | null;
+				workspace_names: Record<string, string>;
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		adminRevoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				revoked: boolean;
+				publicId: string;
+			};
+			meta: object;
+		}>;
+		adminRemove: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				publicId: string;
 			};
@@ -32548,10 +32886,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
+				includeComputers?: boolean | undefined;
 			};
 			output: {
 				pendingProposalId: string | null;
 				operatedByViewer: boolean;
+				hostComputer: {
+					id: string;
+					name: string;
+				} | null;
 				reach: "pod" | "dispatch" | "pull";
 				binding: AgentBindingSummary | null;
 				id: string;
@@ -32564,6 +32907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentMetadata: AgentMetadata | null;
 				isPersonalAgent: boolean;
 				createdVia: AgentCreatedVia | null;
+				hostUserId: string | null;
 				joinedAt: Date | null;
 				lastSeenAt: string | null;
 				host: string | null;
@@ -32692,6 +33036,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: MachineView[];
+			meta: object;
+		}>;
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: AdminMachineView[];
 			meta: object;
 		}>;
 		rename: import("@trpc/server").TRPCMutationProcedure<{
@@ -35016,7 +35365,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -35578,6 +35927,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "provision" | "tier_update" | "membership:grant" | "source-config:write" | "membership:activate")[];
+				expectedStatus?: "approved" | "pending" | "revoked" | "rejected" | undefined;
 			};
 			output: {
 				description: string | null;
@@ -35711,6 +36061,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				connections: {
+					lastUsedAt: Date | null;
+					peopleCount: number;
 					issuerUrl: string;
 					id: string;
 					issuerId: string;
@@ -35755,6 +36107,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				people: {
+					userId: string;
+					name: string | null;
+					email: string;
+					linkedAt: Date;
+				}[];
+				lastUsedAt: Date | null;
+				peopleCount: number;
+				issuerUrl: string;
+				id: string;
+				issuerId: string;
+				clientId: string;
+				displayName: string;
+				publisherUrl: string | null;
+				allowedOrigins: string[];
+				allowedCallbackUrls: string[];
+				allowedScopes: ("auth:exchange-user" | "identity:link-user")[];
+				status: "approved" | "pending" | "revoked" | "rejected";
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				initialRequestData: unknown;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
 		approveRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				requestId: string;
@@ -35779,6 +36163,89 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: void;
+			meta: object;
+		}>;
+	}>>;
+	oauthClients: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
+				opRef?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeUnused?: boolean | undefined;
+			} | undefined;
+			output: {
+				clientId: string;
+				clientName: string;
+				redirectUris: string[];
+				redirectHosts: string[];
+				scopes: string[];
+				createdAt: Date;
+				mintedKeys: number;
+				activeKeys: number;
+				lastUsedAt: Date | null;
+				people: {
+					id: string;
+					name: string | null;
+					email: string | null;
+					active: boolean;
+				}[];
+			}[];
+			meta: object;
+		}>;
+		adminGet: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				clientId: string;
+			};
+			output: {
+				clientId: string;
+				clientName: string;
+				redirectUris: string[];
+				redirectHosts: string[];
+				scopes: string[];
+				createdAt: Date;
+				mintedKeys: number;
+				activeKeys: number;
+				lastUsedAt: Date | null;
+				people: {
+					id: string;
+					name: string | null;
+					email: string | null;
+					active: boolean;
+				}[];
+				keys: MintedKey[];
+			};
+			meta: object;
+		}>;
+		adminRevoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				clientId: string;
+			};
+			output: {
+				clientId: string;
+				revokedKeys: number;
+			};
 			meta: object;
 		}>;
 	}>>;
@@ -40893,10 +41360,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				status?: "running" | "completed" | "failed" | "cancelled" | "skipped" | "proposed" | undefined;
 				limit?: number | undefined;
+				cursor?: string | undefined;
 			};
-			output: {
-				runs: UnifiedRun[];
-			};
+			output: RunsPage;
 			meta: object;
 		}>;
 		groups: import("@trpc/server").TRPCQueryProcedure<{
@@ -40907,6 +41373,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
+				flowId?: string | undefined;
 			};
 			output: RunGroupsPage;
 			meta: object;
@@ -42633,6 +43100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					happened?: number | undefined;
 				} | undefined;
 				picks?: boolean | undefined;
+				kinds?: ("event" | "output" | "notification" | "capture" | "activity" | "rule-run" | "proposal-cluster" | "live-session" | "owed-slot" | "draft-asks" | "session-review" | "access-request")[] | undefined;
 				workspaceId?: string | null | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
@@ -42674,6 +43142,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				notifications: number;
 				review: number;
 				captures: number;
+				requests: number;
 				drafts: number;
 				draftsTruncated: boolean;
 				suggestions: number;
@@ -42696,6 +43165,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: number;
 					review: number;
 					captures: number;
+					requests: number;
 					drafts: number;
 					draftsTruncated: boolean;
 					suggestions: number;
@@ -42726,6 +43196,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: number;
 					review: number;
 					captures: number;
+					requests: number;
 					drafts: number;
 					draftsTruncated: boolean;
 					suggestions: number;
@@ -43057,6 +43528,227 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: BrandResolution;
 			meta: object;
 		}>;
+	}>>;
+	marketplace: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
+				opRef?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query?: string | undefined;
+				kind?: "automation" | "skill" | "cell" | "capability" | "view" | "template" | undefined;
+				source?: string | undefined;
+				limit?: number | undefined;
+				cursor?: number | undefined;
+			} | undefined;
+			output: {
+				entries: {
+					source: string;
+					sourceName: string;
+					trust: "trusted" | "official" | "showcase";
+					id: string;
+					kind: CatalogKind;
+					objectKind: string;
+					slug: string;
+					name: string;
+					description: string | null;
+					version: string | null;
+					tier: string | null;
+					vendor: string | null;
+					tags: string[] | null;
+				}[];
+				total: number;
+				nextCursor: number | null;
+				kinds: {
+					kind: CatalogKind;
+					objectKind: string;
+				}[];
+				sources: MarketplaceSource[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				slug: string;
+				source?: string | undefined;
+			};
+			output: {
+				source: string;
+				sourceName: string;
+				trust: "trusted" | "official" | "showcase";
+				official: boolean;
+				id: string;
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				objectKind: string;
+				slug: string;
+				name: string;
+				description: string | null;
+				version: string | null;
+				tier: string | null;
+				vendor: string | null;
+				installed: boolean | null;
+				installMode: "propose" | "refuse" | "install" | "open_site";
+				blocked: string | null;
+				openUrl: string | null;
+				definition: Record<string, unknown> | null;
+				definitionError: string | null;
+			};
+			meta: object;
+		}>;
+		preflight: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				slug: string;
+				source?: string | undefined;
+				workspaceId?: string | undefined;
+			};
+			output: MarketplacePreflight;
+			meta: object;
+		}>;
+		install: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				slug: string;
+				source?: string | undefined;
+				workspaceId?: string | undefined;
+				version?: string | undefined;
+				params?: Record<string, unknown> | undefined;
+				acknowledge?: {
+					code?: boolean | undefined;
+					network?: boolean | undefined;
+				} | undefined;
+			};
+			output: MarketInstallOutcome;
+			meta: object;
+		}>;
+		sources: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				data: {
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
+					opRef?: string | undefined;
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					httpStatus: number;
+					path?: string;
+					stack?: string;
+				};
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				output: MarketplaceSource[];
+				meta: object;
+			}>;
+			add: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					url: string;
+				};
+				output: {
+					url: string;
+					id: string;
+					name: string;
+					homepage: string | null;
+					packageCount: number;
+					expires: string;
+					signed: boolean;
+					keyFingerprint: string | null;
+					conflict: string | null;
+				};
+				meta: object;
+			}>;
+			confirm: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					url: string;
+					trust: "trusted" | "showcase";
+					keyFingerprint: string | null;
+					agentsMayPropose?: boolean | undefined;
+				};
+				output: MarketplaceSource;
+				meta: object;
+			}>;
+			update: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					name?: string | undefined;
+					trust?: "trusted" | "showcase" | undefined;
+					agentsMayPropose?: boolean | undefined;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			disable: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					enabled: boolean;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			remove: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			approveKeyChange: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					keyFingerprint: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			syncNow: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				output: MarketplaceSource | null;
+				meta: object;
+			}>;
+		}>>;
 	}>>;
 }>>;
 export type AppRouter = typeof coreRouter;

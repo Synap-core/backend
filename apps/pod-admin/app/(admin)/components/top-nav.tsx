@@ -1,11 +1,16 @@
 "use client";
 
 /**
- * `TopNav` — 44px pod-admin header. Three slots:
+ * `TopNav` — 44px Pod Console header. Three slots:
  *
- *   • Left   — Synap mark · "Pod Admin" · pod hostname
+ *   • Left   — (phone: nav menu button) · Synap mark · "Pod Console" · pod
+ *              hostname
  *   • Center — ⌘K Search trigger — opens the global SearchModal palette
- *   • Right  — refresh-timestamp chip · user avatar with sign-out popover
+ *   • Right  — user avatar menu (personal pages — Security, My connections,
+ *              My computers, My vault — account links, sign out)
+ *
+ * Only global controls live here. Page freshness ("last checked · Check
+ * again") belongs to the page it describes — Home's status line.
  *
  * The whole bar is non-sticky on purpose: in a dashboard the operator
  * scrolls the body, not the chrome. Sticky chrome with no shadow ends up
@@ -16,30 +21,37 @@
 import {
   Avatar,
   Button,
-  Chip,
   Kbd,
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@heroui/react";
 import {
+  ArrowUpRight,
   ExternalLink,
   LogOut,
-  RefreshCw,
+  Menu,
   Search,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useState } from "react";
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { openIn, type AccountPage } from "../../../lib/open-in";
 import { useRecoveryCodesState } from "./recovery-codes-nudge";
+import { useConsoleRole } from "./side-nav-role";
 
 /** The account surfaces a pod cannot host itself. Order is most-reached-first. */
 const ACCOUNT_LINKS: { page: AccountPage; label: string }[] = [
   { page: "pod", label: "Pod & plan" },
   { page: "billing", label: "Billing" },
   { page: "support", label: "Support" },
+];
+
+/** Self-service pages about YOU (not the pod), beside Security. */
+const PERSONAL_LINKS: { href: string; label: string }[] = [
+  { href: "/my-connections", label: "My connections" },
+  { href: "/my-computers", label: "My computers" },
+  { href: "/my-vault", label: "My vault" },
 ];
 
 const POD_URL = publicPodUrl();
@@ -49,26 +61,23 @@ interface TopNavProps {
   operatorEmail?: string;
   /** Pod hostname rendered next to the brand. */
   podHost?: string;
-  /** Last-refreshed timestamp (server provides via cookie/header). */
-  lastRefreshed?: Date | null;
-  /** Manual refresh — invalidates the page's queries. */
-  onRefresh?: () => void;
   /** Open the global ⌘K search palette. */
   onOpenSearch?: () => void;
+  /** Open the phone nav drawer (the side nav is hidden below md). */
+  onOpenNav?: () => void;
 }
 
 export function TopNav({
   operatorEmail,
   podHost,
-  lastRefreshed,
-  onRefresh,
   onOpenSearch,
+  onOpenNav,
 }: TopNavProps) {
+  const role = useConsoleRole();
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
   // R3: a persistent ⚠ until recovery codes are saved (the Overview card is
   // skippable; this mark is not).
   const codesMissing = useRecoveryCodesState() === "not_set";
-  const refreshedLabel = useRelativeTime(lastRefreshed ?? null);
 
   const handleSignOut = async () => {
     try {
@@ -99,8 +108,22 @@ export function TopNav({
         border-b border-foreground/[0.05]
       "
     >
-      {/* Left — brand */}
+      {/* Left — brand. Below md the side nav is hidden, so the menu button
+          (and the drawer it opens, which also carries Search) is the way in. */}
       <div className="flex min-w-0 items-center gap-2">
+        {onOpenNav && (
+          <Button
+            isIconOnly
+            variant="light"
+            size="sm"
+            radius="md"
+            aria-label="Open navigation"
+            onPress={onOpenNav}
+            className="-ml-1.5 h-11 w-11 min-w-11 text-foreground/65 md:hidden"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        )}
         <span
           aria-hidden
           className="
@@ -112,7 +135,7 @@ export function TopNav({
           <span className="text-[10px] font-semibold text-white/95">S</span>
         </span>
         <span className="text-[13px] font-medium tracking-tight text-foreground">
-          Pod Admin
+          Pod Console
         </span>
         {podHost && (
           <span className="hidden font-mono text-[11px] text-foreground/45 sm:inline">
@@ -146,34 +169,9 @@ export function TopNav({
         </button>
       </div>
 
-      {/* Right — refresh + user avatar */}
+      {/* Right — user avatar */}
       <div className="ml-auto flex items-center gap-1.5">
-        {refreshedLabel && (
-          <Chip
-            size="sm"
-            radius="sm"
-            variant="flat"
-            className="hidden text-[11px] text-foreground/55 sm:inline-flex"
-          >
-            {refreshedLabel}
-          </Chip>
-        )}
-
-        {onRefresh && (
-          <Button
-            isIconOnly
-            variant="light"
-            size="sm"
-            radius="full"
-            aria-label="Refresh"
-            onPress={onRefresh}
-            className="text-foreground/55 hover:text-foreground"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        )}
-
-        <Popover placement="bottom-end" backdrop="opaque">
+        <Popover placement="bottom-end">
           <PopoverTrigger>
             <Button
               isIconOnly
@@ -210,7 +208,9 @@ export function TopNav({
                   <p className="truncate text-[12px] font-medium text-foreground">
                     {operatorEmail}
                   </p>
-                  <p className="text-[11px] text-foreground/55">Pod admin</p>
+                  <p className="text-[11px] text-foreground/65">
+                    {role === "admin" ? "Pod admin" : "Member"}
+                  </p>
                 </div>
               )}
               <div className="h-px bg-foreground/[0.05]" />
@@ -222,7 +222,7 @@ export function TopNav({
                   the landing site because a pod cannot host its own billing. */}
               <a
                 href="/settings/security"
-                className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60"
+                className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 Security
                 {codesMissing ? (
@@ -234,6 +234,17 @@ export function TopNav({
                   <ShieldCheck className="h-3.5 w-3.5 text-foreground/40" />
                 )}
               </a>
+              {/* Your own keys/apps and your own vault: self-service pages
+                  every member may open, which nothing linked to before. */}
+              {PERSONAL_LINKS.map(({ href, label }) => (
+                <a
+                  key={href}
+                  href={href}
+                  className="flex items-center rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  {label}
+                </a>
+              ))}
               <div className="h-px bg-foreground/[0.05]" />
 
               {ACCOUNT_LINKS.map(({ page, label }) => (
@@ -242,17 +253,20 @@ export function TopNav({
                   href={openIn({ kind: "account", page }).href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60"
+                  className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   {label}
-                  <ExternalLink className="h-3 w-3 text-foreground/40" />
+                  <ArrowUpRight
+                    className="h-3 w-3 text-foreground/40"
+                    strokeWidth={1.75}
+                  />
                 </a>
               ))}
               <a
                 href={openIn({ kind: "guide", slug: "quickstart" }).href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60"
+                className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 Documentation
                 <ExternalLink className="h-3 w-3 text-foreground/40" />
@@ -267,6 +281,7 @@ export function TopNav({
                   text-[12.5px] text-foreground/85
                   hover:bg-content2/60
                   rounded-md
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40
                 "
               >
                 <LogOut className="h-3.5 w-3.5" strokeWidth={2} />
@@ -278,23 +293,4 @@ export function TopNav({
       </div>
     </header>
   );
-}
-
-/**
- * Tick a "Updated 3m ago" label every 30s. Returns null while the input
- * is null so the chip doesn't render placeholder text.
- */
-function useRelativeTime(date: Date | null): string | null {
-  const [, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-  if (!date) return null;
-  const diff = Date.now() - date.getTime();
-  if (diff < 30_000) return "Just now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return `Updated ${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `Updated ${hours}h ago`;
 }

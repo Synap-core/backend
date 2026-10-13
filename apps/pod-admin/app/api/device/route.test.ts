@@ -7,8 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const calls: Array<{ path: string; input: unknown }> = [];
 let queryAnswer: unknown = { ok: true, data: { requestId: "r" } };
 
+/** What the session check answers: proceed, or the route's 401 / 503. */
+let session: "active" | "none" | "unavailable" = "active";
 vi.mock("../../../lib/kratos", () => ({
-  whoamiFromCookie: async () => ({ id: "u1" }),
+  apiSessionDenial: async () =>
+    session === "active"
+      ? null
+      : Response.json({}, { status: session === "none" ? 401 : 503 }),
 }));
 vi.mock("../../../lib/pod-trpc", () => ({
   callPodQuery: async (path: string, input: unknown) => {
@@ -33,11 +38,22 @@ const post = (body: unknown) =>
   );
 
 beforeEach(() => {
+  session = "active";
   calls.length = 0;
   queryAnswer = { ok: true, data: { requestId: "r" } };
 });
 
 describe("POST /api/device", () => {
+  it("tells signed out (401) from a pod that could not say (503)", async () => {
+    const decide = () =>
+      post({ requestId: "r1", userCode: "ABCDEFGH", decision: "deny" });
+    session = "none";
+    expect((await decide()).status).toBe(401);
+    session = "unavailable";
+    expect((await decide()).status).toBe(503);
+    expect(calls).toEqual([]);
+  });
+
   it("'This wasn't me' reaches the pod as decision deny — and only that", async () => {
     const res = await post({
       requestId: "r1",

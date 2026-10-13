@@ -289,6 +289,10 @@
       "types": "./dist/push/index.d.ts",
       "import": "./dist/push/index.js"
     },
+    "./marketplace-source": {
+      "types": "./dist/marketplace-source/index.d.ts",
+      "import": "./dist/marketplace-source/index.js"
+    },
     "./trust-ladder": {
       "types": "./dist/trust-ladder/index.d.ts",
       "import": "./dist/trust-ladder/index.js"
@@ -308,6 +312,14 @@
     "./attention-order": {
       "types": "./dist/attention-order.d.ts",
       "import": "./dist/attention-order.js"
+    },
+    "./property-render": {
+      "types": "./dist/property-render/index.d.ts",
+      "import": "./dist/property-render/index.js"
+    },
+    "./renderer-ref": {
+      "types": "./dist/renderer-ref/index.d.ts",
+      "import": "./dist/renderer-ref/index.js"
     }
   },
   "scripts": {

@@ -22,28 +22,30 @@ import {
   proposals,
   ProposalStatus,
   capabilities,
+  links,
+  skills,
+  inArray,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
   ownAgentUserFilter,
   authoredByUser,
 } from "../agent-identity-service.js";
+import { listRuns, listRunGroups } from "../runs/index.js";
 import {
-  listRuns,
-  listRunGroups,
+  DEFAULT_STUCK_THRESHOLD_HOURS,
   RECENT_FAILURE_WINDOW_DAYS,
   isRecentFailure,
-} from "../runs/index.js";
+} from "@synap-core/types/run-activity";
 import {
   collapseProposalsToClusters,
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
 import { agentProposalCap } from "../../utils/permission-check.js";
-import {
-  DEFAULT_STUCK_THRESHOLD_HOURS,
-  type GlobalHealthReport,
-  type HealthSection,
-  type HealthStatus,
+import type {
+  GlobalHealthReport,
+  HealthSection,
+  HealthStatus,
 } from "./types.js";
 import {
   IDLE_STALL_MINUTES,
@@ -79,6 +81,99 @@ const PENDING_SCAN_LIMIT = 1000;
 const CAP_ATTENTION_FRACTION = 0.8;
 
 // ── The raw signals the pure summarizer ranks ────────────────────────────────
+
+/**
+ * Capability posture, counted where the execution gate reads it. A verb runs
+ * only when its backing skill is enabled — `skills.approved`, the row
+ * `gateCapabilityExecution` loads (packages/capability-gate) and the one
+ * `capabilities.setToolEnabled` / the `capability.enable` executor flip. The
+ * container's own `capabilities.approved` is read by no execution path, so it
+ * is not counted: counting it reported "N awaiting approval" for a flag whose
+ * approval changed nothing, while the verbs that actually refuse went unsaid.
+ */
+export interface CapabilityVerbPosture {
+  /** Installed capability containers visible to the caller. */
+  installed: number;
+  /** Their member verbs (skills), each counted once. */
+  verbs: number;
+  /** Member verbs not enabled — every run of one is refused until it is. */
+  verbsAwaitingEnable: number;
+  /** Containers holding at least one such verb. */
+  capabilitiesAwaitingEnable: number;
+}
+
+/**
+ * PURE: the posture from the three reads `diagnoseGlobal` makes. A member link
+ * to a skill that no longer exists is ignored (nothing to enable); a skill in
+ * two containers is one verb, and makes both containers "awaiting".
+ */
+export function capabilityVerbPosture(input: {
+  containerIds: readonly string[];
+  members: ReadonlyArray<{ capabilityId: string; skillId: string }>;
+  skills: ReadonlyArray<{ id: string; approved: boolean }>;
+}): CapabilityVerbPosture {
+  const approvedById = new Map(input.skills.map((s) => [s.id, s.approved]));
+  const verbs = new Set<string>();
+  const awaiting = new Set<string>();
+  const awaitingCaps = new Set<string>();
+  for (const m of input.members) {
+    const approved = approvedById.get(m.skillId);
+    if (approved === undefined) continue;
+    verbs.add(m.skillId);
+    if (!approved) {
+      awaiting.add(m.skillId);
+      awaitingCaps.add(m.capabilityId);
+    }
+  }
+  return {
+    installed: input.containerIds.length,
+    verbs: verbs.size,
+    verbsAwaitingEnable: awaiting.size,
+    capabilitiesAwaitingEnable: awaitingCaps.size,
+  };
+}
+
+/** A container whose verbs are not all turned on, with the verbs that refuse. */
+export interface CapabilityAwaitingEnable {
+  id: string;
+  name: string;
+  verbs: Array<{ id: string; name: string }>;
+}
+
+/**
+ * PURE: the per-container view of the same graph `capabilityVerbPosture`
+ * counts — which containers are fully on, and which hold verbs that refuse.
+ * A container with no live member verb has nothing to turn on and is "enabled".
+ */
+export function capabilityVerbListing(graph: CapabilityVerbGraph): {
+  enabled: Array<{ id: string; name: string }>;
+  awaitingEnable: CapabilityAwaitingEnable[];
+} {
+  const skillById = new Map(graph.skills.map((s) => [s.id, s]));
+  const offByContainer = new Map<string, Map<string, string>>();
+  for (const m of graph.members) {
+    const skill = skillById.get(m.skillId);
+    if (!skill || skill.approved) continue;
+    const off = offByContainer.get(m.capabilityId) ?? new Map<string, string>();
+    off.set(skill.id, skill.name);
+    offByContainer.set(m.capabilityId, off);
+  }
+  const enabled: Array<{ id: string; name: string }> = [];
+  const awaitingEnable: CapabilityAwaitingEnable[] = [];
+  for (const c of graph.containers) {
+    const off = offByContainer.get(c.id);
+    if (!off) {
+      enabled.push({ id: c.id, name: c.name });
+      continue;
+    }
+    awaitingEnable.push({
+      id: c.id,
+      name: c.name,
+      verbs: [...off].map(([id, name]) => ({ id, name })),
+    });
+  }
+  return { enabled, awaitingEnable };
+}
 
 export interface GlobalSignals {
   stuckHours: number;
@@ -128,7 +223,7 @@ export interface GlobalSignals {
     oldestAgeHoursIncludingOutsideLens: number | null;
   };
   duplicateClusters: Array<{ targetLabel: string; count: number }>;
-  capabilities: { enabled: number; unapproved: number };
+  capabilities: CapabilityVerbPosture;
   agentActivity: Array<{ agentId: string; pendingCount: number; cap: number }>;
   /**
    * How often the human APPROVES what the pod asks about — the decide queue's
@@ -281,16 +376,27 @@ export function summarizeGlobalHealth(
     detail: { clusters: signals.duplicateClusters.slice(0, 10) },
   });
 
-  // Capabilities — attention when some are enabled-but-unapproved. Live
-  // per-connection outage detection is deferred (see NEEDS-DOGFOOD in the impl).
+  // Capabilities — attention when installed verbs are not turned on: those
+  // are the runs that refuse (see `CapabilityVerbPosture`). A verb runs only
+  // when its backing skill is enabled (`skills.approved`); the container's own
+  // `approved` flag gates nothing, so it is not counted. Live per-connection
+  // outage detection is not part of this section.
+  const cap = signals.capabilities;
   sections.push({
     key: "capabilities",
-    status: signals.capabilities.unapproved > 0 ? "attention" : "ok",
+    status: cap.verbsAwaitingEnable > 0 ? "attention" : "ok",
     headline:
-      signals.capabilities.enabled > 0 || signals.capabilities.unapproved > 0
-        ? `${signals.capabilities.enabled} capability(ies) approved, ${signals.capabilities.unapproved} awaiting approval`
-        : "No capabilities configured",
-    detail: signals.capabilities,
+      cap.installed === 0
+        ? "No capabilities installed"
+        : cap.verbsAwaitingEnable > 0
+          ? `${cap.verbsAwaitingEnable} verb(s) in ${cap.capabilitiesAwaitingEnable} capability(ies) not turned on — they refuse to run until turned on`
+          : `${cap.installed} capability(ies) installed, all ${cap.verbs} verb(s) turned on`,
+    detail: {
+      ...cap,
+      // Read by the desktop app's FlowHealthBand until it reads
+      // `verbsAwaitingEnable`; drop it once that reader moves.
+      unapproved: cap.capabilitiesAwaitingEnable,
+    },
   });
 
   // Agent activity — degraded when an agent is at/over the daily cap.
@@ -393,7 +499,7 @@ export function summarizeGlobalHealth(
   const problems = sections.filter((s) => s.status !== "ok");
   const summary =
     problems.length === 0
-      ? `All clear — no stuck runs, no failed flows, no review backlog, and ${signals.capabilities.enabled} capability(ies) healthy.`
+      ? `All clear — no stuck runs, no failed flows, no review backlog, and every verb of ${signals.capabilities.installed} capability(ies) enabled.`
       : `${problems.length} area(s) need attention: ` +
         problems.map((s) => s.headline).join("; ") +
         ".";
@@ -436,6 +542,75 @@ export function failingFlowOfGroup(g: {
 
 // ── DB tier: gather the signals, then summarize ──────────────────────────────
 
+/** The three hops behind the posture, with names for a per-container listing. */
+export interface CapabilityVerbGraph {
+  containers: Array<{ id: string; name: string }>;
+  members: Array<{ capabilityId: string; skillId: string }>;
+  skills: Array<{ id: string; name: string; approved: boolean }>;
+}
+
+/**
+ * The containers the caller can see (same floor and lens as the rest of this
+ * report), their `member_of` verbs, and those verbs' enable flags — the same
+ * three hops `buildCapabilityCatalog` folds into a card's `verbs[].enabled`,
+ * so this count and the Marketplace's Tools list cannot disagree. Shared with
+ * the `type:"capability"` class arm so both surfaces count the same thing.
+ */
+export async function readCapabilityVerbGraph(
+  userId: string,
+  workspaceId: string | null
+): Promise<CapabilityVerbGraph> {
+  const containers = await db
+    .select({ id: capabilities.id, name: capabilities.name })
+    .from(capabilities)
+    .where(
+      and(
+        userVisibleWhere(capabilities.workspaceId, userId),
+        workspaceId ? eq(capabilities.workspaceId, workspaceId) : undefined
+      )
+    );
+  const containerIds = containers.map((c) => c.id);
+  const members =
+    containerIds.length > 0
+      ? await db
+          .select({ capabilityId: links.toId, skillId: links.fromId })
+          .from(links)
+          .where(
+            and(
+              eq(links.toType, "capability"),
+              inArray(links.toId, containerIds),
+              eq(links.linkType, "member_of"),
+              eq(links.fromType, "skill")
+            )
+          )
+      : [];
+  const skillIds = [...new Set(members.map((m) => m.skillId))];
+  const skillRows =
+    skillIds.length > 0
+      ? await db
+          .select({
+            id: skills.id,
+            name: skills.name,
+            approved: skills.approved,
+          })
+          .from(skills)
+          .where(inArray(skills.id, skillIds))
+      : [];
+  return { containers, members, skills: skillRows };
+}
+
+async function readCapabilityVerbPosture(
+  userId: string,
+  workspaceId: string | null
+): Promise<CapabilityVerbPosture> {
+  const graph = await readCapabilityVerbGraph(userId, workspaceId);
+  return capabilityVerbPosture({
+    containerIds: graph.containers.map((c) => c.id),
+    members: graph.members,
+    skills: graph.skills,
+  });
+}
+
 /**
  * Run the whole-pod health checklist for `userId`. `workspaceId` narrows the
  * floor to one lens; `stuckThresholdHours` overrides the "stuck" boundary.
@@ -463,7 +638,7 @@ export async function diagnoseGlobal(params: {
     // Author-floored twin of `backlogRow` — see the comment on its query.
     mineBacklogRow,
     pendingRows,
-    capRows,
+    capabilitiesSignal,
     agentRows,
   ] = await Promise.all([
     // Stuck: running runs across flows (per-flow cap 100), aged client-side.
@@ -533,16 +708,8 @@ export async function diagnoseGlobal(params: {
       )
       .orderBy(desc(proposals.createdAt))
       .limit(PENDING_SCAN_LIMIT),
-    // Capability posture: approved vs awaiting-approval (user-floored).
-    db
-      .select({ approved: capabilities.approved })
-      .from(capabilities)
-      .where(
-        and(
-          userVisibleWhere(capabilities.workspaceId, userId),
-          workspaceId ? eq(capabilities.workspaceId, workspaceId) : undefined
-        )
-      ),
+    // Capability posture: installed verbs enabled vs not (user-floored).
+    readCapabilityVerbPosture(userId, workspaceId),
     // Agent activity: per-agent PENDING proposal counts for this owner — the
     // population the F2 cap protects (the review queue, not write volume).
     //
@@ -657,11 +824,6 @@ export async function diagnoseGlobal(params: {
     .filter((c) => c.count > 1)
     .map((c) => ({ targetLabel: c.targetLabel, count: c.count }))
     .sort((a, b) => b.count - a.count);
-
-  const capabilitiesSignal = {
-    enabled: capRows.filter((c) => c.approved).length,
-    unapproved: capRows.filter((c) => !c.approved).length,
-  };
 
   const agentActivityCounts = agentRows
     .filter((a): a is { agentId: string; pendingCount: number } =>

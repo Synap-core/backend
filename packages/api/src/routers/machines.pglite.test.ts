@@ -7,6 +7,7 @@
  * Pinned:
  *   - list: YOUR computers only, each with its key state, access name, and
  *     the agents it hosts named "<agent> on <computer>";
+ *   - adminList: every computer with its owner, for a pod admin only;
  *   - rename / setKeyTtl / revoke: a stranger gets NOT_FOUND; a key (no
  *     session) is refused; revoke stops the computer's AND its agents' keys;
  *   - setKeyTtl drives the lifetime the next key gets (`resolveMachineKeyTtlDays`).
@@ -19,6 +20,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  /** Who `isPodAdmin` answers yes for. */
+  admins: new Set<string>(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -52,7 +55,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
 }));
 vi.mock("../utils/workspace-role.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  isPodAdmin: async () => false,
+  isPodAdmin: async (userId: string) => h.admins.has(userId),
 }));
 
 import { is } from "drizzle-orm";
@@ -70,6 +73,7 @@ import { machinesRouter } from "./machines.js";
 
 const HUMAN = "human-computers";
 const STRANGER = "human-stranger";
+const ADMIN = "human-pod-admin";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -143,7 +147,8 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
-  for (const id of [HUMAN, STRANGER])
+  h.admins.add(ADMIN);
+  for (const id of [HUMAN, STRANGER, ADMIN])
     await q(
       `insert into users (id, email, user_type, email_verified, timezone, locale, is_personal_agent)
        values ($1, $1 || '@x', 'human', true, 'UTC', 'en', false)`,
@@ -175,6 +180,30 @@ describe("machines.list", () => {
 
   it("never lists a stranger's computer", async () => {
     expect(await caller(STRANGER).list()).toEqual([]);
+  });
+});
+
+describe("machines.adminList", () => {
+  it("a pod admin sees every member's computer, with its owner", async () => {
+    const list = await caller(ADMIN).adminList();
+    expect(list).toHaveLength(1);
+    const [c] = list;
+    // The same view the owner reads, plus who owns it.
+    expect(c).toMatchObject({
+      ...(await caller(HUMAN).list())[0],
+      owner: { id: HUMAN, name: `${HUMAN}@x` },
+    });
+    // The admin's own floored list stays empty: they own no computer.
+    expect(await caller(ADMIN).list()).toEqual([]);
+  });
+
+  it("is forbidden to anyone who is not a pod admin, the owner included", async () => {
+    await expect(caller(HUMAN).adminList()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(caller(STRANGER).adminList()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 });
 

@@ -329,6 +329,32 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(row.verb?.action).toBe("approve");
     expect(resolveUnitState(row.state).state).toBe("needs_review");
   });
+  it("an access request is a decision about WHAT would be trusted, opened to review", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "access:issuer:i1",
+        kind: "access-request",
+        title: 'Connect Trusted issuer "auth.example.com"',
+        category: "governance",
+        target: { kind: "issuer", id: "i1" },
+        access: {
+          subject: "issuer",
+          name: "auth.example.com",
+          from: "https://auth.example.com",
+        },
+      }),
+    ]);
+    const row = lensRowOfNeedsYou(recent[0]!, "blocking");
+    expect(row.objectKind).toBe("issuer");
+    expect(row.verb).toEqual({ action: "review", label: "Review" });
+    expect(row.reason).toBeNull();
+    expect(row.byAgent).toBe(false);
+    expect(row.door).toEqual({ kind: "issuer", id: "i1" });
+    expect(resolveUnitState(row.state).state).toBe("needs_review");
+    expect(placeSignal({ kind: "access-request" }, "needs-you")).toBe(
+      "blocking"
+    );
+  });
   it("a draft row is never marked working", () => {
     const { recent } = needsYouRows([
       sig({ id: "d", kind: "draft-asks", count: 2 }),

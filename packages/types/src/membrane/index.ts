@@ -505,7 +505,8 @@ export interface AppKeyLike {
 export interface AppPendingRequestLike {
   proposal_id: string;
   requests: ReadonlyArray<{ permission: string; workspaceId: string }>;
-  requested_at: string;
+  /** A `Date` through tRPC (superjson), an ISO string through a JSON proxy. */
+  requested_at: string | Date;
 }
 
 /** What the app rule reads — any `apps.list` / `apps.get` row satisfies it. */

@@ -100,7 +100,30 @@ export function inferOpenTypeFromId(id: string): TypedOpenKind | undefined {
   return normalizeOpenId(id).startsWith("generated:") ? "cell" : undefined;
 }
 
-export type OpenWebKind = "proposal" | "entity" | "view";
+/**
+ * Kinds pod-admin HOSTS at `/open/<kind>/<id>` for a signed-in human. Must
+ * equal pod-admin `HOST_TYPES` (`apps/pod-admin/app/open/open-params.ts`;
+ * frozen copy in `open-kinds.lock.tripwire.test.ts`). `automation` and
+ * `session` are hosted so the console can offer their de-escalating acts
+ * (pause, cancel) on the web.
+ */
+export const WEB_HOSTED_OPEN_KINDS = [
+  "entity",
+  "view",
+  "automation",
+  "session",
+] as const;
+export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
+
+export function isWebHostedOpenKind(
+  value: string | undefined
+): value is WebHostedOpenKind {
+  return (
+    !!value && (WEB_HOSTED_OPEN_KINDS as readonly string[]).includes(value)
+  );
+}
+
+export type OpenWebKind = "proposal" | WebHostedOpenKind;
 
 export function podAdminTarget(
   kind: OpenWebKind,
@@ -109,6 +132,37 @@ export function podAdminTarget(
 ): string {
   const path = kind === "proposal" ? `/proposal/${id}` : `/open/${kind}/${id}`;
   return new URL(path, adminBase).toString();
+}
+
+/**
+ * pod-admin's resolver page for an id this PUBLIC route could not type
+ * (`/open/<id>`). It calls `diagnose.resolveOpen` with the reader's cookie —
+ * the user-floored answer this unauthenticated route must never compute — and
+ * routes to the typed page. Keeps every type list out of the public route.
+ */
+export function podAdminResolveTarget(id: string, adminBase: string): string {
+  return new URL(`/open/${id}`, adminBase).toString();
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The "View in browser" escape on a BOUNCE page (shown when `synap://` did
+ * nothing): pod-admin's page for this object, when it has one. Proposal is
+ * here for the mobile branch; an untyped uuid goes through the resolver page.
+ */
+export function podAdminBrowserUrl(
+  type: string | undefined,
+  id: string,
+  adminBase: string | null
+): string | undefined {
+  if (!adminBase) return undefined;
+  if (type === "proposal" || isWebHostedOpenKind(type)) {
+    return podAdminTarget(type, id, adminBase);
+  }
+  if (!type && UUID_RE.test(id)) return podAdminResolveTarget(id, adminBase);
+  return undefined;
 }
 
 /**
@@ -162,7 +216,11 @@ export function isOpenViewValue(
 }
 
 // Proposal is web-first (review already lives on pod-admin, even for bots).
-// Entity/view 302 only for humans — unfurl HTML must never carry their bodies.
+// Hosted kinds (entity / view / automation / session) 302 only for humans —
+// unfurl HTML must never carry their bodies. A session addressed with a VIEW
+// (`?view=room`, the Intake Room) is a reading only the app has, so it keeps
+// bouncing with its view. An untyped uuid (the bare route's probe could not
+// type it) 302s a human to pod-admin's resolver page.
 //
 // EXCEPT when the link was minted for a phone (`?client=mobile`): pod-admin is
 // a desktop review surface, so a mobile-flavoured link bounces to `synap://`
@@ -191,11 +249,21 @@ export function dispatchOpen(opts: {
     };
   }
 
-  if ((type === "entity" || type === "view") && adminBase && !bot && !mobile) {
+  if (
+    adminBase &&
+    !bot &&
+    !mobile &&
+    isWebHostedOpenKind(type) &&
+    !(type === "session" && isOpenViewValue(view))
+  ) {
     return {
       action: "redirect",
       url: podAdminTarget(type, id, adminBase),
     };
+  }
+
+  if (adminBase && !bot && !mobile && !type && UUID_RE.test(id)) {
+    return { action: "redirect", url: podAdminResolveTarget(id, adminBase) };
   }
 
   const base = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;

@@ -29,15 +29,17 @@ import {
   ResourceRowSkeleton,
 } from "../../../components/resource-row";
 import { StatusPill } from "../../../components/status-pill";
+import { useFocusRow } from "../../../components/use-focus-row";
 import {
   GrantRolePicker,
   keyMintFromRole,
   roleFitsWorkspace,
   roleSetsLifetime,
   useGrantRoleOptions,
-} from "../../../trust-keys/_lib/grant-role-picker";
-import { useOfferedKeyScopes } from "../../../trust-keys/_lib/api-keys-section";
+} from "../../../keys/_lib/grant-role-picker";
+import { useOfferedKeyScopes } from "../../../keys/_lib/key-scopes";
 import type { GrantMintInput } from "@synap-core/types/grants";
+import { formatRelative } from "../../../../../lib/format";
 
 interface ApiKey {
   id: string;
@@ -49,7 +51,6 @@ interface ApiKey {
   expiresAt?: Date | string | null;
   lastUsedAt?: Date | string | null;
   createdAt?: Date | string | null;
-  workspaceId?: string | null;
 }
 
 function normalizeScopes(s: string[] | string | null | undefined): string[] {
@@ -59,18 +60,6 @@ function normalizeScopes(s: string[] | string | null | undefined): string[] {
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-}
-
-function formatRelTime(d: Date | string | null | undefined): string {
-  if (!d) return "never";
-  const diff = Date.now() - new Date(d).getTime();
-  if (diff < 60_000) return "just now";
-  const m = Math.floor(diff / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const days = Math.floor(h / 24);
-  return `${days}d ago`;
 }
 
 function keyStatus(k: ApiKey): {
@@ -112,6 +101,10 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     () => (keysQuery.data as ApiKey[] | undefined) ?? [],
     [keysQuery.data]
   );
+
+  // ?focus=<keyId> — the receiver for a workspace-scoped key, which the
+  // pod-wide Trust & Keys list filters out. `data-row-id` is on each KeyRow.
+  useFocusRow({ ready: !keysQuery.isLoading });
   const active = useMemo(() => keys.filter((k) => k.isActive), [keys]);
   const revoked = useMemo(() => keys.filter((k) => !k.isActive), [keys]);
 
@@ -148,7 +141,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     <div className="flex flex-col gap-5">
       <SectionCard
         title="API keys"
-        hint="Keys scoped to this workspace"
+        hint="Keys scoped to this space"
         actions={
           <Button
             size="sm"
@@ -170,7 +163,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
             onRetry={() => void keysQuery.refetch()}
           />
         ) : keys.length === 0 ? (
-          <ResourceRowEmpty message="No keys for this workspace." />
+          <ResourceRowEmpty message="No keys for this space." />
         ) : (
           <div className="flex flex-col divide-y divide-foreground/[0.05] pt-1">
             {active.map((k) => (
@@ -246,7 +239,10 @@ function KeyRow({
   const scopes = normalizeScopes(apiKey.scope);
 
   return (
-    <div className="flex items-center gap-3 py-3 px-1">
+    <div
+      data-row-id={apiKey.id}
+      className="flex items-center gap-3 rounded-md py-3 px-1 transition-shadow"
+    >
       <KeyRound
         className="h-4 w-4 shrink-0 text-foreground/40"
         strokeWidth={2}
@@ -277,12 +273,10 @@ function KeyRow({
             </span>
           ) : null}
         </div>
-        <span className="text-[11px] text-foreground/40">
+        <span className="text-[11px] text-foreground/65">
           {apiKey.keyPrefix ? `${apiKey.keyPrefix}…` : ""} · last used{" "}
-          {formatRelTime(apiKey.lastUsedAt)} · created{" "}
-          {apiKey.createdAt
-            ? new Date(apiKey.createdAt).toLocaleDateString()
-            : "—"}
+          {formatRelative(apiKey.lastUsedAt, { empty: "never" })} · created{" "}
+          {formatRelative(apiKey.createdAt)}
         </span>
       </div>
 
@@ -600,7 +594,7 @@ function RevealKeyModal({
           </Snippet>
           <p className="text-[11.5px] text-foreground/55">
             Treat this like a password. Anyone with the key can act on this
-            workspace within its scopes.
+            space within its scopes.
           </p>
         </ModalBody>
         <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">

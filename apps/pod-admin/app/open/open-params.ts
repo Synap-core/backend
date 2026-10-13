@@ -1,17 +1,21 @@
 /**
  * `/open/:type/:id` param parser — keeps the page dumb.
  *
- * Host types (`entity`, `view`) are the only ones this surface fetches.
+ * Host types are the kinds this surface renders itself: `entity`, `view`,
+ * and — since D6 — the two operational kinds the console can safely act on
+ * from a link, `automation` (pause) and `session` (cancel / run again).
  * Bounce kinds match the Hono `/open/:type/:id` ALLOWED set minus host
  * types: we never render them here, we point at `synap://open/{type}/{id}`.
  *
- * HOST_TYPES ∪ BOUNCE_TYPES MUST equal TYPED_OPEN_KINDS in
- * apps/api/src/open-dispatch.ts (enforced by open-kinds.lock.test.ts).
+ * HOST_TYPES ∪ BOUNCE_TYPES MUST equal TYPED_OPEN_KINDS, and HOST_TYPES MUST
+ * equal WEB_HOSTED_OPEN_KINDS, in apps/api/src/open-dispatch.ts (enforced by
+ * open-kinds.lock.tripwire.test.ts).
  */
 
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { isUuid } from "../../lib/format";
 
-export const HOST_TYPES = ["entity", "view"] as const;
+export const HOST_TYPES = ["entity", "view", "automation", "session"] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
 /** Known `synap://` bounce kinds that are not hosted on this page. */
@@ -20,7 +24,6 @@ export const BOUNCE_TYPES = [
   "document",
   "cell",
   "channel",
-  "session",
   "project",
   "workspace",
   "capability",
@@ -28,7 +31,6 @@ export const BOUNCE_TYPES = [
   "skill",
   "tool",
   "playbook",
-  "automation",
   "agent",
   "run",
 ] as const;
@@ -42,15 +44,8 @@ export type ParsedOpen =
   | { status: "invalid-id"; type: KnownOpenType; id: string }
   | { status: "not-found"; type: string; id: string };
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Same allowlist Hono uses for `/open/:type/:id` interpolation. */
 const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
-export function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
 
 export function isSafeOpenId(value: string): boolean {
   return SAFE_ID_RE.test(value);
@@ -86,7 +81,6 @@ export function parseOpenParams(type: string, id: string): ParsedOpen {
 export function openDocumentTitle(parsed: ParsedOpen): string {
   switch (parsed.status) {
     case "host":
-      return parsed.type === "entity" ? "Entity" : "View";
     case "bounce":
       return labelForOpenType(parsed.type);
     case "invalid-id":

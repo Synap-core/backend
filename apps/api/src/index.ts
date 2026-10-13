@@ -85,7 +85,7 @@ import {
   isSafeOpenId,
   isTypedOpenKind,
   normalizeOpenId,
-  podAdminTarget,
+  podAdminBrowserUrl,
 } from "./open-dispatch.js";
 import {
   setupEventBroadcasting,
@@ -268,7 +268,9 @@ app.use("*", podEdgeCorsMiddleware);
 
 // Security Middleware
 app.use("*", requestSizeLimit); // Max 10MB requests
-app.use("*", rateLimitMiddleware); // multi-class: free/import/ai/crud; Bearer-hash or IP
+// Mounted on "*" BEFORE every route, so tRPC and the backend's own
+// /.ory/kratos/public/* proxy (pod-admin's whoami) are keyed alike.
+app.use("*", rateLimitMiddleware); // multi-class; Bearer, session or IP keyed
 app.use("*", secureHeaders()); // Hono built-in security headers
 
 // 5xx egress sanitizer — registered as the OUTERMOST response-shaping
@@ -527,7 +529,7 @@ app.get("/admin/connect", (c) => {
   if (!admin.ok) {
     return c.json(
       {
-        error: "Pod Admin is not configured",
+        error: "Pod Console is not configured",
         code: admin.code,
         remediation: "configure_pod_admin_url",
       },
@@ -541,9 +543,9 @@ app.get("/admin/connect", (c) => {
 
 // ── Deep-link bounce (public, no auth) ──────────────────────────────────────
 // An https URL — clickable anywhere (Discord, email, chat). Humans hitting
-// proposal | entity | view 302 to pod-admin when it's configured; unfurl bots
-// (and every other type) get a tiny page that redirects to `synap://` so
-// Discord/etc. never scrape entity bodies. Discord will NOT linkify a raw
+// proposal | entity | view | automation | session (and an untyped uuid) 302
+// to pod-admin when it's configured; unfurl bots (and every other type) get a
+// tiny page that redirects to `synap://` so Discord/etc. never scrape bodies. Discord will NOT linkify a raw
 // `synap://` URL. The app's deep-link handler (`useDeepLinkHandler.ts`)
 // understands `synap://open/<type>/<id>` for
 // proposal | entity | view | document | cell | channel | session | project |
@@ -586,8 +588,8 @@ function renderDeepLinkPage(deep: string, browserUrl?: string): string {
 }
 
 // Proposal 302s to pod-admin first (web is the review surface, bots included).
-// Entity/view also have a web host for humans; unfurl bots still bounce so
-// Discord/etc. never scrape entity bodies. Other types always bounce.
+// The hosted kinds (`WEB_HOSTED_OPEN_KINDS`) have a web host for humans; unfurl
+// bots still bounce so Discord/etc. never scrape bodies. Other types bounce.
 // Falls through to bounce if pod-admin isn't configured (graceful).
 function applyOpenDispatch(
   c: HonoContext,
@@ -616,13 +618,10 @@ function applyOpenDispatch(
   if (result.action === "redirect") {
     return c.redirect(result.url, 302);
   }
-  // `proposal` is here for the MOBILE branch only: a desktop proposal always
-  // 302s above, so this fallback link is what a phone taps when relay is not
-  // installed — the same "View in browser" escape entity/view already had.
-  const browserUrl =
-    adminBase && (type === "entity" || type === "view" || type === "proposal")
-      ? podAdminTarget(type, id, adminBase)
-      : undefined;
+  // The "View in browser" escape when `synap://` did nothing — a phone without
+  // relay, a session Intake Room link without the app. `podAdminBrowserUrl`
+  // names pod-admin's page for the kind, or none.
+  const browserUrl = podAdminBrowserUrl(type, id, adminBase);
   return c.html(renderDeepLinkPage(result.deep, browserUrl));
 }
 
@@ -655,10 +654,13 @@ app.get("/open/:type/:id", (c) => {
 //   • proposal      → 302 to the pod-admin review page (humans AND bots);
 //   • entity / view → 302 to the pod-admin web host (humans only).
 // Every other id — skill, session, playbook, automation, channel, document,
-// project, … — bounces as an untyped `synap://open/<id>` and the app resolves
-// it. A private probe list here used to decide those kinds for the app and
-// fell behind the route table (a skill / session / playbook id bounced typeless
-// and landed nowhere).
+// project, … — is UNTYPED here. A human browser 302s to pod-admin's resolver
+// page (`/open/<id>`), which asks `diagnose.resolveOpen` WITH the reader's
+// cookie and routes to the typed page (hosted, or a named "open in app"
+// card); a bot or a `?client=mobile` link bounces as `synap://open/<id>` and
+// the app resolves it. A private probe list here used to decide those kinds
+// and fell behind the route table (a skill / session / playbook id bounced
+// typeless and landed nowhere) — the user-floored resolver is the only list.
 //
 // `projects` is still read, but only as a GUARD: migration 0151 copied projects
 // into the first-class `projects` table while preserving ids and left the
@@ -666,9 +668,9 @@ app.get("/open/:type/:id", (c) => {
 // would 302 a project id onto the stale entity copy. A project id bounces
 // untyped like every other non-web kind.
 //
-// A probe that FAILS is not a miss: it is logged and the id bounces untyped
-// (never a 302 decided on a guess) so the app's authenticated resolver gives
-// the real answer, error included.
+// A probe that FAILS is not a miss: it is logged and the id goes on UNTYPED
+// (never a typed 302 decided on a guess), so an authenticated resolver —
+// pod-admin's page or the app's — gives the real answer, error included.
 app.get("/open/:id", async (c) => {
   const id = normalizeOpenId(c.req.param("id"));
   if (!isSafeOpenId(id)) {

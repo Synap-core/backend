@@ -54,6 +54,15 @@ const {
   };
 });
 
+const sourcesMock = vi.hoisted(() => ({
+  read: vi.fn(async (): Promise<unknown> => ({
+    sources: [],
+    official: null,
+    status: {},
+  })),
+  syncThirdParty: vi.fn(async () => ({ state: "ok" })),
+}));
+
 vi.mock("@synap/database", () => ({
   db: dbMock,
   drizzleSql: { raw: vi.fn() },
@@ -61,6 +70,11 @@ vi.mock("@synap/database", () => ({
   eq: vi.fn(),
   notInArray: vi.fn(),
   recordCatalogSyncStamp: recordStampMock,
+  readMarketplaceSources: sourcesMock.read,
+}));
+
+vi.mock("../marketplace-source-sync.js", () => ({
+  syncThirdPartySource: sourcesMock.syncThirdParty,
 }));
 
 vi.mock("@synap/database/schema", () => ({
@@ -77,7 +91,11 @@ vi.mock("@synap-core/core", () => ({
 
 const fetchMock = vi.fn();
 
-import { handleCpCatalogSync } from "../cp-catalog-sync.js";
+import {
+  DEFAULT_CATALOG_SOURCE,
+  describeCatalogSources,
+  handleCpCatalogSync,
+} from "../cp-catalog-sync.js";
 
 const CP = "https://cp.example.test";
 
@@ -723,5 +741,150 @@ describe("handleCpCatalogSync — an older CP refuses includeRetired", () => {
     ).toHaveLength(1);
     expect(templateStamps().map((c) => c[2])).toEqual(["misconfigured"]);
     expect(insertValuesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("describeCatalogSources — the one source seam", () => {
+  const KEYS = ["CONTROL_PLANE_URL", "CP_URL", "SYNAP_CATALOG_SOURCE"] as const;
+  const withEnv = <T>(
+    env: Partial<Record<(typeof KEYS)[number], string>>,
+    run: () => T
+  ): T => {
+    const saved = KEYS.map((k) => [k, process.env[k]] as const);
+    KEYS.forEach((k) => delete process.env[k]);
+    Object.assign(process.env, env);
+    try {
+      return run();
+    } finally {
+      for (const [k, v] of saved) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+  const official = (env: Partial<Record<(typeof KEYS)[number], string>>) =>
+    withEnv(env, () => describeCatalogSources(null)[0]!);
+
+  it("the official source is the pod's Control Plane when one is set", () => {
+    expect(
+      official({ CONTROL_PLANE_URL: "https://cp.example.com/" })
+    ).toMatchObject({
+      id: "synap",
+      cacheKey: "https://cp.example.com",
+      trust: "official",
+      enabled: true,
+    });
+  });
+
+  it("falls back to Synap's public catalog when none is set (or it is empty)", () => {
+    expect(official({}).cacheKey).toBe(DEFAULT_CATALOG_SOURCE);
+    expect(official({ CONTROL_PLANE_URL: "" }).cacheKey).toBe(
+      DEFAULT_CATALOG_SOURCE
+    );
+  });
+
+  it("SYNAP_CATALOG_SOURCE=off switches it off and the console cannot turn it on", () => {
+    expect(
+      official({
+        CONTROL_PLANE_URL: "https://cp.example.com",
+        SYNAP_CATALOG_SOURCE: "off",
+      })
+    ).toMatchObject({
+      enabled: false,
+      lockedOff: true,
+      cacheKey: "https://cp.example.com",
+    });
+    expect(
+      withEnv(
+        { SYNAP_CATALOG_SOURCE: "off" },
+        () =>
+          describeCatalogSources({
+            sources: [],
+            official: { enabled: true, changedBy: "u", changedAt: "" },
+          })[0]
+      )
+    ).toMatchObject({ enabled: false });
+  });
+
+  it("a pod admin can turn the official source off; added sources follow it, keyed by id", () => {
+    const list = withEnv({}, () =>
+      describeCatalogSources({
+        official: { enabled: false, changedBy: "u", changedAt: "" },
+        sources: [
+          {
+            id: "acme",
+            url: "https://acme.test",
+            name: "Acme",
+            trust: "showcase",
+            publicKey: null,
+            keyFingerprint: null,
+            agentsMayPropose: true,
+            addedBy: "u",
+            addedAt: "",
+            enabled: true,
+          },
+        ],
+      })
+    );
+    expect(list.map((s) => [s.id, s.cacheKey, s.enabled])).toEqual([
+      ["synap", DEFAULT_CATALOG_SOURCE, false],
+      ["acme", "acme", true],
+    ]);
+    // The agent opt-in only means something on a TRUSTED source.
+    expect(list[1]!.agentsMayPropose).toBe(false);
+  });
+});
+
+describe("handleCpCatalogSync — sources", () => {
+  const added = {
+    id: "acme",
+    url: "https://acme.test",
+    name: "Acme",
+    trust: "trusted",
+    publicKey: "k",
+    keyFingerprint: "f",
+    addedBy: "u",
+    addedAt: "",
+    enabled: true,
+  };
+
+  beforeEach(() => {
+    sourcesMock.read.mockReset();
+    sourcesMock.syncThirdParty.mockClear();
+    fetchMock.mockResolvedValue(
+      jsonRes({ capabilities: [], packages: [], cells: [], total: 0 })
+    );
+  });
+
+  it("syncs an enabled added source through the signed-index sync, with its last status", async () => {
+    sourcesMock.read.mockResolvedValue({
+      sources: [added, { ...added, id: "off", enabled: false }],
+      official: null,
+      status: { acme: { state: "ok" } },
+    });
+    await handleCpCatalogSync();
+    expect(sourcesMock.syncThirdParty).toHaveBeenCalledTimes(1);
+    expect(sourcesMock.syncThirdParty.mock.calls[0]).toMatchObject([
+      { id: "acme", official: false },
+      { state: "ok" },
+    ]);
+    expect(fetchedUrls().some((u) => u.startsWith(CP))).toBe(true);
+  });
+
+  it("a switched-off official source is not fetched", async () => {
+    sourcesMock.read.mockResolvedValue({
+      sources: [],
+      official: { enabled: false, changedBy: "u", changedAt: "" },
+      status: {},
+    });
+    await handleCpCatalogSync();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed settings read still syncs the official catalog, and no added source", async () => {
+    sourcesMock.read.mockRejectedValue(new Error("db down"));
+    await handleCpCatalogSync();
+    expect(fetchedUrls().some((u) => u.startsWith(CP))).toBe(true);
+    expect(sourcesMock.syncThirdParty).not.toHaveBeenCalled();
   });
 });

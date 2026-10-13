@@ -15,9 +15,15 @@ import {
   desc,
   eq,
   and,
+  count,
+  inArray,
+  max,
   FederatedApplicationConnectionService,
+  federatedAccessReceipts,
   federatedApplicationConnections,
+  federatedIdentityLinks,
   trustedIssuers,
+  users,
   workspaces,
 } from "@synap/database";
 import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
@@ -83,6 +89,53 @@ async function matchingApprovedConnection(input: {
     columns: { allowedOrigins: true },
   });
   return Boolean(connection?.allowedOrigins.includes(input.origin));
+}
+
+/**
+ * How much a connection is used, read from what the pod already records —
+ * no new column. Both facts are keyed by ISSUER, not by client: an identity
+ * link and an access receipt name the issuer that vouched for the person,
+ * never the browser app they came through. So they are the usage of the
+ * issuer a connection was registered under, which is the connection's own
+ * usage in the common one-app-per-issuer case and an upper bound otherwise.
+ *
+ *   lastUsedAt — the newest issuer-authorized access command the pod applied
+ *                (`federated_access_receipts.applied_at`); null = never.
+ *   people     — how many pod users signed in through that issuer
+ *                (`federated_identity_links`).
+ *
+ * Two grouped queries for any number of connections (`issuerIds` narrows them
+ * to the ones asked for).
+ */
+async function issuerUsage(issuerIds?: readonly string[]) {
+  const narrowReceipts =
+    issuerIds && inArray(federatedAccessReceipts.issuerId, [...issuerIds]);
+  const narrowLinks =
+    issuerIds && inArray(federatedIdentityLinks.issuerId, [...issuerIds]);
+  const [receipts, links] = await Promise.all([
+    db
+      .select({
+        issuerId: federatedAccessReceipts.issuerId,
+        lastUsedAt: max(federatedAccessReceipts.appliedAt),
+      })
+      .from(federatedAccessReceipts)
+      .where(narrowReceipts || undefined)
+      .groupBy(federatedAccessReceipts.issuerId),
+    db
+      .select({
+        issuerId: federatedIdentityLinks.issuerId,
+        people: count(),
+      })
+      .from(federatedIdentityLinks)
+      .where(narrowLinks || undefined)
+      .groupBy(federatedIdentityLinks.issuerId),
+  ]);
+  const lastUsed = new Map(receipts.map((r) => [r.issuerId, r.lastUsedAt]));
+  const people = new Map(links.map((l) => [l.issuerId, Number(l.people)]));
+  return (issuerId: string) => ({
+    lastUsedAt: lastUsed.get(issuerId) ?? null,
+    peopleCount: people.get(issuerId) ?? 0,
+  });
 }
 
 function reviewShape(
@@ -199,7 +252,7 @@ export const applicationConnectionsRouter = router({
     }),
 
   list: podAdminProcedure.query(async () => {
-    const [connectionRows, requests] = await Promise.all([
+    const [connectionRows, requests, usageOf] = await Promise.all([
       // Keep the issuer URL beside each connection in the owner audit view.
       // This is an inner join because a connection cannot exist without its
       // referenced trusted issuer; it avoids a per-row lookup while preserving
@@ -219,11 +272,13 @@ export const applicationConnectionsRouter = router({
         orderBy: (table, { desc }) => [desc(table.createdAt)],
         limit: 100,
       }),
+      issuerUsage(),
     ]);
     return {
       connections: connectionRows.map(({ connection, issuerUrl }) => ({
         ...connection,
         issuerUrl,
+        ...usageOf(connection.issuerId),
       })),
       // Owner inventory needs the proposal and its lifecycle, never either
       // browser-held capability hash. Keeping those out of the tRPC payload
@@ -242,6 +297,56 @@ export const applicationConnectionsRouter = router({
       ),
     };
   }),
+
+  /**
+   * One connection — the console's app page: the ledger row, its issuer, its
+   * usage (`issuerUsage`) and WHO uses it, the pod users linked through its
+   * issuer (newest link first). Same capability-hash discipline as `list`:
+   * the connection row holds none.
+   */
+  get: podAdminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const [row] = await db
+        .select({
+          connection: federatedApplicationConnections,
+          issuerUrl: trustedIssuers.issuerUrl,
+        })
+        .from(federatedApplicationConnections)
+        .innerJoin(
+          trustedIssuers,
+          eq(federatedApplicationConnections.issuerId, trustedIssuers.id)
+        )
+        .where(eq(federatedApplicationConnections.id, input.id))
+        .limit(1);
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Application connection not found",
+        });
+      }
+      const issuerId = row.connection.issuerId;
+      const [usageOf, people] = await Promise.all([
+        issuerUsage([issuerId]),
+        db
+          .select({
+            userId: federatedIdentityLinks.userId,
+            name: users.name,
+            email: users.email,
+            linkedAt: federatedIdentityLinks.linkedAt,
+          })
+          .from(federatedIdentityLinks)
+          .innerJoin(users, eq(federatedIdentityLinks.userId, users.id))
+          .where(eq(federatedIdentityLinks.issuerId, issuerId))
+          .orderBy(desc(federatedIdentityLinks.linkedAt)),
+      ]);
+      return {
+        ...row.connection,
+        issuerUrl: row.issuerUrl,
+        ...usageOf(issuerId),
+        people,
+      };
+    }),
 
   approveRequest: podAdminProcedure
     .input(requestIdSchema)

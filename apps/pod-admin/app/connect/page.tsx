@@ -38,6 +38,7 @@ import {
   approvedIssuerRedirectPrefix,
   toOriginPrefix,
 } from "../../lib/connect-redirect";
+import { podCallerHeaders } from "../../lib/pod-caller-headers";
 
 const INTERNAL_POD_URL = process.env.POD_URL ?? "http://localhost:4000";
 
@@ -72,9 +73,12 @@ function readAllowedHttpsOrigins(): string[] {
  * failed read yields null: the assertion then widens nothing (fail closed) and
  * only the owner's CONNECT_ALLOWED_HTTPS_ORIGINS apply.
  */
-async function readApprovedIssuerUrl(): Promise<string | null> {
+async function readApprovedIssuerUrl(
+  incoming: Headers
+): Promise<string | null> {
   try {
     const res = await fetch(`${INTERNAL_POD_URL}/api/federation/discovery`, {
+      headers: podCallerHeaders(incoming),
       cache: "no-store",
       signal: AbortSignal.timeout(5000),
     });
@@ -96,13 +100,14 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
   const agentType = sp.agent_type ?? null;
   const redirectUri = sp.redirect_uri ?? "";
   const issuerAssertion = sp.issuer_assertion ?? "";
+  const h = await headers();
 
   // Allowed https redirect prefixes: the assertion's issuer ONLY when it is the
   // pod's approved Synap Cloud issuer (lib/connect-redirect.ts) PLUS any origins
   // the pod owner pre-allowlisted via env.
   const trustedPrefix = approvedIssuerRedirectPrefix(
     issuerAssertion,
-    await readApprovedIssuerUrl()
+    await readApprovedIssuerUrl(h)
   );
   const extraRedirectPrefixes = [
     ...(trustedPrefix ? [trustedPrefix] : []),
@@ -113,7 +118,6 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
   // hands an API key to an integration is the most phishing-shaped surface the
   // pod has; the identity row is the only anchor a reader arriving from a CLI
   // banner or a control-plane redirect has that this pod is the one they meant.
-  const h = await headers();
 
   return (
     <ConnectForm

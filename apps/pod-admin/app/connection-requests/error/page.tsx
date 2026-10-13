@@ -18,11 +18,11 @@ import { ReceiverShell } from "../../_lib/receiver-shell";
 
 const messages: Record<string, string> = {
   POD_ADMIN_URL_REQUIRED:
-    "This Pod does not yet have a public Pod Admin URL. Its owner needs to finish Pod deployment configuration.",
+    "This Pod does not yet have a public Pod Console URL. Its owner needs to finish Pod deployment configuration.",
   POD_ADMIN_URL_INVALID:
-    "This Pod's Admin URL does not match its deployed console. Its owner needs to correct the Pod configuration.",
+    "This Pod's Console URL does not match its deployed console. Its owner needs to correct the Pod configuration.",
   POD_CONNECTION_START_FAILED:
-    "The Pod could not prepare this connection. Try again shortly; if it persists, ask the Pod owner to inspect Pod Admin.",
+    "The Pod could not prepare this connection. Try again shortly; if it persists, ask the Pod owner to inspect Pod Console.",
 };
 
 export default function ConnectionRequestErrorPage() {

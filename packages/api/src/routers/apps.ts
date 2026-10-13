@@ -14,11 +14,17 @@
  * call the ONE service `services/app-connect.ts` (request access, issue key,
  * rename, revoke, remove) over the ONE write door `AppRepository`, so the two
  * can never disagree about what an app is or what revoke does.
+ *
+ * The `admin*` procedures are the pod admin's door to EVERY member's apps
+ * (the console's Apps page): read any, and END any (revoke, remove for good)
+ * through the same service with the owner floor lifted. Asking for access,
+ * issuing a key and renaming stay the owner's.
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { db, AppRepository } from "@synap/database";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
 import {
   issueKey,
   loadOwnedApp,
@@ -28,6 +34,7 @@ import {
   requestAccess,
   revokeApp,
   serializeApp,
+  serializeAppsForAdmin,
 } from "../services/app-connect.js";
 
 const PublicId = z.string().min(1).max(200);
@@ -186,6 +193,64 @@ export const appsRouter = router({
       const { publicId } = await removeApp({
         publicId: input.publicId,
         ownerUserId: ctx.userId,
+      });
+      return { removed: true, publicId };
+    }),
+
+  // ── Pod admin: every member's apps (the console's Apps page) ──────────────
+
+  /**
+   * EVERY app on the pod, whoever owns it — the console inventory. Pod admin
+   * only; the self-scoped `list` above stays the member's own door. Each row
+   * is the owner's wire row plus its keys, its owner and the names of the
+   * spaces it reaches (`serializeAppsForAdmin`). Revoked apps are included
+   * by default so an admin can remove them for good; removed apps never are.
+   */
+  adminList: podAdminProcedure
+    .input(z.object({ includeRevoked: z.boolean().optional() }).optional())
+    .query(async ({ input }) =>
+      serializeAppsForAdmin(
+        await new AppRepository(db).listAll({
+          includeRevoked: input?.includeRevoked ?? true,
+        })
+      )
+    ),
+
+  /** One app by public id, whoever owns it — the console's app page. */
+  adminGet: podAdminProcedure
+    .input(z.object({ publicId: PublicId }))
+    .query(async ({ input }) => {
+      const found = await new AppRepository(db).getByPublicId(input.publicId);
+      if (!found) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
+      }
+      const [row] = await serializeAppsForAdmin([found]);
+      return row!;
+    }),
+
+  /**
+   * Revoke anyone's app — the SAME service as `revoke`, with the owner floor
+   * lifted (`podAdmin`). The event names the admin who did it.
+   */
+  adminRevoke: podAdminProcedure
+    .input(z.object({ publicId: PublicId }))
+    .mutation(async ({ ctx, input }) => {
+      const { publicId } = await revokeApp({
+        publicId: input.publicId,
+        ownerUserId: ctx.userId,
+        podAdmin: true,
+      });
+      return { revoked: true, publicId };
+    }),
+
+  /** Remove anyone's REVOKED app for good — the same service as `remove`. */
+  adminRemove: podAdminProcedure
+    .input(z.object({ publicId: PublicId }))
+    .mutation(async ({ ctx, input }) => {
+      const { publicId } = await removeApp({
+        publicId: input.publicId,
+        ownerUserId: ctx.userId,
+        podAdmin: true,
       });
       return { removed: true, publicId };
     }),

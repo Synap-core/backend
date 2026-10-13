@@ -46,6 +46,17 @@
  * source has no by-slug packages-endpoint analogue, but the CP serves it at
  * `GET {source}/api/marketplace/cells?q=<key>` (the same live endpoint
  * `routers/cells.ts`'s `install` mutation already fetches from).
+ *
+ * Sources (Pod Console D11): every target names ONE catalog source — omitted
+ * means the official Synap source, never "whichever source has the slug". A
+ * package from a source a person added is installed only as its trust level
+ * allows (`decideMarketInstall`): its definition is fetched anonymously from
+ * the signed listing and digest-checked (`resolveListedDefinition`), a person
+ * confirms code and network reach explicitly, an agent proposes only where
+ * that source opted in, a showcase source never installs, and everything it
+ * installs is stamped `<sourceId>/<slug>` so it can never converge onto — or
+ * be reconciled as — Synap's own package. The by-key Control Plane fallbacks
+ * below are official-only.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -57,11 +68,25 @@ import {
   or,
   isNull,
   inArray,
+  drizzleSql,
   getWorkspaceMembership,
   automations as automationsTable,
 } from "@synap/database";
-import { cpCatalogCache, profiles, views } from "@synap/database/schema";
-import type { PackageCellRendererType } from "@synap/database/schema";
+import {
+  capabilities,
+  cpCatalogCache,
+  profiles,
+  views,
+} from "@synap/database/schema";
+import type {
+  CatalogListing,
+  PackageCellRendererType,
+} from "@synap/database/schema";
+import type { CatalogSource } from "@synap/jobs/workers/cp-catalog-sync.js";
+import {
+  decideMarketInstall,
+  qualifiedPackageId,
+} from "@synap-core/types/marketplace-source";
 import type { CatalogKind } from "@synap/jobs";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import type { WorkspaceDefinitionInput } from "@synap/database";
@@ -89,6 +114,19 @@ import {
   summarizePostWorkspaceLayers,
   installedTrackTemplates,
 } from "./install-layers.js";
+import {
+  marketSourceGate,
+  provenanceSlug,
+  resolveListedDefinition,
+  resolveMarketSource,
+} from "./market-sources.js";
+import {
+  assessMarketRisks,
+  missingAcknowledgements,
+  riskNotices,
+  type MarketAcknowledgement,
+} from "./market-risk.js";
+import { officialCatalogCondition } from "./catalog-cache-query.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -104,17 +142,35 @@ export interface CatalogCacheRowFull {
   tier: string | null;
   vendor: string | null;
   definition: Record<string, unknown> | null;
+  /** Third-party rows only: the signed listing (definition URL + digest). */
+  listing: CatalogListing | null;
 }
 
-/** Look up ONE cache row by (kind, slug) — the exact target an install needs. */
+/**
+ * Look up ONE cache row by (source, kind, slug) — the exact target an install
+ * needs. The cache is unique on all three.
+ *
+ * `source` omitted (or `synap`, or the official URL): the OFFICIAL source's
+ * row, and only that — a bare slug never resolves to a source a person added,
+ * so `acme/crm` can never stand in for Synap's `crm`. A source that is not
+ * on this pod is refused (`resolveMarketSource`).
+ */
 export async function lookupCatalogEntry(
   kind: CatalogKind,
-  slug: string
+  slug: string,
+  source?: string | null
 ): Promise<CatalogCacheRowFull | null> {
+  const resolved = await resolveMarketSource(source);
   const [row] = await db
     .select()
     .from(cpCatalogCache)
-    .where(and(eq(cpCatalogCache.kind, kind), eq(cpCatalogCache.slug, slug)))
+    .where(
+      and(
+        eq(cpCatalogCache.source, resolved.cacheKey),
+        eq(cpCatalogCache.kind, kind),
+        eq(cpCatalogCache.slug, slug)
+      )
+    )
     .limit(1);
   // A tombstone is never an install target (the CP answers 410 for it too).
   if (row?.retiredAt) {
@@ -366,6 +422,56 @@ async function resolveCellDefinitionByKey(slug: string): Promise<{
   };
 }
 
+/**
+ * The install payload for one catalog target, resolved EXACTLY as
+ * `applyMarketInstall` resolves it: the cache row's inline definition, else a
+ * by-slug fetch from the row's own source; with no row, the per-kind by-key
+ * re-resolve from the configured Control Plane. ONE resolution path, so a
+ * preview (`marketplace.get` / `marketplace.preflight`) describes the very
+ * definition the install will apply.
+ *
+ * Null only where the install would also stop: a capability the CP does not
+ * know, or a cached cell row that carries no renderer source.
+ */
+export async function resolveCatalogDefinition(
+  kind: CatalogKind,
+  slug: string,
+  entry: CatalogCacheRowFull | null,
+  version?: string | null
+): Promise<Record<string, unknown> | null> {
+  // A source a person added: the signed listing is the ONLY way in — never a
+  // Control Plane fallback — and a showcase source is never fetched at all.
+  if (entry?.listing) {
+    const source = await resolveMarketSource(entry.source);
+    if (source.trust === "showcase") {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `"${entry.name}" is listed by ${source.name} for show only — it installs from the publisher's site, never from this pod.`,
+        cause: { code: "MARKET_SHOWCASE_ONLY" },
+      });
+    }
+    return resolveListedDefinition(entry);
+  }
+  if (kind === "cell") {
+    // A cell's source is inline-only — the by-slug packages endpoint never
+    // serves it — so a cached row is read as-is, never re-fetched.
+    return entry
+      ? entry.definition
+      : ((await resolveCellDefinitionByKey(slug)).def as Record<
+          string,
+          unknown
+        >);
+  }
+  if (entry) return resolveDefinition(entry, version);
+  if (kind === "capability") {
+    return (await fetchCPCapabilityTemplate(slug)) as unknown as Record<
+      string,
+      unknown
+    > | null;
+  }
+  return resolveDefinitionByKey(slug, version);
+}
+
 /** Shared install-time params schema — the ONE zod shape every capability-apply
  *  door declares for `{{param}}` substitution (tRPC `capabilities.install`,
  *  Hub `POST /capabilities/apply`, and the `market.install` verb). */
@@ -400,6 +506,12 @@ export async function applyCapabilityDefinition(
 export interface ApplyMarketInstallInput {
   kind: CatalogKind;
   slug: string;
+  /**
+   * The catalog source (provider base URL) the target is listed under. Omit
+   * when only one source offers this slug; required once several do (see
+   * `lookupCatalogEntry`).
+   */
+  source?: string | null;
   version?: string | null;
   params?: Record<string, unknown>;
   userId: string;
@@ -417,6 +529,74 @@ export interface ApplyMarketInstallInput {
    * cannot fetch unauthenticated. When absent, resolution is unchanged (fetch).
    */
   definition?: Record<string, unknown>;
+  /**
+   * A third-party definition the caller ALREADY fetched and digest-checked
+   * from this very catalog row (`runMarketInstall` does, to disclose its
+   * risks first). Skips the second fetch; the trust gate still runs here.
+   */
+  verifiedDefinition?: Record<string, unknown>;
+}
+
+/**
+ * A package from a source a person added may not replace a capability this
+ * pod already has, nor take a key Synap's own catalog uses: a capability is
+ * keyed by name, and the applier would re-apply its tools onto the existing
+ * row — credentials and all.
+ */
+async function assertNoCapabilityTakeover(
+  source: CatalogSource,
+  kind: CatalogKind,
+  definition: Record<string, unknown>
+): Promise<void> {
+  const keys = new Set<string>();
+  const keyOf = (def: unknown): string | null => {
+    const d = (def ?? {}) as { key?: unknown; capability?: { key?: unknown } };
+    const key = d.capability?.key ?? d.key;
+    return typeof key === "string" && key ? key : null;
+  };
+  if (kind === "capability") {
+    const k = keyOf(definition);
+    if (k) keys.add(k);
+  }
+  for (const cap of Array.isArray(definition.capabilities)
+    ? (definition.capabilities as Array<{ definition?: unknown }>)
+    : []) {
+    const k = cap?.definition ? keyOf(cap.definition) : null;
+    if (k) keys.add(k);
+  }
+  if (keys.size === 0) return;
+  const list = [...keys];
+  const [installed] = await db
+    .select({
+      key: drizzleSql<string>`${capabilities.metadata}->>'templateKey'`,
+    })
+    .from(capabilities)
+    .where(
+      inArray(
+        drizzleSql<string>`${capabilities.metadata}->>'templateKey'`,
+        list
+      )
+    )
+    .limit(1);
+  const [official] = await db
+    .select({ key: cpCatalogCache.slug })
+    .from(cpCatalogCache)
+    .where(
+      and(
+        officialCatalogCondition(),
+        eq(cpCatalogCache.kind, "capability"),
+        inArray(cpCatalogCache.slug, list)
+      )
+    )
+    .limit(1);
+  const taken = installed?.key ?? official?.key;
+  if (taken) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `This package brings a capability called "${taken}", which ${installed ? "is already installed on this pod" : "Synap's catalog uses"}. A package from ${source.name} can't replace it.`,
+      cause: { code: "MARKET_CAPABILITY_TAKEOVER", key: taken },
+    });
+  }
 }
 
 /**
@@ -433,10 +613,53 @@ export async function applyMarketInstall(
   // `entry` left null, each kind branch's existing `entry ? … : …` fetch is
   // bypassed in favour of `supplied`, while the `entry?.name`/`entry?.version`
   // display fallbacks degrade harmlessly (same as the by-key re-resolve path).
-  const supplied = input.definition ?? null;
-  const entry = supplied
+  const source = await resolveMarketSource(input.source);
+  if (input.definition && !source.official) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A supplied definition installs only as a Synap package — a package from another source installs from its own signed listing.",
+    });
+  }
+  const entry = input.definition
     ? null
-    : await lookupCatalogEntry(input.kind, input.slug);
+    : await lookupCatalogEntry(input.kind, input.slug, source.cacheKey);
+  // The identity everything this install creates is stamped with.
+  const pslug = provenanceSlug(source, input.slug);
+
+  // A source a person added: the trust gate runs HERE too, so an approved
+  // proposal re-checks it (a source blocked or turned showcase since the
+  // proposal was filed installs nothing). The approver is a person.
+  let listed: Record<string, unknown> | null = null;
+  if (!source.official) {
+    if (!entry) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `"${input.slug}" is not in the ${source.name} catalog on this pod.`,
+      });
+    }
+    const decision = decideMarketInstall(
+      await marketSourceGate(source),
+      "person"
+    );
+    if (decision.allow === "open_site") {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `${source.name} is a showcase source — "${entry.name}" installs from the publisher's site, never from this pod.`,
+        cause: { code: "MARKET_SHOWCASE_ONLY" },
+      });
+    }
+    if (decision.allow === "refuse") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: decision.reason,
+        cause: { code: "MARKET_SOURCE_REFUSED" },
+      });
+    }
+    listed = input.verifiedDefinition ?? (await resolveListedDefinition(entry));
+    await assertNoCapabilityTakeover(source, input.kind, listed);
+  }
+  const supplied = input.definition ?? listed;
 
   // A CAPABILITY is resolvable WITHOUT a cache row. Opt-in capabilities
   // (syncByDefault:false, e.g. unipile-linkedin, arch-backend) never enter
@@ -449,13 +672,13 @@ export async function applyMarketInstall(
   // Capability is handled BEFORE the cache-row requirement because it resolves
   // by key, cache-row or not.
   if (input.kind === "capability") {
-    const definition = (supplied
-      ? supplied
-      : entry
-        ? await resolveDefinition(entry, input.version)
-        : await fetchCPCapabilityTemplate(
-            input.slug
-          )) as unknown as CapabilityDefinition | null;
+    const definition = (supplied ??
+      (await resolveCatalogDefinition(
+        "capability",
+        input.slug,
+        entry,
+        input.version
+      ))) as unknown as CapabilityDefinition | null;
     if (!definition) {
       throw new TRPCError({
         code: "NOT_FOUND",
@@ -515,12 +738,17 @@ export async function applyMarketInstall(
       // every source-less cell share one namespace, so two unrelated cells with
       // the same `key` minted the SAME `cell:unknown:<key>` and the second
       // install died on `widget_def_type_key_workspace_uniq`.
-      const [slugPackage, slugCellKey] = input.slug.includes("/")
+      const [ownPackage, slugCellKey] = input.slug.includes("/")
         ? input.slug.split("/")
         : [
             def.packageSlug ?? cellByKey?.packageSlug ?? input.slug,
             def.key ?? cellByKey?.cellKey ?? input.slug,
           ];
+      // From an added source the package segment is qualified
+      // (`cell:acme/charts:bar`), so it can never overwrite Synap's cell.
+      const slugPackage = source.official
+        ? ownPackage
+        : qualifiedPackageId(source.id, ownPackage as string);
       // Shared with the packages/apply inline-`cells[]` applier so the typeKey
       // derivation and the view-renderer affinity threading cannot drift
       // between the two install doors. See `install-cell-from-definition.ts`.
@@ -553,14 +781,13 @@ export async function applyMarketInstall(
       // Supplied payload (RC4) → use directly; else cache row present → resolve
       // inline/by-slug; row MISSING → by-key re-resolve from the CP (opt-in /
       // just-authored template).
-      const definition = (supplied
-        ? supplied
-        : entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(
-              input.slug,
-              input.version
-            )) as unknown as WorkspaceDefinitionInput & {
+      const definition = (supplied ??
+        (await resolveCatalogDefinition(
+          "template",
+          input.slug,
+          entry,
+          input.version
+        ))) as unknown as WorkspaceDefinitionInput & {
         workspaceName?: string;
       };
       // Idempotency: packageSlug/proposalId both set to the catalog slug, so a
@@ -579,11 +806,11 @@ export async function applyMarketInstall(
         definition,
         userId: input.userId,
         selfSlug: input.slug,
-        proposalId: input.slug,
-        packageSlug: input.slug,
+        proposalId: pslug,
+        packageSlug: pslug,
         packageVersion: entry?.version ?? input.version ?? undefined,
         workspaceName: definition.workspaceName,
-        templateId: input.slug,
+        templateId: pslug,
         templateName: entry?.name ?? input.slug,
       });
       // `created` (new or idempotent re-hit, with its reconcile outcome) or
@@ -658,7 +885,7 @@ export async function applyMarketInstall(
           agentUserId: input.agentUserId ?? undefined,
           projectId: input.projectId,
           projectName: input.projectName,
-          packageSlug: input.slug,
+          packageSlug: pslug,
           homeWorkspaceId: result.workspaceId,
         });
         if ("error" in resolved) {
@@ -748,7 +975,11 @@ export async function applyMarketInstall(
               ...postBody,
               _meta: {
                 ...postBody._meta,
-                slug: postBody._meta?.slug ?? input.slug,
+                // From an added source the namespace is FORCED to its
+                // qualified id — never the definition's own `_meta.slug`.
+                slug: source.official
+                  ? (postBody._meta?.slug ?? input.slug)
+                  : pslug,
               },
             },
             userId: input.userId,
@@ -852,9 +1083,12 @@ export async function applyMarketInstall(
       // inline/by-slug; row MISSING → by-key re-resolve from the CP (opt-in /
       // just-authored automation package).
       const definition = (supplied ??
-        (entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version))) as {
+        (await resolveCatalogDefinition(
+          "automation",
+          input.slug,
+          entry,
+          input.version
+        ))) as {
         automations?: Array<{
           name: string;
           description?: string;
@@ -923,8 +1157,8 @@ export async function applyMarketInstall(
             triggerConfig,
             flowDefinition,
           };
-          const source = buildMarketSource(fields, {
-            packageSlug: input.slug,
+          const stamp = buildMarketSource(fields, {
+            packageSlug: pslug,
             packageVersion: entry?.version ?? input.version ?? null,
             installedAt: new Date().toISOString(),
           });
@@ -935,7 +1169,7 @@ export async function applyMarketInstall(
           // system provenance can never be clobbered. Mirrors the author-metadata
           // merge in package-apply-post-workspace.ts. The W4a `fields`/baseline above
           // is unaffected — metadata is not a reconcilable field.
-          const metadata = stampMarketSource(a.metadata, source);
+          const metadata = stampMarketSource(a.metadata, stamp);
           const r = await caller.create({
             workspaceId: input.workspaceId,
             name: a.name,
@@ -985,9 +1219,12 @@ export async function applyMarketInstall(
       // carries no `skill` slot at all) behaves exactly as it did before.
       const resolved =
         supplied ??
-        (entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version));
+        (await resolveCatalogDefinition(
+          "skill",
+          input.slug,
+          entry,
+          input.version
+        ));
       const definition = ((resolved as { skill?: Record<string, unknown> })
         .skill ?? resolved) as {
         /** The skill's own `load_skill` ref — see `skillFields.slug` below. */
@@ -1039,12 +1276,12 @@ export async function applyMarketInstall(
         executionMode: definition.executionMode ?? "sync",
         timeoutSeconds: definition.timeoutSeconds ?? 30,
       };
-      const source = buildMarketSource(skillFields, {
-        packageSlug: input.slug,
+      const stamp = buildMarketSource(skillFields, {
+        packageSlug: pslug,
         packageVersion: entry?.version ?? input.version ?? null,
         installedAt: new Date().toISOString(),
       });
-      const metadata = stampMarketSource(undefined, source);
+      const metadata = stampMarketSource(undefined, stamp);
       const result = await skillsRouter.createCaller(ctx).create({
         workspaceId: input.workspaceId ?? undefined,
         ...skillFields,
@@ -1064,7 +1301,11 @@ export async function applyMarketInstall(
          * lie. `marketplace-install.baseline-writability.tripwire.test.ts`
          * enforces exactly this split.
          */
-        slug: definition.slug ?? input.slug,
+        // From an added source the ref is qualified, so it can never shadow
+        // a Synap skill a space already loads by slug.
+        slug: source.official
+          ? (definition.slug ?? input.slug)
+          : qualifiedPackageId(source.id, definition.slug ?? input.slug),
         metadata,
       });
       return { kind: "skill", ...result };
@@ -1082,9 +1323,12 @@ export async function applyMarketInstall(
       // → use directly; else cache row present → resolve inline/by-slug; row
       // MISSING → by-key re-resolve from the CP.
       const definition = (supplied ??
-        (entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version))) as {
+        (await resolveCatalogDefinition(
+          "view",
+          input.slug,
+          entry,
+          input.version
+        ))) as {
         name?: string;
         displayName?: string;
         views?: Array<{
@@ -1195,7 +1439,7 @@ export async function applyMarketInstall(
       for (const ev of existingViews) {
         if (
           readMarketSource(ev.metadata as Record<string, unknown> | null)
-            ?.packageSlug === input.slug
+            ?.packageSlug === pslug
         ) {
           linkedByName.set(ev.name, ev.id);
         }
@@ -1227,12 +1471,12 @@ export async function applyMarketInstall(
           query: v.query,
           config: v.config,
         };
-        const source = buildMarketSource(fields, {
-          packageSlug: input.slug,
+        const stamp = buildMarketSource(fields, {
+          packageSlug: pslug,
           packageVersion: entry?.version ?? input.version ?? null,
           installedAt: new Date().toISOString(),
         });
-        const metadata = stampMarketSource(v.metadata, source);
+        const metadata = stampMarketSource(v.metadata, stamp);
         try {
           const existingId = linkedByName.get(name);
           if (existingId) {
@@ -1289,15 +1533,25 @@ export async function applyMarketInstall(
 export interface RunMarketInstallInput {
   slug: string;
   kind: CatalogKind;
+  /**
+   * The catalog source: omitted (or `synap`) = the official source; an added
+   * source's id otherwise. A bare request never reaches an added source.
+   */
+  source?: string | null;
   version?: string | null;
   params?: Record<string, unknown>;
   /**
    * RC4 payload-in: the FULL package definition supplied by an
    * already-CP-authenticated client (see ApplyMarketInstallInput.definition).
    * Threaded straight into the direct-execute path so an operator installs a
-   * PRIVATE package the pod cannot fetch unauthenticated.
+   * PRIVATE package the pod cannot fetch unauthenticated. Official only.
    */
   definition?: Record<string, unknown>;
+  /**
+   * A person's explicit confirms for a package from a TRUSTED added source
+   * that runs code or reaches the network (the console's extra confirm).
+   */
+  acknowledge?: MarketAcknowledgement;
   userId: string;
   workspaceId: string | null;
   /** The acting AGENT (agent-user id), when this call originates from an agent. */
@@ -1311,52 +1565,116 @@ export type MarketInstallOutcome =
   | { status: "proposed"; proposalId: string; reviewUrl: string };
 
 /**
- * Entry point for the `market.install` builtin verb. (P2.1-A / D3): an
- * agent-initiated call ALWAYS proposes — never auto-provisions, regardless of
- * whether the outer capability gate already let this call through (a grant on
- * `market.install` itself governs INVOKING the verb, not the provisioning it
- * performs). An operator call (no agentUserId) executes directly.
+ * Entry point for the `market.install` builtin verb and the console's
+ * `marketplace.install`. The source's trust level decides first
+ * (`decideMarketInstall`):
+ *   - official: an agent ALWAYS proposes (P2.1-A / D3) — never auto-provisions,
+ *     whatever the outer capability gate let through; a person installs.
+ *   - trusted: a person installs after confirming code / network reach; an
+ *     agent proposes only where the source opted in, else it is refused.
+ *   - showcase: never installs — the publisher's site does.
  */
 export async function runMarketInstall(
   input: RunMarketInstallInput
 ): Promise<MarketInstallOutcome> {
-  const entry = await lookupCatalogEntry(input.kind, input.slug);
+  const source = await resolveMarketSource(input.source);
+  const entry = await lookupCatalogEntry(
+    input.kind,
+    input.slug,
+    source.cacheKey
+  );
   // Capability resolves by key even without a cache row — opt-in caps
   // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them by
   // key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). The same
   // now holds for automation/template (resolveDefinitionByKey) AND cell
   // (resolveCellDefinitionByKey, `GET {CP}/api/marketplace/cells?q=`) — an
   // opt-in / just-authored package the cache never saw re-resolves by key from
-  // the CP instead of dead-ending here. No early gate is needed for any kind:
-  // `applyMarketInstall` (called below, or by the approve-executor after a
-  // proposal) does its own by-key resolve and throws its own clear NOT_FOUND
-  // when the CP is unreachable/unconfigured or genuinely has no match.
+  // the CP instead of dead-ending here. Official source only: an added source
+  // serves nothing it did not sign.
+  const actor = input.agentUserId ? "agent" : "person";
+  const decision = decideMarketInstall(await marketSourceGate(source), actor);
+  if (decision.allow === "open_site") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `${source.name} is a showcase source — "${entry?.name ?? input.slug}" installs from the publisher's site, never from this pod.`,
+      cause: {
+        code: "MARKET_SHOWCASE_ONLY",
+        url: entry?.listing?.installUrl ?? entry?.listing?.homepageUrl ?? null,
+      },
+    });
+  }
+  if (decision.allow === "refuse") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: decision.reason,
+      cause: { code: "MARKET_SOURCE_REFUSED", source: source.id },
+    });
+  }
 
-  // Tier pre-check (P2.5) — fail early, before any proposal or provisioning.
-  await assertPackageTierAccess(input.userId, input.slug);
+  // An added source: fetch + verify once, and disclose what it brings BEFORE
+  // a proposal is filed or anything is written. A person must have confirmed
+  // code and network reach explicitly.
+  let verifiedDefinition: Record<string, unknown> | undefined;
+  let notices: string[] = [];
+  if (!source.official) {
+    if (!entry) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `"${input.slug}" is not in the ${source.name} catalog on this pod.`,
+      });
+    }
+    if (input.definition) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "A supplied definition installs only as a Synap package — a package from another source installs from its own signed listing.",
+      });
+    }
+    verifiedDefinition = await resolveListedDefinition(entry);
+    const risks = assessMarketRisks(verifiedDefinition);
+    if (actor === "person") {
+      const missing = missingAcknowledgements(risks, input.acknowledge);
+      if (missing.length > 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: missing.join(" "),
+          cause: { code: "MARKET_ACK_REQUIRED", missing },
+        });
+      }
+    }
+    notices = riskNotices(risks);
+  } else {
+    // Tier pre-check (P2.5) — fail early, before any proposal or provisioning.
+    // Tiers are Synap's plans; an added source's `requiredTier` is its own.
+    await assertPackageTierAccess(input.userId, input.slug);
+  }
 
-  if (input.agentUserId) {
+  if (decision.allow === "propose") {
+    const from = source.official
+      ? "the marketplace"
+      : `${source.name} (${source.id})`;
     const proposal = await createPendingProposal({
       userId: input.userId,
       workspaceId: input.workspaceId,
       targetType: "capability",
-      targetId: `market:${input.kind}:${input.slug}`,
+      targetId: `market:${input.kind}:${provenanceSlug(source, input.slug)}`,
       proposalType: "capability.install",
-      agentUserId: input.agentUserId,
+      agentUserId: input.agentUserId ?? undefined,
       data: {
         slug: input.slug,
         kind: input.kind,
         // `entry` is null for any by-key re-resolve (opt-in capability, or an
         // automation/template with no cache row); the approve-executor re-resolves
-        // the definition via applyMarketInstall, so source/version here are
-        // informational and safely fall back to the slug.
+        // the definition via applyMarketInstall, so version here is informational.
         version: input.version ?? entry?.version ?? null,
-        source: entry?.source ?? null,
+        // The source the approval installs from (re-checked then).
+        source: source.id,
         params: input.params ?? {},
+        ...(notices.length > 0 ? { risks: notices } : {}),
         ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.projectName ? { projectName: input.projectName } : {}),
       },
-      notificationDescription: `Install "${entry?.name ?? input.slug}" (${input.kind}) v${entry?.version ?? "latest"} from the marketplace`,
+      notificationDescription: `Install "${entry?.name ?? input.slug}" (${input.kind}) v${entry?.version ?? "latest"} from ${from}${notices.length > 0 ? ` — ${notices.join(" ")}` : ""}`,
     });
     return {
       status: "proposed",
@@ -1368,9 +1686,11 @@ export async function runMarketInstall(
   const result = await applyMarketInstall({
     kind: input.kind,
     slug: input.slug,
+    source: source.id,
     version: input.version,
     params: input.params,
     definition: input.definition,
+    verifiedDefinition,
     userId: input.userId,
     workspaceId: input.workspaceId,
     agentUserId: input.agentUserId,

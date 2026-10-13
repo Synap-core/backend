@@ -47,6 +47,14 @@ vi.mock("../services/focus-sessions/owed-outputs.js", async (orig) => ({
   },
 }));
 
+const issuersSpy = vi.fn();
+const appRequestsSpy = vi.fn();
+vi.mock("../services/signals/access-requests.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  listPendingIssuers: async (...args: unknown[]) => issuersSpy(...args),
+  listPendingAppRequests: async (...args: unknown[]) => appRequestsSpy(...args),
+}));
+
 vi.mock("../services/projects/project-needs-you.js", () => ({
   listSessionsAwaitingReview: async (...args: unknown[]) => {
     reviewSpy(...args);
@@ -94,6 +102,8 @@ beforeEach(() => {
     scanTruncated: false,
   });
   notifListSpy.mockResolvedValue({ notifications: [] });
+  issuersSpy.mockResolvedValue({ rows: [], truncated: false });
+  appRequestsSpy.mockResolvedValue({ rows: [], truncated: false });
   eventsReadSpy.mockResolvedValue([]);
   activitySpy.mockResolvedValue({ items: [], nextCursor: null });
   landedSpy.mockResolvedValue({
@@ -471,5 +481,110 @@ describe("signals.list — a data change is a DATA line (work + data)", () => {
     );
     // …and `happenedItemOfEvent` stays the authority over what came back.
     expect(r.signals.map((s) => s.id)).toEqual(["event:c"]);
+  });
+});
+
+describe("signals — the access-request halves (pending issuers, app requests)", () => {
+  const issuer = {
+    id: "iss-1",
+    displayName: "auth.example.com",
+    issuerUrl: "https://auth.example.com",
+    createdAt: new Date("2026-10-12T08:00:00Z"),
+  };
+  const app = {
+    id: "req-1",
+    displayName: "Acme CRM",
+    requestedOrigin: "https://crm.acme.test",
+    createdAt: new Date("2026-10-12T09:00:00Z"),
+    expiresAt: new Date("2026-10-12T09:30:00Z"),
+  };
+
+  it("are read at the FLOOR only — never under a space, project, track or session lens", async () => {
+    await caller().list({ lens: "needs-you" });
+    expect(issuersSpy).toHaveBeenCalledTimes(1);
+    expect(appRequestsSpy).toHaveBeenCalledTimes(1);
+    for (const scope of [
+      { workspaceId: "ws-1" },
+      { workspaceId: null },
+      { projectId: P },
+      { trackId: T },
+      { sessionId: S },
+      { automationId: A },
+    ]) {
+      vi.clearAllMocks();
+      await caller().list({ lens: "needs-you", ...scope });
+      expect(issuersSpy, JSON.stringify(scope)).not.toHaveBeenCalled();
+      expect(appRequestsSpy, JSON.stringify(scope)).not.toHaveBeenCalled();
+    }
+  });
+
+  it("list and count carry them as one row each, and `requests` is a part of the one number", async () => {
+    issuersSpy.mockResolvedValue({ rows: [issuer], truncated: false });
+    appRequestsSpy.mockResolvedValue({ rows: [app], truncated: false });
+    const r = await caller().list({ lens: "needs-you" });
+    expect(r.signals.map((s) => [s.kind, s.target])).toEqual([
+      ["access-request", { kind: "connection-request", id: "req-1" }],
+      ["access-request", { kind: "issuer", id: "iss-1" }],
+    ]);
+    const c = await caller().count();
+    expect(c.requests).toBe(2);
+    expect(c.needsYou).toBe(
+      c.decisions +
+        c.notifications +
+        c.blocked +
+        c.review +
+        c.captures +
+        c.requests
+    );
+  });
+
+  it("a FAILED half is unreadable (the tray throws), never an empty answer", async () => {
+    issuersSpy.mockRejectedValue(new Error("issuers down"));
+    await expect(caller().list({ lens: "needs-you" })).rejects.toThrow(
+      "issuers down"
+    );
+    const r = await caller().list({ lens: "page" });
+    expect(r.page?.blocking.unreadable).toEqual(["issuers"]);
+  });
+
+  it("a capped scan makes the number a floor", async () => {
+    appRequestsSpy.mockResolvedValue({ rows: [app], truncated: true });
+    expect((await caller().count()).truncated).toBe(true);
+  });
+
+  it("`kinds` keeps just those rows, cut from the one order", async () => {
+    issuersSpy.mockResolvedValue({ rows: [issuer], truncated: false });
+    groupsSpy.mockResolvedValue({
+      groups: [
+        {
+          fingerprint: "fp",
+          proposalType: "create",
+          targetType: "entity",
+          targetLabel: "Acme",
+          class: "objectWork",
+          lifetimeHours: null,
+          count: 1,
+          sampleProposalIds: ["p-1"],
+          sources: [],
+          latestAt: new Date("2026-10-12T10:00:00Z"),
+          workspaceIds: [],
+          sessionId: null,
+          reasonCounts: {},
+          attentionFloorCount: 0,
+        },
+      ],
+      distinct: 1,
+      scanTruncated: false,
+    });
+    const all = await caller().list({ lens: "needs-you" });
+    expect(all.signals.map((s) => s.kind)).toEqual([
+      "proposal-cluster",
+      "access-request",
+    ]);
+    const only = await caller().list({
+      lens: "needs-you",
+      kinds: ["access-request"],
+    });
+    expect(only.signals.map((s) => s.id)).toEqual(["access:issuer:iss-1"]);
   });
 });

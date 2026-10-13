@@ -5,18 +5,25 @@ import {
   OPEN_CLIENT_MOBILE,
   OPEN_CLIENT_PARAM,
   TYPED_OPEN_KINDS,
+  WEB_HOSTED_OPEN_KINDS,
 } from "./open-dispatch.js";
 
 // Frozen copy of pod-admin HOST_TYPES ∪ BOUNCE_TYPES (open-params.ts).
+// `automation` / `session` are HOST kinds: the console hosts them on the web
+// and `dispatchOpen` 302s humans there.
 // Do not import that file from apps/api — tsc rootDir cannot leave src/.
 // If you change either list, update both this snapshot and open-params.ts.
-const POD_ADMIN_HOST_TYPES = ["entity", "view"] as const;
+const POD_ADMIN_HOST_TYPES = [
+  "entity",
+  "view",
+  "automation",
+  "session",
+] as const;
 const POD_ADMIN_BOUNCE_TYPES = [
   "proposal",
   "document",
   "cell",
   "channel",
-  "session",
   "project",
   "workspace",
   "capability",
@@ -24,7 +31,6 @@ const POD_ADMIN_BOUNCE_TYPES = [
   "skill",
   "tool",
   "playbook",
-  "automation",
   "agent",
   "run",
 ] as const;
@@ -39,6 +45,15 @@ describe("open kinds lock", () => {
     for (const kind of DEEP_LINK_EMITTED_KINDS) {
       expect(TYPED_OPEN_KINDS as readonly string[]).toContain(kind);
     }
+  });
+
+  // The HOST half on its own: a kind pod-admin renders must be one this route
+  // 302s humans to, and vice versa — or the link bounces to the app for a kind
+  // the web serves (or 302s to a page that only shows "opens in app").
+  it("pod-admin HOST equals the kinds dispatchOpen 302s humans to", () => {
+    expect([...POD_ADMIN_HOST_TYPES].sort()).toEqual(
+      [...WEB_HOSTED_OPEN_KINDS].sort()
+    );
   });
 
   it("pod-admin HOST ∪ BOUNCE equals TYPED_OPEN_KINDS", () => {

@@ -1,19 +1,20 @@
 "use client";
 
 /**
- * Workspace detail page — /workspaces/[id]
+ * Space detail page — /workspaces/[id]
  *
  * 4 tabs: Overview · Members · API Keys · Connections
- * Tab state encoded in ?tab=... URL param (same pattern as trust-keys page).
+ * Tab state encoded in ?tab=... URL param (see UrlTabs).
  */
 
-import { Tab, Tabs } from "@heroui/react";
 import { ArrowLeft } from "lucide-react";
-import { Suspense } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, type ReactNode } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { trpc } from "../../../../lib/trpc";
 import { StatusPill } from "../../components/status-pill";
-import { formatRelative } from "../../people/_lib/helpers";
+import { UrlTabs } from "../../components/url-tabs";
+import { formatRelative } from "../../../../lib/format";
+import { navLabel } from "../../../../lib/console-nav";
 import { openIn } from "../../../../lib/open-in";
 import { ExitLink } from "../../../../lib/exit-link";
 import { OverviewTab } from "./_lib/overview-tab";
@@ -21,6 +22,7 @@ import { MembersTab } from "./_lib/members-tab";
 import { ApiKeysTab } from "./_lib/api-keys-tab";
 import { ConnectionsTab } from "./_lib/connections-tab";
 import { GovernanceTab } from "./_lib/governance-tab";
+import { PageFallback, PageShell } from "../../components/page-header";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -39,16 +41,6 @@ type Workspace = {
   archivedAt?: Date | string | null;
 };
 
-type WorkspaceTab =
-  "overview" | "members" | "api-keys" | "connections" | "governance";
-const TABS: WorkspaceTab[] = [
-  "overview",
-  "members",
-  "api-keys",
-  "connections",
-  "governance",
-];
-
 /* The workspace's contents live in the desktop app. `ExitLink` carries the
    download fallback, because a `synap://` that does not resolve fails in
    total silence. */
@@ -60,7 +52,7 @@ function DesktopExit({ workspaceId }: { workspaceId: string }) {
         objectKind: "workspace",
         id: workspaceId,
       })}
-      label="Open in the desktop app"
+      label="Open in app"
     />
   );
 }
@@ -103,41 +95,15 @@ function colorForWorkspace(ws: Workspace): string {
 
 export default function WorkspaceDetailPage() {
   return (
-    <Suspense fallback={<DetailFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <WorkspaceDetailInner />
     </Suspense>
-  );
-}
-
-function DetailFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <div className="h-8 w-32 rounded-md bg-foreground/[0.05] shimmer-pulse mb-6" />
-      <div className="h-10 w-1/2 rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }
 
 function WorkspaceDetailInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const raw = searchParams.get("tab");
-  const activeTab: WorkspaceTab = (TABS as string[]).includes(raw ?? "")
-    ? (raw as WorkspaceTab)
-    : "overview";
-
-  function setTab(next: string | number) {
-    const value = String(next);
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (value === "overview") params.delete("tab");
-    else params.set("tab", value);
-    const qs = params.toString();
-    router.replace(qs ? `/workspaces/${id}?${qs}` : `/workspaces/${id}`, {
-      scroll: false,
-    });
-  }
 
   const wsQuery = trpc.workspaces.adminGet.useQuery(
     { id },
@@ -146,9 +112,11 @@ function WorkspaceDetailInner() {
 
   const ws = wsQuery.data as Workspace | undefined;
   const status = ws ? deriveStatus(ws) : null;
+  const body = (loaded: ReactNode) =>
+    loaded || (wsQuery.isLoading ? <TabSkeleton /> : null);
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <PageShell>
       {/* Back button */}
       <button
         type="button"
@@ -156,7 +124,7 @@ function WorkspaceDetailInner() {
         className="mb-5 flex items-center gap-1.5 text-[12.5px] text-foreground/55 hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
-        Workspaces
+        {navLabel("spaces")}
       </button>
 
       {/* Header */}
@@ -194,9 +162,7 @@ function WorkspaceDetailInner() {
                 <div className="h-3.5 w-72 rounded bg-foreground/[0.05] shimmer-pulse mt-1" />
               </>
             ) : (
-              <p className="text-[13px] text-foreground/55">
-                Workspace not found.
-              </p>
+              <p className="text-[13px] text-foreground/55">Space not found.</p>
             )}
           </div>
         </div>
@@ -204,10 +170,10 @@ function WorkspaceDetailInner() {
         {ws ? (
           <div className="flex items-center gap-2 sm:shrink-0">
             <span className="text-[11.5px] text-foreground/40">
-              updated {formatRelative(new Date(ws.updatedAt))}
+              updated {formatRelative(ws.updatedAt)}
             </span>
-            {/* This page owns the workspace's admin surfaces; its CONTENTS
-                live in the desktop app. That is a `synap://` link, which does
+            {/* This page owns the space's admin surfaces; its CONTENTS
+                live in the app. That is a `synap://` link, which does
                 nothing at all when the app is not installed — so the download
                 fallback sits right beside it. */}
             <DesktopExit workspaceId={ws.id} />
@@ -218,71 +184,42 @@ function WorkspaceDetailInner() {
       {/* Tabs */}
       {wsQuery.isError ? (
         <p className="text-[12.5px] text-status-down">
-          Could not load workspace: {wsQuery.error.message}
+          Couldn't load this space. Try again in a moment.
         </p>
       ) : (
-        <Tabs
-          aria-label="Workspace sections"
-          variant="underlined"
-          selectedKey={activeTab}
-          onSelectionChange={setTab}
-          classNames={{
-            tabList:
-              "gap-4 px-0 border-b border-foreground/[0.05] rounded-none",
-            tab: "px-1 h-10",
-            cursor: "bg-primary",
-            tabContent:
-              "text-foreground/55 group-data-[selected=true]:text-foreground text-[12.5px] font-medium",
-          }}
-        >
-          <Tab key="overview" title="Overview">
-            <div className="pt-5">
-              {ws ? (
-                <OverviewTab ws={ws} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="members" title="Members">
-            <div className="pt-5">
-              {ws ? (
-                <MembersTab workspaceId={ws.id} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="api-keys" title="API keys">
-            <div className="pt-5">
-              {ws ? (
-                <ApiKeysTab workspaceId={ws.id} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="connections" title="Connections">
-            <div className="pt-5">
-              {ws ? (
-                <ConnectionsTab workspaceId={ws.id} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-          <Tab key="governance" title="Governance">
-            <div className="pt-5">
-              {ws ? (
-                <GovernanceTab ws={ws} />
-              ) : wsQuery.isLoading ? (
-                <TabSkeleton />
-              ) : null}
-            </div>
-          </Tab>
-        </Tabs>
+        <UrlTabs
+          param="tab"
+          ariaLabel="Space sections"
+          tabs={[
+            {
+              key: "overview",
+              label: "Overview",
+              content: body(ws && <OverviewTab ws={ws} />),
+            },
+            {
+              key: "members",
+              label: "Members",
+              content: body(ws && <MembersTab workspaceId={ws.id} />),
+            },
+            {
+              key: "api-keys",
+              label: "API keys",
+              content: body(ws && <ApiKeysTab workspaceId={ws.id} />),
+            },
+            {
+              key: "connections",
+              label: "Connections",
+              content: body(ws && <ConnectionsTab workspaceId={ws.id} />),
+            },
+            {
+              key: "governance",
+              label: "Governance",
+              content: body(ws && <GovernanceTab ws={ws} />),
+            },
+          ]}
+        />
       )}
-    </div>
+    </PageShell>
   );
 }
 

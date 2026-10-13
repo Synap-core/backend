@@ -57,13 +57,20 @@ vi.mock("../../utils/project-scope.js", () => ({
 import {
   buildNodeLabelMap,
   buildNodeTypeMap,
+  compareRunsForPage,
   getRun,
   listRunGroups,
   listRunGroupsPage,
+  listRuns,
+  listRunsPage,
   parseRunDefinitionSnapshot,
   parseRunPathTaken,
 } from "./index.js";
-import { decodeRunGroupCursor } from "../../utils/keyset-cursor.js";
+import {
+  decodeRunCursor,
+  decodeRunGroupCursor,
+  encodeRunCursor,
+} from "../../utils/keyset-cursor.js";
 
 /** Chainable select() builder — supports the automation/playbook groupBy shape. */
 function selectChain(rows: unknown[]) {
@@ -515,5 +522,150 @@ describe("run snapshot/path parsers", () => {
         prunedEdgeIds: [42],
       })
     ).toBeNull();
+  });
+});
+
+describe("runs.listRunsPage — keyset pagination over the merged feed", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserVisibleWhere.mockReturnValue({ __userVisible: USER });
+  });
+
+  /** An `automation_runs` row as `listAutomationRuns` selects it. */
+  function automationRow(id: string, startedAt: string) {
+    return {
+      id,
+      automationId: "automation-1",
+      flowName: "Nightly digest",
+      status: "completed",
+      startedAt: new Date(startedAt),
+      completedAt: null,
+      workspaceId: "workspace-1",
+      subjectEntityId: null,
+      error: null,
+      outputSummary: null,
+      triggeredBy: "cron",
+      stepsCompleted: 1,
+      stepsFailed: 0,
+      definitionVersion: 1,
+      channelId: null,
+      replayOf: null,
+    };
+  }
+
+  function hasLt(where: { and: unknown[] }): boolean {
+    return where.and.some(
+      (c) => typeof c === "object" && c !== null && "lt" in c
+    );
+  }
+
+  it("without a cursor returns what listRuns returns, plus a cursor when more exist", async () => {
+    const rows = [
+      automationRow("run-3", "2026-03-03T00:00:00.000Z"),
+      automationRow("run-2", "2026-03-02T00:00:00.000Z"),
+      automationRow("run-1", "2026-03-01T00:00:00.000Z"),
+    ];
+    const pageQuery = selectChain(rows);
+    mockDb.select.mockReturnValueOnce(pageQuery);
+    const page = await listRunsPage({
+      userId: USER,
+      flowType: "automation",
+      limit: 2,
+    });
+
+    mockDb.select.mockReturnValueOnce(selectChain(rows.slice(0, 2)));
+    const legacy = await listRuns({
+      userId: USER,
+      flowType: "automation",
+      limit: 2,
+    });
+
+    expect(page.runs.map((r) => r.id)).toEqual(legacy.map((r) => r.id));
+    // One row of over-fetch is how "more exists" is known without a count.
+    expect(pageQuery.limit).toHaveBeenCalledWith(3);
+    // No cursor → no bound pushed into the ledger.
+    expect(hasLt(pageQuery._captured.where as { and: unknown[] })).toBe(false);
+    expect(decodeRunCursor(page.nextCursor!)).toEqual({
+      at: "2026-03-02T00:00:00.000Z",
+      flowType: "automation",
+      id: "run-2",
+    });
+  });
+
+  it("returns no cursor on the last page", async () => {
+    mockDb.select.mockReturnValueOnce(
+      selectChain([automationRow("run-1", "2026-03-01T00:00:00.000Z")])
+    );
+    const page = await listRunsPage({
+      userId: USER,
+      flowType: "automation",
+      limit: 2,
+    });
+    expect(page.runs).toHaveLength(1);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("pushes the bound down to the millisecond's end and drops rows the previous page returned", async () => {
+    const at = "2026-03-02T00:00:00.000Z";
+    const cursor = encodeRunCursor({
+      at: new Date(at),
+      flowType: "automation",
+      id: "run-b",
+    });
+    const pageQuery = selectChain([
+      // Same millisecond: `run-a` and `run-b` sort at or before the cursor, so
+      // the previous page already returned them; `run-c` sorts after it.
+      automationRow("run-a", at),
+      automationRow("run-b", at),
+      automationRow("run-c", at),
+      automationRow("run-older", "2026-03-01T00:00:00.000Z"),
+    ]);
+    mockDb.select.mockReturnValueOnce(pageQuery);
+
+    const page = await listRunsPage({
+      userId: USER,
+      flowType: "automation",
+      limit: 5,
+      cursor,
+    });
+
+    expect(page.runs.map((r) => r.id)).toEqual(["run-c", "run-older"]);
+    expect(page.nextCursor).toBeNull();
+    const where = pageQuery._captured.where as { and: unknown[] };
+    expect(where.and).toContainEqual({
+      lt: [
+        expect.objectContaining({ name: "started_at" }),
+        new Date(new Date(at).getTime() + 1),
+      ],
+    });
+  });
+
+  it("rejects a malformed cursor as a caller error", async () => {
+    await expect(
+      listRunsPage({ userId: USER, flowType: "automation", cursor: "nope" })
+    ).rejects.toThrow("Invalid pagination cursor");
+  });
+});
+
+describe("compareRunsForPage — the feed's total order", () => {
+  it("orders newest first, then flow kind, then id", () => {
+    const at = new Date("2026-03-02T00:00:00.000Z");
+    const rows = [
+      { startedAt: at, flowType: "playbook" as const, id: "a" },
+      { startedAt: at, flowType: "automation" as const, id: "b" },
+      { startedAt: at, flowType: "automation" as const, id: "a" },
+      {
+        startedAt: new Date("2026-03-03T00:00:00.000Z"),
+        flowType: "chat" as const,
+        id: "z",
+      },
+    ];
+    rows.sort(compareRunsForPage);
+    expect(rows.map((r) => `${r.flowType}:${r.id}`)).toEqual([
+      "chat:z",
+      "automation:a",
+      "automation:b",
+      "playbook:a",
+    ]);
   });
 });
