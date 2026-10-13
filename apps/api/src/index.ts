@@ -1903,6 +1903,21 @@ try {
             apiLogger.info("Registered library light-read handlers (IoC)");
           }
 
+          // IoC: the Library keep-alive pass (daily). jobs owns the queue and
+          // its cron; the pass writes notifications through NotificationService,
+          // which lives in api, so the handler is filled here.
+          {
+            const { registerLibraryKeepAliveHandler } =
+              await import("@synap/jobs/workers/library-keep-alive-worker.js");
+            const { runLibraryKeepAlive } = await import("@synap/api");
+            registerLibraryKeepAliveHandler(async () => {
+              const { archived, suggested, resurfaced } =
+                await runLibraryKeepAlive();
+              return { archived, suggested, resurfaced };
+            });
+            apiLogger.info("Registered library keep-alive handler (IoC)");
+          }
+
           // IoC: fill the capability / signal / feed-runner slots owned by
           // @synap/jobs with the @synap/api implementations. The pg-boss workers
           // run IN this process, but @synap/jobs can't statically import

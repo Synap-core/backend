@@ -756,6 +756,67 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "suggestion",
   },
 
+  // ── Library: keep it alive (CAPTURE_LIBRARY_PLAN L5) ──────────────────────
+  {
+    /**
+     * Weekly "Build one group" — the group that has waited longest, offered
+     * ONCE a week (the 7-day window on `groupKey` = the person). Producer:
+     * `runLibraryKeepAlive` (services/library/keep-alive.ts), daily; a pod
+     * setting turns it off (`proactive.setLibraryKeepAlive`). A SUGGESTION,
+     * never a pending proposal: a pending approval is Blocking, and nothing
+     * here blocks anyone. `sourceId` is the `library_groups` id.
+     */
+    type: "library.build_suggestion",
+    category: "data",
+    label: "Build a Library group",
+    icon: "library",
+    priority: "low",
+    titleTemplate: "Build {{groupName}}?",
+    bodyTemplate:
+      "{{waiting}} kept, the oldest {{waitDays}} days ago. Build it when you're ready.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    groupBy: "groupId",
+    dedupeWindowMs: 7 * 24 * 60 * 60 * 1000,
+    needsYou: "suggestion",
+    actions: [
+      {
+        id: "open",
+        label: "Open Library",
+        variant: "primary",
+        handler: { type: "navigate", app: "library" },
+      },
+    ],
+  },
+  {
+    /**
+     * "From your Library, for <project>" — kept items that match a project the
+     * person is working in this week, resurfaced at most once a week per
+     * project. Producer: `runLibraryKeepAlive`. A SUGGESTION (see above).
+     * `sourceId` is the project id.
+     */
+    type: "library.resurface",
+    category: "data",
+    label: "From your Library",
+    icon: "library",
+    priority: "low",
+    titleTemplate: "From your Library, for {{projectName}}",
+    bodyTemplate: "{{count}} kept item(s) look related: {{titles}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    groupBy: "projectId",
+    dedupeWindowMs: 7 * 24 * 60 * 60 * 1000,
+    needsYou: "suggestion",
+    actions: [
+      {
+        id: "open",
+        label: "Open Library",
+        variant: "primary",
+        handler: { type: "navigate", app: "library" },
+      },
+    ],
+  },
+
   // ── System ────────────────────────────────────────────────────────────────
   {
     type: "pod.update_available",

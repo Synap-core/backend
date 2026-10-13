@@ -102,6 +102,10 @@ import {
   LIBRARY_LIGHT_READ_QUEUE,
   LIBRARY_LIGHT_READ_SWEEP_QUEUE,
 } from "./library-light-read-worker.js";
+import {
+  handleLibraryKeepAlive,
+  LIBRARY_KEEP_ALIVE_QUEUE,
+} from "./library-keep-alive-worker.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -319,6 +323,8 @@ const ALL_QUEUES = [
   // The Library light read (one item) + its hourly re-enqueue sweep.
   LIBRARY_LIGHT_READ_QUEUE,
   LIBRARY_LIGHT_READ_SWEEP_QUEUE,
+  // Library keep-alive (daily: quiet archive, weekly build suggestion, resurfacing).
+  LIBRARY_KEEP_ALIVE_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -783,6 +789,12 @@ export async function registerAllWorkers(): Promise<void> {
   logger.info(
     "Registered workers: library-light-read, library-light-read-sweep"
   );
+
+  // Library keep-alive (daily; handler slot filled by the api layer at boot).
+  await boss.work(LIBRARY_KEEP_ALIVE_QUEUE, async () =>
+    handleLibraryKeepAlive()
+  );
+  logger.info("Registered worker: library-keep-alive");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.
