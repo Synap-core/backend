@@ -157,7 +157,7 @@ jobs:
           bash deploy/__tests__/backup-offhost.test.sh </dev/null
           bash deploy/__tests__/archive-restore-failure.test.sh
           bash deploy/__tests__/kratos-recovery-config.test.sh
-          for t in no-volume-prune compose-project update-lock reset-door users-password; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done && node --test deploy/pod-agent/update-target-version.test.js
+          for t in no-volume-prune compose-project update-lock reset-door users-password; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done && node --test deploy/pod-agent/*.test.js
           for t in update-engine release-manifest config-door doctor one-env-writer caddy-routes cloud-init-template install-register; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done
 
       - name: Check orphaned REST route files
