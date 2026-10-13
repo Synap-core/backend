@@ -962,6 +962,14 @@ describe("resolveObjectNounPlural", () => {
     // A vowel + y keeps the plain s.
     expect(resolveObjectNounPlural("some_key_way")).toBe("Some key ways");
   });
+
+  it("an uncountable noun stays; a sibilant ending takes -es (dogfood-2: \"Researchs\")", () => {
+    expect(resolveObjectNounPlural("research")).toBe("Research");
+    expect(resolveObjectNounPlural("market_research")).toBe("Market research");
+    expect(resolveObjectNounPlural("some_box")).toBe("Some boxes");
+    expect(resolveObjectNounPlural("some_batch")).toBe("Some batches");
+    expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
+  });
 });
 
 describe("withdraw — the mood trap", () => {
