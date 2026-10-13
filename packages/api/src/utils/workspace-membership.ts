@@ -5,36 +5,43 @@
  * belongs to, and silently filter a requested list to accessible IDs only.
  */
 
-import { eq, inArray, and } from "@synap/database";
+import { eq, inArray, and, or, memberWorkspaceIds } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { db } from "@synap/database";
 import { podVisibleWorkspaceWhere } from "./user-visible-where.js";
 
 /**
- * Return all workspace IDs the user is a member of.
+ * The workspaces `userId` may read — the SAME floor as `userVisibleWhere`:
+ * MEMBER ∪ OWNED ∪ POD-VISIBLE. OWNED is its own branch: `workspaces.owner_id`
+ * is first-class and a sovereign pod's owner may have no member row, so a
+ * member-only floor hid their own private spaces (homes review G:
+ * `profiles.listMulti` dropped them). Composed from the shared branch builders,
+ * never re-derived.
+ */
+function readableWorkspaceWhere(userId: string) {
+  return or(
+    inArray(workspaces.id, memberWorkspaceIds(userId)),
+    eq(workspaces.ownerId, userId),
+    podVisibleWorkspaceWhere(userId)
+  )!;
+}
+
+/**
+ * Return all workspace IDs the user can read (member ∪ owned ∪ pod-visible).
  */
 export async function getUserWorkspaceIds(userId: string): Promise<string[]> {
-  const rows = await db.query.workspaceMembers.findMany({
-    where: eq(workspaceMembers.userId, userId),
-    columns: { workspaceId: true },
-  });
-  const ids = new Set(rows.map((r) => r.workspaceId));
-
-  const podReadable = await db.query.workspaces.findMany({
-    // The ONE pod-visible door: never a guest's (Sites W2), never an unknown id's.
-    where: podVisibleWorkspaceWhere(userId),
+  const rows = await db.query.workspaces.findMany({
+    where: readableWorkspaceWhere(userId),
     columns: { id: true },
   });
-  for (const workspace of podReadable) ids.add(workspace.id);
-
-  return Array.from(ids);
+  return rows.map((r) => r.id);
 }
 
 /**
  * Given a list of requested workspace IDs, return only the ones the user
  * actually has access to (silent intersection — never throws).
  *
- * If `requested` is empty, returns all workspace IDs the user belongs to.
+ * If `requested` is empty, returns all workspace IDs the user can read.
  */
 export async function validateWorkspaceAccess(
   userId: string,
@@ -43,26 +50,14 @@ export async function validateWorkspaceAccess(
   if (!requested || requested.length === 0) {
     return getUserWorkspaceIds(userId);
   }
-
-  const rows = await db.query.workspaceMembers.findMany({
-    where: inArray(workspaceMembers.workspaceId, requested),
-    columns: { workspaceId: true, userId: true },
-  });
-
-  const ids = new Set(
-    rows.filter((r) => r.userId === userId).map((r) => r.workspaceId)
-  );
-
-  const podReadable = await db.query.workspaces.findMany({
+  const rows = await db.query.workspaces.findMany({
     where: and(
       inArray(workspaces.id, requested),
-      podVisibleWorkspaceWhere(userId)
+      readableWorkspaceWhere(userId)
     ),
     columns: { id: true },
   });
-  for (const workspace of podReadable) ids.add(workspace.id);
-
-  return Array.from(ids);
+  return rows.map((r) => r.id);
 }
 
 /**
