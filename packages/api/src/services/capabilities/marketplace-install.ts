@@ -90,7 +90,7 @@ import {
   installedTrackTemplates,
 } from "./install-layers.js";
 import { createLogger } from "@synap-core/core";
-import { skillElementOf } from "./skill-package-element.js";
+import { capabilityElementOf, skillElementOf } from "./package-element.js";
 
 const logger = createLogger({ module: "marketplace-install" });
 
@@ -386,11 +386,13 @@ export async function applyCapabilityDefinition(
   ctx: Context
 ): Promise<CreateCapabilityResult> {
   return createCapabilityFromDefinition(
+    // A CP capability PACKAGE arrives wrapped (`{capability:{…}}`): unwrap it
+    // here, where every door converges (`capabilityElementOf`).
     // Inline defs are structurally validated by the door's schema (or `z.any()`);
     // `providerSpec` is passed through as opaque JSON (the applier re-casts it to
     // Record), so a boundary cast to the applier's input type is safe. The applier
     // normalizes tools/skills itself (the ONE place every door funnels into).
-    definition as unknown as Parameters<
+    capabilityElementOf(definition) as Parameters<
       typeof createCapabilityFromDefinition
     >[0],
     params ?? {},

@@ -60,7 +60,7 @@ import {
   detachMarketSource,
 } from "./market-source.js";
 import { lookupCatalogEntry } from "./marketplace-install.js";
-import { skillElementOf } from "./skill-package-element.js";
+import { skillElementOf } from "./package-element.js";
 import type { Context } from "../../types/context.js";
 
 const logger = createLogger({
