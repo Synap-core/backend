@@ -1,14 +1,15 @@
 # Synap Skills
 
-Three skills make up the Synap agent surface. Install all three for the full experience; they are designed to be used together.
+Four baseline skills make up the Synap agent surface (`manifest.json` is the list). Install all of them for the full experience; they are designed to be used together.
 
-## The three skills
+## The baseline skills
 
-| Skill          | Purpose                                                    | Trigger                                                           |
-| -------------- | ---------------------------------------------------------- | ----------------------------------------------------------------- |
-| `synap`        | Core data operations — read, write, link, search, remember | "Save this", "Find my X", "Who is Y", "Remind me to Z"            |
-| `synap-schema` | Extend the data model — new profiles, new properties       | "I need a type for X", "Add a field to tasks"                     |
-| `synap-ui`     | Build views, dashboards, workspaces, bento layouts         | "Make me a dashboard", "Build a kanban", "Create a CRM workspace" |
+| Skill          | Purpose                                                                                    | Trigger                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `synap`        | Core data operations — read, write, link, search, remember                                 | "Save this", "Find my X", "Who is Y", "Remind me to Z"                       |
+| `synap-schema` | Extend the data model — new profiles, new properties                                       | "I need a type for X", "Add a field to tasks"                                |
+| `synap-ui`     | Build views, dashboards, workspaces, bento layouts                                         | "Make me a dashboard", "Build a kanban", "Create a CRM workspace"            |
+| `synap-design` | Design and build UI: principles, the component catalog and tokens, the design-to-code loop | "Design the proposal page", "Is this screen right?", "Implement this design" |
 
 Each skill has its own SKILL.md with a trigger-first description. The harness loads only the skills whose descriptions match the user's intent — so a data-fetch turn doesn't load the UI skill, and vice versa.
 
@@ -29,6 +30,7 @@ skills/
 │   └── property-types.md     ← valueType reference + constraints + uiHints + scope
 │
 ├── synap-ui/                 ← build interface over data
+├── synap-design/             ← design principles, design system, design loop
 │   ├── SKILL.md
 │   ├── view-types.md         ← the 12 implemented view types + configs
 │   ├── widget-catalog.md     ← cells/widgets reference

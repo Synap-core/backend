@@ -1002,5 +1002,49 @@
       "cliBundle": true,
       "capability": null
     }
+  },
+  "synap-design/overview": {
+    "teachesTools": [],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Design: when to load, name the object and job, the six-step design loop (discover, design, critique, review gate, implement, verify).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap-design/principles": {
+    "teachesTools": [],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Design principles: state as a mark, OMIT/INVITE/EXPLAIN/REASSURE, doors, bounded lists, outcomes first, one primary action, disclosure, colour and depth.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap-design/system": {
+    "teachesTools": [],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Design system: query the component catalog first, stack by surface, primitives, tokens (4px spacing, type roles, radius), vocabulary labels, named motion presets.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap-design/loop": {
+    "teachesTools": [],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Design-to-code loop: ui-design Puck JSON, three variants, Checked/Pattern/Opinion critique, human approval, implement, compare Today/Design/Built, where designs are viewed.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   }
 }

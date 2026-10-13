@@ -1,0 +1,21 @@
+name: synap-design
+description: >
+  Use this skill whenever you design, review or build user interface for
+  Synap, or a UI for a user's pod: a screen, page, panel, section, card,
+  component, empty state or dashboard. Triggers: "design this screen", "mock
+  up a page", "review this UI", "critique this design", "build this
+  component", "implement this ui-design", "why does this screen feel off",
+  "what should this page show". It holds the composition principles, the
+  design system (real components, tokens, labels, named motion) and the
+  design-to-code loop (ui-design entity, three variants, critique, human
+  approval, implement, compare). For views, bento dashboards and workspaces
+  over pod data, pair it with synap-ui.
+metadata:
+  openclaw:
+    requires:
+      env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
+    primaryEnv: SYNAP_HUB_API_KEY
+    homepage: https://synap.live
+    capabilities: [design, ui, critique, components]
+    os: [macos, linux, windows]
+    userInvocable: false
