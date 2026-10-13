@@ -20,6 +20,7 @@ import {
 import { buildCaptureGraphOperations } from "../../capture-agent/submit-capture-graph.js";
 import { validatePlanOperations } from "../../capture-agent/capture-plan.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
+import { buildProposalGraph } from "../../../routers/proposals/display.js";
 
 const CONTAINER = "10000000-0000-4000-8000-000000000001";
 const SKILL = "10000000-0000-4000-8000-000000000002";
@@ -130,7 +131,7 @@ describe("Build update mode", () => {
 
     // Through the real materializer: the new members hang off the EXISTING
     // container, and every update reaches its door.
-    const relationCreate = vi.fn(async () => ({ id: "rel" }));
+    const relationCreate = vi.fn(async (_input: unknown) => ({ id: "rel" }));
     const applied: string[] = [];
     let n = 0;
     await materializeCompositeGraph(
@@ -158,6 +159,35 @@ describe("Build update mode", () => {
       "update_rule",
       "update_skill",
       "update_view",
+    ]);
+  });
+
+  it("the review draws every change (Updates) and hangs the new members off the group", async () => {
+    const ops = await operationsOf(bundle(PRIOR));
+    // An unrendered op would make the review refuse the WHOLE proposal.
+    const graph = buildProposalGraph({ operations: ops });
+    expect(graph.updates?.map((u) => [u.kind, u.targetId]).sort()).toEqual(
+      [
+        ["automation", AUTOMATION],
+        ["entity", CONTAINER],
+        ["playbook", PLAYBOOK],
+        ["rule", RULE],
+        ["skill", SKILL],
+        ["view", VIEW],
+      ].sort()
+    );
+    expect(graph.updates?.find((u) => u.kind === "rule")?.fields).toEqual([
+      {
+        key: "intent",
+        value: "When a recipe lands, tell me.",
+        truncated: false,
+      },
+    ]);
+    // New things only — the reused container is not a new node.
+    expect(graph.entities.map((e) => e.ref)).toEqual(["e_i1", "e_i2"]);
+    expect(graph.relations.map((r) => r.sourceLabel)).toEqual([
+      "Recipes",
+      "Recipes",
     ]);
   });
 

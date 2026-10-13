@@ -580,6 +580,19 @@ export interface ProposalReviewGraph {
     /** The group container the list is about, when there is one. */
     containerRef?: string;
   }>;
+  /**
+   * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
+   * "Updates", beside the "New" things above). Each names the row it rewrites
+   * and the fields it sets, with their NEW values (excerpted). What they held
+   * before is read at apply time and stamped, so the change can be undone.
+   */
+  updates?: Array<{
+    ref: string;
+    op: CompositeUpdateOperation["op"];
+    kind: "skill" | "automation" | "rule" | "playbook" | "view" | "entity";
+    targetId: string;
+    fields: Array<{ key: string; value: string; truncated: boolean }>;
+  }>;
 }
 
 export interface ProposalReviewModel {
