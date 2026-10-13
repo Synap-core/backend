@@ -331,6 +331,44 @@ type AttentionNotification = NotificationSignalInput & {
 };
 type AttentionOwed = OwedSlotSignalInput & { workspaceId: string | null };
 
+/**
+ * The pod's unread HEALTH rows — the status banner's own read. Every
+ * status-role type is `system` (pinned in the tests), so the `system` category
+ * at the floor lens is the whole banner population. Read by `readAttention`
+ * whenever the banner cannot reuse the floor notification read, and by
+ * `signals.status` (the banner-only read) — one read, never two copies.
+ */
+async function readHealthRows(
+  ctx: SignalsCtx,
+  input: SignalScopeInput
+): Promise<AttentionNotification[]> {
+  return (
+    await notifCenterRouter.createCaller(ctx).list({
+      workspaceId: floorLens(input.workspaceId),
+      status: "unread",
+      category: "system",
+      limit: NOTIFICATION_SCAN_LIMIT,
+    })
+  ).notifications satisfies AttentionNotification[];
+}
+
+/**
+ * The status banner ALONE (`signals.status`): the page's `status` /
+ * `statusUnreadable` without the page's other halves. A failed read is
+ * `statusUnreadable: true` with `status: null` — never a calm "no issue".
+ */
+async function readStatusBanner(ctx: SignalsCtx, input: SignalScopeInput) {
+  try {
+    return {
+      status: statusBanner(await readHealthRows(ctx, input)),
+      statusUnreadable: false,
+    };
+  } catch (err) {
+    logger.warn({ err }, "status banner read failed — unreadable");
+    return { status: null, statusUnreadable: true };
+  }
+}
+
 // ── Blocking + Proposed + status: one read ──────────────────────────────────
 
 /**
@@ -413,18 +451,8 @@ async function readAttention(
       // Under the intent lens the notification half is suppressed, so the
       // banner reads its own rows too.
       container || (follows && !notifsFollow)
-        ? settle(
-            "notifications",
-            [] as AttentionNotification[],
-            async () =>
-              (
-                await notifCenterRouter.createCaller(ctx).list({
-                  workspaceId: floorLens(input.workspaceId),
-                  status: "unread",
-                  category: "system",
-                  limit: NOTIFICATION_SCAN_LIMIT,
-                })
-              ).notifications satisfies AttentionNotification[]
+        ? settle("notifications", [] as AttentionNotification[], () =>
+            readHealthRows(ctx, input)
           )
         : null,
       // The owed read under the SAME lens and owner floor `focusSessions.owed`
@@ -1656,6 +1684,17 @@ export const signalsRouter = router({
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))
     .query(({ ctx, input }) => countSignals(ctx, input)),
+
+  /**
+   * The STATUS BANNER only — what `list({lens: "page"})` returns as `status`
+   * / `statusUnreadable`, for a surface that shows the banner and nothing else
+   * of the page (Home's banner, homes S8). System health is the pod's: only
+   * `workspaceId` narrows it (the floor lens); the other scope keys are
+   * accepted so a caller can pass its scope as is.
+   */
+  status: protectedProcedure
+    .input(z.object(SignalScope).default({}))
+    .query(({ ctx, input }) => readStatusBanner(ctx, input)),
 
   /**
    * `count` for SEVERAL projects in one round-trip — the desktop project rail

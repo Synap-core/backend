@@ -333,6 +333,22 @@ describe("signals.list — page lens reports failed halves per class", () => {
     expect(page!.status!.issues).toHaveLength(1);
     expect(page!.blocking.total).toBe(0);
     expect(page!.blocking.rows).toEqual([]);
+
+    // signals.status (homes S8): the SAME banner, without the page's halves.
+    const banner = await caller().status({});
+    expect(banner).toEqual({
+      status: page!.status,
+      statusUnreadable: false,
+    });
+    expect(banner.status!.issues).toHaveLength(1);
+  });
+
+  it("signals.status: a failed health read is UNREADABLE, never a calm no-issue", async () => {
+    notifListSpy.mockRejectedValue(new Error("notif down"));
+    expect(await caller().status({})).toEqual({
+      status: null,
+      statusUnreadable: true,
+    });
   });
 
   it("honours per-class caps and reports totals + hasMore past them", async () => {
