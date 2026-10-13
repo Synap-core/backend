@@ -11,6 +11,8 @@ export * from "./entities.js";
 export * from "./entity-vectors.js";
 export * from "./entity-facets.js";
 export * from "./documents.js";
+// The Library's persistent groups (0326).
+export * from "./library-groups.js";
 export * from "./relations.js";
 export * from "./messages.js";
 export * from "./chat-turns.js";

@@ -37,6 +37,7 @@ import { notificationPreferences } from "../schema/notifications.js";
 import { documents } from "../schema/documents.js";
 import { workspaces } from "../schema/workspaces.js";
 import { projectTracks } from "../schema/project-tracks.js";
+import { libraryGroups } from "../schema/library-groups.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -999,6 +1000,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "device_auth_requests",
     column: "poll_interval_seconds",
     addedBy: "0321_device_auth_requests.sql",
+  },
+
+  // library_groups — the Library's persistent groups (0326). Absence means
+  // every Library read and every group edit would 42P01.
+  {
+    table: "library_groups",
+    column: "container_entity_id",
+    addedBy: "0326_library_groups.sql",
+  },
+  {
+    table: "library_groups",
+    column: "build_proposal_ids",
+    addedBy: "0326_library_groups.sql",
   },
 
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
@@ -2033,6 +2047,9 @@ const REQUIRED_INDEX_TABLES = [
   // name on a project"; `TrackRepository.createOrGet` relies on it to turn a
   // concurrent second start into `exists` instead of a twin.
   projectTracks,
+  // The Library (0326): the per-person key unique index IS "one group per
+  // key"; the documents read index (declared on `documents` above) pages it.
+  libraryGroups,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

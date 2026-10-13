@@ -29,3 +29,16 @@ export function isStagedImportItem(metadata: unknown): boolean {
     ?.intakeSource;
   return source?.pending === IMPORT_AWAITING_CURATION;
 }
+
+/** `documents.metadata.importItem` — the key whose presence makes a document a Library item. */
+export const LIBRARY_ITEM_KEY = "importItem";
+
+/**
+ * `metadata` is NOT a Library item (CAPTURE_LIBRARY_PLAN decision 4). A
+ * Library item — anything staged with `importItem` — is never a row of a
+ * capture or document list, before or after its group is built: it lives in
+ * the Library. A row with no metadata (NULL) is kept, never dropped.
+ */
+export function notLibraryItemWhere(metadataColumn: AnyPgColumn): SQL {
+  return sql`NOT COALESCE(${metadataColumn} ? ${LIBRARY_ITEM_KEY}, false)`;
+}
