@@ -177,6 +177,29 @@ function trimEllipsis(text: string): string {
   return text.replace(/[.…]+$/u, "").trim();
 }
 
+/**
+ * A producer title as ONE plain line. A note/ask/tool title is often an
+ * agent's own message, markdown and all — the session's Happening read
+ * `Last: **Code lane — all 8 items committed…**` (dogfood-2 #10). Strips the
+ * INLINE marks only (bold/italic/strike/code, links → their text) and a
+ * leading heading/quote/list marker; first line only. Intraword `_` (a token
+ * like `capture_social_post`) is kept. Pure, no markdown engine (this package
+ * has no dependencies) — a full document is never a step label.
+ */
+export function plainStepLabel(text: string): string {
+  const first = text.split(/\r?\n/).find((l) => l.trim() !== "") ?? "";
+  return first
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/u, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/(\*\*|__)(.+?)\1/gu, "$2")
+    .replace(/~~(.+?)~~/gu, "$1")
+    .replace(/`([^`]*)`/gu, "$1")
+    .replace(/(^|[^\w*])\*(?!\s)([^*]+?)\*(?=[^\w*]|$)/gu, "$1$2")
+    .replace(/(^|[^\w])_(?!\s)([^_]+?)_(?=[^\w]|$)/gu, "$1$2")
+    .replace(/\*\*|__/gu, "")
+    .trim();
+}
+
 function phaseOf(
   item: SessionActivityItem,
   liveTurnId: string | null
@@ -208,7 +231,7 @@ function phaseOf(
 }
 
 function labelOf(item: SessionActivityItem, phase: StepPhase): string {
-  const title = item.title?.trim() ? trimEllipsis(item.title.trim()) : "";
+  const title = item.title?.trim() ? trimEllipsis(plainStepLabel(item.title)) : "";
   switch (item.kind) {
     case "tool":
       return title || humanizeToken(item.action ?? "tool");
