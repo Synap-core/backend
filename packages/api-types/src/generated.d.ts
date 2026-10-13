@@ -5796,11 +5796,6 @@ export interface ReconcileReport {
 			existingEntityScope: string;
 			declaredEntityScope: "pod" | "workspace" | null;
 		}>;
-		/**
-		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
-		 * through `setProfilePresentation`. Absent when none moved.
-		 */
-		presentations?: string[];
 	};
 	properties: {
 		/** New overlay/base property-defs added. */
