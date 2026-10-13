@@ -19,6 +19,7 @@ On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps i
 
 **Keep the session true as you work — the person watches it, not your chat.**
 
+- **Set the subject.** When the work is about one thing (a post, a deal, a feature), name it: `subjectEntityId` on start, or on `synap_update_session` as soon as the thing exists. A session on no thing is listed apart, as "No thing yet · attach one", and its work moves no pipeline.
 - **Step = the subject's status.** With a subject (a post, a deal), move the thing through the door (`update_entity` + `expectedStatus`); the session's step follows it, and a stage's `subjectStatus` moves the thing when you set `currentStage`. Without a subject, a bound playbook seeds `stages`; set `currentStage` as the work moves on. A hand-set `progress` says less than either.
 - **Size it from the work.** One session per thing when each needs its own thinking (a post, a feature); one per batch when the items are interchangeable ("find 10 leads today"). Following a method (`followPlaybookId`) keeps the session your work; it also shows in the method's runs.
 - **Targets get a result each.** A worker session holds its things as targets: your own move of a target marks it `done`, someone else's marks it `skipped`, and targets left at close are `skipped`. Put each outcome on its thing, not only in a summary. Model: `work-model`.

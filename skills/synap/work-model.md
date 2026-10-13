@@ -43,6 +43,7 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 - **Per thing** when each item needs its own thinking: a post, a feature, a deal in negotiation.
 - **Per batch** when items are interchangeable: one session for "find 10 leads today" or "today's follow-ups".
 - A session's **step is its subject's status**: move the thing, the step follows.
+- **Set the subject.** A session about one thing names it: `subjectEntityId` on `start_session`, or on `update_session` the moment the thing exists (a batch names its things as targets). A session on no thing shows on the homes as "No thing yet · attach one", outside every pipeline.
 - Following a method does not turn your session into a run; it stays your work and still shows in the method's runs.
 - **Targets get a result each**: a worker session holds its things as targets. Your own move of a target marks it `done`; someone else's move marks it `skipped`; targets left at close are `skipped`. Put the outcome on each thing, not only in a summary.
 
@@ -53,6 +54,15 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 ### Tracks
 
 A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+
+### The homes: what each space makes, what is moving
+
+Home, a space and a project read the work through two reads (the same answer every app shows):
+
+- `lifecycle.home` (Hub `GET /api/hub/lifecycle/home?projectId=`): every space you see with its intent and, per kind it produces, the pipeline in one line, needs-you, being-worked and one headline thing.
+- `lifecycle.moving` (Hub `GET /api/hub/lifecycle/moving?workspaceId=&projectId=&limit=`): the things with open work on them, the work under each (asks you first), and `unattached`, the open sessions on no thing.
+
+Read them to answer "what is going on" before you list sessions one by one.
 
 ### A kind's dashboard
 

@@ -180,7 +180,7 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Lifecycle"],
     summary: "The things being worked, with their work",
     description:
-      "Things with open work on them (a session, an in-flight worker, a scheduled prep), most urgent first (`lifecycle.moving`).",
+      "Things with open work on them (a session, an in-flight worker, a scheduled prep), most urgent first, plus `unattached`: open work sessions on no thing (`lifecycle.moving`).",
     request: { query: movingQuery },
     responses: {
       200: { description: "Moving now", schema: z.object({}).passthrough() },
