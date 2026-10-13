@@ -81,7 +81,6 @@ export function libraryRunTitle(device: string | null, day: string): string {
 export async function ensureLibraryRun(args: {
   database?: LibraryDb;
   userId: string;
-  agentUserId?: string | null;
   device: string | null;
   workspaceId: string | null;
   projectId: string | null;
@@ -131,7 +130,8 @@ export async function ensureLibraryRun(args: {
   const opened = await openImportSession({
     database,
     userId: args.userId,
-    agentUserId: args.agentUserId ?? null,
+    // A person's run: the Library never takes an agent's write.
+    agentUserId: null,
     workspaceId: args.workspaceId,
     projectId: args.projectId,
     title: libraryRunTitle(args.device, day),
@@ -234,7 +234,6 @@ export async function keepShareNote(args: {
 export async function addToLibrary(args: {
   database?: LibraryDb;
   userId: string;
-  agentUserId?: string | null;
   request: LibraryAddRequest;
   /** Default workspace when the request names none (the caller's lens). */
   workspaceId?: string | null;
@@ -262,7 +261,6 @@ export async function addToLibrary(args: {
   const run = await ensureLibraryRun({
     database,
     userId: args.userId,
-    agentUserId: args.agentUserId ?? null,
     device: req.device?.trim() || null,
     workspaceId,
     projectId: req.projectId ?? null,

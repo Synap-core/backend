@@ -35,6 +35,11 @@ import { adoptImportGroups } from "../../../services/library/groups.js";
 import { listLibraryItems } from "../../../services/library/read-model.js";
 import { searchLibrary } from "../../../services/library/search.js";
 import {
+  AGENT_USE_CAPTURE,
+  AGENT_USE_CAPTURE_MESSAGE,
+  isAgentCaller,
+} from "../../../services/library/agent-door.js";
+import {
   hasScope,
   httpStatusForTrpcError,
   logger,
@@ -56,11 +61,6 @@ const ListQuerySchema = z.object({
   q: z.string().max(200).optional(),
 });
 
-/** An agent's words go to `synap_capture`, never to the Library. */
-export function isAgentCaller(c: { get: (k: string) => unknown }): boolean {
-  return Boolean(c.get("agentUserId")) || c.get("keyType") === "is_internal";
-}
-
 function failure(
   c: { json: (b: unknown, s: number) => Response },
   err: unknown
@@ -80,13 +80,14 @@ export function registerLibraryRoutes(app: HubHono): void {
         403
       );
     }
-    if (isAgentCaller(c)) {
+    if (
+      isAgentCaller({
+        agentUserId: c.get("agentUserId") as string | undefined,
+        keyType: c.get("keyType") as string | undefined,
+      })
+    ) {
       return c.json(
-        {
-          error:
-            "The Library holds what a person keeps. An agent sends its words, links and files to synap_capture.",
-          code: "AGENT_USE_CAPTURE",
-        },
+        { error: AGENT_USE_CAPTURE_MESSAGE, code: AGENT_USE_CAPTURE },
         403
       );
     }

@@ -48,12 +48,12 @@ import { addToLibrary, startKeptItemReads } from "../services/library/add.js";
 import { listLibraryItems } from "../services/library/read-model.js";
 import {
   adoptImportGroups,
-  countGroups,
+  groupViews,
   loadLibraryGroup,
   readLibraryGroups,
-  toGroupView,
 } from "../services/library/groups.js";
 import { curateLibrary } from "../services/library/curate.js";
+import { refuseAgent } from "../services/library/agent-door.js";
 import {
   LibraryActionError,
   runLibraryAction,
@@ -186,17 +186,25 @@ async function runLibraryActionDoor(args: {
   }
 }
 
+/**
+ * Every Library WRITE refuses an agent (the same rule as the Hub door,
+ * `services/library/agent-door.ts`). Reads stay open.
+ */
+const personProcedure = podProcedure.use(async ({ ctx, next }) => {
+  refuseAgent(ctx as { agentUserId?: string | null; keyType?: string | null });
+  return next();
+});
+
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const libraryRouter = router({
   /** Keep items. `proposed` / staged is success; a refused item names its index. */
-  add: podProcedure
+  add: personProcedure
     .input(LibraryAddInputSchema)
     .mutation(async ({ ctx, input }): Promise<LibraryAddResult> => {
       const userId = requireUserId(ctx.userId);
       const result = await addToLibrary({
         userId,
-        agentUserId: ctx.agentUserId ?? null,
         request: input,
         workspaceId: ctx.workspaceId ?? null,
         ...(input.readNow
@@ -258,7 +266,7 @@ export const libraryRouter = router({
       const userId = requireUserId(ctx.userId);
       await adoptImportGroups({ userId });
       const row = await loadLibraryGroup({ userId, groupId: input.groupId });
-      const counts = await countGroups({ userId, groups: [row] });
+      const { views } = await groupViews({ userId, rows: [row] });
       const page = await listLibraryItems({
         userId,
         input: {
@@ -266,11 +274,11 @@ export const libraryRouter = router({
           ...(input.limit ? { limit: input.limit } : {}),
         },
       });
-      return { group: toGroupView(row, counts.get(row.id)), ...page };
+      return { group: views[0]!, ...page };
     }),
 
   /** The person's edits, atomically. A bad op is BAD_REQUEST and writes nothing. */
-  curate: podProcedure
+  curate: personProcedure
     .input(
       z.object({
         ops: z
@@ -294,7 +302,7 @@ export const libraryRouter = router({
     }),
 
   /** One item, structured now and filed alone (governed). */
-  readNow: podProcedure
+  readNow: personProcedure
     .use(aiRateLimitMiddleware)
     .input(z.object({ itemId: uuid }))
     .mutation(async ({ ctx, input }): Promise<ImportBuildResult> => {
@@ -307,7 +315,7 @@ export const libraryRouter = router({
     }),
 
   /** Run one suggested chip as ONE governed proposal. */
-  runAction: podProcedure
+  runAction: personProcedure
     .input(z.object({ itemId: uuid, actionId: z.string().min(1).max(64) }))
     .mutation(async ({ ctx, input }): Promise<LibraryRunActionResult> => {
       const userId = requireUserId(ctx.userId);
@@ -319,7 +327,7 @@ export const libraryRouter = router({
     }),
 
   /** A group → one governed bundle (first build, or a rebuild over what is new). */
-  build: podProcedure
+  build: personProcedure
     .use(aiRateLimitMiddleware)
     .input(z.object({ groupId: uuid }))
     .mutation(async ({ ctx, input }): Promise<ImportBuildResult> => {
@@ -338,7 +346,12 @@ export const libraryRouter = router({
           code: "CONFLICT",
           message:
             "This group's last build is still waiting for your review. Approve or reject it, then build again.",
-          cause: { reason: "previous_build_pending" },
+          cause: {
+            reasonCode: "PREVIOUS_BUILD_PENDING",
+            ...(result.proposalId
+              ? { pendingProposalId: result.proposalId }
+              : {}),
+          },
         });
       }
       return result;
