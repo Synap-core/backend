@@ -35,7 +35,12 @@ import {
   type LibraryDb,
   type LibraryItemCurationMeta,
 } from "./read-model.js";
-import { listLibraryGroupRows, readOutputs } from "./groups.js";
+import {
+  countGroups,
+  listLibraryGroupRows,
+  readOutputs,
+  toGroupView,
+} from "./groups.js";
 
 export class LibraryCurateError extends Error {
   constructor(
@@ -301,7 +306,7 @@ export async function curateLibrary(args: {
   ops: readonly LibraryCurateOp[];
 }): Promise<LibraryCurateResult> {
   const database = args.database ?? defaultDb;
-  return database.transaction(async (tx) => {
+  const written = await database.transaction(async (tx) => {
     const t = tx as unknown as LibraryDb;
     // Every group of the person (keys must stay unique; ids are validated).
     const groupRows = await listLibraryGroupRows({
@@ -399,4 +404,24 @@ export async function curateLibrary(args: {
       changedItemIds: [...change.changedItemIds],
     };
   });
+  // The touched groups as they now read (after commit, with counts).
+  const touched = [
+    ...new Set([...written.createdGroupIds, ...written.changedGroupIds]),
+  ];
+  const rows = touched.length
+    ? await listLibraryGroupRows({
+        database,
+        userId: args.userId,
+        ids: touched,
+      })
+    : [];
+  const counts = await countGroups({
+    database,
+    userId: args.userId,
+    groups: rows,
+  });
+  return {
+    ...written,
+    groups: rows.map((r) => toGroupView(r, counts.get(r.id))),
+  };
 }

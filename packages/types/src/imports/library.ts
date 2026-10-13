@@ -123,6 +123,8 @@ export interface LibraryGroupView {
     needsFile: number;
     /** Kept items staged after `builtAt` (all items when never built). */
     newSinceBuilt: number;
+    /** Suggested chips not run yet, over the group's unarchived items. */
+    actions: number;
   };
   workspaceId?: string;
   archivedAt?: string;
@@ -191,6 +193,11 @@ export interface LibraryAddRequest {
   projectId?: string;
   /** `relay`, `browser`, `extension`, `cli`, … — names the open run "Kept from <device>, <day>". */
   device?: string;
+  /**
+   * A share split over several calls: link these items to the note an earlier
+   * call made (`LibraryAddResult.captureNoteId`) instead of making a new one.
+   */
+  captureNoteId?: string;
 }
 
 export interface LibraryAddResult {
@@ -232,12 +239,20 @@ export interface LibraryRunActionResult {
   status: "proposed" | "applied";
 }
 
+/** Input of `library.groups`: an optional lens (counts and groups narrow to it). */
+export interface LibraryGroupsRequest {
+  workspaceId?: string;
+  projectId?: string;
+}
+
 /** Result of `library.curate`: what changed, so a client can reconcile its optimistic state. */
 export interface LibraryCurateResult {
   /** Ids of groups made by `group.create` ops, in op order. */
   createdGroupIds: string[];
   changedGroupIds: string[];
   changedItemIds: string[];
+  /** The created and changed groups as they now read (archived ones included). */
+  groups: LibraryGroupView[];
 }
 
 /** Result of `library.group`: one group and the first page of its items. */

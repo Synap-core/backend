@@ -155,6 +155,56 @@ export async function ensureLibraryRun(args: {
   });
 }
 
+/** Link more items to an existing share note (owner-floored, share notes only). */
+export async function linkShareNote(args: {
+  database?: LibraryDb;
+  userId: string;
+  noteId: string;
+  itemIds: readonly string[];
+}): Promise<string> {
+  const database = args.database ?? defaultDb;
+  const [note] = await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(${documents.metadata}, '{libraryNoteFor}', (SELECT COALESCE(jsonb_agg(DISTINCT x), '[]'::jsonb) FROM jsonb_array_elements(COALESCE(${documents.metadata} -> 'libraryNoteFor', '[]'::jsonb) || ${JSON.stringify([...args.itemIds])}::jsonb) AS x), true)`,
+    })
+    .where(
+      and(
+        eq(documents.id, args.noteId),
+        eq(documents.userId, args.userId),
+        isNull(documents.deletedAt),
+        drizzleSql`${documents.metadata} #>> '{intakeSource,door}' = ${LIBRARY_NOTE_DOOR}`
+      )
+    )
+    .returning({ id: documents.id });
+  if (!note) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+  }
+  await linkItemsToNote(database, args.userId, args.itemIds, note.id);
+  return note.id;
+}
+
+async function linkItemsToNote(
+  database: LibraryDb,
+  userId: string,
+  itemIds: readonly string[],
+  noteId: string
+) {
+  if (itemIds.length === 0) return;
+  await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,captureNoteId}', ${JSON.stringify(noteId)}::jsonb, true)`,
+    })
+    .where(
+      and(
+        libraryItemsWhere(userId),
+        inArray(documents.id, [...itemIds]),
+        drizzleSql`${documents.metadata} ? 'importCuration'`
+      )
+    );
+}
+
 /** Stage the share-time note as a capture and link it to the items. */
 export async function keepShareNote(args: {
   database?: LibraryDb;
@@ -177,20 +227,7 @@ export async function keepShareNote(args: {
     text,
     extraMetadata: { libraryNoteFor: [...args.itemIds] },
   });
-  if (args.itemIds.length > 0) {
-    await database
-      .update(documents)
-      .set({
-        metadata: drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,captureNoteId}', ${JSON.stringify(staged.documentId)}::jsonb, true)`,
-      })
-      .where(
-        and(
-          libraryItemsWhere(args.userId),
-          inArray(documents.id, [...args.itemIds]),
-          drizzleSql`${documents.metadata} ? 'importCuration'`
-        )
-      );
-  }
+  await linkItemsToNote(database, args.userId, args.itemIds, staged.documentId);
   return staged.documentId;
 }
 
@@ -260,7 +297,16 @@ export async function addToLibrary(args: {
     staged: outcome.staged,
     refused: outcome.refused,
   };
-  if (req.note?.trim()) {
+  if (req.captureNoteId) {
+    // A share split over several calls: these items join the note an earlier
+    // call made. A note that is not the caller's share note reads NOT_FOUND.
+    result.captureNoteId = await linkShareNote({
+      database,
+      userId: args.userId,
+      noteId: req.captureNoteId,
+      itemIds,
+    });
+  } else if (req.note?.trim()) {
     if (req.note.length > LIBRARY_LIMITS.shareNoteMax) {
       throw new TRPCError({
         code: "BAD_REQUEST",

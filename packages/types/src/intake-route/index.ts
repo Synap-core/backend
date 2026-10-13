@@ -224,6 +224,8 @@ export const DEPRECATED_INTAKE_PATHS: readonly DeprecatedIntakePath[] = [
   // ── relay ─────────────────────────────────────────────────────────────
   {
     ...BASE,
+    // Relay routes this to the Library now (wave L4, FE-3).
+    stage: "redirected",
     id: "relay.note.attachments",
     host: "relay",
     reason:
@@ -233,6 +235,8 @@ export const DEPRECATED_INTAKE_PATHS: readonly DeprecatedIntakePath[] = [
   },
   {
     ...BASE,
+    // Relay routes this to the Library now (wave L4, FE-3).
+    stage: "redirected",
     id: "relay.captureUrlHint",
     host: "relay",
     reason:

@@ -216,6 +216,23 @@ export function libraryTextMatchSql(q: string): SQL {
     OR (${documents.metadata} #>> '{importCuration,note}') ILIKE ${like})`;
 }
 
+/** The lens (a space and/or a project), as SQL; undefined when none. */
+export function libraryLensWhere(
+  userId: string,
+  lens: { workspaceId?: string; projectId?: string }
+): SQL | undefined {
+  const parts: SQL[] = [];
+  if (lens.workspaceId) parts.push(eq(documents.workspaceId, lens.workspaceId));
+  if (lens.projectId) {
+    // A run carries the project; its items carry the run.
+    parts.push(drizzleSql`(${documents.metadata} #>> '{intakeSource,sessionId}') IN (
+      SELECT ${focusSessions.id}::text FROM ${focusSessions}
+       WHERE ${focusSessions.userId} = ${userId}
+         AND ${focusSessions.projectId} = ${lens.projectId})`);
+  }
+  return parts.length ? and(...parts) : undefined;
+}
+
 /** The filters of `library.list`, as SQL. */
 export function libraryFilterWhere(
   userId: string,
@@ -228,15 +245,8 @@ export function libraryFilterWhere(
   if (input.status) {
     parts.push(drizzleSql`${readStatusSql} = ${input.status}`);
   }
-  if (input.workspaceId)
-    parts.push(eq(documents.workspaceId, input.workspaceId));
-  if (input.projectId) {
-    // A run carries the project; its items carry the run.
-    parts.push(drizzleSql`(${documents.metadata} #>> '{intakeSource,sessionId}') IN (
-      SELECT ${focusSessions.id}::text FROM ${focusSessions}
-       WHERE ${focusSessions.userId} = ${userId}
-         AND ${focusSessions.projectId} = ${input.projectId})`);
-  }
+  const lens = libraryLensWhere(userId, input);
+  if (lens) parts.push(lens);
   const q = input.q?.trim();
   if (q) parts.push(libraryTextMatchSql(q));
   return and(...parts)!;

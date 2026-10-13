@@ -29,6 +29,7 @@ import {
   isNull,
   desc,
   drizzleSql,
+  type SQL,
   type LibraryGroupRow,
 } from "@synap/database";
 import {
@@ -42,6 +43,7 @@ import {
 import {
   isArchivedSql,
   libraryItemsWhere,
+  libraryLensWhere,
   readStatusSql,
   ungroupedSql,
   type LibraryDb,
@@ -63,6 +65,7 @@ export interface LibraryGroupCounts {
   notRead: number;
   needsFile: number;
   newSinceBuilt: number;
+  actions: number;
 }
 
 const ZERO: LibraryGroupCounts = {
@@ -71,6 +74,7 @@ const ZERO: LibraryGroupCounts = {
   notRead: 0,
   needsFile: 0,
   newSinceBuilt: 0,
+  actions: 0,
 };
 
 export function toGroupView(
@@ -167,6 +171,8 @@ export async function countGroups(args: {
   database?: LibraryDb;
   userId: string;
   groups: readonly LibraryGroupRow[];
+  /** Count only the items inside this lens. */
+  lens?: SQL;
 }): Promise<Map<string, LibraryGroupCounts>> {
   const database = args.database ?? defaultDb;
   const out = new Map<string, LibraryGroupCounts>();
@@ -178,11 +184,13 @@ export async function countGroups(args: {
       status: drizzleSql<string>`${readStatusSql}`,
       decision: drizzleSql<string>`COALESCE(${documents.metadata} #>> '{importCuration,decision}', 'keep')`,
       createdAt: documents.createdAt,
+      actions: drizzleSql<unknown>`${documents.metadata} -> 'importRead' -> 'suggestedActions'`,
     })
     .from(documents)
     .where(
       and(
         libraryItemsWhere(args.userId),
+        args.lens,
         drizzleSql`NOT ${isArchivedSql}`,
         drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb) ?| ${`{${ids.join(",")}}`}::text[]`
       )
@@ -196,6 +204,11 @@ export async function countGroups(args: {
   )) {
     const c = out.get(r.groupId) ?? { ...ZERO };
     c.items += 1;
+    c.actions += Array.isArray(r.actions)
+      ? (r.actions as Array<{ proposalId?: unknown } | null>).filter(
+          (a) => a && typeof a === "object" && !a.proposalId
+        ).length
+      : 0;
     if (r.status === "read") c.read += 1;
     else if (r.status === "not_read" || r.status === "over_budget")
       c.notRead += 1;
@@ -213,6 +226,7 @@ export async function countGroups(args: {
 export async function countLooseItems(args: {
   database?: LibraryDb;
   userId: string;
+  lens?: SQL;
 }): Promise<{ ungrouped: number; archived: number }> {
   const database = args.database ?? defaultDb;
   const [row] = await database
@@ -221,7 +235,7 @@ export async function countLooseItems(args: {
       archived: drizzleSql<number>`count(*) FILTER (WHERE ${isArchivedSql})::int`,
     })
     .from(documents)
-    .where(libraryItemsWhere(args.userId));
+    .where(and(libraryItemsWhere(args.userId), args.lens));
   return {
     ungrouped: Number(row?.ungrouped ?? 0),
     archived: Number(row?.archived ?? 0),
@@ -398,10 +412,15 @@ export async function adoptImportGroups(args: {
   return adopted;
 }
 
-/** `library.groups` — every live group with counts, plus the loose counts. */
+/**
+ * `library.groups` — every live group with counts, plus the loose counts.
+ * With a lens, counts cover only the items inside it and a group with no item
+ * there is left out.
+ */
 export async function readLibraryGroups(args: {
   database?: LibraryDb;
   userId: string;
+  lens?: { workspaceId?: string; projectId?: string };
 }): Promise<{
   groups: LibraryGroupView[];
   ungrouped: number;
@@ -414,14 +433,22 @@ export async function readLibraryGroups(args: {
     userId: args.userId,
     archived: false,
   });
+  const lens = args.lens ? libraryLensWhere(args.userId, args.lens) : undefined;
   const counts = await countGroups({
     database,
     userId: args.userId,
     groups: rows,
+    ...(lens ? { lens } : {}),
   });
-  const loose = await countLooseItems({ database, userId: args.userId });
+  const loose = await countLooseItems({
+    database,
+    userId: args.userId,
+    ...(lens ? { lens } : {}),
+  });
   return {
-    groups: rows.map((r) => toGroupView(r, counts.get(r.id))),
+    groups: rows
+      .filter((r) => !lens || (counts.get(r.id)?.items ?? 0) > 0)
+      .map((r) => toGroupView(r, counts.get(r.id))),
     ...loose,
   };
 }

@@ -21,6 +21,7 @@
  */
 
 import { z } from "zod";
+import { createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
@@ -65,6 +66,8 @@ import {
   buildLibraryGroup,
   readNowLibraryItem,
 } from "../services/library/build.js";
+
+const logger = createLogger({ module: "routers/library" });
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -138,6 +141,7 @@ export const LibraryAddInputSchema = z.object({
   workspaceId: uuid.optional(),
   projectId: uuid.optional(),
   device: z.string().max(40).optional(),
+  captureNoteId: uuid.optional(),
 });
 
 export const LibraryListInputSchema = z.object({
@@ -186,6 +190,27 @@ async function runLibraryActionDoor(args: {
   }
 }
 
+async function indexKeptItems(itemIds: readonly string[]): Promise<void> {
+  if (itemIds.length === 0) return;
+  try {
+    const { getBoss } = await import("@synap/jobs");
+    const boss = getBoss();
+    for (const documentId of itemIds) {
+      await boss.send("search-index", {
+        collection: "documents",
+        operation: "upsert",
+        documentId,
+        timestamp: Date.now(),
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { err, count: itemIds.length },
+      "library add: search-index enqueue FAILED — findable after the next reindex"
+    );
+  }
+}
+
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const libraryRouter = router({
@@ -218,11 +243,14 @@ export const libraryRouter = router({
       });
       // The light read, for what is new to the Library. A failed enqueue is
       // left to the hourly sweep (the item reads "Not read yet", never lost).
+      const fresh = result.staged.filter((s) => !s.deduplicated);
       await enqueueLibraryLightRead(
-        result.staged
-          .filter((s) => !s.deduplicated)
-          .map((s) => ({ userId, itemId: s.itemId }))
+        fresh.map((s) => ({ userId, itemId: s.itemId }))
       );
+      // Kept means findable now: a title-only index row until the light read
+      // re-indexes it with its text. A failed enqueue is said; the next full
+      // reindex picks the item up.
+      await indexKeptItems(fresh.map((s) => s.itemId));
       return result;
     }),
 
@@ -236,10 +264,19 @@ export const libraryRouter = router({
     }),
 
   /** Every live group with counts. */
-  groups: podProcedure.query(async ({ ctx }): Promise<LibraryGroupsResult> => {
-    const userId = requireUserId(ctx.userId);
-    return readLibraryGroups({ userId });
-  }),
+  groups: podProcedure
+    .input(
+      z
+        .object({ workspaceId: uuid.optional(), projectId: uuid.optional() })
+        .default({})
+    )
+    .query(async ({ ctx, input }): Promise<LibraryGroupsResult> => {
+      const userId = requireUserId(ctx.userId);
+      return readLibraryGroups({
+        userId,
+        ...(input.workspaceId || input.projectId ? { lens: input } : {}),
+      });
+    }),
 
   /** One group and the first page of its items. */
   group: podProcedure

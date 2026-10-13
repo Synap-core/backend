@@ -620,3 +620,112 @@ describe("search and health", () => {
     expect(health).toEqual({ unread: 2, groupsWaiting: 1, oldestWaitDays: 5 });
   });
 });
+
+describe("relay's needs", () => {
+  it("a share split over several calls links ONE note to every item", async () => {
+    const first = await keep(["https://example.com/s1"], {
+      note: "for the trip",
+    });
+    const second = await addToLibrary({
+      userId: USER,
+      request: {
+        items: [{ kind: "url", url: "https://example.com/s2" }],
+        captureNoteId: first.captureNoteId!,
+      },
+      deps: { readUrl },
+    });
+    expect(second.captureNoteId).toBe(first.captureNoteId);
+    const page = await listLibraryItems({ userId: USER, input: {} });
+    expect(page.items.map((i) => i.captureNoteId)).toEqual([
+      first.captureNoteId,
+      first.captureNoteId,
+    ]);
+    expect(await myCaptureIds()).toEqual([first.captureNoteId]);
+    const { rows } = await q<{ metadata: any }>(
+      `select metadata from documents where id = $1`,
+      [first.captureNoteId]
+    );
+    expect(rows[0]!.metadata.libraryNoteFor.sort()).toEqual(
+      [first.staged[0]!.itemId, second.staged[0]!.itemId].sort()
+    );
+    // Someone else's note is not a door.
+    await expect(
+      addToLibrary({
+        userId: OTHER,
+        request: {
+          items: [{ kind: "url", url: "https://example.com/s3" }],
+          captureNoteId: first.captureNoteId!,
+        },
+        deps: { readUrl },
+      })
+    ).rejects.toThrow(/Note not found/);
+  });
+
+  it("group counts carry the unrun chips; curate answers with the group views", async () => {
+    const r = await keep(["https://example.com/c1", "https://example.com/c2"]);
+    const [c1, c2] = r.staged.map((s) => s.itemId);
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importRead}', $2::jsonb) where id = $1`,
+      [
+        c1,
+        JSON.stringify({
+          status: "read",
+          suggestedActions: [
+            {
+              id: "date-0",
+              kind: "date",
+              label: "x",
+              value: {},
+              confidence: 1,
+              source: "rule",
+            },
+            {
+              id: "task-0",
+              kind: "task",
+              label: "y",
+              value: {},
+              confidence: 1,
+              source: "rule",
+              proposalId: "p",
+            },
+          ],
+        }),
+      ]
+    );
+    const res = await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.create", name: "Chips", itemIds: [c1!, c2!] }],
+    });
+    expect(res.groups).toHaveLength(1);
+    expect(res.groups[0]).toMatchObject({
+      id: res.createdGroupIds[0],
+      name: "Chips",
+      counts: { items: 2, read: 1, actions: 1 },
+    });
+  });
+
+  it("groups narrow to a lens", async () => {
+    const WS = "00000000-0000-4000-8000-0000000000aa";
+    const inWs = await addToLibrary({
+      userId: USER,
+      request: {
+        items: [{ kind: "url", url: "https://example.com/w" }],
+        workspaceId: WS,
+      },
+      deps: { readUrl },
+    });
+    const out = await keep(["https://example.com/o"]);
+    await newGroup("In space", [inWs.staged[0]!.itemId]);
+    await newGroup("Elsewhere", [out.staged[0]!.itemId]);
+    const all = await readLibraryGroups({ userId: USER });
+    expect(all.groups.map((g) => g.name).sort()).toEqual([
+      "Elsewhere",
+      "In space",
+    ]);
+    const lensed = await readLibraryGroups({
+      userId: USER,
+      lens: { workspaceId: WS },
+    });
+    expect(lensed.groups.map((g) => g.name)).toEqual(["In space"]);
+  });
+});
