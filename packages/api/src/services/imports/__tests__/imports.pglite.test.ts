@@ -690,6 +690,42 @@ describe("build", () => {
     expect(submitted).toHaveLength(1);
   });
 
+  it("reads the file attached to a needs_file item", async () => {
+    const { sessionId, outcome } = await openAndStage([
+      { kind: "url", url: "https://www.instagram.com/reel/attached" },
+    ]);
+    const itemId = outcome.staged[0]!.itemId;
+    await attachImportItemFile({
+      userId: USER,
+      sessionId,
+      itemId,
+      filename: "reel.mp4",
+      mimeType: "video/mp4",
+      contentBase64: Buffer.from("video bytes").toString("base64"),
+    });
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [{ op: "createGroup", name: "Reels", itemIds: [itemId] }],
+    });
+    const files: string[] = [];
+    const d = deps([]);
+    const structure = d.structure;
+    d.structure = async (input) => {
+      if (input.file)
+        files.push(Buffer.from(input.file.content, "base64").toString());
+      return structure(input);
+    };
+    const result = await buildImportGroup({
+      userId: USER,
+      sessionId,
+      groupKey: "reels",
+      deps: d,
+    });
+    expect(result).toMatchObject({ status: "proposed", read: 1, skipped: [] });
+    expect(files).toEqual(["video bytes"]);
+  });
+
   it("builds a group ONCE under concurrent Builds, and a failed Build frees it", async () => {
     const { sessionId, outcome } = await openAndStage([
       { kind: "url", url: "https://example.com/one" },

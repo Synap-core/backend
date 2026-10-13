@@ -12,13 +12,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import {
-  db as defaultDb,
-  documents,
-  and,
-  eq,
-  drizzleSql,
-} from "@synap/database";
+import { db as defaultDb, documents, drizzleSql } from "@synap/database";
 import {
   IMPORT_LIMITS,
   importGroupKey,
@@ -242,19 +236,26 @@ export function applyImportCurateOps(
   return { state, changedItemIds: changed };
 }
 
-/** Write one item's curation (sibling key — `intakeSource` is never touched). */
-export async function writeItemCuration(
+/**
+ * Write the curation of every changed item in ONE statement (a merge across
+ * 2000 items is one round trip, not 2000). Sibling key — `intakeSource` is
+ * never touched.
+ */
+export async function writeItemCurations(
   database: ImportDb,
   userId: string,
-  itemId: string,
-  curation: ImportItemCuration
+  curations: ReadonlyMap<string, ImportItemCuration>,
+  ids: Iterable<string>
 ): Promise<void> {
-  await database
-    .update(documents)
-    .set({
-      metadata: drizzleSql`COALESCE(${documents.metadata}, '{}'::jsonb) || ${JSON.stringify({ [IMPORT_ITEM_CURATION_KEY]: curation })}::jsonb`,
-    })
-    .where(and(eq(documents.id, itemId), eq(documents.userId, userId)));
+  const byId: Record<string, ImportItemCuration> = {};
+  for (const id of ids) byId[id] = curations.get(id)!;
+  if (Object.keys(byId).length === 0) return;
+  await database.execute(drizzleSql`
+    UPDATE ${documents}
+    SET metadata = COALESCE(${documents.metadata}, '{}'::jsonb)
+      || jsonb_build_object(${IMPORT_ITEM_CURATION_KEY}::text, v.value)
+    FROM jsonb_each(${JSON.stringify(byId)}::jsonb) AS v
+    WHERE ${documents.id} = v.key::uuid AND ${documents.userId} = ${userId}`);
 }
 
 /** `imports.curate` — apply the ops atomically. */
@@ -293,14 +294,12 @@ export async function curateImport(args: {
       }
       throw err;
     }
-    for (const id of result.changedItemIds) {
-      await writeItemCuration(
-        tx as unknown as ImportDb,
-        args.userId,
-        id,
-        result.state.items.get(id)!
-      );
-    }
+    await writeItemCurations(
+      tx as unknown as ImportDb,
+      args.userId,
+      result.state.items,
+      result.changedItemIds
+    );
     const next: ImportSessionCuration = {
       ...session.curation,
       groups: result.state.groups,

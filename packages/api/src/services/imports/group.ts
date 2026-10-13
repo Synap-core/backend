@@ -36,7 +36,7 @@ import {
   type ImportItemView,
   type ImportSessionCuration,
 } from "@synap-core/types/imports";
-import { deriveImportPhase, writeItemCuration } from "./curate.js";
+import { deriveImportPhase, writeItemCurations } from "./curate.js";
 import {
   loadImportItemRows,
   readItemCuration,
@@ -458,9 +458,7 @@ export async function groupImport(args: {
       items: new Map(fresh.map((r) => [r.id, readItemCuration(r.metadata)])),
       proposals,
     });
-    for (const id of merged.changed) {
-      await writeItemCuration(t, args.userId, id, merged.items.get(id)!);
-    }
+    await writeItemCurations(t, args.userId, merged.items, merged.changed);
     const groupedAt = new Date().toISOString();
     const next: ImportSessionCuration = {
       ...locked.curation,

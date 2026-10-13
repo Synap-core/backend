@@ -35,6 +35,7 @@ import {
   proposals,
   and,
   eq,
+  inArray,
   isNull,
   drizzleSql,
 } from "@synap/database";
@@ -700,14 +701,12 @@ async function markItemsBuilt(
   ids: string[]
 ) {
   if (ids.length === 0) return;
-  for (const id of ids) {
-    await database
-      .update(documents)
-      .set({
-        metadata: drizzleSql`(${documents.metadata} #- '{intakeSource,pending}')`,
-      })
-      .where(and(eq(documents.id, id), eq(documents.userId, userId)));
-  }
+  await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`(${documents.metadata} #- '{intakeSource,pending}')`,
+    })
+    .where(and(eq(documents.userId, userId), inArray(documents.id, ids)));
 }
 
 /** A Build claim older than this is a crashed build, and may be taken over. */
@@ -909,7 +908,7 @@ async function buildClaimedGroup(
         and(
           eq(documents.userId, args.userId),
           isNull(documents.deletedAt),
-          drizzleSql`${documents.id} = ANY(${attachedIds}::uuid[])`
+          inArray(documents.id, attachedIds)
         )
       );
     for (const f of found) attached.set(f.id, f);
