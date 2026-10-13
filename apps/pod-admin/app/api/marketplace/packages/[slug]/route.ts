@@ -5,7 +5,7 @@
  * `definition` — which is what the detail page reads to describe the install.
  */
 
-import { whoamiFromCookie } from "../../../../../lib/kratos";
+import { apiSessionDenial } from "../../../../../lib/kratos";
 import { controlPlaneUrl } from "../../../../../lib/marketplace";
 
 export const dynamic = "force-dynamic";
@@ -14,10 +14,8 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ slug: string }> }
 ) {
-  const identity = await whoamiFromCookie(req.headers.get("cookie") ?? "");
-  if (!identity) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
 
   const { slug } = await ctx.params;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(slug)) {

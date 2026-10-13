@@ -18,6 +18,11 @@
  *      non-admins). Not admin → 307 to `/forbidden`, except on the
  *      self-service receivers and the member console (`lib/route-policy.ts`).
  *
+ * When the pod cannot ANSWER either question (unreachable, 5xx, 429 from its
+ * rate limiter) the request gets a 503 "try again" page — never /login and
+ * never /forbidden. Those two are verdicts about the person; a busy pod is
+ * not one (`lib/kratos.ts` `SessionCheck`).
+ *
  * Public exemptions: `/login`, `/forbidden`, `/api/*`, `/_next/*`,
  * static files.
  *
@@ -26,7 +31,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { whoamiFromCookie, isPodAdmin } from "./lib/kratos";
+import { checkSession, podAdminRole } from "./lib/kratos";
 import {
   CONSOLE_ROLE_HEADER,
   isMemberConsolePath,
@@ -81,14 +86,16 @@ export async function proxy(req: NextRequest) {
   }
 
   // ── 1. Kratos session ─────────────────────────────────────────────
-  const identity = await whoamiFromCookie(cookie);
-  if (!identity) {
+  const session = await checkSession(cookie);
+  if (session.state === "unavailable") return podUnavailable();
+  if (session.state === "none") {
     const loginUrl = new URL(
       `/login?return=${encodeURIComponent(currentUrl)}`,
       req.url
     );
     return NextResponse.redirect(loginUrl);
   }
+  const { identity } = session;
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
   // Self-service receivers need only the session (each one's reason lives
@@ -96,14 +103,13 @@ export async function proxy(req: NextRequest) {
   // opens for any member but still asks the role, because the nav it
   // renders depends on it. Everything else is pod_admin or /forbidden.
   let role: ConsoleRole | null = null;
-  if (isMemberConsolePath(path)) {
-    role = (await isPodAdmin(cookie)) ? "admin" : "member";
-  } else if (!isSelfService(path)) {
-    const admin = await isPodAdmin(cookie);
-    if (!admin) {
+  if (isMemberConsolePath(path) || !isSelfService(path)) {
+    const answer = await podAdminRole(cookie);
+    if (answer === "unavailable") return podUnavailable();
+    if (answer === "member" && !isMemberConsolePath(path)) {
       return NextResponse.redirect(new URL("/forbidden", req.url));
     }
-    role = "admin";
+    role = answer;
   }
 
   // Pass identity to downstream pages via request headers — useful for
@@ -122,4 +128,23 @@ export async function proxy(req: NextRequest) {
   if (role) requestHeaders.set(CONSOLE_ROLE_HEADER, role);
 
   return NextResponse.next({ request: { headers: requestHeaders } });
+}
+
+/**
+ * The pod did not answer "who is this?". Self-contained HTML (no app chrome:
+ * the layout would need the very answers we lack), and a 503 so a prefetch
+ * never caches it as the page.
+ */
+function podUnavailable(): NextResponse {
+  return new NextResponse(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pod Console</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:32rem;margin:0 auto;padding:4rem 1rem;line-height:1.5;color:#18181b;background:#fafafa}@media (prefers-color-scheme:dark){body{color:#e4e4e7;background:#09090b}}a{color:inherit}</style></head><body><h1 style="font-size:1.25rem">Your pod didn’t answer just now</h1><p>The pod is busy or restarting, so the console couldn’t check your sign-in. Nothing was signed out.</p><p><a href="">Try again</a> in a few seconds.</p></body></html>`,
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": "10",
+      },
+    }
+  );
 }

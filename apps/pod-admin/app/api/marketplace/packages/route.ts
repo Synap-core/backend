@@ -11,16 +11,14 @@
  * unrecognised param must be dropped here rather than passed through.
  */
 
-import { whoamiFromCookie } from "../../../../lib/kratos";
+import { apiSessionDenial } from "../../../../lib/kratos";
 import { controlPlaneUrl, isPackageKind } from "../../../../lib/marketplace";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const identity = await whoamiFromCookie(req.headers.get("cookie") ?? "");
-  if (!identity) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
 
   const incoming = new URL(req.url).searchParams;
   const query = new URLSearchParams();
