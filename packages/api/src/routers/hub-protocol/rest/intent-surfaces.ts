@@ -6,11 +6,14 @@
  *
  *   GET /lifecycle/board       → `lifecycle.board`      (the pipeline)
  *   GET /lifecycle/throughput  → `lifecycle.throughput` (the goal line)
+ *   GET /lifecycle/home        → `lifecycle.home`       (what each space makes)
+ *   GET /lifecycle/moving      → `lifecycle.moving`     (things being worked)
  *   GET /attention/needs-you   → `signals.list({ lens: "needs-you" })`
  *   GET /attention/count       → `signals.count`
  *
- * Every one takes the intent lens (`profileSlug`) plus the board's lens
- * (`workspaceId` · `projectId` · `trackId`). Sessions ON a kind's things ride
+ * The kind-level reads take the intent lens (`profileSlug`) plus the board's
+ * lens (`workspaceId` · `projectId` · `trackId`); the homes reads take only
+ * the narrowing lens they declare. Sessions ON a kind's things ride
  * the existing `GET /focus-sessions?subjectProfileSlug=` (same predicate as
  * `focusSessions.list({ subject })`).
  *
@@ -56,6 +59,16 @@ const throughputQuery = z.object({
   ...lensQuery,
   bucket: z.enum(["day", "week", "month"]).optional(),
   count: z.coerce.number().int().min(1).max(366).optional(),
+});
+
+const homeQuery = z.object({
+  projectId: uuidQueryParam.optional(),
+});
+
+const movingQuery = z.object({
+  projectId: uuidQueryParam.optional(),
+  workspaceId: uuidQueryParam.optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 const attentionQuery = z.object({
@@ -150,6 +163,32 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
   });
   registerOpenApi(app, {
     method: "get",
+    path: "/lifecycle/home",
+    tags: ["Lifecycle"],
+    summary: "What each space produces, and how its things stand",
+    description:
+      "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` narrows every count.",
+    request: { query: homeQuery },
+    responses: {
+      200: { description: "Home", schema: z.object({}).passthrough() },
+      ...errors,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
+    path: "/lifecycle/moving",
+    tags: ["Lifecycle"],
+    summary: "The things being worked, with their work",
+    description:
+      "Things with open work on them (a session, an in-flight worker, a scheduled prep), most urgent first (`lifecycle.moving`).",
+    request: { query: movingQuery },
+    responses: {
+      200: { description: "Moving now", schema: z.object({}).passthrough() },
+      ...errors,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
     path: "/attention/needs-you",
     tags: ["Attention"],
     summary: "What needs you ON a kind's things",
@@ -197,6 +236,24 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
         ...(q.bucket || q.count
           ? { period: { bucket: q.bucket ?? "week", count: q.count ?? 12 } }
           : {}),
+      })
+    )
+  );
+  app.get(
+    "/lifecycle/home",
+    readDoor("lifecycle.home", homeQuery, (ctx, q) =>
+      lifecycleRouter
+        .createCaller(ctx)
+        .home(q.projectId ? { projectId: q.projectId } : {})
+    )
+  );
+  app.get(
+    "/lifecycle/moving",
+    readDoor("lifecycle.moving", movingQuery, (ctx, q) =>
+      lifecycleRouter.createCaller(ctx).moving({
+        ...(q.projectId ? { projectId: q.projectId } : {}),
+        ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+        limit: q.limit ?? 30,
       })
     )
   );

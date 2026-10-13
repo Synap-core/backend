@@ -1,8 +1,8 @@
 /**
  * Hub REST intent-surface reads (surfaces W1.8) — thin doors over the tRPC
  * procedures. Asserted at the SEAM: the query a caller sends arrives at
- * `lifecycle.board` / `lifecycle.throughput` / `signals.list` /
- * `signals.count` as the tRPC input (the procedures' own SQL is proven in
+ * `lifecycle.board` / `lifecycle.throughput` / `lifecycle.home` /
+ * `lifecycle.moving` / `signals.list` / `signals.count` as the tRPC input (the procedures' own SQL is proven in
  * their PGlite suites), a bad query is a 400, a missing scope a 403, and a
  * TRPCError keeps its status (an unknown kind is a 404, never a 500).
  */
@@ -27,6 +27,8 @@ vi.mock("../../lifecycle.js", () => ({
     createCaller: () => ({
       board: record("board"),
       throughput: record("throughput"),
+      home: record("home"),
+      moving: record("moving"),
     }),
   },
 }));
@@ -110,6 +112,31 @@ describe("Hub REST intent-surface reads", () => {
         input: { profileSlug: "post", workspaceId: P },
       },
     ]);
+  });
+
+  it("home and moving: their narrowing lens reaches lifecycle.home / .moving", async () => {
+    expect((await app().request(`/lifecycle/home?projectId=${P}`)).status).toBe(
+      200
+    );
+    await app().request(`/lifecycle/home`);
+    await app().request(
+      `/lifecycle/moving?workspaceId=${P}&projectId=${P}&limit=5`
+    );
+    await app().request(`/lifecycle/moving`);
+    expect(h.calls).toEqual([
+      { proc: "home", input: { projectId: P } },
+      { proc: "home", input: {} },
+      {
+        proc: "moving",
+        input: { projectId: P, workspaceId: P, limit: 5 },
+      },
+      { proc: "moving", input: { limit: 30 } },
+    ]);
+    expect(
+      (await app().request(`/lifecycle/moving?workspaceId=nope`)).status
+    ).toBe(400);
+    expect((await app([]).request(`/lifecycle/home`)).status).toBe(403);
+    expect(h.calls).toHaveLength(4);
   });
 
   it("a bad query is a 400 and reaches nothing; no read scope is a 403", async () => {
