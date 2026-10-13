@@ -9,6 +9,7 @@
  */
 
 import { Suspense } from "react";
+import { trpc } from "../../../lib/trpc";
 import { PageHeader, PageShell } from "../components/page-header";
 import { UrlTabs } from "../components/url-tabs";
 import { ResourceRowSkeleton } from "../components/resource-row";
@@ -16,12 +17,21 @@ import { CatalogTab } from "./_lib/catalog-tab";
 import { InstalledTab } from "./_lib/installed-tab";
 import { ToolsTab } from "./_lib/tools-tab";
 import { SourcesTab } from "./_lib/sources-tab";
+import { tabLabel } from "./_lib/catalog-model";
 
 const TITLE = "Marketplace";
-const DESCRIPTION =
-  "Install from the catalog, see what this pod has installed, choose which of its tools are turned on, and decide where packages come from.";
+const DESCRIPTION = "Packages you can install, and where they come from.";
 
 export default function MarketplacePage() {
+  // Tab counts read the cache the tabs fill (same query keys), never a fetch
+  // of their own: a count appears once its tab has loaded, and stays.
+  const installed = trpc.capabilities.compositions.useQuery(undefined, {
+    enabled: false,
+  });
+  const sources = trpc.marketplace.sources.list.useQuery(undefined, {
+    enabled: false,
+  });
+
   return (
     <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
@@ -32,9 +42,17 @@ export default function MarketplacePage() {
           ariaLabel="Marketplace sections"
           tabs={[
             { key: "catalog", label: "Catalog", content: <CatalogTab /> },
-            { key: "installed", label: "Installed", content: <InstalledTab /> },
+            {
+              key: "installed",
+              label: tabLabel("Installed", installed.data?.length),
+              content: <InstalledTab />,
+            },
             { key: "tools", label: "Tools", content: <ToolsTab /> },
-            { key: "sources", label: "Sources", content: <SourcesTab /> },
+            {
+              key: "sources",
+              label: tabLabel("Sources", sources.data?.length),
+              content: <SourcesTab />,
+            },
           ]}
         />
       </Suspense>

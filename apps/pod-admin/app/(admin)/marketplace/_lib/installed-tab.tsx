@@ -5,7 +5,7 @@
  * lives, whether its verbs are turned on, how its parts are wired, and how
  * its runs are going. Shaping in `installed-model.ts`.
  *
- * Nothing is approved here, on purpose (D5): the container's `approved` flag
+ * Nothing is approved here, on purpose: the container's `approved` flag
  * gates no run, so the one act is to turn its verbs on — in the Tools tab,
  * focused on this capability. `?focus=<capabilityId>` highlights a row.
  */
@@ -24,6 +24,7 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
+import { SectionCard } from "../../components/section-card";
 import { useFocusRow } from "../../components/use-focus-row";
 import { installedRows, type InstalledRow } from "./installed-model";
 
@@ -59,20 +60,22 @@ export function InstalledTab() {
   );
 
   return (
-    <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
-      {compositions.isLoading ? (
-        <ResourceRowSkeleton count={4} />
-      ) : compositions.isError ? (
-        <ResourceRowError
-          message="Couldn't load what is installed."
-          onRetry={() => void compositions.refetch()}
-        />
-      ) : rows.length === 0 ? (
-        <ResourceRowEmpty message="Nothing is installed yet. Browse the Catalog to add a capability." />
-      ) : (
-        rows.map((row) => <InstalledRowView key={row.id} row={row} />)
-      )}
-    </section>
+    <SectionCard title="Installed" hint="Every capability on this pod">
+      <div className="-mx-2 divide-y divide-foreground/[0.05]">
+        {compositions.isLoading ? (
+          <ResourceRowSkeleton count={4} />
+        ) : compositions.isError ? (
+          <ResourceRowError
+            message="Couldn't load what is installed."
+            onRetry={() => void compositions.refetch()}
+          />
+        ) : rows.length === 0 ? (
+          <ResourceRowEmpty message="Nothing is installed yet. Browse the Catalog to add a capability." />
+        ) : (
+          rows.map((row) => <InstalledRowView key={row.id} row={row} />)
+        )}
+      </div>
+    </SectionCard>
   );
 }
 
@@ -103,6 +106,9 @@ function InstalledRowView({ row }: { row: InstalledRow }) {
             <Button
               as={Link}
               href={navHref("marketplace", { tab: "tools", focus: row.id })}
+              // A tab switch, not a new place: keep the scroll, no history entry.
+              scroll={false}
+              replace
               size="sm"
               variant="flat"
               radius="md"

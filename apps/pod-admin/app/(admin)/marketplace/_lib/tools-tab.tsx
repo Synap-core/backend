@@ -4,7 +4,7 @@
  * Marketplace › Tools — every verb an installed capability brings, and whether
  * it is turned on. A verb that is off is refused every time something calls
  * it; turning it on is `capabilities.setToolEnabled` (the backing skill's
- * `approved`, the flag the execution gate reads — D5).
+ * `approved`, the flag the execution gate reads).
  *
  * Who may flip one is the pod's call, not this page's: a pod-wide verb needs a
  * pod admin, a space's verb needs that space's owner. The switch is always
@@ -15,11 +15,12 @@
 import { Chip, Switch, addToast } from "@heroui/react";
 import { ChevronRight } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { readableError } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { SectionCard } from "../../components/section-card";
 import { StatusPill } from "../../components/status-pill";
 import {
   ResourceRowEmpty,
@@ -63,7 +64,11 @@ export function ToolsTab() {
     },
     onError: (err, input) => {
       if (redirectToLoginIfUnauthorized(err)) return;
-      setRefusals((r) => ({ ...r, [input.skillId]: err.message }));
+      setRefusals((r) => ({
+        ...r,
+        [input.skillId]:
+          readableError(err.message) ?? "The pod didn’t change this tool.",
+      }));
       addToast({
         title: "That tool wasn’t changed",
         description: readableError(err.message),
@@ -77,30 +82,32 @@ export function ToolsTab() {
 
   if (catalog.isLoading)
     return (
-      <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+      <ToolsCard>
         <ResourceRowSkeleton count={4} />
-      </section>
+      </ToolsCard>
     );
   if (catalog.isError)
     return (
-      <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+      <ToolsCard>
         <ResourceRowError
           message="Couldn't load the installed tools."
           onRetry={() => void catalog.refetch()}
         />
-      </section>
+      </ToolsCard>
     );
   if (groups.length === 0)
     return (
-      <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+      <ToolsCard>
         <ResourceRowEmpty message="No installed capability brings a tool yet." />
-      </section>
+      </ToolsCard>
     );
 
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-[12.5px] text-foreground/65">{toolsSummary(groups)}</p>
-      <div className="flex flex-col gap-2">
+    <ToolsCard>
+      <p className="px-3 pb-2 text-[12.5px] text-foreground/65">
+        {toolsSummary(groups)}
+      </p>
+      <div className="divide-y divide-foreground/[0.05]">
         {groups.map((g) => (
           <ToolGroupView
             key={g.id}
@@ -115,7 +122,16 @@ export function ToolsTab() {
           />
         ))}
       </div>
-    </div>
+    </ToolsCard>
+  );
+}
+
+/** The Tools tab's card — the same `SectionCard` + `-mx-2` row edge as every tab. */
+function ToolsCard({ children }: { children: ReactNode }) {
+  return (
+    <SectionCard title="Tools" hint="What installed capabilities can do">
+      <div className="-mx-2">{children}</div>
+    </SectionCard>
   );
 }
 
@@ -140,9 +156,9 @@ function ToolGroupView({
     <details
       data-row-id={group.id}
       open={initiallyOpen}
-      className="group/tools rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
+      className="group/tools rounded-md"
     >
-      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-3 py-2 [&::-webkit-details-marker]:hidden">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 rounded-md px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 [&::-webkit-details-marker]:hidden">
         <ChevronRight
           aria-hidden
           className="h-3.5 w-3.5 shrink-0 text-foreground/45 transition-transform group-open/tools:rotate-90"
