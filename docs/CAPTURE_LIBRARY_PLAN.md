@@ -129,6 +129,8 @@ Every wave:
 
 ### L2: The standing Library (pod)
 
+**Status (2026-10-13):** pod core shipped on `claude/festive-turing-ebdyco` — `library_groups` (0326), the read model, curate, add (runs, dedup, share note as a capture), build/rebuild (new items only) and Read now through the shared Build core, one search, health + orient `StartHere.library`, tRPC `library` + Hub `/library/{add,list,search}`. Light read + chips: see `library-light-read`. Reference: [`LIBRARY.md`](LIBRARY.md).
+
 - **Model:** the Library is a lens over staged items (intake-source documents with `importItem`), not one giant session.
   - Items carry the Library marker.
   - Import runs remain the session/undo unit (one run per share batch / drop / import).
