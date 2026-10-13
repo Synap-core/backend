@@ -6,7 +6,13 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  alsoInKinds,
   homeNeedsYouModel,
+  kindColumnTone,
+  kindLabelOf,
+  movingNowRowOpts,
+  movingRowSpaceWord,
+  movingSpaceChips,
   homeSpacesModel,
   kindBarA11y,
   kindBarSegments,
@@ -17,6 +23,7 @@ import {
   type SpaceProducedKindInput,
 } from "./space-intent.js";
 import { lensKpiFact } from "./header.js";
+import { resolveObjectNounPlural } from "../vocabulary/index.js";
 
 function kind(
   over: Partial<SpaceProducedKindInput> = {}
@@ -376,5 +383,215 @@ describe("movingNowRowModel", () => {
     expect(m.beingWorked).toBeNull();
     expect(m.row.title).toBe("Lead");
     expect(m.row.reason).toBe("Lead");
+  });
+});
+
+describe("a failed per-kind read is unknown, never calm", () => {
+  it("owedUnknown / workUnknown only for a null read (zero is calm)", () => {
+    const m = spaceIntentCardModel(
+      space({
+        produces: [
+          kind({ needsYou: null, beingWorked: null }),
+          kind({ profileSlug: "devplane_story", needsYou: 0, beingWorked: 0 }),
+        ],
+      })
+    );
+    expect(m.kinds.map((k) => [k.owed, k.owedUnknown, k.workUnknown])).toEqual([
+      [null, true, true],
+      [null, false, false],
+    ]);
+  });
+});
+
+describe("kindColumnTone (THE option tone rule)", () => {
+  it("an authored tone that is no real token falls back to the category's", () => {
+    // The old copies trusted any authored tone; `lifecycleOptionTone` does not.
+    expect(
+      kindColumnTone({ category: "active", tone: "purple" as never })
+    ).toBe("primary");
+    expect(kindColumnTone({ category: "active", tone: "ai" })).toBe("ai");
+    expect(kindColumnTone({ category: null })).toBe("warning");
+    expect(
+      kindBarSegments([
+        {
+          key: "x",
+          label: "X",
+          category: "done",
+          count: 1,
+          tone: "nope" as never,
+        },
+      ])[0]!.tone
+    ).toBe("success");
+  });
+});
+
+describe("the row/space joins (one rule, browser + relay)", () => {
+  const campaign = (label: string) =>
+    kind({ profileSlug: "campaign", label, plural: `${label}s` });
+  const crm = space({
+    workspaceId: "crm",
+    name: "CRM",
+    label: "Sales",
+    produces: [campaign("Sales campaign")],
+  });
+  const content = space({
+    workspaceId: "content",
+    name: "Content",
+    label: "Content",
+    produces: [campaign("Content campaign")],
+  });
+  const mkt = space({
+    workspaceId: "mkt",
+    name: "Marketing",
+    label: "Growth",
+    produces: [campaign("Growth campaign")],
+  });
+  const lib = space({
+    workspaceId: "lib",
+    name: "Brand",
+    label: "Brand",
+    kind: "library",
+    produces: [],
+  });
+  const home = [crm, content, mkt, lib];
+
+  it("a row's space word is the card's title, not the bare purpose", () => {
+    // relay used the purpose alone ("Sales"); the card says "Sales · CRM".
+    expect(movingRowSpaceWord({ workspaceId: "crm" }, home)).toBe(
+      "Sales · CRM"
+    );
+    expect(movingRowSpaceWord({ workspaceId: "crm" }, home, "crm")).toBeNull();
+    expect(movingRowSpaceWord({ workspaceId: "gone" }, home)).toBeNull();
+  });
+
+  it("a kind shared by spaces keeps ITS OWN space's word (no last-wins)", () => {
+    // The browser's slug→label map kept the LAST space's word ("Growth campaign").
+    expect(
+      movingNowRowOpts({ workspaceId: "crm", profileSlug: "campaign" }, home)
+    ).toEqual({ spaceName: "Sales · CRM", kindLabel: "Sales campaign" });
+    expect(
+      movingNowRowOpts({ workspaceId: "mkt", profileSlug: "campaign" }, home)
+        .kindLabel
+    ).toBe("Growth campaign");
+    // A thing in a space that does not produce it: the first producer's word.
+    expect(
+      movingNowRowOpts({ workspaceId: "lib", profileSlug: "campaign" }, home)
+        .kindLabel
+    ).toBe("Sales campaign");
+    expect(kindLabelOf(mkt, "campaign")).toBe("Growth campaign");
+    expect(kindLabelOf(null, "devplane_feature")).toBe(
+      kindLabelOf([], "devplane_feature")
+    );
+  });
+
+  it("chips: home order, producing + present, a known zero omitted", () => {
+    const items = [
+      { workspaceId: "mkt" },
+      { workspaceId: "mkt" },
+      { workspaceId: "lib" },
+      { workspaceId: "crm" },
+    ];
+    const { total, chips } = movingSpaceChips(items, home);
+    expect(total).toBe(4);
+    // Home order (NOT count order: the browser sorted Growth first), Content
+    // (producing, nothing moving) left out, Brand (library, one moving) in.
+    expect(chips).toEqual([
+      { workspaceId: "crm", title: "Sales · CRM", count: 1 },
+      { workspaceId: "mkt", title: "Growth · Marketing", count: 2 },
+      { workspaceId: "lib", title: "Brand", count: 1 },
+    ]);
+  });
+
+  it("chips: a failed or capped read is UNKNOWN, never 0", () => {
+    const failed = movingSpaceChips(null, home);
+    expect(failed.total).toBeNull();
+    // Every producing space stays a door; none claims a count.
+    expect(failed.chips.map((c) => [c.workspaceId, c.count])).toEqual([
+      ["crm", null],
+      ["content", null],
+      ["mkt", null],
+    ]);
+    const capped = movingSpaceChips(
+      [{ workspaceId: "crm" }, { workspaceId: "crm" }],
+      home,
+      { limit: 2 }
+    );
+    expect(capped.total).toBeNull();
+    expect(capped.chips.every((c) => c.count === null)).toBe(true);
+    expect(movingSpaceChips([], null).chips).toEqual([]);
+  });
+
+  it("also here: declared kinds of THIS space with things, most first", () => {
+    const profiles = [
+      {
+        slug: "note",
+        name: "Note",
+        workspaceId: null,
+        profileKind: "kind" as const,
+      },
+      {
+        slug: "partner",
+        name: "Partner",
+        workspaceId: "crm",
+        profileKind: "role" as const,
+      },
+      {
+        slug: "contact_log",
+        name: "Contact log",
+        workspaceId: "crm",
+        profileKind: "kind" as const,
+      },
+      {
+        slug: "playbook_note",
+        name: "Playbook note",
+        plural: "Playbook notes",
+        workspaceId: "crm",
+        profileKind: "kind" as const,
+      },
+      {
+        slug: "empty_kind",
+        name: "Empty kind",
+        workspaceId: "crm",
+        profileKind: "kind" as const,
+      },
+      {
+        slug: "campaign",
+        name: "Campaign",
+        workspaceId: "crm",
+        profileKind: "kind" as const,
+      },
+      {
+        slug: "other",
+        name: "Other",
+        workspaceId: "content",
+        profileKind: "kind" as const,
+      },
+    ];
+    const counts = {
+      note: 40,
+      partner: 9,
+      contact_log: 2,
+      playbook_note: 5,
+      empty_kind: 0,
+      campaign: 3,
+      other: 7,
+    };
+    // relay counted any profile (note, partner); the browser kept zero
+    // (empty_kind) and sorted by name. ONE rule: declared kind, count > 0, most first.
+    expect(alsoInKinds(crm, profiles, counts)).toEqual([
+      {
+        profileSlug: "playbook_note",
+        title: "Playbook notes",
+        count: 5,
+        workspaceId: "crm",
+      },
+      {
+        profileSlug: "contact_log",
+        title: resolveObjectNounPlural("Contact log"),
+        count: 2,
+        workspaceId: "crm",
+      },
+    ]);
+    expect(alsoInKinds(crm, profiles, null)).toBeNull();
   });
 });

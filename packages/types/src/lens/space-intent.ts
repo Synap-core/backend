@@ -16,10 +16,14 @@
  */
 import type { UnitStateInput, UnitTone } from "../units/state.js";
 import {
-  LIFECYCLE_CATEGORY_TONE,
+  lifecycleOptionTone,
   type LifecycleCategory,
 } from "../lifecycle/option.js";
-import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
+import {
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+  resolveStatusLabel,
+} from "../vocabulary/index.js";
 import { formatKpiFraction, type LensKpiFact } from "./header.js";
 import { lensIntentDoorText } from "./intent.js";
 import type { LensBeingWorked, LensRow } from "./rows.js";
@@ -47,8 +51,21 @@ export interface KindBarSegment {
 }
 
 /**
+ * A column's tone — THE option tone rule (`lifecycleOptionTone`: its authored
+ * tone when a real token, else its category's); `warning` for the
+ * unclassified column (no category: things whose status is no option).
+ */
+export function kindColumnTone(
+  column: Pick<KindBarColumn, "category" | "tone">
+): UnitTone {
+  return column.category
+    ? lifecycleOptionTone({ category: column.category, tone: column.tone })
+    : "warning";
+}
+
+/**
  * THE one-line pipeline bar: the columns in option order, each a segment
- * weighted by its count in its option's tone (`warning` for unclassified).
+ * weighted by its count in its column's tone (`kindColumnTone`).
  * An empty column draws no segment; an all-empty pipeline draws no bar ([]).
  */
 export function kindBarSegments(
@@ -59,9 +76,7 @@ export function kindBarSegments(
     .map((c) => ({
       key: c.key,
       label: c.label,
-      tone:
-        c.tone ??
-        (c.category ? LIFECYCLE_CATEGORY_TONE[c.category] : "warning"),
+      tone: kindColumnTone(c),
       weight: c.count,
     }));
 }
@@ -117,6 +132,10 @@ export interface SpaceKindRowModel {
   fact: string | null;
   /** Needs-you on this kind when > 0 (the mark's count); null = none or unknown. */
   owed: number | null;
+  /** The needs-you read FAILED: draw the unknown mark ("–"), never calm nothing. */
+  owedUnknown: boolean;
+  /** The being-worked read FAILED (unknown, not zero). */
+  workUnknown: boolean;
   /** The row's spoken name: title, needs-you, the bar, the fact. */
   a11y: string;
 }
@@ -241,6 +260,8 @@ export function spaceIntentCardModel(
       segments,
       fact,
       owed,
+      owedUnknown: kind.needsYou === null,
+      workUnknown: kind.beingWorked === null,
       a11y: [
         title,
         owed !== null ? lensIntentDoorText("blocking", owed) : null,
@@ -454,4 +475,195 @@ export function movingNowRowModel(
     work,
     asksYou,
   };
+}
+
+// ── The joins around the rows (ONE rule for browser and relay) ──────────────
+//
+// Moving now and a space home join two reads: `lifecycle.moving` (the things)
+// and `lifecycle.home` (the spaces and their produced kinds). Each join below
+// is decided ONCE here; the hosts only draw what comes back.
+
+/** The space a home read holds, or null (not visible / gone / no read). */
+function spaceIn(
+  spaces: readonly SpaceIntentInput[] | null | undefined,
+  workspaceId: string | null | undefined
+): SpaceIntentInput | null {
+  if (!spaces || !workspaceId) return null;
+  return spaces.find((s) => s.workspaceId === workspaceId) ?? null;
+}
+
+/**
+ * A kind's word ("Feature"): the produced kind's own label, read from ONE
+ * space when given one, else from the first space of a home read (read
+ * order) that produces it; else the vocabulary's noun for the slug.
+ */
+export function kindLabelOf(
+  source: SpaceIntentInput | readonly SpaceIntentInput[] | null | undefined,
+  profileSlug: string
+): string {
+  const spaces: readonly SpaceIntentInput[] = !source
+    ? []
+    : Array.isArray(source)
+      ? source
+      : [source as SpaceIntentInput];
+  for (const space of spaces) {
+    const label = space.produces
+      .find((k) => k.profileSlug === profileSlug)
+      ?.label.trim();
+    if (label) return label;
+  }
+  return resolveObjectNoun(profileSlug);
+}
+
+/**
+ * A moving row's SOURCE word: its space's title (`spaceIntentTitle`, "Product
+ * · Dev" — the same words as that space's card), or null when the row's space
+ * is unknown to the home read or the list is already narrowed to it.
+ */
+export function movingRowSpaceWord(
+  item: Pick<MovingItemInput, "workspaceId">,
+  spaces: readonly SpaceIntentInput[] | null | undefined,
+  filteredTo: string | null = null
+): string | null {
+  if (!item.workspaceId || item.workspaceId === filteredTo) return null;
+  const space = spaceIn(spaces, item.workspaceId);
+  return space ? spaceIntentTitle(space) : null;
+}
+
+/**
+ * What `movingNowRowModel` needs beyond the item: its space word and its
+ * kind's label — the kind as ITS OWN space names it (a kind produced by two
+ * spaces keeps each space's word), else the home read's, else the vocabulary.
+ */
+export function movingNowRowOpts(
+  item: Pick<MovingItemInput, "workspaceId" | "profileSlug">,
+  spaces: readonly SpaceIntentInput[] | null | undefined,
+  filteredTo: string | null = null
+): { spaceName: string | null; kindLabel: string | null } {
+  const own = spaceIn(spaces, item.workspaceId);
+  return {
+    spaceName: movingRowSpaceWord(item, spaces, filteredTo),
+    kindLabel: item.profileSlug
+      ? kindLabelOf(
+          own?.produces.some((k) => k.profileSlug === item.profileSlug)
+            ? own
+            : spaces,
+          item.profileSlug
+        )
+      : null,
+  };
+}
+
+/** One "Moving now" space filter chip — a door that narrows the read SERVER-side. */
+export interface MovingSpaceChip {
+  workspaceId: string;
+  /** `spaceIntentTitle` — the words of the space's card and of its rows' source. */
+  title: string;
+  /** Things moving in this space; null = unknown (the read failed or was capped). */
+  count: number | null;
+}
+
+/**
+ * THE "Moving now" space chips.
+ *
+ *   - Which: every PRODUCING space of the home read, plus any other space a
+ *     moving thing sits in; a space the home read does not hold gets no chip
+ *     (no title to give it). When the counts are known, a space with nothing
+ *     moving is left out (a chip is a door; an empty list is no place to go).
+ *   - Order: the home read's (producing first, busiest first) — stable, so a
+ *     chip never jumps when the list narrows.
+ *   - Counts: from `items`, the UNNARROWED moving read of the same scope
+ *     (pod or project). `items === null` (failed / loading) or a read that hit
+ *     its `limit` (capped: a count would be a floor shown as a total) makes
+ *     EVERY count null — unknown, never 0. `total` follows the same rule.
+ *
+ * `spaces === null` (no home read) ⇒ no chips: a chip without its space's
+ * words is not drawable.
+ */
+export function movingSpaceChips(
+  items: readonly Pick<MovingItemInput, "workspaceId">[] | null,
+  spaces: readonly SpaceIntentInput[] | null | undefined,
+  opts: { limit?: number } = {}
+): { total: number | null; chips: MovingSpaceChip[] } {
+  const known =
+    items !== null && (opts.limit === undefined || items.length < opts.limit);
+  const counts = new Map<string, number>();
+  for (const item of items ?? []) {
+    if (item.workspaceId)
+      counts.set(item.workspaceId, (counts.get(item.workspaceId) ?? 0) + 1);
+  }
+  const chips: MovingSpaceChip[] = [];
+  for (const space of spaces ?? []) {
+    const producing = space.kind === "producing" && space.produces.length > 0;
+    const n = counts.get(space.workspaceId) ?? 0;
+    if (known ? n === 0 : !producing && n === 0) continue;
+    chips.push({
+      workspaceId: space.workspaceId,
+      title: spaceIntentTitle(space),
+      count: known ? n : null,
+    });
+  }
+  return { total: known ? items!.length : null, chips };
+}
+
+/** A profile as a space's "Also here" reads it (`profiles.list`). */
+export interface AlsoHereProfileInput {
+  slug: string;
+  name: string;
+  /** The profile's own plural, when it declares one. */
+  plural?: string | null;
+  workspaceId: string | null;
+  profileKind: "kind" | "role";
+}
+
+/** One "Also here" chip — a door to that kind's list NARROWED to the space. */
+export interface AlsoHereChip {
+  profileSlug: string;
+  /** Plural ("Notes"): the profile's own, else the vocabulary's. */
+  title: string;
+  count: number;
+  /** The door's scope: the kind list narrowed to THIS space (count = destination). */
+  workspaceId: string;
+}
+
+/**
+ * THE "Also here" / "Also in <space>" rule: the kinds DECLARED in this space
+ * (its own profiles — never a pod-wide or system kind, never a role) that it
+ * does not produce, holding at least one thing IN this space — most first.
+ * `counts` = things per profile slug in this space (`entities.countByProfileAll
+ * ({workspaceId})`); null (that read failed) ⇒ null, never an empty row.
+ * Each chip's door is the kind list narrowed to the space, so the count and
+ * the list it opens agree.
+ */
+export function alsoInKinds(
+  space: Pick<SpaceIntentInput, "workspaceId" | "produces">,
+  profiles: readonly AlsoHereProfileInput[],
+  counts: Readonly<Record<string, number>> | null
+): AlsoHereChip[] | null {
+  if (counts === null) return null;
+  const produced = new Set(space.produces.map((k) => k.profileSlug));
+  const seen = new Set<string>();
+  const out: AlsoHereChip[] = [];
+  for (const p of profiles) {
+    if (
+      p.workspaceId !== space.workspaceId ||
+      p.profileKind !== "kind" ||
+      produced.has(p.slug) ||
+      seen.has(p.slug)
+    )
+      continue;
+    const count = counts[p.slug] ?? 0;
+    if (count <= 0) continue;
+    seen.add(p.slug);
+    out.push({
+      profileSlug: p.slug,
+      title:
+        p.plural?.trim() || resolveObjectNounPlural(p.name.trim() || p.slug),
+      count,
+      workspaceId: space.workspaceId,
+    });
+  }
+  return out.sort(
+    (a, b) => b.count - a.count || a.title.localeCompare(b.title)
+  );
 }
