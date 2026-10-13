@@ -224,4 +224,26 @@ describe("install area", () => {
       "Can reach: api.acme.test",
     ]);
   });
+
+  it("words the confirms plainly when the package was too large to inspect", () => {
+    const risks = {
+      code: [] as string[],
+      networkHosts: [] as string[],
+      connectors: [] as string[],
+      incomplete: true as const,
+    };
+    expect(
+      confirmItems({
+        requires: { code: true, network: true },
+        risks,
+        sourceName: "Acme",
+      }).map((i) => i.label)
+    ).toEqual([
+      "I accept that this may run code from Acme on my pod.",
+      "I accept that it may reach other sites on the internet.",
+    ]);
+    expect(riskLines(risks)).toEqual([
+      "This package is too large to inspect fully.",
+    ]);
+  });
 });
