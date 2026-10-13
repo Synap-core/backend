@@ -91,22 +91,10 @@ export async function checkSession(incoming: Headers): Promise<SessionCheck> {
 }
 
 /**
- * The identity behind the cookie, or null when there is none OR the pod could
- * not say. For API routes that only ask "may this caller proceed"; anything
- * that would SEND someone to sign in uses `checkSession` and tells the two
- * apart.
- */
-export async function whoamiFromCookie(
-  incoming: Headers
-): Promise<KratosIdentity | null> {
-  const check = await checkSession(incoming);
-  return check.state === "active" ? check.identity : null;
-}
-
-/**
  * The answer an API route gives a caller it cannot serve, or null to proceed:
  * 401 for no session, 503 when the pod could not say — so the page can tell
- * "sign in again" from "try again" and never confuse the two.
+ * "sign in again" from "try again" and never confuse the two. Every
+ * `app/api/*` route that needs a signed-in caller asks this.
  */
 export async function apiSessionDenial(req: Request): Promise<Response | null> {
   const check = await checkSession(req.headers);
@@ -114,7 +102,7 @@ export async function apiSessionDenial(req: Request): Promise<Response | null> {
   return check.state === "none"
     ? Response.json({ error: "Not signed in" }, { status: 401 })
     : Response.json(
-        { error: "The pod is busy. Try again in a few seconds." },
+        { error: "Couldn't reach the pod. Try again in a few seconds." },
         { status: 503 }
       );
 }

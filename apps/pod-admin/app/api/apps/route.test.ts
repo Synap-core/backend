@@ -7,8 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: Array<{ path: string; input: unknown }> = [];
 
+/** What the session check answers: proceed, or the route's 401 / 503. */
+let session: "active" | "none" | "unavailable" = "active";
 vi.mock("../../../lib/kratos", () => ({
-  whoamiFromCookie: async () => ({ id: "u1" }),
+  apiSessionDenial: async () =>
+    session === "active"
+      ? null
+      : Response.json({}, { status: session === "none" ? 401 : 503 }),
 }));
 vi.mock("../../../lib/pod-trpc", () => ({
   callPodQuery: async () => ({ ok: true, data: [] }),
@@ -30,6 +35,7 @@ const del = (body: unknown) =>
   );
 
 beforeEach(() => {
+  session = "active";
   calls.length = 0;
 });
 
@@ -37,13 +43,25 @@ describe("DELETE /api/apps", () => {
   it("revokes by default", async () => {
     const res = await del({ publicId: "app_1" });
     expect(res.status).toBe(200);
-    expect(calls).toEqual([{ path: "apps.revoke", input: { publicId: "app_1" } }]);
+    expect(calls).toEqual([
+      { path: "apps.revoke", input: { publicId: "app_1" } },
+    ]);
   });
 
   it("removes for good when asked", async () => {
     const res = await del({ publicId: "app_1", action: "remove" });
     expect(res.status).toBe(200);
-    expect(calls).toEqual([{ path: "apps.remove", input: { publicId: "app_1" } }]);
+    expect(calls).toEqual([
+      { path: "apps.remove", input: { publicId: "app_1" } },
+    ]);
+  });
+
+  it("tells signed out (401) from a pod that could not say (503)", async () => {
+    session = "none";
+    expect((await del({ publicId: "app_1" })).status).toBe(401);
+    session = "unavailable";
+    expect((await del({ publicId: "app_1" })).status).toBe(503);
+    expect(calls).toEqual([]);
   });
 
   it("refuses any other action without calling the pod", async () => {
