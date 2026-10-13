@@ -519,9 +519,10 @@ describe("group", () => {
     const v = await view(sessionId);
     expect(v.phase).toBe("curating");
     expect(v.groups.map((g) => [g.name, g.origin])).toEqual([
-      ["YouTube videos", "ai"],
-      ["Instagram", "ai"],
-      ["Notes", "ai"],
+      // The fallback grouped by RULE, not by AI: no AI mark under the banner.
+      ["YouTube videos", "rule"],
+      ["Instagram", "rule"],
+      ["Notes", "rule"],
     ]);
     expect(v.counts.ungrouped).toBe(0);
   });

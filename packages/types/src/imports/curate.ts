@@ -144,7 +144,8 @@ export interface ImportGroup {
   name: string;
   /** The person's instruction for the whole group; every item inherits it. */
   note?: string;
-  origin: "ai" | "user";
+  /** Who made the group: the AI, the person, or the deterministic fallback (`rule` — by platform / host / file type, no AI). */
+  origin: "ai" | "user" | "rule";
   /** What Build should propose for this group. */
   outputs: ImportGroupOutput[];
   /** One line: why the AI grouped these (shown behind "Why these"). */

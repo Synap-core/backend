@@ -14,7 +14,7 @@
  * result SAYS so (`groupingDegraded: true`) — never a silent fallback.
  *
  * Regrouping keeps every group the person touched (theirs, noted, or built)
- * and replaces only the untouched AI groups.
+ * and replaces only the untouched AI (or fallback) groups.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -288,12 +288,15 @@ export function parseGroupingAnswer(
 
 /**
  * Merge proposals into the import's state. Kept groups (the person's, noted,
- * built or being built) stay with their members; untouched AI groups are replaced. PURE.
+ * built or being built) stay with their members; untouched AI or rule groups
+ * are replaced. PURE.
  */
 export function mergeGroupProposals(args: {
   groups: readonly ImportGroup[];
   items: ReadonlyMap<string, ImportItemCuration>;
   proposals: readonly GroupProposal[];
+  /** `rule` when the proposals are the deterministic fallback's, not the AI's. */
+  origin: "ai" | "rule";
 }): {
   groups: ImportGroup[];
   items: Map<string, ImportItemCuration>;
@@ -328,7 +331,7 @@ export function mergeGroupProposals(args: {
         groups.map((g) => g.key)
       ),
       name: p.name,
-      origin: "ai",
+      origin: args.origin,
       outputs: p.outputs ?? outputsForGroupKind(p.kind),
       ...(p.reason ? { reason: p.reason } : {}),
     };
@@ -460,6 +463,7 @@ export async function groupImport(args: {
       groups: locked.curation.groups,
       items: new Map(fresh.map((r) => [r.id, readItemCuration(r.metadata)])),
       proposals,
+      origin: degradedReason ? "rule" : "ai",
     });
     await writeItemCurations(t, args.userId, merged.items, merged.changed);
     const groupedAt = new Date().toISOString();

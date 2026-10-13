@@ -134,6 +134,7 @@ describe("parseGroupingAnswer / mergeGroupProposals", () => {
         ["b", { decision: "keep", groupKeys: ["old-ai"] }],
       ]),
       proposals: [{ name: "Fresh", kind: "films", itemIds: ["b"] }],
+      origin: "ai",
     });
     expect(merged.groups.map((x) => x.key)).toEqual(["mine", "noted", "fresh"]);
     expect(merged.items.get("a")!.groupKeys).toEqual(["mine"]);
