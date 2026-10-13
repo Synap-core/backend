@@ -16,3 +16,4 @@ export * from "./page-model.js";
 export * from "./next-moves.js";
 export * from "./focus.js";
 export * from "./entity-history.js";
+export * from "./space-intent.js";

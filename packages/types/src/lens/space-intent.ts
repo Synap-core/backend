@@ -1,0 +1,457 @@
+/**
+ * OBJECT-FIRST HOMES — the pure models of a home's space cards and its
+ * "Moving now" rows (homes plan §3), shared by the web (`@synap-core/web/
+ * lens-page` `SpaceIntentCard` / `KindBar` / `MovingNowRow`) and relay
+ * (`relay-app/src/components/lens/`). The reads are `lifecycle.home` and
+ * `lifecycle.moving`; these models only turn their wire into words, tones
+ * and doors — one derivation, so the phone and the desktop say the same.
+ *
+ *   Product · Dev
+ *   Features                                 2 in pipeline · 1 done this week
+ *   ▬▬▬▬ ▬▬ ▬ ▬▬▬                            ← `kindBarSegments` (ONE bar rule)
+ *   ● Pinned surfaces · Building · Being worked     ← the headline line
+ *
+ * The input types are structural (this package never imports the API's wire),
+ * so a pod that sends more fields still fits.
+ */
+import type { UnitStateInput, UnitTone } from "../units/state.js";
+import {
+  LIFECYCLE_CATEGORY_TONE,
+  type LifecycleCategory,
+} from "../lifecycle/option.js";
+import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
+import { formatKpiFraction, type LensKpiFact } from "./header.js";
+import { lensIntentDoorText } from "./intent.js";
+import type { LensBeingWorked, LensRow } from "./rows.js";
+import type { LensSource } from "./scope.js";
+
+// ── The kind bar: ONE rule for every one-line pipeline ──────────────────────
+
+/** A pipeline column as the bar reads it (`lifecycle.home` / a board glance). */
+export interface KindBarColumn {
+  key: string;
+  label: string;
+  /** null = the unclassified column (things whose status is no option). */
+  category: LifecycleCategory | null;
+  count: number;
+  /** The option's own tone, when the read carries it; else its category's. */
+  tone?: UnitTone;
+}
+
+export interface KindBarSegment {
+  key: string;
+  label: string;
+  tone: UnitTone;
+  /** The segment's share of the bar (its count). */
+  weight: number;
+}
+
+/**
+ * THE one-line pipeline bar: the columns in option order, each a segment
+ * weighted by its count in its option's tone (`warning` for unclassified).
+ * An empty column draws no segment; an all-empty pipeline draws no bar ([]).
+ */
+export function kindBarSegments(
+  columns: readonly KindBarColumn[]
+): KindBarSegment[] {
+  return columns
+    .filter((c) => c.count > 0)
+    .map((c) => ({
+      key: c.key,
+      label: c.label,
+      tone:
+        c.tone ??
+        (c.category ? LIFECYCLE_CATEGORY_TONE[c.category] : "warning"),
+      weight: c.count,
+    }));
+}
+
+/** The bar, spoken: "Idea 5, Draft 2, Published 6". */
+export function kindBarA11y(segments: readonly KindBarSegment[]): string {
+  return segments.map((s) => `${s.label} ${s.weight}`).join(", ");
+}
+
+// ── A space card ─────────────────────────────────────────────────────────────
+
+export type SpaceHeadlineReason =
+  "needs_you" | "being_worked" | "stuck" | "recent";
+
+/** One produced kind of a space, as `lifecycle.home` sends it. */
+export interface SpaceProducedKindInput {
+  profileSlug: string;
+  label: string;
+  plural: string;
+  live: number;
+  total: number;
+  doneWindowed: number;
+  windowDays: number;
+  columns: readonly KindBarColumn[];
+  needsYou: number | null;
+  beingWorked: number | null;
+  headline: {
+    entityId: string;
+    title: string | null;
+    status: string | null;
+    reason: SpaceHeadlineReason;
+  } | null;
+}
+
+/** One space of `lifecycle.home`. */
+export interface SpaceIntentInput {
+  workspaceId: string;
+  name: string;
+  label: string;
+  source: "template" | "inferred";
+  kind: "producing" | "library";
+  produces: readonly SpaceProducedKindInput[];
+}
+
+/** One produced kind's row on a space card — a door to that kind's surface. */
+export interface SpaceKindRowModel {
+  profileSlug: string;
+  workspaceId: string;
+  /** The kind, plural ("Features"). */
+  title: string;
+  segments: KindBarSegment[];
+  /** "2 / 5 clients" (a goal), else "2 in pipeline · 1 done this week"; null = nothing to say. */
+  fact: string | null;
+  /** Needs-you on this kind when > 0 (the mark's count); null = none or unknown. */
+  owed: number | null;
+  /** The row's spoken name: title, needs-you, the bar, the fact. */
+  a11y: string;
+}
+
+/** The ONE thing a card names, with its mark. */
+export interface SpaceHeadlineModel {
+  entityId: string;
+  profileSlug: string;
+  reason: SpaceHeadlineReason;
+  /** "Pinned surfaces · Building · Being worked". */
+  text: string;
+  /** The mark's state (the shared unit state); null = no mark (a recent move). */
+  state: UnitStateInput | null;
+}
+
+export interface SpaceIntentCardModel {
+  workspaceId: string;
+  /** "Product · Dev"; one word when the label IS the name ("Content"). */
+  title: string;
+  library: boolean;
+  kinds: SpaceKindRowModel[];
+  headline: SpaceHeadlineModel | null;
+}
+
+/** "Product · Dev" — collapsed to one word when the purpose IS the name. */
+export function spaceIntentTitle(
+  space: Pick<SpaceIntentInput, "label" | "name">
+): string {
+  const label = space.label.trim();
+  const name = space.name.trim();
+  if (!label || label.toLowerCase() === name.toLowerCase())
+    return name || label;
+  return `${label} · ${name}`;
+}
+
+/** A headline's urgency: lower is louder (the read's own pick order). */
+const HEADLINE_RANK: Record<SpaceHeadlineReason, number> = {
+  needs_you: 0,
+  being_worked: 1,
+  stuck: 2,
+  recent: 3,
+};
+
+/** The mark a headline wears — the shared unit state, never a hand-picked tone. */
+const HEADLINE_STATE: Record<SpaceHeadlineReason, UnitStateInput | null> = {
+  needs_you: { owedFromYou: 1 },
+  being_worked: { running: true },
+  stuck: { idle: true },
+  recent: null,
+};
+
+function kindFact(
+  kind: SpaceProducedKindInput,
+  goal: LensKpiFact | null | undefined
+): string | null {
+  if (goal && goal.current !== null) {
+    return formatKpiFraction(goal.current, goal.target, goal.unit);
+  }
+  const parts = [
+    kind.live > 0 ? lensIntentDoorText("pipeline", kind.live) : null,
+    kind.doneWindowed > 0
+      ? lensIntentDoorText("produced", kind.doneWindowed, kind.windowDays)
+      : null,
+  ].filter((p): p is string => p !== null);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function headlineOf(space: SpaceIntentInput): SpaceHeadlineModel | null {
+  let best: { kind: SpaceProducedKindInput; rank: number } | null = null;
+  for (const kind of space.produces) {
+    if (!kind.headline) continue;
+    const rank = HEADLINE_RANK[kind.headline.reason];
+    if (!best || rank < best.rank) best = { kind, rank };
+  }
+  if (!best) return null;
+  const { kind } = best;
+  const h = kind.headline!;
+  const statusLabel = h.status
+    ? (kind.columns.find((c) => c.key === h.status)?.label ??
+      resolveStatusLabel(h.status))
+    : null;
+  const text = [
+    h.title?.trim() || resolveObjectNoun(kind.profileSlug),
+    statusLabel,
+    // A recent move says nothing the status does not; the others name why.
+    h.reason === "recent" ? null : resolveStatusLabel(h.reason),
+  ]
+    .filter((p): p is string => Boolean(p))
+    .join(" · ");
+  return {
+    entityId: h.entityId,
+    profileSlug: kind.profileSlug,
+    reason: h.reason,
+    text,
+    state: HEADLINE_STATE[h.reason],
+  };
+}
+
+/**
+ * ONE space of a home as its card: the title, one bar row per produced kind
+ * (in the space's `produces` order — the read's), and the headline (the
+ * loudest of its kinds' headlines; ties keep `produces` order). `goals`
+ * carries a kind's stated goal (a track KPI) by profile slug, when the host
+ * has one: it outranks the live/done words as the row's fact.
+ */
+export function spaceIntentCardModel(
+  space: SpaceIntentInput,
+  goals?: Readonly<Record<string, LensKpiFact | null | undefined>>
+): SpaceIntentCardModel {
+  const kinds = space.produces.map((kind): SpaceKindRowModel => {
+    const segments = kindBarSegments(kind.columns);
+    const fact = kindFact(kind, goals?.[kind.profileSlug]);
+    const owed =
+      typeof kind.needsYou === "number" && kind.needsYou > 0
+        ? kind.needsYou
+        : null;
+    const title = kind.plural.trim() || kind.label;
+    return {
+      profileSlug: kind.profileSlug,
+      workspaceId: space.workspaceId,
+      title,
+      segments,
+      fact,
+      owed,
+      a11y: [
+        title,
+        owed !== null ? lensIntentDoorText("blocking", owed) : null,
+        segments.length > 0 ? kindBarA11y(segments) : null,
+        fact,
+      ]
+        .filter(Boolean)
+        .join(", "),
+    };
+  });
+  return {
+    workspaceId: space.workspaceId,
+    title: spaceIntentTitle(space),
+    library: space.kind === "library",
+    kinds,
+    headline: headlineOf(space),
+  };
+}
+
+/** A home's spaces, split: producing cards (read order) and library chips. */
+export function homeSpacesModel(
+  spaces: readonly SpaceIntentInput[],
+  goals?: Readonly<Record<string, LensKpiFact | null | undefined>>
+): {
+  cards: SpaceIntentCardModel[];
+  library: Array<{ workspaceId: string; title: string }>;
+} {
+  const cards: SpaceIntentCardModel[] = [];
+  const library: Array<{ workspaceId: string; title: string }> = [];
+  for (const space of spaces) {
+    if (space.kind === "library" || space.produces.length === 0) {
+      library.push({
+        workspaceId: space.workspaceId,
+        title: spaceIntentTitle(space),
+      });
+    } else {
+      cards.push(spaceIntentCardModel(space, goals));
+    }
+  }
+  return { cards, library };
+}
+
+/**
+ * The home's needs-you line — "3 need you · Content 2 · Sales 1" — grouped by
+ * space (largest first), each part a door to that space. A zero total OMITS
+ * the line (null); an unknown total keeps it, marked "–" (failed ≠ empty).
+ * Spaces whose count is unknown or zero are left out of the parts.
+ */
+export function homeNeedsYouModel(
+  needsYou: {
+    total: number | null;
+    bySpace: ReadonlyArray<{ workspaceId: string; count: number | null }>;
+  },
+  spaces: ReadonlyArray<
+    Pick<SpaceIntentInput, "workspaceId" | "label" | "name">
+  >
+): {
+  total: number | null;
+  text: string;
+  parts: Array<{ workspaceId: string; label: string; count: number }>;
+} | null {
+  if (needsYou.total === 0) return null;
+  const labelOf = new Map(
+    spaces.map((s) => [s.workspaceId, s.label.trim() || s.name])
+  );
+  const parts = needsYou.bySpace
+    .filter(
+      (b): b is { workspaceId: string; count: number } =>
+        typeof b.count === "number" && b.count > 0
+    )
+    .map((b) => ({
+      workspaceId: b.workspaceId,
+      label: labelOf.get(b.workspaceId) ?? "",
+      count: b.count,
+    }))
+    .filter((p) => p.label !== "")
+    .sort((a, b) => b.count - a.count);
+  const head = lensIntentDoorText("blocking", needsYou.total);
+  return {
+    total: needsYou.total,
+    text: [head, ...parts.map((p) => `${p.label} ${p.count}`)].join(" · "),
+    parts,
+  };
+}
+
+// ── Moving now ───────────────────────────────────────────────────────────────
+
+export type MovingWorkKind = "session" | "worker" | "scheduled";
+
+/** One thing with open work on it, as `lifecycle.moving` sends it. */
+export interface MovingItemInput {
+  entityId: string;
+  title: string | null;
+  profileSlug: string | null;
+  workspaceId: string | null;
+  status: string | null;
+  category: string | null;
+  work: ReadonlyArray<{
+    kind: MovingWorkKind;
+    sessionId: string;
+    label: string;
+    actor?: string;
+    live: boolean;
+    asksYou: boolean;
+    since: string;
+  }>;
+}
+
+/** One work line under a moving thing — a door to its session. */
+export interface MovingWorkLineModel {
+  key: string;
+  sessionId: string;
+  kind: MovingWorkKind;
+  /** "Build: pin a pipeline · Claude Code · Asks you". */
+  text: string;
+  /** The line's mark (asks you ⇒ needs you; live ⇒ working; else quiet). */
+  state: UnitStateInput;
+  asksYou: boolean;
+  live: boolean;
+  since: string;
+}
+
+export interface MovingNowRowModel {
+  /** THE lens row (`AttentionRow`): the thing, its status as the reason. */
+  row: LensRow;
+  /** The being-worked mark (a live work line), or null. */
+  beingWorked: LensBeingWorked | null;
+  /** The work under it, as the read ordered it. */
+  work: MovingWorkLineModel[];
+  asksYou: boolean;
+}
+
+/**
+ * ONE thing of "Moving now" as a lens row + its work lines.
+ *
+ * The row is the THING (opens the thing): its title, its status as the
+ * reason, its space as the source. Its class follows its work: any work that
+ * asks you ⇒ Blocking (the needs-you mark); any live ⇒ Happening; else the
+ * quiet Happened row. `kindLabel` names the kind ("Feature") when the host
+ * knows it from the home read; else the vocabulary's noun for the slug.
+ * The age is the longest-running work's start.
+ */
+export function movingNowRowModel(
+  item: MovingItemInput,
+  opts: { spaceName?: string | null; kindLabel?: string | null } = {}
+): MovingNowRowModel {
+  const work = item.work.map((w): MovingWorkLineModel => {
+    const state: UnitStateInput = w.asksYou
+      ? { owedFromYou: 1 }
+      : w.live
+        ? { running: true }
+        : { idle: true };
+    return {
+      key: `${w.kind}:${w.sessionId}`,
+      sessionId: w.sessionId,
+      kind: w.kind,
+      text: [
+        w.label.trim() || resolveObjectNoun("session"),
+        w.actor?.trim() || null,
+        w.asksYou ? resolveStatusLabel("asks_you") : null,
+      ]
+        .filter((p): p is string => Boolean(p))
+        .join(" · "),
+      state,
+      asksYou: w.asksYou,
+      live: w.live,
+      since: w.since,
+    };
+  });
+  const asksYou = work.some((w) => w.asksYou);
+  const liveLine = item.work.find((w) => w.live);
+  const oldest = item.work
+    .map((w) => w.since)
+    .filter(Boolean)
+    .sort()[0];
+  const kindWord =
+    opts.kindLabel?.trim() ||
+    (item.profileSlug ? resolveObjectNoun(item.profileSlug) : null);
+  const statusWord = item.status ? resolveStatusLabel(item.status) : null;
+  const state: UnitStateInput = asksYou
+    ? { owedFromYou: work.filter((w) => w.asksYou).length }
+    : liveLine
+      ? { running: true }
+      : { idle: true };
+  const source: LensSource | null =
+    item.workspaceId && opts.spaceName?.trim()
+      ? {
+          kind: "workspace",
+          id: item.workspaceId,
+          label: opts.spaceName.trim(),
+        }
+      : null;
+  return {
+    row: {
+      key: item.entityId,
+      cls: asksYou ? "blocking" : liveLine ? "happening" : "happened",
+      state,
+      objectKind: item.profileSlug ?? "entity",
+      title: item.title?.trim() || kindWord || resolveObjectNoun("entity"),
+      reason: [kindWord, statusWord].filter(Boolean).join(" · ") || null,
+      repeat: null,
+      source,
+      occurredAt: oldest ?? null,
+      verb: null,
+      door: { kind: "entity", id: item.entityId },
+      count: 1,
+    },
+    beingWorked: liveLine
+      ? { by: liveLine.actor ?? null, sessionId: liveLine.sessionId }
+      : null,
+    work,
+    asksYou,
+  };
+}
