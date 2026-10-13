@@ -7,7 +7,10 @@
  *   • get returns the row with its on-demand definition — never fetched for a
  *     showcase source — and a source that cannot serve is a field;
  *   • preflight discloses code / network reach and asks for the extra confirm
- *     on a trusted source only; a showcase has no preflight;
+ *     on a trusted source only; a showcase has no preflight, and an added
+ *     source's slug it does not list is NOT_FOUND (never Synap's entry);
+ *   • an agent, an app or any key reads only Synap's catalog and trusted
+ *     sources that let agents propose, and never the list of sources;
  *   • install: a person installs, an agent files the proposal path, any other
  *     key is refused; a person's confirms reach the core, an agent's never do;
  *   • sources.*: reading is pod-admin; every CHANGE is a signed-in person's —
@@ -57,13 +60,11 @@ vi.mock("../services/capabilities/catalog-cache-query.js", () => ({
 vi.mock("../services/capabilities/marketplace-install.js", () => ({
   lookupCatalogEntry: (...a: unknown[]) => m.lookup(...a),
   resolveCatalogDefinition: (...a: unknown[]) => m.resolve(...a),
+  resolveInstalledFlag: async () => undefined,
   runMarketInstall: (...a: unknown[]) => m.run(...a),
 }));
 vi.mock("../services/capabilities/market-sources.js", () => ({
   listMarketSources: (...a: unknown[]) => m.views(...a),
-}));
-vi.mock("../services/capabilities/builtin-verbs.js", () => ({
-  resolveInstalledFlag: async () => undefined,
 }));
 vi.mock("@synap/jobs", () => ({
   CATALOG_KINDS: [
@@ -358,7 +359,99 @@ describe("marketplace.get", () => {
   });
 });
 
+describe("marketplace — what an agent or a key may read", () => {
+  const OPTED_IN = {
+    ...ACME,
+    source: {
+      ...ACME.source,
+      id: "open",
+      cacheKey: "open",
+      name: "Open",
+      agentsMayPropose: true,
+    },
+    gate: { ...ACME.gate, agentsMayPropose: true },
+  };
+
+  beforeEach(() => {
+    m.views.mockResolvedValue([SYNAP, ACME, SHOW, OPTED_IN]);
+  });
+
+  for (const [who, ctx] of Object.entries(NOT_A_PERSON)) {
+    it(`list from an ${who}: Synap and opted-in sources only, no source list`, async () => {
+      m.query.mockResolvedValue([]);
+      const out = await caller(ctx).list();
+      expect(m.query).toHaveBeenCalledWith(
+        expect.objectContaining({ sources: [CP, "open"] })
+      );
+      expect(out.sources).toEqual([]);
+    });
+  }
+
+  it("asking for a hidden source by name reads nothing", async () => {
+    m.query.mockResolvedValue([]);
+    await caller(NOT_A_PERSON.agent).list({ source: "show" });
+    expect(m.query).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: [] })
+    );
+  });
+
+  it("get and preflight of a hidden source are NOT_FOUND — nothing fetched", async () => {
+    m.lookup.mockResolvedValue(
+      entry("charts/bar", "Bar", "cell", "acme", {
+        definitionUrl: "x",
+        sha256: "y",
+      })
+    );
+    for (const run of [
+      () =>
+        caller(NOT_A_PERSON["API key"]).get({
+          kind: "cell",
+          slug: "charts/bar",
+          source: "acme",
+        }),
+      () =>
+        caller(NOT_A_PERSON.agent).preflight({
+          kind: "cell",
+          slug: "charts/bar",
+          source: "acme",
+        }),
+    ]) {
+      await expect(run()).rejects.toMatchObject({ code: "NOT_FOUND" });
+    }
+    expect(m.resolve).not.toHaveBeenCalled();
+  });
+
+  it("a person still reads every source", async () => {
+    m.query.mockResolvedValue([]);
+    const out = await caller().list();
+    expect(m.query).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: [CP, "acme", "show", "open"] })
+    );
+    expect(out.sources.map((s) => s.id)).toEqual([
+      "synap",
+      "acme",
+      "show",
+      "open",
+    ]);
+  });
+});
+
 describe("marketplace.preflight", () => {
+  it("an added source's slug it does not list is NOT_FOUND — never Synap's entry", async () => {
+    m.lookup.mockResolvedValue(null);
+    await expect(
+      caller().preflight({ kind: "capability", slug: "gmail", source: "acme" })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(m.resolve).not.toHaveBeenCalled();
+  });
+
+  it("with no cache row, Synap's catalog still re-resolves by key", async () => {
+    m.lookup.mockResolvedValue(null);
+    m.resolve.mockResolvedValue({ key: "gmail", tools: [] });
+    const out = await caller().preflight({ kind: "capability", slug: "gmail" });
+    expect(out).toMatchObject({ source: "synap", trust: "official" });
+  });
+
   it("blocks a space-bound kind until a space is named", async () => {
     m.lookup.mockResolvedValue(entry("digest", "Digest", "automation"));
     m.resolve.mockResolvedValue({
