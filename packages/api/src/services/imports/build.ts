@@ -25,6 +25,14 @@
  *
  * Per-item failures never fail the build: the item is filed from its title and
  * card and reported in `skipped`. Undo is the import session's revert.
+ *
+ * UPDATE MODE (a Library rebuild, `rebuild`): what the group's earlier bundles
+ * made is read back from their stamped records (`resolvePriorBuild`) and
+ * UPDATED in place — the container reused (`update_entity`, so the new
+ * members' `parent_of` edges hang off the same collection and its live List
+ * grows), the Tool / Rule / behaviour / Template / List rewritten
+ * (`update_*`, revertible) — never twinned. Only what does not exist (or is
+ * no longer live) is created.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -33,8 +41,14 @@ import {
   db as defaultDb,
   documents,
   proposals,
+  entities,
+  skills,
+  automations,
+  playbooks,
+  views,
   and,
   eq,
+  ne,
   inArray,
   isNull,
   drizzleSql,
@@ -357,11 +371,18 @@ export async function planGroupInfrastructure(args: {
   dominantKind: string;
   workspaceId: string | null;
   deps: ImportBuildDeps;
+  /** A rebuild: the Template this group made before is UPDATED, never matched. */
+  priorPlaybookId?: string;
 }): Promise<GroupInfrastructure> {
   const { group, deps } = args;
   const wants = new Set(group.outputs);
   const out: GroupInfrastructure = { degraded: false };
-  if (wants.has("template") && args.workspaceId && deps.matchTemplates) {
+  if (
+    wants.has("template") &&
+    args.workspaceId &&
+    deps.matchTemplates &&
+    !args.priorPlaybookId
+  ) {
     try {
       const [match] = await deps.matchTemplates({
         profileSlug: args.dominantKind,
@@ -502,8 +523,17 @@ export function assembleImportBuildBundle(args: {
   workspaceId: string | null;
   dominantKind: string;
   dryRunCount?: number;
+  /**
+   * A REBUILD (update mode): what this group's earlier Builds made. Each piece
+   * that exists is UPDATED in place (`update_*`), never twinned; the group's
+   * container is reused, so the new members hang off the SAME collection and
+   * its List (live through `membersOf`) grows.
+   */
+  prior?: ImportBuildPrior;
 }): ImportBuildBundle {
   const { group, extractions, infra, workspaceId } = args;
+  const prior = args.prior ?? {};
+  const updates: NonNullable<CapturePlanInput["updates"]> = [];
   const outputs = new Set(group.outputs);
   const note = group.note?.trim();
   const keptIds = extractions.map((x) => x.item.id);
@@ -541,19 +571,33 @@ export function assembleImportBuildBundle(args: {
     relations.push(...x.relations);
   }
 
-  // The group itself — corpus-map container shape.
-  entities.unshift({
-    ref: GROUP_CONTAINER_REF,
-    profileSlug: "note",
-    title: group.name,
-    description: note ? `Your group note: ${note}\n\n${cite}` : `${cite}`,
-    properties: {
-      corpusIntent: "collection",
-      corpusPath: `import/${group.key}`,
-      isContainer: true,
-    },
-    ...(projectRef ? { projectRef } : {}),
-  });
+  // The group itself — corpus-map container shape. A rebuild REUSES the
+  // container it made before (its ref resolves to the existing entity) and
+  // only rewrites its name and note.
+  const containerDescription = note
+    ? `Your group note: ${note}\n\n${cite}`
+    : `${cite}`;
+  if (prior.containerEntityId) {
+    updates.push({
+      op: "update_entity",
+      ref: GROUP_CONTAINER_REF,
+      entityId: prior.containerEntityId,
+      patch: { title: group.name, description: containerDescription },
+    });
+  } else {
+    entities.unshift({
+      ref: GROUP_CONTAINER_REF,
+      profileSlug: "note",
+      title: group.name,
+      description: containerDescription,
+      properties: {
+        corpusIntent: "collection",
+        corpusPath: `import/${group.key}`,
+        isContainer: true,
+      },
+      ...(projectRef ? { projectRef } : {}),
+    });
+  }
   byRef[GROUP_CONTAINER_REF] = whole;
   for (const x of extractions) {
     relations.push({
@@ -564,20 +608,43 @@ export function assembleImportBuildBundle(args: {
   }
 
   if (infra.tool) {
-    plan.skills = [
-      {
+    if (prior.skillId) {
+      updates.push({
+        op: "update_skill",
         ref: "tool",
-        name: infra.tool.name,
-        body: `${infra.tool.body}\n\n${cite}`,
-        scope: workspaceId ? "workspace" : "user",
-      },
-    ];
+        skillId: prior.skillId,
+        patch: { name: infra.tool.name, body: `${infra.tool.body}\n\n${cite}` },
+      });
+    } else {
+      plan.skills = [
+        {
+          ref: "tool",
+          name: infra.tool.name,
+          body: `${infra.tool.body}\n\n${cite}`,
+          scope: workspaceId ? "workspace" : "user",
+        },
+      ];
+    }
     byRef.tool = whole;
   }
   const dryRun: NonNullable<ImportBuildProvenance["dryRun"]> = {};
   if (infra.rule) {
     const behaviourRefs: string[] = [];
-    if (workspaceId) {
+    if (workspaceId && prior.automationId) {
+      // The behaviour this group made before: its words follow the rule; its
+      // trigger and its on/off state stay the person's.
+      updates.push({
+        op: "update_automation",
+        ref: "rule_when",
+        automationId: prior.automationId,
+        patch: {
+          name: infra.rule.name,
+          description: `${infra.rule.intent} ${cite} Off until you turn it on.`,
+        },
+      });
+      behaviourRefs.push("rule_when");
+      byRef.rule_when = whole;
+    } else if (workspaceId) {
       const triggerConfig = {
         eventPattern: "entity.create.completed",
         profileSlug: args.dominantKind,
@@ -628,7 +695,15 @@ export function assembleImportBuildBundle(args: {
         };
       }
     }
-    if (behaviourRefs.length > 0 || infra.tool) {
+    if (prior.ruleId) {
+      updates.push({
+        op: "update_rule",
+        ref: "rule",
+        ruleId: prior.ruleId,
+        patch: { intent: infra.rule.intent },
+      });
+      byRef.rule = whole;
+    } else if (behaviourRefs.length > 0 || infra.tool) {
       plan.rules = [
         {
           ref: "rule",
@@ -649,7 +724,19 @@ export function assembleImportBuildBundle(args: {
       }
     }
   }
-  if (infra.template && workspaceId && !infra.matchedTemplate) {
+  if (infra.template && workspaceId && prior.playbookId) {
+    updates.push({
+      op: "update_playbook",
+      ref: "template",
+      playbookId: prior.playbookId,
+      patch: {
+        name: infra.template.name,
+        description: `${infra.template.description ? `${infra.template.description} ` : ""}${cite}`,
+        goalTemplate: infra.template.goal,
+      },
+    });
+    byRef.template = whole;
+  } else if (infra.template && workspaceId && !infra.matchedTemplate) {
     plan.playbooks = [
       {
         ref: "template",
@@ -662,7 +749,23 @@ export function assembleImportBuildBundle(args: {
     ];
     byRef.template = whole;
   }
-  if (outputs.has("list")) {
+  if (outputs.has("list") && prior.viewId) {
+    // The List is LIVE (`membersOf` = the reused container), so the new
+    // members join it through their `parent_of` edges; only its name follows
+    // the group, and `membersOf` is restated for a List made before it was.
+    updates.push({
+      op: "update_view",
+      ref: "list",
+      viewId: prior.viewId,
+      patch: {
+        name: group.name,
+        ...(prior.containerEntityId
+          ? { config: { membersOf: prior.containerEntityId } }
+          : {}),
+      },
+    });
+    byRef.list = whole;
+  } else if (outputs.has("list")) {
     plan.views = [
       {
         ref: "list",
@@ -675,6 +778,8 @@ export function assembleImportBuildBundle(args: {
     ];
     byRef.list = whole;
   }
+
+  if (updates.length > 0) plan.updates = updates;
 
   return {
     entities,
@@ -934,6 +1039,209 @@ export interface ImportMembersBuild {
   result: ImportBuildResult;
   /** Items Build read (their staged marker is cleared). Empty when refused. */
   builtIds: string[];
+  /**
+   * A REBUILD: the group container this bundle reused (live, owned). The
+   * caller records it (`library_groups.container_entity_id`). Absent on a
+   * first build — the container exists only once that bundle is applied.
+   */
+  containerEntityId?: string;
+}
+
+// ── Update mode (a rebuild) ────────────────────────────────────────────────
+
+/** What a group's earlier Builds made, still live — what a rebuild updates. */
+export interface ImportBuildPrior {
+  containerEntityId?: string;
+  /** `tool` */
+  skillId?: string;
+  /** `rule_when` */
+  automationId?: string;
+  /** `rule` */
+  ruleId?: string;
+  /** `template` */
+  playbookId?: string;
+  /** `list` */
+  viewId?: string;
+}
+
+/** The bundle ref each prior output was filed under (`materialized.byOp` key). */
+const PRIOR_REFS = {
+  containerEntityId: GROUP_CONTAINER_REF,
+  skillId: "tool",
+  automationId: "rule_when",
+  ruleId: "rule",
+  playbookId: "template",
+  viewId: "list",
+} as const satisfies Record<keyof ImportBuildPrior, string>;
+
+/** The row id an op record names — its creation, or the row an update changed. */
+function idOfOpRecord(entry: Record<string, unknown>): string | undefined {
+  for (const key of [
+    "entityId",
+    "skillId",
+    "automationId",
+    "ruleId",
+    "playbookId",
+    "viewId",
+  ]) {
+    const v = entry[key];
+    if (typeof v === "string" && v) return v;
+  }
+  const update = entry.update as { id?: unknown } | undefined;
+  return typeof update?.id === "string" ? update.id : undefined;
+}
+
+/**
+ * Read what a group's earlier bundles made, from THEIR stamped records
+ * (`proposals.data.materialized.byOp[ref]`) — newest first, owner-floored
+ * (`subject_user_id`), skipping an op reverted on its own and any row that is
+ * no longer live (deleted entity, inactive skill / rule, archived automation
+ * or Template, deleted List). `pending` = the newest bundle is still waiting
+ * for review: its rows do not exist yet, so a rebuild now would twin them.
+ */
+export async function resolvePriorBuild(args: {
+  database: ImportDb;
+  userId: string;
+  proposalIds: readonly string[];
+  containerEntityId?: string | null;
+}): Promise<{ prior: ImportBuildPrior; pending: boolean }> {
+  const ids = [...new Set(args.proposalIds)].filter(Boolean);
+  const prior: ImportBuildPrior = {};
+  if (args.containerEntityId) prior.containerEntityId = args.containerEntityId;
+  if (ids.length === 0 && !args.containerEntityId) {
+    return { prior, pending: false };
+  }
+  const rows = ids.length
+    ? await args.database
+        .select({
+          id: proposals.id,
+          status: proposals.status,
+          data: proposals.data,
+          createdAt: proposals.createdAt,
+        })
+        .from(proposals)
+        .where(
+          and(
+            inArray(proposals.id, ids),
+            eq(proposals.subjectUserId, args.userId)
+          )
+        )
+    : [];
+  rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const pending = rows[0]?.status === "pending";
+  const applied = rows.filter(
+    (r) => r.status === "approved" || r.status === "auto_approved"
+  );
+  for (const [field, ref] of Object.entries(PRIOR_REFS) as Array<
+    [keyof ImportBuildPrior, string]
+  >) {
+    if (prior[field]) continue;
+    for (const row of applied) {
+      const byOp = ((
+        row.data as { materialized?: { byOp?: Record<string, unknown> } }
+      )?.materialized?.byOp ?? {})[ref] as Record<string, unknown> | undefined;
+      if (!byOp || byOp.revertedAt || byOp.linked === true) continue;
+      const id = idOfOpRecord(byOp);
+      if (id) {
+        prior[field] = id;
+        break;
+      }
+    }
+  }
+  return { prior: await keepLive(args.database, args.userId, prior), pending };
+}
+
+/** Drop every prior output that is no longer live (a rebuild then re-creates it). */
+async function keepLive(
+  database: ImportDb,
+  userId: string,
+  prior: ImportBuildPrior
+): Promise<ImportBuildPrior> {
+  const live: ImportBuildPrior = {};
+  const one = async (query: Promise<Array<{ id: string }>>) =>
+    (await query).length > 0;
+  if (
+    prior.containerEntityId &&
+    (await one(
+      database
+        .select({ id: entities.id })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.id, prior.containerEntityId),
+            eq(entities.userId, userId),
+            isNull(entities.deletedAt)
+          )
+        )
+        .limit(1)
+    ))
+  ) {
+    live.containerEntityId = prior.containerEntityId;
+  }
+  for (const [field, id] of [
+    ["skillId", prior.skillId],
+    ["ruleId", prior.ruleId],
+  ] as const) {
+    if (
+      id &&
+      (await one(
+        database
+          .select({ id: skills.id })
+          .from(skills)
+          .where(and(eq(skills.id, id), ne(skills.status, "inactive")))
+          .limit(1)
+      ))
+    ) {
+      live[field] = id;
+    }
+  }
+  if (
+    prior.automationId &&
+    (await one(
+      database
+        .select({ id: automations.id })
+        .from(automations)
+        .where(
+          and(
+            eq(automations.id, prior.automationId),
+            ne(automations.status, "archived")
+          )
+        )
+        .limit(1)
+    ))
+  ) {
+    live.automationId = prior.automationId;
+  }
+  if (
+    prior.playbookId &&
+    (await one(
+      database
+        .select({ id: playbooks.id })
+        .from(playbooks)
+        .where(
+          and(
+            eq(playbooks.id, prior.playbookId),
+            ne(playbooks.status, "archived")
+          )
+        )
+        .limit(1)
+    ))
+  ) {
+    live.playbookId = prior.playbookId;
+  }
+  if (
+    prior.viewId &&
+    (await one(
+      database
+        .select({ id: views.id })
+        .from(views)
+        .where(eq(views.id, prior.viewId))
+        .limit(1)
+    ))
+  ) {
+    live.viewId = prior.viewId;
+  }
+  return live;
 }
 
 /**
@@ -963,8 +1271,39 @@ export async function buildImportMembers(args: {
    * container, no `parent_of` edge. Default false.
    */
   withoutContainer?: boolean;
+  /**
+   * A REBUILD (update mode): the group's earlier bundle proposals and its
+   * recorded container. What they made is UPDATED (`update_*`), the container
+   * reused — never twinned. Refused (`previous_build_pending`) while the
+   * newest earlier bundle still waits for review.
+   */
+  rebuild?: {
+    proposalIds: readonly string[];
+    containerEntityId?: string | null;
+  };
 }): Promise<ImportMembersBuild> {
   const { database, deps, session, group, members } = args;
+  let prior: ImportBuildPrior | undefined;
+  if (args.rebuild && !args.withoutContainer) {
+    const resolved = await resolvePriorBuild({
+      database,
+      userId: args.userId,
+      proposalIds: args.rebuild.proposalIds,
+      containerEntityId: args.rebuild.containerEntityId ?? null,
+    });
+    if (resolved.pending) {
+      return {
+        result: {
+          status: "refused",
+          reason: "previous_build_pending",
+          read: 0,
+          skipped: [],
+        },
+        builtIds: [],
+      };
+    }
+    prior = resolved.prior;
+  }
   const skipped: Array<{ itemId: string; reason: ImportBuildSkipReason }> = [];
   const toBuild: Array<{ row: ImportItemRow; view: ImportItemView }> = [];
   for (const m of members) {
@@ -1049,6 +1388,7 @@ export async function buildImportMembers(args: {
     dominantKind,
     workspaceId: session.workspaceId,
     deps,
+    ...(prior?.playbookId ? { priorPlaybookId: prior.playbookId } : {}),
   });
   let dryRunCount: number | undefined;
   if (infra.rule && deps.countRecent) {
@@ -1067,6 +1407,7 @@ export async function buildImportMembers(args: {
     workspaceId: session.workspaceId,
     dominantKind,
     ...(dryRunCount !== undefined ? { dryRunCount } : {}),
+    ...(prior ? { prior } : {}),
   });
   if (args.withoutContainer) {
     bundle.entities = bundle.entities.filter(
@@ -1163,6 +1504,9 @@ export async function buildImportMembers(args: {
       ...(infra.degraded ? { infrastructureDegraded: true } : {}),
     },
     builtIds,
+    ...(prior?.containerEntityId
+      ? { containerEntityId: prior.containerEntityId }
+      : {}),
   };
 }
 

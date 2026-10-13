@@ -1021,6 +1021,22 @@ export async function materializeCompositeGraph(
     }
   };
 
+  // An update names a row that ALREADY exists, so its ref is known before any
+  // write: registered up front, a `create_rule` can bind an updated Tool as
+  // its fact (`factRef`) and a relation can hang off a reused container,
+  // whatever pass the update itself runs in.
+  operations.forEach((op, i) => {
+    if (isUpdateOperation(op)) {
+      registerEntityRef(
+        refToRealId,
+        i,
+        op.ref,
+        updateOperationTargetId(op),
+        false
+      );
+    }
+  });
+
   try {
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
