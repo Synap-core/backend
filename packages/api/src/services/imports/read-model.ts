@@ -194,13 +194,20 @@ export async function buildImportView(args: {
       createdAt: documents.createdAt,
     })
     .from(documents)
-    .where(importItemsWhere(args.userId, args.session.id))
-    .orderBy(asc(documents.createdAt), asc(documents.id));
+    .where(importItemsWhere(args.userId, args.session.id));
+  // Ordered HERE, on the same millisecond values the cursor carries: the
+  // database orders by microseconds a JS Date cannot hold, so items staged in
+  // one millisecond would page out of the cursor's order and be skipped.
   const views = all
     .map((row) => ({ row, view: toItemView(row) }))
     .filter(
       (x): x is { row: (typeof all)[number]; view: ImportItemView } =>
         x.view !== null
+    )
+    .sort(
+      (a, b) =>
+        a.row.createdAt.getTime() - b.row.createdAt.getTime() ||
+        (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0)
     );
   const start = after
     ? views.findIndex(

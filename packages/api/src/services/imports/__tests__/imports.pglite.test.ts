@@ -405,6 +405,43 @@ describe("stage", () => {
   });
 });
 
+describe("get", () => {
+  it("pages every item exactly once, even when items share a millisecond", async () => {
+    const { sessionId, outcome } = await openAndStage([
+      { kind: "text", text: "one" },
+      { kind: "text", text: "two" },
+      { kind: "text", text: "three" },
+    ]);
+    const ids = outcome.staged.map((x) => x.itemId).sort();
+    // Same millisecond, microseconds ordered AGAINST the ids: the database
+    // orders by the microseconds, a JS Date cannot see them.
+    await q(
+      `update documents set created_at = case id
+         when $1 then '2026-01-01 00:00:00.000900'::timestamp
+         when $2 then '2026-01-01 00:00:00.000500'::timestamp
+         else '2026-01-01 00:00:00.000100'::timestamp end
+       where id in ($1, $2, $3)`,
+      ids
+    );
+    const session = await loadImportSession({ userId: USER, sessionId });
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 5; page++) {
+      const v = await buildImportView({
+        database: db,
+        userId: USER,
+        session,
+        cursor,
+        limit: 1,
+      });
+      seen.push(...v.items.map((i) => i.id));
+      cursor = v.nextCursor;
+      if (!cursor) break;
+    }
+    expect(seen.sort()).toEqual(ids);
+  });
+});
+
 describe("curate", () => {
   it("applies ops atomically — a bad op writes nothing", async () => {
     const { sessionId, outcome } = await openAndStage([
