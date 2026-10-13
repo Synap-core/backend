@@ -201,6 +201,13 @@ function PackageCard({ pkg }: { pkg: CatalogPackage }) {
   return (
     <Link
       href={`/marketplace/${encodeURIComponent(pkg.slug)}`}
+      // Up to PAGE_SIZE cards are on screen at once, and every prefetch is a
+      // full gate run in `proxy.ts` (a whoami + a role probe against the pod).
+      // Prefetching them all spent ~120 pod calls per visit from ONE
+      // rate-limit bucket and tipped the pod into 429s — which then read as
+      // "signed out". The detail page loads its data client-side anyway, so
+      // prefetch buys nothing here.
+      prefetch={false}
       className="
         group flex flex-col gap-2 rounded-2xl p-4
         bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10

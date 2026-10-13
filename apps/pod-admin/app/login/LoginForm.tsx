@@ -30,7 +30,9 @@ import {
 } from "lucide-react";
 import {
   collectErrorMessages,
+  COOKIE_SCOPE_MESSAGE,
   createLoginFlow,
+  existingSessionAction,
   extractInitialValues,
   fetchSelfServiceFlow,
   FLOW_RESET_ERROR_IDS,
@@ -51,12 +53,15 @@ interface LoginFormProps {
   initialFlowId: string | null;
   /** Re-authenticate an existing session (Kratos `refresh=true`). */
   refresh?: boolean;
+  /** What the server's own session check saw on this request. */
+  serverSession: "active" | "none" | "unavailable";
 }
 
 export function LoginForm({
   returnTo,
   initialFlowId,
   refresh = false,
+  serverSession,
 }: LoginFormProps) {
   const router = useRouter();
   const [flow, setFlow] = useState<KratosFlow | null>(null);
@@ -78,6 +83,17 @@ export function LoginForm({
     router.replace(returnTo);
     router.refresh();
   }, [returnTo, router]);
+
+  // Kratos refused a new flow because this browser is already signed in.
+  // Returns true when it left for `returnTo`; otherwise it explains why not.
+  const onExistingSession = useCallback((): boolean => {
+    if (existingSessionAction(serverSession) === "return") {
+      goReturn();
+      return true;
+    }
+    setError(COOKIE_SCOPE_MESSAGE);
+    return false;
+  }, [goReturn, serverSession]);
 
   // Mount: create or fetch a flow. If Kratos signals an existing session,
   // skip the form entirely and route to `returnTo` — middleware will see the
@@ -107,7 +123,7 @@ export function LoginForm({
           // page's mount then detects the fresh session and routes on.
           const r = await createLoginFlow(window.location.href, { refresh });
           if (r.existingSession) {
-            if (!cancelled) goReturn();
+            if (!cancelled) onExistingSession();
             return;
           }
           if (!r.flow) throw new Error("Kratos returned no flow");
@@ -132,7 +148,7 @@ export function LoginForm({
     return () => {
       cancelled = true;
     };
-  }, [initialFlowId, goReturn, refresh, router]);
+  }, [initialFlowId, onExistingSession, refresh, router]);
 
   const submitFlow = useCallback(
     async (submittedValues: Record<string, string>) => {
@@ -164,7 +180,7 @@ export function LoginForm({
           // Already authenticated → navigate, do NOT recreate a flow on the
           // same URL (that's the legacy admin-ui's loop bug).
           if (r.structuralError.id === "session_already_available") {
-            goReturn();
+            onExistingSession();
             return;
           }
           if (
@@ -175,7 +191,7 @@ export function LoginForm({
               refresh,
             });
             if (fresh.existingSession) {
-              goReturn();
+              onExistingSession();
               return;
             }
             if (fresh.flow) {
@@ -194,7 +210,7 @@ export function LoginForm({
         setSubmitting(false);
       }
     },
-    [flow, goReturn, refresh]
+    [flow, goReturn, onExistingSession, refresh]
   );
 
   const classified = useMemo<SignInState>(
