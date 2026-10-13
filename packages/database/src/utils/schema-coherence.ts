@@ -1259,7 +1259,7 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   {
     table: "cp_catalog_cache",
     column: "listing",
-    addedBy: "0327_cp_catalog_cache_listing.sql",
+    addedBy: "0328_cp_catalog_cache_listing.sql",
   },
 
   // playbook_runs — the run ledger / executor spine (0127)
