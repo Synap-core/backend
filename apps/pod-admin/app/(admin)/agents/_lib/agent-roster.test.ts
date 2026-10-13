@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { AGENT_BINDING_ERROR_CODES } from "@synap-core/types/agents";
 import {
+  agentReviewHref,
   agentsByCreator,
   buildAgentRoster,
   keyCountsLine,
   originLine,
+  reachErrorSentence,
   standingLine,
   type AgentRosterRowLike,
 } from "./agent-roster";
@@ -176,5 +179,43 @@ describe("lines", () => {
       row({ id: "c", createdByUserId: "u1" }),
     ];
     expect(agentsByCreator(rows, "u1").map((r) => r.id)).toEqual(["a", "c"]);
+  });
+});
+
+describe("agentReviewHref", () => {
+  it("prefers the pending keys' approval page", () => {
+    expect(
+      agentReviewHref(
+        row({
+          approveUrl: "https://pod.example/approve-agents?keys=k1",
+          pendingProposalId: "p1",
+        })
+      )
+    ).toBe("https://pod.example/approve-agents?keys=k1");
+  });
+
+  it("falls back to its connect request in Review's Access view", () => {
+    expect(agentReviewHref(row({ pendingProposalId: "p1" }))).toBe(
+      "/review?type=access&focus=p1"
+    );
+    expect(agentReviewHref(row({}))).toBe("/review?type=access");
+  });
+});
+
+describe("reachErrorSentence", () => {
+  it("words every known code and never leaks an unknown one", () => {
+    const fallback = reachErrorSentence(undefined);
+    for (const code of AGENT_BINDING_ERROR_CODES) {
+      expect(reachErrorSentence(code)).not.toBe(fallback);
+    }
+    expect(reachErrorSentence("tool_inactive")).toBe(
+      "The connector it was set up with is turned off."
+    );
+    expect(reachErrorSentence("something_new")).toBe(
+      "The pod cannot reach it through its connector."
+    );
+    expect(reachErrorSentence(null)).toBe(
+      "The pod cannot reach it through its connector."
+    );
   });
 });

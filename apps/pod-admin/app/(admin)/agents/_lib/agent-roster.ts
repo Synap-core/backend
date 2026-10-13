@@ -17,6 +17,7 @@ import {
   type AgentMarkRowLike,
   type AgentReachRowLike,
 } from "@synap-core/types/agents";
+import { navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
 import { AGENT_MARK_STATUS } from "../../components/status-tone";
 
@@ -34,6 +35,8 @@ export interface AgentRosterRowLike
   createdByUserId?: string | null;
   /** Its open `agent/connect` request, when the viewer may decide it. */
   pendingProposalId?: string | null;
+  /** `/approve-agents?keys=…` for its pending keys, when the viewer may approve them. */
+  approveUrl?: string | null;
 }
 
 /** The slice of a `diagnose.agents` standing this page reads. */
@@ -75,6 +78,36 @@ const PILL_LABEL: Record<AgentMark["kind"], string> = {
 
 export function agentNeedsReview(row: AgentRosterRowLike): boolean {
   return (row.pendingKeys ?? 0) > 0 || !!row.pendingProposalId;
+}
+
+/**
+ * Where a waiting agent is decided: its pending keys' approval page (the one
+ * `synap init` opens) when the pod offers it to this viewer, else its connect
+ * request in Review's Access view.
+ */
+export function agentReviewHref(row: AgentRosterRowLike): string {
+  if (row.approveUrl) return row.approveUrl;
+  return navHref("review", {
+    type: "access",
+    focus: row.pendingProposalId ?? undefined,
+  });
+}
+
+/** Why the pod cannot hand this agent work, as a sentence. */
+const REACH_ERROR_SENTENCE: Record<string, string> = {
+  ambiguous:
+    "More than one connector is set up for it, so the pod cannot tell which to use.",
+  tool_missing: "The connector it was set up with has been removed.",
+  tool_inactive: "The connector it was set up with is turned off.",
+  not_an_agent_tool: "It is set up with a connector that cannot run agents.",
+  malformed: "Its connector is set up wrong.",
+};
+
+export function reachErrorSentence(code: string | null | undefined): string {
+  return (
+    (code ? REACH_ERROR_SENTENCE[code] : undefined) ??
+    "The pod cannot reach it through its connector."
+  );
 }
 
 /**

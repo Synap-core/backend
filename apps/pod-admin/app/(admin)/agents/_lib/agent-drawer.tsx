@@ -28,10 +28,13 @@ import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { StatusPill } from "../../components/status-pill";
+import { FactsGrid, type Fact } from "../../../_lib/object/facts-grid";
 import {
+  agentReviewHref,
   agentsByCreator,
   keyCountsLine,
   originLine,
+  reachErrorSentence,
   type AgentRowView,
 } from "./agent-roster";
 
@@ -74,11 +77,10 @@ export function AgentDrawer({
           {view.needsReview && (
             <Button
               as={Link}
-              href="/review?type=agent"
+              href={agentReviewHref(row)}
               size="sm"
               radius="md"
               variant="flat"
-              color="warning"
               className="min-h-10 self-start"
             >
               Decide in Review
@@ -112,19 +114,6 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Fact({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
-      <dt className="shrink-0 text-[12px] text-foreground/65 sm:w-28">
-        {label}
-      </dt>
-      <dd className="min-w-0 break-words text-[12.5px] text-foreground">
-        {value}
-      </dd>
-    </div>
-  );
-}
-
 function Facts({
   view,
   ownerName,
@@ -136,34 +125,34 @@ function Facts({
   const reach = resolveAgentReachMark(row);
   const origin = originLine(row.origin);
   const owner = ownerName(row.createdByUserId);
+  const facts: Fact[] = [
+    ...(owner ? [{ label: "Answers to", value: owner }] : []),
+    ...(origin ? [{ label: "Came from", value: origin }] : []),
+    ...(view.mark.host
+      ? [{ label: "Last machine", value: view.mark.host, mono: true }]
+      : []),
+    { label: "Keys", value: keyCountsLine(row) },
+    ...(reach
+      ? [
+          {
+            label: "Reach",
+            value: reach.error ? (
+              <span className="text-status-down">
+                {reach.label} — {reachErrorSentence(reach.error.code)}
+              </span>
+            ) : (
+              reach.label
+            ),
+          },
+        ]
+      : []),
+    ...(row.operatedByViewer
+      ? [{ label: "Acts for", value: "You — it can see and pick up your work" }]
+      : []),
+  ];
   return (
     <Section title="About">
-      <dl className="flex flex-col gap-2">
-        {owner && <Fact label="Answers to" value={owner} />}
-        {origin && <Fact label="Came from" value={origin} />}
-        {view.mark.host && <Fact label="Last machine" value={view.mark.host} />}
-        <Fact label="Keys" value={keyCountsLine(row)} />
-        {reach && (
-          <Fact
-            label="Reach"
-            value={
-              reach.error ? (
-                <span className="text-status-down">
-                  {reach.label} — {reach.error.message}
-                </span>
-              ) : (
-                reach.label
-              )
-            }
-          />
-        )}
-        {row.operatedByViewer && (
-          <Fact
-            label="Acts for"
-            value="You — it can see and pick up your work"
-          />
-        )}
-      </dl>
+      <FactsGrid facts={facts} columns={2} />
     </Section>
   );
 }
