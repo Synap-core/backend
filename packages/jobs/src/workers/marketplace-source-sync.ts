@@ -1,16 +1,19 @@
 /**
- * Sync for a source a pod admin added (Pod Console D11). Called by
+ * Sync for a source a pod admin added. Called by
  * `cp-catalog-sync` for every enabled non-official source, on the same
  * 10-minute schedule, and by the console's "Sync now".
  *
  *   1. fetch `synap-index.json` + `.sig` anonymously (marketplace-source-fetch);
  *   2. verify it against the PINNED key (marketplace-source-verify):
  *        key changed  → the source is blocked until a person re-approves;
- *        bad / expired / unreachable → the last verified rows stay, and stop
- *          serving installs once that index's own `expires` passes;
+ *        bad / expired / older than the last accepted copy / unreachable →
+ *          the last verified rows stay, and stop serving installs once that
+ *          index's own `expires` passes;
  *   3. replace the source's `cp_catalog_cache` rows with exactly the signed
  *      list — the index is the whole catalog, so a package it no longer lists
- *      is pruned (per source; never another source's rows);
+ *      is pruned (per source; never another source's rows). Only while the
+ *      source is still on the pod under the key this sync verified: a sync
+ *      that races a remove (or a key re-approval) writes nothing;
  *   4. record the outcome under `marketplaceSourceStatus.<id>`.
  *
  * Rows from an added source are keyed by its id (`acme`), carry no
@@ -31,6 +34,7 @@ import {
 } from "@synap/database";
 import {
   cpCatalogCache,
+  podSettings,
   type NewCpCatalogCacheRow,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -54,6 +58,7 @@ const STATE_FOR: Record<IndexRejection, MarketplaceSourceStatus["state"]> = {
   unsigned: "invalid",
   bad_signature: "bad_signature",
   expired: "expired",
+  replayed: "invalid",
   key_changed: "key_changed",
 };
 
@@ -104,12 +109,36 @@ export function listingRows(
   return { rows, skipped };
 }
 
-/** Make the source's cached rows exactly `rows` (upsert, then prune the rest). */
+/**
+ * Make the source's cached rows exactly `rows` (upsert, then prune the rest)
+ * — only while the source is still on the pod, pinned to the key this sync
+ * verified under. That is read under a SHARE lock on the settings row, inside
+ * this transaction: a remove or key re-approval rewrites the row under an
+ * update lock, so it either committed first (seen here: nothing is written)
+ * or waits until these rows are in, then removes them itself. Returns false
+ * when the source is gone.
+ */
 async function replaceSourceRows(
-  sourceId: string,
+  source: CatalogSource,
   rows: NewCpCatalogCacheRow[]
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<boolean> {
+  const sourceId = source.id;
+  return db.transaction(async (tx) => {
+    const [settingsRow] = await tx
+      .select({ settings: podSettings.settings })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1)
+      .for("share");
+    const listed = settingsRow?.settings?.marketplaceSources;
+    const stillPinned =
+      Array.isArray(listed) &&
+      listed.some(
+        (s) =>
+          s.id === sourceId &&
+          (s.publicKey ?? null) === (source.publicKey ?? null)
+      );
+    if (!stillPinned) return false;
     if (rows.length > 0) {
       await tx
         .insert(cpCatalogCache)
@@ -151,6 +180,7 @@ async function replaceSourceRows(
             )
           : eq(cpCatalogCache.source, sourceId)
       );
+    return true;
   });
 }
 
@@ -179,6 +209,9 @@ export async function syncThirdPartySource(
     pendingPublicKey: null,
     pendingFingerprint: null,
   };
+  // Set when the source was removed (or re-keyed) while this sync ran: its
+  // status is not recorded either, so a removed source leaves nothing behind.
+  let gone = false;
   const attempt = await (async (): Promise<MarketplaceSourceStatus> => {
     // A trusted source is only ever stored with a pinned key; one without is
     // refused rather than verified against whatever key the index declares.
@@ -204,6 +237,7 @@ export async function syncThirdPartySource(
       pinnedKey: source.publicKey,
       requireSignature: source.trust !== "showcase",
       expectedSourceId: source.id,
+      lastAcceptedExpires: previous?.validUntil ?? null,
       now,
     });
     if (!verdict.ok) {
@@ -226,7 +260,7 @@ export async function syncThirdPartySource(
       now
     );
     try {
-      await replaceSourceRows(source.id, rows);
+      gone = !(await replaceSourceRows(source, rows));
     } catch (err) {
       logger.error(
         { err, source: source.id },
@@ -268,6 +302,13 @@ export async function syncThirdPartySource(
         }
       : attempt;
 
+  if (gone) {
+    logger.info(
+      { source: source.id },
+      "Marketplace source changed or was removed during its sync — nothing written"
+    );
+    return status;
+  }
   if (status.state !== "ok") {
     logger.warn(
       { source: source.id, state: status.state, message: status.message },

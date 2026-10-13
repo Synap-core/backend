@@ -8,11 +8,21 @@
  *     at an address the person never chose — an internal one included);
  *   - a definition is fetched only from the index's OWN origin, so a signed
  *     index cannot steer the pod at any other host;
+ *   - only PUBLIC addresses are reached: the host is resolved at connect time
+ *     and refused when any address it resolves to is loopback, private,
+ *     link-local, CGNAT or unique-local (`isNonPublicAddress`) — checked on
+ *     the address the socket actually connects to, so a name that re-resolves
+ *     to an internal address between a check and the connect (DNS rebinding)
+ *     is refused too;
  *   - every body is read through a byte cap and dropped past it.
  *
  * The verdicts on what comes back live in `marketplace-source-verify.ts`.
  */
 
+import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import { request as httpsRequest } from "node:https";
+import { BlockList, isIP, type LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 import {
   MARKETPLACE_INDEX_FILE,
   MARKETPLACE_INDEX_MAX_BYTES,
@@ -24,6 +34,145 @@ import {
 export type SourceFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 const TIMEOUT_MS = 8000;
+
+/**
+ * Every address a source fetch may NOT connect to. IPv4: "this network"
+ * 0/8, RFC 1918 (10/8, 172.16/12, 192.168/16), CGNAT 100.64/10, loopback
+ * 127/8, link-local 169.254/16 (cloud metadata), IETF/benchmark/test nets,
+ * multicast and reserved. IPv6: unspecified, loopback, unique-local
+ * fc00::/7, link-local fe80::/10 and multicast. An IPv4-mapped IPv6 address
+ * (`::ffff:127.0.0.1`) is checked against the IPv4 rules by `BlockList`
+ * itself, so an internal v4 address cannot hide behind it.
+ */
+const NON_PUBLIC = (() => {
+  const list = new BlockList();
+  for (const [net, prefix] of [
+    ["0.0.0.0", 8],
+    ["10.0.0.0", 8],
+    ["100.64.0.0", 10],
+    ["127.0.0.0", 8],
+    ["169.254.0.0", 16],
+    ["172.16.0.0", 12],
+    ["192.0.0.0", 24],
+    ["192.0.2.0", 24],
+    ["192.168.0.0", 16],
+    ["198.18.0.0", 15],
+    ["198.51.100.0", 24],
+    ["203.0.113.0", 24],
+    ["224.0.0.0", 4],
+    ["240.0.0.0", 4],
+  ] as const) {
+    list.addSubnet(net, prefix, "ipv4");
+  }
+  for (const [net, prefix] of [
+    ["::", 128],
+    ["::1", 128],
+    ["fc00::", 7],
+    ["fe80::", 10],
+    ["ff00::", 8],
+  ] as const) {
+    list.addSubnet(net, prefix, "ipv6");
+  }
+  return list;
+})();
+
+/**
+ * Is `address` one a source fetch must never reach? Pure. Anything that is
+ * not an IP address at all counts as non-public — closed, never a guess.
+ */
+export function isNonPublicAddress(address: string): boolean {
+  const bare = address.replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+  const family = isIP(bare);
+  if (family === 0) return true;
+  return NON_PUBLIC.check(bare, family === 4 ? "ipv4" : "ipv6");
+}
+
+function nonPublicError(host: string): NodeJS.ErrnoException {
+  return Object.assign(
+    new Error(`${host} is not a public address, so the pod did not reach it.`),
+    { code: "ENOTPUBLIC" }
+  );
+}
+
+/**
+ * The DNS lookup every source socket connects through: resolve every
+ * address, refuse the host if ANY is non-public (an attacker who controls
+ * one record controls which one is tried), else hand them to the connect.
+ */
+export const publicOnlyLookup: LookupFunction = (
+  hostname,
+  options,
+  callback
+) => {
+  dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
+    const list = (addresses ?? []) as LookupAddress[];
+    if (err) return callback(err, "", 4);
+    if (list.length === 0 || list.some((a) => isNonPublicAddress(a.address))) {
+      return callback(nonPublicError(hostname), "", 4);
+    }
+    if (options.all) return callback(null, list);
+    return callback(null, list[0]!.address, list[0]!.family);
+  });
+};
+
+/**
+ * The fetch every source request goes through by default: an anonymous
+ * https GET whose socket can only reach a public address (`publicOnlyLookup`;
+ * an IP-literal host is checked directly, as no lookup runs for it). A
+ * redirect is refused, never followed — the `redirect: "error"` rule.
+ */
+export const publicOnlyFetch: SourceFetch = (url, init) =>
+  new Promise<Response>((resolve, reject) => {
+    let target: URL;
+    try {
+      target = new URL(url);
+    } catch (err) {
+      return reject(err);
+    }
+    if (target.protocol !== "https:") {
+      return reject(new Error("A source is fetched over https only."));
+    }
+    const host = target.hostname.replace(/^\[|\]$/g, "");
+    if (isIP(host) !== 0 && isNonPublicAddress(host)) {
+      return reject(nonPublicError(host));
+    }
+    const req = httpsRequest(
+      target,
+      {
+        method: "GET",
+        headers: (init.headers ?? {}) as Record<string, string>,
+        lookup: publicOnlyLookup,
+        signal: init.signal ?? undefined,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400) {
+          res.resume();
+          return reject(new Error("The source answered with a redirect."));
+        }
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (Array.isArray(value)) {
+            for (const v of value) headers.append(key, v);
+          } else if (value !== undefined) {
+            headers.set(key, value);
+          }
+        }
+        const empty = status === 204 || status === 205 || status === 304;
+        if (empty) res.resume();
+        resolve(
+          new Response(
+            empty
+              ? null
+              : (Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>),
+            { status, statusText: res.statusMessage, headers }
+          )
+        );
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
 
 /** The exact request init every source fetch uses — nothing pod-identifying. */
 export function anonymousGetInit(): RequestInit {
@@ -141,7 +290,7 @@ async function get(
 /** Fetch a source's index and its detached signature. Never throws. */
 export async function fetchSourceIndex(
   address: string,
-  fetchImpl: SourceFetch = fetch
+  fetchImpl: SourceFetch = publicOnlyFetch
 ): Promise<IndexFetch> {
   const indexUrl = indexUrlFor(address);
   if (!indexUrl) {
@@ -215,7 +364,7 @@ export type DefinitionFetch =
 export async function fetchDefinitionBytes(
   url: string,
   maxBytes: number,
-  fetchImpl: SourceFetch = fetch
+  fetchImpl: SourceFetch = publicOnlyFetch
 ): Promise<DefinitionFetch> {
   const res = await get(url, fetchImpl);
   if (!res) {
