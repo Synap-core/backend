@@ -156,8 +156,8 @@ export function ProviderHealthSection() {
       <div className="mt-3">
         <HandoffCard
           icon={Settings}
-          title="Service configuration lives in the desktop app"
-          body="Credentials and endpoints for a provider are edited in the AI provider registry above. Which models an agent may reach, and the governance around them, are set per workspace in the desktop app's AI settings."
+          title="Service configuration lives in the app"
+          body="Credentials and endpoints for a provider are edited in the AI provider registry above. Which models an agent may reach, and the governance around them, are set per space in the app's AI settings."
           exit={openIn({ kind: "settings", section: "ai-governance" })}
           cta="Open AI settings"
         />

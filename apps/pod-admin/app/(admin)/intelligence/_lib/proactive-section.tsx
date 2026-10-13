@@ -14,6 +14,7 @@ import {
 } from "@heroui/react";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { readableError } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { SectionCard } from "../../components/section-card";
 import { ErrorBanner } from "./error-banner";
@@ -68,8 +69,8 @@ export function ProactiveDefaultsSection() {
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Save failed",
-        description: err.message,
+        title: "Couldn't save the proactive defaults",
+        description: readableError(err.message),
         color: "danger",
       });
     },
@@ -101,7 +102,7 @@ export function ProactiveDefaultsSection() {
   return (
     <SectionCard
       title="Proactive AI defaults"
-      hint="Apply to new workspaces — overridable in Studio"
+      hint="Apply to new spaces — overridable in the app"
       actions={
         dirty && draft ? (
           <div className="flex items-center gap-2">
@@ -207,7 +208,7 @@ export function ProactiveDefaultsSection() {
                 Weekly digest
               </span>
               <span className="text-[11px] text-foreground/55">
-                Sunday roll-up of the week's signals
+                A Sunday summary of the week
               </span>
             </div>
             <Switch

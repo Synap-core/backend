@@ -80,7 +80,7 @@ function secondaryLine(row: InstalledRow): string {
   return [
     row.where,
     row.verbsOff !== null && row.verbsTotal > 0
-      ? `${row.verbsOn} of ${row.verbsTotal} verbs on`
+      ? `${row.verbsOn} of ${row.verbsTotal} tools turned on`
       : null,
     row.members > 0 ? `${row.wired} of ${row.members} parts wired` : null,
     row.lastRunAt ? `last ran ${formatRelative(row.lastRunAt)}` : null,
@@ -106,7 +106,7 @@ function InstalledRowView({ row }: { row: InstalledRow }) {
               size="sm"
               variant="flat"
               radius="md"
-              aria-label={`Turn on ${row.name}'s verbs`}
+              aria-label={`Turn on ${row.name}'s tools`}
             >
               Turn on
             </Button>

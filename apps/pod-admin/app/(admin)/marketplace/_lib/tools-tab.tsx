@@ -17,6 +17,7 @@ import { ChevronRight } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { readableError } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { StatusPill } from "../../components/status-pill";
@@ -64,8 +65,8 @@ export function ToolsTab() {
       if (redirectToLoginIfUnauthorized(err)) return;
       setRefusals((r) => ({ ...r, [input.skillId]: err.message }));
       addToast({
-        title: "That verb wasn’t changed",
-        description: err.message,
+        title: "That tool wasn’t changed",
+        description: readableError(err.message),
         color: "danger",
       });
     },
@@ -84,7 +85,7 @@ export function ToolsTab() {
     return (
       <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
         <ResourceRowError
-          message="Couldn't load the installed verbs."
+          message="Couldn't load the installed tools."
           onRetry={() => void catalog.refetch()}
         />
       </section>
@@ -92,7 +93,7 @@ export function ToolsTab() {
   if (groups.length === 0)
     return (
       <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
-        <ResourceRowEmpty message="No installed capability brings a verb yet." />
+        <ResourceRowEmpty message="No installed capability brings a tool yet." />
       </section>
     );
 

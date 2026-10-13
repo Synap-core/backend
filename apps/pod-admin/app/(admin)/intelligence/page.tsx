@@ -80,9 +80,9 @@ export default function IntelligencePage() {
           <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
             Intelligence
           </h1>
-          <p className="text-[13px] text-foreground/55">
-            Pod-wide AI providers and services. Per-workspace overrides live in
-            Studio.
+          <p className="text-[13px] text-foreground/65">
+            Pod-wide AI providers and services. Per-space overrides are set in
+            the app.
           </p>
           <p className="text-[12.5px] text-foreground/65">
             <Link

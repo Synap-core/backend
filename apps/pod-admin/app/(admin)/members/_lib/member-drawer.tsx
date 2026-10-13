@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * One member's detail: role, every workspace membership (each with its own
- * exit to the desktop app), and the admin actions — reset password, revoke
+ * One member's detail: role, every space membership (each with its own
+ * exit to the app), and the admin actions — reset password, revoke
  * all keys, remove from the pod. Self-actions are blocked here AND by the
  * pod (`adminRevokeAllForUser` / `removeFromPod` refuse the caller).
  */
 
-import { addToast, Avatar, Button, Tooltip } from "@heroui/react";
-import { Ban, ExternalLink, KeyRound, Trash2 } from "lucide-react";
+import { addToast, Avatar, Button, Chip, Tooltip } from "@heroui/react";
+import { ArrowUpRight, Ban, KeyRound, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -18,15 +18,14 @@ import { ExitFallback } from "../../../../lib/exit-link";
 import { useOperatorEmail } from "../../components/admin-shell";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { DetailDrawer } from "../../components/detail-drawer";
-import { StatusPill } from "../../components/status-pill";
-import { rolePillKind, type PodMember } from "./helpers";
+import type { PodMember } from "./helpers";
 
 /**
- * The exit from a membership row to that workspace in the desktop app.
+ * The exit from a membership row to that space in the app.
  *
  * The row carries only the LINK. The "get the app" fallback is rendered once
  * beneath the list instead of inside every row — `open-in.ts` says so in as
- * many words, and someone in six workspaces should not be told to install the
+ * many words, and someone in six spaces should not be told to install the
  * app six times. 40px target, because 24px was not a real one.
  */
 function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
@@ -43,11 +42,28 @@ function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
       size="sm"
       radius="full"
       variant="light"
-      aria-label="Open this workspace in the desktop app"
-      className="h-10 w-10 min-w-10 text-foreground/60 hover:text-foreground"
+      aria-label="Open this space in app"
+      className="h-10 w-10 min-w-10 text-foreground/65 hover:text-foreground"
     >
-      <ExternalLink className="h-3.5 w-3.5" />
+      <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
     </Button>
+  );
+}
+
+/** A role is a label, not a health state, so it never borrows a status tone. */
+function RoleChip({ label }: { label: string }) {
+  return (
+    <Chip
+      size="sm"
+      radius="sm"
+      variant="flat"
+      classNames={{
+        base: "bg-foreground/[0.06]",
+        content: "text-[11px] font-medium text-foreground/80",
+      }}
+    >
+      {label}
+    </Chip>
   );
 }
 
@@ -154,17 +170,14 @@ export function MemberDrawer({
         <div className="flex flex-col gap-5">
           {/* Identity */}
           <div className="flex flex-wrap items-center gap-2">
-            <StatusPill
-              kind={rolePillKind(member.primaryRole)}
-              label={member.primaryRole}
-            />
-            {isPodAdmin && <StatusPill kind="healthy" label="Pod admin" />}
+            <RoleChip label={member.primaryRole} />
+            {isPodAdmin && <RoleChip label="Pod admin" />}
           </div>
 
-          {/* Workspace memberships */}
+          {/* Space memberships */}
           <div>
             <h4 className="mb-2 text-[12px] font-medium text-foreground">
-              Workspaces ({member.workspaces.length})
+              Spaces ({member.workspaces.length})
             </h4>
             <div className="flex flex-col gap-1.5">
               {member.workspaces.map((ws) => (
@@ -176,14 +189,14 @@ export function MemberDrawer({
                     <span className="truncate text-[12.5px] font-medium text-foreground">
                       {ws.name || ws.id.slice(0, 8)}
                     </span>
-                    <span className="truncate font-mono text-[10.5px] text-foreground/40">
+                    <span className="truncate font-mono text-[10.5px] text-foreground/65">
                       {ws.id}
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <StatusPill kind={rolePillKind(ws.role)} label={ws.role} />
-                    <span className="tabular text-[11px] text-foreground/40">
-                      {formatRelative(new Date(ws.joinedAt))}
+                    <RoleChip label={ws.role} />
+                    <span className="tabular text-[11px] text-foreground/65">
+                      {formatRelative(ws.joinedAt)}
                     </span>
                     <WorkspaceExit workspaceId={ws.id} />
                   </div>
@@ -192,7 +205,7 @@ export function MemberDrawer({
             </div>
             {member.workspaces.length > 0 && (
               <p className="mt-2 text-[12px] text-foreground/70">
-                Workspaces open in the desktop app.{" "}
+                Spaces open in the app.{" "}
                 <ExitFallback
                   exit={openIn({
                     kind: "object",

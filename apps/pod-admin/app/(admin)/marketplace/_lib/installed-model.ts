@@ -94,7 +94,7 @@ export function capabilityPill(
   if (health.status === "failed")
     return { kind: "down", label: n(health.failedRuns, "failed run") };
   if (verbsOff !== null && verbsOff > 0)
-    return { kind: "stale", label: `${n(verbsOff, "verb")} off` };
+    return { kind: "stale", label: `${n(verbsOff, "tool")} turned off` };
   if (health.status === "degraded")
     return { kind: "stale", label: n(health.stuckRuns, "stuck run") };
   if (health.status === "ok") return { kind: "healthy", label: "Healthy" };
@@ -188,10 +188,10 @@ export function toolGroups(cards: readonly CardLike[]): ToolGroup[] {
     );
 }
 
-/** "4 verbs off in 2 capabilities" / "Every installed verb is on." */
+/** "4 tools turned off in 2 capabilities" / "Every installed tool is turned on." */
 export function toolsSummary(groups: readonly ToolGroup[]): string {
   const off = groups.reduce((sum, g) => sum + g.off, 0);
-  if (off === 0) return "Every installed verb is on.";
+  if (off === 0) return "Every installed tool is turned on.";
   const caps = groups.filter((g) => g.off > 0).length;
-  return `${n(off, "verb")} off in ${n(caps, "capability", "capabilities")}. Anything that calls one is refused until it is on.`;
+  return `${n(off, "tool")} turned off in ${n(caps, "capability", "capabilities")}. Anything that calls one is refused until it is turned on.`;
 }
