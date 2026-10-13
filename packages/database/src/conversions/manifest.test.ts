@@ -795,9 +795,10 @@ describe("CONVERSION_MANIFEST — H0 dev lifecycles (stray `status` folds)", () 
       keys: ["backlog", "ready", "in-progress", "done", "dropped"],
     },
   };
-  const ops = CONVERSION_MANIFEST.ops.filter((o) => o.opKey.startsWith("h0.devplane-"));
+  const ops = CONVERSION_MANIFEST.ops.filter((o) => /^h0\.devplane-[a-z]+\.status-into-lifecycle$/.test(o.opKey));
 
   it("one deferred status fold per dev kind, landing only on lifecycle keys", () => {
+    expect(ops).toHaveLength(2); // non-vacuity: the opKey filter still sees them
     expect(ops.map((o) => o.op === "remapPropertyValues" && o.slug).sort()).toEqual([
       "devplane_feature",
       "devplane_story",

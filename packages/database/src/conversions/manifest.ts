@@ -1949,6 +1949,31 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       },
       preferTargetValues: ["backlog", "ready", "in-progress", "done", "dropped"],
     },
+    // Story `in-review` left the lifecycle (the feature carries the review):
+    // a story there is "In feature" (`in-progress`). remapPropertyValues needs
+    // sourceKey ≠ targetKey, so the in-place remap is two steps through an
+    // aside key — and each step touches ONLY rows whose value it maps, so no
+    // other story is moved aside (unlike a renamePropertyKey of the whole key).
+    // (1) in-review stories: storyStatus → aside, as in-progress.
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.in-review-aside",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "storyStatus",
+      targetKey: "storyStatus-h0-in-review",
+      valueMap: { "in-review": "in-progress" },
+    },
+    // (2) back onto storyStatus (only the rows step 1 wrote).
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.in-review-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "storyStatus-h0-in-review",
+      targetKey: "storyStatus",
+      valueMap: { "in-progress": "in-progress" },
+    },
   ],
 };
 
