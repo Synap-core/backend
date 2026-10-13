@@ -1174,6 +1174,37 @@ export function resolveImportStatusLabel(
 }
 
 /**
+ * LIBRARY marks — where one kept item (or the Library itself) stands, as the
+ * word beside its mark (CAPTURE_LIBRARY_PLAN L2). Its OWN table: the light
+ * read's statuses (`@synap-core/types/imports` LIBRARY_READ_STATUSES) plus the
+ * keep / archive / built marks. `over_budget` and `not_read` are not failures
+ * — the item will be read — so they say so ("Not read yet", "Read later");
+ * `unreadable` is the one real failure. `needs_file` / `title_only` keep the
+ * import table's words, so one item never reads two ways.
+ */
+export const LIBRARY_STATUS_LABELS: Readonly<Record<string, string>> = {
+  read: "Read",
+  not_read: "Not read yet",
+  over_budget: "Read later",
+  unreadable: "Unreadable",
+  needs_file: "Needs the file",
+  title_only: "Title only",
+  kept: "Kept",
+  archived: "Archived",
+  built: "Built",
+  new_since_built: "New since built",
+};
+
+export function resolveLibraryStatusLabel(
+  status: string | null | undefined
+): string {
+  if (!status) return "";
+  return (
+    LIBRARY_STATUS_LABELS[status.trim().toLowerCase()] ?? humanizeToken(status)
+  );
+}
+
+/**
  * Where an import was STARTED (`ImportSessionCuration.origin`), as the end of
  * "Import from …" and "Started on …". Keyed by the client token each door
  * sends. An unknown origin humanizes, never leaks.
