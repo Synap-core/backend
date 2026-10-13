@@ -32,7 +32,10 @@ import { entities, entityFacets, events } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import { projectLensWhere } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
-import { entityReadVisibleWhere, entityLensWhere } from "./helpers.js";
+import {
+  entityReadVisibleWhere,
+  entityLensWhere,
+} from "../../access/entity-read-floor.js";
 
 /** Mirrors `LIFECYCLE_TRANSITION_EVENT_TYPE` (@synap/events). */
 const TRANSITION_EVENT = "entity.transition.completed";

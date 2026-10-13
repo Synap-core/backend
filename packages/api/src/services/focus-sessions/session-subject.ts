@@ -34,8 +34,7 @@ export async function resolveSessionSubject(
   const rows = await assertKnownProfileSlug(db, input.profileSlug);
   // Lazy: the board's module pulls the entity read helpers, which the
   // proposal and signal doors importing this file never otherwise load.
-  const { statusSubjectOfRows } =
-    await import("../../routers/entities/status-groups.js");
+  const { statusSubjectOfRows } = await import("../lifecycle/status-groups.js");
   const { subject } = statusSubjectOfRows(input.profileSlug, rows);
   return { kind: subject.kind, profileIds: subject.profileIds };
 }

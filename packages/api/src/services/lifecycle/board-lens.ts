@@ -21,7 +21,7 @@ import {
   kindVisibilityConditions,
   roleVisibilityConditions,
   statusSubjectOfRows,
-} from "../../routers/entities/status-groups.js";
+} from "./status-groups.js";
 
 export interface ResolvedProfile {
   profileKind: "kind" | "role";

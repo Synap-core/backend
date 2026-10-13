@@ -36,7 +36,6 @@ import {
   isNull,
   drizzleSql,
   declaredLifecycleProfilesStatement,
-  notProbeEntityWhere,
 } from "@synap/database";
 import {
   entities,
@@ -62,12 +61,13 @@ import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { projectLensWhere } from "../../utils/project-scope.js";
 import { resolveActorNames } from "../../utils/resolve-actor-names.js";
 import { rosterReadFor } from "../../access/session-visibility.js";
-import { entityReadVisibleWhere } from "../../routers/entities/helpers.js";
 import {
   countThingsByProfileAndStatus,
   groupThingsByStatus,
+  kindVisibilityConditions,
+  roleVisibilityConditions,
   type StatusGroup,
-} from "../../routers/entities/status-groups.js";
+} from "./status-groups.js";
 import { countNeedsYouByScope } from "../../routers/signals.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
 import { resolveBoardLens } from "./board-lens.js";
@@ -215,10 +215,11 @@ function storedIntentOf(
  * Counts PER SPACE and profile — what a space with no declared intent
  * produces (homes, `services/lifecycle/homes.ts`): the things of each profile
  * whose OWN space is one of `workspaceIds` (a kind's `entities.workspace_id`,
- * a role's `entity_facets.workspace_id`), under the caller's entity floor.
- * The same base rows as `countThingsByProfileAndStatus`
- * (`routers/entities/status-groups.ts`), grouped by the space instead of the
- * status. A failed read THROWS.
+ * a role's `entity_facets.workspace_id`), under the SAME visibility
+ * conditions as `countThingsByProfileAndStatus` (`./status-groups.ts`
+ * `kindVisibilityConditions` / `roleVisibilityConditions` — for a role, the
+ * facet visibility predicate AND the entity floor), grouped by the space
+ * instead of the status. A failed read THROWS.
  */
 async function countThingsBySpaceAndProfile(params: {
   kind: "kind" | "role";
@@ -228,6 +229,18 @@ async function countThingsBySpaceAndProfile(params: {
 }): Promise<Array<{ workspaceId: string; profileId: string; count: number }>> {
   if (params.profileIds.length === 0 || params.workspaceIds.length === 0)
     return [];
+  const conditions =
+    params.kind === "role"
+      ? await roleVisibilityConditions({
+          userId: params.userId,
+          lensWorkspaceId: undefined,
+        })
+      : kindVisibilityConditions({
+          userId: params.userId,
+          lensWorkspaceId: undefined,
+          explicitWorkspace: false,
+          podScopeKind: false,
+        });
   const rows =
     params.kind === "role"
       ? await db
@@ -244,7 +257,7 @@ async function countThingsBySpaceAndProfile(params: {
               inArray(entityFacets.workspaceId, params.workspaceIds),
               isNull(entityFacets.deletedAt),
               isNull(entities.deletedAt),
-              entityReadVisibleWhere(params.userId) as SQL
+              ...conditions
             )
           )
           .groupBy(entityFacets.workspaceId, entityFacets.profileId)
@@ -260,8 +273,7 @@ async function countThingsBySpaceAndProfile(params: {
               inArray(entities.profileId, params.profileIds),
               inArray(entities.workspaceId, params.workspaceIds),
               isNull(entities.deletedAt),
-              notProbeEntityWhere() as SQL,
-              entityReadVisibleWhere(params.userId) as SQL
+              ...conditions
             )
           )
           .groupBy(entities.workspaceId, entities.profileId);
@@ -270,6 +282,14 @@ async function countThingsBySpaceAndProfile(params: {
     profileId: r.profileId as string,
     count: Number(r.count),
   }));
+}
+
+/** The profiles that declare a lifecycle (own or inherited). */
+async function declaredLifecycleProfileIds(): Promise<string[]> {
+  const res = (await db.execute(declaredLifecycleProfilesStatement())) as
+    Array<{ profile_id: string }> | { rows: Array<{ profile_id: string }> };
+  // postgres.js returns the rows; the PGlite driver (tests) wraps them.
+  return (Array.isArray(res) ? res : res.rows).map((r) => r.profile_id);
 }
 
 /**
@@ -283,12 +303,7 @@ async function inferProduces(
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();
   if (workspaceIds.length === 0) return out;
-  const res = (await db.execute(declaredLifecycleProfilesStatement())) as
-    Array<{ profile_id: string }> | { rows: Array<{ profile_id: string }> };
-  // postgres.js returns the rows; the PGlite driver (tests) wraps them.
-  const declaredIds = (Array.isArray(res) ? res : res.rows).map(
-    (r) => r.profile_id
-  );
+  const declaredIds = await declaredLifecycleProfileIds();
   if (declaredIds.length === 0) return out;
   const profileRows = await db
     .select({
@@ -664,10 +679,169 @@ export async function readHome(
 // ─── lifecycle.moving ────────────────────────────────────────────────────────
 
 /**
+ * A moving thing's IDENTITY: which produced pipeline it sits in. A kind's is
+ * the entity's own (`entities.profile_id` / `status` / `workspace_id`); a
+ * ROLE's is its facet's (`entity_facets.profile_id` / `status` /
+ * `status_category` / `workspace_id`) — a lead is a person whose LEAD stage
+ * lives on the facet, in the Sales space, not on the person (homes review M1).
+ *
+ * The rule: the entity's own kind when ITS space produces it; else a role
+ * facet (visible to the caller: `roleVisibilityConditions`) in a space that
+ * produces that role — a facet's own space, or, for a pod-wide facet (a
+ * shared role is stored with no space), each space whose stored intent
+ * produces the role — the one in the narrowed space when the read is
+ * narrowed, else the most recently moved facet; else the entity's own kind
+ * (an unproduced thing still moves, named by what it is). "Produces" is THE
+ * home's rule: the space's stored intent lists the slug, or — a space with no
+ * stored intent — the slug declares a lifecycle (the inference counts this
+ * very thing, so it is produced there).
+ */
+interface MovingIdentity {
+  profileSlug: string | null;
+  workspaceId: string | null;
+  status: string | null;
+  category: string | null;
+}
+
+async function resolveMovingIdentities(
+  userId: string,
+  things: ReadonlyArray<{
+    id: string;
+    type: string | null;
+    profileId: string | null;
+    workspaceId: string | null;
+    status: string | null;
+    category: string | null;
+  }>,
+  narrowTo: string | undefined
+): Promise<Map<string, MovingIdentity>> {
+  const [spaces, declared, roleConds] = await Promise.all([
+    listHomeSpaces(userId),
+    declaredLifecycleProfileIds(),
+    roleVisibilityConditions({ userId, lensWorkspaceId: undefined }),
+  ]);
+  const declaredIds = new Set(declared);
+  const intentOf = new Map(
+    spaces.map((s) => [s.id, storedIntentOf(s.settings)])
+  );
+  const produces = (
+    workspaceId: string | null,
+    slug: string,
+    profileId: string
+  ): boolean => {
+    if (!workspaceId || !intentOf.has(workspaceId)) return false;
+    const stored = intentOf.get(workspaceId);
+    return stored ? stored.produces.includes(slug) : declaredIds.has(profileId);
+  };
+
+  // The spaces whose STORED intent produces a slug, by name (stable order).
+  const storedProducers = new Map<string, string[]>();
+  for (const sp of [...spaces].sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const slug of intentOf.get(sp.id)?.produces ?? []) {
+      storedProducers.set(slug, [...(storedProducers.get(slug) ?? []), sp.id]);
+    }
+  }
+
+  const profileIds = [
+    ...new Set(things.map((t) => t.profileId).filter((x): x is string => !!x)),
+  ];
+  const [kindSlugRows, facetRows] = await Promise.all([
+    profileIds.length
+      ? db
+          .select({ id: profiles.id, slug: profiles.slug })
+          .from(profiles)
+          .where(inArray(profiles.id, profileIds))
+      : Promise.resolve([] as Array<{ id: string; slug: string }>),
+    db
+      .select({
+        entityId: entityFacets.entityId,
+        profileId: entityFacets.profileId,
+        slug: profiles.slug,
+        workspaceId: entityFacets.workspaceId,
+        status: entityFacets.status,
+        category: entityFacets.statusCategory,
+        updatedAt: entityFacets.updatedAt,
+      })
+      .from(entityFacets)
+      .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+      .innerJoin(profiles, eq(profiles.id, entityFacets.profileId))
+      .where(
+        and(
+          inArray(
+            entityFacets.entityId,
+            things.map((t) => t.id)
+          ),
+          eq(profiles.profileKind, "role"),
+          isNull(entityFacets.deletedAt),
+          ...roleConds
+        )
+      ),
+  ]);
+  const slugOf = new Map(kindSlugRows.map((r) => [r.id, r.slug]));
+  const facetsOf = new Map<string, typeof facetRows>();
+  for (const f of facetRows) {
+    const list = facetsOf.get(f.entityId) ?? [];
+    list.push(f);
+    facetsOf.set(f.entityId, list);
+  }
+
+  const out = new Map<string, MovingIdentity>();
+  for (const t of things) {
+    const kindSlug = (t.profileId && slugOf.get(t.profileId)) || t.type || null;
+    const own: MovingIdentity = {
+      profileSlug: kindSlug,
+      workspaceId: t.workspaceId ?? null,
+      status: t.status ?? null,
+      category: t.category ?? null,
+    };
+    const candidates: MovingIdentity[] = [];
+    if (
+      kindSlug &&
+      t.profileId &&
+      produces(t.workspaceId, kindSlug, t.profileId)
+    )
+      candidates.push(own);
+    for (const f of (facetsOf.get(t.id) ?? []).sort(
+      (a, b) =>
+        new Date(b.updatedAt ?? 0).getTime() -
+        new Date(a.updatedAt ?? 0).getTime()
+    )) {
+      if (!f.profileId) continue;
+      // A pod-wide facet (a shared role is stored with no space) sits in
+      // every space whose intent produces that role — the lens the board of
+      // each of those spaces reads it under (`facetVisibilityConditions`).
+      const homes = f.workspaceId
+        ? [f.workspaceId]
+        : (storedProducers.get(f.slug) ?? []);
+      for (const ws of homes) {
+        if (!produces(ws, f.slug, f.profileId)) continue;
+        candidates.push({
+          profileSlug: f.slug,
+          workspaceId: ws,
+          status: f.status ?? null,
+          category: f.category ?? null,
+        });
+      }
+    }
+    // Narrowed: the identity IN that space when it has one; else its first
+    // (so a thing produced elsewhere falls OUT of the narrowed list).
+    out.set(
+      t.id,
+      (narrowTo && candidates.find((c) => c.workspaceId === narrowTo)) ||
+        candidates[0] ||
+        own
+    );
+  }
+  return out;
+}
+
+/**
  * The things with open work on them, most urgent first: one whose work asks
- * you, then one being worked right now, then the longest-running. Narrowed to
- * the thing's space (`workspaceId`) and/or project. A failed read THROWS —
- * "nothing is moving" is a claim this read must have earned.
+ * you, then one being worked right now, then the longest-running. Each names
+ * its produced identity (`resolveMovingIdentities`: a role's facet status and
+ * space, never the person's). Narrowed to that identity's space
+ * (`workspaceId`) and/or the project. A failed read THROWS — "nothing is
+ * moving" is a claim this read must have earned.
  */
 export async function readMoving(
   ctx: HomesCtx,
@@ -692,11 +866,12 @@ export async function readMoving(
       and(
         inArray(entities.id, ids),
         isNull(entities.deletedAt),
-        notProbeEntityWhere() as SQL,
-        entityReadVisibleWhere(ctx.userId) as SQL,
-        ...(input.workspaceId
-          ? [eq(entities.workspaceId, input.workspaceId)]
-          : []),
+        ...kindVisibilityConditions({
+          userId: ctx.userId,
+          lensWorkspaceId: undefined,
+          explicitWorkspace: false,
+          podScopeKind: false,
+        }),
         ...(input.projectId
           ? [projectLensWhere(entities.id, input.projectId) as SQL]
           : [])
@@ -704,26 +879,22 @@ export async function readMoving(
     );
   if (things.length === 0) return { items: [] };
 
-  const profileIds = [
-    ...new Set(things.map((t) => t.profileId).filter((x): x is string => !!x)),
-  ];
-  const [slugRows, names] = await Promise.all([
-    profileIds.length
-      ? db
-          .select({ id: profiles.id, slug: profiles.slug })
-          .from(profiles)
-          .where(inArray(profiles.id, profileIds))
-      : Promise.resolve([] as Array<{ id: string; slug: string }>),
+  const [identities, names] = await Promise.all([
+    resolveMovingIdentities(ctx.userId, things, input.workspaceId),
     resolveActorNames(
       things.flatMap((t) =>
         (work.get(t.id) ?? []).map((w) => w.agentIds[0] ?? "")
       )
     ),
   ]);
-  const slugOf = new Map(slugRows.map((r) => [r.id, r.slug]));
+  const inScope = things.filter(
+    (t) =>
+      !input.workspaceId ||
+      identities.get(t.id)?.workspaceId === input.workspaceId
+  );
 
   const items: Array<MovingItem & { rank: [number, number, number] }> =
-    things.map((t) => {
+    inScope.map((t) => {
       const rows = work.get(t.id) ?? [];
       const lines = rows.map((w) => {
         const actor = w.agentIds[0] ? names.get(w.agentIds[0]) : undefined;
@@ -747,13 +918,14 @@ export async function readMoving(
         (m, l) => Math.min(m, Date.parse(l.since)),
         Number.POSITIVE_INFINITY
       );
+      const id = identities.get(t.id)!;
       return {
         entityId: t.id,
         title: t.title ?? null,
-        profileSlug: (t.profileId && slugOf.get(t.profileId)) || t.type || null,
-        workspaceId: t.workspaceId ?? null,
-        status: t.status ?? null,
-        category: t.category ?? null,
+        profileSlug: id.profileSlug,
+        workspaceId: id.workspaceId,
+        status: id.status,
+        category: id.category,
         work: lines,
         rank: [
           Number(lines.some((l) => l.asksYou)),

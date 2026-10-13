@@ -11,7 +11,7 @@
  *                     surface should default to (W17: a list below ~10 live
  *                     things or with no worker).
  *
- * Grouping is THE ONE status grouping (`entities/status-groups.ts`, shared with
+ * Grouping is THE ONE status grouping (`services/lifecycle/status-groups.ts`, shared with
  * `entities.groupByFacetStatus`); visibility is the access layer's (entity
  * floor + facet lens + project narrow). A failed read throws — never `[]`.
  *
@@ -51,7 +51,7 @@ import {
   kindVisibilityConditions,
   pageThingsInColumn,
   roleVisibilityConditions,
-} from "./entities/status-groups.js";
+} from "../services/lifecycle/status-groups.js";
 
 /** W17: below this many LIVE things a pipeline defaults to a list. */
 export const BOARD_LIST_THRESHOLD = 10;

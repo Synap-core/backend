@@ -30,6 +30,8 @@ import { randomUUID } from "node:crypto";
 vi.setConfig({ testTimeout: 120_000 });
 
 const DEAL = "11111111-1111-4111-8111-111111111111";
+const LEAD = "22222222-2222-4222-8222-222222222222";
+const PERSON = "33333333-3333-4333-8333-333333333333";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -64,6 +66,17 @@ vi.mock("@synap/database", async (importOriginal) => {
       db: unknown
     ) => object) {
       async getEffectiveLifecycle(profileId: string) {
+        if (profileId === "22222222-2222-4222-8222-222222222222") {
+          return {
+            propertySlug: "leadStage",
+            options: [
+              { key: "new", category: "open" },
+              { key: "qualified", category: "active" },
+              { key: "converted", category: "done" },
+            ],
+            unclassified: [],
+          };
+        }
         if (profileId !== "11111111-1111-4111-8111-111111111111") return null;
         return {
           propertySlug: "commercialStage",
@@ -216,6 +229,36 @@ async function deal(
   return id;
 }
 
+async function person(ws: string | null, title: string): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into entities (id, user_id, workspace_id, type, profile_id, title, properties, created_at)
+     values ($1,$2,$3,'person',$4,$5,'{}'::jsonb,now())`,
+    [id, USER, ws, PERSON, title]
+  );
+  return id;
+}
+
+async function leadFacet(
+  entityId: string,
+  ws: string | null,
+  status: string,
+  owner: string
+): Promise<void> {
+  await q(
+    `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, status_category, properties, metadata, created_at, updated_at)
+     values (gen_random_uuid(),$1,$2,$3,$4,$5,$6,'{}'::jsonb,'{}'::jsonb,now(),now())`,
+    [
+      entityId,
+      LEAD,
+      owner,
+      ws,
+      status,
+      { new: "open", qualified: "active", converted: "done" }[status] ?? null,
+    ]
+  );
+}
+
 async function session(o: {
   subject?: string | null;
   status?: string;
@@ -271,6 +314,8 @@ let LIB = "";
 let ARCHIVED = "";
 let SYSTEM = "";
 let AGENTWS = "";
+let CRM = "";
+let HIDDEN = "";
 const T: Record<string, string> = {};
 
 beforeAll(async () => {
@@ -288,10 +333,16 @@ beforeAll(async () => {
     `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'deal','Deal','Deals','kind','workspace',true)`,
     [DEAL]
   );
+  await q(
+    `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values
+       ($1,'lead','Lead','Leads','role','pod',true),
+       ($2,'person','Person','People','kind','pod',true)`,
+    [LEAD, PERSON]
+  );
   // The declaration the inference reads (`declaredLifecycleProfilesStatement`).
   await q(
-    `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,gen_random_uuid(),true)`,
-    [DEAL]
+    `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,gen_random_uuid(),true), ($2,gen_random_uuid(),true)`,
+    [DEAL, LEAD]
   );
 
   DEV = await space("Dev", {
@@ -321,11 +372,31 @@ beforeAll(async () => {
   T.misc = await deal(MISC, "Misc deal", "draft", 0);
   // Someone else's deal in a space the caller cannot see.
   const hidden = randomUUID();
+  HIDDEN = hidden;
   await q(
     `insert into workspaces (id, name, owner_id, workspace_type, settings) values ($1,'Hidden','other','operational','{}'::jsonb)`,
     [hidden]
   );
   T.hidden = await deal(hidden, "Hidden", "draft", 0, "other");
+
+  // ROLE-produced work (homes review M1): CRM produces `lead`, a ROLE whose
+  // stage lives on the facet. The people live elsewhere (MISC / pod-wide).
+  CRM = await space("CRM", {
+    settings: {
+      intent: { label: "Pipeline", produces: ["lead"], source: "template" },
+    },
+  });
+  T.alice = await person(MISC, "Alice");
+  T.bob = await person(null, "Bob");
+  T.carol = await person(MISC, "Carol");
+  await leadFacet(T.alice, CRM, "qualified", USER);
+  // A shared role's facet is stored POD-WIDE (no space).
+  await leadFacet(T.bob, null, "new", USER);
+  // Carol's lead facet sits in a space the caller cannot see.
+  await leadFacet(T.carol, hidden, "qualified", "other");
+  // Dave's lead facet is pod-wide but SOMEONE ELSE's (the facet owner floor).
+  T.dave = await person(MISC, "Dave");
+  await leadFacet(T.dave, null, "qualified", "other");
 });
 
 describe("lifecycle.home", () => {
@@ -563,5 +634,87 @@ describe("lifecycle.moving", () => {
     expect(inMisc.items.map((i) => i.entityId)).toEqual([T.misc]);
     const one = await caller().moving({ limit: 1 });
     expect(one.items).toHaveLength(1);
+  });
+});
+
+describe("role-produced work + the access floor (homes review M1 / S7)", () => {
+  it("home: a ROLE-produced kind reads the facets under the space's lens", async () => {
+    const home = await caller().home();
+    const crm = home.spaces.find((s) => s.workspaceId === CRM)!;
+    expect(crm).toMatchObject({ label: "Pipeline", kind: "producing" });
+    const lead = crm.produces[0]!;
+    expect(lead.profileSlug).toBe("lead");
+    // Alice (CRM) + Bob (pod-wide, visible in every lens); Carol's facet is
+    // in a space the caller cannot see.
+    expect(lead.columns.map((c) => [c.key, c.count])).toEqual([
+      ["new", 1],
+      ["qualified", 1],
+      ["converted", 0],
+    ]);
+  });
+
+  it("home: another user's private space is never listed", async () => {
+    const ids = (await caller().home()).spaces.map((s) => s.workspaceId);
+    expect(ids).not.toContain(HIDDEN);
+  });
+
+  it("moving: a lead names the FACET's stage, kind and space, never the person's", async () => {
+    await q(`update focus_sessions set status = 'closed'`);
+    await session({ subject: T.alice, mins: 5, title: "Qualify Alice" });
+    await session({ subject: T.bob, mins: 6, title: "Call Bob" });
+    await session({ subject: T.carol, mins: 7, title: "Carol" });
+    await session({ subject: T.dave, mins: 8, title: "Dave" });
+    try {
+      const { items } = await caller().moving();
+      const by = new Map(items.map((i) => [i.entityId, i]));
+      expect(by.get(T.alice)).toMatchObject({
+        profileSlug: "lead",
+        workspaceId: CRM,
+        status: "qualified",
+        category: "active",
+      });
+      // Someone else's pod-wide facet is behind the facet owner floor.
+      expect(by.get(T.dave)).toMatchObject({
+        profileSlug: "person",
+        workspaceId: MISC,
+      });
+      // The pod-wide facet sits in the space that produces the role.
+      expect(by.get(T.bob)).toMatchObject({
+        profileSlug: "lead",
+        workspaceId: CRM,
+        status: "new",
+        category: "open",
+      });
+      // Carol's lead facet is invisible: she moves as what she is.
+      expect(by.get(T.carol)).toMatchObject({
+        profileSlug: "person",
+        workspaceId: MISC,
+        status: null,
+      });
+
+      // The Sales chip narrows server-side to the facet's space.
+      const inCrm = await caller().moving({ workspaceId: CRM, limit: 30 });
+      expect(inCrm.items.map((i) => i.entityId).sort()).toEqual(
+        [T.alice, T.bob].sort()
+      );
+      const inMisc = await caller().moving({ workspaceId: MISC, limit: 30 });
+      expect(inMisc.items.map((i) => i.entityId).sort()).toEqual(
+        [T.carol, T.dave].sort()
+      );
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
+  });
+
+  it("moving: a readable session on a thing the caller cannot read is not listed", async () => {
+    await q(`update focus_sessions set status = 'closed'`);
+    await session({ subject: T.hidden, mins: 2 });
+    await session({ subject: T.fresh, mins: 3 });
+    try {
+      const ids = (await caller().moving()).items.map((i) => i.entityId);
+      expect(ids).toEqual([T.fresh]);
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
   });
 });
