@@ -22,6 +22,7 @@
  * names exactly one hand-off and approving it attaches exactly that agent
  * (`focus_session/assign_agent` executor → `attachSessionAgent`).
  */
+import { db, users, eq } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
 /** The agents in `agentIds` that are NOT the acting agent (a hand-off), deduped. */
@@ -67,6 +68,12 @@ export async function gateAgentHandOff(p: {
   agentId: string;
   reasoning?: string;
 }): Promise<AgentHandOffDecision> {
+  // The reviewer approves a hand-off to a NAMED agent, never to a bare id.
+  const [agent] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, p.agentId))
+    .limit(1);
   const perm = await checkPermissionOrPropose({
     userId: p.userId,
     agentUserId: p.agentUserId,
@@ -75,10 +82,14 @@ export async function gateAgentHandOff(p: {
     action: "assign_agent",
     source: "intelligence",
     ...(p.reasoning ? { reasoning: p.reasoning } : {}),
+    // Filed on the session it hands over, so it shows there as waiting on you.
+    sessionId: p.sessionId,
+    sessionSource: "explicit",
     data: {
       id: p.sessionId,
       goal: p.goal ?? null,
       addAgentId: p.agentId,
+      agentName: agent?.name ?? null,
     },
   });
   if ("denied" in perm && perm.denied) {

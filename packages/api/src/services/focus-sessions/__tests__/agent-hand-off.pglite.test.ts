@@ -202,7 +202,9 @@ describe("update_session addAgentId — an agent handing the session on", () => 
       subjectType: "focus_session",
       action: "assign_agent",
       agentUserId: AGENT,
-      data: { id: sessionId, addAgentId: WORKER },
+      // Filed on the session, naming the agent the reviewer hands it to.
+      sessionId,
+      data: { id: sessionId, addAgentId: WORKER, agentName: "Worker" },
     });
     // The roster-only patch never reached the update membrane, which would
     // have auto-approved it.

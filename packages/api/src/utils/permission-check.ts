@@ -2840,6 +2840,19 @@ export function buildProposalSummary(
         : undefined);
     return goal ? `Complete session "${goal}"` : "Complete focus session";
   }
+  // focus_session HAND-OFF — an agent putting another agent on the roster
+  // (`services/focus-sessions/agent-hand-off.ts`). Names who gets the work.
+  if (subjectType === "focus_session" && action === "assign_agent") {
+    const goal =
+      typeof data.goal === "string" && data.goal.trim() ? data.goal : undefined;
+    const agent =
+      typeof data.agentName === "string" && data.agentName.trim()
+        ? data.agentName
+        : "another agent";
+    return goal
+      ? `Hand session "${goal}" to ${agent}`
+      : `Hand a session to ${agent}`;
+  }
   // focus_session TRACK FILING (adopt existing work into a step). Checked
   // BEFORE the project branch: a filing that also sets the project names the
   // project as a consequence of the track, not as the headline. Names are the
