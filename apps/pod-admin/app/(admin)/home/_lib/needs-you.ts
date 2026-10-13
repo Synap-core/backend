@@ -27,6 +27,7 @@ import {
   type NavId,
 } from "../../../../lib/console-nav";
 import { openIn, type Exit } from "../../../../lib/open-in";
+import type { UpdateIssue } from "../../updates/_lib/updates-model";
 
 export type HealthStatus = "ok" | "attention" | "degraded";
 
@@ -97,6 +98,7 @@ const IMPORTANCE: readonly string[] = [
   "failed_flows",
   "stuck_runs",
   "sync_error",
+  "pod_update",
   "trusted_issuer",
   "agent_activity",
   "duplicate_proposals",
@@ -412,6 +414,21 @@ function syncRow(errors: SyncError[]): NeedsYouRow | null {
   };
 }
 
+// ── A last update that did not land (not a diagnose section) ────────────────
+
+/** `down` (failed, could not roll back) is urgent; `stale` (rolled back, safe on the old release) is not. */
+function updateRow(issue: UpdateIssue | null): NeedsYouRow | null {
+  if (!issue) return null;
+  return {
+    key: "pod_update",
+    tone: issue.kind === "down" ? "degraded" : "attention",
+    headline: issue.headline,
+    secondary: issue.secondary,
+    action: openPage("updates"),
+    items: [],
+  };
+}
+
 function importance(key: string): number {
   const i = IMPORTANCE.indexOf(key);
   // Unknown keys rank after every known one — shown, never first.
@@ -426,15 +443,17 @@ function importance(key: string): number {
  * `audience: "member"` (D8) drops the sections whose page only an admin can
  * open — a row whose one action is a /forbidden is not something the reader
  * can act on. Sync errors are the caller's to omit: members cannot read sync
- * peers at all.
+ * peers at all; the same goes for `updateIssue` (Updates is admin-only).
  */
 export function buildNeedsYou({
   sections,
   syncErrors = [],
+  updateIssue = null,
   audience = "admin",
 }: {
   sections: DiagnoseSection[];
   syncErrors?: SyncError[];
+  updateIssue?: UpdateIssue | null;
   audience?: NavAudience;
 }): NeedsYou {
   const rows = [
@@ -442,6 +461,7 @@ export function buildNeedsYou({
       .filter((s) => s.status !== "ok" && sectionVisibleTo(s.key, audience))
       .map(sectionRow),
     syncRow(syncErrors),
+    audience === "admin" ? updateRow(updateIssue) : null,
   ]
     .filter((r): r is NeedsYouRow => r !== null)
     .sort(

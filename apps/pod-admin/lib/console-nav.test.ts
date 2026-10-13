@@ -112,3 +112,17 @@ describe("SEARCH_DESTINATION", () => {
     expect(navLabel(SEARCH_DESTINATION.issuer.nav)).toBe("Pod security");
   });
 });
+
+describe("Pod group", () => {
+  it("lists Pod security, Backups, Updates, Audit log, admin-only", () => {
+    const pod = navForRole("admin").find((g) => g.id === "pod");
+    expect(pod?.items.map((i) => [i.id, i.audience])).toEqual([
+      ["security", "admin"],
+      ["backups", "admin"],
+      ["updates", "admin"],
+      ["audit", "admin"],
+    ]);
+    expect(navLabel("updates")).toBe("Updates");
+    expect(activeNavId("/updates")).toBe("updates");
+  });
+});

@@ -374,6 +374,50 @@ describe("buildNeedsYou for a member (D8)", () => {
   });
 });
 
+describe("a last update that did not land", () => {
+  const rolledBack = {
+    kind: "stale" as const,
+    headline: "The last update was rolled back",
+    secondary: "The new version didn't pass its health check.",
+  };
+
+  it("adds one row to Updates, below the diagnose faults", () => {
+    const { rows } = buildNeedsYou({
+      sections: [backlog],
+      updateIssue: rolledBack,
+    });
+    expect(rows.map((r) => [r.key, r.tone])).toEqual([
+      ["review_backlog", "attention"],
+      ["pod_update", "attention"],
+    ]);
+    const row = rows[1];
+    expect(row.headline).toBe("The last update was rolled back");
+    expect(row.action).toEqual({
+      kind: "link",
+      label: "Open updates",
+      exit: { href: "/updates", isDesktopLink: false },
+    });
+  });
+
+  it("is urgent when the pod may be broken", () => {
+    const { rows } = buildNeedsYou({
+      sections: [],
+      updateIssue: { ...rolledBack, kind: "down" },
+    });
+    expect(rows[0].tone).toBe("degraded");
+  });
+
+  it("never reaches a member, who cannot open Updates", () => {
+    expect(
+      buildNeedsYou({
+        sections: [],
+        updateIssue: rolledBack,
+        audience: "member",
+      }).rows
+    ).toEqual([]);
+  });
+});
+
 describe("formatAgeHours", () => {
   it("reads at a glance", () => {
     expect(formatAgeHours(0.2)).toBe("under an hour");

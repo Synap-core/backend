@@ -268,6 +268,15 @@ export const CONSOLE_NAV = [
         audience: "admin",
       },
       {
+        id: "updates",
+        href: "/updates",
+        label: "Updates",
+        // No dedicated glyph: `side-nav.tsx` is the shell's, and a new icon
+        // there is a shell change, not an Updates one.
+        icon: "Sparkles",
+        audience: "admin",
+      },
+      {
         id: "audit",
         href: "/audit",
         label: "Audit log",
