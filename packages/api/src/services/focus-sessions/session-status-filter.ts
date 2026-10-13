@@ -32,8 +32,8 @@
  *
  * The activity clock is `coalesce(closed_at, updated_at)`: the conclusion time
  * for a closed row, the last touch for a stale one (stale rows have no
- * `closed_at`). Relay's `isWorkVisibleSession` uses the same fallback, so the
- * pod and the phone cannot disagree about whether a row is inside a window.
+ * `closed_at`). A client that windows sessions itself must use the same
+ * fallback, or it and the pod disagree about whether a row is inside a window.
  */
 
 import {

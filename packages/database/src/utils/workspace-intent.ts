@@ -12,6 +12,9 @@
 import { z } from "zod";
 import type { WorkspaceIntentSettings } from "../schema/workspaces.js";
 
+/** One produced entry, as a definition declares it. */
+const producedEntrySchema = z.object({ profile: z.string() });
+
 /**
  * The wire form on a compiled definition — declared by EVERY install door's
  * zod (`createFromDefinition`, `reconcileFromDefinition`, Hub
@@ -20,31 +23,34 @@ import type { WorkspaceIntentSettings } from "../schema/workspaces.js";
  */
 export const workspaceIntentDefinitionSchema = z.object({
   label: z.string(),
-  produces: z.array(z.object({ profile: z.string() })).optional(),
+  produces: z.array(producedEntrySchema).optional(),
 });
 
 export type WorkspaceIntentDefinition = z.infer<
   typeof workspaceIntentDefinitionSchema
 >;
 
+/**
+ * The same schema, read leniently for the projection: a malformed `produces`
+ * (or one bad entry in it) drops alone instead of the whole intent.
+ */
+const projectedIntentSchema = workspaceIntentDefinitionSchema.extend({
+  produces: z.array(z.unknown()).catch([]).optional(),
+});
+
 /** The stored form of a definition's intent; null when it declares none. */
 export function projectTemplateIntent(
   intent: unknown
 ): WorkspaceIntentSettings | null {
-  if (!intent || typeof intent !== "object") return null;
-  const { label, produces } = intent as {
-    label?: unknown;
-    produces?: unknown;
-  };
-  if (typeof label !== "string" || !label.trim()) return null;
-  const slugs = Array.isArray(produces)
-    ? produces.flatMap((p) => {
-        const slug = (p as { profile?: unknown } | null)?.profile;
-        return typeof slug === "string" && slug.trim() ? [slug.trim()] : [];
-      })
-    : [];
+  const parsed = projectedIntentSchema.safeParse(intent);
+  if (!parsed.success || !parsed.data.label.trim()) return null;
+  const slugs = (parsed.data.produces ?? []).flatMap((p) => {
+    const entry = producedEntrySchema.safeParse(p);
+    const slug = entry.success ? entry.data.profile.trim() : "";
+    return slug ? [slug] : [];
+  });
   return {
-    label: label.trim(),
+    label: parsed.data.label.trim(),
     produces: [...new Set(slugs)],
     source: "template",
   };

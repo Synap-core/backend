@@ -1113,7 +1113,9 @@ export async function readMoving(
   const onThings = things.flatMap((t) => work.get(t.id) ?? []);
   const [identities, names, asksYou] = await Promise.all([
     resolveMovingIdentities(ctx.userId, things, input.workspaceId),
-    resolveActorNames([...onThings, ...loose].map((w) => w.agentIds[0] ?? "")),
+    resolveActorNames(
+      [...onThings, ...loose].flatMap((w) => w.agentIds.slice(0, 1))
+    ),
     // THE needs-you owed predicate (owner floor, drafts out), never a slot scan.
     asksYouSessionIds(
       ctx.userId,

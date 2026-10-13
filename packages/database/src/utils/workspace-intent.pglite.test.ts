@@ -241,6 +241,11 @@ describe("settings.intent — projected by the create and reconcile writers", ()
         produces: [{ profile: "finding" }, { nope: 1 }, { profile: "finding" }],
       })
     ).toEqual({ label: "Research", produces: ["finding"], source: "template" });
+    // A `produces` that is not a list drops alone; the label still lands.
+    expect(
+      projectTemplateIntent({ label: "Notes", produces: "finding" })
+    ).toEqual({ label: "Notes", produces: [], source: "template" });
+    expect(projectTemplateIntent("Research")).toBeNull();
     expect(projectTemplateIntent({ label: "Library" })).toEqual({
       label: "Library",
       produces: [],
