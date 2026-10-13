@@ -257,8 +257,10 @@ export async function runLibraryKeepAlive(args?: {
         type: "library.build_suggestion",
         userId: g.userId,
         workspaceId: g.workspaceId,
-        sourceType: "system",
+        // A door: Home / lens rows and the push open the group.
+        sourceType: "library_group",
         sourceId: g.groupId,
+        target: { kind: "library_group", id: g.groupId },
         // One a week per PERSON, whichever group it names.
         groupKey: `library.build_suggestion:${g.userId}`,
         data: {
@@ -275,8 +277,10 @@ export async function runLibraryKeepAlive(args?: {
         type: "library.resurface",
         userId: c.userId,
         workspaceId: c.workspaceId,
-        sourceType: "system",
+        // A door: the Library, lensed to the project the items are for.
+        sourceType: "library",
         sourceId: c.projectId,
+        target: { kind: "library", id: c.projectId },
         groupKey: `library.resurface:${c.userId}:${c.projectId}`,
         data: {
           projectId: c.projectId,

@@ -18,6 +18,9 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import type { db as DatabaseHandle } from "@synap/database";
 import { readLibraryKeepAlive, runLibraryKeepAlive } from "../keep-alive.js";
+import { signalFromNotification } from "../../signals/needs-you-union.js";
+import { pushTarget } from "../../../notifications/NotificationService.js";
+import { getNotificationDef } from "../../../notifications/registry.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -217,11 +220,40 @@ describe("library keep-alive", () => {
         .filter((c) => c.type === "library.build_suggestion")
         .map((c) => c.userId)
     ).toEqual([A]);
+
+    // REACHABILITY: each notification, stored as the door stores it, is a
+    // union row that OPENS something — and its push carries the same door.
+    const doorOf = (input: Record<string, unknown>) => {
+      const def = getNotificationDef(input.type as string)!;
+      const signal = signalFromNotification({
+        id: "n1",
+        title: "t",
+        category: def.category,
+        sourceType: input.sourceType as string,
+        sourceId: input.sourceId as string,
+        createdAt: NOW,
+        type: input.type as string,
+        actions: def.actions,
+      });
+      return {
+        union: signal.target,
+        push: pushTarget(def, input as never),
+      };
+    };
+    expect(doorOf(suggestion!)).toEqual({
+      union: { kind: "library_group", id: groupOld },
+      push: { kind: "library_group", id: groupOld },
+    });
+
     const resurface = calls.find((c) => c.type === "library.resurface");
     expect(resurface).toMatchObject({
       userId: A,
       sourceId: project,
       data: { projectName: "Kitchen remodel", count: 1, titles: "Tiles" },
+    });
+    expect(doorOf(resurface!)).toEqual({
+      union: { kind: "library", id: project },
+      push: { kind: "library", id: project },
     });
   });
 

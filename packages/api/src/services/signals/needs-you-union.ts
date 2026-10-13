@@ -500,6 +500,12 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   session: "session",
   // `track.kpi_reached` (services/tracks) — sourceId is the track id.
   track: "track",
+  // `library.build_suggestion` / `library.resurface` naming a group — sourceId
+  // is the `library_groups` id.
+  library_group: "library_group",
+  // `library.resurface` naming a project — sourceId is the PROJECT id; the
+  // clients open the Library lensed to it.
+  library: "library",
 };
 
 /**
