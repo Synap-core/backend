@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   batchOf,
+  exitOf,
   focusedRow,
   isRemoval,
   reviewCounts,
@@ -297,5 +298,46 @@ describe("isRemoval", () => {
         data: { verbId: "entity.create" },
       })
     ).toBe(false);
+  });
+});
+
+describe("exitOf — an ask's door keeps the view it asks for", () => {
+  it("a capture's Intake Room door opens the room, not the plain session", () => {
+    const [row] = reviewRows(
+      [
+        sig({
+          id: "capture:s9",
+          kind: "capture",
+          category: "ai",
+          target: { kind: "session", id: "s9", view: "room" },
+        }),
+      ],
+      new Map()
+    );
+    expect(row!.detail).toEqual({
+      kind: "open",
+      door: { kind: "session", id: "s9", view: "room" },
+    });
+    expect(
+      exitOf({
+        kind: "open",
+        door: { kind: "session", id: "s9", view: "room" },
+      }).href
+    ).toBe("synap://open/session/s9?view=room");
+  });
+
+  it("a session door with no view stays on the web page", () => {
+    expect(
+      exitOf({ kind: "open", door: { kind: "session", id: "s1" } }).href
+    ).toBe("/open/session/s1");
+  });
+
+  it("drops a view the allowlist does not know", () => {
+    expect(
+      exitOf({
+        kind: "open",
+        door: { kind: "session", id: "s1", view: "nonsense" },
+      }).href
+    ).toBe("/open/session/s1");
   });
 });

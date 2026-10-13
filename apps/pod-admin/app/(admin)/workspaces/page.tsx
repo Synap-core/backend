@@ -63,7 +63,7 @@ import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
 import { formatRelative, readableError } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
-import { ExitFallback } from "../../../lib/exit-link";
+import { ExitFallback, usePlacedExit } from "../../../lib/exit-link";
 
 // Pull the workspace shape from the query response so we don't drift.
 // We declare it inline (rather than using `inferRouterOutputs`) because
@@ -326,6 +326,9 @@ function WorkspaceRowActions({
     objectKind: "workspace",
     id: ws.id,
   });
+  // `null` on a phone: the mobile app has no space screen. The line beneath
+  // says so and links this space's own page instead.
+  const appHref = usePlacedExit(desktopExit).href;
 
   const deleteMutation = trpc.workspaces.adminDelete.useMutation({
     onSuccess: (data) => {
@@ -397,19 +400,21 @@ function WorkspaceRowActions({
                 does nothing at all when the app is not installed, so the
                 download fallback is rendered right underneath — never a
                 click with no way out. */}
-            <Button
-              as="a"
-              href={desktopExit.href}
-              variant="light"
-              size="sm"
-              radius="sm"
-              className="justify-start text-[12.5px]"
-              startContent={
-                <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
-              }
-            >
-              Open in app
-            </Button>
+            {appHref !== null && (
+              <Button
+                as="a"
+                href={appHref}
+                variant="light"
+                size="sm"
+                radius="sm"
+                className="justify-start text-[12.5px]"
+                startContent={
+                  <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+                }
+              >
+                Open in app
+              </Button>
+            )}
             <span className="px-3 pb-1">
               <ExitFallback exit={desktopExit} />
             </span>

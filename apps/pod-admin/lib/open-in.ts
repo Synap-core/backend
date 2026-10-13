@@ -23,9 +23,18 @@
  * visitor has the app installed, and a `synap://` href that does not resolve
  * fails silently — the browser simply does nothing. `fallback` is what the UI
  * offers next to it so the click is never a dead end.
+ *
+ * The third rule: **a phone is a different receiver.** There `synap://` opens
+ * the mobile app (Relay), which opens fewer things than the desktop app and
+ * mis-routes the rest. Every desktop exit says what a phone does with it
+ * (`phone`), from ONE table (`RELAY_OPENABLE_KINDS`), and `placeExit` turns
+ * that into what the device shows: the link with the mobile install hatch, or
+ * an honest "open this on your computer" with a web page when one covers it.
  */
 
+import type { ObjectNavView } from "@synap-core/types/navigation";
 import { HOST_TYPES } from "../app/open/open-params";
+import { navHref, navLabel } from "./console-nav";
 
 /**
  * Landing-site origin. A CONSTANT, deliberately.
@@ -95,8 +104,12 @@ export type AccountPage = (typeof ACCOUNT_PAGES)[number];
 const WEB_HOSTED_OBJECTS: ReadonlySet<string> = new Set(HOST_TYPES);
 
 export type ExitTarget =
-  /** An object addressed by kind + id. Web-hosted when pod-admin can render it. */
-  | { kind: "object"; objectKind: string; id: string }
+  /**
+   * An object addressed by kind + id. Web-hosted when pod-admin can render it.
+   * `view` asks for a READING of it that only the apps draw (`room` = a
+   * session's Intake Room), so an object with a view always hands off.
+   */
+  | { kind: "object"; objectKind: string; id: string; view?: ObjectNavView }
   /** A section of the desktop app's Settings. */
   | { kind: "settings"; section: BrowserSettingsSection }
   /** A desktop app by manifest id (e.g. `marketplace`, `data`, `governance`). */
@@ -124,22 +137,120 @@ export interface Exit {
   isDesktopLink: boolean;
   /** Always present when `isDesktopLink` — never leave a click with no way out. */
   fallback?: { href: string; label: string };
+  /**
+   * What a PHONE does with this `synap://` link, where the scheme opens the
+   * mobile app (Relay) instead of the desktop one. Present iff `isDesktopLink`;
+   * `placeExit` reads it, nothing else should.
+   */
+  phone?: PhoneExit;
 }
 
+/** A pod-admin page that covers, on the web, what a desktop exit opens. */
+export interface WebAlternative {
+  href: string;
+  label: string;
+}
+
+export type PhoneExit =
+  /** Relay has a screen for it: the same link works, its install hatch differs. */
+  | { opens: "relay" }
+  /** Relay cannot open it. `web` is a console page that covers it, if any. */
+  | { opens: "nowhere"; web?: WebAlternative };
+
 /**
- * The one place the "you need the app" escape hatch is spelled.
- *
- * Exported because a list whose every row is a desktop link should offer this
- * ONCE beneath the list, not once per row. Deriving it from here means that
- * shared affordance can never drift from where the row links actually point.
+ * The one place the "you need the app" escape hatch is spelled. Not exported:
+ * it rides on every desktop `Exit`, and a list that offers it once beneath its
+ * rows renders `ExitFallback` with one of those exits — so the hatch can never
+ * drift from where the row links point, or from the device (`placeExit`).
  */
-export const DESKTOP_FALLBACK = {
+const DESKTOP_FALLBACK = {
   href: `${WEB_BASE}/download/browser`,
   label: "Get the desktop app",
 } as const;
 
-function desktop(href: string): Exit {
-  return { href, isDesktopLink: true, fallback: DESKTOP_FALLBACK };
+/**
+ * The phone's install hatch, for a link Relay can open. Same landing origin;
+ * `/download/relay` is the page Relay itself sends people to
+ * (`relay-app/src/lib/pair-hint.ts` `RELAY_DOWNLOAD_URL`).
+ */
+export const MOBILE_FALLBACK = {
+  href: `${WEB_BASE}/download/relay`,
+  label: "Get the Synap mobile app",
+} as const;
+
+/**
+ * Object kinds Relay can open from `synap://open/<kind>/<id>` — THE table.
+ *
+ * On a phone the `synap://` scheme belongs to Relay, not the desktop app, and
+ * Relay resolves it through its own route table
+ * (`relay-app/src/lib/object-nav.ts` `KIND_ROUTE`; its `NO_SCREEN` lists what
+ * it knowingly cannot open — `workspace`, `channel`, `view`, `capability`,
+ * `skill`). Every kind here has a `KIND_ROUTE` row keyed by the SAME id this
+ * door puts in the link (a session's `?view=room` included). A kind missing
+ * here is told "open on your computer" on a phone rather than handed a link
+ * that lands on Relay's "not found". The `open/app/<appId>` grammar (desktop
+ * apps, Settings sections) is never in it: Relay reads `app` as an App Connect
+ * application id, so `open/app/settings/vault` looks for an application.
+ */
+const RELAY_OPENABLE_KINDS: ReadonlySet<string> = new Set([
+  "session",
+  "automation",
+  "playbook",
+  "owed",
+  "proposal",
+  "entity",
+  "document",
+  "project",
+]);
+
+/**
+ * Settings sections whose substance pod-admin also serves on the web, so a
+ * phone (which cannot reach desktop Settings) is pointed there instead of at
+ * nothing. Every other section has no web twin.
+ */
+const SETTINGS_WEB_ALTERNATIVE: Partial<
+  Record<BrowserSettingsSection, WebAlternative>
+> = {
+  // `/my-vault` is the personal (self-service) page, open to every member.
+  vault: { href: "/my-vault", label: "My vault" },
+  connectors: { href: navHref("sources"), label: navLabel("sources") },
+  "ai-governance": {
+    href: navHref("intelligence"),
+    label: navLabel("intelligence"),
+  },
+};
+
+/** A desktop-only object's page in the console, when it has one. */
+function objectWebAlternative(
+  objectKind: string,
+  id: string
+): WebAlternative | undefined {
+  if (objectKind === "workspace") {
+    return {
+      href: `${navHref("spaces")}/${encodeURIComponent(id)}`,
+      label: "See this space here",
+    };
+  }
+  return undefined;
+}
+
+function withWeb(web: WebAlternative | undefined): PhoneExit {
+  return web ? { opens: "nowhere", web } : { opens: "nowhere" };
+}
+
+function desktop(href: string, phone: PhoneExit): Exit {
+  return { href, isDesktopLink: true, fallback: DESKTOP_FALLBACK, phone };
+}
+
+/** `synap://open/<kind>/<id>[?view=]` — the object grammar both apps read. */
+function objectLink(objectKind: string, id: string, view?: ObjectNavView) {
+  const href = `synap://open/${encodeURIComponent(objectKind)}/${encodeURIComponent(id)}`;
+  return desktop(
+    view ? `${href}?view=${encodeURIComponent(view)}` : href,
+    RELAY_OPENABLE_KINDS.has(objectKind)
+      ? { opens: "relay" }
+      : withWeb(objectWebAlternative(objectKind, id))
+  );
 }
 
 function web(href: string): Exit {
@@ -160,7 +271,9 @@ export function openIn(target: ExitTarget): Exit {
       if (target.objectKind === "proposal") {
         return web(`/proposal/${encodeURIComponent(target.id)}`);
       }
-      if (WEB_HOSTED_OBJECTS.has(target.objectKind)) {
+      // A view is a reading only the apps draw (the Intake Room): the web
+      // page would show the plain object and silently drop what was asked.
+      if (WEB_HOSTED_OBJECTS.has(target.objectKind) && !target.view) {
         return web(
           `/open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
         );
@@ -169,24 +282,25 @@ export function openIn(target: ExitTarget): Exit {
       // capability, playbook — has no web renderer. Be honest about it.
       // (`automation` / `session` are hosted since D6; a caller that means
       // "in the desktop app" asks for `objectInApp`.)
-      return desktop(
-        `synap://open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
-      );
+      return objectLink(target.objectKind, target.id, target.view);
     }
 
     case "objectInApp":
-      return desktop(
-        `synap://open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
-      );
+      return objectLink(target.objectKind, target.id);
 
     case "settings":
       // Receiver verified: `useDeepLinkHandler.ts` routes `open/app/<id>/<seg>`
       // to the app with `props.route = [<seg>]`, and `SettingsApp` reads
       // `route[0]` to call `navigateToSettings()`.
-      return desktop(`synap://open/app/settings/${target.section}`);
+      return desktop(
+        `synap://open/app/settings/${target.section}`,
+        withWeb(SETTINGS_WEB_ALTERNATIVE[target.section])
+      );
 
     case "app":
-      return desktop(`synap://open/app/${encodeURIComponent(target.appId)}`);
+      return desktop(`synap://open/app/${encodeURIComponent(target.appId)}`, {
+        opens: "nowhere",
+      });
 
     case "account":
       return web(`${WEB_BASE}/account/${target.page}`);
@@ -194,4 +308,43 @@ export function openIn(target: ExitTarget): Exit {
     case "guide":
       return web(`${WEB_BASE}/guides/${encodeURIComponent(target.slug)}`);
   }
+}
+
+/**
+ * An exit as THIS device can follow it.
+ *
+ * `href: null` means there is nothing to click here: the reader is on a phone,
+ * where `synap://` opens Relay, and Relay has no screen for the target. Then
+ * `unavailable` carries the honest sentence and, when the console covers the
+ * same ground, the page that does.
+ */
+export interface PlacedExit {
+  href: string | null;
+  isDesktopLink: boolean;
+  /** The install hatch for this device's app. Only with a `synap://` href. */
+  fallback?: { href: string; label: string };
+  unavailable?: { note: string; web?: WebAlternative };
+}
+
+/** Said where a phone cannot follow an exit. Plain, and true. */
+export const PHONE_UNAVAILABLE_NOTE = "Open this on your computer.";
+
+/**
+ * Resolve an exit for the device. Desktop (and the server render) get the exit
+ * exactly as `openIn` built it; a phone keeps web exits, keeps a Relay-openable
+ * `synap://` link with the MOBILE install hatch, and turns everything else into
+ * an `unavailable` note — never a link that lands on Relay's "not found".
+ */
+export function placeExit(exit: Exit, onPhone: boolean): PlacedExit {
+  if (!onPhone || !exit.isDesktopLink || !exit.phone) return exit;
+  if (exit.phone.opens === "relay") {
+    return { href: exit.href, isDesktopLink: true, fallback: MOBILE_FALLBACK };
+  }
+  return {
+    href: null,
+    isDesktopLink: true,
+    unavailable: exit.phone.web
+      ? { note: PHONE_UNAVAILABLE_NOTE, web: exit.phone.web }
+      : { note: PHONE_UNAVAILABLE_NOTE },
+  };
 }

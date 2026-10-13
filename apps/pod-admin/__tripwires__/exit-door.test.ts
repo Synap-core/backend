@@ -144,6 +144,19 @@ describe("pod-admin exit door", () => {
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 
+  it("renders an exit's href only after placing it for the device", () => {
+    // On a phone `synap://` opens the mobile app, which mis-routes desktop
+    // apps and Settings (`open/app/<id>` reads as an App Connect application)
+    // and has no screen for a space or a channel. Reading `exit.href` straight
+    // into an anchor skips `placeExit` and hands a phone exactly that link.
+    // Every renderer goes through `usePlacedExit` / `rowHref` (exit-link.tsx).
+    const allowed = new Set(["lib/exit-link.tsx", "lib/open-in.ts"]);
+    const hits = FILES.filter(
+      (f) => /\b\w*[eE]xit\s*\.\s*href\b/.test(f.body) && !allowed.has(f.path)
+    );
+    expect(hits.map((h) => h.path)).toEqual([]);
+  });
+
   it("uses the shared confirm modal, never the OS dialog", () => {
     // `confirm(...)` is the MORE idiomatic spelling than `window.confirm`, so
     // a guard that only knows the qualified form misses the likely regression.
@@ -210,6 +223,9 @@ describe("landing destinations exist", () => {
   const routes = [
     ...ACCOUNT_PAGES.map((page) => `account/${page}`),
     "download/browser",
+    // The phone's install hatch (`MOBILE_FALLBACK`), the page Relay itself
+    // links (`relay-app/src/lib/pair-hint.ts` `RELAY_DOWNLOAD_URL`).
+    "download/relay",
     "guides/quickstart",
   ];
 

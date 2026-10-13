@@ -18,7 +18,12 @@ import { Button, Textarea, addToast } from "@heroui/react";
 import { ArrowUpRight, Check, X } from "lucide-react";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
-import { ExitFallback, externalProps } from "../../../lib/exit-link";
+import {
+  ExitFallback,
+  externalProps,
+  rowHref,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
    non-uuid workspace ref would fire a request that can only fail. */
@@ -269,22 +274,13 @@ export function ProposalDecision({
                 <span className="text-[12px] text-foreground/65">
                   {resolveObjectNoun(target.kind)}
                 </span>
-                <a
-                  href={exit.href}
-                  {...externalProps(exit.href)}
-                  className="inline-flex items-center gap-1.5 rounded-sm text-[13px] text-foreground/75 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                >
-                  {target.label}
-                  {/* Same promise the shared link makes: the icon means
-                      "this leaves pod-admin". A desktop hand-off does. */}
-                  {exit.isDesktopLink && (
-                    <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden />
-                  )}
-                </a>
+                <SourceLink exit={exit} label={target.label} />
               </li>
             ))}
           </ul>
-          {sourceFallbackExit && <ExitFallback exit={sourceFallbackExit} />}
+          {sourceFallbackExit && (
+            <ExitFallback exit={sourceFallbackExit} showWeb={false} />
+          )}
         </div>
       )}
 
@@ -412,5 +408,30 @@ export function ProposalDecision({
         })()
       )}
     </div>
+  );
+}
+
+/**
+ * One provenance target. On a phone a target the mobile app cannot open
+ * becomes its web page, or plain text — the line beneath the list says why.
+ */
+function SourceLink({ exit, label }: { exit: Exit; label: string }) {
+  const placed = usePlacedExit(exit);
+  const href = rowHref(placed);
+  if (href === null)
+    return <span className="text-[13px] text-foreground/75">{label}</span>;
+  return (
+    <a
+      href={href}
+      {...externalProps(href)}
+      className="inline-flex items-center gap-1.5 rounded-sm text-[13px] text-foreground/75 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+    >
+      {label}
+      {/* Same promise the shared link makes: the icon means
+          "this leaves pod-admin". A desktop hand-off does. */}
+      {placed.href !== null && placed.isDesktopLink && (
+        <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden />
+      )}
+    </a>
   );
 }

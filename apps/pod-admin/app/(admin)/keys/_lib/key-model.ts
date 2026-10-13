@@ -4,7 +4,20 @@
  * the workspace keys tab read one rule and cannot drift.
  */
 
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
+
+/**
+ * Who holds a key — `apiKeys.list` / `adminListAll` project it (`KeyHolder`
+ * in `packages/api/src/routers/api-keys.ts`). An app key, a computer key and
+ * a person's own token share `keyType: "user_pat"`; only this tells them
+ * apart. `null` = the holder row is gone; absent = a list that does not carry
+ * it (`listSystemKeys`).
+ */
+export interface KeyHolder {
+  kind: "app" | "computer" | "agent" | "person";
+  name: string | null;
+}
 
 export interface UnifiedKey {
   id: string;
@@ -28,15 +41,22 @@ export interface UnifiedKey {
     name: string | null;
     userType?: string | null;
   };
+  holder?: KeyHolder | null;
 }
 
-export type KeyCategory = "agent" | "cli" | "service" | "system" | "operator";
+export type KeyCategory =
+  "app" | "computer" | "agent" | "cli" | "service" | "system" | "operator";
 
 /**
- * Badge category, derived purely from `keyType` (the real signal) — never
- * from `hubId`/`keyPrefix` heuristics, which mislabeled a self-service
- * `/connect` CLI key (keyType `hub_inbound`, `linkedUserId` set to the human
- * it acts for) as "System".
+ * Badge category, from `keyType` and the key's HOLDER — never from
+ * `hubId`/`keyPrefix` heuristics, which mislabeled a self-service `/connect`
+ * CLI key (keyType `hub_inbound`, `linkedUserId` set to the human it acts for)
+ * as "System".
+ *
+ * The holder is read because `keyType` alone lies by omission: an app's key
+ * (`app-connect.ts`) and a computer's key (`machine-connect.ts`) are minted as
+ * `user_pat`, the same type as a person's own token, and both read "Operator"
+ * — a human credential — until the holder was on the wire.
  */
 export function categorize(k: UnifiedKey): KeyCategory {
   switch (k.keyType) {
@@ -45,26 +65,43 @@ export function categorize(k: UnifiedKey): KeyCategory {
       return "system";
     case "service":
       return "service";
+  }
+  if (k.holder?.kind === "app") return "app";
+  if (k.holder?.kind === "computer") return "computer";
+  switch (k.keyType) {
     case "hub_inbound":
       if (k.linkedUserId) {
         return k.hubId?.startsWith("integration:cli") ? "cli" : "agent";
       }
       return "system";
+    case "system":
+      return "system";
     default:
-      // "system" (admin-minted) and "user_pat" (personal access token) both
-      // fall here: "system" is already correctly named by keyType; everything
-      // else (personal access tokens) maps to the operator bucket.
-      return k.keyType === "system" ? "system" : "operator";
+      // A personal access token: an agent's when an agent holds it, else a
+      // person's own (the operator bucket).
+      return k.holder?.kind === "agent" ? "agent" : "operator";
   }
 }
 
+/** Nouns from the vocabulary where the pod has one; the rest are key words. */
 export const CATEGORY_LABEL: Record<KeyCategory, string> = {
-  agent: "Agent",
+  app: resolveObjectNoun("application"),
+  computer: resolveObjectNoun("machine"),
+  agent: resolveObjectNoun("agent"),
   cli: "CLI",
   service: "Service",
   system: "System",
   operator: "Operator",
 };
+
+/**
+ * The holder's name, for a key a person did not mint for themselves — "which
+ * app / computer / agent is this?". A person's own key names no one.
+ */
+export function holderName(k: UnifiedKey): string | null {
+  if (!k.holder || k.holder.kind === "person") return null;
+  return k.holder.name?.trim() || null;
+}
 
 export function keyStatus(apiKey: {
   isActive: boolean;

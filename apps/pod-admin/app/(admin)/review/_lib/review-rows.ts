@@ -26,6 +26,8 @@ import {
   type LensDoor,
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
+import { isObjectNavView } from "@synap-core/types/navigation";
+import { openIn, type Exit } from "../../../../lib/open-in";
 
 export type ReviewGroup = "access" | "changes" | "asks";
 
@@ -78,6 +80,22 @@ export type ReviewDetail =
   | { kind: "app-request"; requestId: string }
   /** An ask: decided where it lives, so the row opens it there. */
   | { kind: "open"; door: LensDoor };
+
+/**
+ * An ask's door, resolved through the one exit door. The door's `view` rides
+ * along: a capture's door is its session's Intake Room (`view: "room"`), and
+ * dropping it opened the plain session page — not the thread the ask is in.
+ * An unknown view is dropped (the allowlist is `OBJECT_NAV_VIEWS`).
+ */
+export function exitOf(detail: Extract<ReviewDetail, { kind: "open" }>): Exit {
+  const { kind, id, view } = detail.door;
+  return openIn({
+    kind: "object",
+    objectKind: kind,
+    id,
+    ...(isObjectNavView(view) ? { view } : {}),
+  });
+}
 
 export interface ReviewRow {
   /** Stable key: the signal id. */
