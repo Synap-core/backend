@@ -204,6 +204,8 @@ export {
   ensureMachineWrittenPropertiesReadOnly,
   type MachineWrittenPropertySlug,
 } from "./utils/machine-written-properties.js";
+// provenance / provider — the `source` split (decision 2026-09-14)
+export { PROVENANCE_VALUES, type Provenance } from "./utils/provenance.js";
 
 // DEPRECATED: ensureDefaultViews is no longer auto-called. The frontend
 // renders views ephemerally from profile data and persists them only when

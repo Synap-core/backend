@@ -5,7 +5,7 @@
  * WHY THIS FILE EXISTS
  *
  * A closed-choice (`select`) property is editable by default, and that is right
- * for a task's status — a human owns it. It is wrong for the six enums below: a
+ * for a task's status — a human owns it. It is wrong for the enums below: a
  * job, an ingestion pipeline or the AI writes them, and the schema merely
  * DECLARES them to the user. Left editable, a user can mark a failed deployment
  * "success" and the record then lies about what happened.
@@ -55,6 +55,7 @@ export const MACHINE_WRITTEN_PROPERTY_SLUGS = [
   "reportStatus",
   // Provenance — how the row got here.
   "captureMethod",
+  "provenance",
   // AI-derived.
   "sentiment",
 ] as const;

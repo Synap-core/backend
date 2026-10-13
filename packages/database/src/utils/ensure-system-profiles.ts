@@ -17,6 +17,7 @@ import {
 } from "../index.js";
 import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
 import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
+import { PROVENANCE_VALUES } from "./provenance.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
 import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "./facet-visibility.js";
 import {
@@ -185,6 +186,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "title", required: false, displayOrder: 0 },
       { slug: "content", required: false, displayOrder: 1 },
       { slug: "tags", required: false, displayOrder: 2 },
+      { slug: "provenance", required: false, displayOrder: 3 },
+      { slug: "provider", required: false, displayOrder: 4 },
     ],
   },
   {
@@ -203,6 +206,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "projectId", required: false, displayOrder: 5 },
       { slug: "tags", required: false, displayOrder: 6 },
       { slug: "description", required: false, displayOrder: 7 },
+      { slug: "provenance", required: false, displayOrder: 8 },
+      { slug: "provider", required: false, displayOrder: 9 },
     ],
   },
   // "project" profile removed — projects are now first-class table rows
@@ -224,6 +229,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "calendarLink", required: false, displayOrder: 6 },
       { slug: "tags", required: false, displayOrder: 7 },
       { slug: "description", required: false, displayOrder: 8 },
+      { slug: "provenance", required: false, displayOrder: 9 },
+      { slug: "provider", required: false, displayOrder: 10 },
     ],
   },
   // Capture hierarchy
@@ -237,6 +244,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "content", required: false, displayOrder: 4 },
       { slug: "tags", required: false, displayOrder: 5 },
       { slug: "description", required: false, displayOrder: 6 },
+      { slug: "provenance", required: false, displayOrder: 7 },
+      { slug: "provider", required: false, displayOrder: 8 },
     ],
   },
   {
@@ -285,6 +294,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "focusAreas", required: false, displayOrder: 13 },
       { slug: "tags", required: false, displayOrder: 14 },
       { slug: "description", required: false, displayOrder: 15 },
+      { slug: "provenance", required: false, displayOrder: 18 },
+      { slug: "provider", required: false, displayOrder: 19 },
     ],
   },
   {
@@ -480,6 +491,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "tags", required: false, displayOrder: 6 },
       // description = method, scope, any context that doesn't fit conclusion
       { slug: "description", required: false, displayOrder: 7 },
+      { slug: "provenance", required: false, displayOrder: 8 },
+      { slug: "provider", required: false, displayOrder: 9 },
     ],
   },
   // Report — the header of a generated narrative. Body = linked document.
@@ -899,6 +912,21 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.STRING,
         constraints: {},
         uiHints: { label: "Source", inputType: "text" },
+      },
+      // The `source` split (decision 2026-09-14, `provenance.ts`): HOW a
+      // record arrived (closed) and WHO it came from (free). `source` above
+      // stays as the legacy free-text field; nothing new writes it.
+      {
+        slug: "provenance",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: [...PROVENANCE_VALUES] },
+        uiHints: { label: "Provenance", inputType: "select" },
+      },
+      {
+        slug: "provider",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Provider", inputType: "text" },
       },
       {
         slug: "role",
