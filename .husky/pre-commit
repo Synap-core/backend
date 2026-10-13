@@ -1,3 +1,7 @@
 #!/usr/bin/env sh
 cd "$(dirname "$0")/.." || exit 1
-pnpm exec lint-staged --no-stash
+# CHECK the staged content (prettier + eslint), never rewrite it. Replaced
+# `lint-staged --no-stash` (2026-10-13): it reformatted whole files and hid
+# partially-staged files with `git checkout --force`, dropping concurrent edits.
+# Policy is "new code only": a file already unformatted at HEAD only warns.
+node scripts/precommit-check.mjs --eslint=ts,tsx,js,jsx --prettier=ts,tsx,js,jsx,json,md,yml,yaml
