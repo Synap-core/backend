@@ -38,6 +38,7 @@ import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { resolvePreflightComposeTarget } from "../../services/preflight-compose-target.js";
+import { recordInstalledPack } from "../../services/compose-overlay.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
@@ -1467,13 +1468,38 @@ export const definitionEngineProcedures = {
           const { definition: composedDefinition, provenance: composedFrom } =
             await resolveWorkspaceExtends(input.definition, ctx.userId);
 
+          // A PACK populated onto an existing space that already holds a
+          // DIFFERENT template identity (the Marketplace "Add to workspace",
+          // the profile-pack browser): the same rule as compose
+          // (`composeOntoBaseWorkspace`) — the target keeps its own
+          // packageSlug and version stamp, and the pack goes into its
+          // `installedPacks` ledger (version on convergence, by the
+          // finisher). An unidentified target still takes the slug as its
+          // identity (chat-first onboarding). W2/W3 absorb this branch into
+          // applyTemplate (mode compose).
+          const packOnto = await (async () => {
+            if (!input.workspaceId || !input.packageSlug) return null;
+            const target = await db.query.workspaces.findFirst({
+              where: eq(workspaces.id, input.workspaceId),
+              columns: { packageSlug: true, settings: true },
+            });
+            const identity =
+              target?.packageSlug ??
+              (target?.settings as WorkspaceSettings | null)?.packageSlug ??
+              null;
+            return identity !== null && identity !== input.packageSlug
+              ? { slug: input.packageSlug, version: input.packageVersion }
+              : null;
+          })();
+
           let result: Awaited<ReturnType<typeof createWorkspaceFromDefinition>>;
           try {
             result = await createWorkspaceFromDefinition({
               definition: composedDefinition,
               userId: ctx.userId,
-              packageSlug: input.packageSlug,
-              packageVersion: input.packageVersion,
+              // A pack never becomes the target's identity or stamp.
+              packageSlug: packOnto ? undefined : input.packageSlug,
+              packageVersion: packOnto ? undefined : input.packageVersion,
               templateId: input.templateId,
               templateName: input.templateName,
               workspaceName: input.workspaceName,
@@ -1727,6 +1753,12 @@ export const definitionEngineProcedures = {
               });
             }
           }
+          if (packOnto)
+            await recordInstalledPack(
+              result.workspaceId,
+              packOnto.slug,
+              ctx.userId
+            );
           // The ONE finisher: stamps the version and marks the new space
           // "active" only when its layer 2 landed (`{}` = the template has no
           // living layers); otherwise records why — never an unearned stamp.
@@ -1735,6 +1767,14 @@ export const definitionEngineProcedures = {
             userId: ctx.userId,
             built: true,
             pendingVersionStamp: result.pendingVersionStamp,
+            ...(packOnto?.version
+              ? {
+                  pendingPack: {
+                    slug: packOnto.slug,
+                    version: packOnto.version,
+                  },
+                }
+              : {}),
             post: hasPostWork ? postBag : {},
           });
 

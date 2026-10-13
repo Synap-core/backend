@@ -154,6 +154,38 @@ export function upsertInstalledPack(
 }
 
 /**
+ * Record a pack in a space's `installedPacks` ledger WITHOUT its version —
+ * the version is the finisher's to write on convergence (`pendingPack`), the
+ * same rule `composeOntoBaseWorkspace` follows below. For a door that layers
+ * a pack onto an existing space outside compose (tRPC `createFromDefinition`
+ * populating a `workspaceId`).
+ */
+export async function recordInstalledPack(
+  workspaceId: string,
+  slug: string,
+  userId: string
+): Promise<void> {
+  const [row] = await db
+    .select({ settings: workspaces.settings })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  const ledger = (row?.settings as { installedPacks?: unknown } | null)
+    ?.installedPacks;
+  await new WorkspaceRepository(db, eventRepository).mergeSettings(
+    workspaceId,
+    {
+      installedPacks: upsertInstalledPack(
+        ledger,
+        { slug },
+        new Date().toISOString()
+      ),
+    },
+    userId
+  );
+}
+
+/**
  * The overlay definition with the base workspace's SHELL removed — what a pack
  * may layer onto a workspace that has its own template identity. The settings
  * step of `reconcileWorkspaceFromDefinition` overwrites `workspaceSubtype` /
