@@ -5,16 +5,18 @@
  *
  * Procedures used:
  *   • trpc.trustedIssuers.list      — pod-admin only
- *   • trpc.trustedIssuers.approve   — id + allowedScopes (≥1); here only for
- *                                     the broker panel's scope fix
+ *   • trpc.trustedIssuers.approve   — id + allowedScopes (≥1) + expectedStatus;
+ *                                     here only for the broker panel's scope
+ *                                     fix, which re-approves an issuer in the
+ *                                     status the panel saw (CONFLICT if it moved)
  *   • trpc.trustedIssuers.revoke    — id only
  *
  * PENDING issuers are not decided here: approve / reject live in Review, the
  * one attention door. This list shows them as a single "N waiting → Review"
  * line, never as rows with their own Approve buttons.
  *
- * The backend has no "re-review" mutation — once rejected/revoked an issuer
- * stays in that terminal state. Filter chips simply scope the visible list.
+ * Reinstating a rejected/revoked issuer goes through the same approve call
+ * with `expectedStatus` naming that status. Filter chips scope the list.
  */
 
 import {
@@ -125,6 +127,16 @@ export function IssuersSection() {
     },
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
+      if (err.data?.code === "CONFLICT") {
+        // Someone decided this issuer since the list loaded: show the truth.
+        void utils.trustedIssuers.list.invalidate();
+        addToast({
+          title: "This issuer changed meanwhile",
+          description: "The list is refreshed. Check it and try again.",
+          color: "warning",
+        });
+        return;
+      }
       addToast({
         title: "Approval failed",
         description: err.message,
@@ -303,7 +315,11 @@ export function IssuersSection() {
             setApproveScopes(undefined);
           }}
           onConfirm={async (allowedScopes) => {
-            await approve.mutateAsync({ id: approveTarget.id, allowedScopes });
+            await approve.mutateAsync({
+              id: approveTarget.id,
+              allowedScopes,
+              expectedStatus: approveTarget.status,
+            });
             setApproveTarget(null);
             setApproveScopes(undefined);
           }}
