@@ -2,29 +2,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Button, Card, CardBody, Chip } from "@heroui/react";
-import {
-  ArrowRight,
-  ChevronDown,
-  ExternalLink,
-  ShieldCheck,
-  ShieldOff,
-} from "lucide-react";
+import { Button, Card, CardBody } from "@heroui/react";
+import { ArrowRight, ChevronDown, ShieldCheck, ShieldOff } from "lucide-react";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ConfirmModal } from "../components/confirm-modal";
+import { StatusPill } from "../components/status-pill";
+import { statusPillFor } from "../components/status-tone";
+import { navHref, navLabel } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
-
-function statusColor(
-  status: string
-): "success" | "warning" | "danger" | "default" {
-  if (status === "approved") return "success";
-  if (status === "pending") return "warning";
-  if (status === "rejected" || status === "revoked") return "danger";
-  return "default";
-}
 
 /**
  * Human label for a connection-request status.
@@ -96,8 +84,8 @@ export default function ApplicationConnectionsPage() {
     return (
       <PageShell>
         <div role="alert">
-          <p className="text-sm text-danger">
-            Couldn&apos;t load application connections. Try again.
+          <p className="text-[13px] text-danger">
+            Couldn&apos;t load apps. Try again.
           </p>
           <Button
             size="sm"
@@ -143,11 +131,11 @@ export default function ApplicationConnectionsPage() {
   return (
     <PageShell>
       <PageHeader
-        title="App origins"
-        description="Allowlist which browser website addresses (origins) may call this Pod. By default no external site can reach the Pod API. Approving an origin is transport only — it does not grant data access or membership, and it is separate from Trusted issuers (who may sign identity tokens) under Trust & Keys."
+        title={navLabel("apps")}
+        description="Websites and apps allowed to call this pod from a browser. Allowing one doesn't give anyone access to data."
       />
       {revokeError ? (
-        <p className="-mt-3 mb-6 text-sm text-danger" role="alert">
+        <p className="-mt-3 mb-6 text-[13px] text-danger" role="alert">
           {revokeError}
         </p>
       ) : null}
@@ -161,15 +149,14 @@ export default function ApplicationConnectionsPage() {
           >
             Approved browser origins
           </h2>
-          <span className="text-xs text-foreground/50">
+          <span className="text-[12.5px] text-foreground/65">
             {approvedOrigins.length}
           </span>
         </div>
-        <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-          These website addresses may call this Pod from a browser. Each origin
-          is exact (scheme + host + port). This is not data access — people
-          still need membership. Identity providers are managed under Trust
-          &amp; Keys.
+        <p className="max-w-2xl text-[12.5px] leading-5 text-foreground/65">
+          These addresses may call this pod from a browser. Each one is exact
+          (scheme, host and port). People still need to be members to see
+          anything. Identity providers are managed under {navLabel("security")}.
         </p>
         {approvedOrigins.length === 0 ? (
           <EmptyState label="No external browser origins have been allowed yet." />
@@ -191,7 +178,7 @@ export default function ApplicationConnectionsPage() {
           access request; this page only points there. */}
       {needsReview.length > 0 ? (
         <Link
-          href="/review?type=access"
+          href={navHref("review", { type: "access" })}
           className="mt-9 flex items-center justify-between gap-3 rounded-lg bg-foreground/[0.04] px-4 py-3 text-sm text-foreground ring-1 ring-inset ring-foreground/10 transition-colors hover:bg-foreground/[0.06]"
         >
           <span>
@@ -214,11 +201,11 @@ export default function ApplicationConnectionsPage() {
             >
               In progress
             </h2>
-            <span className="text-xs text-foreground/50">
+            <span className="text-[12.5px] text-foreground/65">
               {inProgress.length}
             </span>
           </div>
-          <p className="max-w-2xl text-xs leading-5 text-foreground/55">
+          <p className="max-w-2xl text-[12.5px] leading-5 text-foreground/65">
             These apps started connecting but haven’t finished. There’s nothing
             to approve yet — finish from the app, and it’ll appear in Review
             once it’s waiting on you.
@@ -249,7 +236,7 @@ export default function ApplicationConnectionsPage() {
             >
               Expired &amp; declined
             </span>
-            <span className="flex items-center gap-2 text-xs text-foreground/50">
+            <span className="flex items-center gap-2 text-[12.5px] text-foreground/65">
               {archiveCount}
               <ChevronDown
                 size={15}
@@ -263,7 +250,7 @@ export default function ApplicationConnectionsPage() {
           </button>
           {showArchive ? (
             <div className="space-y-3">
-              <p className="max-w-2xl text-xs leading-5 text-foreground/55">
+              <p className="max-w-2xl text-[12.5px] leading-5 text-foreground/65">
                 Timed-out or declined requests and revoked origins, kept for
                 audit. If an origin here is already approved above, the app just
                 needs Check connection — not a new request.
@@ -304,7 +291,7 @@ export default function ApplicationConnectionsPage() {
             </p>
             <p className="mt-2 text-foreground/65">
               This does not remove people, revoke trusted issuers, or invalidate
-              direct Pod sign-in sessions.
+              direct pod sign-in sessions.
             </p>
           </>
         }
@@ -346,16 +333,19 @@ function ConnectionCard({
 }) {
   const canRevoke = connection.status === "approved" && onRevoke;
   return (
-    <Card shadow="none" className="border border-foreground/10 bg-content1">
+    <Card
+      shadow="none"
+      className="bg-content1 ring-1 ring-inset ring-foreground/10"
+    >
       <CardBody className="gap-5 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="break-words text-sm font-medium">
+            <p className="break-words text-[13px] font-medium">
               {connection.displayName}
             </p>
             {connection.publisherUrl ? (
               <a
-                className="mt-1 block break-all text-xs text-primary underline-offset-2 hover:underline"
+                className="mt-1 block break-all text-[12.5px] text-primary underline-offset-2 hover:underline"
                 href={connection.publisherUrl}
                 target="_blank"
                 rel="noreferrer"
@@ -364,9 +354,10 @@ function ConnectionCard({
               </a>
             ) : null}
           </div>
-          <Chip size="sm" color={statusColor(connection.status)} variant="flat">
-            {resolveStatusLabel(connection.status)}
-          </Chip>
+          <StatusPill
+            kind={statusPillFor(connection.status)?.kind ?? "unknown"}
+            label={resolveStatusLabel(connection.status)}
+          />
         </div>
 
         <dl className="grid gap-4 md:grid-cols-2">
@@ -421,7 +412,7 @@ function ConnectionDetail({
 }) {
   return (
     <div className={className}>
-      <dt className="text-xs font-medium text-foreground/50">{label}</dt>
+      <dt className="text-[12.5px] font-medium text-foreground/65">{label}</dt>
       <dd className="mt-1 break-all font-mono text-[12px] leading-5 text-foreground/75">
         {value}
       </dd>
@@ -438,7 +429,7 @@ function ConnectionList({
 }) {
   return (
     <div>
-      <dt className="text-xs font-medium text-foreground/50">{label}</dt>
+      <dt className="text-[12.5px] font-medium text-foreground/65">{label}</dt>
       <dd className="mt-1">
         <ul className="space-y-1.5">
           {values.map((value) => (
@@ -457,7 +448,7 @@ function ConnectionList({
 
 function EmptyState({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5 text-sm text-foreground/55">
+    <div className="flex items-center gap-3 rounded-lg px-4 py-5 text-[13px] text-foreground/65 ring-1 ring-inset ring-foreground/10">
       <ShieldCheck size={17} className="shrink-0" />
       {label}
     </div>
@@ -480,20 +471,24 @@ function RequestRow({
   badge?: string;
 }) {
   return (
-    <Card shadow="none" className="border border-foreground/10 bg-content1">
+    <Card
+      shadow="none"
+      className="bg-content1 ring-1 ring-inset ring-foreground/10"
+    >
       <CardBody className="flex flex-row items-center justify-between gap-4 p-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium">
+            <p className="truncate text-[13px] font-medium">
               {request.displayName}
             </p>
             {badge ? (
-              <Chip size="sm" variant="flat" color={statusColor(badge)}>
-                {requestStateLabel(badge)}
-              </Chip>
+              <StatusPill
+                kind={statusPillFor(badge)?.kind ?? "unknown"}
+                label={requestStateLabel(badge)}
+              />
             ) : null}
           </div>
-          <p className="mt-1 truncate font-mono text-xs text-foreground/55">
+          <p className="mt-1 truncate font-mono text-[12.5px] text-foreground/65">
             {request.issuerUrl} · {request.requestedOrigin}
           </p>
         </div>
@@ -503,7 +498,6 @@ function RequestRow({
           size="sm"
           className="min-h-10"
           variant="flat"
-          endContent={<ExternalLink size={14} />}
         >
           {actionLabel}
         </Button>

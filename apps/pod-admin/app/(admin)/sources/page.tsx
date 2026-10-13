@@ -4,28 +4,25 @@
  * Sources — pod-wide aggregate / health-grid view of the pod's connectors.
  *
  * The Sources page is the META picture: how many providers are
- * connected on this pod, how many of those are healthy, plus a per-workspace
- * grid that hands operators off to the desktop app when something needs
- * hands-on editing. Per-workspace connector configuration lives in the
- * desktop app's Settings → Connectors — the console does not duplicate it.
+ * connected on this pod, how many of those are healthy, plus a per-space
+ * grid that hands operators off to the app when something needs
+ * hands-on editing. Connector configuration lives in the app's
+ * Settings → Connectors — the console does not duplicate it.
  *
  * Sections:
  *   1. Health grid — one card per Nango provider type (aggregate)
  *   2. Pod-level source configs — `sourceConfigs.list` (admin-scope)
- *   3. Per-workspace connector grid — denser table, click → side drawer
+ *   3. Per-space connector grid — denser table, click → side drawer
  *
- * If a procedure is missing or the data shape doesn't fit, we render a
- * graceful stub with a clearly labelled TODO. Section 1 should always
- * work because we derive aggregates from any connectors list query.
+ * Section 1 should always work because we derive aggregates from any
+ * connectors list query.
  */
 
 import { Button } from "@heroui/react";
 import {
   AlertTriangle,
-  Building2,
   CheckCircle2,
   Cloud,
-  ExternalLink,
   Layers,
   Plug,
   Rss,
@@ -48,7 +45,9 @@ import { SectionCard } from "../components/section-card";
 import type { StatusKind } from "../components/status-pill";
 import { StatusPill } from "../components/status-pill";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatRelative } from "../../../lib/format";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import { FactsGrid } from "../../_lib/object/facts-grid";
+import { formatRelative, formatTimestamp } from "../../../lib/format";
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
@@ -67,7 +66,7 @@ function SourcesInner() {
     <PageShell>
       <PageHeader
         title={navLabel("sources")}
-        description="External services connected to this pod. Per-workspace configuration happens in the desktop app — the console shows the aggregate health."
+        description="External services connected to this pod. Each space's connections are set up in the app; this page shows their health across the pod."
       />
 
       <div className="flex flex-col gap-6">
@@ -169,7 +168,7 @@ function ProviderHealthGrid() {
   return (
     <SectionCard
       title="Provider health"
-      hint="Aggregate per Nango provider across all workspaces"
+      hint="Connections per provider, across all spaces"
       actions={
         providersQuery.data ? (
           <span className="text-[11px] tabular text-foreground/55">
@@ -186,11 +185,8 @@ function ProviderHealthGrid() {
         </div>
       ) : providersQuery.isError ? (
         <ErrorBanner
-          message={
-            providersQuery.error?.message ??
-            "Couldn't load providers from Control Plane."
-          }
-          hint="If this pod has no CP configured, provider listings are unavailable."
+          message="Couldn't load providers from the Control Plane."
+          hint="If this pod isn't linked to a Control Plane, provider listings are unavailable."
         />
       ) : aggregates.length === 0 ? (
         <ResourceRowEmpty message="No providers wired into this pod yet." />
@@ -254,7 +250,7 @@ function ProviderCard({ agg }: { agg: ProviderAggregate }) {
         </span>
       </div>
       <div className="flex items-center justify-between">
-        <span className="text-[11.5px] text-foreground/55">
+        <span className="text-[11.5px] text-foreground/65">
           {agg.total} {agg.total === 1 ? "connection" : "connections"}
         </span>
         <StatusPill kind={statusKind} label={statusLabel} />
@@ -297,8 +293,8 @@ function ProviderCardSkeleton() {
  * pollers, …). They MAY be workspace-scoped (`workspaceId`) or pod-wide
  * (`workspaceId = null`).
  *
- * Mutations (re-auth, edit) are not Pod Admin's: they hand off to the
- * desktop app per the same "Pod Admin is meta, the app is detail" rule.
+ * Mutations (re-auth, edit) are not the console's: they hand off to the
+ * app — the console is the overview, the app is the detail.
  */
 
 interface SourceConfigRow {
@@ -341,11 +337,7 @@ function PodLevelConnectorsSection() {
       {query.isLoading || isAuthRedirecting ? (
         <ResourceRowSkeleton count={3} />
       ) : query.isError ? (
-        <ErrorBanner
-          message={
-            query.error?.message ?? "Couldn't load pod-level connectors."
-          }
-        />
+        <ErrorBanner message="Couldn't load pod-level connectors." />
       ) : rows.length === 0 ? (
         <ResourceRowEmpty message="No pod-level source configs yet." />
       ) : (
@@ -358,7 +350,7 @@ function PodLevelConnectorsSection() {
               secondary={[
                 row.providerType,
                 row.workspaceId
-                  ? `workspace ${row.workspaceId.slice(0, 8)}`
+                  ? `space ${row.workspaceId.slice(0, 8)}`
                   : "Pod-level",
                 row.description,
               ]
@@ -423,7 +415,7 @@ function PerWorkspaceGridSection() {
 
   const rows = (query.data ?? []) as ConnectionRow[];
 
-  // ?focus=<connectionId> from ⌘K or Overview alerts (sync errors).
+  // ?focus=<connectionId> from ⌘K.
   const focusId = useFocusRow({ ready: !query.isLoading });
   useEffect(() => {
     if (!focusId || selected) return;
@@ -448,8 +440,8 @@ function PerWorkspaceGridSection() {
   return (
     <>
       <SectionCard
-        title="Per-workspace connector grid"
-        hint="Connectors grouped by workspace · click a row for detail"
+        title="Connectors by space"
+        hint="Grouped by space · open a row for detail"
         actions={
           <span className="text-[11px] tabular text-foreground/55">
             {rows.length} rows
@@ -459,11 +451,7 @@ function PerWorkspaceGridSection() {
         {query.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={4} />
         ) : query.isError ? (
-          <ErrorBanner
-            message={
-              query.error?.message ?? "Couldn't load per-workspace connectors."
-            }
-          />
+          <ErrorBanner message="Couldn't load connectors." />
         ) : rows.length === 0 ? (
           <ResourceRowEmpty message="No connectors configured anywhere on this pod." />
         ) : (
@@ -477,7 +465,7 @@ function PerWorkspaceGridSection() {
                   <span className="text-[12px] font-medium text-foreground">
                     {workspaceLabel}
                   </span>
-                  <span className="text-[10.5px] tabular text-foreground/55">
+                  <span className="text-[10.5px] tabular text-foreground/65">
                     {bucket.length} connector
                     {bucket.length === 1 ? "" : "s"}
                   </span>
@@ -505,19 +493,17 @@ function PerWorkspaceGridSection() {
                         ].join(" ")}
                       >
                         <Td className="text-foreground/85">{row.providerId}</Td>
-                        <Td className="text-foreground/55">
+                        <Td className="text-foreground/65">
                           {row.accountEmail ?? "—"}
                         </Td>
                         <Td>
                           <StatusPill
                             kind={feedStatusKind(row.status)}
-                            label={row.status}
+                            label={resolveStatusLabel(row.status)}
                           />
                         </Td>
-                        <Td className="text-foreground/55 tabular">
-                          {row.lastSyncedAt
-                            ? formatRelative(row.lastSyncedAt)
-                            : "—"}
+                        <Td className="text-foreground/65 tabular">
+                          {formatRelative(row.lastSyncedAt)}
                         </Td>
                         <Td>
                           <Button
@@ -525,8 +511,7 @@ function PerWorkspaceGridSection() {
                             variant="light"
                             radius="md"
                             onPress={() => setSelected(row)}
-                            endContent={<ExternalLink className="h-3 w-3" />}
-                            className="text-foreground/55"
+                            className="text-foreground/65"
                           >
                             Open
                           </Button>
@@ -562,43 +547,37 @@ function ConnectorDetailDrawer({
         row
           ? (row.workspaceName ??
             (row.workspaceId
-              ? `workspace ${row.workspaceId.slice(0, 8)}`
+              ? `space ${row.workspaceId.slice(0, 8)}`
               : "Pod-wide"))
           : undefined
       }
     >
       {row ? (
         <div className="flex flex-col gap-4">
-          <DrawerField label="Status">
-            <StatusPill kind={feedStatusKind(row.status)} label={row.status} />
-          </DrawerField>
-          <DrawerField label="Provider">
-            <span className="text-[12.5px] text-foreground/85">
-              {row.providerId}
-            </span>
-          </DrawerField>
-          <DrawerField label="Account">
-            <span className="text-[12.5px] text-foreground/85">
-              {row.accountEmail ?? "—"}
-            </span>
-          </DrawerField>
-          <DrawerField label="Last synced">
-            <span className="text-[12.5px] text-foreground/85 tabular">
-              {row.lastSyncedAt
-                ? new Date(row.lastSyncedAt).toLocaleString()
-                : "Never"}
-            </span>
-          </DrawerField>
-          <DrawerField label="Created">
-            <span className="text-[12.5px] text-foreground/85 tabular">
-              {row.createdAt ? new Date(row.createdAt).toLocaleString() : "—"}
-            </span>
-          </DrawerField>
-          <DrawerField label="Connection ID">
-            <span className="font-mono text-[10.5px] text-foreground/55">
-              {row.connectionId}
-            </span>
-          </DrawerField>
+          <FactsGrid
+            columns={2}
+            facts={[
+              {
+                label: "Status",
+                value: (
+                  <StatusPill
+                    kind={feedStatusKind(row.status)}
+                    label={resolveStatusLabel(row.status)}
+                  />
+                ),
+              },
+              { label: "Provider", value: row.providerId },
+              { label: "Account", value: row.accountEmail ?? "—" },
+              {
+                label: "Last synced",
+                value: row.lastSyncedAt
+                  ? formatTimestamp(row.lastSyncedAt)
+                  : "Never",
+              },
+              { label: "Created", value: formatTimestamp(row.createdAt) },
+              { label: "Connection ID", value: row.connectionId, mono: true },
+            ]}
+          />
 
           {/* Re-auth and removal hold the OAuth grant itself — they belong
               wherever the connection was made, not on a read-only health
@@ -607,31 +586,14 @@ function ConnectorDetailDrawer({
               "Open in Studio" link to a /studio route pod-admin never served. */}
           <HandoffCard
             icon={Plug}
-            title="Connector settings live in the desktop app"
-            body="Re-authenticating a provider or removing a connection happens where the connection was made. Pod Admin reports health across the whole pod; it does not hold the grant."
+            title="Connector settings live in the app"
+            body="Re-authenticating a provider or removing a connection happens where the connection was made. Pod Console reports health across the whole pod; it does not hold the grant."
             exit={openIn({ kind: "settings", section: "connectors" })}
             cta="Open Connectors settings"
           />
         </div>
       ) : null}
     </DetailDrawer>
-  );
-}
-
-function DrawerField({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[10.5px] font-medium uppercase tracking-wide text-foreground/45">
-        {label}
-      </span>
-      {children}
-    </div>
   );
 }
 
@@ -682,7 +644,7 @@ function ErrorBanner({ message, hint }: { message: string; hint?: string }) {
         <span className="text-[12.5px] font-medium text-status-down">
           {message}
         </span>
-        {hint && <span className="text-[11px] text-foreground/55">{hint}</span>}
+        {hint && <span className="text-[11px] text-foreground/65">{hint}</span>}
       </div>
     </div>
   );
@@ -702,6 +664,3 @@ function feedStatusKind(status: string): StatusKind {
       return "unknown";
   }
 }
-
-// Suppress unused-import warnings for icons referenced by lookup only.
-void Building2;
