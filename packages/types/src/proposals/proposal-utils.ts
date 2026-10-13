@@ -61,7 +61,7 @@ export function resolveAuthorName(params: {
  * Priority:
  *  1. Explicit targetName from the request envelope
  *  2. Name/title/displayName from entity payload
- *  3. Fallback: "<targetType> · <truncatedId>"
+ *  3. Fallback: the target kind's noun ("Playbook")
  */
 export function resolveTargetName(params: {
   targetName?: string | null;
@@ -69,7 +69,7 @@ export function resolveTargetName(params: {
   targetId?: string;
   entityPayload?: Record<string, unknown> | null;
 }): string {
-  const { targetName, targetType, targetId, entityPayload } = params;
+  const { targetName, targetType, entityPayload } = params;
 
   // 1. Backend-provided target name
   if (typeof targetName === "string" && targetName) return targetName;
@@ -84,10 +84,10 @@ export function resolveTargetName(params: {
     if (name) return name;
   }
 
-  // 3. Fallback: type + truncated ID
-  const type = targetType || "entity";
-  const id = targetId ? targetId.slice(0, 8) : "";
-  return id ? `${type} · ${id}` : type;
+  // 3. Fallback: the kind's noun — never `<type> · <shortId>`, a random id
+  //    shown as if it were a name (dogfood-2 #10, `"playbook · 368aae92"`).
+  //    `targetId` is often MINTED by the gate and identifies nothing.
+  return resolveObjectNoun(targetType || "entity");
 }
 
 /**
