@@ -32,6 +32,8 @@ import { AccessContext } from "../../../access/index.js";
 import { readWorkspaceEntityStats } from "../../../services/workspace-stats.js";
 import {
   templateHealthFor,
+  awaitingApprovalByWorkspace,
+  templateApplyWarning,
   overlayHealthFor,
   templateSlugsOf,
   resolveTemplateCatalog,
@@ -564,6 +566,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         active.map((w) => w.id),
         userId
       );
+      // The proposals each space's last template apply still waits on — read
+      // LIVE through the one health helper (never the stored array alone).
+      const waitingByWs = await awaitingApprovalByWorkspace(active);
       const list = active.map((workspace) => {
         const settings = (workspace.settings ?? {}) as Record<string, unknown>;
         const membership = membershipByWorkspace.get(workspace.id);
@@ -617,6 +622,17 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           replacedBy: health.replacedBy,
           retiredReason: health.retiredReason,
           lifecycleWarning: health.lifecycleWarning,
+          // The update is held until the person approves these (live pending
+          // ids, `[]` once they are decided — plain drift then), and WHY the
+          // last apply did not finish, in the pod's ONE wording.
+          awaitingApproval: waitingByWs.get(workspace.id) ?? [],
+          applyWarning: pkgSlug
+            ? templateApplyWarning(
+                pkgSlug,
+                settings,
+                waitingByWs.get(workspace.id) ?? []
+              )
+            : null,
           // Each overlay composed onto this space (`installedPacks`), with its
           // own standing through the same authority — a retired overlay is
           // otherwise invisible here.

@@ -298,9 +298,10 @@ export function fairShares(
 /**
  * Pure: the judge's material, ≤ `max` chars ({@link MATERIAL_MAX} unless the
  * caller is retrying for an older IS). The fixed facts
- * (goal, declared outputs, posted evidence, report, earlier checks) come
+ * (goal, declared outputs, posted evidence, report, prior verdicts) come
  * first; the produced CONTENT and the session room share every remaining
- * byte through {@link fairShares}.
+ * byte through {@link fairShares}. `judgedKeys` = the criteria being graded in
+ * this call; their own earlier verdicts are withheld.
  */
 export function buildJudgeMaterial(
   session: Pick<
@@ -314,7 +315,8 @@ export function buildJudgeMaterial(
   evidence: PostedEvidence | undefined,
   produced: readonly ProducedMaterial[],
   room: RoomMaterial = { status: "ok", messages: [] },
-  max: number = MATERIAL_MAX
+  max: number = MATERIAL_MAX,
+  judgedKeys: ReadonlySet<string> = new Set()
 ): string {
   const outputs = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as Array<{ label?: string; status?: string }>)
@@ -331,9 +333,14 @@ export function buildJudgeMaterial(
       ? `REPORT: ${clip(JSON.stringify(session.verificationReport), REPORT_MAX)}`
       : "",
   ].filter(Boolean);
-  const earlier = rows.length
+  // A judge must never read its own earlier verdict (a retry would cite it
+  // as proof): the criteria being graded NOW are dropped. What stays are the
+  // other criteria's recorded results — context about the session, framed as
+  // NOT evidence (the IS judge prompt says the same).
+  const priorRows = rows.filter((r) => !judgedKeys.has(r.criterionKey));
+  const earlier = priorRows.length
     ? clip(
-        `EARLIER CHECKS:\n${rows
+        `PRIOR VERDICTS ON OTHER CRITERIA (context, NOT evidence — never grade from these):\n${priorRows
           .map(
             (r) =>
               `- ${r.criterionKey}: ${r.verdict}${r.rationale ? ` — ${r.rationale}` : ""}`

@@ -146,6 +146,11 @@ export interface TrackActor {
   userId: string;
   agentUserId?: string | null;
   isHubProtocol?: boolean;
+  /**
+   * The caller's focus session, already resolved by its door — handed to the
+   * gate so the write (or its proposal) is filed under that session.
+   */
+  sessionId?: string | null;
   /** Provenance for the proposal (e.g. `mcp`, `hub-rest`). */
   source?: string;
   reasoning?: string;
@@ -780,6 +785,7 @@ export async function startTrack(
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
     agentUserId: actor.agentUserId ?? undefined,
+    sessionId: actor.sessionId ?? undefined,
     workspaceId: project.workspaceId ?? undefined,
     projectId: project.id,
     subjectType: "track",
@@ -1054,6 +1060,7 @@ export async function setTrackStatus(input: {
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
     agentUserId: input.actor.agentUserId ?? undefined,
+    sessionId: input.actor.sessionId ?? undefined,
     workspaceId: project.workspaceId ?? undefined,
     projectId: project.id,
     subjectType: "track",
@@ -1203,6 +1210,7 @@ export async function advanceTrackStage(input: {
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
     agentUserId: input.actor.agentUserId ?? undefined,
+    sessionId: input.actor.sessionId ?? undefined,
     workspaceId: project.workspaceId ?? undefined,
     projectId: project.id,
     subjectType: "track",
@@ -1572,6 +1580,7 @@ export async function setTrackParams(input: {
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
     agentUserId: input.actor.agentUserId ?? undefined,
+    sessionId: input.actor.sessionId ?? undefined,
     workspaceId: project.workspaceId ?? undefined,
     projectId: project.id,
     subjectType: "track",
@@ -1755,6 +1764,7 @@ export async function setTrackDirection(input: {
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
     agentUserId: input.actor.agentUserId ?? undefined,
+    sessionId: input.actor.sessionId ?? undefined,
     workspaceId: project.workspaceId ?? undefined,
     projectId: project.id,
     subjectType: "track",
@@ -2008,6 +2018,7 @@ export async function addTrackStage(input: {
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
     agentUserId: input.actor.agentUserId ?? undefined,
+    sessionId: input.actor.sessionId ?? undefined,
     workspaceId: project.workspaceId ?? undefined,
     projectId: project.id,
     subjectType: "track",

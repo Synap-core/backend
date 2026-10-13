@@ -246,6 +246,9 @@ export {
   type DefaultRelationDef,
 } from "./utils/default-relation-defs.js";
 
+// The ONE "did the last template apply finish?" predicate (health + reconcile).
+export { templateApplyUnfinished } from "./utils/template-apply-state.js";
+
 // Export createWorkspaceFromDefinition utility
 export {
   createWorkspaceFromDefinition,
@@ -290,6 +293,8 @@ export {
   LIFECYCLE_CATEGORIES,
   TERMINAL_LIFECYCLE_CATEGORIES,
   isLifecycleCategory,
+  isStuckAfterDays,
+  STUCK_AFTER_DAYS_MAX,
   parseLifecycleOptions,
   findLifecycleOption,
   classifyLifecycleMove,

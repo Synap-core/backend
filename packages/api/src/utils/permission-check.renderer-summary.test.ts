@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { deriveAgentProposalSessionGoal } from "@synap/database";
 import { buildProposalSummary } from "./permission-check.js";
 import { collapseProposalsToClusters } from "../services/proposals/fingerprint.js";
+import { signalFromCluster } from "../services/signals/needs-you-union.js";
 
 /**
  * ONE SENTENCE per proposal, used everywhere.
@@ -206,11 +207,15 @@ describe("the pack row reuses the sentence", () => {
     expect(cluster.targetLabel).not.toContain(" · ");
   });
 
-  it("still falls back to `<type> · <shortId>` when there is no summary", () => {
+  it("no name and no summary ⇒ NO label — never `<type> · <shortId>` in quotes (dogfood-2 #10)", () => {
     const [cluster] = collapseProposalsToClusters([
       { ...row, data: { ...storedData, summary: undefined } },
     ]);
-    expect(cluster.targetLabel).toBe("profile · 26f94b78");
+    expect(cluster.targetLabel).toBe("");
+    // The needs-you title then names the kind alone, no quoted id.
+    const title = signalFromCluster(cluster).title;
+    expect(title).not.toMatch(/\b[0-9a-f]{8}\b/);
+    expect(title).not.toContain('"');
   });
 
   it("a proposed NAME still outranks the summary", () => {

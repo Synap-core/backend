@@ -31,6 +31,10 @@ import {
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  proposalOnThingsWhere,
+  type ThingsLens,
+} from "../../services/focus-sessions/session-subject-where.js";
 import { authoredByUser } from "../../services/agent-identity-service.js";
 
 /**
@@ -99,6 +103,12 @@ export interface ProposalScopeInput {
   trackId?: string;
   agentUserId?: string;
   agentOnly?: boolean;
+  /**
+   * Only proposals ON the things of a kind/role (`proposalOnThingsWhere`):
+   * targeting one, creating one / attaching the role, or filed in a session
+   * on one. Resolved by the door from its `profileSlug` input (async).
+   */
+  onThings?: ThingsLens;
 }
 
 /**
@@ -148,6 +158,10 @@ export function buildProposalScopeConditions(
 
   if (input.agentOnly) {
     conditions.push(isNotNull(proposals.agentUserId));
+  }
+
+  if (input.onThings) {
+    conditions.push(proposalOnThingsWhere(input.onThings));
   }
 
   return conditions;

@@ -29,6 +29,7 @@ import { needsYouReason } from "@synap-core/types/units";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
+import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 
 /** How many open sessions one project's review scan reads before it is a floor. */
 export const REVIEW_SCAN_LIMIT = 100;
@@ -87,6 +88,8 @@ export async function listSessionsAwaitingReview(q: {
   projectId?: string;
   trackId?: string;
   sessionId?: string;
+  /** Only sessions ON these things (`sessionSubjectWhere`) — an intent surface. */
+  subject?: SessionSubject;
   database?: typeof db;
 }): Promise<{ sessions: ReviewSessionRow[]; truncated: boolean }> {
   const database = q.database ?? db;
@@ -98,6 +101,7 @@ export async function listSessionsAwaitingReview(q: {
     kind: "work",
     includeTrackedRuns: true,
     ...(q.trackId ? { trackId: q.trackId } : {}),
+    ...(q.subject ? { subject: q.subject } : {}),
   });
   if (q.sessionId) conditions.push(eq(focusSessions.id, q.sessionId));
   const rows = await database

@@ -13,7 +13,8 @@ const h = vi.hoisted(() => ({
 vi.mock("../../../../services/lifecycle/move-status.js", () => ({
   moveStatus: h.move,
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     select: () => ({
       from: () => ({ where: async () => [{ status: "pending" }] }),

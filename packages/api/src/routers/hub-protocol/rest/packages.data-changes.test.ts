@@ -33,6 +33,16 @@ const {
   mockComposeTarget: vi.fn(),
 }));
 
+// The ONE finisher (stamp + "active" on convergence) reads and writes the
+// workspace row; its behaviour is pinned on PGlite by
+// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
+vi.mock("../../../services/template-apply-finisher.js", () => ({
+  finishTemplateApply: vi.fn(async () => ({
+    state: "converged",
+    versionStamped: false,
+  })),
+}));
+
 vi.mock("../../../services/preflight-compose-target.js", () => ({
   resolvePreflightComposeTarget: (...a: unknown[]) => mockComposeTarget(...a),
 }));
@@ -72,6 +82,7 @@ vi.mock("../../../services/workspace-materialization-service.js", () => ({
 
 vi.mock("../../../services/package-apply-post-workspace.js", () => ({
   applyPackagePostWorkspace: (...a: unknown[]) => mockApplyPost(...a),
+  TemplateIncompleteError: class extends Error {},
 }));
 
 vi.mock("../../../utils/permission-check.js", () => ({

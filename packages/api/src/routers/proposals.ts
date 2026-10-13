@@ -63,6 +63,7 @@ import {
   findCreatingProposalId,
   proposalSubjectCondition,
 } from "../services/proposals/object-subject.js";
+import { resolveThingsLens } from "../services/focus-sessions/session-subject.js";
 import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -407,6 +408,13 @@ export const proposalsRouter = router({
          * Adds no reach — every visibility predicate below still applies.
          */
         projectId: z.string().uuid().optional(),
+        /**
+         * Only proposals ON the things of this kind or role — targeting one,
+         * creating one / attaching the role, or filed in a session on one
+         * (`proposalOnThingsWhere`). An intent surface's "Needs you". An
+         * unknown slug is NOT_FOUND, never an empty queue.
+         */
+        profileSlug: z.string().min(1).optional(),
         /** Filter to proposals created by a specific agent */
         agentUserId: z.string().optional(),
         /** When true, only return proposals where agentUserId is not null */
@@ -450,7 +458,12 @@ export const proposalsRouter = router({
       // Shared with `groups` — see scope-conditions.ts. The two doors must
       // never disagree on which rows a given scope admits.
       const conditions = buildProposalScopeConditions(
-        input,
+        {
+          ...input,
+          onThings: input.profileSlug
+            ? await resolveThingsLens(input.profileSlug)
+            : undefined,
+        },
         requireUserId(ctx.userId)
       );
 
@@ -720,6 +733,13 @@ export const proposalsRouter = router({
         projectId: z.string().uuid().optional(),
         /** Only proposals filed in this track's sessions — see scope-conditions.ts. */
         trackId: z.string().uuid().optional(),
+        /**
+         * Only proposals ON the things of this kind or role — targeting one,
+         * creating one / attaching the role, or filed in a session on one
+         * (`proposalOnThingsWhere`). An intent surface's "Needs you". An
+         * unknown slug is NOT_FOUND, never an empty queue.
+         */
+        profileSlug: z.string().min(1).optional(),
         /** Same automationId → stepRunId walk as `list` — see scope-conditions.ts. */
         automationId: z.string().uuid().optional(),
         /** Which queue to cluster: the actionable pending queue (default), or
@@ -751,7 +771,15 @@ export const proposalsRouter = router({
 
       // Shared with `list` — see scope-conditions.ts. The two doors must never
       // disagree on which rows a given scope admits.
-      const conditions = buildProposalScopeConditions(input, userId);
+      const conditions = buildProposalScopeConditions(
+        {
+          ...input,
+          onThings: input.profileSlug
+            ? await resolveThingsLens(input.profileSlug)
+            : undefined,
+        },
+        userId
+      );
       if (input.automationId) {
         const stepRunIds = await resolveAutomationStepRunIds(
           input.automationId

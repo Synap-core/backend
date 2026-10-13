@@ -129,30 +129,10 @@ export interface DependencySeedOutcome {
  * caller that already resolved this slug's template (step 3/4 below) pass the
  * SAME cache-first-resolved package definition through instead of resolving
  * it a second time.
- */
-async function seedDependencyPostWorkspace(
-  workspaceId: string,
-  slug: string,
-  userId: string,
-  agentUserId: string | undefined,
-  preResolved?: PackageDefinitionOutput
-): Promise<DependencySeedOutcome> {
-  return (
-    await seedDependencyLayers(
-      workspaceId,
-      slug,
-      userId,
-      agentUserId,
-      preResolved
-    )
-  ).outcome;
-}
-
-/**
- * `seedDependencyPostWorkspace` plus the layer-2 result bag, for the caller
- * that must hand it to `finishTemplateApply` (a NEWLY created dependency
- * space): `post` is `{}` when there was nothing to seed, `undefined` when the
- * layer threw (the applier already marked the space failed).
+ *
+ * Returns the seed outcome AND the layer-2 result bag, which the caller hands
+ * to `finishTemplateApply`: `post` is `{}` when there was nothing to seed,
+ * `undefined` when the layer threw (the applier already marked the space failed).
  */
 async function seedDependencyLayers(
   workspaceId: string,
@@ -213,6 +193,28 @@ async function seedDependencyLayers(
       },
     };
   }
+}
+
+/**
+ * A dependency overlay composed onto its base: its `installedPacks` version is
+ * recorded only once its seeded layer 2 converged (the ONE finisher). A seed
+ * that threw left the base "failed" (the applier's record) — nothing to finish.
+ */
+async function finishComposedDependency(
+  workspaceId: string,
+  userId: string,
+  pendingPack: { slug: string; version: string } | undefined,
+  post: Record<string, unknown> | undefined
+): Promise<void> {
+  if (!pendingPack || !post) return;
+  const { finishTemplateApply } = await import("./template-apply-finisher.js");
+  await finishTemplateApply({
+    workspaceId,
+    userId,
+    built: false,
+    pendingPack,
+    post,
+  });
 }
 
 /** Editor+ roles that may host a compose overlay (write-gate floor). */
@@ -834,7 +836,7 @@ async function ensureWorkspaceDependencyPresent(
       });
     }
     // The ONE compose door — same primitive `materializeWorkspaceCore` drives.
-    await composeOntoBaseWorkspace({
+    const composed = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: ownComposeBase.workspaceId,
       userId,
       definition,
@@ -846,12 +848,19 @@ async function ensureWorkspaceDependencyPresent(
     // base workspace it composed onto (e.g. grants' 4 grant capabilities land on
     // Operations). composeOntoBaseWorkspace reconciles only the workspace shape,
     // so seed the post-workspace layers here — the same door a top-level apply runs.
-    const seedOutcome = await seedDependencyPostWorkspace(
+    const seeded = await seedDependencyLayers(
       ownComposeBase.workspaceId,
       slug,
       userId,
       agentUserId,
       resolvedTemplate.packageDefinition
+    );
+    const seedOutcome = seeded.outcome;
+    await finishComposedDependency(
+      ownComposeBase.workspaceId,
+      userId,
+      composed.pendingPack,
+      seeded.post
     );
     return record(
       {
@@ -876,18 +885,25 @@ async function ensureWorkspaceDependencyPresent(
         message: `Pack "${slug}" could not resolve any of the workspace templates it requires — install one of them first.`,
       });
     }
-    await composeOntoBaseWorkspace({
+    const composed = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: primary.workspaceId,
       userId,
       definition,
       overlay: { slug, version: resolvedTemplate.version },
     });
-    const seedOutcome = await seedDependencyPostWorkspace(
+    const seeded = await seedDependencyLayers(
       primary.workspaceId,
       slug,
       userId,
       agentUserId,
       resolvedTemplate.packageDefinition
+    );
+    const seedOutcome = seeded.outcome;
+    await finishComposedDependency(
+      primary.workspaceId,
+      userId,
+      composed.pendingPack,
+      seeded.post
     );
     return record(
       {

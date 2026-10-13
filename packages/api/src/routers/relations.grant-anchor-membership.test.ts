@@ -251,7 +251,8 @@ describe("TRIPWIRE: generic relation doors reject the whole exposure set", () =>
         type: "belongs_to_project",
       })
     ).rejects.toMatchObject({
-      message: expect.stringContaining("linkEntityToProject"),
+      // A door the CALLER can reach — not an internal function (ticket 2ef2fbeb).
+      message: expect.stringContaining("synap_file_into_project"),
     });
   });
 

@@ -91,18 +91,23 @@ const RAW_SQL_PROFILE_WRITE_SITES: ReadonlyMap<string, string> = new Map([
   [
     "database/src/conversions/engine.ts",
     "the ontology conversion engine runs on raw postgres.js by design (migrate.ts contract). " +
-      "Its one INSERT seeds a kind profile and asserts the reservation first; its UPDATEs only " +
-      "flip profile_kind / applicable_kinds / ui_hints or DEACTIVATE (is_active = false) — " +
-      "none renames a slug or revives a row, the two ways around the reservation.",
+      "Its one INSERT seeds a kind profile and asserts the reservation first; its UPDATEs " +
+      "flip profile_kind / applicable_kinds / ui_hints / display_name, DEACTIVATE (is_active = false), or — " +
+      "in applyRenameProfile only — rename a slug after asserting the NEW slug is not " +
+      "reserved. None revives a row.",
   ],
 ]);
 
 /**
  * Columns an allowlisted raw UPDATE may assign. `slug` is absent (a rename can
- * mint a reserved slug); `is_active` is present but may only be set to `false`
- * (setting it true is a revive, the inverse of migration 0151).
+ * mint a reserved slug) — it is legal only when the same function asserted the
+ * exact value it writes first (`slugRenameViolation`); `is_active` is present
+ * but may only be set to `false` (setting it true is a revive, the inverse of
+ * migration 0151).
  */
 const PERMITTED_RAW_UPDATE_COLUMNS = new Set([
+  // A label: it names no row, so it cannot mint or revive a reserved slug.
+  "display_name",
   "profile_kind",
   "applicable_kinds",
   "ui_hints",
@@ -134,18 +139,44 @@ function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+/** The enclosing function's source from its signature up to `index`, comments dropped. */
+function functionPrefix(src: string, index: number): string {
+  const fnStart = Math.max(
+    ...[
+      "\nasync function ",
+      "\nexport async function ",
+      "\nfunction ",
+      "\nexport function ",
+    ].map((sig) => src.lastIndexOf(sig, index))
+  );
+  return stripComments(src.slice(Math.max(fnStart, 0), index));
+}
+
+/**
+ * A raw `SET slug = ${expr}` is a rename, which can mint a reserved slug. It is
+ * legal only when the same function called `assertProfileSlugNotReserved(expr)`
+ * on that EXACT expression before the write. A literal or any other shape is
+ * refused. Cannot see: an `expr` reassigned between the assert and the write.
+ */
+function slugRenameViolation(
+  src: string,
+  hit: RawProfileWrite,
+  value: string
+): string | null {
+  const expr = /^\s*\$\{([^}]+)\}/.exec(value)?.[1]?.trim();
+  if (!expr)
+    return "UPDATE profiles assigns `slug` from something other than an interpolated value";
+  return functionPrefix(src, hit.index).includes(
+    `assertProfileSlugNotReserved(${expr})`
+  )
+    ? null
+    : `UPDATE profiles renames \`slug\` to ${expr} with no assertProfileSlugNotReserved(${expr}) before it in the same function`;
+}
+
 /** Why an allowlisted raw write is still illegal, or null when it is fine. */
 function rawWriteViolation(src: string, hit: RawProfileWrite): string | null {
   if (hit.verb === "INSERT") {
-    const fnStart = Math.max(
-      ...[
-        "\nasync function ",
-        "\nexport async function ",
-        "\nfunction ",
-        "\nexport function ",
-      ].map((sig) => src.lastIndexOf(sig, hit.index))
-    );
-    const before = stripComments(src.slice(Math.max(fnStart, 0), hit.index));
+    const before = functionPrefix(src, hit.index);
     return before.includes("assertProfileSlugNotReserved(")
       ? null
       : "INSERT INTO profiles with no assertProfileSlugNotReserved() before it in the same function";
@@ -159,6 +190,11 @@ function rawWriteViolation(src: string, hit: RawProfileWrite): string | null {
     return "UPDATE profiles assigns no column the scan can read";
   }
   for (const [, column, value] of assignments) {
+    if (column.toLowerCase() === "slug") {
+      const why = slugRenameViolation(src, hit, value);
+      if (why) return why;
+      continue;
+    }
     if (!PERMITTED_RAW_UPDATE_COLUMNS.has(column.toLowerCase())) {
       return `UPDATE profiles assigns \`${column}\`, which is not a permitted raw-update column`;
     }

@@ -14,6 +14,16 @@ const h = vi.hoisted(() => ({
   materializeArgs: null as null | Record<string, unknown>,
 }));
 
+// The ONE finisher (stamp + "active" on convergence) reads and writes the
+// workspace row; its behaviour is pinned on PGlite by
+// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
+vi.mock("../../../services/template-apply-finisher.js", () => ({
+  finishTemplateApply: vi.fn(async () => ({
+    state: "converged",
+    versionStamped: false,
+  })),
+}));
+
 vi.mock("../../../services/workspace-creation-service.js", async (orig) => ({
   ...(await orig<
     typeof import("../../../services/workspace-creation-service.js")

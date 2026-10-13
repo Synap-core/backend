@@ -350,7 +350,7 @@
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "ViewFrame cell generation: esm.sh imports, SynapWidget bridge.",
+    "summary": "ViewFrame cell generation: esm.sh imports, SynapWidget bridge, intent reads (board, throughput, needs-you, sessions) for a kind's dashboard.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -942,7 +942,7 @@
     }
   },
   "synap-ui/four-builds": {
-    "teachesTools": [],
+    "teachesTools": ["create_cell", "promote_cell_to_renderer"],
     "skillGroup": "build",
     "alwaysOn": false,
     "summary": "The four things you can build: view, dashboard, widget, workspace.",

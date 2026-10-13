@@ -143,6 +143,10 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 
 A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
 
+### A kind's dashboard
+
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`.
+
 ### Rules of thumb
 
 1. Find the thing before creating one: resolve identity, then attach a role — never a twin.
@@ -2731,6 +2735,33 @@ SynapWidget.onInit(async ({ config, context }) => {
 ```
 
 All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, properties, createdAt, … }`.
+
+#### Intent reads (a kind's pipeline, goal, needs-you, sessions)
+
+The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one track.
+
+| Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy` | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }` |
+| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                            |
+| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                     | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                      |
+| `attention.count`      | `profileSlug`, `trackId`                                                                              | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                   |
+| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`      | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                |
+
+```js
+const board = await SynapWidget.query("lifecycle.board", {
+  profileSlug: "post",
+  firstN: 5,
+});
+if (board?.error) return showError(board.error); // 404 = unknown kind, 412 = no lifecycle
+const month = await SynapWidget.query("lifecycle.throughput", {
+  profileSlug: "post",
+  bucket: "month",
+  count: 1,
+});
+```
+
+A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.
 
 #### Mutations (governance-gated — return `{ status: "approved" | "proposed" | "denied" }`)
 

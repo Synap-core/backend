@@ -122,7 +122,11 @@ describe("createFocusSession — the starting agent is on the roster", () => {
       matchTemplate: false,
       forceCreate: true,
     });
-    expect((await roster(sessionId(res))).agent_ids).toEqual([HELPER, RAYCAST]);
+    // Order is when each landed: HELPER is a hand-off from the starting agent,
+    // attached after the row exists once its own door grants it
+    // (`agent-hand-off.ts`; governance is stubbed granted here).
+    const ids = (await roster(sessionId(res))).agent_ids ?? [];
+    expect([...ids].sort()).toEqual([HELPER, RAYCAST].sort());
   });
 
   it("CONTROL — a person's start lists no agent", async () => {

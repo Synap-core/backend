@@ -1820,6 +1820,9 @@ export const playbooksRouter = router({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
+        // The caller's focus session (verified at the door) — files the
+        // playbook, or its proposal, under that session.
+        sessionId: ctx.sessionId ?? undefined,
         subjectType: "playbook" as const,
         action: "create" as const,
         source: input.source,

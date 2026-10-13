@@ -661,22 +661,48 @@ export function resolveObjectNounPlural(
   if (!kind) return "";
   const key = kind.toLowerCase();
   const backendOnly = OBJECT_NOUNS[key];
-  if (backendOnly) return `${backendOnly}s`;
+  if (backendOnly) return pluralizeFallback(backendOnly);
   const canonical = OBJECT_KIND_ALIASES[key] ?? key;
   const entry = OBJECT_KINDS[canonical];
   if (entry?.labelPlural) return entry.labelPlural;
   const canonicalNoun = OBJECT_NOUNS[canonical];
-  if (canonicalNoun) return `${canonicalNoun}s`;
+  if (canonicalNoun) return pluralizeFallback(canonicalNoun);
   return pluralizeFallback(humanizeToken(canonical));
 }
 
 /**
+ * Nouns that do not take a plural — "14 Research", never "Researchs"
+ * (dogfood-2 #10, a project's pipeline door). Matched on the LAST word.
+ */
+const UNCOUNTABLE_NOUNS = new Set([
+  "research",
+  "feedback",
+  "content",
+  "information",
+  "knowledge",
+  "data",
+  "media",
+  "software",
+  "equipment",
+  "evidence",
+  "news",
+  "advice",
+  "analytics",
+]);
+
+/**
  * The uncurated fallback: singular + "s", except a consonant + "y" ending,
  * which takes "ies" — `property` (an alias target with no registry entry)
- * rendered "Propertys" through the bare-`s` rule.
+ * rendered "Propertys" through the bare-`s` rule — a sibilant ending
+ * (s / x / z / ch / sh), which takes "es", and an uncountable noun, which
+ * stays as it is.
  */
 function pluralizeFallback(noun: string): string {
-  return /[^aeiou]y$/i.test(noun) ? `${noun.slice(0, -1)}ies` : `${noun}s`;
+  const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
+  if (UNCOUNTABLE_NOUNS.has(last)) return noun;
+  if (/[^aeiou]y$/i.test(noun)) return `${noun.slice(0, -1)}ies`;
+  if (/(s|x|z|ch|sh)$/i.test(noun)) return `${noun}es`;
+  return `${noun}s`;
 }
 
 /**

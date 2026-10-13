@@ -79,7 +79,9 @@ export type LensScopeFactFor<K extends LensScopeKind> = K extends "project"
     ? Extract<LensScopeFact, { kind: "step" | "kpi" }>
     : K extends "session"
       ? Extract<LensScopeFact, { kind: "criteria" }>
-      : never;
+      : K extends "pipeline"
+        ? Extract<LensScopeFact, { kind: "kpi" }>
+        : never;
 
 /**
  * Which fact a header of this scope kind carries — null for the pod / a space.
@@ -92,6 +94,8 @@ export const LENS_SCOPE_FACT_KIND = {
   project: "target-date",
   track: ["kpi", "step"],
   session: "criteria",
+  /** An intent surface's ONE fact is the kind's goal. */
+  pipeline: "kpi",
 } as const satisfies Record<
   LensScopeKind,
   LensScopeFact["kind"] | readonly LensScopeFact["kind"][] | null
@@ -110,6 +114,7 @@ export const LENS_SCOPE_HAS_PULSE = {
   project: true,
   track: true,
   session: false,
+  pipeline: true,
 } as const satisfies Record<LensScopeKind, boolean>;
 
 /** The fact's words, or null when the fact is a date (the host formats dates). */
@@ -207,9 +212,17 @@ export type LensNarrativePart =
   | { key: "produced" | "blocking" | "happening"; text: string }
   | { key: "last-activity"; at: string };
 
-/** A count shown as a DOOR to its section. `count: null` = unknown (no number). */
-export interface LensCountDoor {
-  section: "blocking" | "happening" | "produced";
+/** The lens sections a header count opens. */
+export type LensCountSection = "blocking" | "happening" | "produced";
+
+/**
+ * A count shown as a DOOR to its section. `count: null` = unknown (no number).
+ * `X` = extra sections a SURFACE adds (an intent surface's `pipeline`,
+ * `lensIntentHeaderModel`); a lens header has none, so its hosts' handlers
+ * never meet a section they do not know.
+ */
+export interface LensCountDoor<X extends string = never> {
+  section: LensCountSection | X;
   label: string;
   count: number | null;
   /**
@@ -272,19 +285,26 @@ export function lensNextMove(
   };
 }
 
-/** The strip's words for one count door. */
-function countDoorText(
-  section: LensCountDoor["section"],
+/**
+ * The mark an UNKNOWN count wears in a door ("– need you"): a count that was
+ * not read reads as not known — never a bare label ("Needs you") that looks
+ * like a section title, never a calm zero. Hosts draw it muted.
+ */
+export const LENS_UNKNOWN_COUNT = "\u2013";
+
+/** The strip's words for one lens-section count door. */
+export function lensCountDoorText(
+  section: "blocking" | "happening" | "produced",
   count: number | null
 ): string {
-  if (count === null) return LENS_SECTION_LABELS[section];
+  const n = count ?? LENS_UNKNOWN_COUNT;
   if (section === "blocking")
-    return `${count} ${count === 1 ? "needs" : "need"} you`;
-  if (section === "produced") return `${count} delivered`;
-  return `${count} running`;
+    return `${n} ${count === 1 ? "needs" : "need"} you`;
+  if (section === "produced") return `${n} delivered`;
+  return `${n} running`;
 }
 
-export interface LensHeaderModel {
+export interface LensHeaderModel<X extends string = never> {
   /** The scope kind this header is for (decides e.g. whether it has a pulse). */
   scopeKind: Exclude<LensScopeKind, "pod">;
   /** The scope's aggregate state (v1 drew it before the title; v2 hosts may badge with it). */
@@ -296,7 +316,7 @@ export interface LensHeaderModel {
    */
   narrative: LensNarrativePart[];
   /** The counts strip, in reading order: Needs you · Produced · Happening. */
-  doors: LensCountDoor[];
+  doors: LensCountDoor<X>[];
   /** The ONE move (see {@link LensNextMove}); null ⇒ the row omits. */
   nextMove: LensNextMove | null;
   /** The newest activity (ISO) — "active 1h ago" — or null when unknown. */
@@ -365,7 +385,7 @@ export function lensHeaderModel<
       section,
       label: LENS_SECTION_LABELS[section],
       count: counts[section],
-      text: countDoorText(section, counts[section]),
+      text: lensCountDoorText(section, counts[section]),
     }));
 
   return {

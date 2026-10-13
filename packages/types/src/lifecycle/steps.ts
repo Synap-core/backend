@@ -20,7 +20,7 @@ import {
   lifecycleOptionTone,
   type LifecycleCategory,
   type LifecycleOption,
-} from "./index.js";
+} from "./option.js";
 
 /**
  * Where a step stands on the path.

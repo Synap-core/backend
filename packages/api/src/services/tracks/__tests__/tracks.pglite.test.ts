@@ -421,6 +421,39 @@ describe("startTrack", () => {
   });
 });
 
+describe("synap_start_track — the caller's session reaches the gate", () => {
+  // The MCP handler module graph is large: importing it inside the test body
+  // counted its load time against the test timeout and timed out under load.
+  let trackHandlers: (typeof import("../../../routers/mcp/handlers/track.js"))["trackHandlers"];
+  beforeAll(async () => {
+    ({ trackHandlers } =
+      await import("../../../routers/mcp/handlers/track.js"));
+  }, 180_000);
+
+  it("the MCP door hands its resolved sessionId to the gate, so the proposal is filed under it", async () => {
+    const SESSION = randomUUID();
+    const res = await trackHandlers.synap_start_track!({
+      toolName: "synap_start_track",
+      args: { projectId: PROJECT, name: "Filed under a session" },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      sessionId: SESSION,
+      caller: undefined as never,
+      lensCaller: undefined as never,
+      workspaceAccessible: false,
+    });
+    expect(JSON.stringify(res)).toContain("proposed");
+    expect(h.permCalls).toHaveLength(1);
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "track",
+      action: "create",
+      agentUserId: AGENT,
+      sessionId: SESSION,
+    });
+  });
+});
+
 describe("visibility — a track is exactly as visible as its project", () => {
   it("a caller who cannot see the project sees neither the list nor the track", async () => {
     const [row] = await trackRows();

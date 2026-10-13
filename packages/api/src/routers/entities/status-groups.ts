@@ -192,6 +192,44 @@ export async function groupThingsByStatus(params: {
 }
 
 /**
+ * STUCK counts (surfaces W1.5): per status that declares a rule, the visible
+ * things sitting in it longer than its `stuckAfterDays` — time in column
+ * (`enteredAt`, else when it took the role / was created) older than now − N
+ * days. The SAME base set and time-in-column read as the board; a status with
+ * no rule is not counted (the caller reports it as "no rule", never 0).
+ * A failed read THROWS.
+ */
+export async function countStuckThings(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  rules: ReadonlyArray<{ status: string; days: number }>;
+}): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (params.subject.profileIds.length === 0 || params.rules.length === 0)
+    return out;
+  const { t, since } = thingsInColumns({ ...params, order: "newest" });
+  const stuck = drizzleSql.join(
+    params.rules.map(
+      (r) =>
+        drizzleSql`(${t.status} = ${r.status} AND ${since} < now() - make_interval(days => ${r.days}::int))`
+    ),
+    drizzleSql` OR `
+  );
+  const rows = await db
+    .select({
+      status: t.status,
+      n: drizzleSql<number>`cast(count(*) as integer)`,
+    })
+    .from(t)
+    .where(drizzleSql`(${stuck})`)
+    .groupBy(t.status);
+  for (const r of rows) {
+    if (r.status !== null) out.set(r.status as string, Number(r.n));
+  }
+  return out;
+}
+
+/**
  * ONE column of the same set, paged (the pipeline's "Show all N"): the things
  * whose status is `column.statuses` — or, for the unclassified column, any
  * status OUTSIDE `column.declared` (NULL included) — in the board's own order
@@ -438,6 +476,88 @@ export async function countThingsByProfileAndStatus(params: {
     profileId: r.profileId as string,
     status: (r.status as string | null) ?? null,
     count: Number(r.count),
+  }));
+}
+
+/** A throughput bucket: `date_trunc` unit, UTC. */
+export type ThroughputBucket = "day" | "week" | "month";
+
+/**
+ * THROUGHPUT — things that ENTERED a `done` / `lost` option, per bucket, since
+ * `since`: the goal line of an intent surface (surfaces W1.4) and the measured
+ * goal of work model wave 5.
+ *
+ * Read from the transition log (`entity.transition.completed`, the one status
+ * door's event) — the category stamped at move time, of THAT lifecycle (the
+ * kind's own — `role IS NULL` — or the role's) — over the SAME visible things
+ * as the board (subject + the caller's visibility conditions). A thing counts
+ * once per bucket per category (it may bounce out and back in). A move made
+ * before the door existed has no event and is not counted — reported as
+ * measured, never guessed. A failed read THROWS.
+ */
+export async function countTerminalEntriesByBucket(params: {
+  subject: StatusGroupSubject;
+  conditions: SQL[];
+  since: Date;
+  bucket: ThroughputBucket;
+}): Promise<Array<{ bucketStart: string; done: number; lost: number }>> {
+  const { subject } = params;
+  if (subject.profileIds.length === 0) return [];
+  const visible =
+    subject.kind === "role"
+      ? db
+          .select({ id: drizzleSql`${entities.id}::text`.as("thing_id") })
+          .from(entityFacets)
+          .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+          .where(
+            and(
+              inArray(entityFacets.profileId, subject.profileIds),
+              isNull(entityFacets.deletedAt),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          )
+      : db
+          .select({ id: drizzleSql`${entities.id}::text`.as("thing_id") })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.profileId, subject.profileIds),
+              isNull(entities.deletedAt),
+              ...params.conditions
+            )
+          );
+  const roleMatch =
+    subject.kind === "role"
+      ? drizzleSql`${events.data}->>'role' = ${subject.roleSlug}`
+      : drizzleSql`${events.data}->>'role' IS NULL`;
+  // The unit is one of three literals (typed), never caller text.
+  const unit = drizzleSql.raw(`'${params.bucket}'`);
+  // Truncated in UTC, then read back as an instant (timestamptz).
+  const bucketStart = drizzleSql`(date_trunc(${unit}, ${events.timestamp} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`;
+  const rows = await db
+    .select({
+      bucketStart: drizzleSql<string>`${bucketStart}`.as("bucket_start"),
+      done: drizzleSql<number>`cast(count(DISTINCT ${events.subjectId}) FILTER (WHERE ${events.data}->>'category' = 'done') as integer)`,
+      lost: drizzleSql<number>`cast(count(DISTINCT ${events.subjectId}) FILTER (WHERE ${events.data}->>'category' = 'lost') as integer)`,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.subjectType, "entity"),
+        eq(events.type, TRANSITION_EVENT),
+        roleMatch,
+        drizzleSql`${events.data}->>'category' IN ('done', 'lost')`,
+        drizzleSql`${events.timestamp} >= ${params.since.toISOString()}::timestamptz`,
+        drizzleSql`${events.subjectId} IN (${visible})`
+      )
+    )
+    .groupBy(drizzleSql`1`)
+    .orderBy(drizzleSql`1`);
+  return rows.map((r) => ({
+    bucketStart: iso(r.bucketStart),
+    done: Number(r.done),
+    lost: Number(r.lost),
   }));
 }
 

@@ -17,7 +17,11 @@
  *      spaces "pending" forever, which this catches first);
  *  (2) only the finisher calls `stampWorkspacePackageVersion(`;
  *  (3) no other file writes a `packageVersion` key through `mergeSettings(` /
- *      `.set(` / a `settings.packageVersion =` assignment.
+ *      `.set(` / a `settings.packageVersion =` assignment;
+ *  (4) the overlay ledger's version (`installedPacks[].version`) is recorded
+ *      only by the finisher (on convergence) and the boot ledger pass (after
+ *      its own `playbookReportConverged`); compose records the PACK, never its
+ *      version — every `upsertInstalledPack(` caller is derived and classified.
  *
  * NOT covered, measured: granularity is the FILE, not the call site — a door
  * file with two core calls and one finisher call stays green if the second
@@ -29,8 +33,10 @@
  * seen.
  * `reconcileWorkspaceFromDefinition({ packageVersion })` (@synap/database) is a
  * second channel: its one caller that passes a version is the boot reconcile,
- * which gates the version on its own convergence report (playbooks + rules) —
- * classified below, not hidden.
+ * which gates the version on its own convergence report (playbooks + rules),
+ * and the util itself holds it while the space's last apply is unfinished
+ * (`templateApplyUnfinished`, pinned in @synap/database
+ * `create-workspace-hands-back-stamp.pglite.test.ts`) — classified below.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -172,7 +178,8 @@ describe("template apply — one finisher writes the stamp and active", () => {
     //  - the stamp writer itself (called only by the finisher — test 2);
     //  - the database `reconcileWorkspaceFromDefinition`, which writes the
     //    version a caller passes — its one version-passing caller is the boot
-    //    reconcile, gated on its own convergence report (playbooks + rules).
+    //    reconcile, gated on its own convergence report (playbooks + rules) —
+    //    and holds it while the last apply is unfinished.
     const CLASSIFIED = new Set([
       "services/workspace-creation-service.ts",
       relative(
@@ -222,5 +229,24 @@ describe("template apply — one finisher writes the stamp and active", () => {
     expect(
       CORE_CALL.test("export async function createWorkspaceFromDefinition(")
     ).toBe(false);
+  });
+
+  it("(4) only the finisher and the boot ledger pass record an overlay's version", () => {
+    const callers = apiFiles.filter((p) =>
+      /(?<!function\s)\bupsertInstalledPack\s*\(/.test(code(p))
+    );
+    // Non-vacuity: compose, the finisher and the boot ledger pass all call it.
+    expect(callers.map(rel).sort()).toEqual([
+      "services/compose-overlay.ts",
+      "services/reconcile-installed-packs.ts",
+      FINISHER,
+    ]);
+    // Compose records the pack WITHOUT a version (layer 2 has not run yet).
+    const composeSpans = callSpans(
+      code(join(API_SRC, "services/compose-overlay.ts")),
+      /(?<!function\s)\bupsertInstalledPack\s*\(/
+    );
+    expect(composeSpans.length).toBeGreaterThan(0);
+    for (const span of composeSpans) expect(span).not.toMatch(/\bversion\b/);
   });
 });

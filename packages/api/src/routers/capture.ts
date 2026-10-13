@@ -107,6 +107,7 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
+  reservedEntityKindReason,
   type EntityProvenance,
   PropertyValidationError,
   workspaces,
@@ -388,16 +389,36 @@ export function resolveEmptyResultDegradedReason(
   return trimmed.length > 0 ? trimmed : "is_empty_result";
 }
 
+/**
+ * The kind a degraded capture files as when the CALLER named one explicitly
+ * (`structure({ profileSlug })`, e.g. MCP `synap_capture` `profileSlug`):
+ * that kind, when it is a KIND (not a role, not reserved) among the profiles
+ * this capture may file into; otherwise `undefined` ⇒ the fallback note. The
+ * structurer is down, so the caller's own choice is the best classification
+ * there is — dropping it filed every degraded capture as a note.
+ */
+export function resolveDegradedFallbackKind(
+  hint: string | undefined,
+  profiles: ReadonlyArray<{ slug: string; profileKind?: string | null }>
+): string | undefined {
+  const slug = hint?.trim();
+  if (!slug || reservedEntityKindReason(slug)) return undefined;
+  const match = profiles.find((p) => p.slug === slug);
+  return match && match.profileKind !== "role" ? match.slug : undefined;
+}
+
 /** Build the generic-item fallback proposal returned when IS cannot structure input. */
 export function buildDegradedCaptureFallback(
   inputText: string,
-  degradedReason: DegradedCaptureReasonOrUnknown
+  degradedReason: DegradedCaptureReasonOrUnknown,
+  /** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
+  kind: string = FALLBACK_CAPTURE_KIND
 ) {
   return {
     proposals: [
       {
         tempId: "t1",
-        profileSlug: FALLBACK_CAPTURE_KIND,
+        profileSlug: kind,
         title: inputText.slice(0, 80).trim(),
         description: inputText.length > 80 ? inputText : undefined,
         properties: { content: inputText },
@@ -1126,6 +1147,14 @@ const captureBaseRouter = router({
         url: z.string().url().optional(),
         html: z.string().max(50_000).optional(),
         context: z.string().optional(),
+        /**
+         * The caller's explicit kind (MCP `synap_capture` `profileSlug`). Read
+         * ONLY by the degraded fallback: when the structurer cannot run, the
+         * text files as this kind (still `degraded`, confidence 0.3) if it is a
+         * kind this capture may file into — else as a note. The structurer
+         * itself gets the hint through `context`.
+         */
+        profileSlug: z.string().optional(),
         previousEntities: z
           .array(
             z.object({
@@ -1745,7 +1774,18 @@ const captureBaseRouter = router({
       //                         timeout/network) — NOT a credentials problem
       const degradedFallback = (
         degradedReason: DegradedCaptureReasonOrUnknown
-      ) => buildDegradedCaptureFallback(inputText, degradedReason);
+      ) =>
+        buildDegradedCaptureFallback(
+          inputText,
+          degradedReason,
+          resolveDegradedFallbackKind(
+            input.profileSlug,
+            linkableProfiles as ReadonlyArray<{
+              slug: string;
+              profileKind?: string | null;
+            }>
+          )
+        );
 
       // The relation vocabulary for this lens, sent so the structurer emits only
       // slugs the write lanes will accept — the SAME read those lanes validate

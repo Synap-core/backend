@@ -1036,6 +1036,8 @@ export async function applyMarketInstall(
               : core.status === "composed"
                 ? core.pendingVersionStamp
                 : undefined,
+          pendingPack:
+            core.status === "composed" ? core.pendingPack : undefined,
           post: postWorkspace ?? {},
         });
       }

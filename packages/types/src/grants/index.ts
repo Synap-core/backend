@@ -11,6 +11,7 @@
  *  - `sections` — how an editor groups, describes and counts the subjects.
  *  - `holder`   — what a holder (agent, app, key) may do, in one reading.
  *  - `listed`   — a listed grant back into the editor, keeping its lineage.
+ *  - `algebra`  — cover, meet and containment of grants, exact against `permits`.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -23,3 +24,4 @@ export * from "./agent.js";
 export * from "./sections.js";
 export * from "./holder.js";
 export * from "./listed.js";
+export * from "./algebra.js";

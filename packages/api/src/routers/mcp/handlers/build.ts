@@ -25,6 +25,10 @@ import type {
 import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import {
+  updateSkillGoverned,
+  type SkillUpdatePatch,
+} from "../../../services/skills/update-skill-governed.js";
+import {
   ok,
   requireScope,
   readReasoning,
@@ -896,6 +900,53 @@ export const buildHandlers: McpHandlerMap = {
       parameters: args.parameters as Record<string, unknown> | undefined,
       agentUserId: agentUserId ?? undefined,
     });
+    return ok(result);
+  },
+  synap_update_skill: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const str = (v: unknown) =>
+      typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    const id = str(args.id);
+    const slug = str(args.slug);
+    if (!id && !slug) {
+      return toolError(`Tool '${toolName}' needs the skill's slug or id.`);
+    }
+    if (id && !isUuid(id)) {
+      return toolError(`Tool '${toolName}': id must be a UUID — got '${id}'.`);
+    }
+    const patch: SkillUpdatePatch = {};
+    for (const field of ["name", "description", "body"] as const) {
+      if (typeof args[field] === "string") patch[field] = args[field];
+    }
+    if (Object.keys(patch).length === 0) {
+      return toolError(
+        `Tool '${toolName}': nothing to change — pass body, description and/or name.`
+      );
+    }
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      null,
+      undefined,
+      sessionId,
+      agentUserId ?? null
+    );
+    // GOVERNED: the ONE skill-update door (skills.update) — gate, owner floor,
+    // and an agent body rewrite re-earns approval, so it never stays live.
+    const result = await updateSkillGoverned({
+      callerCtx,
+      userId,
+      agentUserId,
+      ref: id ? { id } : { slug },
+      patch,
+    });
+    if (result.status === "not_found") {
+      return toolError(
+        `Tool '${toolName}': no skill you can edit matches ${id ? `id ${id}` : `slug '${slug}'`}.`
+      );
+    }
     return ok(result);
   },
 };

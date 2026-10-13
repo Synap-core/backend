@@ -18,7 +18,8 @@ const h = vi.hoisted(() => ({
   current: "negotiating" as string | null,
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   resolveStatusMoveTarget: vi.fn(async () => ({
     ok: true,

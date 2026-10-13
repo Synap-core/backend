@@ -378,13 +378,7 @@ function harvestSkillFile(absPath: string, known: ReadonlySet<string>) {
  */
 const AWAITING_DECISION: Readonly<Record<string, string>> = {
   // CRM vocabulary with no def anywhere — should these defs EXIST?
-  "synap/crm.md:linked_to_deal": "CRM verb, no def — seed or rewrite",
-  "synap/crm.md:is_client": "role expressed as an edge; Kind+Facets says facet",
-  "synap/crm.md:produced_by_deal": "CRM verb, no def — seed or rewrite",
   "synap/crm.md:member_of": "no def; `affiliated_with` is close but not equal",
-  "synap/SKILL.md:linked_to_deal": "generated from crm.md",
-  "synap/SKILL.md:is_client": "generated from crm.md",
-  "synap/SKILL.md:produced_by_deal": "generated from crm.md",
   "synap/SKILL.md:member_of": "generated from crm.md",
   // Content OS
   "synap/content-os.md:belongs_to_pillar": "content verb, no def",

@@ -305,6 +305,14 @@ describe("an action placement waiting on a proposed playbook is deferred", () =>
 
   it("(4) once the playbook exists, the next apply places it and earns the stamp", async () => {
     h.proposedName = "";
+    // (3)'s 422 left the space "failed"; the real wrapper RESUMES a failed
+    // space (outcome "created"), which this suite's layer-1 stub does not
+    // model — and the finisher never stamps over a "failed" record. Start (4)
+    // from the resumed state.
+    await q(
+      `update workspaces set provisioning_status = 'active', settings = settings || '{"provisioningStatus":"active"}'::jsonb where id = $1`,
+      [WS]
+    );
     const { status, body } = await apply({
       playbooks: [QUALIFY],
       actionPlacements: [PLACE("Qualify a lead")],

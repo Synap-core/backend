@@ -50,7 +50,10 @@ import {
 } from "./session-kind.js";
 import type { SessionStatus } from "./session-statuses.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
-import { sessionSubjectWhere, type SessionSubject } from "./session-subject.js";
+import {
+  sessionSubjectWhere,
+  type SessionSubject,
+} from "./session-subject-where.js";
 
 /** Triage lens: `default` hides undecided agent drafts, `triage` shows only them. */
 export type SessionLens = "default" | "triage" | "all";

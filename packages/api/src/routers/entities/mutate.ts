@@ -335,7 +335,10 @@ export const mutateProcs = {
           if (statusMove.status === "proposed") {
             return {
               status: "proposed",
-              message: "Status change proposed for review",
+              message: proposedMessageFor(
+                statusMove.proposalType,
+                "Status change proposed for review"
+              ),
               proposalId: statusMove.proposalId,
               proposalType: statusMove.proposalType,
               reviewUrl: statusMove.reviewUrl,

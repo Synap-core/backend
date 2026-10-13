@@ -269,6 +269,10 @@
       "types": "./dist/workers/index.d.ts",
       "import": "./dist/workers/index.js"
     },
+    "./workers/words": {
+      "types": "./dist/workers/words.d.ts",
+      "import": "./dist/workers/words.js"
+    },
     "./targets": {
       "types": "./dist/targets/index.d.ts",
       "import": "./dist/targets/index.js"

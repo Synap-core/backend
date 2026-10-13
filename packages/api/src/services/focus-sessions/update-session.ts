@@ -64,6 +64,11 @@ import {
   type BlockedSlotRef,
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
+import {
+  gateAgentHandOff,
+  handedOffAgentIds,
+  type AgentHandOffDecision,
+} from "./agent-hand-off.js";
 import { archivedAnswerHistory } from "./answer-history.js";
 import { logSlotsAsked } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
@@ -246,6 +251,13 @@ export type UpdateFocusSessionResult =
        * Absent when there is nothing to say.
        */
       warnings?: string[];
+      /**
+       * An agent's `addAgentId` naming ANOTHER agent is a hand-off, decided by
+       * its own door (`agent-hand-off.ts`). Present only when the patch carried
+       * one: `proposed` ⇒ the roster add waits on a person (the rest of this
+       * patch landed); `granted` ⇒ it was attached with the rest.
+       */
+      handOff?: AgentHandOffDecision;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -1262,6 +1274,27 @@ export function criteriaDiffer(
   return !isDeepStrictEqual(byKey(stored), byKey(next));
 }
 
+/**
+ * Does the patch ask for anything beyond the identity fields? Every key other
+ * than `sessionId` / `userId` / `agentUserId` that carries a value counts —
+ * derived from the object, never a hand list of fields, so a new field is
+ * counted by existing. Criteria count only when they CHANGE (`criteriaChange`),
+ * the same rule the membrane applies.
+ */
+function patchAsksForMore(
+  params: UpdateFocusSessionParams,
+  criteriaChange: boolean
+): boolean {
+  return Object.entries(params).some(([key, value]) => {
+    if (value === undefined) return false;
+    if (key === "sessionId" || key === "userId" || key === "agentUserId") {
+      return false;
+    }
+    if (key === "criteria") return criteriaChange;
+    return true;
+  });
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -1430,6 +1463,44 @@ export async function updateFocusSession(
       const reason = trackFilingRefusal(err);
       if (reason === null) throw err;
       return { status: "denied", reason };
+    }
+  }
+
+  // AGENT HAND-OFF — an agent putting ANOTHER agent on the roster is its own
+  // governed write (`focus_session/assign_agent`, propose unless a rule says
+  // auto), decided BEFORE the update membrane so an auto-approved update can
+  // never carry it through. A person, and an agent adding itself, skip this.
+  // Granted ⇒ it rides the patch below as before. Proposed ⇒ it is dropped
+  // from this patch (the proposal carries it; approval attaches it) and,
+  // when nothing else was asked for, the proposal IS the answer.
+  let handOff: AgentHandOffDecision | undefined;
+  if (params.addAgentId !== undefined) {
+    const [handedTo] = handedOffAgentIds(agentUserId, [params.addAgentId]);
+    if (handedTo && agentUserId) {
+      handOff = await gateAgentHandOff({
+        userId,
+        agentUserId,
+        workspaceId: existing.workspaceId,
+        sessionId,
+        goal: existing.goal,
+        agentId: handedTo,
+      });
+      if (handOff.status === "denied") {
+        return { status: "denied", reason: handOff.reason };
+      }
+      if (handOff.status === "proposed") {
+        params = { ...params, addAgentId: undefined };
+        if (!patchAsksForMore(params, criteriaChange)) {
+          return {
+            status: "proposed",
+            proposalId: handOff.proposalId,
+            proposalType: handOff.proposalType,
+            summary: handOff.summary,
+            reviewPath: handOff.reviewPath,
+            reviewUrl: handOff.reviewUrl,
+          };
+        }
+      }
     }
   }
 
@@ -1812,5 +1883,6 @@ export async function updateFocusSession(
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(handOff ? { handOff } : {}),
   };
 }

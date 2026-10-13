@@ -32,6 +32,7 @@
 import type { WorkspaceSettings } from "@synap/database";
 import { postWorkspaceLayersConverged } from "./capabilities/install-layers.js";
 import { stampWorkspacePackageVersion } from "./workspace-creation-service.js";
+import { upsertInstalledPack } from "./compose-overlay.js";
 
 export type TemplateApplyRecord = NonNullable<
   WorkspaceSettings["templateApply"]
@@ -48,6 +49,11 @@ export interface FinishTemplateApplyInput {
   built: boolean;
   /** The version layer 1 materialized / reconciled to — never stamped by it. */
   pendingVersionStamp?: string;
+  /**
+   * An overlay pack this apply recorded in `installedPacks` without its
+   * version (compose never records it): written here, on convergence only.
+   */
+  pendingPack?: { slug: string; version: string };
   /**
    * The `applyPackagePostWorkspace` result bag. `{}` when the template has no
    * living layers (nothing to land). `null` when this door does not run layer 2
@@ -106,7 +112,13 @@ function notLanded(bag: Record<string, unknown>): {
 export async function finishTemplateApply(
   input: FinishTemplateApplyInput
 ): Promise<FinishTemplateApplyResult> {
-  const { workspaceId, userId, built, pendingVersionStamp, post } = input;
+  const { workspaceId, userId, built, pendingVersionStamp, pendingPack, post } =
+    input;
+  // Nothing ran and nothing is claimed (e.g. a natural compose through a door
+  // with no layer 2): there is no outcome to write — and clearing a record an
+  // earlier, unfinished apply left would be a lie.
+  if (post === null && !built && !pendingVersionStamp && !pendingPack)
+    return { state: "converged", versionStamped: false };
   const { db, workspaces, eq, getDb, eventRepository, WorkspaceRepository } =
     await import("@synap/database");
   const [row] = await db
@@ -124,14 +136,25 @@ export async function finishTemplateApply(
   const activate = built ? { provisioningStatus: "active" as const } : {};
 
   const converged =
-    post === null ? !pendingVersionStamp : postWorkspaceLayersConverged(post);
+    post === null
+      ? !pendingVersionStamp && !pendingPack
+      : postWorkspaceLayersConverged(post);
   if (converged) {
     if (pendingVersionStamp) {
       await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
     }
+    const packVersion = pendingPack
+      ? {
+          installedPacks: upsertInstalledPack(
+            (row?.settings as WorkspaceSettings | null)?.installedPacks,
+            pendingPack,
+            new Date().toISOString()
+          ),
+        }
+      : {};
     await repo.mergeSettings(
       workspaceId,
-      { ...activate, templateApply: null },
+      { ...activate, ...packVersion, templateApply: null },
       userId
     );
     return { state: "converged", versionStamped: !!pendingVersionStamp };
@@ -145,7 +168,7 @@ export async function finishTemplateApply(
         : failures.length > 0
           ? "partial"
           : "awaiting-approval",
-    version: pendingVersionStamp ?? null,
+    version: pendingVersionStamp ?? pendingPack?.version ?? null,
     at: new Date().toISOString(),
     ...(proposals.length > 0 ? { proposals } : {}),
     ...(failures.length > 0 ? { failures } : {}),

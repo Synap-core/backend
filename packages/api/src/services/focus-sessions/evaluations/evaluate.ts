@@ -264,7 +264,8 @@ export async function evaluateSession(
             params.evidence,
             produced,
             room,
-            max
+            max,
+            new Set(judged.map((c) => c.key))
           ),
           ...(typeof modelId === "string" && modelId
             ? { excludeModel: modelId }
