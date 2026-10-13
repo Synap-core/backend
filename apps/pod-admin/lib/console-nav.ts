@@ -29,6 +29,7 @@ export type NavIconName =
   | "Shapes"
   | "Database"
   | "Bot"
+  | "Laptop"
   | "AppWindow"
   | "KeyRound"
   | "Users"
@@ -180,6 +181,14 @@ export const CONSOLE_NAV = [
         label: "Agents",
         icon: "Bot",
         kind: "agent",
+        audience: "admin",
+      },
+      {
+        id: "computers",
+        href: "/computers",
+        label: "Computers",
+        icon: "Laptop",
+        kind: "machine",
         audience: "admin",
       },
       {
@@ -370,6 +379,7 @@ export type SearchCategory =
   | "workspace"
   | "person"
   | "agent"
+  | "computer"
   | "issuer"
   | "api-key"
   | "entity"
@@ -408,6 +418,12 @@ export const SEARCH_DESTINATION: Readonly<
     nav: "agents",
     label: "Agents",
     href: (id) => navHref("agents", { focus: id }),
+  },
+  // A computer is an object with its own page, so a result opens it.
+  computer: {
+    nav: "computers",
+    label: "Computers",
+    href: (id) => `${navHref("computers")}/${encodeURIComponent(id)}`,
   },
   issuer: {
     nav: "security",

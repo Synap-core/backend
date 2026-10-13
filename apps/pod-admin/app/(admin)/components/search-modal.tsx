@@ -44,6 +44,7 @@ import {
   ClipboardCheck,
   Database,
   KeyRound,
+  Laptop,
   Mailbox,
   Search,
   ShieldCheck,
@@ -97,6 +98,7 @@ const CATEGORY_ICON: Record<ResultCategory, LucideIcon> = {
   workspace: Building2,
   person: CircleUser,
   agent: Bot,
+  computer: Laptop,
   issuer: ShieldCheck,
   "api-key": KeyRound,
   entity: Database,
@@ -124,6 +126,7 @@ const CATEGORY_ORDER: ResultCategory[] = [
   "workspace",
   "person",
   "agent",
+  "computer",
   "issuer",
   "api-key",
   "entity",
@@ -186,6 +189,11 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     { type: "agent", limit: 200 },
     { enabled: can("agent"), staleTime: 30_000 }
   );
+
+  const computersQuery = trpc.machines.adminList.useQuery(undefined, {
+    enabled: can("computer"),
+    staleTime: 30_000,
+  });
 
   const issuersQuery = trpc.trustedIssuers.list.useQuery(undefined, {
     enabled: can("issuer"),
@@ -272,7 +280,10 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     // Agents
     bucket = [];
     const agentItems = agentsQuery.data?.users ?? [];
+    // A computer is an agent user too, but it has its own page and bucket.
+    const computerIds = new Set((computersQuery.data ?? []).map((c) => c.id));
     for (const a of agentItems) {
+      if (computerIds.has(a.id)) continue;
       const hay = `${a.name ?? ""} ${a.email}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
       const meta = (a.agentMetadata ?? {}) as { agentType?: string };
@@ -282,6 +293,29 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         primary: a.name ?? a.email,
         secondary: `${meta.agentType ?? "agent"} · ${a.workspaceMembershipCount} ws`,
         href: SEARCH_DESTINATION.agent.href(a.id),
+      });
+      if (bucket.length >= cap) break;
+    }
+    matches.push(...bucket);
+
+    // Computers
+    bucket = [];
+    for (const c of computersQuery.data ?? []) {
+      const hay =
+        `${c.name} ${c.hostname ?? ""} ${c.owner?.name ?? ""}`.toLowerCase();
+      if (q && !hay.includes(q)) continue;
+      bucket.push({
+        id: c.id,
+        category: "computer",
+        primary: c.name,
+        secondary: [
+          c.hostname,
+          c.owner?.name,
+          `${c.agents.length} agent${c.agents.length === 1 ? "" : "s"}`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        href: SEARCH_DESTINATION.computer.href(c.id),
       });
       if (bucket.length >= cap) break;
     }
@@ -411,6 +445,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     wsQuery.data,
     peopleQuery.data,
     agentsQuery.data,
+    computersQuery.data,
     issuersQuery.data,
     apiKeysQuery.data,
     entitiesQuery.data,
