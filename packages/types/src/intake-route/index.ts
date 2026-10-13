@@ -272,6 +272,7 @@ export const DEPRECATED_INTAKE_PATHS: readonly DeprecatedIntakePath[] = [
   },
   {
     ...BASE,
+    stage: "redirected",
     id: "browser.quickCapture.file",
     host: "browser",
     reason:
