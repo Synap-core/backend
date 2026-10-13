@@ -34,7 +34,9 @@ import type {
   RuleCreateCaller,
   PlaybookCreateCaller,
   ViewCreateCaller,
+  CompositeUpdateCaller,
 } from "./materialize-composite.js";
+import { buildCompositeUpdateCaller } from "./composite-update-caller.js";
 // Type-only: no runtime edge, so the lazy-import cycle guard above still holds.
 import type { materializeApprovedAutomation } from "../routers/automations.js";
 
@@ -64,10 +66,14 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   ruleCaller: RuleCreateCaller;
   playbookCaller: PlaybookCreateCaller;
   viewCaller: ViewCreateCaller;
+  updateCaller: CompositeUpdateCaller;
 } {
   const { database, userId, workspaceId, auditSource } = ctx;
 
   return {
+    // A Library rebuild's CHANGES (`update_*`), each through its object's
+    // existing update door — see `composite-update-caller.ts`.
+    updateCaller: buildCompositeUpdateCaller(ctx),
     skillCaller: {
       create: async (skillOp) => {
         const { insertSkillGoverned } = await import("../routers/skills.js");

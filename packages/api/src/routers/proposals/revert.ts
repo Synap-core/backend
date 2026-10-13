@@ -14,7 +14,10 @@ import {
   isCompositeProposalData,
   isNestedEnvelope,
 } from "@synap-core/types/proposals";
-import type { CompleteMaterializedRecord } from "../../services/proposals/stamp-materialized.js";
+import type {
+  CompleteMaterializedRecord,
+  RowPatchRecord,
+} from "../../services/proposals/stamp-materialized.js";
 import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
 
 // ---------------------------------------------------------------------------
@@ -52,6 +55,8 @@ export type ProposalRevertPlan =
       /** Draft playbooks / lists a bundle created — optional, like the plan rows. */
       playbookIds?: string[];
       viewIds?: string[];
+      /** Config rows a rebuild's `update_*` ops changed — restored, never deleted. */
+      rowPatches?: RowPatchRecord[];
       /** Connected plan rows — optional so every older plan literal still types. */
       sessionIds?: string[];
       projectIds?: string[];
@@ -454,6 +459,7 @@ export function creationsPlanFromRecord(
     propertyDiffs: [...(record.propertyDiffs ?? [])],
     playbookIds: [...(record.playbookIds ?? [])],
     viewIds: [...(record.viewIds ?? [])],
+    rowPatches: [...(record.rowPatches ?? [])],
     sessionIds: [...(record.sessionIds ?? [])],
     projectIds: [...(record.projectIds ?? [])],
     linkIds: [...(record.linkIds ?? [])],
@@ -538,7 +544,35 @@ export function planProposalOpRevert(
   };
   const opKeys = [opKey];
 
-  if (entry.op === "create_relation") {
+  if (entry.op === "update_entity" && entry.entityId) {
+    // An entity a rebuild CHANGED: its diff lives in the record's one
+    // per-entity diff — undoing it alone is safe only while no other live
+    // item touched the same entity (the shared-diff rule below).
+    const sharing = Object.entries(byOp)
+      .filter(
+        ([key, other]) =>
+          key !== opKey &&
+          !other.revertedAt &&
+          other.entityId === entry.entityId
+      )
+      .map(([key]) => `'${key}'`);
+    if (sharing.length > 0) {
+      return {
+        kind: "refused",
+        reason: `Item '${opKey}' changed entity ${entry.entityId}, and so did ${sharing.join(", ")}. Their changes are recorded together, so undoing '${opKey}' alone would also undo theirs — revert the whole proposal instead.`,
+      };
+    }
+    plan.propertyDiffs.push(
+      ...(record.propertyDiffs ?? []).filter(
+        (d) => d.entityId === entry.entityId
+      )
+    );
+  } else if (entry.update) {
+    // A config row a rebuild CHANGED: restore its own before, and only that.
+    plan.rowPatches = (record.rowPatches ?? []).filter(
+      (p) => p.kind === entry.update!.kind && p.id === entry.update!.id
+    );
+  } else if (entry.op === "create_relation") {
     if (entry.relationId && !entry.preExisting)
       plan.relationIds.push(entry.relationId);
   } else if (entry.op === "create_entity" && entry.entityId) {
@@ -589,6 +623,7 @@ export function planProposalOpRevert(
       plan.ruleIds.length +
       (plan.playbookIds?.length ?? 0) +
       (plan.viewIds?.length ?? 0) +
+      (plan.rowPatches?.length ?? 0) +
       plan.propertyDiffs.length ===
     0;
   if (empty) {

@@ -17,6 +17,7 @@
  *   - create_rule              → rule.create
  *   - create_playbook          → playbook.create (a DRAFT process)
  *   - create_view              → view.create (a List over the bundle's things)
+ *   - update_<kind>            → <kind>.update (a Library rebuild's change)
  * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
  * only read/presentational keys: search.*, memory.recall, entity.read,
  * bento.arrange, document.read, context.*, filesystem.*, view.create). An
@@ -34,7 +35,21 @@
  * unscored.
  */
 
-import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import {
+  isUpdateOperation,
+  type CompositeProposalOperation,
+  type CompositeUpdateOperation,
+} from "@synap-core/types/proposals";
+
+/** Update op → the subject its update door gates. Total over the update arms. */
+const UPDATE_OP_SUBJECT: Record<CompositeUpdateOperation["op"], string> = {
+  update_skill: "skill",
+  update_automation: "automation",
+  update_rule: "rule",
+  update_playbook: "playbook",
+  update_view: "view",
+  update_entity: "entity",
+};
 
 export interface CaptureGraphEventKey {
   subjectType: string;
@@ -103,6 +118,11 @@ export function captureGraphEventKeys(
       // `view.create`). It is in the shipped auto-approve set, so a list never
       // makes a graph stricter than the things it lists.
       add({ subjectType: "view", action: "create" });
+    } else if (isUpdateOperation(op)) {
+      // A Library rebuild's change to a row it made before: the SAME key the
+      // object's own update door judges (`skills.update` → `skill.update`, …).
+      // Mapped from the op kind, never defaulted — see the fail-closed else.
+      add({ subjectType: UPDATE_OP_SUBJECT[op.op], action: "update" });
     } else if (op.op === "create_session") {
       // The SAME keys the direct session door judges: `createFocusSession`
       // gates `focus_session.create`, and a create-time blocker is judged as

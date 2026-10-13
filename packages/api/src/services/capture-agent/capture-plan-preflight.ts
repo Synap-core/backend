@@ -162,6 +162,8 @@ export async function preflightPlanOperations(
   operations.forEach((op, i) => {
     if (op.op === "create_session") noteEntity(op.subjectEntityId, i);
     else if (op.op === "create_document") noteEntity(op.entityId, i);
+    // A rebuild's change to an existing entity (the reused group container).
+    else if (op.op === "update_entity") noteEntity(op.entityId, i);
     else if (op.op === "create_project") {
       noteEntity(op.subjectEntityId, i);
       for (const id of op.evidenceEntityIds ?? []) noteEntity(id, i);
@@ -181,7 +183,9 @@ export async function preflightPlanOperations(
           ? [op.entityId]
           : op.op === "create_project"
             ? [op.subjectEntityId]
-            : [];
+            : op.op === "update_entity"
+              ? [op.entityId]
+              : [];
     for (const id of mustSee) {
       if (id && !visibleEntityIds.has(id)) {
         push(i, `entity ${id} was not found`);

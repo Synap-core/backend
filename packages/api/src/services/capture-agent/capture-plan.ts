@@ -19,6 +19,8 @@ import {
   COMPOSITE_VIEW_TYPES,
   isLikelyUUID,
   isPlanOperation,
+  isUpdateOperation,
+  updateOperationTargetId,
   PLAN_LINK_TYPES,
   type CompositeProposalOperation,
   type PlanLinkType,
@@ -120,6 +122,14 @@ const OP_REF_KIND: Partial<
   create_rule: "rule",
   create_playbook: "playbook",
   create_view: "view",
+  // An update names an EXISTING row; its ref resolves to that row's id, so
+  // a relation may target a reused container (`update_entity`).
+  update_skill: "skill",
+  update_automation: "automation",
+  update_rule: "rule",
+  update_playbook: "playbook",
+  update_view: "view",
+  update_entity: "entity",
 };
 
 /** ref → kind for every op that registers a ref (first declaration wins). */
@@ -170,7 +180,8 @@ export function hasComposedSteps(
       op.op === "create_automation" ||
       op.op === "create_rule" ||
       op.op === "create_playbook" ||
-      op.op === "create_view"
+      op.op === "create_view" ||
+      isUpdateOperation(op)
   );
 }
 
@@ -748,6 +759,60 @@ export function validatePlanOperations(
           push(i, "config must be an object");
         }
         return;
+      // ── Updates (Library rebuild) ─────────────────────────────────────
+      // Shape only: the row's existence, ownership and the field contracts
+      // are the update door's to judge at apply time.
+      case "update_skill":
+      case "update_automation":
+      case "update_rule":
+      case "update_playbook":
+      case "update_view":
+      case "update_entity": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "an update step needs a `ref`");
+        expectId(i, "target id", updateOperationTargetId(op));
+        const patch = op.patch as Record<string, unknown> | null | undefined;
+        if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+          push(i, "an update step needs a `patch` object");
+          return;
+        }
+        if (op.op === "update_rule") {
+          if (typeof op.patch.intent !== "string" || !op.patch.intent.trim())
+            push(i, "a rule update needs `patch.intent` (the rule in words)");
+          return;
+        }
+        if (op.op === "update_entity") {
+          // An empty entity patch is allowed: it registers the ref (a reused
+          // container) so relations in this batch can target it.
+          if (
+            patch.properties !== undefined &&
+            (patch.properties === null ||
+              typeof patch.properties !== "object" ||
+              Array.isArray(patch.properties))
+          ) {
+            push(i, "patch.properties must be an object");
+          }
+          return;
+        }
+        if (
+          "name" in patch &&
+          (typeof patch.name !== "string" || !patch.name.trim())
+        ) {
+          push(i, "patch.name must be a non-empty string");
+        }
+        if (
+          op.op === "update_view" &&
+          patch.config !== undefined &&
+          (patch.config === null ||
+            typeof patch.config !== "object" ||
+            Array.isArray(patch.config))
+        ) {
+          push(i, "patch.config must be an object");
+        }
+        if (Object.keys(patch).length === 0)
+          push(i, "an update step needs at least one field in `patch`");
+        return;
+      }
       default:
         return;
     }
@@ -842,6 +907,8 @@ export interface PlanStepSummary {
     | "playbook"
     | "view";
   label: string;
+  /** Set on a step that CHANGES an existing row (a Library rebuild). */
+  update?: { targetId: string };
 }
 
 /** Self-describing step list — what a plan receipt and the review UI name. */
@@ -886,6 +953,39 @@ export function planStepSummaries(
         return { ...base, kind: "playbook", label: op.name };
       case "create_view":
         return { ...base, kind: "view", label: op.name };
+      case "update_skill":
+      case "update_automation":
+      case "update_rule":
+      case "update_playbook":
+      case "update_view":
+      case "update_entity": {
+        const kind = UPDATE_STEP_KIND[op.op];
+        const patch = op.patch as Record<string, unknown>;
+        const named =
+          (typeof patch.name === "string" && patch.name) ||
+          (typeof patch.title === "string" && patch.title) ||
+          (typeof patch.intent === "string" && patch.intent) ||
+          base.ref ||
+          kind;
+        return {
+          ...base,
+          kind,
+          label: named,
+          update: { targetId: updateOperationTargetId(op) },
+        };
+      }
     }
   });
 }
+
+const UPDATE_STEP_KIND = {
+  update_skill: "skill",
+  update_automation: "automation",
+  update_rule: "rule",
+  update_playbook: "playbook",
+  update_view: "view",
+  update_entity: "entity",
+} as const satisfies Record<
+  Extract<CompositeProposalOperation["op"], `update_${string}`>,
+  PlanStepSummary["kind"]
+>;

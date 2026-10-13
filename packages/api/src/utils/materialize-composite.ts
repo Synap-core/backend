@@ -16,12 +16,15 @@
 import {
   isPlanBatch,
   isPlanOperation,
+  isUpdateOperation,
+  updateOperationTargetId,
   normalizeProposalSource,
   opRef,
   registerEntityRef,
   resolveCompositeRef,
   type CompositeCreateEntityOp,
   type CompositeProposalOperation,
+  type CompositeUpdateOperation,
 } from "@synap-core/types/proposals";
 import {
   planSessionEdges,
@@ -346,6 +349,22 @@ export interface MaterializeViewResult {
   containerEntityId?: string;
 }
 
+/**
+ * Per-op result for an `update_*` op (a Library rebuild's change). `before`
+ * and `after` hold ONLY the fields the op patched, read right around the
+ * write — what revert restores, compare-and-set against `after`. For
+ * `update_entity` they are the entity's undo snapshot (title / preview /
+ * properties), turned into the ONE entity diff shape by the record builder.
+ */
+export interface MaterializeUpdateResult {
+  ref: string;
+  opIndex: number;
+  op: CompositeUpdateOperation["op"];
+  targetId: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}
+
 /** Per-op result for a `create_project` op (connected plan). */
 export interface MaterializeProjectResult {
   ref: string;
@@ -469,6 +488,8 @@ export interface MaterializeResult {
   playbooks: MaterializePlaybookResult[];
   /** Lists created by `create_view` ops. Empty by default. */
   views: MaterializeViewResult[];
+  /** Rows CHANGED by `update_*` ops (a Library rebuild). Empty by default. */
+  updates: MaterializeUpdateResult[];
   /** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
   projects: MaterializeProjectResult[];
   sessions: MaterializeSessionResult[];
@@ -562,6 +583,20 @@ export type ViewCreateCaller = {
     containerEntityId?: string;
     config?: Record<string, unknown>;
   }) => Promise<{ id: string }>;
+};
+
+/**
+ * The `update_*` ops (a Library rebuild). ONE caller for the six kinds, wired
+ * by `buildRuleLoopCallers`: each kind routes to its object's EXISTING update
+ * door with the approver's authority. It reads the patched fields right
+ * before and right after the write and returns both, so the record can undo
+ * exactly this write — and nothing a later edit wrote over it.
+ */
+export type CompositeUpdateCaller = {
+  apply: (op: CompositeUpdateOperation) => Promise<{
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }>;
 };
 
 /**
@@ -727,6 +762,8 @@ export interface MaterializeOptions {
   playbookCaller?: PlaybookCreateCaller;
   /** List (`create_view`) — wired with the Rule Loop callers. */
   viewCaller?: ViewCreateCaller;
+  /** Changes (`update_*`, a Library rebuild) — wired with the Rule Loop callers. */
+  updateCaller?: CompositeUpdateCaller;
   /**
    * Connected plan (sessions / documents / projects / session edges). Required
    * the moment a batch carries a plan op — absent ⇒ the batch is refused before
@@ -778,6 +815,7 @@ function appliedRowsOf(
     ...result.rules.map((r) => ({ kind: "rule", id: r.ruleId })),
     ...result.playbooks.map((p) => ({ kind: "playbook", id: p.playbookId })),
     ...result.views.map((v) => ({ kind: "view", id: v.viewId })),
+    ...result.updates.map((u) => ({ kind: `${u.op}`, id: u.targetId })),
     ...result.projects
       .filter((p) => !p.linked)
       .map((p) => ({ kind: "project", id: p.projectId })),
@@ -817,7 +855,8 @@ export async function materializeCompositeGraph(
       (op.op === "create_automation" && !options?.automationCaller) ||
       (op.op === "create_rule" && !options?.ruleCaller) ||
       (op.op === "create_playbook" && !options?.playbookCaller) ||
-      (op.op === "create_view" && !options?.viewCaller)
+      (op.op === "create_view" && !options?.viewCaller) ||
+      (isUpdateOperation(op) && !options?.updateCaller)
   );
   if (missingConfigCaller) {
     throw new Error(
@@ -915,6 +954,7 @@ export async function materializeCompositeGraph(
   const ruleResults: MaterializeRuleResult[] = [];
   const playbookResults: MaterializePlaybookResult[] = [];
   const viewResults: MaterializeViewResult[] = [];
+  const updateResults: MaterializeUpdateResult[] = [];
   const facetResults: MaterializeFacetResult[] = [];
   let relations: MaterializeRelationResult[] = [];
   const relationsFailed: MaterializeRelationFailure[] = [];
@@ -937,11 +977,49 @@ export async function materializeCompositeGraph(
     rules: ruleResults,
     playbooks: playbookResults,
     views: viewResults,
+    updates: updateResults,
     projects: projectResults,
     sessions: sessionResults,
     links: linkResults,
     documents: documentResults,
   });
+
+  // One update op through the update caller. Per-op resilient like every
+  // config op: a failed change is logged and skipped (inside a plan it fails
+  // the plan). Its ref registers the row's id, so a relation in this batch
+  // may target a reused container.
+  const applyUpdateOp = async (
+    i: number,
+    op: CompositeUpdateOperation
+  ): Promise<void> => {
+    currentOpIndex = i;
+    if (!options?.updateCaller) {
+      // Unreachable — the fail-closed preflight above already refused this
+      // batch. Kept as a narrowing guard that THROWS (never skips).
+      throw new Error(
+        `materializeCompositeGraph: ${op.op} op reached pass execution with no updateCaller (preflight bypassed)`
+      );
+    }
+    const targetId = updateOperationTargetId(op);
+    try {
+      const { before, after } = await options.updateCaller.apply(op);
+      registerEntityRef(refToRealId, i, op.ref, targetId, false);
+      updateResults.push({
+        ref: op.ref,
+        opIndex: i,
+        op: op.op,
+        targetId,
+        before,
+        after,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, ref: op.ref, op: op.op, targetId },
+        "Skipping update op (batch continues)"
+      );
+      failPlanStep(i, err);
+    }
+  };
 
   try {
     for (let i = 0; i < operations.length; i++) {
@@ -1455,6 +1533,15 @@ export async function materializeCompositeGraph(
       }
     }
 
+    // ── Pass 1u — ENTITY UPDATES (a Library rebuild's reused container) ───
+    // Before relations, so a `parent_of` from the container to a new member
+    // resolves through the ref this registers.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "update_entity") continue;
+      await applyUpdateOp(i, op);
+    }
+
     // Pass 2 — relations via the shared loop (resolution + create guarded
     // per-relation; a malformed/failed relation is reported and skipped, never
     // discarding the entities already created).
@@ -1739,6 +1826,16 @@ export async function materializeCompositeGraph(
         );
         failPlanStep(i, err);
       }
+    }
+
+    // ── Pass 6 — CONFIG UPDATES (a Library rebuild) ───────────────────────
+    // Last: a rebuild's change to the Tools / Templates / Rules / Lists an
+    // earlier bundle made. Nothing in the batch points AT an update, so it
+    // may run after every create.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (!isUpdateOperation(op) || op.op === "update_entity") continue;
+      await applyUpdateOp(i, op);
     }
   } catch (err) {
     // Outside a plan a throw keeps its historic meaning: it propagates, and

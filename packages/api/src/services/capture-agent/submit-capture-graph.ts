@@ -60,6 +60,7 @@ import {
   type CompositeCreateRuleOp,
   type CompositeCreatePlaybookOp,
   type CompositeCreateViewOp,
+  type CompositeUpdateOperation,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
   type PlanProjectEvidence,
@@ -220,6 +221,13 @@ export interface CapturePlanInput {
    * `views.create`.
    */
   views?: Array<Omit<CompositeCreateViewOp, "op">>;
+  /**
+   * Changes to rows an earlier bundle made (a Library rebuild): a Tool's
+   * body, a Template's goal, a List's name, the group container's note.
+   * Carried WITH their discriminant — each names its own door. Never a twin:
+   * a rebuild that finds its earlier row updates it.
+   */
+  updates?: CompositeUpdateOperation[];
 }
 
 /** One plan step on a submit receipt — self-describing for the reviewer/agent. */
@@ -246,7 +254,8 @@ export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
       (plan?.automations?.length ?? 0) +
       (plan?.rules?.length ?? 0) +
       (plan?.playbooks?.length ?? 0) +
-      (plan?.views?.length ?? 0) >
+      (plan?.views?.length ?? 0) +
+      (plan?.updates?.length ?? 0) >
     0
   );
 }
@@ -591,6 +600,7 @@ export async function buildCaptureGraphOperations(
       ...p,
     })),
     ...(plan?.views ?? []).map((v) => ({ op: "create_view" as const, ...v })),
+    ...(plan?.updates ?? []),
   ];
 
   // Scope-aware homes (shared with import): stamp process kinds into the graph

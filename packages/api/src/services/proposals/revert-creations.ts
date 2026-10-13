@@ -118,6 +118,14 @@ export function revertTargetsFromPlan(
       id,
     })),
     ...(plan.viewIds ?? []).map((id) => ({ kind: "view" as const, id })),
+    // Config rows a rebuild's `update_*` ops changed (absent on older records).
+    ...(plan.rowPatches ?? []).map((p) => ({
+      kind: "row_patch" as const,
+      table: p.kind,
+      id: p.id,
+      before: p.before,
+      after: p.after,
+    })),
     // A connected plan's non-entity rows (absent on every older record).
     ...(plan.linkIds ?? []).map((id) => ({ kind: "link" as const, id })),
     ...(plan.projectIds ?? []).map((id) => ({
@@ -139,6 +147,8 @@ export function describeRevertTarget(target: RevertTarget): string {
       return `body of entity ${target.entityId}`;
     case "entity_field":
       return `${entityFieldApiName(target.field)} of entity ${target.entityId}`;
+    case "row_patch":
+      return `changes to ${target.table} ${target.id}`;
     default:
       return `${target.kind} ${target.id}`;
   }
@@ -216,8 +226,17 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
     projectIds: [],
     linkIds: [],
   };
+  const rowPatches: NonNullable<CompleteMaterializedRecord["rowPatches"]> = [];
   for (const target of reverted) {
     switch (target.kind) {
+      case "row_patch":
+        rowPatches.push({
+          kind: target.table,
+          id: target.id,
+          before: target.before,
+          after: target.after,
+        });
+        break;
       case "entity":
         record.entityIds.push(target.id);
         break;
@@ -272,7 +291,11 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
         break;
     }
   }
-  return { ...record, propertyDiffs: [...diffs.values()] };
+  return {
+    ...record,
+    propertyDiffs: [...diffs.values()],
+    ...(rowPatches.length > 0 ? { rowPatches } : {}),
+  };
 }
 
 export async function revertProposalCreations(args: {
@@ -535,6 +558,17 @@ function emitRevertEvents(args: {
         row.workspaceId
       );
     }
+  }
+
+  // A restored config row is an UPDATE of that row (its earlier text is back).
+  for (const patch of undone.rowPatches ?? []) {
+    void recordDomainMutation({
+      ...base,
+      subjectType: patch.kind === "rule" ? "skill" : patch.kind,
+      action: "update",
+      subjectId: patch.id,
+      data: { changedKeys: Object.keys(patch.before), ...reason },
+    });
   }
 
   for (const [subjectType, ids] of [

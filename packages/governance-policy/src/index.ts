@@ -2421,6 +2421,14 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_playbook: { subjectType: "playbook", action: "create" },
   // A List over the bundle's things — the `views.create` door.
   create_view: { subjectType: "view", action: "create" },
+  // A Library rebuild's CHANGES to what it made before — each the update door
+  // of the object it rewrites (never a create: no twin is minted).
+  update_skill: { subjectType: "skill", action: "update" },
+  update_automation: { subjectType: "automation", action: "update" },
+  update_rule: { subjectType: "rule", action: "update" },
+  update_playbook: { subjectType: "playbook", action: "update" },
+  update_view: { subjectType: "view", action: "update" },
+  update_entity: { subjectType: "entity", action: "update" },
 } as const satisfies Record<string, GovernedWritePair>;
 
 /** The composite operation arms this module knows how to gate. */
@@ -2452,6 +2460,14 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   // mints no identity — below an entity, above a bare edge.
   create_view: 0.5,
   create_relation: 0,
+  // An update rewrites a row a person already approved once: ranked with the
+  // create of the same object, a hair below it (it mints no identity).
+  update_rule: 3.9,
+  update_skill: 2.9,
+  update_playbook: 2.4,
+  update_automation: 1.9,
+  update_entity: 0.9,
+  update_view: 0.4,
 };
 
 /**
