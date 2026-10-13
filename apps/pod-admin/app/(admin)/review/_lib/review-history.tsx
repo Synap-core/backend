@@ -18,7 +18,7 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import type { StatusKind } from "../../components/status-pill";
-import { kindIcon, kindLabel } from "../../marketplace/_lib/kind-icon";
+import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 
 /** Status → pill colour only; the word comes from the vocabulary. */

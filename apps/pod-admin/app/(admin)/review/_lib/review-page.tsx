@@ -43,7 +43,7 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import { kindIcon, kindLabel } from "../../marketplace/_lib/kind-icon";
+import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import {
   batchOf,
   focusedRow,

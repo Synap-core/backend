@@ -5079,26 +5079,17 @@ export interface EffectiveProperty extends PropertyDef {
 	isLifecycle: boolean;
 }
 /**
- * RendererRef — what a profile or workspace stores as its renderer choice
- * for a (slot, profile) pair.
+ * RendererRef / DeclarativeBlock — MIRROR of `@synap-core/types/renderer-ref`.
  *
- * Structural mirror of `RendererTarget` from `@synap-core/renderer-runtime`.
- * Kept as a structural type in the database layer (rather than importing the
- * frontend package) so the schema package stays UI-free. The canonical type
- * lives in `@synap-core/renderer-runtime` and is re-exported by
- * `@synap-core/profile-renderer` as `RendererRef`.
+ * The canonical declaration (and its docs) lives in that module, which every
+ * surface that draws a renderer reads. This package cannot import it —
+ * `@synap-core/types` already builds against `@synap/database`, so the
+ * reverse edge is a build cycle — so the pod keeps this structural copy, and
+ * `packages/types/src/renderer-ref/pod-parity.contract.ts` holds the two
+ * EXACTLY equal at compile time. Change both, in the same commit.
  *
- * Stored as JSONB on `profiles.default_(list|detail)_renderer` and inside
- * `workspaces.settings.profileRenderers[slug]`.
- *
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
- */
-/**
- * DeclarativeBlock — a MINIMAL, bounded Block-Kit-style schema for a
- * `declarative` renderer (the config-first surface a capability page can carry
- * without a coded cell or a saved view). Intentionally small: five block kinds,
- * each a plain data shape the browser can render generically. Additive — it
- * exists ONLY to give the new `RendererRef.declarative` kind a typed `schema`.
+ * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and
+ * inside `workspaces.settings.profileRenderers[slug]`.
  */
 export type DeclarativeBlock = {
 	type: "heading";
