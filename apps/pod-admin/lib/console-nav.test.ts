@@ -81,6 +81,7 @@ describe("consoleRedirects", () => {
       ["/trust-keys", "section=api-keys", "/keys", false],
       ["/trust-keys", "section=secrets", "/security?section=secrets", false],
       ["/overview", null, "/home", false],
+      ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
       ["/connectors", null, "/sources", false],
       ["/trust-keys", null, "/security", false],

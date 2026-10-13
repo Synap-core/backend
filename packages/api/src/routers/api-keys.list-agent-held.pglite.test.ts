@@ -209,7 +209,11 @@ describe("apiKeys.list — who holds each key", () => {
       kind: "computer",
       name: "Studio Mac",
     });
-    expect(holder(keyOf.app)).toEqual({ kind: "app", name: "Invoicer" });
+    expect(holder(keyOf.app)).toEqual({
+      kind: "app",
+      name: "Invoicer",
+      appId: "app_x",
+    });
     expect(holder(keyOf.agent)).toEqual({ kind: "agent", name: "Claude" });
   });
 

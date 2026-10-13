@@ -7,6 +7,7 @@
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
+import { appHref } from "../../applications/_lib/app-inventory";
 
 /**
  * Who holds a key — `apiKeys.list` / `adminListAll` project it (`KeyHolder`
@@ -18,6 +19,8 @@ import type { StatusKind } from "../../components/status-pill";
 export interface KeyHolder {
   kind: "app" | "computer" | "agent" | "person";
   name: string | null;
+  /** An app holder's `public_id` — its page on Apps (`holderHref`). */
+  appId?: string;
 }
 
 export interface UnifiedKey {
@@ -105,13 +108,16 @@ export function holderName(k: UnifiedKey): string | null {
 }
 
 /**
- * The page of the key's holder, when it has one in the console: a computer's
- * key opens its computer (the key's `userId` IS the computer). null for every
- * other key — the row then stays a row.
+ * Where the key's holder has its own page: a computer's key opens its
+ * computer (the key's `userId` IS the computer); an app's key opens its app on
+ * Apps. null = the holder has no page to open from here — the row stays a row.
  */
 export function holderHref(k: UnifiedKey): string | null {
   if (k.holder?.kind === "computer" && k.userId)
     return `${navHref("computers")}/${encodeURIComponent(k.userId)}`;
+  if (k.holder?.kind === "app" && k.holder.appId) {
+    return appHref("key", k.holder.appId);
+  }
   return null;
 }
 

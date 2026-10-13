@@ -452,7 +452,8 @@ function KeyRow({
   onDelete?: () => void;
 }) {
   const router = useRouter();
-  // A computer's key opens its computer, where its lifetime and agents are.
+  // A computer's or app's key opens its holder's page (what holds it, what it
+  // reaches, how to revoke it).
   const holderPage = holderHref(apiKey);
   const status = keyStatus(apiKey);
   const scopes = normalizeScopes(apiKey.scope);

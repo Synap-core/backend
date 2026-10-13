@@ -42,6 +42,7 @@ import {
   OAUTH_AGENT_TYPE,
   OAUTH_DEFAULT_SCOPES,
   OAUTH_SUPPORTED_SCOPES,
+  oauthKeyInstanceId,
   resolveIssuer,
 } from "./config.js";
 import {
@@ -364,7 +365,7 @@ oauthApp.post("/token", async (c) => {
       // exactly this connection's key and never kills another human's — agent
       // USERs are singleton per (createdByUserId, agentType), and instanceId
       // further isolates multi-runtime keys for the same human.
-      instanceId: `oauth:${claimed.clientId}:${claimed.userId}`,
+      instanceId: oauthKeyInstanceId(claimed.clientId, claimed.userId),
       scopes,
       ensureRegistryRow: true,
       agentLabel: "Claude (Web, direct)",
