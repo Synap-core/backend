@@ -121,6 +121,7 @@ export function registerProfileExecutors(): void {
         profileKind: innerData.profileKind as "kind" | "role" | undefined,
         applicableKinds: innerData.applicableKinds as string[] | undefined,
         roleCategory: innerData.roleCategory as string | undefined,
+        forceCreate: innerData.forceCreate === true ? true : undefined,
       });
       // The approver IS the authority — the re-entrant gate should auto-grant.
       // A nested proposal means the approver lacks profile.create rights; surface

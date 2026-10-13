@@ -665,11 +665,21 @@ export const profilesRouter = router({
       // door does: `input.agentUserId` and `source` are both caller-supplied,
       // so an agent could omit them and walk past this guard. The ALS value is
       // set server-side at every key-auth entry point and cannot be dropped.
+      //
+      // An approved AGENT proposal counts too: the approve executor re-enters
+      // this door as the human approver (no agentUserId, no ALS), so without
+      // the provenance signal the twin check was skipped on exactly the path
+      // that minted the live `finding` twin (ticket 5c3879d4: a replayed agent
+      // proposal, approved by a human, created Builder's `finding` beside
+      // Research's). The proposal carries `forceCreate` through, so an agent
+      // that judged the concept separate is not refused at approve.
       const isAiCaller =
         Boolean(getActingAgentUserId()) ||
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
-        input.source === "intelligence";
+        input.source === "intelligence" ||
+        (ctx as { profileProvenance?: { origin?: string } }).profileProvenance
+          ?.origin === "agent";
       if (isAiCaller && !input.forceCreate) {
         const elsewhere = await profileRepo.findActiveBySlugAnyScope(
           input.slug
@@ -775,6 +785,9 @@ export const profilesRouter = router({
           // role's category — dropping it here approves a role that
           // `entity.query { roleCategory }` can never match.
           roleCategory: input.roleCategory,
+          // Carried so the approve executor re-applies the caller's twin
+          // judgement (the cross-workspace twin check above re-runs there).
+          ...(input.forceCreate ? { forceCreate: true } : {}),
         },
       });
 
