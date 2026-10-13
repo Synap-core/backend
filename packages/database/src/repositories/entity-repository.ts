@@ -773,8 +773,29 @@ export class EntityRepository extends BaseRepository<
       );
 
       if (!validationResult.valid) {
-        throw new Error(
-          `Property validation failed: ${validationResult.errors.join(", ")}`
+        // A PARTIAL update answers only for the keys it writes. Legacy values
+        // in untouched keys (e.g. an enum option retired after the row was
+        // written, a required field added later) must not make the row
+        // un-editable — not even by the edit that would fix them. A retype is
+        // a new schema contract, so it keeps the whole-bag check, like create.
+        const isRetype =
+          newProfileId !== undefined && newProfileId !== existing.profileId;
+        const blocking = isRetype
+          ? validationResult.errors
+          : await this.patchValidationErrors(
+              existing.properties as Record<string, unknown> | null,
+              mergedProperties,
+              validationProfileId,
+              lensWorkspaceId
+            );
+        if (blocking.length > 0) {
+          throw new Error(`Property validation failed: ${blocking.join(", ")}`);
+        }
+        // No warnings channel exists on the update receipt (only `unmodeled`),
+        // so the pre-existing violations are logged, never silently "fixed":
+        // the untouched values are stored verbatim.
+        console.warn(
+          `[EntityRepository.update] entity ${id} kept pre-existing property violations in untouched keys: ${validationResult.errors.join(", ")}`
         );
       }
 
@@ -848,6 +869,54 @@ export class EntityRepository extends BaseRepository<
     }
 
     return unmodeled.length ? { ...entity, unmodeled } : entity;
+  }
+
+  /**
+   * The validation errors a partial update is answerable for: those of the
+   * keys whose value this write CHANGES (set, changed, deleted, or derived —
+   * e.g. the Knowledge claim), judged by the same validator. A changed key
+   * that is required, has no default and ends up absent is refused — the
+   * validator's own "required" rule, scoped to the patch: a patch may not
+   * delete a required field, but it is never refused for one it did not touch.
+   */
+  private async patchValidationErrors(
+    before: Record<string, unknown> | null,
+    merged: Record<string, unknown>,
+    profileId: string,
+    lensWorkspaceId: string | null
+  ): Promise<string[]> {
+    const prior = before ?? {};
+    const changed = [
+      ...new Set([...Object.keys(prior), ...Object.keys(merged)]),
+    ].filter((k) => JSON.stringify(prior[k]) !== JSON.stringify(merged[k]));
+    if (changed.length === 0) return [];
+
+    const written: Record<string, unknown> = {};
+    for (const k of changed) {
+      if (k in merged) written[k] = merged[k];
+    }
+    const { errors } = await this.propertyValidation.validateProperties(
+      written,
+      profileId,
+      lensWorkspaceId,
+      { enforceRequired: false }
+    );
+
+    const effective = await this.profileResolution.getEffectiveProperties(
+      profileId,
+      lensWorkspaceId
+    );
+    for (const prop of effective) {
+      if (
+        prop.required &&
+        changed.includes(prop.slug) &&
+        !(prop.slug in merged) &&
+        (prop.defaultValue === null || prop.defaultValue === undefined)
+      ) {
+        errors.push(`Property '${prop.slug}' is required`);
+      }
+    }
+    return errors;
   }
 
   /**
