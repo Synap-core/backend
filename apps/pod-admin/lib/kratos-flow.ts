@@ -288,8 +288,14 @@ export function existingSessionAction(
   return serverSession === "none" ? "explain_cookie_scope" : "return";
 }
 
-export const COOKIE_SCOPE_MESSAGE =
-  "You're already signed in to this pod, but the console can't see that sign-in. Reload this page; if it keeps appearing, the pod's sign-in cookie isn't shared with the console's address.";
+/**
+ * What /login says instead of looping (`explain_cookie_scope`). Not an error
+ * the reader caused, so it reads as a calm note with one act: reload.
+ */
+export const COOKIE_SCOPE_COPY = {
+  title: "You're signed in, but this page can't tell yet.",
+  body: "Reload the page. If you land here again, this pod's sign-in isn't shared with the address you opened it at — open the console from the pod's own address, or ask whoever runs the pod.",
+} as const;
 
 /** Every self-service flow kind a `?flow=` id can belong to. */
 export type AnySelfServiceFlowKind =

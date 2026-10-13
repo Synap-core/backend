@@ -26,11 +26,12 @@ import {
   AlertCircle,
   KeyRound,
   Lock,
+  RefreshCw,
   UserPlus,
 } from "lucide-react";
 import {
   collectErrorMessages,
-  COOKIE_SCOPE_MESSAGE,
+  COOKIE_SCOPE_COPY,
   createLoginFlow,
   existingSessionAction,
   extractInitialValues,
@@ -76,6 +77,9 @@ export function LoginForm({
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Signed in, but the session cookie does not reach this address: explain
+  // and offer a reload instead of a form that would loop back here.
+  const [cookieScope, setCookieScope] = useState(false);
 
   // `returnTo` is always a path on this origin (`lib/safe-return-to.ts`), so
   // an in-app navigation is enough and keeps the Next.js bundle.
@@ -91,7 +95,7 @@ export function LoginForm({
       goReturn();
       return true;
     }
-    setError(COOKIE_SCOPE_MESSAGE);
+    setCookieScope(true);
     return false;
   }, [goReturn, serverSession]);
 
@@ -229,6 +233,7 @@ export function LoginForm({
 
   // The flow is answered by a state panel, not the form.
   const stateView =
+    cookieScope ||
     signIn.kind === "access_required" ||
     signIn.kind === "self_registration_disabled" ||
     (flowKind === "registration" && flow !== null);
@@ -272,11 +277,20 @@ export function LoginForm({
 
           {loading ? (
             <SignInHeader refresh={refresh} />
+          ) : cookieScope ? (
+            <RefusalPanel
+              icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
+              title={COOKIE_SCOPE_COPY.title}
+              actionLabel="Reload"
+              onAction={() => window.location.reload()}
+            >
+              <p>{COOKIE_SCOPE_COPY.body}</p>
+            </RefusalPanel>
           ) : signIn.kind === "access_required" ? (
             <RefusalPanel
               icon={<Lock className="h-5 w-5" strokeWidth={2} />}
               title="You don't have access to this pod yet."
-              onBack={backToSignIn}
+              onAction={backToSignIn}
             >
               <p>
                 The pod owner has to let you in. Open the Synap app (Relay or
@@ -296,7 +310,7 @@ export function LoginForm({
             <RefusalPanel
               icon={<UserPlus className="h-5 w-5" strokeWidth={2} />}
               title="New accounts on this pod are created by invitation or with Synap Cloud."
-              onBack={backToSignIn}
+              onAction={backToSignIn}
             />
           ) : flowKind === "registration" && flow ? (
             // pod-admin renders no sign-up form; any other registration error
@@ -354,7 +368,7 @@ export function LoginForm({
           {!loading && !refresh ? (
             <a
               href="/recovery"
-              className="self-start text-[12.5px] text-foreground/60 underline-offset-4 hover:text-foreground hover:underline"
+              className="self-start rounded-sm text-[12.5px] text-foreground/65 underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Can&apos;t sign in?
             </a>
@@ -398,16 +412,19 @@ function SignInHeader({ refresh = false }: { refresh?: boolean }) {
  * An EXPLAIN state: the user cannot fix this from the form, so say why and
  * what to do, with one way back. Not an error banner — nothing failed.
  */
+/** A sign-in state that is not an error: what is true, and the one way on. */
 function RefusalPanel({
   icon,
   title,
   children,
-  onBack,
+  onAction,
+  actionLabel = "Back to sign-in",
 }: {
   icon: React.ReactNode;
   title: string;
   children?: React.ReactNode;
-  onBack: () => void;
+  onAction: () => void;
+  actionLabel?: string;
 }) {
   return (
     <div className="flex flex-col gap-4" role="status">
@@ -432,9 +449,9 @@ function RefusalPanel({
         variant="flat"
         radius="md"
         className="min-h-11 self-start"
-        onPress={onBack}
+        onPress={onAction}
       >
-        Back to sign-in
+        {actionLabel}
       </Button>
     </div>
   );

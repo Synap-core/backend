@@ -98,7 +98,7 @@ export async function proxy(req: NextRequest) {
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
   // Self-service receivers need only the session (each one's reason lives
-  // in `lib/route-policy.ts`). The member console (`/home`, `/review`, D8)
+  // in `lib/route-policy.ts`). The member console (`/home`, `/review`)
   // opens for any member but still asks the role, because the nav it
   // renders depends on it. Everything else is pod_admin or /forbidden.
   let role: ConsoleRole | null = null;
@@ -132,11 +132,13 @@ export async function proxy(req: NextRequest) {
 /**
  * The pod did not answer "who is this?". Self-contained HTML (no app chrome:
  * the layout would need the very answers we lack), and a 503 so a prefetch
- * never caches it as the page.
+ * never caches it as the page. Its colours are the console theme's own
+ * (`tailwind.config.ts`: dark by default, the light theme when the browser
+ * asks for it), and Refresh is a plain link to this same address — no script.
  */
 function podUnavailable(): NextResponse {
   return new NextResponse(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pod Console</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:32rem;margin:0 auto;padding:4rem 1rem;line-height:1.5;color:#18181b;background:#fafafa}@media (prefers-color-scheme:dark){body{color:#e4e4e7;background:#09090b}}a{color:inherit}</style></head><body><h1 style="font-size:1.25rem">Your pod didn’t answer just now</h1><p>The pod is busy or restarting, so the console couldn’t check your sign-in. Nothing was signed out.</p><p><a href="">Try again</a> in a few seconds.</p></body></html>`,
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><title>Pod Console</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:32rem;margin:0 auto;padding:4rem 1rem;line-height:1.5;color:#ECECEA;background:#0B0C0A}h1{font-size:1.25rem;font-weight:500;margin:0 0 .5rem}p{margin:0 0 1rem;color:rgba(236,236,234,.75)}.btn{display:inline-block;padding:.5rem 1rem;border-radius:12px;background:#047857;color:#fff;text-decoration:none;font-weight:500}.btn:hover{opacity:.9}.btn:focus-visible{outline:2px solid #34D399;outline-offset:2px}@media (prefers-color-scheme:light){body{color:#1A1A19;background:#FAF9F6}p{color:rgba(26,26,25,.75)}.btn:focus-visible{outline-color:#10B981}}</style></head><body><main><h1>Your pod didn’t answer just now</h1><p>The pod is busy or restarting, so the console couldn’t check your sign-in. Nothing was signed out.</p><p>Try again in a few seconds.</p><a class="btn" href="">Refresh</a></main></body></html>`,
     {
       status: 503,
       headers: {
