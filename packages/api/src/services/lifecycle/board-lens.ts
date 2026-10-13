@@ -23,6 +23,20 @@ import {
   statusSubjectOfRows,
 } from "./status-groups.js";
 
+/**
+ * A per-request memo for reads that resolve MANY lenses (the home: one per
+ * producing space × kind). A slug's rows are space-independent, so they are
+ * read once per request; everything space-dependent is still resolved per
+ * lens. Never shared across requests (a profile edit must be seen next read).
+ */
+export interface BoardLensMemo {
+  slugRows: Map<string, ReturnType<typeof assertKnownProfileSlug>>;
+}
+
+export function newBoardLensMemo(): BoardLensMemo {
+  return { slugRows: new Map() };
+}
+
 export interface ResolvedProfile {
   profileKind: "kind" | "role";
   profileIds: string[];
@@ -38,9 +52,15 @@ export interface ResolvedProfile {
  */
 export async function resolveProfileLifecycle(
   profileSlug: string,
-  workspaceId: string | null | undefined
+  workspaceId: string | null | undefined,
+  memo?: BoardLensMemo
 ): Promise<ResolvedProfile> {
-  const rows = await assertKnownProfileSlug(db, profileSlug);
+  let read = memo?.slugRows.get(profileSlug);
+  if (!read) {
+    read = assertKnownProfileSlug(db, profileSlug);
+    memo?.slugRows.set(profileSlug, read);
+  }
+  const rows = await read;
   const { chosen, profileKind, podScopeKind } = statusSubjectOfRows(
     profileSlug,
     rows
@@ -102,7 +122,8 @@ export async function resolveBoardLens(
     trackId?: string;
     workspaceId?: string | null;
   },
-  ctx: { userId: string; workspaceId?: string | null }
+  ctx: { userId: string; workspaceId?: string | null },
+  memo?: BoardLensMemo
 ) {
   let projectId = input.projectId;
   if (input.trackId) {
@@ -128,7 +149,11 @@ export async function resolveBoardLens(
     input.workspaceId !== undefined
       ? input.workspaceId
       : (ctx.workspaceId ?? undefined);
-  const p = await resolveProfileLifecycle(input.profileSlug, lensWorkspaceId);
+  const p = await resolveProfileLifecycle(
+    input.profileSlug,
+    lensWorkspaceId,
+    memo
+  );
   const lifecycle = toLifecycleWire(input.profileSlug, p);
 
   const conditions =

@@ -72,7 +72,11 @@ import {
   type SignalsCtx,
 } from "../../routers/signals.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
-import { resolveBoardLens } from "./board-lens.js";
+import {
+  newBoardLensMemo,
+  resolveBoardLens,
+  type BoardLensMemo,
+} from "./board-lens.js";
 import {
   loadOpenWork,
   loadUnattachedWork,
@@ -429,6 +433,7 @@ async function readProducedKind(
     /** The open sessions that ASK YOU (`asksYouSessionIds`); null = unknown. */
     asksYou: ReadonlySet<string> | null;
     needsYou: number | null;
+    memo: BoardLensMemo;
   }
 ): Promise<ProducedKind | null> {
   let lens;
@@ -439,7 +444,8 @@ async function readProducedKind(
         projectId: input.projectId,
         workspaceId: input.workspaceId,
       },
-      ctx
+      ctx,
+      input.memo
     );
   } catch (err) {
     // Unknown / undeclared = not a pipeline here (a fact, like lifecycle.list).
@@ -604,6 +610,29 @@ async function readProducedKind(
 
 // ─── lifecycle.home ──────────────────────────────────────────────────────────
 
+/** Produced-kind reads in flight at once — a pod with 17 spaces stays polite. */
+export const HOME_KIND_CONCURRENCY = 6;
+
+/** `fn` over `items`, at most `limit` at once, results in input order. */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const n = next++;
+      out[n] = await fn(items[n]!);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+  return out;
+}
+
 export async function readHome(
   ctx: HomesCtx,
   input: { projectId?: string }
@@ -673,33 +702,37 @@ export async function readHome(
     (i) => needs?.byKind.get(i.space.id) ?? new Map<string, number | null>()
   );
 
-  const out = await Promise.all(
-    intents.map(async (i, idx): Promise<SpaceIntent> => {
-      const produced = (
-        await Promise.all(
-          i.produces.map((profileSlug) =>
-            readProducedKind(ctx, {
-              workspaceId: i.space.id,
-              profileSlug,
-              projectId: input.projectId,
-              words: words.get(profileSlug),
-              openWork: open?.work ?? null,
-              asksYou: open?.asks ?? null,
-              needsYou: byKind[idx]!.get(profileSlug) ?? null,
-            })
-          )
-        )
-      ).filter((p): p is ProducedKind => p !== null);
-      return {
-        workspaceId: i.space.id,
-        name: i.space.name,
-        label: i.label,
-        source: i.source,
-        kind: produced.length > 0 ? "producing" : "library",
-        produces: produced,
-      };
+  // Every (space, produced kind) is ~3 queries (Q-S4 ratchet in
+  // lifecycle.homes.pglite): bounded in flight, the slug rows read once.
+  const memo = newBoardLensMemo();
+  const pairs = intents.flatMap((i, idx) =>
+    i.produces.map((profileSlug) => ({ i, idx, profileSlug }))
+  );
+  const read = await mapLimit(pairs, HOME_KIND_CONCURRENCY, (pair) =>
+    readProducedKind(ctx, {
+      workspaceId: pair.i.space.id,
+      profileSlug: pair.profileSlug,
+      projectId: input.projectId,
+      words: words.get(pair.profileSlug),
+      openWork: open?.work ?? null,
+      asksYou: open?.asks ?? null,
+      needsYou: byKind[pair.idx]!.get(pair.profileSlug) ?? null,
+      memo,
     })
   );
+  const out = intents.map((i, idx): SpaceIntent => {
+    const produced = read.filter(
+      (p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx
+    );
+    return {
+      workspaceId: i.space.id,
+      name: i.space.name,
+      label: i.label,
+      source: i.source,
+      kind: produced.length > 0 ? "producing" : "library",
+      produces: produced,
+    };
+  });
 
   const liveOf = (s: SpaceIntent) => s.produces.reduce((n, p) => n + p.live, 0);
   out.sort(

@@ -555,6 +555,60 @@ describe("lifecycle.home", () => {
   });
 });
 
+describe("lifecycle.home cost (homes review Q-S4)", () => {
+  /**
+   * Queries one home read issues. NOT covered: the lifecycle declaration read
+   * (`getEffectiveLifecycle`, mocked here, one per pair in prod) and the
+   * in-flight bound (`HOME_KIND_CONCURRENCY`) — this counts queries, not
+   * their overlap.
+   */
+  async function homeQueries(): Promise<number> {
+    const spy = vi.spyOn(h.client!, "query");
+    try {
+      spy.mockClear();
+      await caller().home();
+      return spy.mock.calls.length;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("RATCHET: each producing (space, kind) adds a bounded, constant number of queries", async () => {
+    const extra: string[] = [];
+    const producing = (name: string) =>
+      space(name, {
+        settings: {
+          intent: { label: name, produces: ["deal"], source: "template" },
+        },
+      });
+    try {
+      const base = await homeQueries();
+      extra.push(await producing("Extra one"));
+      const one = await homeQueries();
+      extra.push(await producing("Extra two"));
+      const two = await homeQueries();
+      expect(base).toBeGreaterThan(5); // non-vacuity: the spy sees drizzle's queries
+      // Linear in the pairs, never super-linear …
+      expect(two - one).toBe(one - base);
+      // … and the per-pair cost never grows back.
+      expect(one - base).toBeLessThanOrEqual(HOME_QUERIES_PER_KIND);
+      expect(base).toBeLessThanOrEqual(HOME_QUERIES_FIXTURE);
+    } finally {
+      for (const id of extra)
+        await q(`update workspaces set archived_at = now() where id = $1`, [
+          id,
+        ]);
+    }
+  });
+});
+
+/**
+ * The ratchet's ceilings, measured on this fixture (Q-S4). Lower them when a
+ * change earns it; raising one is a decision the commit message must name.
+ */
+const HOME_QUERIES_PER_KIND = 2;
+const HOME_QUERIES_FIXTURE = 23;
+
 describe("lifecycle.moving", () => {
   it("things with open work, the work under each, most urgent first", async () => {
     const quiet = await session({
