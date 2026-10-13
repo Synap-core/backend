@@ -1,0 +1,427 @@
+/**
+ * Library GROUPS — the person's persistent groups (`library_groups`, 0326).
+ *
+ * A group outlives any import run: its note, outputs, the collection entity
+ * Build minted (`containerEntityId`: a rebuild updates it, never twins it) and
+ * its built state. Membership lives on the item
+ * (`documents.metadata.importCuration.groupIds`); counts are read from there.
+ *
+ * LAZY ADOPTION of per-import groups: a group made inside an import session
+ * (`focus_sessions.metadata.importCuration.groups`, keyed per import) becomes a
+ * Library group the first time the Library is read (`adoptImportGroups`). It is
+ * stamped `libraryGroupId` on the session's group and its members gain the id
+ * — once, idempotently. No data migration rewrites rows blindly.
+ *
+ * Every read and write is OWNER-FLOORED (`user_id = userId`); a foreign or
+ * missing id reads NOT_FOUND.
+ */
+
+import { TRPCError } from "@trpc/server";
+import { createLogger } from "@synap-core/core";
+import {
+  db as defaultDb,
+  documents,
+  focusSessions,
+  libraryGroups,
+  and,
+  eq,
+  inArray,
+  isNull,
+  desc,
+  drizzleSql,
+  type LibraryGroupRow,
+} from "@synap/database";
+import {
+  IMPORT_GROUP_OUTPUTS,
+  importGroupKey,
+  readImportCuration,
+  type ImportGroup,
+  type ImportGroupOutput,
+  type LibraryGroupView,
+} from "@synap-core/types/imports";
+import {
+  isArchivedSql,
+  libraryItemsWhere,
+  readStatusSql,
+  ungroupedSql,
+  type LibraryDb,
+} from "./read-model.js";
+
+const logger = createLogger({ module: "library/groups" });
+
+export function readOutputs(v: unknown): ImportGroupOutput[] {
+  return Array.isArray(v)
+    ? v.filter((o): o is ImportGroupOutput =>
+        (IMPORT_GROUP_OUTPUTS as readonly string[]).includes(o as string)
+      )
+    : [];
+}
+
+export interface LibraryGroupCounts {
+  items: number;
+  read: number;
+  notRead: number;
+  needsFile: number;
+  newSinceBuilt: number;
+}
+
+const ZERO: LibraryGroupCounts = {
+  items: 0,
+  read: 0,
+  notRead: 0,
+  needsFile: 0,
+  newSinceBuilt: 0,
+};
+
+export function toGroupView(
+  row: LibraryGroupRow,
+  counts: LibraryGroupCounts = ZERO
+): LibraryGroupView {
+  return {
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    ...(row.note ? { note: row.note } : {}),
+    origin: row.origin,
+    outputs: readOutputs(row.outputs),
+    ...(row.containerEntityId
+      ? { containerEntityId: row.containerEntityId }
+      : {}),
+    ...(row.builtAt ? { builtAt: row.builtAt.toISOString() } : {}),
+    ...(row.buildingAt ? { buildingAt: row.buildingAt.toISOString() } : {}),
+    counts,
+    ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
+    ...(row.archivedAt ? { archivedAt: row.archivedAt.toISOString() } : {}),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** The `ImportGroup` shape Build reads, from a Library group. */
+export function asImportGroup(row: LibraryGroupRow): ImportGroup {
+  return {
+    key: row.key,
+    name: row.name,
+    ...(row.note ? { note: row.note } : {}),
+    origin: row.origin,
+    outputs: readOutputs(row.outputs),
+    ...(row.builtAt ? { builtAt: row.builtAt.toISOString() } : {}),
+  };
+}
+
+/** One owned group, or NOT_FOUND. */
+export async function loadLibraryGroup(args: {
+  database?: LibraryDb;
+  userId: string;
+  groupId: string;
+  forUpdate?: boolean;
+}): Promise<LibraryGroupRow> {
+  const database = args.database ?? defaultDb;
+  const query = database
+    .select()
+    .from(libraryGroups)
+    .where(
+      and(
+        eq(libraryGroups.id, args.groupId),
+        eq(libraryGroups.userId, args.userId)
+      )
+    )
+    .limit(1);
+  const [row] = args.forUpdate ? await query.for("update") : await query;
+  if (!row) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
+  }
+  return row;
+}
+
+/** The person's groups (live by default), most recently touched first. */
+export async function listLibraryGroupRows(args: {
+  database?: LibraryDb;
+  userId: string;
+  archived?: boolean;
+  ids?: readonly string[];
+}): Promise<LibraryGroupRow[]> {
+  const database = args.database ?? defaultDb;
+  return database
+    .select()
+    .from(libraryGroups)
+    .where(
+      and(
+        eq(libraryGroups.userId, args.userId),
+        args.archived === undefined
+          ? undefined
+          : args.archived
+            ? drizzleSql`${libraryGroups.archivedAt} IS NOT NULL`
+            : isNull(libraryGroups.archivedAt),
+        args.ids ? inArray(libraryGroups.id, [...args.ids]) : undefined
+      )
+    )
+    .orderBy(desc(libraryGroups.updatedAt), desc(libraryGroups.id));
+}
+
+/**
+ * Counts per group, over unarchived items, in ONE aggregate.
+ * `newSinceBuilt`: kept items staged after the group's `builtAt` (every kept
+ * item when never built) — what a rebuild would read.
+ */
+export async function countGroups(args: {
+  database?: LibraryDb;
+  userId: string;
+  groups: readonly LibraryGroupRow[];
+}): Promise<Map<string, LibraryGroupCounts>> {
+  const database = args.database ?? defaultDb;
+  const out = new Map<string, LibraryGroupCounts>();
+  if (args.groups.length === 0) return out;
+  const ids = args.groups.map((g) => g.id);
+  const rows = await database
+    .select({
+      groupIds: drizzleSql<unknown>`${documents.metadata} -> 'importCuration' -> 'groupIds'`,
+      status: drizzleSql<string>`${readStatusSql}`,
+      decision: drizzleSql<string>`COALESCE(${documents.metadata} #>> '{importCuration,decision}', 'keep')`,
+      createdAt: documents.createdAt,
+    })
+    .from(documents)
+    .where(
+      and(
+        libraryItemsWhere(args.userId),
+        drizzleSql`NOT ${isArchivedSql}`,
+        drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb) ?| ${`{${ids.join(",")}}`}::text[]`
+      )
+    );
+  const builtAt = new Map(args.groups.map((g) => [g.id, g.builtAt]));
+  const wanted = new Set(ids);
+  for (const r of rows.flatMap((row) =>
+    (Array.isArray(row.groupIds) ? (row.groupIds as unknown[]) : [])
+      .filter((g): g is string => typeof g === "string" && wanted.has(g))
+      .map((groupId) => ({ ...row, groupId }))
+  )) {
+    const c = out.get(r.groupId) ?? { ...ZERO };
+    c.items += 1;
+    if (r.status === "read") c.read += 1;
+    else if (r.status === "not_read" || r.status === "over_budget")
+      c.notRead += 1;
+    else if (r.status === "needs_file") c.needsFile += 1;
+    const built = builtAt.get(r.groupId);
+    if (r.decision === "keep" && (!built || r.createdAt > built)) {
+      c.newSinceBuilt += 1;
+    }
+    out.set(r.groupId, c);
+  }
+  return out;
+}
+
+/** Unarchived items in no group, and archived items. */
+export async function countLooseItems(args: {
+  database?: LibraryDb;
+  userId: string;
+}): Promise<{ ungrouped: number; archived: number }> {
+  const database = args.database ?? defaultDb;
+  const [row] = await database
+    .select({
+      ungrouped: drizzleSql<number>`count(*) FILTER (WHERE NOT ${isArchivedSql} AND ${ungroupedSql})::int`,
+      archived: drizzleSql<number>`count(*) FILTER (WHERE ${isArchivedSql})::int`,
+    })
+    .from(documents)
+    .where(libraryItemsWhere(args.userId));
+  return {
+    ungrouped: Number(row?.ungrouped ?? 0),
+    archived: Number(row?.archived ?? 0),
+  };
+}
+
+/** Insert a group with a fresh key (unique per person). */
+export async function insertLibraryGroup(args: {
+  database: LibraryDb;
+  userId: string;
+  name: string;
+  note?: string | null;
+  origin: "ai" | "user" | "rule";
+  outputs?: ImportGroupOutput[];
+  workspaceId?: string | null;
+  builtAt?: Date | null;
+  buildProposalIds?: string[];
+}): Promise<LibraryGroupRow> {
+  const taken = await args.database
+    .select({ key: libraryGroups.key })
+    .from(libraryGroups)
+    .where(eq(libraryGroups.userId, args.userId));
+  const key = importGroupKey(
+    args.name,
+    taken.map((t) => t.key)
+  );
+  const [row] = await args.database
+    .insert(libraryGroups)
+    .values({
+      userId: args.userId,
+      key,
+      name: args.name,
+      note: args.note?.trim() ? args.note.trim() : null,
+      origin: args.origin,
+      outputs: args.outputs ?? ["things"],
+      workspaceId: args.workspaceId ?? null,
+      builtAt: args.builtAt ?? null,
+      buildProposalIds: args.buildProposalIds ?? [],
+    })
+    .returning();
+  return row!;
+}
+
+/** Add / remove group ids on items (owner-floored, one statement per item set). */
+export async function setItemGroupIds(args: {
+  database: LibraryDb;
+  userId: string;
+  itemIds: readonly string[];
+  add: string;
+}): Promise<void> {
+  if (args.itemIds.length === 0) return;
+  await args.database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(
+        ${documents.metadata},
+        '{importCuration,groupIds}',
+        (SELECT COALESCE(jsonb_agg(DISTINCT x), '[]'::jsonb) FROM jsonb_array_elements(
+          COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb)
+          || ${JSON.stringify([args.add])}::jsonb) AS x),
+        true)`,
+    })
+    .where(
+      and(
+        libraryItemsWhere(args.userId),
+        inArray(documents.id, [...args.itemIds]),
+        drizzleSql`${documents.metadata} ? 'importCuration'`
+      )
+    );
+}
+
+/**
+ * Turn every per-import group not yet adopted into a Library group, once.
+ * Returns how many were adopted. A failure is logged and rethrown — a Library
+ * read that silently skipped adoption would show adopted items as ungrouped.
+ */
+export async function adoptImportGroups(args: {
+  database?: LibraryDb;
+  userId: string;
+}): Promise<number> {
+  const database = args.database ?? defaultDb;
+  const sessions = await database
+    .select({
+      id: focusSessions.id,
+      workspaceId: focusSessions.workspaceId,
+      metadata: focusSessions.metadata,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.userId, args.userId),
+        drizzleSql`jsonb_array_length(COALESCE(${focusSessions.metadata} -> 'importCuration' -> 'groups', '[]'::jsonb)) > 0`,
+        // Only sessions with at least one group not yet adopted.
+        drizzleSql`EXISTS (SELECT 1 FROM jsonb_array_elements(${focusSessions.metadata} -> 'importCuration' -> 'groups') AS grp WHERE NOT (grp ? 'libraryGroupId'))`
+      )
+    );
+  let adopted = 0;
+  for (const s of sessions) {
+    try {
+      adopted += await database.transaction(async (tx) => {
+        const t = tx as unknown as LibraryDb;
+        const [locked] = await t
+          .select({ metadata: focusSessions.metadata })
+          .from(focusSessions)
+          .where(
+            and(
+              eq(focusSessions.id, s.id),
+              eq(focusSessions.userId, args.userId)
+            )
+          )
+          .for("update");
+        const curation = readImportCuration(locked?.metadata);
+        if (!curation) return 0;
+        let n = 0;
+        const groups: Array<ImportGroup & { libraryGroupId?: string }> = [];
+        for (const g of curation.groups as Array<
+          ImportGroup & { libraryGroupId?: string }
+        >) {
+          if (g.libraryGroupId) {
+            groups.push(g);
+            continue;
+          }
+          const row = await insertLibraryGroup({
+            database: t,
+            userId: args.userId,
+            name: g.name,
+            note: g.note ?? null,
+            origin: g.origin,
+            outputs: g.outputs,
+            workspaceId: s.workspaceId,
+            builtAt: g.builtAt ? new Date(g.builtAt) : null,
+            buildProposalIds: g.buildProposalId ? [g.buildProposalId] : [],
+          });
+          const members = await t
+            .select({ id: documents.id })
+            .from(documents)
+            .where(
+              and(
+                libraryItemsWhere(args.userId),
+                drizzleSql`${documents.metadata} #>> '{intakeSource,sessionId}' = ${s.id}`,
+                drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupKeys', '[]'::jsonb) ? ${g.key}`
+              )
+            );
+          await setItemGroupIds({
+            database: t,
+            userId: args.userId,
+            itemIds: members.map((m) => m.id),
+            add: row.id,
+          });
+          groups.push({ ...g, libraryGroupId: row.id });
+          n += 1;
+        }
+        await t
+          .update(focusSessions)
+          .set({
+            metadata: drizzleSql`jsonb_set(${focusSessions.metadata}, '{importCuration,groups}', ${JSON.stringify(groups)}::jsonb, true)`,
+          })
+          .where(
+            and(
+              eq(focusSessions.id, s.id),
+              eq(focusSessions.userId, args.userId)
+            )
+          );
+        return n;
+      });
+    } catch (err) {
+      logger.error(
+        { err, sessionId: s.id },
+        "library: import groups NOT adopted"
+      );
+      throw err;
+    }
+  }
+  return adopted;
+}
+
+/** `library.groups` — every live group with counts, plus the loose counts. */
+export async function readLibraryGroups(args: {
+  database?: LibraryDb;
+  userId: string;
+}): Promise<{
+  groups: LibraryGroupView[];
+  ungrouped: number;
+  archived: number;
+}> {
+  const database = args.database ?? defaultDb;
+  await adoptImportGroups({ database, userId: args.userId });
+  const rows = await listLibraryGroupRows({
+    database,
+    userId: args.userId,
+    archived: false,
+  });
+  const counts = await countGroups({
+    database,
+    userId: args.userId,
+    groups: rows,
+  });
+  const loose = await countLooseItems({ database, userId: args.userId });
+  return {
+    groups: rows.map((r) => toGroupView(r, counts.get(r.id))),
+    ...loose,
+  };
+}

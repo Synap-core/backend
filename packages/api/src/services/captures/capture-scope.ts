@@ -11,6 +11,7 @@ import {
   drizzleSql,
   documents,
   notStagedImportItemWhere,
+  notLibraryItemWhere,
 } from "@synap/database";
 import {
   INTAKE_SOURCE_METADATA_KEY,
@@ -36,13 +37,18 @@ export const CAPTURE_LIST_KINDS = [
  *
  * A STAGED import item (`intakeSource.pending = "awaiting_curation"`) is not a
  * capture: nothing read it and nobody decided what it is, so it would only ever
- * read "Not structured". It joins "my captures" once its group is built.
+ * read "Not structured".
+ *
+ * A LIBRARY item (anything staged with `importItem`) is never a capture, before
+ * or after its group is built (CAPTURE_LIBRARY_PLAN decision 4): it is something
+ * the person KEPT, not their words. It lives in the Library.
  */
 export function ownCapturesWhere(userId: string) {
   return and(
     eq(documents.userId, userId),
     isNull(documents.deletedAt),
     drizzleSql`${documents.metadata} ? ${INTAKE_SOURCE_METADATA_KEY}`,
-    notStagedImportItemWhere(documents.metadata)
+    notStagedImportItemWhere(documents.metadata),
+    notLibraryItemWhere(documents.metadata)
   )!;
 }

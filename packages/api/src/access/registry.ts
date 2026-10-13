@@ -43,6 +43,7 @@ import {
   sourceSubscriptions,
   userPreferences,
   userResourceState,
+  libraryGroups,
   agentConfigs,
   focusSessions,
   sessionEvaluations,
@@ -516,6 +517,14 @@ registerVisibility({
   // Composite key (userId, resourceId, resourceType); state is
   // strictly per-user. No workspace column.
   rule: { kind: "user", userColumn: userResourceState.userId },
+});
+
+registerVisibility({
+  table: libraryGroups,
+  query: () => db.query.libraryGroups,
+  // The Library's groups (0326) are the person's own: owner floor only. The
+  // nullable workspaceId is where Build files, not a read lens.
+  rule: { kind: "user", userColumn: libraryGroups.userId },
 });
 
 // ── USER-OWNED, workspace-lensed tables (owner floor AND workspace lens) ──────

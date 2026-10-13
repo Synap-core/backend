@@ -958,6 +958,11 @@ export async function buildImportMembers(args: {
   groups: readonly ImportGroup[];
   members: ReadonlyArray<{ row: ImportItemRow; view: ImportItemView }>;
   deps: ImportBuildDeps;
+  /**
+   * "Read now" (one item, Library): file the thing(s) alone — no group
+   * container, no `parent_of` edge. Default false.
+   */
+  withoutContainer?: boolean;
 }): Promise<ImportMembersBuild> {
   const { database, deps, session, group, members } = args;
   const skipped: Array<{ itemId: string; reason: ImportBuildSkipReason }> = [];
@@ -1063,6 +1068,17 @@ export async function buildImportMembers(args: {
     dominantKind,
     ...(dryRunCount !== undefined ? { dryRunCount } : {}),
   });
+  if (args.withoutContainer) {
+    bundle.entities = bundle.entities.filter(
+      (e) => e.ref !== GROUP_CONTAINER_REF
+    );
+    bundle.relations = bundle.relations.filter(
+      (r) =>
+        r.sourceRef !== GROUP_CONTAINER_REF &&
+        r.targetRef !== GROUP_CONTAINER_REF
+    );
+    delete bundle.provenance.byRef[GROUP_CONTAINER_REF];
+  }
 
   const builtIds = extractions.map((x) => x.item.id);
   const submitInput = (

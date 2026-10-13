@@ -94,6 +94,11 @@ export interface ImportStageOutcome {
 export interface ImportStageDeps {
   /** Injected in tests; defaults to the SSRF-guarded public reader. */
   readUrl?: (url: string) => Promise<PublicUrlRead>;
+  /**
+   * `library`: a link, text or file already kept ANYWHERE in the person's
+   * Library is the same item (the Library door). Default `session`.
+   */
+  dedupScope?: "session" | "library";
 }
 
 function clip(
@@ -137,7 +142,8 @@ function defaultCuration(note?: string): ImportItemCuration {
 async function findStagedByHash(
   database: ImportDb,
   userId: string,
-  sessionId: string,
+  /** null = across the whole Library (every run of the person). */
+  sessionId: string | null,
   contentHash: string
 ): Promise<string | null> {
   const [row] = await database
@@ -145,7 +151,13 @@ async function findStagedByHash(
     .from(documents)
     .where(
       and(
-        importItemsWhere(userId, sessionId),
+        sessionId
+          ? importItemsWhere(userId, sessionId)
+          : and(
+              eq(documents.userId, userId),
+              isNull(documents.deletedAt),
+              drizzleSql`${documents.metadata} ? ${IMPORT_ITEM_KEY}`
+            ),
         drizzleSql`${documents.metadata} #>> '{intakeSource,contentHash}' = ${contentHash}`
       )
     )
@@ -281,6 +293,7 @@ async function stageOne(args: {
   session: ImportSessionRow;
   prepared: Extract<Prepared, { kind: "stage" }>;
   readUrl: (url: string) => Promise<PublicUrlRead>;
+  dedupScope?: "session" | "library";
   /** Take one slot of the import's item cap; false = the import is full. */
   claimRoom: () => boolean;
 }): Promise<
@@ -291,7 +304,7 @@ async function stageOne(args: {
   const existing = await findStagedByHash(
     database,
     userId,
-    session.id,
+    args.dedupScope === "library" ? null : session.id,
     prepared.contentHash
   );
   if (existing) return { itemId: existing, deduplicated: true };
@@ -509,6 +522,9 @@ export async function stageImportItems(args: {
                   session: args.session,
                   prepared: p,
                   readUrl,
+                  ...(args.deps?.dedupScope
+                    ? { dedupScope: args.deps.dedupScope }
+                    : {}),
                   claimRoom,
                 });
           return "refused" in r

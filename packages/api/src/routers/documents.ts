@@ -39,6 +39,7 @@ import {
   createDocumentWithContent,
   resolveWorkspacePlacement,
   notStagedImportItemWhere,
+  notLibraryItemWhere,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
@@ -761,9 +762,11 @@ export const documentsRouter = router({
           sessionRoster: rosterReadFor(ctx),
         }),
       ];
-      // A STAGED import item is nobody's document yet (Import → Curate → Build):
-      // it joins the list once its group is built.
+      // A STAGED import item is nobody's document yet, and a Library item is
+      // never a document row (CAPTURE_LIBRARY_PLAN decision 4): it lives in
+      // the Library, before and after its group is built.
       conditions.push(notStagedImportItemWhere(documents.metadata));
+      conditions.push(notLibraryItemWhere(documents.metadata));
       if (input.type) {
         conditions.push(eq(documents.type, input.type));
       }
@@ -809,7 +812,8 @@ export const documentsRouter = router({
         eq(documents.workspaceId, workspaceId),
         isNull(documents.deletedAt),
         isNotNull(documents.storageKey),
-        notStagedImportItemWhere(documents.metadata)
+        notStagedImportItemWhere(documents.metadata),
+        notLibraryItemWhere(documents.metadata)
       );
 
       const markdownish = or(

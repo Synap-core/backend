@@ -58,6 +58,7 @@ import { cellsRouter } from "./routers/cells.js";
 import { cellInstancesRouter } from "./routers/cell-instances.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
+import { libraryRouter } from "./routers/library.js";
 import { connectorsRouter } from "./routers/connectors-trpc.js";
 import { notifCenterRouter } from "./routers/notif-center.js";
 import { connectionPrefsRouter } from "./routers/connection-prefs.js";
@@ -174,6 +175,8 @@ export const coreRouter = router({
   cellInstances: cellInstancesRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
+  // The Library — everything the person keeps (CAPTURE_LIBRARY_PLAN L2).
+  library: libraryRouter,
   connectors: connectorsRouter,
   notifCenter: notifCenterRouter,
   connectionPrefs: connectionPrefsRouter,

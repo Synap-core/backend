@@ -111,6 +111,7 @@ import {
   and,
   IMPORT_AWAITING_CURATION,
   notStagedImportItemWhere,
+  notLibraryItemWhere,
 } from "@synap/database";
 import {
   documentVersions,
@@ -339,7 +340,9 @@ describe("stage", () => {
     expect((await view(sessionId)).items).toHaveLength(2);
   });
 
-  it("no capture list sees a staged item; a built one joins My captures", async () => {
+  // CAPTURE_LIBRARY_PLAN decision 4 (changed on purpose): a built item stays
+  // in the Library — it never joins "my captures" or the documents list.
+  it("no capture or document list sees a staged item, nor a built one", async () => {
     const { outcome } = await openAndStage([
       { kind: "url", url: "https://example.com/x" },
     ]);
@@ -356,7 +359,12 @@ describe("stage", () => {
         await db
           .select({ id: documents.id })
           .from(documents)
-          .where(and(notStagedImportItemWhere(documents.metadata)))
+          .where(
+            and(
+              notStagedImportItemWhere(documents.metadata),
+              notLibraryItemWhere(documents.metadata)
+            )
+          )
       ).map((r) => r.id);
     expect(await listed()).not.toContain(id);
     expect(await inDocuments()).not.toContain(id);
@@ -364,8 +372,8 @@ describe("stage", () => {
       `update documents set metadata = metadata #- '{intakeSource,pending}' where id = $1`,
       [id]
     );
-    expect(await listed()).toContain(id);
-    expect(await inDocuments()).toContain(id);
+    expect(await listed()).not.toContain(id);
+    expect(await inDocuments()).not.toContain(id);
   });
 
   it("refuses to adopt an uploaded document whose stored type the upload door refuses", async () => {

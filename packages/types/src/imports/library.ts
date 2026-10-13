@@ -199,6 +199,8 @@ export interface LibraryAddResult {
   refused: Array<{ index: number; reason: string }>;
   captureNoteId?: string;
   readNowProposalId?: string;
+  /** Read now was asked and did not file a bundle: why (the item is kept regardless). */
+  readNowFailed?: string;
 }
 
 export interface LibraryListRequest {
