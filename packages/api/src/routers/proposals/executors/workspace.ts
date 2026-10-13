@@ -1186,18 +1186,24 @@ export function registerWorkspaceExecutors(): void {
         eventRepository,
         WorkspaceRepository,
         reconcileWorkspaceFromDefinition,
+        writeTemplateState,
       } = await import("@synap/database");
 
-      const settingsPatch: Partial<
-        import("@synap/database").WorkspaceSettings
-      > = {
-        packageSlug: templateSlug,
-        proposalId: templateSlug,
-      };
       const dbConn = await getDb();
+      // Approver is the authority — same as workspace/create above. The
+      // identity is the template state's `slug` (the ONE writer).
+      await writeTemplateState(
+        dbConn,
+        workspaceId,
+        { slug: templateSlug },
+        { userId }
+      );
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
-      // Approver is the authority — same as workspace/create above.
-      await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
+      await workspaceRepo.mergeSettings(
+        workspaceId,
+        { proposalId: templateSlug },
+        userId
+      );
 
       const report = await reconcileWorkspaceFromDefinition({
         validateFlow: unfilteredAiFanoutError,

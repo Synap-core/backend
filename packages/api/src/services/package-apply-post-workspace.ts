@@ -497,10 +497,10 @@ export interface ApplyPackagePostWorkspaceInput {
 }
 
 /**
- * Stamp the workspace `provisioningStatus:"failed"` after a post-workspace
- * layer throw. Routes through `mergeSettings` — the ONE door provisioning-status
- * transitions flow through — mirroring core's `handleStepError`. Best-effort:
- * a stamp failure must never mask the real layer error.
+ * Record a LAYER-2 failure (`state: "failed"`, `failedLayer: 2`) after a
+ * post-workspace layer throw, through the ONE template-state writer
+ * (`writeTemplateState`) — mirroring core's `handleStepError`. Best-effort:
+ * a write failure must never mask the real layer error.
  */
 async function markPostWorkspaceProvisioningFailed(
   workspaceId: string,
@@ -508,18 +508,18 @@ async function markPostWorkspaceProvisioningFailed(
   cause: unknown
 ): Promise<void> {
   const message = cause instanceof Error ? cause.message : String(cause);
-  const { getDb, WorkspaceRepository, eventRepository } =
+  const { getDb, writeTemplateState, LAYER_TWO_FAILED_STEP } =
     await import("@synap/database");
-  const dbConn = await getDb();
-  const repo = new WorkspaceRepository(dbConn, eventRepository);
-  await repo.mergeSettings(
+  await writeTemplateState(
+    await getDb(),
     workspaceId,
     {
-      provisioningStatus: "failed",
-      failedStep: "post-workspace",
-      failedStepError: message.slice(0, 500),
+      state: "failed",
+      failedLayer: 2,
+      failedStep: LAYER_TWO_FAILED_STEP,
+      error: message.slice(0, 500),
     },
-    userId
+    { userId }
   );
 }
 
@@ -1078,15 +1078,13 @@ async function applyPackagePostWorkspaceInner(
   // ── Action placements (→ settings.actionPlacements) ─────────────────────
   // Runs AFTER playbooks/loops so playbook/automation refs resolve to rows this
   // apply created. Merged idempotently into the workspace settings JSONB (dedup
-  // on profileSlug+surface+kind+ref) via the same direct read-modify-write the
-  // enroll-agent step / workspace-creation-service proposalId-stamp use — not
-  // the governed tRPC settings caller, which would PROPOSE (not apply) an
-  // agent-driven settings change and leave placements deferred.
-  // KNOWN LIMIT: read-modify-write has a lost-update window if a concurrent
-  // writer touches settings between the SELECT and UPDATE (second install,
-  // enroll-agent, user edit). Accepted — installs are rare and re-apply is
-  // idempotent (re-running restores a lost placement); a server-side JSONB
-  // merge is the fix if this ever bites.
+  // on profileSlug+surface+kind+ref) by a direct write — not the governed tRPC
+  // settings caller, which would PROPOSE (not apply) an agent-driven settings
+  // change and leave placements deferred. The merge is computed from the
+  // stored list read under a row lock (`SELECT … FOR UPDATE`) and written
+  // to the `actionPlacements` key ONLY (`jsonb_set`), in one transaction: no
+  // lost update with a concurrent install, and no other settings key is
+  // rewritten (it used to write the whole blob read before the merge).
   if (body.actionPlacements?.length && workspaceId) {
     try {
       const { resolved, deferred } = await resolveActionPlacementRefs(
@@ -1100,46 +1098,44 @@ async function applyPackagePostWorkspaceInner(
       const deferredReport =
         deferred.length > 0 ? { status: "proposed" as const, deferred } : {};
       if (resolved.length > 0) {
-        const { db, workspaces, eq } = await import("@synap/database");
-        const [ws] = await db
-          .select({ settings: workspaces.settings })
-          .from(workspaces)
-          .where(eq(workspaces.id, workspaceId))
-          .limit(1);
-        const existingSettings = (ws?.settings ?? {}) as Record<
-          string,
-          unknown
-        >;
-        const existingPlacements = Array.isArray(
-          existingSettings.actionPlacements
-        )
-          ? (existingSettings.actionPlacements as ActionPlacement[])
-          : [];
-        const merged = [...existingPlacements];
-        const indexByKey = new Map(
-          merged.map((placement, index) => [placementKey(placement), index])
-        );
-        for (const p of resolved) {
-          const key = placementKey(p);
-          const existingIndex = indexByKey.get(key);
-          if (existingIndex === undefined) {
-            indexByKey.set(key, merged.length);
-            merged.push(p);
-          } else {
-            // Reconcile is declarative: the latest template is authoritative
-            // for applicability/confirmation/copy of its stable action key.
-            merged[existingIndex] = p;
+        const { db, workspaces, eq, drizzleSql } =
+          await import("@synap/database");
+        const merged = await db.transaction(async (tx) => {
+          const [ws] = await tx
+            .select({ settings: workspaces.settings })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .for("update")
+            .limit(1);
+          const stored = (ws?.settings as WorkspaceSettings | null)
+            ?.actionPlacements;
+          const list = [
+            ...(Array.isArray(stored) ? (stored as ActionPlacement[]) : []),
+          ];
+          const indexByKey = new Map(
+            list.map((placement, index) => [placementKey(placement), index])
+          );
+          for (const p of resolved) {
+            const key = placementKey(p);
+            const existingIndex = indexByKey.get(key);
+            if (existingIndex === undefined) {
+              indexByKey.set(key, list.length);
+              list.push(p);
+            } else {
+              // Reconcile is declarative: the latest template is
+              // authoritative for applicability/confirmation/copy of its
+              // stable action key.
+              list[existingIndex] = p;
+            }
           }
-        }
-        await db
-          .update(workspaces)
-          .set({
-            settings: {
-              ...existingSettings,
-              actionPlacements: merged,
-            } as WorkspaceSettings,
-          })
-          .where(eq(workspaces.id, workspaceId));
+          await tx
+            .update(workspaces)
+            .set({
+              settings: drizzleSql`jsonb_set(COALESCE(${workspaces.settings}, '{}'::jsonb), '{actionPlacements}', ${JSON.stringify(list)}::jsonb, true)`,
+            })
+            .where(eq(workspaces.id, workspaceId));
+          return list;
+        });
         result.actionPlacements = {
           status: "merged",
           count: resolved.length,

@@ -281,9 +281,10 @@ describe("an action placement waiting on a proposed playbook is deferred", () =>
 
   it("(3b) health reads a FAILED space as drifted even when its stamp equals the catalog (founder pod state)", async () => {
     // The founder pod after errorId cef79303: a build that stamped after layer
-    // 1 left the NEW version beside provisioningStatus "failed".
+    // 1 left the NEW version beside provisioningStatus "failed" — a LEGACY row
+    // (no `settings.template`; the reader derives it).
     await q(
-      `update workspaces set settings = settings || '{"packageSlug":"crm","packageVersion":"h-v2","provisioningStatus":"failed"}'::jsonb where id = $1`,
+      `update workspaces set settings = (settings - 'template') || '{"packageSlug":"crm","packageVersion":"h-v2","provisioningStatus":"failed"}'::jsonb where id = $1`,
       [WS]
     );
     await q(
@@ -298,7 +299,7 @@ describe("an action placement waiting on a proposed playbook is deferred", () =>
     });
     // Restore the drifted pre-(4) state the next test starts from.
     await q(
-      `update workspaces set settings = settings || '{"packageVersion":"h-v1"}'::jsonb where id = $1`,
+      `update workspaces set settings = (settings - 'template') || '{"packageVersion":"h-v1"}'::jsonb where id = $1`,
       [WS]
     );
   });
@@ -310,7 +311,7 @@ describe("an action placement waiting on a proposed playbook is deferred", () =>
     // model — and the finisher never stamps over a "failed" record. Start (4)
     // from the resumed state.
     await q(
-      `update workspaces set provisioning_status = 'active', settings = settings || '{"provisioningStatus":"active"}'::jsonb where id = $1`,
+      `update workspaces set provisioning_status = 'active', settings = (settings - 'template') || '{"provisioningStatus":"active"}'::jsonb where id = $1`,
       [WS]
     );
     const { status, body } = await apply({

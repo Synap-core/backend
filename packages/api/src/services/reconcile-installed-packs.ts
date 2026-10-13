@@ -29,16 +29,13 @@
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
   db,
-  eventRepository,
-  WorkspaceRepository,
+  readTemplateState,
+  withPack,
+  writeTemplateState,
   reconcileWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
-import {
-  overlayDefinitionForIdentifiedBase,
-  upsertInstalledPack,
-  type InstalledPackEntry,
-} from "./compose-overlay.js";
+import { overlayDefinitionForIdentifiedBase } from "./compose-overlay.js";
 import {
   playbookReportConverged,
   reconcileWorkspacePlaybooksToTemplate,
@@ -82,20 +79,18 @@ export async function reconcileInstalledPacks(opts: {
   catalog: TemplateCatalogView | null;
   now?: string;
 }): Promise<InstalledPackReconcileOutcome[]> {
-  const ledger = opts.settings?.installedPacks;
-  if (!Array.isArray(ledger) || ledger.length === 0) return [];
+  const state = readTemplateState(opts.settings);
+  const ledger = state?.packs ?? [];
+  if (ledger.length === 0) return [];
   const now = opts.now ?? new Date().toISOString();
-  const identity =
-    typeof opts.settings?.packageSlug === "string"
-      ? opts.settings.packageSlug
-      : null;
+  const identity = state?.slug ?? null;
   const out: InstalledPackReconcileOutcome[] = [];
-  let nextLedger: InstalledPackEntry[] | unknown = ledger;
-  let ledgerMoved = false;
+  /** Packs whose version this pass earned (both layers converged). */
+  const advanced: Array<{ slug: string; version: string }> = [];
 
-  for (const entry of ledger as Array<Partial<InstalledPackEntry>>) {
-    const slug = entry?.slug;
-    if (typeof slug !== "string" || slug === identity) continue;
+  for (const entry of ledger) {
+    const slug = entry.slug;
+    if (slug === identity) continue;
     try {
       const resolved = await opts.resolve(slug);
       if (!resolved) {
@@ -133,12 +128,7 @@ export async function reconcileInstalledPacks(opts: {
         continue; // stamp withheld — failed, or only PROPOSED (not applied)
       }
       if (resolved.version && resolved.version !== entry.version) {
-        nextLedger = upsertInstalledPack(
-          nextLedger,
-          { slug, version: resolved.version },
-          now
-        );
-        ledgerMoved = true;
+        advanced.push({ slug, version: resolved.version });
       }
       out.push({
         slug,
@@ -155,12 +145,19 @@ export async function reconcileInstalledPacks(opts: {
     }
   }
 
-  if (ledgerMoved) {
-    const repo = new WorkspaceRepository(db, eventRepository);
-    await repo.mergeSettings(
+  if (advanced.length > 0) {
+    // Applied onto the ledger as stored NOW, under the ONE template-state
+    // writer's row lock — a pack recorded meanwhile is kept, never overwritten.
+    await writeTemplateState(
+      db,
       opts.workspaceId,
-      { installedPacks: nextLedger as InstalledPackEntry[] },
-      opts.ownerId
+      (current) => ({
+        packs: advanced.reduce(
+          (packs, pack) => withPack(packs, pack, now),
+          current?.packs
+        ),
+      }),
+      { userId: opts.ownerId }
     );
   }
   return out;

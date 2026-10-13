@@ -1,42 +1,48 @@
 /**
- * ONE finisher writes a template apply's outcome markers.
+ * ONE finisher earns a template apply's version stamp; ONE module writes the
+ * template state.
  *
- * The version stamp (`settings.packageVersion`) says "this space is at template
- * version X" — layer 1 AND layer 2. Every door that wrote it itself wrote it
- * after layer 1, before layer 2 ran, so a layer 2 that failed or only proposed
- * left a stamp claiming a convergence that never happened (founder pod
- * 2026-10-12: CRM read "current" while its playbook waited on a proposal).
- * The create/resume core now hands the version back (`pendingVersionStamp`)
- * and leaves the space "pending"; only `finishTemplateApply` stamps it and
- * marks the space "active", and only when layer 2 converged.
+ * The version stamp says "this space is at template version X" — layer 1 AND
+ * layer 2. Every door that wrote it itself wrote it after layer 1, before
+ * layer 2 ran, so a layer 2 that failed or only proposed left a stamp claiming
+ * a convergence that never happened (founder pod 2026-10-12: CRM read
+ * "current" while its playbook waited on a proposal). Then the state was
+ * spread over eight settings keys written by ~15 writers, four of them
+ * read-modify-write (APPLY-ONE-DOOR-PLAN §2). Now the state is ONE object,
+ * `settings.template`, written only by `writeTemplateState`
+ * (@synap/database `utils/template-state.ts`), which also writes the legacy
+ * mirror (`packageVersion`, `provisioningStatus`, `failedStep*`,
+ * `completedSteps`, `templateApply`, `installedPacks`) until W6.
  *
  * Pinned here, by source scan:
  *  (1) every file that calls the create/resume core is a DOOR and calls
  *      `finishTemplateApply(` — the set is DERIVED by grep, so a new door joins
- *      the scan by existing (and a door that forgets the finisher leaves its
- *      spaces "pending" forever, which this catches first);
- *  (2) only the finisher calls `stampWorkspacePackageVersion(`;
- *  (3) no other file writes a `packageVersion` key through `mergeSettings(` /
- *      `.set(` / a `settings.packageVersion =` assignment;
- *  (4) the overlay ledger's version (`installedPacks[].version`) is recorded
- *      only by the finisher (on convergence) and the boot ledger pass (after
- *      its own `playbookReportConverged`); compose records the PACK, never its
- *      version — every `upsertInstalledPack(` caller is derived and classified.
+ *      the scan by existing;
+ *  (2) a version STAMP reaches `writeTemplateState(` only from the finisher
+ *      and from the reconcile util's boot channel (held while the last apply
+ *      is unfinished, re-checked under the writer's lock);
+ *  (3) no file outside the module writes `template` or a mirrored key into
+ *      settings (`mergeSettings(` / `.set(` / `.create(` / `.update(` spans that
+ *      touch settings, `settings.<key> =`, `const|let *settings* = {…}`
+ *      literals, and SQL `jsonb_set`/`jsonb_build_object` on the key) — over
+ *      EVERY `packages/<pkg>/src` and `apps/<app>/src` of the backend,
+ *      derived by listing the directories; the guarded key list is parsed
+ *      out of the module's own `TEMPLATE_STATE_MIRROR_KEYS`;
+ *  (4) an overlay pack's VERSION is recorded only by the finisher (on
+ *      convergence) and the boot ledger pass; compose records the PACK
+ *      without a version — every `upsertPack(` / `withPack(` caller outside
+ *      the module is derived and classified.
  *
- * NOT covered, measured: granularity is the FILE, not the call site — a door
- * file with two core calls and one finisher call stays green if the second
- * call forgets it (verified: removing one of the two resume-branch finisher
- * calls in definition-engine.ts stays green). (3) reads object literals passed
- * DIRECTLY to those calls plus any `const|let <…settings…> = {…}` literal (the
- * shape both adopt doors used for their patch); a patch assembled any other
- * way (e.g. `patch.packageVersion = v` on a differently named object) is not
- * seen.
- * `reconcileWorkspaceFromDefinition({ packageVersion })` (@synap/database) is a
- * second channel: its one caller that passes a version is the boot reconcile,
- * which gates the version on its own convergence report (playbooks + rules),
- * and the util itself holds it while the space's last apply is unfinished
- * (`templateApplyUnfinished`, pinned in @synap/database
- * `create-workspace-hands-back-stamp.pglite.test.ts`) — classified below.
+ * NOT covered, measured: granularity is the FILE, not the call site (a door
+ * file with two core calls and one finisher call stays green). (3) reads
+ * object literals passed DIRECTLY to those calls and `*settings*` literals; a
+ * patch assembled any other way (e.g. `patch.provisioningStatus = v` on a
+ * differently named object, or a computed key) is not seen. A `.set(`/
+ * `.create(` span is only judged when it mentions `settings` — that is what
+ * keeps unrelated tables' `template:` columns (rule seeds) out, and it means a
+ * column-only write (`provisioningStatus: x` with no settings) is not seen
+ * except where it sits next to a settings write. Classified writers are
+ * listed with their reason below.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -47,6 +53,24 @@ const here = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(here, "..");
 const APPS_API_SRC = join(here, "../../../../apps/api/src");
 const DB_SRC = join(here, "../../../database/src");
+const BACKEND = join(here, "../../../..");
+const MODULE = join(DB_SRC, "utils/template-state.ts");
+
+/** Every backend source root, DERIVED: packages/<pkg>/src + apps/<app>/src. */
+function sourceRoots(): string[] {
+  const roots: string[] = [];
+  for (const group of ["packages", "apps"]) {
+    for (const name of readdirSync(join(BACKEND, group))) {
+      const src = join(BACKEND, group, name, "src");
+      try {
+        if (statSync(src).isDirectory()) roots.push(src);
+      } catch {
+        // no src/ — not a source package
+      }
+    }
+  }
+  return roots;
+}
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -102,7 +126,15 @@ function callSpans(src: string, name: RegExp): string[] {
   return spans;
 }
 
-const PACKAGE_VERSION_KEY = /\bpackageVersion\s*[:,}]/;
+/** The guarded keys, parsed out of the module's own mirror list (+ `template`). */
+function guardedKeys(): string[] {
+  const src = readFileSync(MODULE, "utf8");
+  const block = src.match(
+    /TEMPLATE_STATE_MIRROR_KEYS = \[([\s\S]*?)\] as const/
+  )?.[1];
+  const keys = [...(block ?? "").matchAll(/"(\w+)"/g)].map((m) => m[1]!);
+  return ["template", ...keys];
+}
 
 /** Every `const|let <name containing "settings"> … = {`…`}` literal, brace-balanced. */
 function settingsLiterals(src: string): string[] {
@@ -124,17 +156,62 @@ function settingsLiterals(src: string): string[] {
   return spans;
 }
 
-/** The settings writes in a source that carry a `packageVersion` key. */
-function packageVersionWrites(src: string): string[] {
-  const hits: string[] = [];
-  for (const span of [
-    ...callSpans(src, /\bmergeSettings\s*\(/),
-    ...callSpans(src, /\.set\s*\(/),
-    ...settingsLiterals(src),
-  ]) {
-    if (PACKAGE_VERSION_KEY.test(span)) hits.push(span.trim().slice(0, 120));
+/**
+ * The arguments of the MODULE's own calls blanked: a key passed to
+ * `templateStateSettings(` / `writeTemplateState(` IS the one writer.
+ */
+function withoutModuleCalls(src: string): string {
+  let out = src;
+  const re =
+    /\b(templateStateSettings|writeTemplateState|upsertPack|removePack)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(out))) {
+    let i = m.index + m[0].length;
+    let depth = 1;
+    const start = i;
+    while (i < out.length && depth > 0) {
+      const ch = out[i];
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+      i++;
+    }
+    out =
+      out.slice(0, start) +
+      out.slice(start, i - 1).replace(/[^\n]/g, " ") +
+      out.slice(i - 1);
   }
-  for (const m of src.matchAll(/settings\.packageVersion\s*=(?!=)/g))
+  return out;
+}
+
+/** The settings writes in a source that carry one of `keys`. */
+function stateWrites(raw: string, keys: string[]): string[] {
+  const src = withoutModuleCalls(raw);
+  const alt = keys.join("|");
+  const KEY = new RegExp(`(?<![\\w.])(${alt})\\s*:(?!:)`);
+  const hits: string[] = [];
+  const spans = [
+    ...callSpans(src, /\bmergeSettings\s*\(/),
+    ...[
+      ...callSpans(src, /\.set\s*\(/),
+      ...callSpans(src, /\.create\s*\(/),
+      ...callSpans(src, /\.update\s*\(/),
+    ].filter((span) => /\bsettings\b/.test(span)),
+    ...settingsLiterals(src),
+  ];
+  for (const span of spans) {
+    const m = span.match(KEY);
+    if (m) hits.push(`${m[1]}: ${span.trim().slice(0, 100)}`);
+  }
+  for (const m of src.matchAll(
+    new RegExp(`settings\\??\\.(${alt})\\s*=(?!=)`, "g")
+  ))
+    hits.push(m[0]);
+  for (const m of src.matchAll(
+    new RegExp(
+      `(jsonb_set\\([^)]*'\\{(${alt})\\}'|jsonb_build_object\\(\\s*'(${alt})')`,
+      "g"
+    )
+  ))
     hits.push(m[0]);
   return hits;
 }
@@ -164,65 +241,112 @@ describe("template apply — one finisher writes the stamp and active", () => {
     expect(missing).toEqual([]);
   });
 
-  it("(2) only the finisher calls stampWorkspacePackageVersion", () => {
-    const callers = apiFiles
+  it("(2) a version stamp reaches writeTemplateState only from the finisher and the boot channel", () => {
+    const files = [...apiFiles, ...walk(APPS_API_SRC), ...walk(DB_SRC)];
+    const stampers = files
+      .filter((p) => p !== MODULE)
       .filter((p) =>
-        /(?<!function\s)\bstampWorkspacePackageVersion\s*\(/.test(code(p))
+        callSpans(code(p), /(?<!function\s)\bwriteTemplateState\s*\(/).some(
+          (span) => /(?<![\w.])version\s*:/.test(span)
+        )
       )
-      .map(rel);
-    expect(callers).toEqual([FINISHER]);
+      .map(rel)
+      .sort();
+    // Classified: the finisher (on convergence) and the reconcile util (the
+    // boot pass's channel, which gates on its own convergence report and holds
+    // the stamp while the last apply is unfinished).
+    expect(stampers).toEqual(
+      [
+        FINISHER,
+        relative(
+          API_SRC,
+          join(DB_SRC, "utils/reconcile-workspace-from-definition.ts")
+        ),
+      ].sort()
+    );
   });
 
-  it("(3) no other file writes packageVersion into settings", () => {
+  it("(3) only the template-state module writes settings.template or a mirrored key", () => {
+    const keys = guardedKeys();
+    // Non-vacuity: the parsed list is the mirror (7 keys) + template.
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "template",
+        "packageVersion",
+        "provisioningStatus",
+        "failedStep",
+        "failedStepError",
+        "completedSteps",
+        "templateApply",
+        "installedPacks",
+      ])
+    );
+    const roots = sourceRoots();
+    expect(roots.length).toBeGreaterThanOrEqual(10);
+    const files = roots.flatMap(walk);
+    expect(files.length).toBeGreaterThan(1000);
     // Classified, not hidden:
-    //  - the stamp writer itself (called only by the finisher — test 2);
-    //  - the database `reconcileWorkspaceFromDefinition`, which writes the
-    //    version a caller passes — its one version-passing caller is the boot
-    //    reconcile, gated on its own convergence report (playbooks + rules) —
-    //    and holds it while the last apply is unfinished.
-    const CLASSIFIED = new Set([
-      "services/workspace-creation-service.ts",
-      relative(
-        API_SRC,
-        join(DB_SRC, "utils/reconcile-workspace-from-definition.ts")
-      ),
-    ]);
-    const files = [...apiFiles, ...walk(APPS_API_SRC), ...walk(DB_SRC)];
-    expect(files.length).toBeGreaterThan(200);
+    //  - the repository's generic doors PROMOTE `provisioningStatus` into its
+    //    column from whatever blob they are handed (create seeds come from
+    //    `templateStateSettings`, the settings save carries the key over);
+    //  - pod-to-pod replica sync writes the peer's row wholesale by design.
+    const CLASSIFIED = new Set(
+      [
+        join(DB_SRC, "repositories/workspace-repository.ts"),
+        join(API_SRC, "routers/sync.ts"),
+      ].map(rel)
+    );
     const offenders = files
-      .filter((p) => !CLASSIFIED.has(rel(p)))
-      .flatMap((p) =>
-        packageVersionWrites(code(p)).map((h) => `${rel(p)}: ${h}`)
-      );
+      .filter((p) => p !== MODULE && !CLASSIFIED.has(rel(p)))
+      .flatMap((p) => stateWrites(code(p), keys).map((h) => `${rel(p)}: ${h}`));
     expect(offenders).toEqual([]);
   });
 
   it("self-check: the scanner sees a literal sample of what it hunts", () => {
+    const keys = guardedKeys();
+    const hits = (src: string) => stateWrites(src, keys);
     expect(
-      packageVersionWrites(
-        `await repo.mergeSettings(id, { packageSlug: s, packageVersion: v }, u);`
-      )
+      hits(`await repo.mergeSettings(id, { provisioningStatus: "failed" }, u);`)
     ).toHaveLength(1);
     expect(
-      packageVersionWrites(
+      hits(
         `await db.update(w).set({ settings: { ...s, packageVersion } }).where(x);`
       )
-    ).toHaveLength(1);
+    ).toHaveLength(0); // shorthand is not a `key:` — see the next sample
     expect(
-      packageVersionWrites(
-        `if (packageVersion) settings.packageVersion = packageVersion;`
+      hits(
+        `await db.update(w).set({ settings: { ...s, packageVersion: v } }).where(x);`
+      )
+    ).toHaveLength(1);
+    expect(hits(`if (v) settings.installedPacks = next;`)).toHaveLength(1);
+    expect(
+      hits(
+        `const settingsPatch: Partial<WorkspaceSettings> = { packageSlug: t, templateApply: null };`
       )
     ).toHaveLength(1);
     expect(
-      packageVersionWrites(
-        `const settingsPatch: Partial<WorkspaceSettings> = { packageSlug: t, ...(v ? { packageVersion: v } : {}) };`
+      hits(
+        "settings: sql`jsonb_set(settings, '{completedSteps}', ${x}::jsonb)`"
       )
     ).toHaveLength(1);
     expect(
-      packageVersionWrites(
-        `await repo.mergeSettings(id, { packageSlug: s }, u);`
+      hits(
+        `await repo.create({ name, ownerId, settings: { template: t } }, u);`
+      )
+    ).toHaveLength(1);
+    // The module's own seed/writer calls are the one writer, not offenders.
+    expect(
+      hits(
+        `await repo.create({ settings: { ...s, ...templateStateSettings({ state: "building", completedSteps: [] }) } }, u);`
       )
     ).toHaveLength(0);
+    // Not settings: a rule seed's `template:` column is not this state.
+    expect(
+      hits(`await db.update(rules).set({ template: t, key: k });`)
+    ).toHaveLength(0);
+    expect(hits(`await repo.mergeSettings(id, { layout }, u);`)).toHaveLength(
+      0
+    );
     expect(CORE_CALL.test("const r = await materializeWorkspaceCore({")).toBe(
       true
     );
@@ -232,19 +356,23 @@ describe("template apply — one finisher writes the stamp and active", () => {
   });
 
   it("(4) only the finisher and the boot ledger pass record an overlay's version", () => {
-    const callers = apiFiles.filter((p) =>
-      /(?<!function\s)\bupsertInstalledPack\s*\(/.test(code(p))
+    const files = [...apiFiles, ...walk(APPS_API_SRC), ...walk(DB_SRC)].filter(
+      (p) => p !== MODULE
     );
+    const PACK_CALL = /(?<!function\s)\b(upsertPack|withPack)\s*\(/;
+    const callers = files.filter((p) => PACK_CALL.test(code(p))).map(rel);
     // Non-vacuity: compose, the finisher and the boot ledger pass all call it.
-    expect(callers.map(rel).sort()).toEqual([
-      "services/compose-overlay.ts",
-      "services/reconcile-installed-packs.ts",
-      FINISHER,
-    ]);
+    expect(callers.sort()).toEqual(
+      [
+        "services/compose-overlay.ts",
+        "services/reconcile-installed-packs.ts",
+        FINISHER,
+      ].sort()
+    );
     // Compose records the pack WITHOUT a version (layer 2 has not run yet).
     const composeSpans = callSpans(
       code(join(API_SRC, "services/compose-overlay.ts")),
-      /(?<!function\s)\bupsertInstalledPack\s*\(/
+      PACK_CALL
     );
     expect(composeSpans.length).toBeGreaterThan(0);
     for (const span of composeSpans) expect(span).not.toMatch(/\bversion\b/);

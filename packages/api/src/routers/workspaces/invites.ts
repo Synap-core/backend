@@ -27,6 +27,7 @@ import {
   drizzleSql,
   users,
   createWorkspaceFromDefinition,
+  templateStateSettings,
   ensureTeamPersonForMember,
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
@@ -1454,8 +1455,8 @@ export const inviteProcedures = {
             },
             createdBy: "provisioning",
             provisionedAt: new Date().toISOString(),
-            provisioningStatus: "active",
-            packageSlug: "zeroclaw",
+            // Identity + "active" through the ONE template-state seed.
+            ...templateStateSettings({ slug: "zeroclaw", state: "active" }),
           },
         },
         systemUserId

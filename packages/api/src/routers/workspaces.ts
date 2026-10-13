@@ -855,9 +855,15 @@ const coreProcedures = {
         // strip-and-replace as `intelligenceRegistry.disconnectFromWorkspace`.
         const { intelligenceServiceId: _cleared, ...rest } =
           (workspace.settings as Record<string, unknown> | null) ?? {};
+        // The server-owned keys (the template state among them) are carried
+        // over from the STORED row inside the same UPDATE, so a template write
+        // landing between the read above and this replace is never reverted.
         await workspaceRepo.update(
           input.workspaceId,
-          { settings: rest },
+          {
+            settings: rest,
+            preserveSettingsKeys: SERVER_OWNED_WORKSPACE_SETTINGS_KEYS,
+          },
           ctx.userId
         );
       }

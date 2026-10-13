@@ -48,6 +48,7 @@ import {
   ProfileScope,
   WorkspaceRepository,
   EventRepository,
+  writeTemplateState,
   sql,
   eq,
   and,
@@ -231,14 +232,21 @@ export async function backfillWorkspaceIdentity(
         // `workspaceSubtype` is the template's own declared subtype, which is
         // NOT injective across the corpus and so is written as a category, not
         // as the resolution key.
-        await workspaceRepo.mergeSettings(
+        // The identity goes through the ONE template-state writer (state
+        // `slug` + mirror + column together); the subtype is plain settings.
+        const actor = ownerById.get(m.workspaceId) ?? "system";
+        await writeTemplateState(
+          db,
           m.workspaceId,
-          {
-            packageSlug: m.match.slug,
-            ...(m.match.subtype ? { workspaceSubtype: m.match.subtype } : {}),
-          },
-          ownerById.get(m.workspaceId) ?? "system"
+          { slug: m.match.slug },
+          { userId: actor }
         );
+        if (m.match.subtype)
+          await workspaceRepo.mergeSettings(
+            m.workspaceId,
+            { workspaceSubtype: m.match.subtype },
+            actor
+          );
         stamped.push({
           id: m.workspaceId,
           name: m.workspaceName,

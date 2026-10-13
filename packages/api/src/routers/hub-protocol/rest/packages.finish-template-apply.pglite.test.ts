@@ -75,7 +75,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         );
       if (workspaceId) {
         await client.query(
-          `update workspaces set provisioning_status = 'pending', settings = settings || '{"provisioningStatus":"pending","failedStep":null}'::jsonb where id = $1`,
+          `update workspaces set provisioning_status = 'pending', settings = (settings - 'template') || '{"provisioningStatus":"pending","failedStep":null}'::jsonb where id = $1`,
           [workspaceId]
         );
       } else {
@@ -338,9 +338,10 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
   it("(2) a space whose layer 2 failed is re-synced, never re-created: stamped, active, record cleared, health current", async () => {
     const { id } = await space();
     // As the founder's CRM was left: built before `completedSteps` were
-    // recorded, layer 2 failed, and the run stamped the version early.
+    // recorded, layer 2 failed, and the run stamped the version early — a
+    // LEGACY row (no `settings.template`; the reader derives it).
     await q(
-      `update workspaces set provisioning_status = 'failed', settings = (settings - 'completedSteps') || jsonb_build_object('provisioningStatus','failed','failedStep','post-workspace','packageVersion',$2::text) where id = $1`,
+      `update workspaces set provisioning_status = 'failed', settings = (settings - 'completedSteps' - 'template') || jsonb_build_object('provisioningStatus','failed','failedStep','post-workspace','packageVersion',$2::text) where id = $1`,
       [id, version]
     );
     // The proposal was approved out of band: the playbook can now land.
@@ -365,7 +366,7 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     const { id } = await space();
     // As compose leaves it: the pack is recorded, its version is not.
     await q(
-      `update workspaces set settings = settings || '{"installedPacks":[{"slug":"grants","version":"","installedAt":"t0"}]}'::jsonb where id = $1`,
+      `update workspaces set settings = (settings - 'template') || '{"installedPacks":[{"slug":"grants","version":"","installedAt":"t0"}]}'::jsonb where id = $1`,
       [id]
     );
     const pendingPack = { slug: "grants", version: "h-g" };

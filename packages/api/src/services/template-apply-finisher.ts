@@ -1,7 +1,8 @@
 /**
  * finishTemplateApply — the ONE door that writes a template apply's outcome
- * markers: `settings.packageVersion` (the version stamp) and
- * `provisioningStatus: "active"`.
+ * markers: the version stamp and the "active" state — through the ONE
+ * template-state writer (`writeTemplateState`, @synap/database), under its
+ * row lock.
  *
  * WHY ONE DOOR. The stamp says "this space is at template version X", and the
  * template is layer 1 (profiles / views / bento) AND layer 2 (capabilities,
@@ -31,8 +32,6 @@
 
 import type { WorkspaceSettings } from "@synap/database";
 import { postWorkspaceLayersConverged } from "./capabilities/install-layers.js";
-import { stampWorkspacePackageVersion } from "./workspace-creation-service.js";
-import { upsertInstalledPack } from "./compose-overlay.js";
 
 export type TemplateApplyRecord = NonNullable<
   WorkspaceSettings["templateApply"]
@@ -119,93 +118,89 @@ export async function finishTemplateApply(
   // earlier, unfinished apply left would be a lie.
   if (post === null && !built && !pendingVersionStamp && !pendingPack)
     return { state: "converged", versionStamped: false };
-  const { db, workspaces, eq, getDb, eventRepository, WorkspaceRepository } =
+  const { getDb, writeTemplateState, withPack } =
     await import("@synap/database");
-  const [row] = await db
-    .select({ settings: workspaces.settings })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
-  const status = (row?.settings as WorkspaceSettings | null)
-    ?.provisioningStatus;
-  // A layer 2 that threw already marked the space failed — that record wins;
-  // the resume path (`resumeIfFailed`) is what clears it.
-  if (status === "failed") return { state: "failed", versionStamped: false };
-
-  const repo = new WorkspaceRepository(await getDb(), eventRepository);
-  const activate = built ? { provisioningStatus: "active" as const } : {};
 
   const converged =
     post === null
       ? !pendingVersionStamp && !pendingPack
       : postWorkspaceLayersConverged(post);
-  if (converged) {
-    if (pendingVersionStamp) {
-      await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
-    }
-    const packVersion = pendingPack
-      ? {
-          installedPacks: upsertInstalledPack(
-            (row?.settings as WorkspaceSettings | null)?.installedPacks,
-            pendingPack,
-            new Date().toISOString()
-          ),
-        }
-      : {};
-    await repo.mergeSettings(
-      workspaceId,
-      { ...activate, ...packVersion, templateApply: null },
-      userId
-    );
-    return { state: "converged", versionStamped: !!pendingVersionStamp };
-  }
+  const { proposals, failures } =
+    !converged && post ? notLanded(post) : { proposals: [], failures: [] };
+  const recordState: TemplateApplyRecord["state"] =
+    post === null
+      ? "layer-2-not-run"
+      : failures.length > 0
+        ? "partial"
+        : "awaiting-approval";
 
-  const { proposals, failures } = post ? notLanded(post) : notLanded({});
+  // Decided against the row the ONE writer locks (utils/template-state.ts):
+  // a layer 2 that threw already marked the space failed — that record wins;
+  // the resume path is what clears it.
+  let failed = false;
+  const written = await writeTemplateState(
+    await getDb(),
+    workspaceId,
+    (current) => {
+      if (current?.state === "failed") {
+        failed = true;
+        return null;
+      }
+      const now = new Date().toISOString();
+      if (converged) {
+        // A space another door is still building stays "building" unless
+        // this apply built it.
+        return {
+          state: built || current?.state !== "building" ? "active" : "building",
+          ...(pendingVersionStamp ? { version: pendingVersionStamp } : {}),
+          ...(pendingPack
+            ? { packs: withPack(current?.packs, pendingPack, now) }
+            : {}),
+        };
+      }
+      return {
+        state: recordState,
+        pendingVersion: pendingVersionStamp ?? pendingPack?.version ?? null,
+        proposals: proposals.length > 0 ? proposals : null,
+        failures: failures.length > 0 ? failures : null,
+      };
+    },
+    { userId }
+  );
+  if (failed) return { state: "failed", versionStamped: false };
+  if (converged)
+    return {
+      state: "converged",
+      versionStamped: !!pendingVersionStamp && !!written,
+    };
   const templateApply: TemplateApplyRecord = {
-    state:
-      post === null
-        ? "layer-2-not-run"
-        : failures.length > 0
-          ? "partial"
-          : "awaiting-approval",
+    state: recordState,
     version: pendingVersionStamp ?? pendingPack?.version ?? null,
-    at: new Date().toISOString(),
+    at: written?.at ?? new Date().toISOString(),
     ...(proposals.length > 0 ? { proposals } : {}),
     ...(failures.length > 0 ? { failures } : {}),
   };
-  await repo.mergeSettings(workspaceId, { ...activate, templateApply }, userId);
   return { state: templateApply.state, versionStamped: false, templateApply };
 }
 
 /**
  * Re-open a space whose LAYER 2 failed (`failedInLayerTwo`) for a re-run of
  * layer 2. Layer 1 is built, so the space is what an unfinished apply is:
- * "active" with `templateApply: layer-2-not-run` — a crash before the finisher
- * runs still reads drifted, never "failed" forever and never current. The
- * failure markers are cleared here because the finisher refuses to overwrite
- * "failed"; if layer 2 throws again, `applyPackagePostWorkspace` re-marks it.
+ * "layer-2-not-run" — a crash before the finisher runs still reads drifted,
+ * never "failed" forever and never current. Leaving "failed" clears the
+ * failure fields (the finisher refuses to overwrite "failed"); if layer 2
+ * throws again, `applyPackagePostWorkspace` re-marks it.
  */
 export async function reopenFailedLayerTwo(
   workspaceId: string,
   userId: string,
   version: string | undefined
 ): Promise<void> {
-  const { getDb, eventRepository, WorkspaceRepository } =
-    await import("@synap/database");
-  const repo = new WorkspaceRepository(await getDb(), eventRepository);
-  const templateApply: TemplateApplyRecord = {
-    state: "layer-2-not-run",
-    version: version ?? null,
-    at: new Date().toISOString(),
-  };
-  await repo.mergeSettings(
+  const { getDb, writeTemplateState } = await import("@synap/database");
+  await writeTemplateState(
+    await getDb(),
     workspaceId,
-    {
-      provisioningStatus: "active",
-      failedStep: null,
-      failedStepError: null,
-      templateApply,
-    },
-    userId
+    { state: "layer-2-not-run", pendingVersion: version ?? null },
+    { userId }
   );
 }

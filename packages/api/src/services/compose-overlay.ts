@@ -32,7 +32,8 @@ import {
   eq,
   workspaces,
   eventRepository,
-  WorkspaceRepository,
+  readTemplateState,
+  upsertPack,
   reconcileWorkspaceFromDefinition,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
@@ -122,37 +123,6 @@ export interface ComposeOntoBaseInput {
   overlay?: { slug?: string; version?: string };
 }
 
-/** One `settings.installedPacks` entry. */
-export interface InstalledPackEntry {
-  slug: string;
-  version: string;
-  installedAt: string;
-}
-
-/**
- * Upsert a pack into an `installedPacks` ledger (by slug). A re-compose
- * refreshes the version and keeps the first `installedAt`. Pure.
- */
-export function upsertInstalledPack(
-  ledger: unknown,
-  pack: { slug: string; version?: string | null },
-  now: string
-): InstalledPackEntry[] {
-  const list = Array.isArray(ledger)
-    ? (ledger as Array<Partial<InstalledPackEntry>>).filter(
-        (e): e is InstalledPackEntry =>
-          !!e && typeof e === "object" && typeof e.slug === "string"
-      )
-    : [];
-  const existing = list.find((e) => e.slug === pack.slug);
-  const entry: InstalledPackEntry = {
-    slug: pack.slug,
-    version: pack.version ?? existing?.version ?? "",
-    installedAt: existing?.installedAt ?? now,
-  };
-  return [...list.filter((e) => e.slug !== pack.slug), entry];
-}
-
 /**
  * Record a pack in a space's `installedPacks` ledger WITHOUT its version —
  * the version is the finisher's to write on convergence (`pendingPack`), the
@@ -165,24 +135,8 @@ export async function recordInstalledPack(
   slug: string,
   userId: string
 ): Promise<void> {
-  const [row] = await db
-    .select({ settings: workspaces.settings })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
-  const ledger = (row?.settings as { installedPacks?: unknown } | null)
-    ?.installedPacks;
-  await new WorkspaceRepository(db, eventRepository).mergeSettings(
-    workspaceId,
-    {
-      installedPacks: upsertInstalledPack(
-        ledger,
-        { slug },
-        new Date().toISOString()
-      ),
-    },
-    userId
-  );
+  // The ONE template-state writer: upserted under its row lock.
+  await upsertPack(db, workspaceId, { slug }, { userId });
 }
 
 /**
@@ -240,11 +194,9 @@ export async function composeOntoBaseWorkspace(
     .limit(1);
   if (!baseWs) throw new ComposeBaseNotFoundError();
 
-  const baseSettings = (baseWs.settings ?? {}) as {
-    packageSlug?: string;
-    installedPacks?: unknown;
-  };
-  const baseIdentity = baseSettings.packageSlug ?? baseWs.packageSlug ?? null;
+  const baseIdentity =
+    readTemplateState(baseWs.settings, { packageSlug: baseWs.packageSlug })
+      ?.slug ?? null;
   // Stamp the explicit `--onto` slug as IDENTITY only on an unidentified target
   // (or a re-attach of the same slug). Otherwise it is an overlay pack.
   const stampIdentity =
@@ -270,20 +222,15 @@ export async function composeOntoBaseWorkspace(
       ...(stampIdentity ? { packageSlug: input.packageSlug } : {}),
     });
     if (recordPack && !stampIdentity) {
-      const repo = new WorkspaceRepository(db, eventRepository);
-      await repo.mergeSettings(
+      // The VERSION is not recorded here: layer 2 has not run. The entry
+      // keeps its previous version (or none when new); the finisher records
+      // `pendingPack.version` on convergence. Upserted under the template-state
+      // writer's row lock, so a concurrent pack record is never lost.
+      await upsertPack(
+        db,
         composeTargetWorkspaceId,
-        {
-          installedPacks: upsertInstalledPack(
-            baseSettings.installedPacks,
-            // The VERSION is not recorded here: layer 2 has not run. The
-            // entry keeps its previous version (or none when new); the
-            // finisher records `pendingPack.version` on convergence.
-            { slug: overlaySlug! },
-            new Date().toISOString()
-          ),
-        },
-        userId
+        { slug: overlaySlug! },
+        { userId }
       );
     }
     // Seeds — adopt what the base already holds, create only what is missing.

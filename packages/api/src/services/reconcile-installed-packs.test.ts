@@ -5,18 +5,30 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { reconcileMock, mergeSettingsMock, playbooksMock } = vi.hoisted(() => ({
+const { reconcileMock, writeMock, playbooksMock, stored } = vi.hoisted(() => ({
   reconcileMock: vi.fn(async (_o: Record<string, unknown>) => ({})),
-  mergeSettingsMock: vi.fn(async () => ({})),
+  writeMock: vi.fn(),
   playbooksMock: vi.fn(),
+  /** The row the ONE writer would lock and merge onto. */
+  stored: { settings: {} as unknown },
 }));
-vi.mock("@synap/database", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@synap/database")>()),
-  reconcileWorkspaceFromDefinition: reconcileMock,
-  WorkspaceRepository: class {
-    mergeSettings = mergeSettingsMock;
-  },
-}));
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    reconcileWorkspaceFromDefinition: reconcileMock,
+    // The template-state writer, with the REAL reader + merge applied to the
+    // stored row: what it returns is the state it would write.
+    writeTemplateState: writeMock.mockImplementation(
+      async (_db: unknown, _id: string, patch: unknown) => {
+        const current = actual.readTemplateState(stored.settings);
+        const change =
+          typeof patch === "function" ? patch(current) : (patch as object);
+        return change ? actual.mergeTemplateState(current, change, "t") : null;
+      }
+    ),
+  };
+});
 vi.mock(
   "./playbooks/reconcile-installed-playbooks.js",
   async (importOriginal) => ({
@@ -52,7 +64,10 @@ const SETTINGS = {
 };
 
 describe("reconcileInstalledPacks", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stored.settings = SETTINGS;
+  });
 
   it("re-syncs the pack additively (no identity) and advances its ledger version", async () => {
     playbooksMock.mockResolvedValue({ results: [], missing: [], failed: [] });
@@ -75,11 +90,13 @@ describe("reconcileInstalledPacks", () => {
         workspaceId: "ws-f",
       })
     );
-    const ledger = (
-      (mergeSettingsMock.mock.calls[0] as unknown[])[1] as {
-        installedPacks: Array<{ slug: string; version: string }>;
-      }
-    ).installedPacks;
+    const written = await writeMock.mock.results[0]!.value;
+    const ledger = written.packs as Array<{ slug: string; version: string }>;
+    // The other ledger entry survives (merged onto the stored row).
+    expect(ledger.map((p) => p.slug).sort()).toEqual([
+      "business-model",
+      "some-view-pack",
+    ]);
     expect(ledger.find((p) => p.slug === "business-model")?.version).toBe(
       "h-2"
     );
@@ -101,7 +118,7 @@ describe("reconcileInstalledPacks", () => {
       resolve,
       catalog: null,
     });
-    expect(mergeSettingsMock).not.toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled();
     expect(out.find((o) => o.slug === "business-model")?.status).toBe(
       "partial"
     );
@@ -130,7 +147,7 @@ describe("reconcileInstalledPacks", () => {
       resolve,
       catalog: null,
     });
-    expect(mergeSettingsMock).not.toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled();
     const bm = out.find((o) => o.slug === "business-model");
     expect(bm?.status).toBe("partial");
     expect(bm?.playbooks?.proposed).toBe(1);
@@ -178,7 +195,7 @@ describe("reconcileInstalledPacks — an unresolvable overlay says why it was sk
     const out = await run(catalog(true));
     expect(out.every((o) => o.status === "skipped")).toBe(true);
     expect(reconcileMock).not.toHaveBeenCalled();
-    expect(mergeSettingsMock).not.toHaveBeenCalled(); // ledger untouched
+    expect(writeMock).not.toHaveBeenCalled(); // ledger untouched
     const by = new Map(out.map((o) => [o.slug, o]));
     expect(by.get("business-developer")).toMatchObject({
       lifecycle: "retired",

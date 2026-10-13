@@ -14,10 +14,14 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { reconcileMock, mergeSettingsMock, baseRow } = vi.hoisted(() => ({
+const { reconcileMock, upsertPackMock, baseRow, recorded } = vi.hoisted(() => ({
   reconcileMock: vi.fn(async (_opts: Record<string, unknown>) => ({})),
-  mergeSettingsMock: vi.fn(async () => ({})),
+  upsertPackMock: vi.fn(),
   baseRow: { current: {} as Record<string, unknown> },
+  /** The pack list the ONE writer would store (real `withPack` merge). */
+  recorded: {
+    packs: [] as Array<{ slug: string; version: string | null }>,
+  },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -31,9 +35,20 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: { select: () => chain },
     reconcileWorkspaceFromDefinition: reconcileMock,
-    WorkspaceRepository: class {
-      mergeSettings = mergeSettingsMock;
-    },
+    // The template-state writer, applied to the stored row with the REAL
+    // merge (`withPack`) so the ledger it would write is asserted.
+    upsertPack: upsertPackMock.mockImplementation(
+      async (_db: unknown, _id: string, pack: { slug: string }) => {
+        recorded.packs = actual.withPack(
+          actual.readTemplateState(
+            (baseRow.current as { settings?: unknown }).settings
+          )?.packs,
+          pack,
+          "t1"
+        );
+        return null;
+      }
+    ),
   };
 });
 vi.mock("../utils/workspace-write-access.js", () => ({
@@ -43,7 +58,6 @@ vi.mock("../utils/workspace-write-access.js", () => ({
 import {
   composeOntoBaseWorkspace,
   overlayDefinitionForIdentifiedBase,
-  upsertInstalledPack,
 } from "./compose-overlay.js";
 
 const OVERLAY = {
@@ -59,7 +73,8 @@ const OVERLAY = {
 describe("composeOntoBaseWorkspace — overlay identity", () => {
   beforeEach(() => {
     reconcileMock.mockClear();
-    mergeSettingsMock.mockClear();
+    upsertPackMock.mockClear();
+    recorded.packs = [];
   });
 
   it("--onto an IDENTIFIED workspace keeps its identity and records the pack", async () => {
@@ -90,22 +105,17 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
     ).toBeUndefined();
     // Additive layers still travel.
     expect(def.profiles).toEqual([{ slug: "convention" }]);
-    expect(mergeSettingsMock).toHaveBeenCalledTimes(1);
-    const patch = (mergeSettingsMock.mock.calls[0] as unknown[])[1] as {
-      installedPacks: Array<{ slug: string; version: string }>;
-    };
-    expect(patch.installedPacks.map((p) => p.slug).sort()).toEqual([
+    expect(upsertPackMock).toHaveBeenCalledTimes(1);
+    expect(recorded.packs.map((p) => p.slug).sort()).toEqual([
       "business-model",
       "other",
     ]);
     // The pack is RECORDED, but its version is not: layer 2 has not run. The
     // caller's finisher records `pendingPack.version` once it converged.
     expect(
-      patch.installedPacks.find((p) => p.slug === "business-model")?.version
-    ).toBe("");
-    expect(patch.installedPacks.find((p) => p.slug === "other")?.version).toBe(
-      "1"
-    );
+      recorded.packs.find((p) => p.slug === "business-model")?.version
+    ).toBeNull();
+    expect(recorded.packs.find((p) => p.slug === "other")?.version).toBe("1");
     expect(report.pendingPack).toEqual({
       slug: "business-model",
       version: "h-bm",
@@ -132,7 +142,7 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
     // once layer 2 converged (`identityStamped` tells materialize to hand it back).
     expect(opts.packageVersion).toBeUndefined();
     expect(report.identityStamped).toBe(true);
-    expect(mergeSettingsMock).not.toHaveBeenCalled();
+    expect(upsertPackMock).not.toHaveBeenCalled();
   });
 
   it("a NATURAL compose records the overlay without stamping identity", async () => {
@@ -150,25 +160,11 @@ describe("composeOntoBaseWorkspace — overlay identity", () => {
     });
     const opts = reconcileMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(opts.packageSlug).toBeUndefined();
-    const patch = (mergeSettingsMock.mock.calls[0] as unknown[])[1] as {
-      installedPacks: Array<{ slug: string }>;
-    };
-    expect(patch.installedPacks.map((p) => p.slug)).toEqual(["grants"]);
+    expect(recorded.packs.map((p) => p.slug)).toEqual(["grants"]);
   });
 });
 
 describe("pure helpers", () => {
-  it("upsertInstalledPack refreshes the version and keeps the first installedAt", () => {
-    const next = upsertInstalledPack(
-      [{ slug: "grants", version: "h-1", installedAt: "t0" }],
-      { slug: "grants", version: "h-2" },
-      "t1"
-    );
-    expect(next).toEqual([
-      { slug: "grants", version: "h-2", installedAt: "t0" },
-    ]);
-  });
-
   it("overlayDefinitionForIdentifiedBase keeps sidebar items", () => {
     const d = overlayDefinitionForIdentifiedBase(OVERLAY) as unknown as {
       layoutConfig: { sidebarItems: unknown[] };

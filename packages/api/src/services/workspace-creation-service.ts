@@ -29,6 +29,8 @@ import {
   or,
   findWorkspaceIdentityConflict,
   WorkspaceIdentityConflictError,
+  readTemplateState,
+  isFailedInLayerTwo,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
@@ -77,30 +79,6 @@ export interface ReconcileIfStaleResult {
    * version X", and layer 1 alone has not earned it.
    */
   pendingVersionStamp?: string;
-}
-
-/**
- * Stamp `settings.packageVersion` — the marker every idempotent hit compares
- * against (`reconcileWorkspaceIfStale`), so the NEXT hit short-circuits as up
- * to date. Merged atomically from the database's current value: replacing the
- * whole JSONB document would erase settings a reconcile just persisted.
- *
- * Called ONLY by `finishTemplateApply` (services/template-apply-finisher.ts),
- * once a door's layer 2 converged — tripwire
- * `__tripwires__/template-apply-one-finisher.test.ts`. Throws on a failed write.
- */
-export async function stampWorkspacePackageVersion(
-  workspaceId: string,
-  version: string
-): Promise<void> {
-  await db
-    .update(workspaces)
-    .set({
-      settings: drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(
-        { packageVersion: version }
-      )}::jsonb`,
-    })
-    .where(eq(workspaces.id, workspaceId));
 }
 
 /**
@@ -173,7 +151,7 @@ export async function reconcileWorkspaceIfStale(opts: {
     const version = resolved?.version ?? callerVersion;
     if (!version) return { reconciled: false, checked: false };
 
-    if (version === currentSettings?.packageVersion) {
+    if (version === readTemplateState(currentSettings)?.version) {
       return { reconciled: false, checked: true, version };
     }
 
@@ -520,18 +498,17 @@ export async function checkOneSpacePerDomain(input: {
 export function failedInLayerTwo(
   settings: WorkspaceSettings | null | undefined
 ): boolean {
-  return (
-    settings?.provisioningStatus === "failed" &&
-    settings.failedStep === "post-workspace"
-  );
+  return isFailedInLayerTwo(readTemplateState(settings));
 }
 
 /** The settings a re-sync compares against, with the version stamp dropped. */
 export function withoutStamp(
   settings: WorkspaceSettings | null | undefined
 ): WorkspaceSettings {
-  const { packageVersion: _dropped, ...rest } = settings ?? {};
-  return rest;
+  const { packageVersion: _dropped, template, ...rest } = settings ?? {};
+  return template
+    ? { ...rest, template: { ...template, version: null } }
+    : rest;
 }
 
 /** Deterministic: owned first, then the OLDEST (the original domain space). */
@@ -716,7 +693,8 @@ export async function createWorkspaceFromDefinitionIdempotent(
     workspaceId: string,
     settings: WorkspaceSettings | null | undefined
   ): Promise<CreateWorkspaceFromDefinitionResult | null> => {
-    if (settings?.provisioningStatus !== "failed") return null;
+    const state = readTemplateState(settings);
+    if (state?.state !== "failed") return null;
     if (failedInLayerTwo(settings)) {
       // Layer 1 is built: re-sync it (stamp ignored) and hand back a
       // non-"unchanged" outcome so the caller re-runs layer 2 and the
@@ -757,8 +735,8 @@ export async function createWorkspaceFromDefinitionIdempotent(
         workspaceId,
         proposalId,
         packageSlug,
-        failedStep: settings.failedStep,
-        completedSteps: settings.completedSteps,
+        failedStep: state.failedStep,
+        completedSteps: state.completedSteps,
       },
       "createFromDefinition (Hub): resuming failed workspace from completed steps"
     );
@@ -775,7 +753,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
       createdBy,
       resumeFrom: {
         workspaceId,
-        completedSteps: settings.completedSteps ?? [],
+        completedSteps: state.completedSteps ?? [],
       },
     });
     return {

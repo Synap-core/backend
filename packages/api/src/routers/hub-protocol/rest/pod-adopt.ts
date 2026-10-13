@@ -36,6 +36,8 @@ import {
   eventRepository,
   WorkspaceRepository,
   reconcileWorkspaceFromDefinition,
+  readTemplateState,
+  writeTemplateState,
   type WorkspaceSettings,
   type ReconcileReport,
 } from "@synap/database";
@@ -165,33 +167,36 @@ export function registerPodAdoptRoutes(app: HubHono): void {
 
       // ── Already adopted at this exact version — no-op (mirrors
       // `reconcileWorkspaceIfStale`'s "checked, in sync" short-circuit) ──────
+      const current = readTemplateState(currentSettings);
       const alreadyCurrent =
-        currentSettings?.packageSlug === templateSlug &&
-        (!resolved.version ||
-          currentSettings?.packageVersion === resolved.version);
+        current?.slug === templateSlug &&
+        (!resolved.version || current?.version === resolved.version);
       if (alreadyCurrent) {
         return c.json({
           status: "adopted",
           outcome: "unchanged" as const,
           workspaceId,
           templateSlug,
-          packageVersion:
-            resolved.version ?? currentSettings?.packageVersion ?? null,
+          packageVersion: resolved.version ?? current?.version ?? null,
         });
       }
 
       // ── Stamp identity (atomic JSONB merge — lifts packageSlug/proposalId
       // into their promoted columns too), then additively reconcile. ────────
       const actingUserId = agentUserId ?? userId;
-      const settingsPatch: Partial<WorkspaceSettings> = {
-        packageSlug: templateSlug,
-        proposalId: templateSlug,
-      };
+      // The identity is the template state's `slug` — the ONE writer
+      // (`writeTemplateState`) keeps it, the mirror and the column together.
       const dbConn = await getDb();
+      await writeTemplateState(
+        dbConn,
+        workspaceId,
+        { slug: templateSlug },
+        { userId: actingUserId }
+      );
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
       await workspaceRepo.mergeSettings(
         workspaceId,
-        settingsPatch,
+        { proposalId: templateSlug },
         actingUserId
       );
 
