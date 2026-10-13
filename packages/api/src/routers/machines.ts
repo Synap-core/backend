@@ -2,9 +2,10 @@
  * Machines router — Connected › Computers (MACHINE-IDENTITY-PLAN W5).
  *
  * A computer is an agent user of type `machine` that the person approved on
- * `/device`. This router is the person's view of THEIR computers and the
- * three acts on one: rename, set its key lifetime, revoke (which revokes the
- * keys of every agent it hosts — `revokeMachine`, the one door).
+ * `/device`. This router is the person's view of THEIR computers (and, for a
+ * pod admin, `adminList` — everyone's) and the three acts on one: rename, set
+ * its key lifetime, revoke (which revokes the keys of every agent it hosts —
+ * `revokeMachine`, the one door).
  *
  * Every mutation is a PERSON's, signed in: a key — a computer's own, or an
  * agent's — never renames, re-times or revokes a computer (the same rule as
@@ -19,12 +20,13 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { revokeMachine } from "../services/machine-connect.js";
 import {
+  listAllMachines,
   listMachines,
   loadManageableMachine,
   renameMachine,
@@ -50,6 +52,15 @@ const MachineIdShape = z.string().min(1).max(200);
 export const machinesRouter = router({
   /** Your computers, newest first, each with its key's state and its agents. */
   list: protectedProcedure.query(({ ctx }) => listMachines(ctx.userId)),
+
+  /**
+   * EVERY member's computers, each with its owner — the Pod Console's
+   * Access › Computers. Pod admin only: `list` stays the owner-floored door
+   * (the desktop's Connected › Computers and the console's "My computers").
+   * The acts stay on `rename` / `setKeyTtl` / `revoke`, which already let a
+   * pod admin manage any computer (`loadManageableMachine`).
+   */
+  adminList: podAdminProcedure.query(() => listAllMachines()),
 
   rename: protectedProcedure
     .input(
