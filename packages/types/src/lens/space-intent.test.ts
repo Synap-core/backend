@@ -600,6 +600,40 @@ describe("the row/space joins (one rule, browser + relay)", () => {
     ]);
     expect(alsoInKinds(crm, profiles, null)).toBeNull();
   });
+
+  it("a profile's own name keeps its casing: 'UI Design' → 'UI Designs', never 'Ui designs' (S9)", () => {
+    const space = { workspaceId: "dev", produces: [] };
+    const chips = alsoInKinds(
+      space,
+      [
+        {
+          slug: "ui-design",
+          name: "UI Design",
+          workspaceId: "dev",
+          profileKind: "kind",
+        },
+        {
+          slug: "mcp_server",
+          name: "MCP server",
+          plural: " MCP servers ",
+          workspaceId: "dev",
+          profileKind: "kind",
+        },
+        {
+          slug: "contact_log",
+          name: " ",
+          workspaceId: "dev",
+          profileKind: "kind",
+        },
+      ],
+      { "ui-design": 3, mcp_server: 2, contact_log: 1 }
+    );
+    expect(chips?.map((c) => c.title)).toEqual([
+      "UI Designs",
+      "MCP servers",
+      resolveObjectNounPlural("contact_log"),
+    ]);
+  });
 });
 
 describe("unattachedRowModel (homes A7)", () => {

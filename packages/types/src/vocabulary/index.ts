@@ -729,6 +729,17 @@ const UNCOUNTABLE_NOUNS = new Set([
  * (s / x / z / ch / sh), which takes "es", and an uncountable noun, which
  * stays as it is. A Greek -sis / -xis ending takes -ses / -xes.
  */
+/**
+ * A noun's plural KEEPING its casing — for a profile's own display name
+ * ("UI design" → "UI designs"). `resolveObjectNounPlural` takes a machine KIND
+ * and lower-cases it to look it up, so a cased name must never go through it
+ * ("UI Design" → "Ui designs", homes review S9).
+ */
+export function pluralizeNoun(noun: string): string {
+  const trimmed = noun.trim();
+  return trimmed ? pluralizeFallback(trimmed) : "";
+}
+
 function pluralizeFallback(noun: string): string {
   const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
   if (UNCOUNTABLE_NOUNS.has(last)) return noun;

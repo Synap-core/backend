@@ -193,6 +193,15 @@ describe("lensIntentGoalFact — the goal line (WP.5)", () => {
     expect(lensIntentHeaderModel({ counts, goal: fact }).fact).toEqual(fact);
   });
 
+  it("the done word keeps an acronym mid-sentence: 'QA passed', never 'qa passed' (S9)", () => {
+    const fact = lensIntentGoalFact({
+      goal: { count: 4, per: "week" },
+      done: 1,
+      doneWord: "QA passed",
+    })!;
+    expect(lensScopeFactLabel(fact)).toBe("Goal 1 / 4 QA passed this week");
+  });
+
   it("an unknown measure still says the target, with no bar", () => {
     const fact = lensIntentGoalFact({
       goal: { count: 3, per: "week" },

@@ -23,6 +23,7 @@ import {
   type LensKpiFact,
 } from "./header.js";
 import type { LensRow } from "./rows.js";
+import { nounInSentence } from "../vocabulary/index.js";
 
 /** An intent surface's extra count section: the kind's board. */
 export type LensIntentSection = "pipeline";
@@ -100,7 +101,7 @@ export function lensIntentGoalFact(input: {
     label: "Goal",
     target: goal.count,
     ...(input.done === null ? {} : { current: input.done }),
-    unit: `${input.doneWord.toLowerCase()} this ${goal.per}`,
+    unit: `${nounInSentence(input.doneWord)} this ${goal.per}`,
   });
 }
 

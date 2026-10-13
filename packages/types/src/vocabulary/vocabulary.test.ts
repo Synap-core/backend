@@ -8,6 +8,7 @@ import {
   humanizeToken,
   sentenceCaseLabel,
   nounInSentence,
+  pluralizeNoun,
   resolveActionLabel,
   resolveActionProgressive,
   resolveActionPresent,
@@ -133,6 +134,15 @@ describe("sentenceCaseLabel", () => {
     expect(sentenceCaseLabel("works_at")).toBe("Works at");
     expect(sentenceCaseLabel("worksAt")).toBe("Works at");
     expect(sentenceCaseLabel("")).toBe("");
+  });
+});
+
+describe("pluralizeNoun", () => {
+  it("pluralizes a display name keeping its casing", () => {
+    expect(pluralizeNoun("UI design")).toBe("UI designs");
+    expect(pluralizeNoun(" Hypothesis ")).toBe("Hypotheses");
+    expect(pluralizeNoun("Research")).toBe("Research");
+    expect(pluralizeNoun("")).toBe("");
   });
 });
 

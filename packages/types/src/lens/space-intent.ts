@@ -20,6 +20,7 @@ import {
   type LifecycleCategory,
 } from "../lifecycle/option.js";
 import {
+  pluralizeNoun,
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
@@ -744,8 +745,13 @@ export function alsoInKinds(
     seen.add(p.slug);
     out.push({
       profileSlug: p.slug,
+      // The profile's own words keep their casing ("UI designs"); only a
+      // nameless profile falls back to the slug's vocabulary noun.
       title:
-        p.plural?.trim() || resolveObjectNounPlural(p.name.trim() || p.slug),
+        p.plural?.trim() ||
+        (p.name.trim()
+          ? pluralizeNoun(p.name)
+          : resolveObjectNounPlural(p.slug)),
       count,
       workspaceId: space.workspaceId,
     });
