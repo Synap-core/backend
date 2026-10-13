@@ -8258,6 +8258,43 @@ export type MoveStatusResult = ApplyStatusMoveResult | {
 	code: "NOT_FOUND" | "NO_LIFECYCLE" | "NOT_THE_LIFECYCLE" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
 	reason: string;
 };
+export type UpdateEntitiesVerdict = "execute" | "propose" | "deny" | "skip";
+export interface UpdateEntitiesResult {
+	batchId: string;
+	/** Present on a dry run: nothing was written. */
+	validated?: true;
+	/** Present when this answer is the receipt of an earlier identical call. */
+	replayed?: true;
+	/** Every item in request order, with the verdict it got (and why, when not executed). */
+	items: Array<{
+		id: string;
+		verdict: UpdateEntitiesVerdict;
+		reason?: string;
+	}>;
+	/** Written now, in request order. Empty on a dry run. */
+	applied: string[];
+	/** The ONE review this call filed, or null. */
+	proposed: {
+		proposalId: string;
+		count: number;
+		ids: string[];
+		reviewUrl?: string;
+	} | null;
+	denied: Array<{
+		id: string;
+		reason: string;
+	}>;
+	/**
+	 * `deferred: true` = the write was KEPT on a workspace-join request and is
+	 * replayed for the caller once the join is approved — never resend it.
+	 */
+	skipped: Array<{
+		id: string;
+		reason: string;
+		proposalId?: string;
+		deferred?: true;
+	}>;
+}
 export type PromotePropertyToBodyResult = {
 	status: "promoted";
 	entityId: string;
@@ -18699,6 +18736,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					message: string;
 				}[];
 				proposedEntityId?: string | undefined;
+				deferred?: true | undefined;
+				ref?: string | undefined;
 				status: string;
 				message: string;
 				entity: Record<string, unknown> | null;
@@ -19093,6 +19132,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 				forcePropose?: boolean | undefined;
 				expectedStatus?: string | null | undefined;
+				batchId?: string | undefined;
 				global?: boolean | undefined;
 				targetWorkspaceId?: string | undefined;
 				viewContext?: {
@@ -19114,6 +19154,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			} | {
 				statusMove?: MoveStatusResult | undefined;
+				deferred?: true | undefined;
+				ref?: string | undefined;
 				status: string;
 				message: string;
 				proposalId: string;
@@ -19132,6 +19174,30 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalType?: undefined;
 				reviewUrl?: undefined;
 			};
+			meta: object;
+		}>;
+		updateMany: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				items: {
+					id: string;
+					patch: {
+						title?: string | undefined;
+						description?: string | undefined;
+						properties?: Record<string, unknown> | undefined;
+						deleteProperties?: string[] | undefined;
+						expectedStatus?: string | null | undefined;
+					};
+					expected?: {
+						title?: string | null | undefined;
+					} | undefined;
+				}[];
+				idempotencyKey?: string | undefined;
+				validate?: boolean | undefined;
+				reasoning?: string | undefined;
+				agentUserId?: string | undefined;
+				source?: "system" | "user" | "agent" | "ai" | "intelligence" | "extension" | undefined;
+			};
+			output: UpdateEntitiesResult;
 			meta: object;
 		}>;
 		attachFacet: import("@trpc/server").TRPCMutationProcedure<{
