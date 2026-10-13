@@ -977,6 +977,10 @@ export const sessionHandlers: McpHandlerMap = {
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings ? { warnings: result.warnings } : {}),
+          // Same reason as `completeOutput`: a hand-off to another agent that
+          // is WAITING on a person is not on the roster yet, and the session
+          // alone reads as if it were never asked for.
+          ...(result.handOff ? { handOff: result.handOff } : {}),
           ...(nudges ? { nudges } : {}),
         });
       }

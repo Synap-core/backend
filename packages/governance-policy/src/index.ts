@@ -182,6 +182,9 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   // session in the capture channel without a proposal ("capture channel = no
   // proposals"). `focus_session.grant_capability` is DELIBERATELY excluded — it
   // widens a session's egress abilities, so it still routes to a proposal.
+  // `focus_session.assign_agent` is excluded for the same kind of reason: an
+  // agent putting ANOTHER agent on a roster starts that agent's work, which
+  // cannot be called back (see GATE_WRITE_DOORS).
   // delete/archive remain destructive → proposal.
   // ONE carve-out INSIDE `focus_session.update`: an AI update that CARRIES
   // `criteria` is floored to a proposal at rung 2.1 by
@@ -830,6 +833,8 @@ export type KnownGovernanceAction =
   | "execute"
   | "run"
   | "grant_capability"
+  // An agent handing a session to ANOTHER agent (roster add ≠ itself).
+  | "assign_agent"
   | "register"
   | "arrange"
   | "invite"
@@ -895,6 +900,7 @@ export function requiredPermissionFor(
     action === "execute" ||
     action === "run" ||
     action === "grant_capability" ||
+    action === "assign_agent" ||
     action === "register" ||
     action === "arrange" ||
     action === "invite" ||
@@ -1004,6 +1010,21 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
   focus_session: "session",
 };
 
+/**
+ * Gate doors whose GRANT is an existing action of their subject — a door that
+ * exists to be GOVERNED differently, not to be granted differently.
+ *
+ * `focus_session/assign_agent` (an agent handing a session to another agent)
+ * is a roster UPDATE of the session: any key that may update a session may
+ * ASK to hand it on, exactly as it could before the door existed. What the
+ * door changes is the governance verdict (propose unless a rule says auto),
+ * not who may ask — so a key or agent minted with the AI preset before the
+ * door existed is not suddenly refused.
+ */
+const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
+  "focus_session/assign_agent": "update",
+};
+
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
 const toGrammarToken = (token: string): string =>
   token
@@ -1025,7 +1046,9 @@ export function grantRequestKey(
 ): { subject: string; action: string } {
   return {
     subject: GRANT_SUBJECT_FOLDS[subjectType] ?? toGrammarToken(subjectType),
-    action: toGrammarToken(action),
+    action: toGrammarToken(
+      GRANT_ACTION_FOLDS[`${subjectType}/${action}`] ?? action
+    ),
   };
 }
 
@@ -1950,6 +1973,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "facet/attach": "reversible",
   "facet/detach": "reversible", // soft-delete; re-attach recovers it
   "facet/update": "reversible",
+  "focus_session/assign_agent": "disruptive", // effect: another agent starts work
   "focus_session/create": "reversible",
   "focus_session/grant_capability": "disruptive", // egress
   "focus_session/update": "reversible", // a criteria change is floored (2.1)
@@ -2145,6 +2169,16 @@ export const GATE_WRITE_DOORS = {
   "facet/attach": "gate",
   "facet/detach": "gate",
   "facet/update": "gate",
+  // An AGENT handing a session to ANOTHER agent (founder, 2026-10-12: "if not
+  // overridden, ask for approval for non-cancelable actions"). Putting a second
+  // agent on the roster starts that agent's work — a worker picks it up, an
+  // external one spends a provider run — and that cannot be called back. So it
+  // is its own door, deliberately NOT in DEFAULT_AUTO_APPROVE: it proposes by
+  // default (rung 9) and a `governance_rules` row naming it (rung 2.8) is the
+  // override. Classed `disruptive`, so the `@reversible` class row never widens
+  // it. A person staffing their own session, and an agent adding ITSELF, never
+  // reach this door (`services/focus-sessions/agent-hand-off.ts`).
+  "focus_session/assign_agent": "gate",
   "focus_session/create": "gate",
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",
