@@ -39,6 +39,7 @@ import {
   Layers,
   Mailbox,
   PackageCheck,
+  RefreshCw,
   Sparkles,
   Wrench,
   type LucideIcon,
@@ -75,6 +76,11 @@ import { useConsoleRole } from "../components/side-nav-role";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { HEALTH_PILL } from "../components/status-tone";
 import { buildNeedsYou, statusLine, type NeedsYouRow } from "./_lib/needs-you";
+import { updateIssue } from "../updates/_lib/updates-model";
+import {
+  PodUpdatesError,
+  usePodUpdates,
+} from "../updates/_lib/use-pod-updates";
 
 export default function HomePage() {
   const isAdmin = useConsoleRole() === "admin";
@@ -109,6 +115,7 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   failed_flows: AlertTriangle,
   stuck_runs: Clock,
   sync_error: GitBranch,
+  pod_update: RefreshCw,
   agent_activity: Bot,
   duplicate_proposals: Layers,
   review_queue: Activity,
@@ -129,8 +136,16 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
     enabled: isAdmin,
   });
 
+  // The last update's outcome (admin-only, like its page). An older pod has
+  // no endpoint (404): that is "nothing to report", not a failed band.
+  const updates = usePodUpdates({ enabled: isAdmin });
+  const updatesFailed =
+    updates.isError &&
+    !(updates.error instanceof PodUpdatesError && updates.error.status === 404);
+
   const needsYou = buildNeedsYou({
     audience: isAdmin ? "admin" : "member",
+    updateIssue: updates.data ? updateIssue(updates.data.lastUpdate) : null,
     sections: diagnose.data?.sections ?? [],
     syncErrors: (sync.data ?? []).flatMap((p) =>
       p.syncState?.lastError
@@ -161,6 +176,14 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
       key: "sync",
       message: "Couldn't load sync peers.",
       retry: () => void sync.refetch(),
+    });
+  }
+
+  if (updatesFailed) {
+    failures.push({
+      key: "updates",
+      message: "Couldn't read the pod's update status.",
+      retry: () => void updates.refetch(),
     });
   }
 
