@@ -526,6 +526,30 @@ describe("group", () => {
     expect(v.counts.ungrouped).toBe(0);
   });
 
+  it("writes nothing into an import closed while the AI was answering", async () => {
+    const { sessionId } = await openAndStage([
+      { kind: "url", url: "https://example.com/closing" },
+    ]);
+    await expect(
+      groupImport({
+        userId: USER,
+        sessionId,
+        generate: async () => {
+          await q(
+            `update focus_sessions set status = 'cancelled' where id = $1`,
+            [sessionId]
+          );
+          return { groups: [{ name: "Late", kind: "other", items: [0] }] };
+        },
+        loadContext: async () => ({ kinds: [], collections: [] }),
+      })
+    ).rejects.toThrow(/closed/);
+    const row = await sessionRow(sessionId);
+    expect(
+      (row.metadata.importCuration as { groups: unknown[] }).groups
+    ).toEqual([]);
+  });
+
   it("takes the AI's groups, an item in several", async () => {
     const { sessionId } = await openAndStage([
       { kind: "url", url: "https://example.com/dune" },

@@ -448,6 +448,8 @@ export async function groupImport(args: {
       sessionId: session.id,
       forUpdate: true,
     });
+    // Closed while the AI was answering: nothing is written into it.
+    assertImportOpen(locked);
     const fresh = await loadImportItemRows({
       database: t,
       userId: args.userId,
