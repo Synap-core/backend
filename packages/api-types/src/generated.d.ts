@@ -35638,7 +35638,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "provision" | "tier_update" | "membership:grant" | "source-config:write" | "membership:activate")[];
+				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "membership:grant" | "source-config:write" | "provision" | "tier_update" | "membership:activate")[];
 			};
 			output: {
 				description: string | null;
@@ -35676,7 +35676,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				issuerUrl: string;
 				displayName: string;
-				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "provision" | "tier_update" | "membership:grant" | "source-config:write" | "membership:activate")[];
+				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "membership:grant" | "source-config:write" | "provision" | "tier_update" | "membership:activate")[];
 			};
 			output: {
 				description: string | null;
@@ -41808,12 +41808,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | null;
 					}[];
 				}[];
-				podWide: {
-					profileSlug: string;
-					label: string;
-					plural: string;
-					count: number;
-				}[] | null;
 				needsYou: {
 					total: number | null;
 					bySpace: {
@@ -41855,6 +41849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					live: boolean;
 					asksYou: boolean;
 					since: string;
+					workspaceId: string | null;
 					actor?: string | undefined;
 				}[];
 			};
