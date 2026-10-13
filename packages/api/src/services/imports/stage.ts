@@ -484,14 +484,16 @@ export async function stageImportItems(args: {
     return true;
   };
 
-  const prepared = await Promise.all(args.items.map((item) => prepare(item)));
-  for (let start = 0; start < prepared.length; start += STAGE_CONCURRENCY) {
-    const wave = prepared.slice(start, start + STAGE_CONCURRENCY);
+  // Prepared (base64 decoded) one wave at a time, so a batch of inline files
+  // never holds more than STAGE_CONCURRENCY decoded buffers at once.
+  for (let start = 0; start < args.items.length; start += STAGE_CONCURRENCY) {
+    const wave = args.items.slice(start, start + STAGE_CONCURRENCY);
     const waveResults = await Promise.all(
-      wave.map(async (p, offset) => {
+      wave.map(async (item, offset) => {
         const index = start + offset;
-        if (p.kind === "refuse") return { index, reason: p.reason };
         try {
+          const p = await prepare(item);
+          if (p.kind === "refuse") return { index, reason: p.reason };
           const r =
             p.kind === "adopt"
               ? await adoptOne({

@@ -435,7 +435,7 @@ describe("get", () => {
         limit: 1,
       });
       seen.push(...v.items.map((i) => i.id));
-      cursor = v.nextCursor;
+      cursor = v.nextCursor ?? null;
       if (!cursor) break;
     }
     expect(seen.sort()).toEqual(ids);
