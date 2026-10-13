@@ -11,64 +11,26 @@
  * (`@synap/database` `utils/lifecycle-model.ts`, it cannot import this
  * package); `./pod-parity.contract.ts` pins the two EQUAL at compile time.
  */
-import type { UnitTone } from "../units/state.js";
-import { resolveStatusLabel } from "../vocabulary/index.js";
+import type { LifecycleCategory, LifecycleOption } from "./option.js";
 
-export const LIFECYCLE_CATEGORIES = [
-  "open",
-  "active",
-  "paused",
-  "done",
-  "lost",
-] as const;
-export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+export {
+  LIFECYCLE_CATEGORIES,
+  LIFECYCLE_CATEGORY_TONE,
+  lifecycleOptionLabel,
+  lifecycleOptionTone,
+  type LifecycleCategory,
+  type LifecycleOption,
+} from "./option.js";
 
 export const TERMINAL_LIFECYCLE_CATEGORIES: readonly LifecycleCategory[] = [
   "done",
   "lost",
 ];
 
-export interface LifecycleOption {
-  key: string;
-  /** Authored label. Absent ⇒ the vocabulary (`resolveStatusLabel`). */
-  label?: string;
-  category: LifecycleCategory;
-  /** A `UnitTone` token. Absent ⇒ {@link LIFECYCLE_CATEGORY_TONE}. */
-  tone?: string;
-  humanOnly?: boolean;
-  /**
-   * Days in this option before a thing is STUCK. Absent ⇒ no stuck rule (a
-   * surface omits its Stuck count). Never on a done/lost option.
-   */
-  stuckAfterDays?: number;
-}
-
 export interface LifecycleDeclaration {
   propertySlug: string;
   options: LifecycleOption[];
 }
-
-/** The default mark of each category — a tone TOKEN, never a colour. */
-export const LIFECYCLE_CATEGORY_TONE: Readonly<
-  Record<LifecycleCategory, UnitTone>
-> = {
-  open: "textSecondary",
-  active: "primary",
-  paused: "warning",
-  done: "success",
-  lost: "error",
-};
-
-const UNIT_TONES: readonly string[] = [
-  "primary",
-  "ai",
-  "info",
-  "error",
-  "success",
-  "warning",
-  "textSecondary",
-  "textMuted",
-] satisfies readonly UnitTone[];
 
 /**
  * The board column (and status read) holding values no declared option names
@@ -87,22 +49,6 @@ export function isTerminalLifecycleCategory(
   category: LifecycleCategory | null | undefined
 ): boolean {
   return category != null && TERMINAL_LIFECYCLE_CATEGORIES.includes(category);
-}
-
-/** The words for an option: its authored label, else the shared vocabulary. */
-export function lifecycleOptionLabel(
-  option: Pick<LifecycleOption, "key" | "label">
-): string {
-  return option.label?.trim() || resolveStatusLabel(option.key);
-}
-
-/** The tone for an option: its authored tone (if a real token), else its category's. */
-export function lifecycleOptionTone(
-  option: Pick<LifecycleOption, "category" | "tone">
-): UnitTone {
-  return option.tone && UNIT_TONES.includes(option.tone)
-    ? (option.tone as UnitTone)
-    : LIFECYCLE_CATEGORY_TONE[option.category];
 }
 
 export function findLifecycleOption(
