@@ -10891,6 +10891,7 @@ export interface WorkerMetadata {
 	outputs?: string[];
 	category: "table" | "shared" | "ai";
 }
+export type CatalogKind = "capability" | "automation" | "template" | "cell" | "skill" | "view";
 export interface DeviceRequestView {
 	requestId: string;
 	status: "pending" | "approved" | "denied" | "consumed" | "expired";
@@ -17041,6 +17042,70 @@ export type BrandResolution = {
 	/** The project asked about, if any. */
 	projectId: string | null;
 };
+export type MarketInstallOutcome = {
+	status: "installed";
+	result: Record<string, unknown>;
+} | {
+	status: "proposed";
+	proposalId: string;
+	reviewUrl: string;
+};
+/**
+ * Where the install lands:
+ *   creates  — it builds (or converges onto) its own space (template).
+ *   required — it is added INTO a space the installer names (automation, view).
+ *   optional — pod-wide unless a space is named (capability, skill, cell).
+ */
+export type MarketWorkspaceNeed = "creates" | "required" | "optional";
+/** One kind of thing the install adds, named in the registry's own kind token. */
+export interface MarketInstallPart {
+	kind: string;
+	names: string[];
+}
+/** An install-time parameter the package declares (a capability's `params`). */
+export interface MarketInstallParam {
+	name: string;
+	label: string | null;
+	description: string | null;
+	required: boolean;
+	hasDefault: boolean;
+	/**
+	 * The value lands in the pod's vault (a `vault[].value` template names it)
+	 * — a credential, so a form masks it.
+	 */
+	secret: boolean;
+}
+export interface MarketInstallSummary {
+	workspace: MarketWorkspaceNeed;
+	adds: MarketInstallPart[];
+	/** Plain sentences a person reads before confirming. */
+	notices: string[];
+	params: MarketInstallParam[];
+}
+export interface MarketplaceSource {
+	/** The provider base URL rows are keyed by. */
+	source: string;
+	name: string;
+	/** Configured on this pod now (vs rows left from a source since removed). */
+	configured: boolean;
+	/** Newest sync attempt across kinds; null when it never synced. */
+	lastSyncAt: string | null;
+	/** True when every kind's latest attempt could not reach the source. */
+	unreachable: boolean;
+}
+export interface MarketplacePreflight extends MarketInstallSummary {
+	kind: CatalogKind;
+	slug: string;
+	source: string | null;
+	name: string;
+	version: string | null;
+	/** False when something below must change before the install can run. */
+	ok: boolean;
+	/** Plain sentences naming what stops the install. */
+	blockers: string[];
+	/** Template only: the write-free workspace plan (profiles, links, views). */
+	report: WorkspacePreflightReport | null;
+}
 /**
  * Core API Router
  */
@@ -42789,6 +42854,110 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			output: BrandResolution;
+			meta: object;
+		}>;
+	}>>;
+	marketplace: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
+				opRef?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query?: string | undefined;
+				kind?: "automation" | "skill" | "cell" | "capability" | "view" | "template" | undefined;
+				source?: string | undefined;
+				limit?: number | undefined;
+				cursor?: number | undefined;
+			} | undefined;
+			output: {
+				entries: {
+					source: string;
+					sourceName: string;
+					kind: CatalogKind;
+					objectKind: string;
+					slug: string;
+					name: string;
+					description: string | null;
+					version: string | null;
+					tier: string | null;
+					vendor: string | null;
+					tags: string[] | null;
+				}[];
+				total: number;
+				nextCursor: number | null;
+				kinds: {
+					kind: CatalogKind;
+					objectKind: string;
+				}[];
+				sources: MarketplaceSource[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				slug: string;
+				source?: string | undefined;
+			};
+			output: {
+				source: string;
+				sourceName: string;
+				sourceConfigured: boolean;
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				objectKind: string;
+				slug: string;
+				name: string;
+				description: string | null;
+				version: string | null;
+				tier: string | null;
+				vendor: string | null;
+				installed: boolean | null;
+				definition: Record<string, unknown> | null;
+				definitionError: string | null;
+			};
+			meta: object;
+		}>;
+		preflight: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				slug: string;
+				source?: string | undefined;
+				workspaceId?: string | undefined;
+			};
+			output: MarketplacePreflight;
+			meta: object;
+		}>;
+		install: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
+				slug: string;
+				source?: string | undefined;
+				workspaceId?: string | undefined;
+				version?: string | undefined;
+				params?: Record<string, unknown> | undefined;
+			};
+			output: MarketInstallOutcome;
 			meta: object;
 		}>;
 	}>>;

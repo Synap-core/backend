@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * Marketplace › Catalog — browse the Synap catalog and install a package onto
- * this pod.
+ * Marketplace › Catalog — browse what this pod can install.
  *
- * ONE catalog: the Control Plane's `synap_packages`, read through this app's
- * `/api/marketplace/packages` proxy. Pod Admin adds no second registry.
+ * The catalog is the POD's: `marketplace.list` reads the catalog the pod keeps
+ * in sync with its sources (every 10 minutes), so browsing never waits on a
+ * source and a source being down shows the last synced copy, not an error —
+ * and never a sign-in page. A pod with no source says so plainly.
  *
  * Deliberately absent, and not an oversight:
  *   • No "Verified" badge. `isVerified` is set by domain registration on the
@@ -22,111 +23,75 @@ import { Chip, Input, Spinner } from "@heroui/react";
 import { Search } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import {
-  PACKAGE_KINDS,
-  readableDescription,
-  type CatalogPage,
-  type CatalogPackage,
-} from "../../../../lib/marketplace";
+import { trpc } from "../../../../lib/trpc";
+import { readableDescription } from "../../../../lib/marketplace";
 import {
   ResourceRowEmpty,
   ResourceRowError,
 } from "../../components/resource-row";
 import { FilterChips } from "../../components/filter-chips";
-import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
+import { kindIcon } from "../../../_lib/object/kind-icon";
+import {
+  catalogDetailHref,
+  catalogFreshness,
+  catalogKindLabel,
+} from "./catalog-model";
+import type { CatalogEntry } from "./types";
 
 const PAGE_SIZE = 60;
-/** The chip that clears the kind filter (not a package kind). */
+/** The chip that clears the kind filter (not a catalog kind). */
 const ALL = "all";
 
 export function CatalogTab() {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [kind, setKind] = useState<string | null>(null);
-  const [page, setPage] = useState<CatalogPage | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // Bumped by Retry — a state value the effect depends on, so retrying after a
-  // network failure actually re-runs the fetch (re-setting `debounced` to the
-  // same string would not).
-  const [reloadNonce, setReloadNonce] = useState(0);
+  const [kind, setKind] = useState<CatalogEntry["kind"] | null>(null);
 
-  // Debounce the search box — each keystroke otherwise runs an ILIKE across
-  // the whole catalog on the CP.
+  // Debounce the search box — each keystroke otherwise re-ranks the catalog.
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 250);
     return () => clearTimeout(t);
   }, [search]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
+  const catalog = trpc.marketplace.list.useQuery(
+    {
+      query: debounced || undefined,
+      kind: kind ?? undefined,
+      limit: PAGE_SIZE,
+    },
+    {
+      // Keep the last page on screen while the next filter loads.
+      placeholderData: (prev) => prev,
+      staleTime: 60_000,
+      // A catalog read that fails is shown in place; retrying a pod that just
+      // said no only delays that message.
+      retry: false,
+    }
+  );
 
-    const query = new URLSearchParams({ limit: String(PAGE_SIZE) });
-    if (debounced) query.set("search", debounced);
-    if (kind) query.set("category", kind);
+  const page = catalog.data;
+  const entries = useMemo(() => page?.entries ?? [], [page]);
 
-    fetch(`/api/marketplace/packages?${query}`, { credentials: "include" })
-      .then(async (res) => {
-        const body = (await res.json()) as CatalogPage & { error?: string };
-        if (!res.ok)
-          throw new Error(body.error ?? `Catalog error ${res.status}`);
-        return body;
-      })
-      .then((body) => {
-        if (!cancelled) setPage(body);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setPage(null);
-          setError(err instanceof Error ? err.message : "Catalog unavailable");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [debounced, kind, reloadNonce]);
-
-  const packages = page?.packages ?? [];
-
-  // Kind chips carry a count so an empty filter is visible BEFORE it is
-  // clicked. The count is over `packages` — the current PAGE_SIZE-capped page —
-  // because a catalog-wide count would cost one extra CP request per kind on
-  // every keystroke. It is therefore shown ONLY when the page happens to hold
-  // the whole catalog (`pageIsWholeCatalog` below); past that it is omitted
-  // rather than caveated.
+  // Kind chips carry a count only when the page holds the WHOLE catalog, so a
+  // number beside "Space" is a fact rather than a sample of the first page. A
+  // tooltip caveat would not fix a wrong number — it is invisible to touch and
+  // keyboard — so past one page there is no number at all; the footer's
+  // "Showing N of total" carries the scale.
   const countsInPage = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const p of packages)
-      counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
+    for (const e of entries) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
     return counts;
-  }, [packages]);
+  }, [entries]);
+  const pageIsWholeCatalog = !!page && page.total <= entries.length;
 
-  /**
-   * True only when this page holds the ENTIRE catalog, so a per-kind count is a
-   * fact rather than a sample.
-   *
-   * The counts are computed over `packages`, which the CP caps at PAGE_SIZE.
-   * Today total=53 < 60, so they are exact — the defect is latent and appears
-   * silently at the 61st package. A bare "24" beside "Capability" reads as "the
-   * catalog has 24", and a `title` tooltip does not fix that: tooltips are
-   * invisible to touch and to keyboard, so the correction never reaches most of
-   * the people being misled. When the page stops being the whole catalog we
-   * therefore show NO number rather than a number that needs a caveat. The
-   * footer's "Showing N of total" already carries the honest scale.
-   */
-  const pageIsWholeCatalog = !!page && page.total <= packages.length;
+  const noSource = !!page && page.sources.length === 0;
+  const freshness = page ? catalogFreshness(page.sources) : null;
 
   return (
     <div>
       <Input
         aria-label="Search the catalog"
-        placeholder="Search packages…"
+        placeholder="Search the catalog…"
         value={search}
         onValueChange={setSearch}
         size="sm"
@@ -136,71 +101,91 @@ export function CatalogTab() {
         className="mb-3 max-w-md"
       />
 
-      <FilterChips
-        ariaLabel="Kind"
-        active={kind ?? ALL}
-        chips={[
-          { key: ALL, label: "All" },
-          ...PACKAGE_KINDS.map((k) => ({
-            key: k,
-            label: kindLabel(k),
-            count:
-              kind === null && pageIsWholeCatalog
-                ? countsInPage.get(k)
-                : undefined,
-          })),
-        ]}
-        // Pressing the active kind again clears it, like the old toggle.
-        onSelect={(k) => setKind(k === ALL || k === kind ? null : k)}
-      />
+      {page && (
+        <FilterChips
+          ariaLabel="Kind"
+          active={kind ?? ALL}
+          chips={[
+            { key: ALL as typeof ALL | CatalogEntry["kind"], label: "All" },
+            ...page.kinds.map((k) => ({
+              key: k.kind,
+              label: catalogKindLabel(k.objectKind),
+              count:
+                kind === null && !debounced && pageIsWholeCatalog
+                  ? (countsInPage.get(k.kind) ?? 0)
+                  : undefined,
+            })),
+          ]}
+          // Pressing the active kind again clears it.
+          onSelect={(k) => setKind(k === ALL || k === kind ? null : k)}
+        />
+      )}
 
-      {loading && (
-        <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/55">
+      {catalog.isLoading && (
+        <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/65">
           <Spinner size="sm" /> Loading the catalog…
         </div>
       )}
 
-      {!loading && error && (
+      {catalog.error && !page && (
         <ResourceRowError
-          message={error}
-          onRetry={() => setReloadNonce((n) => n + 1)}
+          message={`The pod couldn't read its catalog: ${catalog.error.message}`}
+          onRetry={() => void catalog.refetch()}
         />
       )}
 
-      {!loading && !error && packages.length === 0 && (
+      {noSource && (
+        <ResourceRowEmpty message="This pod has no catalog source, so there is nothing to browse. A pod connected to Synap lists the Synap catalog here." />
+      )}
+
+      {page && !noSource && entries.length === 0 && (
         <ResourceRowEmpty
           message={
             debounced || kind
-              ? "No packages match this filter."
-              : "The catalog is empty."
+              ? "Nothing in the catalog matches this filter."
+              : (freshness ?? "The catalog is empty.")
           }
         />
       )}
 
-      {!loading && !error && packages.length > 0 && (
+      {entries.length > 0 && (
         <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {packages.map((pkg) => (
-              <PackageCard key={pkg.id} pkg={pkg} />
+            {entries.map((entry) => (
+              <EntryCard
+                key={`${entry.source}|${entry.kind}|${entry.slug}`}
+                entry={entry}
+                showSource={(page?.sources.length ?? 0) > 1}
+              />
             ))}
           </div>
-          {page && page.total > packages.length && (
-            <p className="mt-4 text-[11.5px] text-foreground/45">
-              Showing {packages.length} of {page.total}. Narrow the search to
-              see the rest.
+          {page && page.total > entries.length && (
+            <p className="mt-4 text-[11.5px] text-foreground/65">
+              Showing {entries.length} of {page.total}. Narrow the search to see
+              the rest.
             </p>
           )}
         </>
+      )}
+
+      {freshness && entries.length > 0 && (
+        <p className="mt-3 text-[11.5px] text-foreground/65">{freshness}</p>
       )}
     </div>
   );
 }
 
-function PackageCard({ pkg }: { pkg: CatalogPackage }) {
-  const Icon = kindIcon(pkg.category);
+function EntryCard({
+  entry,
+  showSource,
+}: {
+  entry: CatalogEntry;
+  showSource: boolean;
+}) {
+  const Icon = kindIcon(entry.objectKind);
   return (
     <Link
-      href={`/marketplace/${encodeURIComponent(pkg.slug)}`}
+      href={catalogDetailHref(entry)}
       // Up to PAGE_SIZE cards are on screen at once, and every prefetch is a
       // full gate run in `proxy.ts` (a whoami + a role probe against the pod).
       // Prefetching them all spent ~120 pod calls per visit from ONE
@@ -220,7 +205,7 @@ function PackageCard({ pkg }: { pkg: CatalogPackage }) {
             <Icon size={14} />
           </span>
           <span className="truncate text-[13.5px] font-medium tracking-tight text-foreground">
-            {pkg.displayName}
+            {entry.name}
           </span>
         </div>
         <Chip
@@ -229,17 +214,17 @@ function PackageCard({ pkg }: { pkg: CatalogPackage }) {
           variant="flat"
           className="shrink-0 text-[11px]"
         >
-          {kindLabel(pkg.category)}
+          {catalogKindLabel(entry.objectKind)}
         </Chip>
       </div>
 
       <p className="line-clamp-2 text-[12px] leading-relaxed text-foreground/65">
-        {readableDescription(pkg.description) ?? "No description."}
+        {readableDescription(entry.description) ?? "No description."}
       </p>
 
-      <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] text-foreground/65">
-        <span className="font-mono">{pkg.slug}</span>
-        {pkg.domain && <span>· {pkg.domain}</span>}
+      <div className="mt-auto flex min-w-0 items-center gap-1.5 pt-1 text-[11px] text-foreground/65">
+        <span className="truncate font-mono">{entry.slug}</span>
+        {showSource && <span className="shrink-0">· {entry.sourceName}</span>}
       </div>
     </Link>
   );

@@ -2160,7 +2160,7 @@ const entityFacetListHandler: BuiltinVerbHandler = async (params, ctx) => {
 /** Resolve whether a catalog entry is already installed — HONEST per kind: a
  *  cheap natural-key check for capability/cell, `undefined` (never a fabricated
  *  guess) when the check would require scanning every workspace's provenance. */
-async function resolveInstalledFlag(
+export async function resolveInstalledFlag(
   kind: CatalogKind,
   slug: string
 ): Promise<boolean | undefined> {

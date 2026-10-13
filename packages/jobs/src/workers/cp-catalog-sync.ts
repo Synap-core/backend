@@ -98,7 +98,7 @@ export const CP_CATALOG_SYNC_CRON = "*/10 * * * *";
 // duplicates that contract (P2.10.3) and must not drift from it.
 export type CatalogKind =
   "capability" | "automation" | "template" | "cell" | "skill" | "view";
-const CATALOG_KINDS: CatalogKind[] = [
+export const CATALOG_KINDS: readonly CatalogKind[] = [
   "capability",
   "automation",
   "template",
@@ -153,7 +153,7 @@ export function mapRetired(retired: RetiredDto | null | undefined): {
 }
 
 /** Every configured catalog-provider base URL. Today: always just the CP. */
-function catalogSources(): string[] {
+export function catalogSources(): string[] {
   const url = (
     process.env.CONTROL_PLANE_URL ??
     process.env.CP_URL ??

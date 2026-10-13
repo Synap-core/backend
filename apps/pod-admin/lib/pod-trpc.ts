@@ -12,8 +12,7 @@
  * contracts-publish pipeline. A newly added procedure is invisible to the typed
  * client until that shared artifact is regenerated, which is a release step and
  * not something to do from inside a feature change. The wire format is stable
- * and small; the response shapes are declared in
- * `app/(admin)/marketplace/_lib/types.ts`.
+ * and small; each caller declares the response shape it reads.
  *
  * SuperJSON is the pod's transformer (see `app/providers.tsx`), hence the
  * `{ json }` envelope in both directions.
