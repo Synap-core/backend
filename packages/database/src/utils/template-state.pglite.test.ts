@@ -12,9 +12,16 @@
  *  (4) two concurrent pack upserts BOTH survive (no lost update);
  *  (5) taking a template slug another active space holds is the typed 409;
  *  (6) `templateStateSettings` seeds a new row (the INSERT door) with the
- *      columns promoted by `WorkspaceRepository.create`.
+ *      columns promoted by `WorkspaceRepository.create`;
+ *  (7) KEY-ONLY: a template write racing a plain settings merge loses
+ *      neither — the writer touches its own keys, never the whole blob;
+ *  (8) ONE STATEMENT: under concurrent writers of different states, the
+ *      stored mirror and column always say what `settings.template` says
+ *      (the mirror is derived from the merged state, inside the same UPDATE);
+ *  (9) the state LANDS even when the after-commit announce fails — the
+ *      writer returns it instead of throwing over a true state.
  */
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterEach } from "vitest";
 
 const h = vi.hoisted(() => {
   const state = {
@@ -295,6 +302,84 @@ describe("writeTemplateState", () => {
       slug: "seeded",
       state: "building",
       completedSteps: [],
+    });
+  });
+
+  it("(7) key-only: a racing plain settings merge and a template write both survive", async () => {
+    const id = await seed(
+      { packageSlug: "keys", actionPlacements: [{ verbId: "a" }] },
+      "keys"
+    );
+    const repo = new WorkspaceRepository(
+      h.db,
+      new EventRepository({
+        unsafe: (t: string, p?: unknown[]) => q(t, p),
+      } as never)
+    );
+    await Promise.all([
+      writeTemplateState(h.db, id, { state: "active", version: "h-7" }),
+      repo.mergeSettings(id, { layout: { racing: true } } as never, USER),
+      upsertPack(h.db, id, { slug: "pack-7" }),
+    ]);
+    const s = (await row(id)).settings;
+    expect(s.layout).toEqual({ racing: true });
+    expect(s.actionPlacements).toEqual([{ verbId: "a" }]);
+    expect(readTemplateState(s)).toMatchObject({
+      slug: "keys",
+      version: "h-7",
+      packs: [expect.objectContaining({ slug: "pack-7" })],
+    });
+  });
+
+  it("(8) one statement: the mirror and the column always say what settings.template says", async () => {
+    const id = await seed({ packageSlug: "torn" }, "torn");
+    const patches = [
+      { state: "building" as const, completedSteps: ["workspace"] },
+      {
+        state: "failed" as const,
+        failedLayer: 1 as const,
+        failedStep: "views",
+        error: "x",
+      },
+      { state: "active" as const, version: "h-8" },
+      { state: "partial" as const, pendingVersion: "h-9", failures: ["f"] },
+      { state: "layer-2-not-run" as const, pendingVersion: "h-9" },
+    ];
+    for (let round = 0; round < 4; round++) {
+      await Promise.all(patches.map((p) => writeTemplateState(h.db, id, p)));
+      const r = await row(id);
+      const template = readTemplateState(r.settings)!;
+      // The legacy keys ALONE (template stripped) derive the same state.
+      const { template: _t, ...legacy } = r.settings;
+      const fromMirror = readTemplateState(legacy, {
+        packageSlug: r.package_slug,
+      })!;
+      expect(fromMirror.state).toBe(template.state);
+      expect(fromMirror.version).toBe(template.version);
+      expect(fromMirror.failedStep).toBe(template.failedStep);
+      expect(fromMirror.completedSteps).toEqual(template.completedSteps);
+      expect(r.provisioning_status).toBe(r.settings.provisioningStatus);
+    }
+  });
+
+  describe("(9) the announce fails after the commit", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+    it("the state is written and returned, not thrown", async () => {
+      const id = await seed({ packageSlug: "loud" }, "loud");
+      vi.spyOn(
+        WorkspaceRepository.prototype,
+        "announceUpdated"
+      ).mockRejectedValue(new Error("event bus down"));
+      const written = await writeTemplateState(
+        h.db,
+        id,
+        { state: "active", version: "h-10" },
+        { userId: USER }
+      );
+      expect(written).toMatchObject({ state: "active", version: "h-10" });
+      expect((await row(id)).settings.packageVersion).toBe("h-10");
     });
   });
 });

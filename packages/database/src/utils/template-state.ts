@@ -26,15 +26,18 @@
  * working. W6 folds them into `template` with one SQL migration and drops the
  * mirror and the legacy fallback of the reader.
  *
- * Tripwire: `packages/api/src/__tripwires__/template-state-one-writer.test.ts`
- * — only this module writes `settings.template` or a mirrored key.
+ * Tripwire: `packages/api/src/__tripwires__/template-apply-one-finisher.test.ts`
+ * (3) — only this module writes `settings.template` or a mirrored key.
  */
 import { eq, sql } from "drizzle-orm";
+import { createLogger } from "@synap-core/core";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import {
   assertWorkspaceIdentityFree,
   toWorkspaceIdentityError,
 } from "./workspace-identity.js";
+
+const logger = createLogger({ module: "template-state" });
 
 /** Where the last template apply on a space stands. */
 export type TemplateApplyStateName =
@@ -491,14 +494,25 @@ export async function writeTemplateState(
   });
   if (!result) return null;
   if (opts.userId && result.updated) {
-    const { WorkspaceRepository } =
-      await import("../repositories/workspace-repository.js");
-    const { eventRepository } =
-      await import("../repositories/event-repository.js");
-    await new WorkspaceRepository(db, eventRepository).announceUpdated(
-      result.updated,
-      opts.userId
-    );
+    // After the commit, best-effort: the state LANDED, so a failed announce
+    // must not make the caller believe the write failed (it would retry or
+    // record a failure over a state that is true). Logged, never swallowed
+    // silently.
+    try {
+      const { WorkspaceRepository } =
+        await import("../repositories/workspace-repository.js");
+      const { eventRepository } =
+        await import("../repositories/event-repository.js");
+      await new WorkspaceRepository(db, eventRepository).announceUpdated(
+        result.updated,
+        opts.userId
+      );
+    } catch (err) {
+      logger.warn(
+        { err, workspaceId },
+        "writeTemplateState: state written, workspaces.update.completed not announced"
+      );
+    }
   }
   return result.next;
 }
