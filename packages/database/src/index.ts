@@ -87,6 +87,7 @@ export * from "./utils/facet-visibility.js";
 export * from "./utils/pod-membership.js";
 export * from "./utils/user-visible-where.js";
 export * from "./utils/catalog-sync-stamps.js";
+export * from "./utils/marketplace-sources.js";
 export * from "./utils/cp-relay-credential.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/workspace-identity.js";

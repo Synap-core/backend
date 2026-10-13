@@ -25,11 +25,26 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
+/** A third-party listing's facts, copied from its verified `synap-index.json`. */
+export interface CatalogListing {
+  /** Absolute https URL on the index's own origin. */
+  definitionUrl: string;
+  /** sha256 (hex) of the definition's exact bytes. */
+  sha256: string;
+  installUrl?: string | null;
+  homepageUrl?: string | null;
+  icon?: string | null;
+}
+
 export const cpCatalogCache = pgTable(
   "cp_catalog_cache",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    /** Catalog provider base URL this row was synced from (today always CONTROL_PLANE_URL). */
+    /**
+     * Where this row came from: the official catalog's base URL
+     * (CONTROL_PLANE_URL, else Synap's public catalog), or a third-party
+     * source's id (`acme` — never contains `://`).
+     */
     source: text("source").notNull(),
     /** One of "capability" | "automation" | "template" | "cell". */
     kind: text("kind").notNull(),
@@ -54,6 +69,12 @@ export const cpCatalogCache = pgTable(
      * time (Wave 3b's concern, not this cache's).
      */
     definition: jsonb("definition").$type<Record<string, unknown>>(),
+    /**
+     * Third-party sources only (0327): the signed listing facts for this row —
+     * where its definition lives and the sha256 it must match, and the
+     * publisher's pages a showcase listing opens. NULL on official rows.
+     */
+    listing: jsonb("listing").$type<CatalogListing>(),
     /**
      * Tombstone (0322, template kind only): set when the catalog RETIRED this
      * entry. A retired row is KNOWN, not installable — every browse/install

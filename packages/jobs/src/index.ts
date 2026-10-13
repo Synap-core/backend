@@ -55,9 +55,28 @@ export {
 // catalog-cache-query.ts and the `marketplace` router)
 export {
   type CatalogKind,
+  type CatalogSource,
   CATALOG_KINDS,
   catalogSources,
+  describeCatalogSources,
+  officialCatalogUrl,
+  syncCatalogSourceNow,
 } from "./workers/cp-catalog-sync.js";
+// Marketplace sources a pod admin adds (D11): anonymous fetches, the pure
+// signature/digest checks, and dropping a removed source's rows.
+export {
+  fetchSourceIndex,
+  fetchDefinitionBytes,
+  indexUrlFor,
+  type SourceFetch,
+} from "./workers/marketplace-source-fetch.js";
+export {
+  verifyIndex,
+  verifyDefinitionBytes,
+  keyFingerprint,
+  type IndexVerdict,
+} from "./workers/marketplace-source-verify.js";
+export { deleteSourceRows } from "./workers/marketplace-source-sync.js";
 export {
   derivePackageSearchTokens,
   mergePackageSearchTags,

@@ -1255,6 +1255,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "retired_reason",
     addedBy: "0322_cp_catalog_cache_retired.sql",
   },
+  // Third-party source listings (0327): definition URL + digest per row.
+  {
+    table: "cp_catalog_cache",
+    column: "listing",
+    addedBy: "0327_cp_catalog_cache_listing.sql",
+  },
 
   // playbook_runs — the run ledger / executor spine (0127)
   {
