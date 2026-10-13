@@ -57,7 +57,19 @@ import {
   type LibraryItemRead,
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
-import type { PublicUrlRead } from "../capabilities/read-public-url.js";
+import {
+  readHtmlPage,
+  readableTextFromHtml,
+  type PublicUrlRead,
+} from "../capabilities/read-public-url.js";
+import { readLibraryPageMeta } from "./page-html.js";
+import {
+  groupIdsFromNames,
+  loadGroupProfiles,
+  scoreGroupSuggestions,
+  writeGroupSuggestions,
+  type GroupProfile,
+} from "./suggest-groups.js";
 import { reserveLibraryReadAi, type LibraryReadDb } from "./read-budget.js";
 
 const logger = createLogger({ module: "library/light-read" });
@@ -106,7 +118,13 @@ export interface LightReadDeps {
     title: string;
     text: string;
     today: string;
-  }): Promise<{ summary?: unknown; actions?: unknown } | null>;
+    /** Names of the person's groups the item could join (may be empty). */
+    groups?: string[];
+  }): Promise<{
+    summary?: unknown;
+    actions?: unknown;
+    groups?: unknown;
+  } | null>;
   /** Take one AI unit for the item. */
   reserveAi(args: { userId: string; itemId: string }): Promise<boolean>;
   /** Queue the document for the search index. */
@@ -120,11 +138,14 @@ export interface LightReadResult {
   chars?: number;
   actions?: number;
   usedAi?: boolean;
+  /** Groups suggested for the item (never membership). */
+  suggestedGroupIds?: string[];
 }
 
 interface ItemRow {
   id: string;
   userId: string;
+  workspaceId: string | null;
   title: string;
   metadata: unknown;
   storageKey: string | null;
@@ -175,6 +196,7 @@ async function loadRow(
     .select({
       id: documents.id,
       userId: documents.userId,
+      workspaceId: documents.workspaceId,
       title: documents.title,
       metadata: documents.metadata,
       storageKey: documents.storageKey,
@@ -245,6 +267,21 @@ async function readContent(args: {
     return !got.degraded && got.text?.trim()
       ? { kind: "text", text: got.text, usedAi: true }
       : { kind: "status", status: "unreadable", usedAi: true };
+  }
+
+  // The page the person's browser sent (a login-only page): read it, not
+  // the URL — and even for a platform the pod never fetches, since the person
+  // gave the page themselves. Its text is DATA, like any page.
+  const page = readLibraryPageMeta(row.metadata);
+  if (page && s.url) {
+    const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
+    const head = readHtmlPage(html, s.url);
+    const body = readableTextFromHtml(html, LIGHT_READ_TEXT_MAX);
+    const title = head.kind === "read" ? head.title : "";
+    const text = [title, body].filter((t) => t.trim()).join("\n\n");
+    return text.trim()
+      ? { kind: "text", text, usedAi: false }
+      : { kind: "status", status: "unreadable" };
   }
 
   if (item.contentStatus === "needs_file") {
@@ -354,6 +391,40 @@ export async function lightReadLibraryItem(args: {
     .filter((t): t is string => !!t?.trim())
     .join("\n");
   const siteName = card?.siteName ?? item.source.host;
+  // An item already in a group is not offered others: nothing re-clusters.
+  const grouped =
+    ((meta?.importCuration as { groupIds?: unknown[] } | undefined)?.groupIds
+      ?.length ?? 0) > 0;
+  let groups: GroupProfile[] = [];
+  if (!grouped) {
+    try {
+      groups = await loadGroupProfiles(database, {
+        userId,
+        workspaceId: row.workspaceId,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, itemId },
+        "library light read: groups NOT loaded — no suggestions this time"
+      );
+    }
+  }
+  const suggest = async (itemText: string, aiNames?: unknown) => {
+    if (groups.length === 0) return undefined;
+    try {
+      return await writeGroupSuggestions(database, {
+        itemId,
+        ruleIds: scoreGroupSuggestions(itemText, groups).map((g) => g.groupId),
+        aiIds: groupIdsFromNames(aiNames, groups),
+      });
+    } catch (err) {
+      logger.warn(
+        { err, itemId },
+        "library light read: group suggestions NOT written"
+      );
+      return undefined;
+    }
+  };
 
   let got: Got;
   try {
@@ -389,11 +460,13 @@ export async function lightReadLibraryItem(args: {
         : {}),
     });
     if (status !== "not_read") await indexQuietly(deps, itemId);
+    const suggested = await suggest(`${title}\n${cardText}`);
     return {
       itemId,
       status,
       actions: actions.length,
       usedAi: got.usedAi ?? false,
+      ...(suggested ? { suggestedGroupIds: suggested } : {}),
     };
   }
 
@@ -408,6 +481,7 @@ export async function lightReadLibraryItem(args: {
   let usedAi = got.usedAi;
   let summary = extractiveSummary(text);
   let aiActions: LibraryAction[] = [];
+  let aiGroups: unknown;
   if (text.length > LIGHT_READ_SHORT_TEXT) {
     // The summary is the read's one AI call (a file already holds its unit).
     const may = usedAi || (await deps.reserveAi({ userId, itemId }));
@@ -418,7 +492,10 @@ export async function lightReadLibraryItem(args: {
           title,
           text: text.slice(0, LIGHT_READ_SUMMARY_INPUT_MAX),
           today: now.toISOString().slice(0, 10),
+          // The same call picks groups: no second AI call for suggestions.
+          groups: groups.slice(0, 20).map((g) => g.name),
         });
+        aiGroups = answer?.groups;
         const aiSummary =
           typeof answer?.summary === "string" ? answer.summary.trim() : "";
         if (aiSummary) summary = aiSummary.slice(0, LIGHT_READ_SUMMARY_MAX);
@@ -444,12 +521,17 @@ export async function lightReadLibraryItem(args: {
     textKey,
   });
   await indexQuietly(deps, itemId);
+  const suggested = await suggest(
+    [title, cardText, summary, text.slice(0, 2000)].join("\n"),
+    aiGroups
+  );
   return {
     itemId,
     status: "read",
     chars: text.length,
     actions: actions.length,
     usedAi,
+    ...(suggested ? { suggestedGroupIds: suggested } : {}),
   };
 }
 
@@ -457,7 +539,7 @@ export async function lightReadLibraryItem(args: {
 
 const SUMMARY_SYSTEM = [
   "You read one item a person kept (a page, a file, a transcript) and answer JSON only:",
-  '{"summary": string, "actions": [{"kind": "date"|"receipt"|"contact"|"task", "value": {...}, "confidence": 0..1}]}.',
+  '{"summary": string, "actions": [{"kind": "date"|"receipt"|"contact"|"task", "value": {...}, "confidence": 0..1}], "groups": [string]}.',
   "summary: two or three plain sentences saying what the item is and why it may matter. No preamble.",
   "actions: only what the person could clearly act on. date value {date: YYYY-MM-DD, time?: HH:mm, title}",
   "(only an upcoming appointment, deadline or event); receipt value {amount: number, currency: ISO code,",
@@ -534,12 +616,22 @@ export function defaultLightReadDeps(args: {
       const { generateViaIS } = await import("../mail-feed/generate.js");
       const out = await generateViaIS({
         system: SUMMARY_SYSTEM,
-        prompt: `Today is ${input.today}.\nTitle: ${input.title}\n---\n${input.text}`,
+        prompt: [
+          `Today is ${input.today}.`,
+          input.groups?.length
+            ? `The person's groups: ${JSON.stringify(input.groups)}. Put in "groups" the names (copied exactly) of at most 2 groups this item clearly belongs to, else [].`
+            : "",
+          `Title: ${input.title}`,
+          "---",
+          input.text,
+        ]
+          .filter(Boolean)
+          .join("\n"),
         json: true,
         maxTokens: 600,
       });
       return out && typeof out === "object"
-        ? (out as { summary?: unknown; actions?: unknown })
+        ? (out as { summary?: unknown; actions?: unknown; groups?: unknown })
         : null;
     },
     reserveAi: (r) => reserveLibraryReadAi(args.database, r),
