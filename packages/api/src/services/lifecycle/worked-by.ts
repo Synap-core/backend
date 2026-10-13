@@ -24,8 +24,10 @@ import {
   db,
   and,
   desc,
+  eq,
   inArray,
   isNotNull,
+  isNull,
   drizzleSql,
   focusSessions,
   links,
@@ -37,6 +39,8 @@ import {
   SESSION_WORKING_WINDOW_MS,
 } from "@synap-core/types/run-activity";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
+import { sessionKindWhere } from "../focus-sessions/session-kind.js";
+import { notTriagePendingWhere } from "../focus-sessions/triage.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { loadSessionLiveness } from "../runs/session-liveness.js";
 
@@ -199,4 +203,85 @@ export async function loadWorkedBy(
     out.set(thingId, marks);
   }
   return out;
+}
+
+/** Subjectless sessions shown in Moving now — a nudge, not a session list. */
+export const UNATTACHED_CAP = 10;
+
+/** An open session ON NO thing (`loadUnattachedWork`). */
+export type UnattachedWorkRow = Omit<OpenWorkRow, "thingId">;
+
+/**
+ * The open WORK sessions on no thing (homes A7): open, no subject, and no
+ * worker target (the other "on" of `loadOpenWork`) — the work Moving now
+ * cannot place under a thing, so it shows it as "No thing yet · attach one".
+ * The `work` kind only (never a run or a receipt) and never an undecided
+ * agent draft (triage — the same rule needs-you uses). Floored by
+ * `sessionReadableWhere`, narrowed by the session's own space / project,
+ * most recently moved first, capped at `limit`. A failed liveness read
+ * THROWS.
+ */
+export async function loadUnattachedWork(
+  reader: { userId: string; roster: boolean },
+  opts: { workspaceId?: string; projectId?: string; limit?: number } = {}
+): Promise<UnattachedWorkRow[]> {
+  const rows = await db
+    .select({
+      id: focusSessions.id,
+      status: focusSessions.status,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      agentIds: focusSessions.agentIds,
+      channelId: focusSessions.channelId,
+      expectedOutputs: focusSessions.expectedOutputs,
+      startedAt: focusSessions.startedAt,
+      updatedAt: focusSessions.updatedAt,
+      automationId: drizzleSql<
+        string | null
+      >`${focusSessions.metadata}->>'automationId'`,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        sessionReadableWhere(reader),
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+        isNull(focusSessions.subjectEntityId),
+        sessionKindWhere("work"),
+        notTriagePendingWhere(),
+        drizzleSql`NOT EXISTS (
+          SELECT 1 FROM ${links}
+          WHERE ${links.fromType} = 'session'
+            AND ${links.fromId} = ${focusSessions.id}::text
+            AND ${links.toType} = 'entity'
+            AND ${links.metadata}->>'role' = ${WORKER_TARGET_LINK_ROLE}
+        )`,
+        ...(opts.workspaceId
+          ? [eq(focusSessions.workspaceId, opts.workspaceId)]
+          : []),
+        ...(opts.projectId ? [eq(focusSessions.projectId, opts.projectId)] : [])
+      )
+    )
+    .orderBy(desc(focusSessions.updatedAt))
+    .limit(opts.limit ?? UNATTACHED_CAP);
+  if (rows.length === 0) return [];
+
+  const now = Date.now();
+  const live = await loadSessionLiveness(reader, rows, {
+    since: new Date(now - SESSION_WORKING_WINDOW_MS),
+  });
+  if (rows.some((s) => live.get(s.id) === null)) {
+    throw new Error("session liveness read failed");
+  }
+  return rows.map((r) => ({
+    sessionId: r.id,
+    status: r.status as string,
+    title: r.title ?? null,
+    goal: r.goal ?? null,
+    agentIds: r.agentIds ?? [],
+    expectedOutputs: r.expectedOutputs,
+    automationId: r.automationId ?? null,
+    startedAt: new Date(r.startedAt),
+    updatedAt: new Date(r.updatedAt),
+    live: isSessionWorkingNow(live.get(r.id), now),
+  }));
 }

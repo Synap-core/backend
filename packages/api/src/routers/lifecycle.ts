@@ -237,6 +237,18 @@ const homeWire = z.object({
   }),
 });
 
+const movingLineWire = z.object({
+  sessionId: z.string(),
+  label: z.string(),
+  /** The agent on it, by name; absent when none is named. */
+  actor: z.string().optional(),
+  /** Working RIGHT NOW (`isSessionWorkingNow`). */
+  live: z.boolean(),
+  /** The session holds a deliverable owed by you (THE needs-you predicate). */
+  asksYou: z.boolean(),
+  since: z.string(),
+});
+
 const movingWire = z.object({
   /** Most urgent first: asks you, then live, then the longest-running. */
   items: z.array(
@@ -248,22 +260,19 @@ const movingWire = z.object({
       status: z.string().nullable(),
       category: z.string().nullable(),
       work: z.array(
-        z.object({
+        movingLineWire.extend({
           /** `worker` = an automation's session; `scheduled` = a scheduled prep. */
           kind: z.enum(["session", "worker", "scheduled"]),
-          sessionId: z.string(),
-          label: z.string(),
-          /** The agent on it, by name; absent when none is named. */
-          actor: z.string().optional(),
-          /** Working RIGHT NOW (`isSessionWorkingNow`). */
-          live: z.boolean(),
-          /** The session holds a deliverable owed by you (an open ask). */
-          asksYou: z.boolean(),
-          since: z.string(),
         })
       ),
     })
   ),
+  /**
+   * Open work sessions on NO thing (no subject, no worker target) — "No thing
+   * yet · attach one". Asks you first, then live, then most recently moved;
+   * capped (`UNATTACHED_CAP`), narrowed by the session's own space / project.
+   */
+  unattached: z.array(movingLineWire),
 });
 
 export type LifecycleWire = z.infer<typeof lifecycleWire>;

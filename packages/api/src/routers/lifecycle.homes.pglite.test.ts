@@ -269,6 +269,8 @@ async function session(o: {
   agent?: string;
   /** `agent` = an undecided agent DRAFT (triage pending). */
   origin?: string;
+  /** The session's own space (`focus_sessions.workspace_id`). */
+  workspace?: string;
   mins: number;
 }): Promise<string> {
   const id = randomUUID();
@@ -291,8 +293,8 @@ async function session(o: {
       ]
     : [];
   await q(
-    `insert into focus_sessions (id, user_id, title, goal, status, origin, subject_entity_id, channel_id, expected_outputs, agent_ids, metadata, created_at, started_at, updated_at)
-     values ($1,$2,$3,'g',$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,$11,$11)`,
+    `insert into focus_sessions (id, user_id, title, goal, status, origin, subject_entity_id, channel_id, expected_outputs, agent_ids, metadata, created_at, started_at, updated_at, workspace_id)
+     values ($1,$2,$3,'g',$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,$11,$11,$12)`,
     [
       id,
       USER,
@@ -305,6 +307,7 @@ async function session(o: {
       o.agent ? [o.agent] : [],
       JSON.stringify(o.worker ? { automationId: randomUUID() } : {}),
       minsAgo(o.mins),
+      o.workspace ?? null,
     ]
   );
   return id;
@@ -671,6 +674,60 @@ describe("lifecycle.moving", () => {
         entityId: T.neg,
         reason: "needs_you",
       });
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
+  });
+});
+
+describe("lifecycle.moving — unattached work (A7)", () => {
+  it("open work sessions on NO thing: no subject, no worker target, no draft, narrowed by their space", async () => {
+    await q(`update focus_sessions set status = 'closed'`);
+    const plain = await session({ mins: 20, title: "Loose plain" });
+    const asks = await session({ owes: true, mins: 30, title: "Loose asks" });
+    const inMisc = await session({
+      mins: 10,
+      title: "Loose in misc",
+      workspace: MISC,
+    });
+    // Not unattached: on a thing, a draft, closed, and a session whose work
+    // targets a thing (the other "on" of Moving now).
+    const onThing = await session({ subject: T.neg, mins: 5, title: "On" });
+    const draft = await session({ origin: "agent", mins: 6, title: "Draft" });
+    const closed = await session({ status: "closed", mins: 7 });
+    const targets = await session({ mins: 8, title: "Targets a thing" });
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+       values (gen_random_uuid(),'session',$1,'entity',$2,'targets','{"role":"worker_target"}'::jsonb,now())`,
+      [targets, T.stuck]
+    );
+    try {
+      const all = await caller().moving();
+      // Asks you first, then the most recently moved.
+      expect(all.unattached.map((u) => u.sessionId)).toEqual([
+        asks,
+        inMisc,
+        plain,
+      ]);
+      expect(all.unattached[0]).toMatchObject({
+        label: "Loose asks",
+        asksYou: true,
+        live: false,
+      });
+      expect(all.unattached[1]!.asksYou).toBe(false);
+      const loose = all.unattached.map((u) => u.sessionId);
+      for (const id of [onThing, draft, closed, targets])
+        expect(loose).not.toContain(id);
+      // The thing's work stays a Moving-now item, never a loose line.
+      expect(
+        all.items.flatMap((i) => i.work.map((w) => w.sessionId))
+      ).toContain(onThing);
+
+      const misc = await caller().moving({ workspaceId: MISC, limit: 30 });
+      expect(misc.unattached.map((u) => u.sessionId)).toEqual([inMisc]);
+      // Capped by the read's limit.
+      const one = await caller().moving({ limit: 1 });
+      expect(one.unattached).toHaveLength(1);
     } finally {
       await q(`update focus_sessions set status = 'closed'`);
     }

@@ -73,7 +73,12 @@ import {
 } from "../../routers/signals.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
 import { resolveBoardLens } from "./board-lens.js";
-import { loadOpenWork, type OpenWorkRow } from "./worked-by.js";
+import {
+  loadOpenWork,
+  loadUnattachedWork,
+  UNATTACHED_CAP,
+  type OpenWorkRow,
+} from "./worked-by.js";
 
 const logger = createLogger({ module: "lifecycle-homes" });
 
@@ -146,6 +151,21 @@ export interface MovingItem {
     asksYou: boolean;
     since: string;
   }>;
+}
+
+/** One line of open work: what it is, who is on it, and where it stands. */
+export type MovingWorkLine = MovingItem["work"][number];
+
+/**
+ * An open session on NO thing (A7): Moving now draws it as "No thing yet ·
+ * attach one" — the session line, without a kind (never a worker).
+ */
+export type UnattachedLine = Omit<MovingWorkLine, "kind">;
+
+export interface MovingRead {
+  items: MovingItem[];
+  /** Open work sessions with no subject and no worker target; capped. */
+  unattached: UnattachedLine[];
 }
 
 /**
@@ -855,58 +875,78 @@ async function resolveMovingIdentities(
  * you, then one being worked right now, then the longest-running. Each names
  * its produced identity (`resolveMovingIdentities`: a role's facet status and
  * space, never the person's). Narrowed to that identity's space
- * (`workspaceId`) and/or the project. A failed read THROWS — "nothing is
- * moving" is a claim this read must have earned.
+ * (`workspaceId`) and/or the project. Beside them, `unattached`: the open
+ * work sessions on no thing (`loadUnattachedWork`, narrowed by the session's
+ * own space / project). A failed read THROWS — "nothing is moving" is a claim
+ * this read must have earned.
  */
 export async function readMoving(
   ctx: HomesCtx,
   input: { projectId?: string; workspaceId?: string; limit: number }
-): Promise<{ items: MovingItem[] }> {
-  const work = await loadOpenWork(readerOf(ctx), null);
+): Promise<MovingRead> {
+  const [work, loose] = await Promise.all([
+    loadOpenWork(readerOf(ctx), null),
+    loadUnattachedWork(readerOf(ctx), {
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      limit: Math.min(input.limit, UNATTACHED_CAP),
+    }),
+  ]);
   const ids = [...work.keys()];
-  if (ids.length === 0) return { items: [] };
 
-  const things = await db
-    .select({
-      id: entities.id,
-      title: entities.title,
-      type: entities.type,
-      profileId: entities.profileId,
-      workspaceId: entities.workspaceId,
-      status: entities.status,
-      category: entities.statusCategory,
-    })
-    .from(entities)
-    .where(
-      and(
-        inArray(entities.id, ids),
-        isNull(entities.deletedAt),
-        ...kindVisibilityConditions({
-          userId: ctx.userId,
-          lensWorkspaceId: undefined,
-          explicitWorkspace: false,
-          podScopeKind: false,
-        }),
-        ...(input.projectId
-          ? [projectLensWhere(entities.id, input.projectId) as SQL]
-          : [])
-      )
-    );
-  if (things.length === 0) return { items: [] };
+  const things =
+    ids.length === 0
+      ? []
+      : await db
+          .select({
+            id: entities.id,
+            title: entities.title,
+            type: entities.type,
+            profileId: entities.profileId,
+            workspaceId: entities.workspaceId,
+            status: entities.status,
+            category: entities.statusCategory,
+          })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.id, ids),
+              isNull(entities.deletedAt),
+              ...kindVisibilityConditions({
+                userId: ctx.userId,
+                lensWorkspaceId: undefined,
+                explicitWorkspace: false,
+                podScopeKind: false,
+              }),
+              ...(input.projectId
+                ? [projectLensWhere(entities.id, input.projectId) as SQL]
+                : [])
+            )
+          );
+  if (things.length === 0 && loose.length === 0)
+    return { items: [], unattached: [] };
 
+  const onThings = things.flatMap((t) => work.get(t.id) ?? []);
   const [identities, names, asksYou] = await Promise.all([
     resolveMovingIdentities(ctx.userId, things, input.workspaceId),
-    resolveActorNames(
-      things.flatMap((t) =>
-        (work.get(t.id) ?? []).map((w) => w.agentIds[0] ?? "")
-      )
-    ),
+    resolveActorNames([...onThings, ...loose].map((w) => w.agentIds[0] ?? "")),
     // THE needs-you owed predicate (owner floor, drafts out), never a slot scan.
     asksYouSessionIds(
       ctx.userId,
-      things.flatMap((t) => (work.get(t.id) ?? []).map((w) => w.sessionId))
+      [...onThings, ...loose].map((w) => w.sessionId)
     ),
   ]);
+  const lineOf = (w: Omit<OpenWorkRow, "thingId">): UnattachedLine => {
+    const actor = w.agentIds[0] ? names.get(w.agentIds[0]) : undefined;
+    return {
+      sessionId: w.sessionId,
+      label: resolveSessionTitle({ title: w.title, goal: w.goal }),
+      ...(actor ? { actor } : {}),
+      live: w.live,
+      asksYou: asksYou.has(w.sessionId),
+      since: w.startedAt.toISOString(),
+    };
+  };
   const inScope = things.filter(
     (t) =>
       !input.workspaceId ||
@@ -916,18 +956,10 @@ export async function readMoving(
   const items: Array<MovingItem & { rank: [number, number, number] }> =
     inScope.map((t) => {
       const rows = work.get(t.id) ?? [];
-      const lines = rows.map((w) => {
-        const actor = w.agentIds[0] ? names.get(w.agentIds[0]) : undefined;
-        return {
-          kind: workKindOf(w),
-          sessionId: w.sessionId,
-          label: resolveSessionTitle({ title: w.title, goal: w.goal }),
-          ...(actor ? { actor } : {}),
-          live: w.live,
-          asksYou: asksYou.has(w.sessionId),
-          since: w.startedAt.toISOString(),
-        };
-      });
+      const lines: MovingWorkLine[] = rows.map((w) => ({
+        kind: workKindOf(w),
+        ...lineOf(w),
+      }));
       lines.sort(
         (a, b) =>
           Number(b.asksYou) - Number(a.asksYou) ||
@@ -960,5 +992,16 @@ export async function readMoving(
   );
   return {
     items: items.slice(0, input.limit).map(({ rank: _rank, ...item }) => item),
+    // Asks you first, then live, then the most recently moved (the read order).
+    unattached: loose
+      .map(lineOf)
+      .map((line, i) => ({ line, i }))
+      .sort(
+        (a, b) =>
+          Number(b.line.asksYou) - Number(a.line.asksYou) ||
+          Number(b.line.live) - Number(a.line.live) ||
+          a.i - b.i
+      )
+      .map(({ line }) => line),
   };
 }
