@@ -1128,6 +1128,34 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
+     * "Continue on desktop" for a LIBRARY GROUP (relay's Library tab). The
+     * same ask as `handoff.continue` — in-app only, never pushed back to the
+     * phone — but its button and tap open the GROUP (`library_group`, the
+     * `library_groups` id in `sourceId`), not a session room. Producer:
+     * `notifCenter.requestHandoff` with `target.kind = "library_group"`.
+     */
+    type: "handoff.continue_library",
+    category: "system",
+    label: "Continue on desktop",
+    icon: "monitor",
+    priority: "normal",
+    titleTemplate: "Continue on desktop: {{groupName}}",
+    bodyTemplate:
+      "Sent from another device. Open the group to pick up where you were.",
+    defaultChannels: ["in_app"],
+    channelCeiling: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "open-group",
+        label: "Open group",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "library_group" },
+      },
+    ],
+  },
+  {
+    /**
      * An agent spent its allowed automatic attempts on a REQUIRED criterion and
      * still could not pass it, so the grade is now the founder's to make.
      *

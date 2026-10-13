@@ -40,6 +40,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         focusSessions: actual.focusSessions as never,
         notifications: actual.notifications as never,
         notificationPreferences: actual.notificationPreferences as never,
+        libraryGroups: actual.libraryGroups as never,
       },
     }),
     eventRepository: { append: async () => undefined },
@@ -82,6 +83,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   db,
   focusSessions,
+  libraryGroups,
   notifications,
   notificationPreferences,
 } from "@synap/database";
@@ -153,13 +155,18 @@ const rowsFor = (sessionId: string) =>
 
 describe("notifCenter.requestHandoff", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, notifications, notificationPreferences]) {
+    for (const t of [
+      focusSessions,
+      notifications,
+      notificationPreferences,
+      libraryGroups,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   });
   beforeEach(async () => {
     await h.client!.exec(
-      "delete from focus_sessions; delete from notifications; delete from notification_preferences;"
+      "delete from focus_sessions; delete from notifications; delete from notification_preferences; delete from library_groups;"
     );
     h.emits.length = 0;
     h.pushes.length = 0;
@@ -208,6 +215,76 @@ describe("notifCenter.requestHandoff", () => {
       sourceType: "session",
       sourceId: id,
     });
+  });
+
+  it("a Library group: one notification whose button and tap open the GROUP; owner-floored; no view", async () => {
+    const group = async (owner: string) => {
+      const id = randomUUID();
+      await q(
+        `insert into library_groups (id, user_id, key, name, origin, outputs, build_proposal_ids)
+         values ($1, $2, $3, 'Recipes to try', 'user', '[]'::jsonb, '[]'::jsonb)`,
+        [id, owner, `k-${id.slice(0, 8)}`]
+      );
+      return id;
+    };
+    const mine = await group(OWNER);
+    const result = await notifCenterRouter
+      .createCaller({ db, authenticated: true, userId: OWNER } as never)
+      .requestHandoff({ target: { kind: "library_group", id: mine } });
+    expect(result.status).toBe("sent");
+    const rows = await rowsFor(mine);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      type: "handoff.continue_library",
+      source_type: "library_group",
+      source_id: mine,
+      title: "Continue on desktop: Recipes to try",
+    });
+    expect(rows[0]!.actions).toEqual([
+      {
+        id: "open-group",
+        label: "Open group",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "library_group" },
+      },
+    ]);
+    // needs-you's door for the row is the group itself.
+    const { targetFromNotification } =
+      await import("../services/signals/needs-you-union.js");
+    expect(
+      targetFromNotification("library_group", mine, rows[0]!.actions)
+    ).toEqual({ kind: "library_group", id: mine });
+
+    // Someone else's group and a missing one: the same NOT_FOUND, nothing written.
+    const theirs = await group(STRANGER);
+    for (const id of [theirs, randomUUID()]) {
+      await expect(
+        notifCenterRouter
+          .createCaller({ db, authenticated: true, userId: OWNER } as never)
+          .requestHandoff({ target: { kind: "library_group", id } })
+      ).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        message: "Group not found",
+      });
+    }
+    expect(await rowsFor(theirs)).toHaveLength(0);
+    // A group has no view; an agent is still refused.
+    await expect(
+      request(OWNER, {
+        target: { kind: "library_group", id: mine },
+        view: "room",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      notifCenterRouter
+        .createCaller({
+          db,
+          authenticated: true,
+          userId: OWNER,
+          agentUserId: "agent-1",
+        } as never)
+        .requestHandoff({ target: { kind: "library_group", id: mine } })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("answers the SAME not-found for someone else's session and a missing one, and writes nothing", async () => {

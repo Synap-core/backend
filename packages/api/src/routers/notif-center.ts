@@ -16,6 +16,7 @@ import {
   notifications,
   notificationPreferences,
   focusSessions,
+  libraryGroups,
   eq,
   and,
   or,
@@ -76,7 +77,9 @@ async function wakeDueSnoozes(userId: string): Promise<void> {
 }
 
 const HANDOFF_NOTIFICATION_TYPE = "handoff.continue";
-const HANDOFF_TARGET_KINDS = ["session"] as const;
+/** A Library group's "Continue on desktop" (its own row: the button opens the group). */
+const HANDOFF_LIBRARY_NOTIFICATION_TYPE = "handoff.continue_library";
+const HANDOFF_TARGET_KINDS = ["session", "library_group"] as const;
 /** A repeat request for the same target inside this window reuses the unread row. */
 export const HANDOFF_DEDUP_WINDOW_MS = 60_000;
 
@@ -673,11 +676,21 @@ export const notifCenterRouter = router({
           kind: z.enum(HANDOFF_TARGET_KINDS),
           id: z.string().uuid(),
         }),
-        view: z.enum(OBJECT_NAV_VIEWS),
+        /** `room` for a session; a Library group has no view. */
+        view: z.enum(OBJECT_NAV_VIEWS).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const isGroup = input.target.kind === "library_group";
+      if (isGroup ? input.view !== undefined : input.view !== "room") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: isGroup
+            ? "A Library group opens as itself — no view."
+            : "A session opens in its room (view: room).",
+        });
+      }
       // A handoff is a PERSON asking their own desktop to pick up a run — a
       // device act. An agent key cannot make that ask on their behalf.
       if (ctx.agentUserId) {
@@ -691,6 +704,10 @@ export const notifCenterRouter = router({
         subjectType: "focus_session",
         action: "update",
       });
+
+      if (isGroup) {
+        return handOffLibraryGroup(userId, input.target.id);
+      }
 
       const session = await db.query.focusSessions.findFirst({
         where: and(
@@ -750,3 +767,65 @@ export const notifCenterRouter = router({
       return { status: "sent" as const, notificationId };
     }),
 });
+
+/**
+ * "Continue on desktop" for a Library group: owner-floored on `library_groups`
+ * (someone else's group and a missing one answer the SAME NOT_FOUND), the
+ * same dedup window, and a `handoff.continue_library` notification whose
+ * button and tap open the group (`library_group`, needs-you's door).
+ */
+async function handOffLibraryGroup(userId: string, groupId: string) {
+  const [group] = await db
+    .select({
+      id: libraryGroups.id,
+      name: libraryGroups.name,
+      workspaceId: libraryGroups.workspaceId,
+    })
+    .from(libraryGroups)
+    .where(and(eq(libraryGroups.id, groupId), eq(libraryGroups.userId, userId)))
+    .limit(1);
+  if (!group) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
+  }
+  const [recent] = await db
+    .select({ id: notifications.id })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.type, HANDOFF_LIBRARY_NOTIFICATION_TYPE),
+        eq(notifications.sourceType, "library_group"),
+        eq(notifications.sourceId, group.id),
+        eq(notifications.status, NotificationStatus.UNREAD),
+        gte(
+          notifications.createdAt,
+          new Date(Date.now() - HANDOFF_DEDUP_WINDOW_MS)
+        )
+      )
+    )
+    .orderBy(desc(notifications.createdAt))
+    .limit(1);
+  if (recent) {
+    return { status: "already_sent" as const, notificationId: recent.id };
+  }
+  const name = group.name.trim();
+  const notificationId = await NotificationService.create({
+    // Literal, not the const: the producer-allowlist scan reads `type: "<t>"`.
+    type: "handoff.continue_library",
+    userId,
+    workspaceId: group.workspaceId ?? null,
+    sourceType: "library_group",
+    sourceId: group.id,
+    data: {
+      groupName: name.length > 120 ? `${name.slice(0, 119)}…` : name,
+    },
+  });
+  if (!notificationId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Your pod didn't send this to your desktop. Notifications may be turned off or muted.",
+    });
+  }
+  return { status: "sent" as const, notificationId };
+}
