@@ -60,6 +60,7 @@ import {
   detachMarketSource,
 } from "./market-source.js";
 import { lookupCatalogEntry } from "./marketplace-install.js";
+import { skillElementOf } from "./skill-package-element.js";
 import type { Context } from "../../types/context.js";
 
 const logger = createLogger({
@@ -226,13 +227,10 @@ const ADAPTERS: KindAdapter[] = [
         : await q) as unknown as Record<string, unknown>[];
     },
     creatorOf: (row) => row.userId as string,
-    findElement(def, rowName) {
-      // A skill package IS a single skill (marketplace-install reads top-level
-      // definition fields). Return it when the name matches, else return it
-      // anyway for a single-skill package (the common case).
-      const name = elementName(def);
-      if (name === undefined || name === rowName) return def;
-      return def;
+    findElement(def) {
+      // A skill package IS a single skill, served under its `skill` slot —
+      // the same unwrap the install door reads through (`skillElementOf`).
+      return skillElementOf(def);
     },
     async applyUpdate({ ctx, id, merged, metadata }) {
       const { skillsRouter } = await import("../../routers/skills.js");

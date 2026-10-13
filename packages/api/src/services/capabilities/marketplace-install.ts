@@ -90,6 +90,7 @@ import {
   installedTrackTemplates,
 } from "./install-layers.js";
 import { createLogger } from "@synap-core/core";
+import { skillElementOf } from "./skill-package-element.js";
 
 const logger = createLogger({ module: "marketplace-install" });
 
@@ -988,8 +989,9 @@ export async function applyMarketInstall(
         (entry
           ? await resolveDefinition(entry, input.version)
           : await resolveDefinitionByKey(input.slug, input.version));
-      const definition = ((resolved as { skill?: Record<string, unknown> })
-        .skill ?? resolved) as {
+      const definition = skillElementOf(
+        resolved as Record<string, unknown>
+      ) as {
         /** The skill's own `load_skill` ref — see `skillFields.slug` below. */
         slug?: string;
         name?: string;
