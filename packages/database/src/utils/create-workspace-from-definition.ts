@@ -53,6 +53,10 @@ import type {
 import { createLogger } from "@synap-core/core";
 import { resolveWorkspacePrimarySurface } from "./workspace-primary-surface.js";
 import { seedKindTitleKey, seedRefAliasIndex } from "./seed-refs.js";
+import {
+  projectTemplateIntent,
+  type WorkspaceIntentDefinition,
+} from "./workspace-intent.js";
 
 const logger = createLogger({ module: "create-workspace-from-definition" });
 
@@ -203,6 +207,12 @@ export interface WorkspaceDefinitionInput {
    * the resolver as unsatisfied, never silently dropped.
    */
   taskIntents?: string[];
+  /**
+   * What this space PRODUCES — the template's `meta.intent`, compiled onto the
+   * definition's top level. Projected to `settings.intent` by
+   * `projectTemplateIntent` here and in the reconcile.
+   */
+  intent?: WorkspaceIntentDefinition;
   /** Product-surface policy for the existing CRM workspace. */
   crm?: WorkspaceSettings["crm"];
   /** Domain → provider/consumer role map. */
@@ -1040,6 +1050,10 @@ export async function createWorkspaceFromDefinition(
   // reconciled away here.
   if (definition.taskIntents) {
     settings.taskIntents = definition.taskIntents;
+  }
+  const intent = projectTemplateIntent(definition.intent);
+  if (intent) {
+    settings.intent = intent;
   }
   if (definition.crm) {
     settings.crm = definition.crm;

@@ -44,6 +44,7 @@ import {
 } from "@synap/database";
 import {
   preflightWorkspaceFromDefinition,
+  workspaceIntentDefinitionSchema,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import {
@@ -227,6 +228,11 @@ export const PackageApplySchema = z.object({
     .enum(["private", "members", "pod_visible", "pod_joinable", "public_link"])
     .optional(),
   workspaceCapabilities: z.array(z.string()).optional(),
+  /**
+   * What the space produces → `settings.intent` (object-first homes). Declared:
+   * this schema is a plain `z.object`, so an undeclared key is stripped.
+   */
+  intent: workspaceIntentDefinitionSchema.optional(),
   sourceRoles: z
     .record(z.string(), z.enum(["provider", "consumer", "provider-consumer"]))
     .optional(),

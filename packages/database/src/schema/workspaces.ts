@@ -594,6 +594,15 @@ export interface SpaceBriefSeed {
   fields: Partial<Record<string, string>>;
 }
 
+/** `settings.intent` — what a space produces, as its template declared it. */
+export interface WorkspaceIntentSettings {
+  /** The purpose word shown first ("Product · Dev"). */
+  label: string;
+  /** Produced profile slugs (kinds or roles), in order; [] = a library. */
+  produces: string[];
+  source: "template";
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
@@ -858,6 +867,15 @@ export interface WorkspaceSettings {
    * external capability requirements, which is a real answer, not a missing one.
    */
   taskIntents?: string[];
+  /**
+   * WHAT THIS SPACE PRODUCES (object-first homes) — the template's
+   * `meta.intent`, projected on install/reconcile by the settings-merge writer
+   * (`projectTemplateIntent`). `produces` = profile slugs (kinds or roles), in
+   * the template's order; empty = a LIBRARY. Absent (or null, once a template
+   * stopped declaring it) → `lifecycle.home` INFERS one at read time; an
+   * inferred intent is never stored.
+   */
+  intent?: WorkspaceIntentSettings | null;
   /**
    * System-reserved slug identifying built-in workspaces created by the backend.
    * Used for idempotent re-creation (e.g. 'pod-admin').

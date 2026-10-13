@@ -248,6 +248,13 @@ export {
 // The ONE "did the last template apply finish?" predicate (health + reconcile).
 export { templateApplyUnfinished } from "./utils/template-apply-state.js";
 
+// A template's `meta.intent` → `settings.intent` (object-first homes).
+export {
+  projectTemplateIntent,
+  workspaceIntentDefinitionSchema,
+  type WorkspaceIntentDefinition,
+} from "./utils/workspace-intent.js";
+
 // Export createWorkspaceFromDefinition utility
 export {
   createWorkspaceFromDefinition,

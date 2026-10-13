@@ -25,6 +25,9 @@ export const CLIENT_SAFE_WORKSPACE_SETTINGS_KEYS = [
   // browser's template-update surface could never render.
   "packageVersion",
   "systemSlug",
+  // What the space produces (label + produced profile slugs) — the homes read
+  // it; a catalog declaration, no credential.
+  "intent",
   // UI layout / view-id caches.
   "layout",
   "mainWhiteboardId",

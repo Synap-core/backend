@@ -98,6 +98,7 @@ import {
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
 import { templateApplyUnfinished } from "./template-apply-state.js";
+import { projectTemplateIntent } from "./workspace-intent.js";
 import {
   holdsTemplateStamp,
   pendingTemplateDataChanges,
@@ -526,6 +527,23 @@ export async function reconcileWorkspaceFromDefinition(
     } else {
       settingsPatch.workspaceCapabilities = definition.workspaceCapabilities;
     }
+  }
+  // What the space produces (`settings.intent`). Converges to the template on
+  // every pass — the version stamp below covers the whole template, so the
+  // field is written whenever the definition carries it, never gated on a
+  // marker. Only the space's IDENTITY definition owns it (the brief's rule,
+  // 1b): an overlay arrives with `intent` stripped and the base-defaults pass
+  // carries none, so neither clears it. An identity definition that stopped
+  // declaring an intent retires the template's stored one (null → the read
+  // infers again).
+  const intent = projectTemplateIntent(definition.intent);
+  if (intent) {
+    settingsPatch.intent = intent;
+  } else if (
+    (definition.workspaceSubtype !== undefined || opts.packageSlug) &&
+    (ws.settings as WorkspaceSettings | null)?.intent?.source === "template"
+  ) {
+    settingsPatch.intent = null;
   }
   // Package provenance stamp — additive, mirrors the create path. Only written
   // when provided (install-onto-existing), so a re-attach with the same version

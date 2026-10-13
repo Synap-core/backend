@@ -113,6 +113,13 @@ function toWorkspaceDefinitionInput(
     workspaceType: pkg.workspaceType,
     workspaceVisibility: pkg.workspaceVisibility,
     workspaceCapabilities: pkg.workspaceCapabilities,
+    // What the space produces (object-first homes) — the CP-cache path maps it
+    // off the package body like every other field; dropped here, a catalog
+    // install would carry it on the bundle path only. Read untyped until the
+    // installed templates package declares it.
+    ...({
+      intent: (pkg as { intent?: unknown }).intent,
+    } as Record<string, unknown>),
     sourceRoles: pkg.sourceRoles,
     defaultSources: pkg.defaultSources,
     onboarding: pkg.onboarding,

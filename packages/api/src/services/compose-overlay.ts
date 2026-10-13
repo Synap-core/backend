@@ -167,6 +167,8 @@ export function overlayDefinitionForIdentifiedBase(
   const {
     workspaceSubtype: _subtype,
     workspaceVisibility: _visibility,
+    // What the space produces belongs to its own template, never an overlay.
+    intent: _intent,
     ...rest
   } = definition as WorkspaceDefinitionInput & {
     workspaceSubtype?: unknown;

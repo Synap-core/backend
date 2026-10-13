@@ -32,6 +32,7 @@ import {
   type WorkspaceDefinitionInput,
   type ReconcileReport,
   type InstallLayerReport,
+  workspaceIntentDefinitionSchema,
 } from "@synap/database";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -713,6 +714,8 @@ export const definitionEngineProcedures = {
              * shared applier. Declared so the typed body carries them;
              * untrusted — `readTemplateRules` is the one parser.
              */
+            /** What the space produces → `settings.intent` (object-first homes). */
+            intent: workspaceIntentDefinitionSchema.optional(),
             rules: z.array(z.unknown()).optional(),
             /**
              * Declared skills (package `skills[]`) → `applyTemplateSkills`:
@@ -1970,6 +1973,11 @@ export const definitionEngineProcedures = {
            * Template rules — without this field zod STRIPS them (this object
            * is not passthrough), so a reconcile could never converge rules.
            */
+          /**
+           * What the space produces → `settings.intent` — stripped by zod
+           * without this (this object is not passthrough).
+           */
+          intent: workspaceIntentDefinitionSchema.optional(),
           rules: z.array(z.unknown()).optional(),
           /**
            * Declared skills — stripped by zod without this, exactly like rules.
