@@ -19,10 +19,17 @@
  * is evidence of anything. On the result, read what the pod reported
  * (`describeInstall`), never the absence of an error. A catalog failure is a
  * calm message in place — never a sign-in redirect.
+ *
+ * Where it comes from decides what Install means (Pod Console D11, enforced by
+ * the pod; this page reflects it): a showcase source's package opens the
+ * publisher's site and is never fetched; a blocked source says why; a package
+ * from a trusted source names the code and network reach it brings and asks
+ * for an explicit confirm of each before Install is enabled.
  */
 
 import {
   Button,
+  Checkbox,
   Chip,
   Input,
   Select,
@@ -46,6 +53,8 @@ import {
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { publisherExit } from "../../../../lib/open-in";
+import { ExitLink } from "../../../../lib/exit-link";
 import {
   readableDescription,
   type PackageDefinition,
@@ -61,6 +70,8 @@ import {
   describeInstall,
   type InstallSummary,
 } from "../_lib/catalog-model";
+import { confirmItems, installMode, riskLines } from "../_lib/sources-model";
+import { TrustChip } from "../_lib/sources-tab";
 import type {
   CatalogDetail,
   CatalogEntry,
@@ -239,9 +250,13 @@ function Detail({ target }: { target: Target }) {
               )}
             </div>
             <p className="break-all font-mono text-[11.5px] text-foreground/65">
-              {pkg.slug}
+              {pkg.id}
               {pkg.version ? ` · ${pkg.version}` : ""}
             </p>
+            <div className="flex flex-wrap items-center gap-2 text-[12px] text-foreground/65">
+              <span>From {pkg.sourceName}</span>
+              <TrustChip trust={pkg.trust} />
+            </div>
           </div>
         </div>
         {description && (
@@ -268,7 +283,11 @@ function Contents({ pkg }: { pkg: CatalogDetail }) {
         <p className="text-[12.5px] text-foreground/65">
           {pkg.definitionError
             ? `The pod couldn't fetch the full package from ${pkg.sourceName} right now: ${pkg.definitionError}`
-            : "The catalog carries no definition for this entry."}
+            : pkg.installMode === "open_site"
+              ? `Listed for show by ${pkg.sourceName} — the pod never fetches its contents.`
+              : pkg.installMode === "refuse"
+                ? "Not fetched while this source can't install anything."
+                : "The catalog carries no definition for this entry."}
         </p>
       </SectionCard>
     );
@@ -324,10 +343,64 @@ function Contents({ pkg }: { pkg: CatalogDetail }) {
 }
 
 function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
+  const mode = installMode(pkg);
+  if (mode.kind === "open_site")
+    return <PublisherSite pkg={pkg} url={mode.url} />;
+  if (mode.kind === "blocked") {
+    return (
+      <SectionCard title="Install">
+        <div className="flex items-start gap-2.5">
+          <CircleAlert size={15} className="mt-0.5 shrink-0 text-status-down" />
+          <p className="text-[12.5px] leading-relaxed text-foreground/75">
+            {mode.reason}
+          </p>
+        </div>
+      </SectionCard>
+    );
+  }
+  return <Installer target={target} pkg={pkg} />;
+}
+
+/**
+ * A showcase listing: Install is the publisher's own page, in a new tab —
+ * never a fetch, never an install on this pod.
+ */
+function PublisherSite({
+  pkg,
+  url,
+}: {
+  pkg: CatalogDetail;
+  url: string | null;
+}) {
+  const exit = publisherExit(url);
+  return (
+    <SectionCard title="Install">
+      <div className="flex flex-col gap-3">
+        <p className="text-[12.5px] leading-relaxed text-foreground/75">
+          {pkg.sourceName} is listed for show only: this package installs from
+          the publisher&apos;s site, and nothing from it runs on this pod.
+        </p>
+        {exit ? (
+          <ExitLink exit={exit} label="Open the publisher's site" />
+        ) : (
+          <p className="text-[12px] text-foreground/65">
+            The publisher gave no install page.
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
   const utils = trpc.useUtils();
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [accepted, setAccepted] = useState<{
+    code?: boolean;
+    network?: boolean;
+  }>({});
   const install = trpc.marketplace.install.useMutation();
 
   // The row's own source, so preflight and install name the exact row read.
@@ -340,6 +413,7 @@ function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
         { ...exact, workspaceId: space ?? undefined },
         { staleTime: 0 }
       );
+      setAccepted({});
       setStage({ kind: "plan", preflight });
     } catch (err) {
       setStage({
@@ -364,6 +438,7 @@ function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
         ...exact,
         workspaceId: workspaceId ?? undefined,
         params: Object.keys(params).length > 0 ? params : undefined,
+        acknowledge: accepted,
       });
       setStage({ kind: "done", summary: describeInstall(outcome) });
       void utils.marketplace.get.invalidate();
@@ -407,6 +482,9 @@ function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
     const missing = preflight.params.filter(
       (p) => p.required && !p.hasDefault && !values[p.name]?.trim()
     );
+    const confirms = confirmItems(preflight);
+    const unconfirmed = confirms.some((c) => accepted[c.key] !== true);
+    const brings = riskLines(preflight.risks);
     return (
       <SectionCard
         title="What this will do to your pod"
@@ -430,6 +508,16 @@ function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
           )}
           {preflight.report && <PlanBody report={preflight.report} />}
           <Adds preflight={preflight} />
+          {brings.length > 0 && (
+            <PlanGroup
+              tone={confirms.length > 0 ? "stale" : "neutral"}
+              heading="What it brings"
+            >
+              {brings.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </PlanGroup>
+          )}
           {preflight.notices.length > 0 && (
             <PlanGroup tone="stale" heading="Worth knowing">
               {preflight.notices.map((n) => (
@@ -464,13 +552,37 @@ function InstallPanel({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
             </div>
           )}
         </div>
+        {confirms.length > 0 && (
+          <div className="mt-3 flex flex-col gap-2 rounded-lg bg-status-stale/10 p-3">
+            <p className="text-[12.5px] font-medium text-foreground">
+              Before it installs — from {preflight.sourceName}, not Synap
+            </p>
+            {confirms.map((c) => (
+              <Checkbox
+                key={c.key}
+                size="sm"
+                isSelected={accepted[c.key] === true}
+                isDisabled={installing}
+                onValueChange={(v) =>
+                  setAccepted((prev) => ({ ...prev, [c.key]: v }))
+                }
+              >
+                <span className="text-[12.5px] text-foreground/80">
+                  {c.label}
+                </span>
+              </Checkbox>
+            ))}
+          </div>
+        )}
         <Provenance pkg={pkg} />
         <div className="mt-4 flex items-center gap-2 border-t border-foreground/[0.07] pt-3">
           <Button
             size="sm"
             radius="sm"
             color="primary"
-            isDisabled={installing || !preflight.ok || missing.length > 0}
+            isDisabled={
+              installing || !preflight.ok || missing.length > 0 || unconfirmed
+            }
             isLoading={installing}
             onPress={() => void runInstall(preflight)}
           >
@@ -759,7 +871,9 @@ function Provenance({ pkg }: { pkg: CatalogDetail }) {
     <div className="mt-3 flex flex-col gap-1 border-t border-foreground/[0.07] pt-3">
       <p className="text-[12px] text-foreground/65">
         From the {pkg.sourceName} catalog
-        {pkg.sourceConfigured ? "" : " — a source this pod no longer syncs"}.
+        {pkg.official
+          ? "."
+          : ` — a source this pod's admin added (${pkg.source}).`}
       </p>
       {pkg.vendor ? (
         <p className="font-mono text-[11px] text-foreground/65">

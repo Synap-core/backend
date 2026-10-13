@@ -21,6 +21,7 @@ import {
   db,
   and,
   eq,
+  or,
   inArray,
   isNull,
   skills,
@@ -35,6 +36,8 @@ import {
   readSpaceBrief,
 } from "@synap-core/types/space-brief";
 import { candidateSlugs } from "./skills/template-skills.js";
+import { officialCatalogCondition } from "./capabilities/catalog-cache-query.js";
+import { SOURCE_ID_PATTERN } from "@synap-core/types/marketplace-source";
 
 /**
  * Is `installed` behind `latest`? Plan option (a): CP mints content-hash
@@ -107,6 +110,28 @@ export interface TemplateCatalogView {
   entryBySlug: Map<string, TemplateCatalogEntry>;
   /** Was the last template sync provably complete? Gates `unlisted`. */
   complete: boolean;
+  /**
+   * Source-qualified slugs (`acme/crm`, a space installed from a source a
+   * person added) that are absent from that source's rows: the official
+   * sync's completeness proves nothing about them, so they read `unknown`.
+   */
+  unprovable?: Set<string>;
+}
+
+/**
+ * Split a stamped template slug: a space installed from an added source is
+ * stamped `<sourceId>/<slug>` and is compared with THAT source's row — never
+ * with Synap's same-named template. A bare slug is the official catalog's.
+ */
+export function splitTemplateSlug(
+  stamped: string
+): { source: string; slug: string } | null {
+  const cut = stamped.indexOf("/");
+  if (cut <= 0) return null;
+  const source = stamped.slice(0, cut);
+  return SOURCE_ID_PATTERN.test(source)
+    ? { source, slug: stamped.slice(cut + 1) }
+    : null;
 }
 
 /**
@@ -144,9 +169,15 @@ export async function resolveTemplateCatalog(
   const latestBySlug = new Map<string, string>();
   const entryBySlug = new Map<string, TemplateCatalogEntry>();
   const distinct = [...new Set(slugs.filter((s): s is string => !!s))];
+  const bare = distinct.filter((s) => !splitTemplateSlug(s));
+  const qualified = distinct.flatMap((s) => {
+    const split = splitTemplateSlug(s);
+    return split ? [{ stamped: s, ...split }] : [];
+  });
   if (distinct.length > 0) {
     const rows = await db
       .select({
+        source: cpCatalogCache.source,
         slug: cpCatalogCache.slug,
         version: cpCatalogCache.version,
         retiredAt: cpCatalogCache.retiredAt,
@@ -157,30 +188,49 @@ export async function resolveTemplateCatalog(
       .where(
         and(
           eq(cpCatalogCache.kind, "template"),
-          inArray(cpCatalogCache.slug, distinct)
+          or(
+            ...(bare.length > 0
+              ? [
+                  and(
+                    officialCatalogCondition(),
+                    inArray(cpCatalogCache.slug, bare)
+                  ),
+                ]
+              : []),
+            ...qualified.map((q) =>
+              and(
+                eq(cpCatalogCache.source, q.source),
+                eq(cpCatalogCache.slug, q.slug)
+              )
+            )
+          )
         )
       );
+    const stampedFor = new Map(
+      qualified.map((q) => [`${q.source}|${q.slug}`, q.stamped])
+    );
     for (const row of rows) {
+      const key = stampedFor.get(`${row.source}|${row.slug}`) ?? row.slug;
       const retired = row.retiredAt != null;
-      // Two sources could cache the same slug: a live row wins over a tombstone.
-      const prev = entryBySlug.get(row.slug);
-      if (prev && !prev.retired) continue;
-      entryBySlug.set(row.slug, {
+      entryBySlug.set(key, {
         version: row.version,
         retired,
         replacedBy: retired ? row.replacedBySlug : null,
         retiredReason: retired ? row.retiredReason : null,
       });
-      if (!retired && row.version) latestBySlug.set(row.slug, row.version);
+      if (!retired && row.version) latestBySlug.set(key, row.version);
     }
   }
+  const unprovable = new Set(
+    qualified.map((q) => q.stamped).filter((s) => !entryBySlug.has(s))
+  );
   let complete = false;
   try {
     complete = isTemplateCatalogComplete(await getCatalogSyncStamps());
   } catch {
     complete = false; // a failed stamp read proves nothing → `unknown`
   }
-  return { latestBySlug, entryBySlug, complete };
+  return { latestBySlug, entryBySlug, complete, unprovable };
 }
 
 /** The TemplateHealth axes for one workspace's stamped template identity. */
@@ -203,7 +253,7 @@ export interface TemplateHealth {
 /** Classify one attached slug against the catalog view. */
 export function classifyTemplateLifecycle(
   packageSlug: string,
-  catalog: Pick<TemplateCatalogView, "entryBySlug" | "complete">
+  catalog: Pick<TemplateCatalogView, "entryBySlug" | "complete" | "unprovable">
 ): {
   lifecycle: TemplateLifecycle;
   replacedBy: string | null;
@@ -220,7 +270,10 @@ export function classifyTemplateLifecycle(
   if (entry)
     return { lifecycle: "current", replacedBy: null, retiredReason: null };
   return {
-    lifecycle: catalog.complete ? "unlisted" : "unknown",
+    lifecycle:
+      catalog.complete && !catalog.unprovable?.has(packageSlug)
+        ? "unlisted"
+        : "unknown",
     replacedBy: null,
     retiredReason: null,
   };

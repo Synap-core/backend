@@ -10891,6 +10891,12 @@ export interface WorkerMetadata {
 	outputs?: string[];
 	category: "table" | "shared" | "ai";
 }
+declare const MARKETPLACE_TRUST_LEVELS: readonly [
+	"official",
+	"trusted",
+	"showcase"
+];
+export type MarketplaceTrust = (typeof MARKETPLACE_TRUST_LEVELS)[number];
 export type CatalogKind = "capability" | "automation" | "template" | "cell" | "skill" | "view";
 export interface DeviceRequestView {
 	requestId: string;
@@ -17089,6 +17095,29 @@ export type BrandResolution = {
 	/** The project asked about, if any. */
 	projectId: string | null;
 };
+/**
+ * Market risk disclosure — what a package brings that a person should see
+ * before it runs on their pod: CODE (cells, code skills), NETWORK reach (the
+ * hosts it names) and CONNECTORS (credentials, providers, MCP servers). Read
+ * off the definition the install will apply. Pure.
+ *
+ * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
+ * template's nested cells and capabilities are found as well as a lone cell's.
+ * It discloses what the definition DECLARES — it is not a sandbox and does not
+ * promise the absence of anything it did not find.
+ *
+ * A package from a TRUSTED third-party source needs an extra, explicit
+ * confirm for code and for network reach (`requiredAcknowledgements`); the
+ * install door refuses without it (marketplace-install.ts).
+ */
+export interface MarketRisks {
+	/** Names of the parts that carry code (a cell's renderer, a code skill). */
+	code: string[];
+	/** Hosts the package names: declared egress and every URL it carries. */
+	networkHosts: string[];
+	/** Credentials, providers and servers it asks to connect. */
+	connectors: string[];
+}
 export type MarketInstallOutcome = {
 	status: "installed";
 	result: Record<string, unknown>;
@@ -17129,21 +17158,43 @@ export interface MarketInstallSummary {
 	notices: string[];
 	params: MarketInstallParam[];
 }
+/** Where a source stands, in one token the console can draw. */
+export type MarketplaceSourceState = "ok" | "pending" | "unreachable" | "invalid" | "bad_signature" | "expired" | "key_changed" | "off";
 export interface MarketplaceSource {
-	/** The provider base URL rows are keyed by. */
-	source: string;
+	id: string;
 	name: string;
-	/** Configured on this pod now (vs rows left from a source since removed). */
-	configured: boolean;
-	/** Newest sync attempt across kinds; null when it never synced. */
+	/** The address the pod reads (the Control Plane for Synap). */
+	url: string;
+	trust: MarketplaceTrust;
+	official: boolean;
+	enabled: boolean;
+	/** Official only: `SYNAP_CATALOG_SOURCE=off` — the console cannot turn it on. */
+	lockedOff: boolean;
+	/** sha256 of the pinned key, hex; null for Synap today and an unsigned showcase. */
+	keyFingerprint: string | null;
+	agentsMayPropose: boolean;
+	addedBy: string | null;
+	addedAt: string | null;
+	/** Newest sync attempt; null when it never synced. */
 	lastSyncAt: string | null;
-	/** True when every kind's latest attempt could not reach the source. */
+	/** Listings this pod holds from it. */
+	packageCount: number;
+	state: MarketplaceSourceState;
+	/** Why nothing installs from it right now, or null. */
+	blocked: string | null;
+	/** One sentence on the last sync when it did not apply. */
+	message: string | null;
+	/** key_changed: the fingerprint the source is signed with now. */
+	pendingFingerprint: string | null;
+	/** Kept for the Catalog freshness line: every recent attempt failed to connect. */
 	unreachable: boolean;
 }
 export interface MarketplacePreflight extends MarketInstallSummary {
 	kind: CatalogKind;
 	slug: string;
-	source: string | null;
+	source: string;
+	sourceName: string;
+	trust: MarketplaceTrust;
 	name: string;
 	version: string | null;
 	/** False when something below must change before the install can run. */
@@ -17152,6 +17203,13 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 	blockers: string[];
 	/** Template only: the write-free workspace plan (profiles, links, views). */
 	report: WorkspacePreflightReport | null;
+	/** What the package brings: code, network reach, connectors. */
+	risks: MarketRisks;
+	/** The extra confirms the install will ask for (a trusted source only). */
+	requires: {
+		code: boolean;
+		network: boolean;
+	};
 }
 /**
  * Core API Router
@@ -43175,6 +43233,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entries: {
 					source: string;
 					sourceName: string;
+					trust: "trusted" | "official" | "showcase";
+					id: string;
 					kind: CatalogKind;
 					objectKind: string;
 					slug: string;
@@ -43204,7 +43264,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				source: string;
 				sourceName: string;
-				sourceConfigured: boolean;
+				trust: "trusted" | "official" | "showcase";
+				official: boolean;
+				id: string;
 				kind: "automation" | "skill" | "cell" | "capability" | "view" | "template";
 				objectKind: string;
 				slug: string;
@@ -43214,6 +43276,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				tier: string | null;
 				vendor: string | null;
 				installed: boolean | null;
+				installMode: "propose" | "refuse" | "install" | "open_site";
+				blocked: string | null;
+				openUrl: string | null;
 				definition: Record<string, unknown> | null;
 				definitionError: string | null;
 			};
@@ -43237,10 +43302,120 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				version?: string | undefined;
 				params?: Record<string, unknown> | undefined;
+				acknowledge?: {
+					code?: boolean | undefined;
+					network?: boolean | undefined;
+				} | undefined;
 			};
 			output: MarketInstallOutcome;
 			meta: object;
 		}>;
+		sources: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				data: {
+					reasonCode?: string;
+					expectedStatus?: string | null;
+					currentStatus?: string | null;
+					opRef?: string | undefined;
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					httpStatus: number;
+					path?: string;
+					stack?: string;
+				};
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				output: MarketplaceSource[];
+				meta: object;
+			}>;
+			add: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					url: string;
+				};
+				output: {
+					url: string;
+					id: string;
+					name: string;
+					homepage: string | null;
+					packageCount: number;
+					expires: string;
+					signed: boolean;
+					keyFingerprint: string | null;
+					conflict: string | null;
+				};
+				meta: object;
+			}>;
+			confirm: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					url: string;
+					trust: "trusted" | "showcase";
+					keyFingerprint: string | null;
+					agentsMayPropose?: boolean | undefined;
+				};
+				output: MarketplaceSource;
+				meta: object;
+			}>;
+			update: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					name?: string | undefined;
+					trust?: "trusted" | "showcase" | undefined;
+					agentsMayPropose?: boolean | undefined;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			disable: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					enabled: boolean;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			remove: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			approveKeyChange: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					keyFingerprint: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			syncNow: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				output: MarketplaceSource | null;
+				meta: object;
+			}>;
+		}>>;
 	}>>;
 }>>;
 export type AppRouter = typeof coreRouter;

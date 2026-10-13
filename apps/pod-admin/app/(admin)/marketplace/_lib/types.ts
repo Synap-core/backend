@@ -17,3 +17,7 @@ export type MarketPreflight = Marketplace["preflight"];
 /** The template-only workspace plan (`preflightWorkspaceFromDefinition`). */
 export type PreflightReport = NonNullable<MarketPreflight["report"]>;
 export type InstallOutcome = Marketplace["install"];
+/** One catalog source as the Sources tab draws it (`marketplace.sources.list`). */
+export type MarketSource = Marketplace["sources"]["list"][number];
+/** What step 2 of adding a source shows: who signs it (`marketplace.sources.add`). */
+export type SourcePreview = Marketplace["sources"]["add"];

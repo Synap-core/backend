@@ -42,7 +42,7 @@ import {
   views,
   entities,
   relations,
-  messages,
+  type messages,
   documents,
   capabilities,
   getWorkspaceMembership,
@@ -2206,14 +2206,40 @@ const marketSearchParams = z.object({
     ])
     .optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
+  /**
+   * One catalog source by id (`synap`, or a source a pod admin added). Omitted:
+   * Synap's catalog plus any trusted source that lets agents propose installs.
+   */
+  source: z.string().min(1).max(100).optional(),
 });
 
 const marketSearchHandler: BuiltinVerbHandler = async (params) => {
   const input = marketSearchParams.parse(params);
   const { queryCatalogCache } = await import("./catalog-cache-query.js");
+  const { listMarketSources } = await import("./market-sources.js");
+  const { qualifiedPackageId } =
+    await import("@synap-core/types/marketplace-source");
+  // Only sources that may serve right now; by default only those an agent
+  // may propose from — a showcase or opted-out source's text never reaches an
+  // agent unless it asks for that source by name.
+  const views = (await listMarketSources()).filter(
+    (v) =>
+      !v.gate.blocked &&
+      (input.source
+        ? v.source.id === input.source
+        : v.source.official || v.source.agentsMayPropose)
+  );
+  if (input.source && views.length === 0) {
+    return {
+      entries: [],
+      message: `"${input.source}" is not a catalog source this pod can search right now.`,
+    };
+  }
+  const bySourceKey = new Map(views.map((v) => [v.source.cacheKey, v.source]));
   const entries = await queryCatalogCache({
     query: input.query,
     kind: input.kind,
+    sources: [...bySourceKey.keys()],
     limit: input.limit ?? 20,
   });
 
@@ -2226,15 +2252,38 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
   }
 
   const compact = await Promise.all(
-    entries.map(async (e) => ({
-      slug: e.slug,
-      kind: e.kind,
-      name: e.name,
-      description: e.description,
-      version: e.version,
-      tier: e.tier,
-      installed: await resolveInstalledFlag(e.kind, e.slug),
-    }))
+    entries.map(async (e) => {
+      const source = bySourceKey.get(e.source);
+      if (!source || source.official) {
+        return {
+          slug: e.slug,
+          kind: e.kind,
+          name: e.name,
+          description: e.description,
+          version: e.version,
+          tier: e.tier,
+          installed: await resolveInstalledFlag(e.kind, e.slug),
+        };
+      }
+      // From an added source: say so, and how it installs (pass `source`).
+      return {
+        id: qualifiedPackageId(source.id, e.slug),
+        slug: e.slug,
+        source: source.id,
+        sourceName: source.name,
+        trust: source.trust,
+        kind: e.kind,
+        name: e.name,
+        description: e.description,
+        version: e.version,
+        installable:
+          source.trust === "showcase"
+            ? "no — listed only; installs from the publisher's site"
+            : source.agentsMayPropose
+              ? "propose — a person reviews it"
+              : "no — a person installs it from the Pod Console",
+      };
+    })
   );
 
   return { entries: compact, count: compact.length };
@@ -2252,6 +2301,11 @@ const marketInstallParams = z.object({
   ]),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * The catalog source id (`synap`, or one a pod admin added). Omitted: Synap's
+   * catalog — a bare slug never installs from another source.
+   */
+  source: z.string().min(1).max(100).optional(),
   /** Stamp uses-edges / seed filing onto this existing project. */
   projectId: z.string().uuid().optional(),
   /**
@@ -2308,9 +2362,26 @@ const toolRequestHandler: BuiltinVerbHandler = async (params, ctx) => {
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);
   const { runMarketInstall } = await import("./marketplace-install.js");
+  // A source-qualified id (`acme/crm`) names its source; a bare slug is
+  // Synap's. Only a prefix naming a source on this pod is read as one, and
+  // never for a cell (whose own slug is `<package>/<cell>`).
+  let { slug, source } = input;
+  if (!source && input.kind !== "cell" && slug.includes("/")) {
+    const { listMarketSources } = await import("./market-sources.js");
+    const { parseQualifiedPackageId } =
+      await import("@synap-core/types/marketplace-source");
+    const parsed = parseQualifiedPackageId(
+      input.kind,
+      slug,
+      (await listMarketSources()).map((v) => v.source.id)
+    );
+    slug = parsed.slug;
+    source = parsed.source ?? undefined;
+  }
   return runMarketInstall({
-    slug: input.slug,
+    slug,
     kind: input.kind,
+    source,
     version: input.version,
     params: input.params,
     definition: input.definition,

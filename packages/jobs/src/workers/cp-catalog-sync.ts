@@ -5,9 +5,11 @@
  * source-dimensioned successor to `capability-template-sync.ts` (which keeps
  * running unchanged; this is additive, not a replacement — see P2.4-B in
  * CAPABILITY-MARKETPLACE-PLAN.md). Fills the cache for all four marketplace
- * kinds from each configured catalog-provider `source` (today always
- * `[cpUrl()]` — P2.10.2: a future federated provider is a new entry in that
- * list, never a schema or verb change):
+ * kinds from each configured catalog source (`catalogSources()` — the ONE
+ * seam: the built-in Synap source plus the sources a pod admin added, Pod
+ * Console D11). The official source is read from the Control Plane's own
+ * endpoints, as below; an added source serves a signed `synap-index.json`
+ * and is synced by `marketplace-source-sync.ts`:
  *
  *   - capability → GET {source}/api/marketplace/capabilities
  *   - automation → GET {source}/api/packages?category=workflow
@@ -50,10 +52,17 @@ import {
   eq,
   notInArray,
   recordCatalogSyncStamp,
+  readMarketplaceSources,
+  type MarketplaceSourcesSnapshot,
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import {
+  OFFICIAL_SOURCE_ID,
+  type MarketplaceTrust,
+} from "@synap-core/types/marketplace-source";
 import { mergePackageSearchTags } from "./package-search-tokens.js";
+import { syncThirdPartySource } from "./marketplace-source-sync.js";
 
 const logger = createLogger({ module: "cp-catalog-sync" });
 
@@ -159,19 +168,107 @@ export function mapRetired(retired: RetiredDto | null | undefined): {
  */
 export const DEFAULT_CATALOG_SOURCE = "https://api.synap.live";
 
+/** The person-facing name of the built-in source. */
+export const OFFICIAL_SOURCE_NAME = "Synap";
+
 /**
- * Every configured catalog-provider base URL. Today: one — the pod's Control
- * Plane when set, else Synap's public catalog. `SYNAP_CATALOG_SOURCE=off`
- * turns the catalog off entirely (a pod that must make no outbound calls).
+ * Synap's catalog signing key (raw ed25519, base64), compiled in. NULL today:
+ * the Control Plane does not serve a signed `synap-index.json` yet, so the
+ * official source is trusted the way it always was — it IS the configured
+ * Control Plane URL, over TLS. When the CP signs its index, this constant gets
+ * the key and the official source moves to the same verified format as every
+ * other source (docs/marketplace-source.md).
  */
-export function catalogSources(): string[] {
-  if (process.env.SYNAP_CATALOG_SOURCE === "off") return [];
-  const url = (
+export const SYNAP_CATALOG_PUBLIC_KEY: string | null = null;
+
+/**
+ * The official catalog's base URL — the pod's Control Plane when set, else
+ * Synap's public catalog. It is also the official rows' cache key, so it is
+ * resolved even while the catalog is switched off (the rows stay readable).
+ */
+export function officialCatalogUrl(): string {
+  return (
     process.env.CONTROL_PLANE_URL ||
     process.env.CP_URL ||
     DEFAULT_CATALOG_SOURCE
   ).replace(/\/$/, "");
-  return [url];
+}
+
+/** `SYNAP_CATALOG_SOURCE=off`: a pod that must make no outbound catalog calls. */
+export function officialCatalogEnvOff(): boolean {
+  return process.env.SYNAP_CATALOG_SOURCE === "off";
+}
+
+/** One catalog source as every reader sees it. */
+export interface CatalogSource {
+  /** `synap` for the built-in source, else the source's own id. */
+  id: string;
+  /** What its `cp_catalog_cache` rows are keyed by: the URL (official) or the id. */
+  cacheKey: string;
+  url: string;
+  name: string;
+  trust: MarketplaceTrust;
+  official: boolean;
+  /** Synced, listed and installable (subject to its status). */
+  enabled: boolean;
+  /** Official only: switched off by `SYNAP_CATALOG_SOURCE=off` — the console cannot turn it on. */
+  lockedOff: boolean;
+  /** The pinned signing key; null for the official source today and an unsigned showcase. */
+  publicKey: string | null;
+  keyFingerprint: string | null;
+  /** Trusted only: agents may propose installs from it. */
+  agentsMayPropose: boolean;
+  addedBy: string | null;
+  addedAt: string | null;
+}
+
+/**
+ * THE seam: every catalog source this pod knows — the built-in Synap source
+ * first, then the sources a pod admin added, enabled or not. Pure over a
+ * settings snapshot (null = the settings could not be read: the official
+ * source still answers, from the environment alone).
+ */
+export function describeCatalogSources(
+  snapshot: Pick<MarketplaceSourcesSnapshot, "sources" | "official"> | null
+): CatalogSource[] {
+  const envOff = officialCatalogEnvOff();
+  const url = officialCatalogUrl();
+  const official: CatalogSource = {
+    id: OFFICIAL_SOURCE_ID,
+    cacheKey: url,
+    url,
+    name: OFFICIAL_SOURCE_NAME,
+    trust: "official",
+    official: true,
+    enabled: !envOff && (snapshot?.official?.enabled ?? true),
+    lockedOff: envOff,
+    publicKey: SYNAP_CATALOG_PUBLIC_KEY,
+    keyFingerprint: null,
+    agentsMayPropose: true,
+    addedBy: null,
+    addedAt: null,
+  };
+  const added = (snapshot?.sources ?? []).map((s): CatalogSource => ({
+    id: s.id,
+    cacheKey: s.id,
+    url: s.url,
+    name: s.name,
+    trust: s.trust,
+    official: false,
+    enabled: s.enabled,
+    lockedOff: false,
+    publicKey: s.publicKey,
+    keyFingerprint: s.keyFingerprint,
+    agentsMayPropose: s.trust === "trusted" && s.agentsMayPropose === true,
+    addedBy: s.addedBy,
+    addedAt: s.addedAt,
+  }));
+  return [official, ...added];
+}
+
+/** Every catalog source, read from the pod settings. Throws when they cannot be read. */
+export async function catalogSources(): Promise<CatalogSource[]> {
+  return describeCatalogSources(await readMarketplaceSources());
 }
 
 /**
@@ -716,17 +813,51 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
  * kind) pair is independent: one failing never blocks the others.
  */
 export async function handleCpCatalogSync(): Promise<void> {
-  const sources = catalogSources();
-  if (sources.length === 0) {
-    logger.info(
-      "No catalog sources configured (CONTROL_PLANE_URL unset) — skipping"
+  // A settings read that fails must not stop the official catalog: it syncs
+  // from the environment alone, and added sources wait for the next run.
+  let snapshot: MarketplaceSourcesSnapshot | null = null;
+  try {
+    snapshot = await readMarketplaceSources();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Could not read the pod's marketplace sources — syncing the official catalog only this run"
     );
+  }
+  const sources = describeCatalogSources(snapshot).filter((s) => s.enabled);
+  if (sources.length === 0) {
+    logger.info("Every catalog source is switched off — skipping");
     return;
   }
 
   for (const source of sources) {
-    for (const kind of CATALOG_KINDS) {
-      await syncOne(source, kind);
+    if (source.official) {
+      for (const kind of CATALOG_KINDS) {
+        await syncOne(source.cacheKey, kind);
+      }
+    } else {
+      await syncThirdPartySource(source, snapshot?.status[source.id]);
     }
   }
+}
+
+/**
+ * Sync ONE source now (the console's "Sync now"). The official source runs
+ * the same per-kind sync as the schedule. Throws when the source is unknown
+ * or switched off — a person asked, so they get a reason.
+ */
+export async function syncCatalogSourceNow(sourceId: string): Promise<void> {
+  const snapshot = await readMarketplaceSources();
+  const source = describeCatalogSources(snapshot).find(
+    (s) => s.id === sourceId
+  );
+  if (!source) throw new Error(`No catalog source "${sourceId}" on this pod.`);
+  if (!source.enabled) {
+    throw new Error(`The "${source.name}" source is switched off.`);
+  }
+  if (source.official) {
+    for (const kind of CATALOG_KINDS) await syncOne(source.cacheKey, kind);
+    return;
+  }
+  await syncThirdPartySource(source, snapshot.status[source.id]);
 }
