@@ -30,6 +30,25 @@ const h = vi.hoisted(() => ({
   objects: new Map<string, Buffer>(),
 }));
 
+// The write floor reads workspace_members through the relational query API,
+// which this fixture does not stand up; the stub keeps its CONTRACT: a
+// non-member's space is FORBIDDEN, a pod-wide import is the owner's.
+const FOREIGN_WORKSPACE = "00000000-0000-4000-8000-00000000f0f0";
+vi.mock("../../../utils/workspace-write-access.js", async () => {
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    assertWorkspaceWrite: async (
+      _db: unknown,
+      _userId: string,
+      row: { workspaceId: string | null }
+    ) => {
+      if (row.workspaceId === FOREIGN_WORKSPACE) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "not a member" });
+      }
+    },
+  };
+});
+
 vi.mock("@synap/storage", () => ({
   storage: {
     buildPath: (userId: string, kind: string, id: string, ext: string) =>
@@ -346,6 +365,16 @@ describe("stage", () => {
     );
     expect(await listed()).toContain(id);
     expect(await inDocuments()).toContain(id);
+  });
+
+  it("refuses to open an import in a space the caller cannot write", async () => {
+    await expect(
+      openImportSession({ userId: USER, workspaceId: FOREIGN_WORKSPACE })
+    ).rejects.toThrow(/not a member/);
+    const { rows } = await q<{ n: number }>(
+      `select count(*)::int as n from focus_sessions`
+    );
+    expect(rows[0]!.n).toBe(0);
   });
 
   it("another user's import is not found", async () => {

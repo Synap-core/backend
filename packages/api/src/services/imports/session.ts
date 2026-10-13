@@ -33,6 +33,7 @@ import {
 } from "@synap-core/types/imports";
 import { resolveImportOriginLabel } from "@synap-core/types/vocabulary";
 import { ensureIntakeSession } from "../intake/ensure-intake-session.js";
+import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 
 export type ImportDb = typeof defaultDb;
 
@@ -75,6 +76,12 @@ export async function openImportSession(args: {
   origin?: string | null;
 }): Promise<{ sessionId: string; curation: ImportSessionCuration }> {
   const database = args.database ?? defaultDb;
+  // The import's space is where its items are stored and its bundles filed:
+  // the caller must be able to write there (a request-supplied id is a claim).
+  await assertWorkspaceWrite(database, args.userId, {
+    workspaceId: args.workspaceId ?? null,
+    ownerId: args.userId,
+  });
   const title = importSessionTitle(args);
   const minted = await ensureIntakeSession({
     userId: args.userId,
