@@ -223,7 +223,7 @@ oauthApp.get("/authorize", async (c) => {
       "pod-oauth: POD_ADMIN_URL not configured — cannot show consent"
     );
     return c.text(
-      "This pod is not configured with a Pod Admin URL, so it cannot show an authorization consent screen.",
+      "This pod is not configured with a Pod Console URL, so it cannot show an authorization consent screen.",
       503
     );
   }

@@ -527,7 +527,7 @@ app.get("/admin/connect", (c) => {
   if (!admin.ok) {
     return c.json(
       {
-        error: "Pod Admin is not configured",
+        error: "Pod Console is not configured",
         code: admin.code,
         remediation: "configure_pod_admin_url",
       },

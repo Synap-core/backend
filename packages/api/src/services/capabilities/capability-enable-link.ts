@@ -37,7 +37,7 @@
  *
  * What does NOT exist: a pod-admin (web) route for enabling a capability or
  * connecting a provider. `/proposal/<id>` has a web destination; a capability
- * does not — `(admin)/connectors` is an explicitly read-only aggregate whose own
+ * does not — `(admin)/sources` is an explicitly read-only aggregate whose own
  * docstring says per-workspace connector configuration lives in Studio. So this
  * link works for a human WITH the desktop app and dead-ends for one without.
  * `opensIn: "desktop"` states that in the payload rather than implying a
