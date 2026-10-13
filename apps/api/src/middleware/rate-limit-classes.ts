@@ -61,7 +61,13 @@ export function getRateLimitClassConfig(): Record<
     RateLimitClass,
     "free" | "public_read" | "public_submit" | "device_auth" | "key_state"
   >,
-  { max: number; windowMs: number; retryAfter: string; sessionMax?: number }
+  {
+    max: number;
+    windowMs: number;
+    retryAfter: string;
+    sessionMax?: number;
+    ipCeiling?: number;
+  }
 > {
   const crudWindow = parsePositiveInt(
     process.env.RATE_LIMIT_CRUD_WINDOW_MS,
@@ -84,6 +90,15 @@ export function getRateLimitClassConfig(): Record<
     5 * 60 * 1000
   );
 
+  // One signed-in person's budget (`crud:session:*`). The console spends ~2
+  // gate calls per page and prefetch plus its own queries and polling —
+  // roughly 60–150 requests a minute for an active operator — so the anonymous
+  // per-IP budget would lock a single person out.
+  const crudSessionMax = parsePositiveInt(
+    process.env.RATE_LIMIT_CRUD_SESSION_MAX,
+    3000
+  );
+
   return {
     import: {
       max: parsePositiveInt(process.env.RATE_LIMIT_IMPORT_MAX, 200),
@@ -102,13 +117,14 @@ export function getRateLimitClassConfig(): Record<
     },
     crud: {
       max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_MAX, 500),
-      // One signed-in person's budget (`crud:session:*`). The console spends
-      // ~2 gate calls per page and prefetch plus its own queries and polling —
-      // roughly 60–150 requests a minute for an active operator — so the
-      // anonymous per-IP budget above would lock a single person out.
-      sessionMax: parsePositiveInt(
-        process.env.RATE_LIMIT_CRUD_SESSION_MAX,
-        3000
+      sessionMax: crudSessionMax,
+      // Every `crud` request from one client address, whatever bucket it
+      // spends from (`crud:ipall:*`, see `buildCrudIpCeilingKey`). Five busy
+      // people behind one address fit; a caller inventing a session or Bearer
+      // per request does not get past it.
+      ipCeiling: parsePositiveInt(
+        process.env.RATE_LIMIT_CRUD_IP_CEILING,
+        5 * crudSessionMax
       ),
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
@@ -384,6 +400,71 @@ export function clientIp(c: {
 }
 
 /**
+ * A call this pod may leave unthrottled: it reached the API process straight
+ * over loopback (the socket peer is 127.0.0.0/8 or ::1) and carries no
+ * forwarding header, so no proxy relayed it — an in-container caller.
+ *
+ * Decided on the SOCKET, never on X-Forwarded-For / X-Real-IP: a header saying
+ * "127.0.0.1" is something any caller on the compose network can send. And a
+ * request that went through a proxy on the same host (a bare-metal install
+ * with Caddy on loopback) still carries the proxy's X-Forwarded-For, so it is
+ * keyed like any other client rather than waved through. `c.env.incoming` is
+ * the Node request `@hono/node-server` binds; without one (tests via
+ * `app.request`) nothing is local.
+ */
+export function isDirectLoopbackCall(c: {
+  env?: unknown;
+  req: { header(name: string): string | undefined };
+}): boolean {
+  if (c.req.header("x-forwarded-for") || c.req.header("x-real-ip")) {
+    return false;
+  }
+  const env = c.env as
+    { incoming?: { socket?: { remoteAddress?: string } } } | undefined;
+  const peer = env?.incoming?.socket?.remoteAddress;
+  if (!peer) return false;
+  return (
+    peer === "::1" || peer.startsWith("127.") || peer.startsWith("::ffff:127.")
+  );
+}
+
+/**
+ * True when the pod says every visitor arrives from one client address (a
+ * Cloudflare tunnel's cloudflared peer). Same env and truthy spellings as
+ * `sharedClientIpFromEnv` in `@synap/api` `services/sharing/public-doors-
+ * switch.ts`, which this file cannot import (it pulls in the database).
+ */
+export function sharedClientIp(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  const raw = env.SYNAP_SHARED_CLIENT_IP;
+  return (
+    typeof raw === "string" &&
+    ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase())
+  );
+}
+
+/**
+ * The address-wide `crud` bucket every request from one client spends,
+ * whichever key (`:key:`, `:session:`, `:ip:`) it also spends from. The
+ * per-key and per-session buckets are keyed on values the limiter cannot
+ * validate (it runs before auth), so without a ceiling a caller inventing one
+ * per request is never limited at all.
+ *
+ * null — no ceiling — when the address does not tell callers apart: "unknown"
+ * (no forwarding header: a service on the compose network, which publishes no
+ * port; every call through Caddy carries one), or a pod whose visitors all
+ * share the tunnel's address, where one ceiling would be the whole internet's.
+ */
+export function buildCrudIpCeilingKey(
+  ip: string,
+  env: Record<string, string | undefined> = process.env
+): string | null {
+  if (ip === "unknown" || sharedClientIp(env)) return null;
+  return `crud:ipall:${ip}`;
+}
+
+/**
  * Stable SHA-256 prefix of a bearer token. Never log the raw token.
  */
 export function hashBearerToken(token: string): string {
@@ -396,6 +477,13 @@ export function hashBearerToken(token: string): string {
  * every auth path in the pod reads this same literal.
  */
 export const KRATOS_SESSION_COOKIE = "ory_kratos_session";
+
+/**
+ * The shortest cookie value that earns a per-session bucket. A real Kratos
+ * session cookie is a signed, encrypted securecookie of a few hundred
+ * characters; anything shorter is invented and stays in the IP bucket.
+ */
+export const KRATOS_SESSION_MIN_LENGTH = 64;
 
 /**
  * The `ory_kratos_session` value from a raw Cookie header, or null. Lenient on
@@ -438,8 +526,9 @@ export function calendarFeedTokenFromPath(path: string): string | null {
  *
  * Like the Bearer key, the cookie is not validated here (the limiter runs
  * before auth), so a caller inventing values buys a bucket per value — the
- * exposure an invented Bearer already has. The same length floor keeps
- * trivial values in the IP bucket.
+ * exposure an invented Bearer already has. `KRATOS_SESSION_MIN_LENGTH` keeps
+ * short values in the IP bucket, and the address-wide ceiling
+ * (`buildCrudIpCeilingKey`) bounds what invented values can buy.
  */
 export function buildRateLimitKey(
   className: RateLimitClass | string,
@@ -462,7 +551,7 @@ export function buildRateLimitKey(
     }
   }
   const session = kratosSessionFromCookieHeader(cookieHeader);
-  if (session && session.length >= 20) {
+  if (session && session.length >= KRATOS_SESSION_MIN_LENGTH) {
     return `${className}:session:${hashBearerToken(session)}`;
   }
   return `${className}:ip:${ip}`;
