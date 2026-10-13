@@ -21,7 +21,7 @@
  * "what is it, and what will it do to my pod" before anything is written.
  */
 
-import { Chip, Input, Spinner } from "@heroui/react";
+import { Chip, Input } from "@heroui/react";
 import { Search } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -108,7 +108,7 @@ export function CatalogTab() {
         value={search}
         onValueChange={setSearch}
         size="sm"
-        radius="sm"
+        radius="md"
         variant="bordered"
         startContent={<Search size={14} className="text-foreground/40" />}
         className="mb-3 max-w-md"
@@ -146,15 +146,11 @@ export function CatalogTab() {
         />
       )}
 
-      {catalog.isLoading && (
-        <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/65">
-          <Spinner size="sm" /> Loading the catalog…
-        </div>
-      )}
+      {catalog.isLoading && <CatalogSkeleton />}
 
       {catalog.error && !page && (
         <ResourceRowError
-          message={`The pod couldn't read its catalog: ${catalog.error.message}`}
+          message="The pod couldn't read its catalog."
           onRetry={() => void catalog.refetch()}
         />
       )}
@@ -166,7 +162,7 @@ export function CatalogTab() {
               No catalog source is on, so there is nothing to browse.{" "}
               <Link
                 href={navHref("marketplace", { tab: "sources" })}
-                className="text-primary hover:underline"
+                className="rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 See the sources
               </Link>
@@ -234,6 +230,7 @@ function EntryCard({
         group flex flex-col gap-2 rounded-2xl p-4
         bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10
         transition-colors hover:bg-foreground/[0.07]
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40
       "
     >
       <div className="flex items-start justify-between gap-2">
@@ -271,5 +268,31 @@ function EntryCard({
         )}
       </div>
     </Link>
+  );
+}
+
+/** The grid's shape while the first page loads, so cards land where it stood. */
+function CatalogSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading the catalog"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
+    >
+      {Array.from({ length: 6 }, (_, i) => (
+        <div
+          key={i}
+          className="flex h-[124px] flex-col gap-3 rounded-2xl bg-foreground/[0.04] p-4 ring-1 ring-inset ring-foreground/10"
+        >
+          <div className="flex items-center gap-2">
+            <div className="h-7 w-7 rounded-lg bg-foreground/10 shimmer-pulse" />
+            <div className="h-3.5 w-28 rounded bg-foreground/10 shimmer-pulse" />
+          </div>
+          <div className="h-3 w-full rounded bg-foreground/[0.07] shimmer-pulse" />
+          <div className="h-3 w-2/3 rounded bg-foreground/[0.07] shimmer-pulse" />
+        </div>
+      ))}
+    </div>
   );
 }

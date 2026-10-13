@@ -5,6 +5,8 @@ import {
   catalogKindLabel,
   countNoun,
   describeInstall,
+  installBlockedHint,
+  tabLabel,
 } from "./catalog-model";
 
 afterEach(() => vi.useRealTimers());
@@ -163,5 +165,37 @@ describe("describeInstall", () => {
         result: { kind: "capability", key: "gmail", created: false },
       }).sentence
     ).toBe("Already installed — nothing new was added.");
+  });
+});
+
+describe("installBlockedHint", () => {
+  it("says why Install is disabled — first unmet condition wins", () => {
+    expect(
+      installBlockedHint({ ok: false, missing: ["Token"], unconfirmed: true })
+    ).toBe("It can't install until the problems listed above are fixed.");
+    expect(
+      installBlockedHint({
+        ok: true,
+        missing: ["Token", "Region"],
+        unconfirmed: true,
+      })
+    ).toBe("Fill in Token, Region first.");
+    expect(
+      installBlockedHint({ ok: true, missing: [], unconfirmed: true })
+    ).toBe("Tick each box above to confirm, then install.");
+  });
+
+  it("is null when Install can be pressed", () => {
+    expect(
+      installBlockedHint({ ok: true, missing: [], unconfirmed: false })
+    ).toBeNull();
+  });
+});
+
+describe("tabLabel", () => {
+  it("adds a known count, and stays bare when it is not loaded", () => {
+    expect(tabLabel("Installed", 14)).toBe("Installed (14)");
+    expect(tabLabel("Sources", 0)).toBe("Sources (0)");
+    expect(tabLabel("Installed", undefined)).toBe("Installed");
   });
 });

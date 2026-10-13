@@ -20,22 +20,14 @@
  * (`describeInstall`), never the absence of an error. A catalog failure is a
  * calm message in place — never a sign-in redirect.
  *
- * Where it comes from decides what Install means (Pod Console D11, enforced by
- * the pod; this page reflects it): a showcase source's package opens the
+ * Where it comes from decides what Install means (enforced by the pod; this
+ * page reflects it): a showcase source's package opens the
  * publisher's site and is never fetched; a blocked source says why; a package
  * from a trusted source names the code and network reach it brings and asks
  * for an explicit confirm of each before Install is enabled.
  */
 
-import {
-  Button,
-  Checkbox,
-  Chip,
-  Input,
-  Select,
-  SelectItem,
-  Spinner,
-} from "@heroui/react";
+import { Button, Checkbox, Input, Select, SelectItem } from "@heroui/react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -53,6 +45,8 @@ import {
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { navHref } from "../../../../lib/console-nav";
+import { readableError } from "../../../../lib/format";
 import { publisherExit } from "../../../../lib/open-in";
 import { ExitLink } from "../../../../lib/exit-link";
 import {
@@ -60,14 +54,16 @@ import {
   type PackageDefinition,
 } from "../../../../lib/marketplace";
 import { SectionCard } from "../../components/section-card";
-import { ResourceRowError } from "../../components/resource-row";
-import { kindIcon } from "../../../_lib/object/kind-icon";
-import { PageShell } from "../../components/page-header";
+import { PageFallback, PageShell } from "../../components/page-header";
+import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
+import { ObjectHeader } from "../../../_lib/object/object-header";
+import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
 import {
   catalogDetailHref,
   catalogKindLabel,
   countNoun,
   describeInstall,
+  installBlockedHint,
   type InstallSummary,
 } from "../_lib/catalog-model";
 import { confirmItems, installMode, riskLines } from "../_lib/sources-model";
@@ -152,12 +148,15 @@ type Stage =
   | { kind: "plan"; preflight: MarketPreflight }
   | { kind: "installing"; preflight: MarketPreflight }
   | { kind: "done"; summary: InstallSummary }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; detail: string };
+
+const FOCUS_RING =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 export default function CatalogEntryPage() {
   // `useSearchParams` needs a Suspense boundary for the static build.
   return (
-    <Suspense fallback={<Loading label="Loading…" />}>
+    <Suspense fallback={<PageFallback />}>
       <CatalogEntry />
     </Suspense>
   );
@@ -177,16 +176,18 @@ function CatalogEntry() {
     { enabled: !kindParam && !!slug, retry: false }
   );
   if (!kindParam) {
-    if (bySlug.isLoading) return <Loading label="Finding it in the catalog…" />;
+    if (bySlug.isLoading) return <PageFallback />;
     const matches = (bySlug.data?.entries ?? []).filter((e) => e.slug === slug);
     if (bySlug.error || matches.length === 0) {
       return (
         <Failure
           message={
             bySlug.error
-              ? `The pod couldn't read its catalog: ${bySlug.error.message}`
+              ? "The pod couldn't read its catalog."
               : `"${slug}" is not in this pod's catalog.`
           }
+          detail={bySlug.error ? errorDetail(bySlug.error) : undefined}
+          onRetry={bySlug.error ? () => void bySlug.refetch() : undefined}
         />
       );
     }
@@ -202,75 +203,59 @@ function Detail({ target }: { target: Target }) {
     { retry: false, staleTime: 60_000 }
   );
 
-  if (entry.isLoading) return <Loading label="Loading…" />;
+  if (entry.isLoading) return <PageFallback />;
   if (entry.error || !entry.data) {
     return (
       <Failure
-        message={entry.error?.message ?? "This catalog entry is unavailable."}
+        message={
+          readableError(entry.error?.message) ??
+          "This catalog entry is unavailable right now."
+        }
+        detail={entry.error ? errorDetail(entry.error) : undefined}
         onRetry={() => void entry.refetch()}
       />
     );
   }
   const pkg = entry.data;
-  const Icon = kindIcon(pkg.objectKind);
   const description = readableDescription(pkg.description);
 
   return (
     <PageShell className="flex flex-col gap-4">
-      <BackLink />
-
       {/* ── 1. What it is ─────────────────────────────────────────────── */}
-      <header className="flex flex-col gap-2">
-        <div className="flex items-start gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-foreground/[0.06] text-foreground/70">
-            <Icon size={17} />
-          </span>
-          <div className="min-w-0 flex flex-col gap-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-                {pkg.name}
-              </h1>
-              <Chip
-                size="sm"
-                radius="sm"
-                variant="flat"
-                className="text-[11px]"
-              >
-                {catalogKindLabel(pkg.objectKind)}
-              </Chip>
-              {pkg.installed && (
-                <Chip
-                  size="sm"
-                  radius="sm"
-                  variant="flat"
-                  className="text-[11px] text-status-healthy"
-                >
-                  Installed
-                </Chip>
-              )}
-            </div>
-            <p className="break-all font-mono text-[11.5px] text-foreground/65">
-              {pkg.id}
-              {pkg.version ? ` · ${pkg.version}` : ""}
-            </p>
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-foreground/65">
-              <span>From {pkg.sourceName}</span>
-              <TrustChip trust={pkg.trust} />
-            </div>
-          </div>
+      <div className="flex flex-col gap-2">
+        <ObjectHeader
+          kind={pkg.objectKind}
+          noun={catalogKindLabel(pkg.objectKind)}
+          title={pkg.name}
+          summary={description}
+          status={
+            pkg.installed ? { kind: "healthy", label: "Installed" } : null
+          }
+          breadcrumb={[
+            { label: "Marketplace", href: navHref("marketplace") },
+            { label: pkg.name },
+          ]}
+        />
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-foreground/65 sm:pl-14">
+          <span>From {pkg.sourceName}</span>
+          <TrustChip trust={pkg.trust} />
         </div>
-        {description && (
-          <p className="text-[13px] leading-relaxed text-foreground/70">
-            {description}
-          </p>
-        )}
-      </header>
+      </div>
 
       {/* ── 2. What it contains ───────────────────────────────────────── */}
       <Contents pkg={pkg} />
 
       {/* ── 3 + 4. What it will do here, then confirm ─────────────────── */}
       <InstallPanel target={target} pkg={pkg} />
+
+      <AdvancedPanel
+        ids={[
+          { label: "Package id", value: pkg.id },
+          ...(pkg.version ? [{ label: "Version", value: pkg.version }] : []),
+          { label: "Source id", value: pkg.source },
+          ...(pkg.vendor ? [{ label: "Vendor id", value: pkg.vendor }] : []),
+        ]}
+      />
     </PageShell>
   );
 }
@@ -282,7 +267,7 @@ function Contents({ pkg }: { pkg: CatalogDetail }) {
       <SectionCard title="What's in this package">
         <p className="text-[12.5px] text-foreground/65">
           {pkg.definitionError
-            ? `The pod couldn't fetch the full package from ${pkg.sourceName} right now: ${pkg.definitionError}`
+            ? `The pod couldn't fetch the full package from ${pkg.sourceName} right now.`
             : pkg.installMode === "open_site"
               ? `Listed for show by ${pkg.sourceName} — the pod never fetches its contents.`
               : pkg.installMode === "refuse"
@@ -418,7 +403,10 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
     } catch (err) {
       setStage({
         kind: "failed",
-        message: err instanceof Error ? err.message : "The check failed.",
+        message:
+          readableError(errorDetail(err)) ??
+          "The pod couldn't check this package. Nothing was written.",
+        detail: errorDetail(err),
       });
     }
   }
@@ -441,11 +429,20 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
         acknowledge: accepted,
       });
       setStage({ kind: "done", summary: describeInstall(outcome) });
-      void utils.marketplace.get.invalidate();
+      // What an install can change: the package's own "Installed", the
+      // Installed/Tools tabs, and the spaces a template creates.
+      void Promise.all([
+        utils.marketplace.get.invalidate(),
+        utils.capabilities.invalidate(),
+        utils.workspaces.invalidate(),
+      ]);
     } catch (err) {
       setStage({
         kind: "failed",
-        message: err instanceof Error ? err.message : "The install failed.",
+        message:
+          readableError(errorDetail(err)) ??
+          "The install didn't go through. Nothing changed — try again.",
+        detail: errorDetail(err),
       });
     }
   }
@@ -455,22 +452,17 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
   if (stage.kind === "failed") {
     return (
       <SectionCard title="Install didn't go through">
-        <div className="flex items-start gap-2.5">
-          <CircleAlert size={15} className="mt-0.5 shrink-0 text-status-down" />
-          <div className="flex min-w-0 flex-col gap-2">
-            <p className="text-[12.5px] leading-relaxed text-foreground/75">
-              {stage.message}
-            </p>
-            <Button
-              size="sm"
-              radius="sm"
-              variant="flat"
-              className="w-fit"
-              onPress={() => setStage({ kind: "idle" })}
-            >
-              Start over
-            </Button>
-          </div>
+        <div className="flex min-w-0 flex-col gap-2">
+          <ErrorNote message={stage.message} detail={stage.detail} />
+          <Button
+            size="sm"
+            radius="md"
+            variant="flat"
+            className="w-fit"
+            onPress={() => setStage({ kind: "idle" })}
+          >
+            Start over
+          </Button>
         </div>
       </SectionCard>
     );
@@ -484,6 +476,11 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
     );
     const confirms = confirmItems(preflight);
     const unconfirmed = confirms.some((c) => accepted[c.key] !== true);
+    const blockedHint = installBlockedHint({
+      ok: preflight.ok,
+      missing: missing.map((p) => p.label ?? p.name),
+      unconfirmed,
+    });
     const brings = riskLines(preflight.risks);
     return (
       <SectionCard
@@ -534,7 +531,7 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
                 <Input
                   key={p.name}
                   size="sm"
-                  radius="sm"
+                  radius="md"
                   variant="bordered"
                   label={p.label ?? p.name}
                   description={p.description ?? undefined}
@@ -575,14 +572,12 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
           </div>
         )}
         <Provenance pkg={pkg} />
-        <div className="mt-4 flex items-center gap-2 border-t border-foreground/[0.07] pt-3">
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-foreground/[0.07] pt-3">
           <Button
             size="sm"
-            radius="sm"
+            radius="md"
             color="primary"
-            isDisabled={
-              installing || !preflight.ok || missing.length > 0 || unconfirmed
-            }
+            isDisabled={installing || blockedHint !== null}
             isLoading={installing}
             onPress={() => void runInstall(preflight)}
           >
@@ -590,13 +585,18 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
           </Button>
           <Button
             size="sm"
-            radius="sm"
+            radius="md"
             variant="light"
             isDisabled={installing}
             onPress={() => setStage({ kind: "idle" })}
           >
             Cancel
           </Button>
+          {blockedHint && !installing && (
+            <p className="w-full text-[12px] text-foreground/65 sm:w-auto">
+              {blockedHint}
+            </p>
+          )}
         </div>
       </SectionCard>
     );
@@ -609,7 +609,7 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
     >
       <Button
         size="sm"
-        radius="sm"
+        radius="md"
         color="primary"
         className="w-fit"
         isLoading={stage.kind === "checking"}
@@ -644,7 +644,7 @@ function SpacePicker({
     <Select
       label={need === "required" ? "Add it to" : "Install for"}
       size="sm"
-      radius="sm"
+      radius="md"
       variant="bordered"
       className="max-w-md"
       placeholder={spaces.isLoading ? "Loading spaces…" : "Choose a space"}
@@ -657,7 +657,7 @@ function SpacePicker({
       }}
       errorMessage={
         spaces.error
-          ? `Couldn't list spaces: ${spaces.error.message}`
+          ? "Couldn't list the spaces. Reload the page to try again."
           : undefined
       }
       isInvalid={!!spaces.error}
@@ -712,17 +712,17 @@ function Result({ summary }: { summary: InstallSummary }) {
           {summary.workspaceId && (
             <Link
               href={`/workspaces/${summary.workspaceId}`}
-              className="inline-flex w-fit items-center gap-1.5 text-[12.5px] font-medium text-primary hover:underline"
+              className={`inline-flex w-fit items-center gap-1.5 rounded-sm text-[12.5px] font-medium text-primary hover:underline ${FOCUS_RING}`}
             >
               Open the space <ArrowRight size={13} />
             </Link>
           )}
           {summary.proposalId && (
             <Link
-              href="/review"
-              className="inline-flex w-fit items-center gap-1.5 text-[12.5px] font-medium text-primary hover:underline"
+              href={navHref("review", { focus: summary.proposalId })}
+              className={`inline-flex w-fit items-center gap-1.5 rounded-sm text-[12.5px] font-medium text-primary hover:underline ${FOCUS_RING}`}
             >
-              Open Review <ArrowRight size={13} />
+              Open in Review <ArrowRight size={13} />
             </Link>
           )}
         </div>
@@ -862,29 +862,16 @@ function PlanGroup({
 }
 
 /**
- * Where the entry came from: the catalog source the pod synced it from, and
- * the vendor id the catalog records. The catalog stores publisher ids, not
- * names, so an id is shown as an id rather than dressed up as an identity.
+ * Where the entry came from, in words. The catalog stores publisher ids, not
+ * names, so the vendor id and the source id live in Advanced rather than
+ * being dressed up as an identity here.
  */
 function Provenance({ pkg }: { pkg: CatalogDetail }) {
   return (
-    <div className="mt-3 flex flex-col gap-1 border-t border-foreground/[0.07] pt-3">
-      <p className="text-[12px] text-foreground/65">
-        From the {pkg.sourceName} catalog
-        {pkg.official
-          ? "."
-          : ` — a source this pod's admin added (${pkg.source}).`}
-      </p>
-      {pkg.vendor ? (
-        <p className="font-mono text-[11px] text-foreground/65">
-          vendor {pkg.vendor}
-        </p>
-      ) : (
-        <p className="text-[11.5px] text-foreground/65">
-          No vendor is named — the catalog stores publisher ids, not names.
-        </p>
-      )}
-    </div>
+    <p className="mt-3 border-t border-foreground/[0.07] pt-3 text-[12px] text-foreground/65">
+      From the {pkg.sourceName} catalog
+      {pkg.official ? "." : " — a source an admin of this pod added."}
+    </p>
   );
 }
 
@@ -899,7 +886,7 @@ function Choose({ matches }: { matches: CatalogEntry[] }) {
               <Link
                 href={catalogDetailHref(m)}
                 prefetch={false}
-                className="text-[12.5px] font-medium text-primary hover:underline"
+                className={`rounded-sm text-[12.5px] font-medium text-primary hover:underline ${FOCUS_RING}`}
               >
                 {m.name} — {catalogKindLabel(m.objectKind)} from {m.sourceName}
               </Link>
@@ -911,28 +898,30 @@ function Choose({ matches }: { matches: CatalogEntry[] }) {
   );
 }
 
-function Loading({ label }: { label: string }) {
-  return (
-    <PageShell>
-      <BackLink />
-      <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/65">
-        <Spinner size="sm" /> {label}
-      </div>
-    </PageShell>
-  );
-}
-
 function Failure({
   message,
+  detail,
   onRetry,
 }: {
   message: string;
+  detail?: string;
   onRetry?: () => void;
 }) {
   return (
-    <PageShell>
+    <PageShell className="flex flex-col gap-4">
       <BackLink />
-      <ResourceRowError message={message} onRetry={onRetry} />
+      <ErrorNote message={message} detail={detail} />
+      {onRetry && (
+        <Button
+          size="sm"
+          radius="md"
+          variant="flat"
+          className="w-fit"
+          onPress={onRetry}
+        >
+          Retry
+        </Button>
+      )}
     </PageShell>
   );
 }
@@ -940,8 +929,8 @@ function Failure({
 function BackLink() {
   return (
     <Link
-      href="/marketplace"
-      className="inline-flex w-fit items-center gap-1.5 text-[12px] text-foreground/65 hover:text-foreground"
+      href={navHref("marketplace")}
+      className={`inline-flex w-fit items-center gap-1.5 rounded-sm text-[12px] text-foreground/65 hover:text-foreground ${FOCUS_RING}`}
     >
       <ArrowLeft size={13} /> Marketplace
     </Link>

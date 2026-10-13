@@ -37,8 +37,9 @@ export function countNoun(kind: string, count: number): string {
 
 /**
  * The detail link for a catalog entry. `kind` and `source` ride the query:
- * a slug is unique only within (source, kind), and the pod refuses an
- * ambiguous install rather than picking one.
+ * a slug is unique only within (source, kind), and a request that names no
+ * source reads Synap's official catalog — so a link to another source's
+ * package must say which source.
  */
 export function catalogDetailHref(entry: {
   kind: string;
@@ -72,6 +73,29 @@ export function catalogFreshness(
         : `From ${s.name} · refreshed ${when}.`;
     })
     .join(" ");
+}
+
+/**
+ * Why Install is still disabled on a checked plan, in one line — or null when
+ * it can be pressed. The first unmet condition wins, in the order the page
+ * reads top to bottom.
+ */
+export function installBlockedHint(state: {
+  ok: boolean;
+  /** Labels of the required fields still empty. */
+  missing: string[];
+  unconfirmed: boolean;
+}): string | null {
+  if (!state.ok) {
+    return "It can't install until the problems listed above are fixed.";
+  }
+  if (state.missing.length > 0) {
+    return `Fill in ${state.missing.join(", ")} first.`;
+  }
+  if (state.unconfirmed) {
+    return "Tick each box above to confirm, then install.";
+  }
+  return null;
 }
 
 export type InstallTone = "healthy" | "stale";
@@ -207,4 +231,13 @@ export function describeInstall(outcome: InstallOutcome): InstallSummary {
     default:
       return done("Installed.");
   }
+}
+
+/**
+ * A Marketplace tab's label, with its count when the tab's list is already in
+ * the cache — "Installed (14)". Unknown stays bare: never a 0 that only means
+ * "not loaded yet".
+ */
+export function tabLabel(label: string, count: number | undefined): string {
+  return count === undefined ? label : `${label} (${count})`;
 }
