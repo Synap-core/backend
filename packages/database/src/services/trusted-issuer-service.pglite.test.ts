@@ -92,20 +92,15 @@ describe("TrustedIssuerService — a decision actions the pending notification",
     const id = await pendingIssuer("https://a.example.com");
     await notify(id, "admin-1");
     await notify(id, "admin-2", "snoozed");
-    await svc.approve(id, "admin-1", ["auth:exchange-user"]);
+    await svc.approvePending(id, "admin-1", ["auth:exchange-user"]);
     expect(await statuses(id)).toEqual(["actioned", "actioned"]);
   });
 
-  it("reject and the first-link approvePending clear it too", async () => {
+  it("reject clears it too", async () => {
     const rejected = await pendingIssuer("https://r.example.com");
     await notify(rejected, "admin-1");
     await svc.reject(rejected, "admin-1", "not ours");
     expect(await statuses(rejected)).toEqual(["actioned"]);
-
-    const linked = await pendingIssuer("https://l.example.com");
-    await notify(linked, "admin-1");
-    await svc.approvePending(linked, "admin-1", ["identity:link-user"]);
-    expect(await statuses(linked)).toEqual(["actioned"]);
   });
 
   it("touches only THIS issuer's rows, and keeps a dismissed row dismissed", async () => {
@@ -124,5 +119,46 @@ describe("TrustedIssuerService — a decision actions the pending notification",
     await notify(id, "admin-2");
     expect(await svc.approvePending(id, "admin-2", ["sync"])).toBeNull();
     expect(await statuses(id)).toEqual(["unread"]);
+  });
+});
+
+describe("TrustedIssuerService.approveFromStatus — a compare-and-set on status", () => {
+  const status = async (id: string) =>
+    (
+      await pg().query<{ status: string; allowed_scopes: string[] }>(
+        `select status, allowed_scopes from trusted_issuers where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+
+  it("a stale 'pending' approve never resurrects a revoked issuer", async () => {
+    const id = await pendingIssuer("https://s.example.com");
+    await svc.revoke(id, "admin-1");
+    expect(await svc.approvePending(id, "admin-2", ["sync"])).toBeNull();
+    expect((await status(id)).status).toBe("revoked");
+  });
+
+  it("from 'approved' changes the scopes of an approved issuer only", async () => {
+    const id = await pendingIssuer("https://c.example.com");
+    await svc.approvePending(id, "admin-1", ["sync"]);
+    const row = await svc.approveFromStatus(
+      id,
+      "admin-1",
+      ["sync", "source-config:write"],
+      "approved"
+    );
+    expect(row?.allowedScopes).toEqual(["sync", "source-config:write"]);
+    await svc.reject(id, "admin-1", "no");
+    expect(
+      await svc.approveFromStatus(id, "admin-1", ["sync"], "approved")
+    ).toBeNull();
+    expect((await status(id)).status).toBe("rejected");
+  });
+
+  it("from 'revoked' reinstates deliberately", async () => {
+    const id = await pendingIssuer("https://v.example.com");
+    await svc.revoke(id, "admin-1");
+    const row = await svc.approveFromStatus(id, "admin-1", ["sync"], "revoked");
+    expect(row?.status).toBe("approved");
   });
 });

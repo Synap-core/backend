@@ -1447,7 +1447,7 @@ federationRouter.post("/identity-links", authMiddleware, async (c) => {
     columns: { id: true, email: true },
   });
   const issuerService = new TrustedIssuerService();
-  let issuer = await issuerService.getByUrl(issuerUrl);
+  const issuer = await issuerService.getByUrl(issuerUrl);
   if (!issuer || issuer.status !== "approved") {
     return c.json(
       {
@@ -1799,12 +1799,17 @@ async function approveBootstrapIssuer(input: {
       approvedIssuer.allowedScopes.includes(capability)
     )
   ) {
-    issuer = await issuerService.approve(approvedIssuer.id, ownerUserId, [
-      ...new Set([
-        ...approvedIssuer.allowedScopes,
-        ...bootstrapIssuerCapabilities,
-      ]),
-    ]);
+    issuer = await issuerService.approveFromStatus(
+      approvedIssuer.id,
+      ownerUserId,
+      [
+        ...new Set([
+          ...approvedIssuer.allowedScopes,
+          ...bootstrapIssuerCapabilities,
+        ]),
+      ],
+      "approved"
+    );
   }
   return Boolean(
     issuer &&
