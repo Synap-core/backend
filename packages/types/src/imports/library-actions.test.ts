@@ -83,6 +83,14 @@ describe("detectLibraryActions — receipts", () => {
     expect(a?.label).toBe("Keep receipt · 42.50 EUR · Monoprix");
   });
 
+  it("an amount written before its € sign, at the end of a line", () => {
+    const [a] = detectLibraryActions({
+      text: "TOTAL 42,50 €\nReceipt from Monoprix",
+      now: NOW,
+    }).filter((x) => x.kind === "receipt");
+    expect(a?.value).toMatchObject({ amount: 42.5, currency: "EUR" });
+  });
+
   it("an amount with no receipt word is no receipt", () => {
     expect(
       kinds(

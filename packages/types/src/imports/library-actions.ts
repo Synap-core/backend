@@ -382,7 +382,7 @@ const CODE = "EUR|USD|GBP|CHF|CAD|AUD|JPY";
 const NUMBER =
   "\\d{1,3}(?:[ \\u00a0.,]\\d{3})*(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?";
 const AMOUNT_RE = new RegExp(
-  `(?:([€$£¥])\\s?(${NUMBER}))|(?:\\b(${CODE})\\s?(${NUMBER}))|(?:(${NUMBER})\\s?(€|${CODE})\\b)`,
+  `(?:([€$£¥])\\s?(${NUMBER}))|(?:\\b(${CODE})\\s?(${NUMBER}))|(?:(${NUMBER})\\s?(€|(?:${CODE})\\b))`,
   "gi"
 );
 
