@@ -290,7 +290,12 @@ const movingWire = z.object({
    * yet · attach one". Asks you first, then live, then most recently moved;
    * capped (`UNATTACHED_CAP`), narrowed by the session's own space / project.
    */
-  unattached: z.array(movingLineWire),
+  unattached: z.array(
+    movingLineWire.extend({
+      /** The SESSION's own space; null = none. */
+      workspaceId: z.string().nullable(),
+    })
+  ),
 });
 
 export type LifecycleWire = z.infer<typeof lifecycleWire>;

@@ -165,7 +165,13 @@ export type MovingWorkLine = MovingItem["work"][number];
  * An open session on NO thing (A7): Moving now draws it as "No thing yet ·
  * attach one" — the session line, without a kind (never a worker).
  */
-export type UnattachedLine = Omit<MovingWorkLine, "kind">;
+export type UnattachedLine = Omit<MovingWorkLine, "kind"> & {
+  /**
+   * The SESSION's own space (null = none) — so a space whose only work is
+   * unattached still gets its Moving-now chip (`movingSpaceChips`).
+   */
+  workspaceId: string | null;
+};
 
 export interface MovingRead {
   items: MovingItem[];
@@ -1001,7 +1007,9 @@ export async function readMoving(
       [...onThings, ...loose].map((w) => w.sessionId)
     ),
   ]);
-  const lineOf = (w: Omit<OpenWorkRow, "thingId">): UnattachedLine => {
+  const lineOf = (
+    w: Omit<OpenWorkRow, "thingId">
+  ): Omit<UnattachedLine, "workspaceId"> => {
     const actor = w.agentIds[0] ? names.get(w.agentIds[0]) : undefined;
     return {
       sessionId: w.sessionId,
@@ -1059,7 +1067,10 @@ export async function readMoving(
     items: items.slice(0, input.limit).map(({ rank: _rank, ...item }) => item),
     // Asks you first, then live, then the most recently moved (the read order).
     unattached: loose
-      .map(lineOf)
+      .map((w): UnattachedLine => ({
+        ...lineOf(w),
+        workspaceId: w.workspaceId,
+      }))
       .map((line, i) => ({ line, i }))
       .sort(
         (a, b) =>

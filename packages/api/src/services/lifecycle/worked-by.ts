@@ -209,8 +209,11 @@ export async function loadWorkedBy(
 /** Subjectless sessions shown in Moving now — a nudge, not a session list (the shared cap). */
 export const UNATTACHED_CAP = MOVING_UNATTACHED_CAP;
 
-/** An open session ON NO thing (`loadUnattachedWork`). */
-export type UnattachedWorkRow = Omit<OpenWorkRow, "thingId">;
+/** An open session ON NO thing (`loadUnattachedWork`), with its own space. */
+export type UnattachedWorkRow = Omit<OpenWorkRow, "thingId"> & {
+  /** The SESSION's space (`focus_sessions.workspace_id`); null = none. */
+  workspaceId: string | null;
+};
 
 /**
  * The open WORK sessions on no thing (homes A7): open, no subject, and no
@@ -237,6 +240,7 @@ export async function loadUnattachedWork(
       expectedOutputs: focusSessions.expectedOutputs,
       startedAt: focusSessions.startedAt,
       updatedAt: focusSessions.updatedAt,
+      workspaceId: focusSessions.workspaceId,
       automationId: drizzleSql<
         string | null
       >`${focusSessions.metadata}->>'automationId'`,
@@ -284,5 +288,6 @@ export async function loadUnattachedWork(
     startedAt: new Date(r.startedAt),
     updatedAt: new Date(r.updatedAt),
     live: isSessionWorkingNow(live.get(r.id), now),
+    workspaceId: r.workspaceId ?? null,
   }));
 }

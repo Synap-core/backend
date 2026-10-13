@@ -486,6 +486,11 @@ export interface UnattachedLineInput {
   live: boolean;
   asksYou: boolean;
   since: string;
+  /**
+   * The SESSION's own space; null = none. Absent = a pod older than the field
+   * (homes A7 wire) — its space is unknown, so space counts become unknown.
+   */
+  workspaceId?: string | null;
 }
 
 /**
@@ -641,15 +646,19 @@ export interface MovingSpaceChip {
  * THE "Moving now" space chips.
  *
  *   - Which: every PRODUCING space of the home read, plus any other space a
- *     moving thing sits in; a space the home read does not hold gets no chip
- *     (no title to give it). When the counts are known, a space with nothing
- *     moving is left out (a chip is a door; an empty list is no place to go).
+ *     moving thing OR a subjectless session sits in; a space the home read
+ *     does not hold gets no chip (no title to give it). When the counts are
+ *     known, a space with nothing moving is left out (a chip is a door; an
+ *     empty list is no place to go).
  *   - Order: the home read's (producing first, busiest first) — stable, so a
  *     chip never jumps when the list narrows.
- *   - Counts: from `items`, the UNNARROWED moving read of the same scope
- *     (pod or project). `items === null` (failed / loading) or a read that hit
- *     its `limit` (capped: a count would be a floor shown as a total) makes
- *     EVERY count null — unknown, never 0. `total` follows the same rule.
+ *   - Counts: from `items` + `unattached`, the UNNARROWED moving read of the
+ *     same scope (pod or project) — the rows the narrowed list will draw.
+ *     `items === null` (failed / loading), a read that hit its `limit`, an
+ *     unattached list at its cap (a count would be a floor shown as a total)
+ *     or an unattached line with no `workspaceId` (an older pod: its space is
+ *     unknown) makes EVERY count null — unknown, never 0. `total` likewise,
+ *     except that a line's missing space does not make the total unknown.
  *
  * `spaces === null` (no home read) ⇒ no chips: a chip without its space's
  * words is not drawable.
@@ -661,24 +670,27 @@ export function movingSpaceChips(
     limit?: number;
     /**
      * The same read's subjectless sessions: they are rows of the list, so
-     * "All" counts them. They carry no space, so no space chip does. A list
-     * at its cap (`min(limit, MOVING_UNATTACHED_CAP)`) makes the total unknown.
+     * "All" counts them, and each counts in its SESSION's space (a space
+     * whose only work is unattached still gets its chip). A list at its cap
+     * (`min(limit, MOVING_UNATTACHED_CAP)`) makes every count unknown.
      */
-    unattached?: readonly unknown[];
+    unattached?: readonly Pick<UnattachedLineInput, "workspaceId">[];
   } = {}
 ): { total: number | null; chips: MovingSpaceChip[] } {
-  const known =
-    items !== null && (opts.limit === undefined || items.length < opts.limit);
   const loose = opts.unattached ?? [];
   const looseCap =
     opts.limit === undefined
       ? MOVING_UNATTACHED_CAP
       : Math.min(opts.limit, MOVING_UNATTACHED_CAP);
-  const totalKnown = known && loose.length < looseCap;
+  const totalKnown =
+    items !== null &&
+    (opts.limit === undefined || items.length < opts.limit) &&
+    loose.length < looseCap;
+  const known = totalKnown && loose.every((l) => l.workspaceId !== undefined);
   const counts = new Map<string, number>();
-  for (const item of items ?? []) {
-    if (item.workspaceId)
-      counts.set(item.workspaceId, (counts.get(item.workspaceId) ?? 0) + 1);
+  for (const row of [...(items ?? []), ...loose]) {
+    if (row.workspaceId)
+      counts.set(row.workspaceId, (counts.get(row.workspaceId) ?? 0) + 1);
   }
   const chips: MovingSpaceChip[] = [];
   for (const space of spaces ?? []) {

@@ -906,6 +906,17 @@ describe("lifecycle.moving — unattached work (A7)", () => {
         live: false,
       });
       expect(all.unattached[1]!.asksYou).toBe(false);
+      // Each line names its SESSION's space (null = none), so a space whose
+      // only work is unattached still gets its Moving-now chip.
+      expect(all.unattached.map((u) => u.workspaceId)).toEqual([
+        null,
+        MISC,
+        null,
+      ]);
+      // A thing's work lines carry no space of their own (the item has it).
+      expect(
+        all.items.flatMap((i) => i.work).some((w) => "workspaceId" in w)
+      ).toBe(false);
       const loose = all.unattached.map((u) => u.sessionId);
       for (const id of [onThing, draft, closed, targets])
         expect(loose).not.toContain(id);

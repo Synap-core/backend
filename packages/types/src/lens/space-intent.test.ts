@@ -722,15 +722,51 @@ describe("movingNowRows: one list, asks-you first (homes A7)", () => {
 describe("movingSpaceChips counts the subjectless rows in All (homes A7)", () => {
   it("All = things + subjectless sessions; a list at the subjectless cap makes it unknown", () => {
     const items = [{ workspaceId: "w1" }, { workspaceId: "w1" }];
-    expect(chipsOf(items, [], { limit: 100, unattached: [1, 2] }).total).toBe(
-      4
-    );
-    const full = Array.from({ length: MOVING_UNATTACHED_CAP }, (_, i) => i);
+    const none = { workspaceId: null };
+    expect(
+      chipsOf(items, [], { limit: 100, unattached: [none, none] }).total
+    ).toBe(4);
+    const full = Array.from({ length: MOVING_UNATTACHED_CAP }, () => none);
     expect(
       chipsOf(items, [], { limit: 100, unattached: full }).total
     ).toBeNull();
     expect(
-      chipsOf(items, [], { limit: 5, unattached: [1, 2, 3, 4, 5] }).total
+      chipsOf(items, [], {
+        limit: 5,
+        unattached: [none, none, none, none, none],
+      }).total
     ).toBeNull();
+  });
+
+  const space = (workspaceId: string, kind: "producing" | "library") => ({
+    workspaceId,
+    name: workspaceId,
+    label: workspaceId,
+    source: "template" as const,
+    kind,
+    produces: [],
+  });
+
+  it("a subjectless session counts in its SESSION's space: a space whose only work is unattached gets its chip", () => {
+    const home = [space("dev", "producing"), space("ops", "library")];
+    const { total, chips } = chipsOf([{ workspaceId: "dev" }], home, {
+      limit: 30,
+      unattached: [{ workspaceId: "ops" }, { workspaceId: null }],
+    });
+    expect(total).toBe(3);
+    expect(chips).toEqual([
+      { workspaceId: "dev", title: "dev", count: 1 },
+      { workspaceId: "ops", title: "ops", count: 1 },
+    ]);
+  });
+
+  it("a line with no workspaceId (an older pod) makes the space counts unknown, not the total", () => {
+    const home = [space("dev", "producing"), space("ops", "library")];
+    const { total, chips } = chipsOf([{ workspaceId: "dev" }], home, {
+      limit: 30,
+      unattached: [{}],
+    });
+    expect(total).toBe(2);
+    expect(chips).toEqual([{ workspaceId: "dev", title: "dev", count: null }]);
   });
 });
