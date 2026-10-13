@@ -22,6 +22,10 @@ concurrency:
   group: npm-publish
   cancel-in-progress: false
 
+# Least privilege: jobs that need more declare it themselves.
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -35,16 +39,16 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Version comes from the repo's `packageManager: pnpm@10.28.0`, which pins
       # it MORE precisely than a `version: 10` input would. Passing both makes
       # action-setup fail with "Multiple versions of pnpm specified" — which
       # happened here and meant this pipeline never published. Do not add
       # `version:` back.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           # Node 20 is DELIBERATE. An artifact was once published from node
           # 22.22.3 and broke consumers; CI pins the version `.node-version`

@@ -22,6 +22,10 @@ on:
 # by DIGEST + migration level + compose sha + deploy bundle. `synap update
 # --release <id|fast|stable>` consumes it; nothing pulls a mutable tag.
 
+# Least privilege by default; each job grants only what it needs.
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
 
@@ -32,7 +36,10 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       contents: read
       packages: write
@@ -61,13 +68,21 @@ jobs:
     steps:
       - name: Resolve ref and sha
         id: resolve
+        # Event data goes through env, never interpolated into the script
+        # (a branch name is attacker-controlled text).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_REF: ${{ github.ref }}
+          GH_SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            REF="refs/heads/${{ github.event.workflow_run.head_branch }}"
-            SHA="${{ github.event.workflow_run.head_sha }}"
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            REF="refs/heads/${RUN_HEAD_BRANCH}"
+            SHA="${RUN_HEAD_SHA}"
           else
-            REF="${{ github.ref }}"
-            SHA="${{ github.sha }}"
+            REF="${GH_REF}"
+            SHA="${GH_SHA}"
           fi
           {
             echo "ref=${REF}"
@@ -78,15 +93,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.resolve.outputs.sha }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -101,7 +116,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.full }}
           tags: |
@@ -113,7 +128,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build Backend image (local)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: ./deploy/Dockerfile
@@ -171,7 +186,7 @@ jobs:
 
       - name: Push Backend image to GHCR
         id: push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: ./deploy/Dockerfile
@@ -190,7 +205,10 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       contents: read
       packages: write
@@ -200,13 +218,21 @@ jobs:
     steps:
       - name: Resolve ref and sha
         id: resolve
+        # Event data goes through env, never interpolated into the script
+        # (a branch name is attacker-controlled text).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_REF: ${{ github.ref }}
+          GH_SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            REF="refs/heads/${{ github.event.workflow_run.head_branch }}"
-            SHA="${{ github.event.workflow_run.head_sha }}"
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            REF="refs/heads/${RUN_HEAD_BRANCH}"
+            SHA="${RUN_HEAD_SHA}"
           else
-            REF="${{ github.ref }}"
-            SHA="${{ github.sha }}"
+            REF="${GH_REF}"
+            SHA="${GH_SHA}"
           fi
           {
             echo "ref=${REF}"
@@ -217,15 +243,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.resolve.outputs.sha }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -241,7 +267,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/pod-agent
           tags: |
@@ -254,7 +280,7 @@ jobs:
 
       - name: Build and push pod-agent image
         id: push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: ./deploy/pod-agent
           file: ./deploy/pod-agent/Dockerfile
@@ -273,7 +299,10 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       contents: read
       packages: write
@@ -283,13 +312,21 @@ jobs:
     steps:
       - name: Resolve ref and sha
         id: resolve
+        # Event data goes through env, never interpolated into the script
+        # (a branch name is attacker-controlled text).
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_REF: ${{ github.ref }}
+          GH_SHA: ${{ github.sha }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            REF="refs/heads/${{ github.event.workflow_run.head_branch }}"
-            SHA="${{ github.event.workflow_run.head_sha }}"
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            REF="refs/heads/${RUN_HEAD_BRANCH}"
+            SHA="${RUN_HEAD_SHA}"
           else
-            REF="${{ github.ref }}"
-            SHA="${{ github.sha }}"
+            REF="${GH_REF}"
+            SHA="${GH_SHA}"
           fi
           {
             echo "ref=${REF}"
@@ -300,15 +337,15 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.resolve.outputs.sha }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -324,7 +361,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.owner }}/pod-admin
           tags: |
@@ -337,7 +374,7 @@ jobs:
 
       - name: Build and push pod-admin image
         id: push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           file: ./apps/pod-admin/Dockerfile
@@ -372,18 +409,19 @@ jobs:
       release_id: ${{ steps.id.outputs.id }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.build-and-push-backend-api.outputs.resolved_sha }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Release id + channel
         id: id
+        env:
+          REF: ${{ needs.build-and-push-backend-api.outputs.resolved_ref }}
+          SHA: ${{ needs.build-and-push-backend-api.outputs.resolved_sha }}
         run: |
-          REF="${{ needs.build-and-push-backend-api.outputs.resolved_ref }}"
-          SHA="${{ needs.build-and-push-backend-api.outputs.resolved_sha }}"
           if [[ "$REF" == refs/tags/v* ]]; then
             echo "id=${REF#refs/tags/}" >> "$GITHUB_OUTPUT"; echo "channel=stable" >> "$GITHUB_OUTPUT"
           else
@@ -423,7 +461,11 @@ jobs:
           CHANNEL: ${{ steps.id.outputs.channel }}
           SHA: ${{ needs.build-and-push-backend-api.outputs.resolved_sha }}
         run: |
-          ASSETS=(release.json "synap-deploy-${ID}.tar.gz")
+          # install.sh + the cloud-init template ride on every release AND on the
+          # channel pointer: the CP fetches <base>/<channel-stable|id>/pod-user-data.yaml.tmpl
+          # and the template fetches <dir>/install.sh.
+          INSTALLER_ASSETS=(install.sh deploy/cloud-init/pod-user-data.yaml.tmpl)
+          ASSETS=(release.json "synap-deploy-${ID}.tar.gz" "${INSTALLER_ASSETS[@]}")
           if gh release view "$ID" >/dev/null 2>&1; then
             gh release upload "$ID" "${ASSETS[@]}" --clobber
           elif [ "$CHANNEL" = stable ]; then
@@ -435,7 +477,7 @@ jobs:
           POINTER="channel-${CHANNEL}"
           gh release view "$POINTER" >/dev/null 2>&1 || gh release create "$POINTER" --target "$SHA" --prerelease --latest=false \
             --title "$POINTER" --notes "Channel pointer: release.json here is the latest $CHANNEL release. Apply: synap update --release $CHANNEL"
-          gh release upload "$POINTER" release.json --clobber
+          gh release upload "$POINTER" release.json "${INSTALLER_ASSETS[@]}" --clobber
 
   notify-control-plane:
     runs-on: ubuntu-latest
@@ -456,6 +498,8 @@ jobs:
         env:
           CP_URL: ${{ secrets.CONTROL_PLANE_API_URL }}
           CP_SECRET: ${{ secrets.CP_WEBHOOK_SECRET }}
+          RESOLVED_SHA: ${{ needs.build-and-push-backend-api.outputs.resolved_sha }}
+          RESOLVED_REF: ${{ needs.build-and-push-backend-api.outputs.resolved_ref }}
         run: |
           # A MISSING SECRET IS A CONFIG ERROR AND MUST FAIL LOUDLY.
           # Both were unset here too: the curl posted to a bare path with an
@@ -472,8 +516,8 @@ jobs:
           fi
           PAYLOAD=$(jq -n \
             --arg tag "${{ steps.tag.outputs.tag }}" \
-            --arg gitSha "${{ needs.build-and-push-backend-api.outputs.resolved_sha }}" \
-            --arg gitRef "${{ needs.build-and-push-backend-api.outputs.resolved_ref }}" \
+            --arg gitSha "$RESOLVED_SHA" \
+            --arg gitRef "$RESOLVED_REF" \
             '{tag: $tag, gitSha: $gitSha, gitRef: $gitRef}')
 
           SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$CP_SECRET" | awk '{print $2}')
