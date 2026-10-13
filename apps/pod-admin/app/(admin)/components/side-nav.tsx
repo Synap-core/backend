@@ -41,6 +41,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
+  RefreshCw,
   ScrollText,
   Search,
   Shapes,
@@ -93,6 +94,7 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   Store,
   ShieldCheck,
   HardDrive,
+  RefreshCw,
   ScrollText,
 };
 

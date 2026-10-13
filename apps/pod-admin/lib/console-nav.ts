@@ -37,6 +37,7 @@ export type NavIconName =
   | "Store"
   | "ShieldCheck"
   | "HardDrive"
+  | "RefreshCw"
   | "ScrollText";
 
 /**
@@ -271,9 +272,7 @@ export const CONSOLE_NAV = [
         id: "updates",
         href: "/updates",
         label: "Updates",
-        // No dedicated glyph: `side-nav.tsx` is the shell's, and a new icon
-        // there is a shell change, not an Updates one.
-        icon: "Sparkles",
+        icon: "RefreshCw",
         audience: "admin",
       },
       {
