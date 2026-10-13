@@ -39,6 +39,7 @@ import {
   toLifecycleWire,
 } from "../services/lifecycle/board-lens.js";
 import { readHome, readMoving } from "../services/lifecycle/homes.js";
+import { countNeedsYouByScope } from "./signals.js";
 import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { loadCardFaces } from "../services/lifecycle/card-face.js";
@@ -667,7 +668,9 @@ export const lifecycleRouter = router({
   home: podProcedure
     .input(z.object({ projectId: z.string().uuid().optional() }).default({}))
     .output(homeWire)
-    .query(({ input, ctx }) => readHome(ctx, input)),
+    .query(({ input, ctx }) =>
+      readHome(ctx, input, (scopes) => countNeedsYouByScope(ctx, scopes))
+    ),
 
   /**
    * MOVING NOW: the things with open work on them (a session on it, an

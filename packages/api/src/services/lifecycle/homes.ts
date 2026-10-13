@@ -15,7 +15,8 @@
  *     kind's door opens reads the same lifecycle, conditions and subject;
  *   - columns come from THE status grouping (`groupThingsByStatus`);
  *   - needs-you is `countNeedsYouByScope` — `signals.count`'s own read and
- *     count, read ONCE and narrowed per space / kind;
+ *     count, read ONCE and narrowed per space / kind; the router hands it in
+ *     (`NeedsYouByScopeRead`), so this service imports no router;
  *   - "being worked" is the board's workedBy predicate (`loadOpenWork`).
  *
  * The intent is the template's (`settings.intent`, projected on install); a
@@ -67,10 +68,6 @@ import {
   roleVisibilityConditions,
   type StatusGroup,
 } from "./status-groups.js";
-import {
-  countNeedsYouByScope,
-  type SignalsCtx,
-} from "../../routers/signals.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
 import {
   newBoardLensMemo,
@@ -172,12 +169,27 @@ export interface MovingRead {
   unattached: UnattachedLine[];
 }
 
+/** What the trpc ctx carries that these reads use. */
+export interface HomesCtx {
+  userId: string;
+  workspaceId?: string | null;
+  agentUserId?: string | null;
+  isHubProtocol?: boolean;
+}
+
 /**
- * The caller context — the signals read's own (`countNeedsYouByScope` takes
- * it as is), so a ctx-shape change fails the build instead of hiding behind a
- * cast.
+ * The page's ONE needs-you read (`countNeedsYouByScope`, `routers/signals`),
+ * handed in by the router over its own ctx — a service never imports a
+ * router. Per scope: null = that scope's read failed (never 0).
  */
-export type HomesCtx = SignalsCtx & { userId: string };
+export type NeedsYouByScopeRead = (scopes: {
+  projectId?: string;
+  spaces: ReadonlyArray<{ workspaceId: string; profileSlugs: string[] }>;
+}) => Promise<{
+  total: number | null;
+  bySpace: Map<string, number | null>;
+  byKind: Map<string, Map<string, number | null>>;
+}>;
 
 const readerOf = (ctx: HomesCtx) => ({
   userId: ctx.userId,
@@ -635,7 +647,8 @@ async function mapLimit<T, R>(
 
 export async function readHome(
   ctx: HomesCtx,
-  input: { projectId?: string }
+  input: { projectId?: string },
+  readNeedsYou: NeedsYouByScopeRead
 ): Promise<HomeRead> {
   const spaces = await listHomeSpaces(ctx.userId);
   const stored = new Map(spaces.map((s) => [s.id, storedIntentOf(s.settings)]));
@@ -684,7 +697,7 @@ export async function readHome(
     settle("open work", openWorkAndAsks),
     // ONE attention read for every scope on the page (null per failed scope).
     settle("needs-you", () =>
-      countNeedsYouByScope(ctx, {
+      readNeedsYou({
         ...(input.projectId ? { projectId: input.projectId } : {}),
         spaces: intents.map((i) => ({
           workspaceId: i.space.id,
