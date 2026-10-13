@@ -17,13 +17,13 @@ import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
 import type { DangerAction } from "../../../_lib/object/danger-zone";
 import { mcpReach, mcpState, statePill } from "./app-inventory";
 import {
-  AppSection,
   CopyableId,
   ExactValues,
   KeyList,
   PeopleList,
   appFailure,
 } from "./app-object-parts";
+import { SectionCard } from "../../components/section-card";
 import { ViaChip } from "./via-chip";
 
 export function McpAppObject({
@@ -43,13 +43,14 @@ export function McpAppObject({
       Promise.all([
         utils.oauthClients.adminGet.invalidate({ clientId }),
         utils.oauthClients.adminList.invalidate(),
+        utils.apiKeys.invalidate(),
       ]),
   });
   useReauthOnUnauthorized(query.error, revoke.error);
 
   if (query.isLoading) return frame.loading("Loading app…");
   const client = query.data;
-  if (query.error || !client) return appFailure(frame, query.error);
+  if (query.error || !client) return appFailure(frame, clientId, query.error);
 
   const state = mcpState(client);
   const reach = mcpReach(client.scopes);
@@ -86,12 +87,15 @@ export function McpAppObject({
   return frame.object({
     header: {
       kind: "application",
-      noun: "App",
+      noun: (
+        <>
+          App <ViaChip via="mcp" />
+        </>
+      ),
       title: client.clientName,
       summary: `${reach}.`,
       status: statePill(state),
       breadcrumb: frame.breadcrumb?.(client.clientName),
-      secondaryActions: <ViaChip via="mcp" />,
     },
     facts: [
       {
@@ -117,19 +121,21 @@ export function McpAppObject({
           />
         )}
 
-        <AppSection title="Identity">
+        <SectionCard variant="flat" title="Identity">
           <CopyableId label="Client id" value={client.clientId} />
           <ExactValues label="Redirect URIs" values={client.redirectUris} />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="What it can reach"
           hint={`${reach}, as an agent: the pod's agent rules decide which of its changes wait for review.`}
         >
           <ExactValues label="Scopes" values={client.scopes} />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="Who uses it"
           hint="Each person who approved it on the consent screen holds a key of their own."
         >
@@ -140,11 +146,11 @@ export function McpAppObject({
             }))}
             empty="No one has connected it."
           />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection title="Keys">
+        <SectionCard variant="flat" title="Keys">
           <KeyList keys={client.keys} empty="No key was minted for it." />
-        </AppSection>
+        </SectionCard>
       </>
     ),
     advanced: {

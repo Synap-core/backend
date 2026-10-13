@@ -11,7 +11,7 @@
 import { Suspense, useEffect } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { navHref } from "../../../lib/console-nav";
+import { computerHref } from "../../../lib/console-nav";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ComputerList } from "./_lib/computer-list";
 import {
@@ -55,7 +55,7 @@ function ComputersInner() {
         isLoading={list.isLoading || isAuthRedirecting}
         isError={list.isError && !isAuthRedirecting}
         onRetry={() => void list.refetch()}
-        hrefFor={(id) => `${navHref("computers")}/${encodeURIComponent(id)}`}
+        hrefFor={computerHref}
         showOwner
         viewerId={me.data?.id ?? null}
       />

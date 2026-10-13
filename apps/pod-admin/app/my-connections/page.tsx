@@ -440,8 +440,8 @@ export default function MyConnectionsPage() {
           </>
         }
         confirmLabel="Revoke key"
-        /* Scoped to THIS key — see origins/page.tsx for the cross-row
-           staleness this prevents. */
+        /* Scoped to THIS key: a shared `isPending` would spin this dialog
+           while another key's revoke is still in flight. */
         isPending={
           revoke.isPending && revoke.variables?.keyId === pendingRevoke?.id
         }

@@ -137,7 +137,10 @@ function Facts({
           {
             label: "Runs on",
             value: (
-              <Link href={computerHref} className="hover:underline">
+              <Link
+                href={computerHref}
+                className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
                 {row.hostComputer.name}
               </Link>
             ),

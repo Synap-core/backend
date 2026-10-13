@@ -14,6 +14,7 @@
  */
 
 import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
+import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 
 export type ComputerKeyState =
@@ -65,8 +66,6 @@ export const RECONNECT_COMMAND = AGENT_CONNECT_COMMAND.replace(
 export const CONNECT_COMMAND = AGENT_CONNECT_COMMAND;
 
 // ─── Key state → words ───────────────────────────────────────────────
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Whole days until `expiresAt` (at least 1 while it has not passed). */
 export function daysLeft(expiresAt: Date | string, now: number): number {

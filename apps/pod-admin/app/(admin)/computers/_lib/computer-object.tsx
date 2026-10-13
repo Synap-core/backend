@@ -30,8 +30,14 @@ import {
   shortId,
 } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { navHref } from "../../../../lib/console-nav";
+import { CommandLine } from "../../../_lib/command-line";
 import type { DangerAction } from "../../../_lib/object/danger-zone";
-import { couldNotLoad, loadFailure } from "../../../_lib/object/load-failure";
+import {
+  loadFailure,
+  notFound,
+  type FailureWording,
+} from "../../../_lib/object/load-failure";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
 import {
   ResourceRow,
@@ -40,7 +46,6 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
-import { CommandLine } from "./computer-list";
 import {
   ComputerKeyLifetimeModal,
   RenameComputerModal,
@@ -64,6 +69,12 @@ import {
 const ACTIVITY_SHOWN = 25;
 /** Agents the Overview previews before "Open Agents tab". */
 const AGENTS_PREVIEW = 3;
+
+/**
+ * A computer has no page in the Synap app — this one is the only one — so a
+ * failed read never offers to open it there.
+ */
+const NOT_IN_APP: FailureWording = { inApp: false };
 
 /** What the viewer may follow from this page (admin pages link out more). */
 export interface ComputerLinks {
@@ -113,13 +124,14 @@ export function ComputerObject({
 
   if (isLoading) return frame.loading("Loading computer…");
   if (!computer) {
+    // No error and no row: the list loaded and this computer is not in it.
     return frame.failure({
       kind: "machine",
       id,
       failure:
-        loadFailure(error, "Computer") ??
-        loadFailure({ data: { code: "NOT_FOUND" } }, "Computer") ??
-        couldNotLoad("Computer"),
+        loadFailure(error, "Computer", NOT_IN_APP) ??
+        notFound("Computer", NOT_IN_APP),
+      openIn: false,
     });
   }
 
@@ -163,9 +175,11 @@ export function ComputerObject({
           ),
           onConfirm: async () => {
             const res = await revoke.mutateAsync({ machineId: c.id });
+            // Its keys and its agents' keys stop: the Keys list reads them too.
             await Promise.all([
               utils.machines.invalidate(),
               utils.agentUsers.list.invalidate(),
+              utils.apiKeys.invalidate(),
             ]);
             if (res.status === "proposed") {
               setProposalId(res.proposalId);
@@ -231,7 +245,7 @@ export function ComputerObject({
                     c.owner && links.ownerHref ? (
                       <Link
                         href={links.ownerHref(c.owner.id)}
-                        className="hover:underline"
+                        className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 hover:underline"
                       >
                         {capitalize(owner)}
                       </Link>
@@ -253,13 +267,13 @@ export function ComputerObject({
             </p>
             <Button
               as={Link}
-              href={`/proposal/${encodeURIComponent(proposalId)}`}
+              href={navHref("review", { focus: proposalId })}
               size="sm"
               variant="flat"
               radius="md"
               endContent={<ArrowRight className="h-3.5 w-3.5" />}
             >
-              Open the request
+              Open in Review
             </Button>
           </div>
         ) : undefined,
@@ -275,7 +289,8 @@ export function ComputerObject({
                     c.agents.length > AGENTS_PREVIEW ? (
                       <Link
                         href="?tab=agents"
-                        className="text-[12px] text-foreground/65 hover:text-foreground hover:underline"
+                        scroll={false}
+                        className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 text-[12px] text-foreground/65 hover:text-foreground hover:underline"
                       >
                         Open Agents tab
                       </Link>

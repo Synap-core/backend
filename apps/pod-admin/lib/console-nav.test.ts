@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeNavId,
+  computerHref,
   consoleRedirects,
   navForRole,
   navHref,
@@ -36,6 +37,11 @@ describe("navHref", () => {
       "/review?type=access"
     );
     expect(navHref("home")).toBe("/home");
+  });
+
+  it("opens a computer on its own page, from every surface alike", () => {
+    expect(computerHref("c 1")).toBe("/computers/c%201");
+    expect(SEARCH_DESTINATION.computer.href("c 1")).toBe(computerHref("c 1"));
   });
 
   it("routes pending issuers into Review's Access filter", () => {

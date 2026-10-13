@@ -3,7 +3,7 @@
 /**
  * `ObjectFrame` — WHERE an object page draws, kept apart from WHAT it draws.
  *
- * One object page per kind, two frames (D6): the `/open` receiver card a
+ * One object page per kind, two frames: the `/open` receiver card a
  * member lands on from a link (`OPEN_FRAME`, `app/open/open-shell.tsx`), and
  * the console route an admin reaches from a list (`consoleFrame`). The body
  * (`views/*`) fetches, decides and composes the `ObjectPage`; the frame only
@@ -27,6 +27,12 @@ export interface ObjectFrame {
     kind: string;
     id: string;
     failure: LoadFailure;
+    /**
+     * `false` for an object the Synap app has no page for (a computer, a
+     * connected app): no "Open in app" beside the failure. Word the failure
+     * to match (`loadFailure(..., { inApp: false })`).
+     */
+    openIn?: boolean;
   }) => ReactNode;
   object: (props: ObjectPageProps) => ReactNode;
   /** Crumbs above the title. A receiver has none; the console names its list. */
@@ -35,10 +41,14 @@ export interface ObjectFrame {
   pathFor?: (kind: string, id: string) => string;
 }
 
-/** The console's frame: the page itself, under a crumb back to `list`. */
+/**
+ * The console's frame: the page itself, under a crumb back to `list`. A
+ * self-service list (`/my-computers`) passes its `personal` column width.
+ */
 export function consoleFrame(list: {
   label: string;
   href: string;
+  width?: "console" | "personal";
 }): ObjectFrame {
   const crumbs = (title: string): ObjectCrumb[] => [
     { label: list.label, href: list.href },
@@ -48,12 +58,12 @@ export function consoleFrame(list: {
     breadcrumb: crumbs,
     pathFor: (_kind, id) => `${list.href}/${encodeURIComponent(id)}`,
     loading: (label) => (
-      <PageShell>
+      <PageShell width={list.width}>
         <PageSkeleton rows={3} label={label} />
       </PageShell>
     ),
-    failure: ({ kind, id, failure }) => (
-      <PageShell>
+    failure: ({ kind, id, failure, openIn = true }) => (
+      <PageShell width={list.width}>
         <ObjectPage
           header={{
             kind,
@@ -61,13 +71,15 @@ export function consoleFrame(list: {
             summary: failure.message,
             status: { kind: "unknown", label: failure.chip },
             breadcrumb: crumbs(failure.chip),
-            secondaryActions: <OpenInAppLink type={kind} id={id} />,
+            secondaryActions: openIn ? (
+              <OpenInAppLink type={kind} id={id} />
+            ) : undefined,
           }}
         />
       </PageShell>
     ),
     object: (props) => (
-      <PageShell>
+      <PageShell width={list.width}>
         <ObjectPage {...props} />
       </PageShell>
     ),

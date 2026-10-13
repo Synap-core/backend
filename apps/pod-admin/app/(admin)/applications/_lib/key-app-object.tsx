@@ -32,12 +32,12 @@ import type { DangerAction } from "../../../_lib/object/danger-zone";
 import { ResourceRowEmpty } from "../../components/resource-row";
 import { personName, statePill } from "./app-inventory";
 import {
-  AppSection,
   CopyableId,
   KeyList,
   PeopleList,
   appFailure,
 } from "./app-object-parts";
+import { SectionCard } from "../../components/section-card";
 import { ViaChip } from "./via-chip";
 
 export function KeyAppObject({
@@ -50,15 +50,20 @@ export function KeyAppObject({
   const router = useRouter();
   const utils = trpc.useUtils();
   const query = trpc.apps.adminGet.useQuery({ publicId }, { retry: false });
+  // Ending an app ends its keys too: the Keys list reads them.
   const refresh = () =>
     Promise.all([
       utils.apps.adminGet.invalidate(),
       utils.apps.adminList.invalidate(),
+      utils.apiKeys.invalidate(),
     ]);
   const revoke = trpc.apps.adminRevoke.useMutation({ onSuccess: refresh });
   const remove = trpc.apps.adminRemove.useMutation({
     onSuccess: async () => {
-      await utils.apps.adminList.invalidate();
+      await Promise.all([
+        utils.apps.adminList.invalidate(),
+        utils.apiKeys.invalidate(),
+      ]);
       router.push(navHref("apps"));
     },
   });
@@ -66,7 +71,7 @@ export function KeyAppObject({
 
   if (query.isLoading) return frame.loading("Loading app…");
   const app = query.data;
-  if (query.error || !app) return appFailure(frame, query.error);
+  if (query.error || !app) return appFailure(frame, publicId, query.error);
 
   const state = resolveAppConnectionState(app);
   const access = appHolderAccess(app, { workspaceNames: app.workspace_names });
@@ -128,7 +133,11 @@ export function KeyAppObject({
   return frame.object({
     header: {
       kind: "application",
-      noun: "App",
+      noun: (
+        <>
+          App <ViaChip via="key" />
+        </>
+      ),
       title: app.name,
       summary: app.description || access.sentence,
       status: statePill(state),
@@ -144,10 +153,9 @@ export function KeyAppObject({
           radius="md"
           color="primary"
         >
-          {resolveConnectionAction("review").label}
+          Open in Review
         </Button>
       ) : undefined,
-      secondaryActions: <ViaChip via="key" />,
     },
     facts: [
       { label: "Owner", value: owner ?? "Unknown" },
@@ -170,7 +178,7 @@ export function KeyAppObject({
           />
         )}
 
-        <AppSection title="Identity">
+        <SectionCard variant="flat" title="Identity">
           <CopyableId
             label="App id"
             value={app.public_id}
@@ -181,9 +189,10 @@ export function KeyAppObject({
               </>
             }
           />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="What it can reach"
           hint={app.revoked_at ? undefined : access.sentence}
         >
@@ -227,9 +236,10 @@ export function KeyAppObject({
               </ul>
             </div>
           )}
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="Who uses it"
           hint="A key app acts as its owner, within the spaces its key names."
         >
@@ -237,14 +247,15 @@ export function KeyAppObject({
             people={app.owner ? [{ ...app.owner, note: "Owner" }] : []}
             empty="Its owner's account is gone."
           />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="Keys"
           hint="Only its owner can issue a new key, from their Connected page. Revoking the app below stops every key it holds."
         >
           <KeyList keys={app.keys} empty="No key has been issued yet." />
-        </AppSection>
+        </SectionCard>
       </>
     ),
     advanced: {
