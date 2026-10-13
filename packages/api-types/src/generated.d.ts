@@ -13448,6 +13448,16 @@ export interface MachineView {
 	accessName: string | null;
 	agents: HostedAgentView[];
 }
+/** Who a computer belongs to: the person who approved it on `/device`. */
+export interface MachineOwnerView {
+	id: string;
+	/** Their display name, else their email. */
+	name: string;
+}
+export interface AdminMachineView extends MachineView {
+	/** null = the approver's row is gone (or was never recorded). */
+	owner: MachineOwnerView | null;
+}
 declare const TRUST_RUNGS: readonly [
 	"ask",
 	"propose",
@@ -32484,10 +32494,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
+				includeComputers?: boolean | undefined;
 			};
 			output: {
 				pendingProposalId: string | null;
 				operatedByViewer: boolean;
+				hostComputer: {
+					id: string;
+					name: string;
+				} | null;
 				reach: "pod" | "dispatch" | "pull";
 				binding: AgentBindingSummary | null;
 				id: string;
@@ -32500,6 +32515,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentMetadata: AgentMetadata | null;
 				isPersonalAgent: boolean;
 				createdVia: AgentCreatedVia | null;
+				hostUserId: string | null;
 				joinedAt: Date | null;
 				lastSeenAt: string | null;
 				host: string | null;
@@ -32628,6 +32644,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: MachineView[];
+			meta: object;
+		}>;
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: AdminMachineView[];
 			meta: object;
 		}>;
 		rename: import("@trpc/server").TRPCMutationProcedure<{

@@ -481,3 +481,63 @@ describe("agentUsers.governance — read only by those the agent answers to", ()
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
+
+describe("agentUsers.list — computers and the agents they host", () => {
+  type HostRow = {
+    id: string;
+    hostComputer: { id: string; name: string } | null;
+  };
+  const COMPUTER = randomUUID();
+  const HOSTED = randomUUID();
+
+  beforeAll(async () => {
+    // A computer is an agent user of type `machine`; its agent points at it.
+    await q(
+      `insert into users (id, email, name, user_type, agent_type, agent_metadata, created_by_user_id)
+         values ($1, 'computer@x', null, 'agent', 'machine', '{"hostname":"devbox"}', $3),
+                ($2, 'hosted@x', 'Claude Code', 'agent', 'claude-code', null, $3)`,
+      [COMPUTER, HOSTED, OWNER]
+    );
+    await q(`update users set host_user_id = $1 where id = $2`, [
+      COMPUTER,
+      HOSTED,
+    ]);
+  });
+
+  const listed = async (input: { includeComputers?: boolean }) =>
+    new Map(
+      (
+        (await caller(OWNER).list({
+          workspaceId: null,
+          ...input,
+        })) as HostRow[]
+      ).map((r) => [r.id, r])
+    );
+
+  it("keeps computers by default (the desktop opens one through the roster)", async () => {
+    const rows = await listed({});
+    expect(rows.has(COMPUTER)).toBe(true);
+    expect(rows.get(COMPUTER)!.hostComputer).toBeNull();
+  });
+
+  it("names the computer an agent runs on, by the roster's own rule", async () => {
+    const rows = await listed({});
+    expect(rows.get(HOSTED)!.hostComputer).toEqual({
+      id: COMPUTER,
+      name: "devbox",
+    });
+    // Not on a computer → null, never a guess.
+    expect(rows.get(AGENT)!.hostComputer).toBeNull();
+  });
+
+  it("includeComputers:false leaves computers out and keeps their agents", async () => {
+    const rows = await listed({ includeComputers: false });
+    expect(rows.has(COMPUTER)).toBe(false);
+    expect(rows.get(HOSTED)!.hostComputer).toEqual({
+      id: COMPUTER,
+      name: "devbox",
+    });
+    // An agent with no agent type is not a computer.
+    expect(rows.has(AGENT)).toBe(true);
+  });
+});
