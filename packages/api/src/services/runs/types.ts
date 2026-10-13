@@ -142,9 +142,10 @@ export interface RunGroup {
   /**
    * Runs that FAILED (`failed` only — a `blocked_by_policy` run is a calm
    * governance outcome, not a failure) within the last
-   * `RECENT_FAILURE_WINDOW_DAYS` (7) days —
-   * the HEALTH number (W2 calm). A flow is "failing" iff this is > 0; a flow
-   * that failed 271 times in June and has run clean since is not failing now.
+   * `RECENT_FAILURE_WINDOW_DAYS` (7, `@synap-core/types/run-activity`) days,
+   * each dated by `coalesce(completedAt, startedAt)` — the HEALTH number. A
+   * flow is "failing" iff this is > 0; a flow that failed 271 times in June
+   * and has run clean since is not failing now.
    */
   recentFailedCount: number;
   /** Runs still running. */

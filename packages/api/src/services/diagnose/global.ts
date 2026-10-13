@@ -31,22 +31,21 @@ import {
   ownAgentUserFilter,
   authoredByUser,
 } from "../agent-identity-service.js";
+import { listRuns, listRunGroups } from "../runs/index.js";
 import {
-  listRuns,
-  listRunGroups,
+  DEFAULT_STUCK_THRESHOLD_HOURS,
   RECENT_FAILURE_WINDOW_DAYS,
   isRecentFailure,
-} from "../runs/index.js";
+} from "@synap-core/types/run-activity";
 import {
   collapseProposalsToClusters,
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
 import { agentProposalCap } from "../../utils/permission-check.js";
-import {
-  DEFAULT_STUCK_THRESHOLD_HOURS,
-  type GlobalHealthReport,
-  type HealthSection,
-  type HealthStatus,
+import type {
+  GlobalHealthReport,
+  HealthSection,
+  HealthStatus,
 } from "./types.js";
 import {
   IDLE_STALL_MINUTES,

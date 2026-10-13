@@ -122,6 +122,8 @@ export const runsRouter = router({
           .optional(),
         limit: z.number().min(1).max(100).optional(),
         cursor: z.string().min(1).optional(),
+        /** One flow's group (automation or playbook id). */
+        flowId: z.string().uuid().optional(),
       })
     )
     .query(async ({ ctx, input }) => {

@@ -90,6 +90,7 @@ import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import {
   deriveRunActivity,
+  RECENT_FAILURE_WINDOW_DAYS,
   type SessionActivityWire,
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
@@ -1534,14 +1535,14 @@ export async function listRunsPage(
   const last = runs.at(-1);
   // An undateable last row cannot anchor a cursor; it already sorts last, so
   // nothing dateable can follow it in this order.
-  const lastAt = last?.startedAt?.getTime?.();
+  const anchored =
+    last !== undefined &&
+    last.startedAt instanceof Date &&
+    !Number.isNaN(last.startedAt.getTime());
   return {
     runs,
     nextCursor:
-      after.length > limit &&
-      last &&
-      lastAt !== undefined &&
-      !Number.isNaN(lastAt)
+      after.length > limit && last && anchored
         ? encodeRunCursor({
             at: last.startedAt,
             flowType: last.flowType,
@@ -1563,6 +1564,11 @@ export interface ListRunGroupsInput {
   limit?: number;
   /** Opaque keyset cursor returned by `listRunGroupsPage`. */
   cursor?: string;
+  /**
+   * One flow's group only (an automation or playbook id) — the server's group
+   * facts for a single template or rule, so no client re-derives them.
+   */
+  flowId?: string;
 }
 
 /**
@@ -1681,14 +1687,17 @@ export async function listRunGroupsPage(
   const scope = input.scope ?? {};
   const limit = Math.min(input.limit ?? 50, 100);
   const cursor = input.cursor ? decodeRunGroupCursor(input.cursor) : undefined;
+  const flowIds = input.flowId ? [input.flowId] : undefined;
 
   const jobs: Array<Promise<RunGroup[]>> = [];
   if (!flowType || flowType === "automation")
     jobs.push(
-      groupAutomationRuns(userId, scope.workspaceId, limit + 1, cursor)
+      groupAutomationRuns(userId, scope.workspaceId, limit + 1, cursor, flowIds)
     );
   if (!flowType || flowType === "playbook")
-    jobs.push(groupPlaybookRuns(userId, scope.workspaceId, limit + 1, cursor));
+    jobs.push(
+      groupPlaybookRuns(userId, scope.workspaceId, limit + 1, cursor, flowIds)
+    );
 
   const merged = (await Promise.all(jobs)).flat();
   merged.sort((a, b) => {
@@ -1739,30 +1748,6 @@ function withinRecentRuns(
     cols.id,
     db.select({ id: ranked.id }).from(ranked).where(lte(ranked.rn, window))
   );
-}
-
-/**
- * The window a failure counts as CURRENT for health (W2 calm): "failing" =
- * distinct flows with a failed run in the last 7 days, never lifetime runs.
- * Lifetime stays on `failedCount` for the drill-down.
- */
-export const RECENT_FAILURE_WINDOW_DAYS = 7;
-
-/**
- * THE recent-failure rule in TypeScript — the twin of the SQL in the run
- * groupers: a failure's instant is `completedAt ?? startedAt`, recent iff after
- * `now - RECENT_FAILURE_WINDOW_DAYS`. Used for ledgers the groupers do not
- * cover (chat turns), so flow and chat failures are windowed ONE way.
- *
- * `failed` only: a `blocked_by_policy` run is a calm governance outcome, not a
- * failure — it never makes a flow "failing".
- */
-export function isRecentFailure(
-  run: { completedAt?: Date | string | null; startedAt: Date | string },
-  nowMs: number
-): boolean {
-  const at = new Date(run.completedAt ?? run.startedAt).getTime();
-  return at > nowMs - RECENT_FAILURE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 }
 
 async function groupAutomationRuns(
