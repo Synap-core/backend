@@ -1,6 +1,6 @@
 # Capture = your words · Library = everything you bring in: plan
 
-**Status:** plan approved in principle (founder, 2026-10-13: "agree on all recommendations"). Each wave starts with its own session.
+**Status:** plan approved (founder, 2026-10-13). **L1–L5 built on `claude/festive-turing-ebdyco` (backend, synap-app, browser, relay), reviewed and pushed 2026-10-13; not yet merged or deployed.** What is left: L0 (merge, deploy, bump the relay `monorepo.json` pin, dogfood), then L6 only once the removal criteria in §2 hold. Reference for what shipped: [`LIBRARY.md`](LIBRARY.md).
 **Decision brief:** pod document "Decision brief — Capture = your words, Library = everything you bring in" (session "Decision: capture = your words…").
 **Evidence:** these reports in the build scratchpad:
 
