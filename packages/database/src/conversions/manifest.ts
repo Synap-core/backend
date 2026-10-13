@@ -1898,6 +1898,57 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
         worksAt: "works_at",
       },
     },
+
+    // ─── Object-first homes H0 (founder 10-13): the dev lifecycles ────────────
+    //
+    // builder-workspace declares `featureStatus` / `storyStatus` as the
+    // feature's and story's ONE lifecycle, keeping the keys live pods already
+    // hold. Older features and stories were written with a stray, undeclared
+    // `status` key instead (todo / building / shipped / stable / …), so a home
+    // counting by lifecycle sees them as having no status. Fold it onto the
+    // lifecycle property; a lifecycle value already set wins (the stray key is
+    // then just stripped). Unmapped values keep their key. Operator-run.
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-feature.status-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_feature",
+      sourceKey: "status",
+      targetKey: "featureStatus",
+      valueMap: {
+        todo: "backlog",
+        exploring: "backlog",
+        building: "in_progress",
+        "in-progress": "in_progress",
+        shipped: "done",
+        stable: "done",
+        done: "done",
+      },
+      preferTargetValues: [
+        "backlog",
+        "spec",
+        "in_progress",
+        "in_review",
+        "done",
+        "cancelled",
+      ],
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.status-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "status",
+      targetKey: "storyStatus",
+      valueMap: {
+        "not-started": "backlog",
+        exploring: "backlog",
+        building: "in-progress",
+        shipped: "done",
+        done: "done",
+      },
+      preferTargetValues: ["backlog", "ready", "in-progress", "done", "dropped"],
+    },
   ],
 };
 
