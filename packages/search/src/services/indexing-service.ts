@@ -12,7 +12,7 @@ import {
   eq,
   isNull,
   loadDocumentBodyTexts,
-  notStagedImportItemWhere,
+  searchIndexableDocumentWhere,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
@@ -193,10 +193,11 @@ export class IndexingService {
 
       case "documents": {
         const docRows = await db.query.documents.findMany({
-          // A staged import item is never indexed (see fullReindex below).
+          // A staged import item is not indexed — except a Library item, which
+          // is (title-only until its light read; see fullReindex below).
           where: and(
             inArray(schema.documents.id, ids),
-            notStagedImportItemWhere(schema.documents.metadata)
+            searchIndexableDocumentWhere(schema.documents.metadata)
           ),
         });
         // The documents table has NO `content` column. Index the stored body —
@@ -375,10 +376,14 @@ export class IndexingService {
             break;
           case "documents":
             dbRecords = await db.query.documents.findMany({
-              // A STAGED import item (Import → Curate → Build) is not indexed
-              // until its group is built — nobody's record yet.
+              // A STAGED import item is not indexed until its group is built —
+              // except a Library item (`importItem`): kept means findable, by
+              // its title before the light read and its read text after.
               where: (d, { isNull, and }) =>
-                and(isNull(d.deletedAt), notStagedImportItemWhere(d.metadata)),
+                and(
+                  isNull(d.deletedAt),
+                  searchIndexableDocumentWhere(d.metadata)
+                ),
             });
             break;
           case "views":

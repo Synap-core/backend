@@ -42,3 +42,14 @@ export const LIBRARY_ITEM_KEY = "importItem";
 export function notLibraryItemWhere(metadataColumn: AnyPgColumn): SQL {
   return sql`NOT COALESCE(${metadataColumn} ? ${LIBRARY_ITEM_KEY}, false)`;
 }
+
+/**
+ * What the search index holds of `documents`: everything but a staged import
+ * item — EXCEPT a Library item, which is indexed from the moment it is kept
+ * (CAPTURE_LIBRARY_PLAN decision 4): by its title before the light read, by
+ * its read text after (`loadDocumentBodyTexts`). Library items stay out of the
+ * capture and document LISTS (`notLibraryItemWhere`), not out of search.
+ */
+export function searchIndexableDocumentWhere(metadataColumn: AnyPgColumn): SQL {
+  return sql`(${notStagedImportItemWhere(metadataColumn)} OR COALESCE(${metadataColumn} ? ${LIBRARY_ITEM_KEY}, false))`;
+}
