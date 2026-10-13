@@ -545,6 +545,54 @@ export interface InputOverride {
 	default?: string;
 	options?: string[];
 }
+/** Where the last template apply on a space stands. */
+export type TemplateApplyStateName = 
+/** Layer 1 is being built (legacy `provisioningStatus: "pending"`). */
+"building"
+/** Built, nothing unfinished. The STAMP (`version`) says "converged". */
+ | "active"
+/** Layer 2 only filed proposals (nothing failed). */
+ | "awaiting-approval"
+/** A layer-2 item errored. */
+ | "partial"
+/** This door ran layer 1 only; the living layers were never applied. */
+ | "layer-2-not-run"
+/** An apply threw (`failedLayer` says which layer). */
+ | "failed";
+/** One overlay pack recorded on a space (legacy `installedPacks[]`). */
+export interface TemplatePackEntry {
+	slug: string;
+	/** The pack version that CONVERGED; `null` = recorded, not yet earned. */
+	version: string | null;
+	installedAt: string;
+}
+export interface TemplateState {
+	/**
+	 * The template identity (also the `package_slug` column). `null` for a space
+	 * built from a definition with no catalog identity, or one that only carries
+	 * packs — such a space still has a build state (and a resume ledger).
+	 */
+	slug: string | null;
+	/** The version stamp — written only on convergence. */
+	version: string | null;
+	state: TemplateApplyStateName;
+	/**
+	 * The version an UNFINISHED apply (awaiting-approval · partial ·
+	 * layer-2-not-run) was converging to — never the stamp (legacy
+	 * `templateApply.version`).
+	 */
+	pendingVersion?: string | null;
+	failedLayer?: 1 | 2;
+	failedStep?: string;
+	error?: string;
+	/** Layer-1 resume ledger. */
+	completedSteps?: string[];
+	proposals?: string[];
+	failures?: string[];
+	packs?: TemplatePackEntry[];
+	/** When this state was last written ("" = unknown, a legacy record). */
+	at: string;
+}
 declare enum ProfileScope {
 	SYSTEM = "system",// Available to all users (pod-wide)
 	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
@@ -562,14 +610,6 @@ export interface AiPosture {
 	attachOutputs?: boolean;
 	directives?: string[];
 }
-/**
- * Workspaces Schema - Multi-user workspace support
- *
- * A workspace can be:
- * - Personal (single user)
- * - Team (multiple users with roles)
- * - Enterprise (advanced features)
- */
 export type WorkspaceSidebarSurfacePlacement = "main" | "side" | "floating" | "modal" | "popover" | "embed";
 export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "medium" | "full";
 export type WorkspaceSidebarAppRendererType = "native" | "external" | "iframe-srcdoc";
@@ -1302,6 +1342,15 @@ export interface WorkspaceSettings {
 		version: string;
 		installedAt: string;
 	}>;
+	/**
+	 * THE template install state (APPLY-ONE-DOOR-PLAN §2): identity, stamp,
+	 * apply state, resume ledger, packs. Read ONLY through `readTemplateState`
+	 * and written ONLY through `writeTemplateState` (utils/template-state.ts),
+	 * which also mirrors the legacy keys below (`packageVersion`,
+	 * `provisioningStatus`, `failedStep*`, `completedSteps`, `templateApply`,
+	 * `installedPacks`) until W6 folds them in. Server-owned.
+	 */
+	template?: TemplateState;
 	/** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
 	createdBy?: "user" | "provisioning" | "plugin";
 	/** ISO timestamp when provisioning started (set immediately on workspace creation) */
@@ -3198,7 +3247,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "human" | "automation" | "playbook";
+			data: "human" | "agent" | "playbook" | "automation";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3213,7 +3262,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "human" | "automation" | "playbook";
+			$type: "human" | "agent" | "playbook" | "automation";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3319,7 +3368,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3487,6 +3536,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
+			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3498,7 +3548,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -3781,7 +3830,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "human" | "capability" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4578,7 +4627,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -19963,7 +20012,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20017,7 +20066,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20715,7 +20764,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20769,7 +20818,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20817,7 +20866,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20871,7 +20920,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -20933,7 +20982,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20987,7 +21036,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -35028,7 +35077,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -41685,6 +41734,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[];
 					windowed: boolean;
 					stuck: number | null;
+					unset?: number | undefined;
 				}[];
 				doneWindowed: number;
 				lostWindowed: number;
@@ -41746,6 +41796,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							label: string;
 							category: "active" | "paused" | "open" | "done" | "lost" | null;
 							count: number;
+							unset?: number | undefined;
 						}[];
 						needsYou: number | null;
 						beingWorked: number | null;
@@ -41757,12 +41808,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | null;
 					}[];
 				}[];
+				podWide: {
+					profileSlug: string;
+					label: string;
+					plural: string;
+					count: number;
+				}[] | null;
 				needsYou: {
 					total: number | null;
 					bySpace: {
 						workspaceId: string;
 						count: number | null;
 					}[];
+					podLevel: number | null;
 				};
 			};
 			meta: object;
