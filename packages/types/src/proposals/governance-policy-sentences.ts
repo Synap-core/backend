@@ -62,3 +62,53 @@ export function isGovernancePolicySentence(
 ): boolean {
   return typeof text === "string" && SENTENCES.has(text.trim());
 }
+
+// ─── The pod's other system-written "why" sentences ──────────────────────────
+//
+// Besides the engine's sentence above, the gate wrote two DEFAULTS of its own
+// into `data.reasoning` when the proposer gave none: the generic placeholder,
+// and the RBAC "exceeds your workspace role" line. Both read on the review page
+// as the proposer's own WHY. The pod now returns them to the caller and the
+// notification only (`policyReason`); rows already written still carry them.
+// The builders below are the ONE spelling — `permission-check.ts` composes its
+// sentences with them, so the recognizer cannot drift from the writer.
+
+/** "<action> <type> requires your approval" — the gate's no-reason placeholder. */
+export function defaultApprovalSentence(action: string, type: string): string {
+  return `${action} ${type} requires your approval`;
+}
+
+/**
+ * The RBAC role-exceed sentence: a member (agent or person) whose workspace
+ * role cannot run this write directly, so it was proposed instead.
+ */
+export function roleExceedSentence(opts: {
+  action: string;
+  subjectType: string;
+  role: string;
+  proposer: "agent" | "person";
+}): string {
+  return opts.proposer === "agent"
+    ? `${opts.action} ${opts.subjectType} exceeds the agent's workspace role (${opts.role}) — proposed for your approval`
+    : `${opts.action} ${opts.subjectType} exceeds your workspace role (${opts.role}) — proposed for a reviewer's approval`;
+}
+
+// Tokens are single words (`create`, `focus_session`, `renderer.set`) — no space.
+const DEFAULT_APPROVAL_RE = /^\S+ \S+ requires your approval\.?$/;
+const ROLE_EXCEED_RE =
+  /^\S+ \S+ exceeds (?:the agent's|your) workspace role \([^)]*\) — proposed for (?:your|a reviewer's) approval$/;
+
+/**
+ * True when `text` was written by the pod, not by the proposer: the engine's
+ * policy sentence, the no-reason placeholder, or the role-exceed line. A
+ * reader drops it rather than drawing it as the proposer's WHY.
+ */
+export function isSystemReasoning(text: string | null | undefined): boolean {
+  if (typeof text !== "string") return false;
+  const t = text.trim();
+  return (
+    isGovernancePolicySentence(t) ||
+    DEFAULT_APPROVAL_RE.test(t) ||
+    ROLE_EXCEED_RE.test(t)
+  );
+}

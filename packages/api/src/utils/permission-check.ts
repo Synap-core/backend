@@ -80,8 +80,10 @@ import { buildProjectFilingSummary } from "../services/projects/project-filing-s
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
+  defaultApprovalSentence,
   isLikelyUUID,
   isCompositeProposalData,
+  roleExceedSentence,
 } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
@@ -1517,9 +1519,16 @@ async function evaluatePermission(
               subjectType,
               action,
               data,
-              reasoning:
-                opts.reasoning ??
-                `${action} ${subjectType} exceeds the agent's workspace role (${result.role ?? "member"}) — proposed for your approval`,
+              // The caller's reasoning only — the role line is the POD's
+              // sentence, so it answers the caller and the notification
+              // (`policyReason`), never the row's WHY.
+              reasoning: opts.reasoning,
+              policyReason: roleExceedSentence({
+                action,
+                subjectType,
+                role: result.role ?? "member",
+                proposer: "agent",
+              }),
             });
           }
         }
@@ -1584,9 +1593,15 @@ async function evaluatePermission(
               subjectType,
               action,
               data,
-              reasoning:
-                opts.reasoning ??
-                `${action} ${subjectType} exceeds your workspace role (${result.role}) — proposed for a reviewer's approval`,
+              // As the agent branch above: the role line is policy, not the
+              // proposer's WHY.
+              reasoning: opts.reasoning,
+              policyReason: roleExceedSentence({
+                action,
+                subjectType,
+                role: result.role,
+                proposer: "person",
+              }),
             });
           }
         }
@@ -3133,7 +3148,7 @@ export function buildProposalResponseFields(opts: {
     summary,
     reasoning:
       opts.reasoning ??
-      `${opts.action} ${opts.subjectType} requires your approval`,
+      defaultApprovalSentence(opts.action, opts.subjectType),
     reviewPath: openPath(opts.proposalId),
     reviewUrl: openLink(opts.proposalId),
   };
@@ -3895,7 +3910,10 @@ async function createProposal(args: {
     ...(targetName ? { targetName } : {}),
     changeType: action as RequestShapedProposalData["changeType"],
     data,
-    reasoning: reasoning || `${action} ${singularType} requires your approval`,
+    // The PROPOSER's words, or nothing. The no-reason placeholder is the pod's
+    // sentence and was drawn as the proposer's WHY; it now only answers the
+    // caller (the return below).
+    ...(reasoning ? { reasoning } : {}),
     summary,
     correlationId: resolvedCorrelationId,
     ...(previousData ? { previousData } : {}),
@@ -3970,7 +3988,7 @@ async function createProposal(args: {
         reasoning:
           reasoning ||
           policyReason ||
-          `${action} ${singularType} requires your approval`,
+          defaultApprovalSentence(action, singularType),
         reviewPath: openPath(existing.id),
         reviewUrl: openLink(existing.id),
         deduped: true,
@@ -4058,7 +4076,7 @@ async function createProposal(args: {
     reasoning:
       reasoning ??
       policyReason ??
-      `${action} ${singularType} requires your approval`,
+      defaultApprovalSentence(action, singularType),
     reviewPath: openPath(proposal.id),
     reviewUrl: openLink(proposal.id),
     ...(deduped ? { deduped: true } : {}),
