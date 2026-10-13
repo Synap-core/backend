@@ -7829,7 +7829,7 @@ export interface LibraryAction {
 	/** Stable within the item (`date-0`, `receipt-0`, …). */
 	id: string;
 	kind: LibraryActionKind;
-	/** Short words for the chip ("Add 14 Nov to calendar"). */
+	/** The chip's words (`libraryActionLabel`: "Add to calendar", "Add expense", "Add person", "Add task"). Chips stored before 2026-10-13 may carry older words; render `libraryActionLabel(kind)`. */
 	label: string;
 	/** What the chip would file (date, amount + merchant, email, task title…). */
 	value: Record<string, unknown>;
@@ -7880,6 +7880,11 @@ export interface LibraryGroupView {
 	builtAt?: string;
 	/** Set while a Build holds the group. */
 	buildingAt?: string;
+	/**
+	 * The group's newest bundle while it still waits for review: a rebuild is
+	 * refused until it is decided (`previous_build_pending`). "Open the review".
+	 */
+	pendingBuildProposalId?: string;
 	counts: {
 		items: number;
 		read: number;
@@ -17767,6 +17772,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				title: string | null;
 				type: string;
 			}[] | undefined;
+			pendingProposalId?: string | undefined;
 			captureQuestionStatus?: string | undefined;
 			code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 			httpStatus: number;
@@ -17792,6 +17798,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -17826,6 +17833,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -18003,6 +18011,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -19254,6 +19263,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20207,6 +20217,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -20322,6 +20333,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -21838,6 +21850,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -22539,6 +22552,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -22564,6 +22578,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -23125,6 +23140,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -23209,6 +23225,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -23701,6 +23718,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -23847,6 +23865,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24067,6 +24086,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24160,6 +24180,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24434,6 +24455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24778,6 +24800,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24849,6 +24872,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -24907,6 +24931,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25040,6 +25065,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25151,6 +25177,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -25624,6 +25651,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26243,6 +26271,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26298,6 +26327,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -26323,6 +26353,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -26478,6 +26509,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -26715,6 +26747,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -27148,6 +27181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -27423,6 +27457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -27684,6 +27719,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29283,6 +29319,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -29821,6 +29858,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30059,6 +30097,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30170,6 +30209,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30407,6 +30447,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30486,6 +30527,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30812,6 +30854,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -30928,6 +30971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31343,6 +31387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31556,6 +31601,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31707,6 +31753,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -31817,6 +31864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32610,6 +32658,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32645,6 +32694,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32813,6 +32863,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -32898,6 +32949,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33007,6 +33059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33094,6 +33147,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33260,6 +33314,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33326,6 +33381,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33599,6 +33655,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33712,6 +33769,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33921,6 +33979,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -33977,6 +34036,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34193,6 +34253,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34296,6 +34357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34448,6 +34510,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34666,6 +34729,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34722,6 +34786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34893,6 +34958,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -34953,6 +35019,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35276,6 +35343,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35387,6 +35455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35771,6 +35840,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -35974,10 +36044,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		requestHandoff: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				target: {
-					kind: "session";
+					kind: "session" | "library_group";
 					id: string;
 				};
-				view: "room";
+				view?: "room" | undefined;
 			};
 			output: {
 				status: "already_sent";
@@ -36004,6 +36074,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36051,6 +36122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36189,6 +36261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36345,6 +36418,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36455,6 +36529,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36602,6 +36677,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36733,6 +36809,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -36950,6 +37027,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37071,6 +37149,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37557,6 +37636,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37723,6 +37803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -37779,6 +37860,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -38065,6 +38147,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -38145,6 +38228,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -38293,6 +38377,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -38402,6 +38487,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -38427,6 +38513,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -40198,6 +40285,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -40223,6 +40311,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -40268,6 +40357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -40299,6 +40389,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -40341,6 +40432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -40420,6 +40512,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						title: string | null;
 						type: string;
 					}[] | undefined;
+					pendingProposalId?: string | undefined;
 					captureQuestionStatus?: string | undefined;
 					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 					httpStatus: number;
@@ -41468,6 +41561,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -41529,6 +41623,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -41590,6 +41685,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -41666,6 +41762,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -41746,6 +41843,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -41790,6 +41888,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -41930,6 +42029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -42180,6 +42280,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -42220,6 +42321,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -42384,6 +42486,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -42498,6 +42601,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -42596,6 +42700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43049,6 +43154,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43132,6 +43238,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43295,6 +43402,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43407,6 +43515,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43498,6 +43607,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43574,6 +43684,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43660,6 +43771,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
@@ -43693,6 +43805,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					type: string;
 				}[] | undefined;
+				pendingProposalId?: string | undefined;
 				captureQuestionStatus?: string | undefined;
 				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
 				httpStatus: number;
