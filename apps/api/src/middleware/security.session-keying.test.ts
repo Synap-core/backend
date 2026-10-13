@@ -19,6 +19,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 // The limiter is built at import from the env; a small budget keeps the
 // test fast. Same prime-then-import shape as the calendar-feed guard.
 const BUDGET = 5;
+const ANON_BUDGET = 3;
 let rateLimitMiddleware: MiddlewareHandler;
 
 let n = 0;
@@ -43,10 +44,17 @@ describe("crud budget — one per signed-in person, not one per address", () => 
     process.env.DATABASE_URL ??=
       "postgresql://synap:test@localhost:5432/synap_test";
     const previous = process.env.RATE_LIMIT_CRUD_MAX;
-    process.env.RATE_LIMIT_CRUD_MAX = String(BUDGET);
+    const previousSession = process.env.RATE_LIMIT_CRUD_SESSION_MAX;
+    // Anonymous callers get a smaller budget than a signed-in person; the
+    // tests below spend each in full.
+    process.env.RATE_LIMIT_CRUD_MAX = String(ANON_BUDGET);
+    process.env.RATE_LIMIT_CRUD_SESSION_MAX = String(BUDGET);
     ({ rateLimitMiddleware } = await import("./security.js"));
     if (previous === undefined) delete process.env.RATE_LIMIT_CRUD_MAX;
     else process.env.RATE_LIMIT_CRUD_MAX = previous;
+    if (previousSession === undefined)
+      delete process.env.RATE_LIMIT_CRUD_SESSION_MAX;
+    else process.env.RATE_LIMIT_CRUD_SESSION_MAX = previousSession;
   });
 
   it("a second person keeps their budget after the first spends theirs", async () => {
@@ -76,12 +84,21 @@ describe("crud budget — one per signed-in person, not one per address", () => 
   it("anonymous callers without an address still share the IP bucket", async () => {
     const app = makeApp();
     let sawLimit = false;
-    for (let i = 0; i <= BUDGET; i += 1) {
+    for (let i = 0; i <= ANON_BUDGET; i += 1) {
       if ((await call(app, "/trpc/public.thing")).status === 429) {
         sawLimit = true;
         break;
       }
     }
     expect(sawLimit).toBe(true);
+  });
+
+  it("a signed-in person gets the larger session budget, not the anonymous one", async () => {
+    const app = makeApp();
+    const a = nextSession();
+    for (let i = 0; i < BUDGET; i += 1) {
+      expect((await call(app, "/trpc/sync.getStatus", a)).status).toBe(200);
+    }
+    expect(BUDGET).toBeGreaterThan(ANON_BUDGET);
   });
 });

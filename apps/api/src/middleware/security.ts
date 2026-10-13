@@ -123,11 +123,18 @@ const aiAgentTurnRateLimiter = rateLimiter({
   ),
 });
 
+const crudKey = classKeyGenerator("crud");
+const crudSessionMax =
+  rateLimitClassConfig.crud.sessionMax ?? rateLimitClassConfig.crud.max;
+
 const crudRateLimiter = rateLimiter({
   windowMs: rateLimitClassConfig.crud.windowMs,
-  limit: rateLimitClassConfig.crud.max,
+  limit: (c) =>
+    crudKey(c).startsWith("crud:session:")
+      ? crudSessionMax
+      : rateLimitClassConfig.crud.max,
   standardHeaders: "draft-7",
-  keyGenerator: classKeyGenerator("crud"),
+  keyGenerator: crudKey,
   handler: classHandler(
     "crud",
     rateLimitClassConfig.crud.max,

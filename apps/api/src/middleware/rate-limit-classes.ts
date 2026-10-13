@@ -61,7 +61,7 @@ export function getRateLimitClassConfig(): Record<
     RateLimitClass,
     "free" | "public_read" | "public_submit" | "device_auth" | "key_state"
   >,
-  { max: number; windowMs: number; retryAfter: string }
+  { max: number; windowMs: number; retryAfter: string; sessionMax?: number }
 > {
   const crudWindow = parsePositiveInt(
     process.env.RATE_LIMIT_CRUD_WINDOW_MS,
@@ -102,6 +102,14 @@ export function getRateLimitClassConfig(): Record<
     },
     crud: {
       max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_MAX, 500),
+      // One signed-in person's budget (`crud:session:*`). The console spends
+      // ~2 gate calls per page and prefetch plus its own queries and polling —
+      // roughly 60–150 requests a minute for an active operator — so the
+      // anonymous per-IP budget above would lock a single person out.
+      sessionMax: parsePositiveInt(
+        process.env.RATE_LIMIT_CRUD_SESSION_MAX,
+        3000
+      ),
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
     },
