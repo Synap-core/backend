@@ -22,7 +22,12 @@
  * them too — so they appear in no segment.
  */
 
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  OPEN_SESSION_STATUSES,
+  resolveSessionTitle,
+  SUSPENDED_SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
+} from "@synap-core/types/focus-sessions";
 import {
   isSessionWorkingNow,
   type SessionLiveFacts,
@@ -65,10 +70,18 @@ export function segmentOf(raw: string | null | undefined): SessionSegment {
  */
 export const STUCK_AFTER_HOURS = 24;
 
-/** The statuses the Running and Stuck segments are read from, in one query. */
-export const OPEN_RUN_STATUSES = ["active", "forming", "paused"] as const;
-export const IDLE_STATUSES = ["stale"] as const;
-export const CLOSED_STATUSES = ["closed", "cancelled", "failed"] as const;
+/**
+ * The statuses the Running and Stuck segments are read from, in one query:
+ * every open status but `scheduled` — an appointment is not a run yet.
+ */
+export const OPEN_RUN_STATUSES = OPEN_SESSION_STATUSES.filter(
+  (s) => s !== "scheduled"
+);
+/** Suspended by the reaper, not by a person (a paused session is Running). */
+export const IDLE_STATUSES = SUSPENDED_SESSION_STATUSES.filter(
+  (s) => s !== "paused"
+);
+export const CLOSED_STATUSES = TERMINAL_SESSION_STATUSES;
 
 /** The fields a `focusSessions.browse` row carries that a row reads. */
 export interface SessionLike {
