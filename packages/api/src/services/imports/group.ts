@@ -287,7 +287,7 @@ export function parseGroupingAnswer(
 
 /**
  * Merge proposals into the import's state. Kept groups (the person's, noted,
- * built) stay with their members; untouched AI groups are replaced. PURE.
+ * built or being built) stay with their members; untouched AI groups are replaced. PURE.
  */
 export function mergeGroupProposals(args: {
   groups: readonly ImportGroup[];
@@ -299,7 +299,8 @@ export function mergeGroupProposals(args: {
   changed: Set<string>;
 } {
   const kept = args.groups.filter(
-    (g) => g.origin === "user" || (g.note ?? "").trim() || g.builtAt
+    (g) =>
+      g.origin === "user" || (g.note ?? "").trim() || g.builtAt || g.buildingAt
   );
   const keptKeys = new Set(kept.map((g) => g.key));
   const groups: ImportGroup[] = kept.map((g) => ({ ...g }));

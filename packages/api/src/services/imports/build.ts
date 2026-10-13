@@ -76,6 +76,7 @@ import {
   loadImportSession,
   writeImportCuration,
   type ImportDb,
+  type ImportSessionRow,
 } from "./session.js";
 
 const logger = createLogger({ module: "imports/build" });
@@ -709,28 +710,152 @@ async function markItemsBuilt(
   }
 }
 
-export async function buildImportGroup(args: {
+/** A Build claim older than this is a crashed build, and may be taken over. */
+export const BUILD_CLAIM_TTL_MS = 30 * 60_000;
+
+/**
+ * CLAIM the group for this Build, under the session lock: a second Build of
+ * the same group (a double tap, two devices) is refused instead of filing a
+ * second bundle. The claim is `group.buildingAt`; it is cleared when the
+ * Build lands (`builtAt`) or fails (`releaseGroupBuild`).
+ */
+async function claimGroupBuild(
+  database: ImportDb,
+  userId: string,
+  sessionId: string,
+  groupKey: string
+): Promise<
+  | { session: ImportSessionRow; group: ImportGroup }
+  | { refused: ImportBuildResult }
+> {
+  return database.transaction(async (tx) => {
+    const t = tx as unknown as ImportDb;
+    const session = await loadImportSession({
+      database: t,
+      userId,
+      sessionId,
+      forUpdate: true,
+    });
+    assertImportOpen(session);
+    const group = session.curation.groups.find((g) => g.key === groupKey);
+    if (!group) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
+    }
+    const refuse = (reason: string) => ({
+      refused: { status: "refused" as const, reason, read: 0, skipped: [] },
+    });
+    if (group.builtAt) return refuse("already_built");
+    if (
+      group.buildingAt &&
+      Date.now() - Date.parse(group.buildingAt) < BUILD_CLAIM_TTL_MS
+    ) {
+      return refuse("already_building");
+    }
+    const claimed: ImportGroup = {
+      ...group,
+      buildingAt: new Date().toISOString(),
+    };
+    await writeImportCuration({
+      database: t,
+      userId,
+      sessionId: session.id,
+      curation: {
+        ...session.curation,
+        groups: session.curation.groups.map((g) =>
+          g.key === groupKey ? claimed : g
+        ),
+      },
+    });
+    return { session, group: claimed };
+  });
+}
+
+function withoutClaim(g: ImportGroup): ImportGroup {
+  const { buildingAt: _claim, ...rest } = g;
+  return rest;
+}
+
+/** Drop this Build's claim (it refused or failed); the group can be built again. */
+async function releaseGroupBuild(
+  database: ImportDb,
+  userId: string,
+  sessionId: string,
+  groupKey: string
+): Promise<void> {
+  await database.transaction(async (tx) => {
+    const t = tx as unknown as ImportDb;
+    const locked = await loadImportSession({
+      database: t,
+      userId,
+      sessionId,
+      forUpdate: true,
+    });
+    await writeImportCuration({
+      database: t,
+      userId,
+      sessionId,
+      curation: {
+        ...locked.curation,
+        groups: locked.curation.groups.map((g) =>
+          g.key === groupKey ? withoutClaim(g) : g
+        ),
+      },
+    });
+  });
+}
+
+type ImportBuildArgs = {
   database?: ImportDb;
   userId: string;
   sessionId: string;
   groupKey: string;
   deps: ImportBuildDeps;
-}): Promise<ImportBuildResult> {
+};
+
+export async function buildImportGroup(
+  args: ImportBuildArgs
+): Promise<ImportBuildResult> {
   const database = args.database ?? defaultDb;
-  const { deps } = args;
-  const session = await loadImportSession({
+  const claim = await claimGroupBuild(
     database,
-    userId: args.userId,
-    sessionId: args.sessionId,
-  });
-  assertImportOpen(session);
-  const group = session.curation.groups.find((g) => g.key === args.groupKey);
-  if (!group) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Group not found" });
+    args.userId,
+    args.sessionId,
+    args.groupKey
+  );
+  if ("refused" in claim) return claim.refused;
+  let landed = false;
+  try {
+    const result = await buildClaimedGroup(
+      { ...args, database },
+      claim.session,
+      claim.group
+    );
+    landed = result.status !== "refused";
+    return result;
+  } finally {
+    if (!landed) {
+      await releaseGroupBuild(
+        database,
+        args.userId,
+        args.sessionId,
+        args.groupKey
+      ).catch((err) =>
+        // The claim expires after BUILD_CLAIM_TTL_MS; said, not hidden.
+        logger.error(
+          { err, sessionId: args.sessionId, groupKey: args.groupKey },
+          "import build: claim NOT released — the group stays locked until it expires"
+        )
+      );
+    }
   }
-  if (group.builtAt) {
-    return { status: "refused", reason: "already_built", read: 0, skipped: [] };
-  }
+}
+
+async function buildClaimedGroup(
+  args: ImportBuildArgs & { database: ImportDb },
+  session: ImportSessionRow,
+  group: ImportGroup
+): Promise<ImportBuildResult> {
+  const { database, deps } = args;
 
   const rows = await loadImportItemRows({
     database,
@@ -905,7 +1030,7 @@ export async function buildImportGroup(args: {
     const groups = locked.curation.groups.map((g) =>
       g.key === group.key
         ? {
-            ...g,
+            ...withoutClaim(g),
             builtAt: new Date().toISOString(),
             ...(submitted.proposalId
               ? { buildProposalId: submitted.proposalId }

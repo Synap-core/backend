@@ -149,6 +149,8 @@ export interface ImportGroup {
   outputs: ImportGroupOutput[];
   /** One line: why the AI grouped these (shown behind "Why these"). */
   reason?: string;
+  /** Set while a Build holds the group (cleared when it lands or fails). */
+  buildingAt?: string;
   /** Set once the group was built. */
   builtAt?: string;
   buildProposalId?: string;
