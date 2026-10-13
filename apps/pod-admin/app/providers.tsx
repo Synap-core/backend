@@ -7,14 +7,15 @@
  * AppRouter, same `superjson` transformer, same `credentials: "include"` so the
  * Kratos session cookie is sent to the pod tRPC endpoint. The only difference
  * is workspace context: pod-admin doesn't pin a workspace globally — pod-level
- * routes (`podAdminProcedure`) don't need an X-Workspace-Id header.
+ * routes (`podAdminProcedure`) don't need an X-Workspace-Id header, and the
+ * rare call that acts in one space names it per call (see the split link).
  */
 
 import { useState, type ReactNode } from "react";
 import { HeroUIProvider, ToastProvider } from "@heroui/react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink } from "@trpc/client";
+import { httpBatchLink, httpLink, splitLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import { trpc, POD_URL } from "../lib/trpc";
 
@@ -34,19 +35,33 @@ export function Providers({ children }: { children: ReactNode }) {
       })
   );
 
-  const [trpcClient] = useState(() =>
-    trpc.createClient({
+  const [trpcClient] = useState(() => {
+    const transport = {
+      url: `${POD_URL}/trpc`,
+      transformer: SuperJSON,
+      fetch(url: URL | RequestInfo, options?: RequestInit) {
+        return fetch(url, { ...options, credentials: "include" });
+      },
+    };
+    return trpc.createClient({
       links: [
-        httpBatchLink({
-          url: `${POD_URL}/trpc`,
-          transformer: SuperJSON,
-          fetch(url, options) {
-            return fetch(url, { ...options, credentials: "include" });
-          },
+        // Pod-wide by default (no header). A call that must act IN one space —
+        // a `workspaceProcedure` such as `profiles.proposeRetire` — names it
+        // per call (`{ context: { workspaceId } }`) and goes unbatched, so the
+        // header can never leak onto a pod-wide call in the same batch.
+        splitLink({
+          condition: (op) => typeof op.context.workspaceId === "string",
+          true: httpLink({
+            ...transport,
+            headers: ({ op }) => ({
+              "X-Workspace-Id": op.context.workspaceId as string,
+            }),
+          }),
+          false: httpBatchLink(transport),
         }),
       ],
-    })
-  );
+    });
+  });
 
   return (
     <NextThemesProvider

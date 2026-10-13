@@ -227,7 +227,12 @@ describe("summarizeSchemaContract", () => {
         oldestAgeHoursIncludingOutsideLens: null,
       },
       duplicateClusters: [],
-      capabilities: { enabled: 0, unapproved: 0 },
+      capabilities: {
+        installed: 0,
+        verbs: 0,
+        verbsAwaitingEnable: 0,
+        capabilitiesAwaitingEnable: 0,
+      },
       agentActivity: [],
     };
     const without = summarizeGlobalHealth(clean, { workspaceId: null });

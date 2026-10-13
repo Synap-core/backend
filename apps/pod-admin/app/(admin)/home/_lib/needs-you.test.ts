@@ -33,7 +33,10 @@ describe("buildNeedsYou ranking", () => {
         section("stuck_runs", "degraded", { count: 2, thresholdHours: 24 }),
         backlog,
         section("failed_flows", "degraded", { failingFlows: 1, flows: [] }),
-        section("capabilities", "attention", { enabled: 3, unapproved: 13 }),
+        section("capabilities", "attention", {
+          verbsAwaitingEnable: 13,
+          capabilitiesAwaitingEnable: 3,
+        }),
       ],
     });
     expect(rows.map((r) => r.key)).toEqual([
@@ -191,15 +194,40 @@ describe("buildNeedsYou link building", () => {
     });
   });
 
-  it("sends unapproved capabilities to Marketplace → Installed", () => {
+  it("counts verbs not turned on and sends them to Marketplace → Tools (D5)", () => {
     const [row] = buildNeedsYou({
-      sections: [section("capabilities", "attention", { unapproved: 13 })],
+      sections: [
+        section("capabilities", "attention", {
+          verbsAwaitingEnable: 4,
+          capabilitiesAwaitingEnable: 1,
+        }),
+      ],
     }).rows;
+    expect(row.headline).toBe("4 installed verbs not turned on");
+    expect(row.secondary).toBe(
+      "In 1 capability. Anything that calls them is refused until you turn them on."
+    );
     expect(row.action).toEqual({
       kind: "link",
-      label: "Review in Marketplace",
-      exit: { href: "/marketplace?tab=installed", isDesktopLink: false },
+      label: "Turn on in Marketplace",
+      exit: { href: "/marketplace?tab=tools", isDesktopLink: false },
     });
+  });
+
+  it("falls back to the server headline for an older pod's container count", () => {
+    const [row] = buildNeedsYou({
+      sections: [
+        section(
+          "capabilities",
+          "attention",
+          { enabled: 3, unapproved: 13 },
+          "3 capability(ies) approved, 13 awaiting approval"
+        ),
+      ],
+    }).rows;
+    expect(row.headline).toBe(
+      "3 capability(ies) approved, 13 awaiting approval"
+    );
   });
 
   it("names the worst failing flow and opens Runs", () => {
@@ -345,7 +373,7 @@ describe("buildNeedsYou for a member (D8)", () => {
   const sections = [
     backlog,
     section("failed_flows", "degraded", { failingFlows: 1, flows: [] }),
-    section("capabilities", "attention", { unapproved: 2 }),
+    section("capabilities", "attention", { verbsAwaitingEnable: 2 }),
     section("review_queue", "attention"),
     section("brand_new_check", "attention", {}, "Something new"),
     section("stuck_runs", "ok", {}, "No stuck runs"),

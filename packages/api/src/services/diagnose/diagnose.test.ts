@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { computeAgentScorecard } from "./agent-scorecard.js";
 import type { ScorecardProposalRow } from "./agent-scorecard.js";
-import { summarizeGlobalHealth, type GlobalSignals } from "./global.js";
+import {
+  capabilityVerbPosture,
+  summarizeGlobalHealth,
+  type GlobalSignals,
+} from "./global.js";
 import { PROBE_ORDER } from "./resolve-object-kind.js";
 
 /**
@@ -208,7 +212,12 @@ describe("summarizeGlobalHealth", () => {
       oldestAgeHoursIncludingOutsideLens: null,
     },
     duplicateClusters: [],
-    capabilities: { enabled: 3, unapproved: 0 },
+    capabilities: {
+      installed: 3,
+      verbs: 5,
+      verbsAwaitingEnable: 0,
+      capabilitiesAwaitingEnable: 0,
+    },
     agentActivity: [],
   };
 
@@ -413,5 +422,95 @@ describe("PROBE_ORDER", () => {
     expect(PROBE_ORDER[PROBE_ORDER.length - 1]).toBe("entity");
     // No duplicates.
     expect(new Set(PROBE_ORDER).size).toBe(PROBE_ORDER.length);
+  });
+});
+
+// D5 (Pod Console): the container's `capabilities.approved` gates no execution
+// path; the gate reads the VERB (`skills.approved`). The section counts that.
+describe("capabilities section — counts verbs awaiting enable", () => {
+  const base: GlobalSignals = {
+    stuckHours: 24,
+    stuck: [],
+    failedFlows: [],
+    backlog: {
+      pending: 0,
+      oldestAgeHours: null,
+      mineOutsideLens: 0,
+      oldestAgeHoursIncludingOutsideLens: null,
+    },
+    duplicateClusters: [],
+    capabilities: {
+      installed: 0,
+      verbs: 0,
+      verbsAwaitingEnable: 0,
+      capabilitiesAwaitingEnable: 0,
+    },
+    agentActivity: [],
+  };
+  const section = (cap: GlobalSignals["capabilities"]) =>
+    summarizeGlobalHealth(
+      { ...base, capabilities: cap },
+      { workspaceId: null }
+    ).sections.find((s) => s.key === "capabilities")!;
+
+  it("a skill in two containers is one verb, and marks both containers", () => {
+    expect(
+      capabilityVerbPosture({
+        containerIds: ["c1", "c2", "c3"],
+        members: [
+          { capabilityId: "c1", skillId: "s1" },
+          { capabilityId: "c2", skillId: "s1" },
+          { capabilityId: "c2", skillId: "s2" },
+          { capabilityId: "c3", skillId: "s3" },
+          // A member link to a skill that no longer exists: nothing to enable.
+          { capabilityId: "c3", skillId: "gone" },
+        ],
+        skills: [
+          { id: "s1", approved: false },
+          { id: "s2", approved: true },
+          { id: "s3", approved: true },
+        ],
+      })
+    ).toEqual({
+      installed: 3,
+      verbs: 3,
+      verbsAwaitingEnable: 1,
+      capabilitiesAwaitingEnable: 2,
+    });
+  });
+
+  it("is attention when installed verbs are not enabled, and says so", () => {
+    const s = section({
+      installed: 13,
+      verbs: 40,
+      verbsAwaitingEnable: 4,
+      capabilitiesAwaitingEnable: 2,
+    });
+    expect(s.status).toBe("attention");
+    expect(s.headline).toBe(
+      "4 verb(s) in 2 capability(ies) installed but not enabled — they refuse to run until enabled"
+    );
+    expect(s.detail).toMatchObject({
+      verbsAwaitingEnable: 4,
+      capabilitiesAwaitingEnable: 2,
+    });
+    // The old container-flag fields are gone, so no reader keeps counting them.
+    expect(s.detail).not.toHaveProperty("unapproved");
+  });
+
+  it("is ok when every verb is enabled, and when nothing is installed", () => {
+    const all = section({
+      installed: 13,
+      verbs: 40,
+      verbsAwaitingEnable: 0,
+      capabilitiesAwaitingEnable: 0,
+    });
+    expect(all.status).toBe("ok");
+    expect(all.headline).toBe(
+      "13 capability(ies) installed, all 40 verb(s) enabled"
+    );
+    const none = section(base.capabilities);
+    expect(none.status).toBe("ok");
+    expect(none.headline).toBe("No capabilities installed");
   });
 });
