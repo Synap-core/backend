@@ -111,7 +111,9 @@ vi.mock("./_shared.js", () => ({
 const verifyCpSpy = vi.fn(
   async (_token?: string, _opts?: unknown) => ({ mcp_redeem: true }) as unknown
 );
-vi.mock("../../../utils/jwks-client.js", () => ({
+vi.mock("../../../utils/jwks-client.js", async (importOriginal) => ({
+  // The real `podAudience` — the ONE audience spelling the route must use.
+  ...(await importOriginal<typeof import("../../../utils/jwks-client.js")>()),
   verifyTrustedIssuerJwt: (token: string, opts: unknown) =>
     verifyCpSpy(token, opts),
 }));

@@ -35,6 +35,7 @@ import {
   describeServingIntelligence,
   envIntelligenceEndpoint,
   getSyncGenerationState,
+  podAudience,
   resolveServiceKey,
   toRegistrationTrace,
   verifyTrustedIssuerJwt,
@@ -144,7 +145,7 @@ provisionRouter.post("/register-intelligence", async (c) => {
     // Fall through to undefined: the trusted issuer registry still gates `iss`.
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "register-intelligence refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -414,7 +415,7 @@ provisionRouter.post("/reset-intelligence", async (c) => {
     /* fall through */
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "reset-intelligence refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -574,7 +575,7 @@ provisionRouter.post("/validate-credentials", async (c) => {
     /* fall through */
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "validate-credentials refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -757,7 +758,7 @@ provisionRouter.get("/status", async (c) => {
       const token = authHeader.slice(7);
       const cpUrl = (ws?.settings as Record<string, unknown> | null)
         ?.controlPlane as { url?: string } | undefined;
-      const podPublicUrl = process.env.PUBLIC_URL;
+      const podPublicUrl = podAudience();
       if (podPublicUrl) {
         const payload = await verifyTrustedIssuerJwt(token, {
           pinnedIssuer: cpUrl?.url,
@@ -974,7 +975,7 @@ provisionRouter.get("/status", async (c) => {
 // JWT, so only a Pod operator's trusted control surface can call this.
 
 provisionRouter.get("/debug", async (c) => {
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     return c.json({ error: "PUBLIC_URL not configured" }, 500);
   }
@@ -1071,8 +1072,9 @@ provisionRouter.get("/debug", async (c) => {
     },
     provisioningToken: {
       configured: !!provToken,
-      // First 8 chars so operator can verify it matches the CP without exposing the full secret
-      prefix: provToken ? provToken.slice(0, 8) + "..." : null,
+      // A fingerprint (`sha256:` + 8 hex), never characters of the token: an
+      // operator compares it with the CP's, nothing of the secret leaves.
+      fingerprint: provToken ? keyFingerprintOf(provToken) : null,
     },
   });
 });
@@ -1254,7 +1256,7 @@ provisionRouter.get("/addon-status", async (c) => {
     /* fall through */
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "addon-status refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -1390,7 +1392,7 @@ provisionRouter.post("/activate-addon", async (c) => {
     /* fall through */
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "activate-addon refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -1672,7 +1674,7 @@ provisionRouter.post("/deactivate-addon", async (c) => {
     /* fall through */
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "deactivate-addon refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -1779,7 +1781,7 @@ provisionRouter.post("/disconnect", async (c) => {
   }
   const { token } = parsed.data;
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "disconnect refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -1894,7 +1896,7 @@ provisionRouter.post("/trigger-update", async (c) => {
     );
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "trigger-update refused: PUBLIC_URL not configured — audience check is mandatory"

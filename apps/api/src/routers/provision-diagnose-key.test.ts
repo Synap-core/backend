@@ -24,6 +24,8 @@ vi.mock("./provision-intelligence-probe.js", () => ({
   probeIntelligenceService: async () => ({ reachable: false }),
 }));
 vi.mock("@synap/api", () => ({
+  // Mirrors the real contract (@synap/api jwks-client): PUBLIC_URL, no trailing slash.
+  podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   createAndVerifyHubInboundKey: vi.fn(),
   encryptServiceKey: vi.fn(),
   describeServingIntelligence: async () => ({
@@ -82,6 +84,58 @@ describe("GET /diagnose-intelligence", () => {
     // No run of 6+ characters of the key appears anywhere in the response.
     for (let i = 0; i + 6 <= FAKE_KEY.length; i++) {
       expect(text).not.toContain(FAKE_KEY.slice(i, i + 6));
+    }
+  });
+});
+
+/**
+ * `GET /api/provision/debug` (issuer-authenticated, rendered by the CP admin
+ * dashboard) used to return the first 8 characters of PROVISIONING_TOKEN. It
+ * now returns the same fingerprint as /diagnose-intelligence (SEC-F2), and its
+ * audience is the ONE pod audience spelling (PUBLIC_URL, no trailing slash).
+ */
+describe("GET /debug", () => {
+  const FAKE_PROV_TOKEN = "test-secret-Qz7xK2pV9mW4rT8nLb3Jc6";
+
+  it("returns a fingerprint of the provisioning token, never any of its characters", async () => {
+    const { verifyTrustedIssuerJwt } = await import("@synap/api");
+    vi.mocked(verifyTrustedIssuerJwt).mockResolvedValue({ type: "debug" });
+    vi.stubEnv("PUBLIC_URL", "https://pod.test.invalid/");
+    vi.stubEnv("KRATOS_ADMIN_URL", "http://kratos.test.invalid");
+    vi.stubEnv("PROVISIONING_TOKEN", FAKE_PROV_TOKEN);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("no network in tests");
+      })
+    );
+    try {
+      const res = await provisionRouter.request("/debug", {
+        headers: { Authorization: "Bearer test-issuer-jwt" },
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const body = JSON.parse(text) as {
+        provisioningToken: Record<string, unknown>;
+      };
+
+      // The audience is normalised: the trailing slash of PUBLIC_URL is gone.
+      expect(vi.mocked(verifyTrustedIssuerJwt)).toHaveBeenCalledWith(
+        "test-issuer-jwt",
+        { audience: "https://pod.test.invalid" }
+      );
+
+      const expected = `sha256:${createHash("sha256").update(FAKE_PROV_TOKEN).digest("hex").slice(0, 8)}`;
+      expect(body.provisioningToken).toEqual({
+        configured: true,
+        fingerprint: expected,
+      });
+      for (let i = 0; i + 6 <= FAKE_PROV_TOKEN.length; i++) {
+        expect(text).not.toContain(FAKE_PROV_TOKEN.slice(i, i + 6));
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
     }
   });
 });

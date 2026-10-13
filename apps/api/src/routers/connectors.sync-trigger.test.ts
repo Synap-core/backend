@@ -26,6 +26,8 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("@synap/api", () => ({
+  // Mirrors the real contract (@synap/api jwks-client): PUBLIC_URL, no trailing slash.
+  podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   verifyCpJwtWithTrust: h.verify,
   enqueueConnectionSync: h.enqueue,
   reconcileLiveConnections: h.reconcile,

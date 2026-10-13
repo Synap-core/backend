@@ -19,6 +19,8 @@ import { z } from "zod";
 import { getDb, eq, and, isNull, isNotNull } from "@synap/database";
 import { secrets } from "@synap/database/schema";
 import {
+  // The ONE pod audience spelling (PUBLIC_URL, no trailing slash).
+  podAudience,
   verifyCpJwtWithTrust,
   enqueueConnectionSync,
   reconcileLiveConnections,
@@ -27,16 +29,6 @@ import {
 import { config, createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "connectors-router" });
-
-/**
- * The audience a CP token must carry: PUBLIC_URL without trailing slashes —
- * the same spelling as `podAudience` in the source-config and federation
- * doors, so every CP→pod door accepts the same `aud`.
- */
-function podAudience(): string | null {
-  const value = process.env.PUBLIC_URL?.replace(/\/+$/, "");
-  return value || null;
-}
 
 export const connectorsRouter = new Hono();
 

@@ -21,7 +21,7 @@ import {
   workspaces,
   workspaceMembers,
   TrustedIssuerService,
-  TRUSTED_ISSUER_CAPABILITIES,
+  CONTROL_PLANE_ISSUER_SCOPES,
 } from "@synap/database";
 import { recordSystemProfilesBootResult } from "./startup/boot-status.js";
 import { randomUUID, randomBytes } from "crypto";
@@ -204,14 +204,6 @@ async function seedDefaultCorsOrigins(): Promise<void> {
   }
 }
 
-/** Canonical bootstrap scopes granted to the CP as a trusted issuer. */
-const CP_BOOTSTRAP_SCOPES = [
-  TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
-  TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
-  TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
-  TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
-];
-
 /**
  * Seed the Control Plane as a built-in trusted issuer.
  *
@@ -242,7 +234,8 @@ async function seedControlPlaneIssuer(): Promise<void> {
   try {
     // Prefer the CP-DECLARED issuer (transport URL may differ from signing iss).
     let issuerUrl: string | null = null;
-    let allowedScopes: string[] = CP_BOOTSTRAP_SCOPES;
+    // Canonical bootstrap scopes: the ONE CP scope list (@synap/database).
+    let allowedScopes: string[] = [...CONTROL_PLANE_ISSUER_SCOPES];
     let source: "declared" | "transport" = "declared";
 
     try {
@@ -254,7 +247,7 @@ async function seedControlPlaneIssuer(): Promise<void> {
       // the issuer from the transport URL (historical behavior).
       source = "transport";
       issuerUrl = normalizeIssuerUrl(controlPlaneUrl);
-      allowedScopes = CP_BOOTSTRAP_SCOPES;
+      allowedScopes = [...CONTROL_PLANE_ISSUER_SCOPES];
       logger.warn(
         {
           controlPlaneUrl,

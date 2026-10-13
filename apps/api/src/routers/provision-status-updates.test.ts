@@ -30,6 +30,8 @@ vi.mock("./provision-intelligence-probe.js", () => ({
   probeIntelligenceService: async () => ({ reachable: false }),
 }));
 vi.mock("@synap/api", () => ({
+  // Mirrors the real contract (@synap/api jwks-client): PUBLIC_URL, no trailing slash.
+  podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   createAndVerifyHubInboundKey: vi.fn(),
   encryptServiceKey: vi.fn(),
   describeServingIntelligence: async () => ({
@@ -38,7 +40,10 @@ vi.mock("@synap/api", () => ({
     source: "env",
   }),
   envIntelligenceEndpoint: vi.fn(),
-  getSyncGenerationState: async () => ({ splitBrainDetected: false, role: "primary" }),
+  getSyncGenerationState: async () => ({
+    splitBrainDetected: false,
+    role: "primary",
+  }),
   resolveServiceKey: vi.fn(),
   toRegistrationTrace: vi.fn(),
   verifyTrustedIssuerJwt: vi.fn(),
@@ -55,7 +60,9 @@ vi.mock("@synap/database", () => ({
   ApiKeyRepository: vi.fn(),
   TrustedIssuerService: vi.fn(),
 }));
-vi.mock("@synap/database/api-key-revocation", () => ({ revokeApiKeys: vi.fn() }));
+vi.mock("@synap/database/api-key-revocation", () => ({
+  revokeApiKeys: vi.fn(),
+}));
 vi.mock("@synap/database/schema", () => ({
   workspaces: {},
   intelligenceServices: {},
@@ -86,12 +93,20 @@ describe("GET /api/provision/status → updates", () => {
 
   it("a fresh pod reports auto ON and no recorded update", async () => {
     const body = await status();
-    expect(body.updates.settings).toEqual({ auto: true, channel: "stable", explicit: false });
+    expect(body.updates.settings).toEqual({
+      auto: true,
+      channel: "stable",
+      explicit: false,
+    });
     expect(body.updates.lastUpdate).toEqual({ read: "absent" });
   });
 
   it("carries the owner's choice and the engine's last outcome, metadata only", async () => {
-    h.settings = { auto: false, channel: "fast", updatedAt: "2026-10-04T00:00:00Z" };
+    h.settings = {
+      auto: false,
+      channel: "fast",
+      updatedAt: "2026-10-04T00:00:00Z",
+    };
     const { mkdirSync } = await import("node:fs");
     mkdirSync(h.dir, { recursive: true });
     writeFileSync(
@@ -108,7 +123,11 @@ describe("GET /api/provision/status → updates", () => {
       })
     );
     const body = await status();
-    expect(body.updates.settings).toEqual({ auto: false, channel: "fast", explicit: true });
+    expect(body.updates.settings).toEqual({
+      auto: false,
+      channel: "fast",
+      explicit: true,
+    });
     expect(body.updates.lastUpdate.read).toBe("ok");
     expect(body.updates.lastUpdate.outcome?.status).toBe("rolled_back");
     // No secret / host path leaves the pod through the public status.

@@ -28,7 +28,7 @@ import jwt from "jsonwebtoken";
 import { createLogger } from "@synap-core/core";
 import {
   TrustedIssuerService,
-  TRUSTED_ISSUER_CAPABILITIES,
+  CONTROL_PLANE_ISSUER_SCOPES,
   consumeFederatedAssertionReceipt,
 } from "@synap/database";
 import {
@@ -664,23 +664,16 @@ export async function verifyTrustedIssuerJwt<T extends object>(
 
 /**
  * The registry scopes that identify "the issuer this pod approved as its
- * Control Plane": both doors that approve the CP grant exactly this set —
- * owner bootstrap (`approveBootstrapIssuer`, apps/api federation.ts) and the
- * boot seed (`seedControlPlaneIssuer`, CP `FEDERATION_ISSUER_SCOPES`). A
- * third-party application issuer is approved with NO issuer-wide scope, so
- * requiring this set keeps CP-only purposes (OIDC config push, sync setup,
- * share delivery) out of any other approved issuer's reach.
+ * Control Plane" — `CONTROL_PLANE_ISSUER_SCOPES` (@synap/database), the ONE
+ * list the approving doors grant. Requiring it keeps CP-only purposes (OIDC
+ * config push, sync setup, share delivery) out of any other approved issuer's
+ * reach.
  *
  * A function, not a module constant, so importing this file never reads
  * `@synap/database` at load time (route tests mock that module partially).
  */
 export function controlPlaneIssuerScopes(): readonly string[] {
-  return [
-    TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
-    TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
-    TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
-    TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
-  ];
+  return CONTROL_PLANE_ISSUER_SCOPES;
 }
 
 /**

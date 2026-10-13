@@ -38,6 +38,23 @@ export const TRUSTED_ISSUER_CAPABILITIES = {
 export type TrustedIssuerCapability =
   (typeof TRUSTED_ISSUER_CAPABILITIES)[keyof typeof TRUSTED_ISSUER_CAPABILITIES];
 
+/**
+ * The ONE scope set that identifies "the issuer this pod approved as its
+ * Control Plane". Every door that approves the CP grants exactly this set —
+ * owner bootstrap (`approveBootstrapIssuer`, apps/api federation.ts) and the
+ * boot seed (`seedControlPlaneIssuer`, apps/api startup-hooks.ts; CP twin:
+ * `FEDERATION_ISSUER_SCOPES`) — and every CP-only door requires it
+ * (`controlPlaneIssuerScopes()`, @synap/api jwks-client). A third-party
+ * application issuer is approved with NO issuer-wide scope, so it can never
+ * hold this set.
+ */
+export const CONTROL_PLANE_ISSUER_SCOPES: readonly TrustedIssuerCapability[] = [
+  TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+  TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
+  TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
+  TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
+];
+
 export const trustedIssuers = pgTable("trusted_issuers", {
   id: uuid("id").primaryKey().defaultRandom(),
   issuerUrl: text("issuer_url").notNull().unique(),

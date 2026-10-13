@@ -30,6 +30,7 @@ import {
   type PodUserAccess,
   TrustedIssuerService,
   TRUSTED_ISSUER_CAPABILITIES,
+  CONTROL_PLANE_ISSUER_SCOPES,
 } from "@synap/database";
 import {
   federatedIdentityLinks,
@@ -48,6 +49,7 @@ import {
   normalizeApplicationOrigin,
   normalizePublisherUrl,
   hashOpaqueApplicationConnectionValue,
+  podAudience,
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
 } from "@synap/api";
@@ -178,22 +180,10 @@ const bootstrapClaimsSchema = z.object({
   commandId: z.string().min(1).max(512),
 });
 
-const bootstrapIssuerCapabilities = [
-  TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
-  TRUSTED_ISSUER_CAPABILITIES.IDENTITY_LINK,
-  TRUSTED_ISSUER_CAPABILITIES.MEMBERSHIP_GRANT,
-  TRUSTED_ISSUER_CAPABILITIES.SOURCE_CONFIG_WRITE,
-] as const;
-
 type Assertion = Record<string, unknown> & { iss?: unknown };
 
 const applicationConnectionService =
   new FederatedApplicationConnectionService();
-
-function podAudience(): string | null {
-  const value = process.env.PUBLIC_URL?.replace(/\/+$/, "");
-  return value || null;
-}
 
 /**
  * Trusted issuer URLs are persistent Pod-local identity keys. The JWT claim
@@ -1785,11 +1775,11 @@ async function approveBootstrapIssuer(input: {
 }): Promise<boolean> {
   const { issuerService, issuerUrl, ownerUserId } = input;
   let issuer: TrustedIssuerRecord | null | undefined = input.issuer;
-  const requiredCapabilities = [...bootstrapIssuerCapabilities];
+  const requiredCapabilities = [...CONTROL_PLANE_ISSUER_SCOPES];
   if (issuer.status === "pending") {
     issuer =
       (await issuerService.approvePending(issuer.id, ownerUserId, [
-        ...bootstrapIssuerCapabilities,
+        ...CONTROL_PLANE_ISSUER_SCOPES,
       ])) ?? (await issuerService.getByUrl(issuerUrl));
   }
   const approvedIssuer = issuer?.status === "approved" ? issuer : null;
@@ -1802,7 +1792,7 @@ async function approveBootstrapIssuer(input: {
     issuer = await issuerService.approve(approvedIssuer.id, ownerUserId, [
       ...new Set([
         ...approvedIssuer.allowedScopes,
-        ...bootstrapIssuerCapabilities,
+        ...CONTROL_PLANE_ISSUER_SCOPES,
       ]),
     ]);
   }

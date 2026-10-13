@@ -39,6 +39,12 @@ vi.mock("@synap/database", () => ({
     MEMBERSHIP_GRANT: "membership:grant",
     SOURCE_CONFIG_WRITE: "source-config:write",
   },
+  CONTROL_PLANE_ISSUER_SCOPES: [
+    "auth:exchange-user",
+    "identity:link-user",
+    "membership:grant",
+    "source-config:write",
+  ],
   db: {
     select: () => ({
       from: () => ({

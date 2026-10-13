@@ -55,6 +55,12 @@ vi.mock("@synap/database", () => ({
     MEMBERSHIP_GRANT: "membership:grant",
     USER_EXCHANGE: "auth:exchange-user",
   },
+  CONTROL_PLANE_ISSUER_SCOPES: [
+    "auth:exchange-user",
+    "identity:link-user",
+    "membership:grant",
+    "source-config:write",
+  ],
 }));
 
 vi.mock("@synap/database/schema", () => ({
@@ -68,6 +74,8 @@ vi.mock("@synap/database/schema", () => ({
 }));
 
 vi.mock("@synap/api", () => ({
+  // Mirrors the real contract (@synap/api jwks-client): PUBLIC_URL, no trailing slash.
+  podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   createOpaqueApplicationConnectionValue: vi.fn(),
   hashOpaqueApplicationConnectionValue: vi.fn(),
   normalizeApplicationCallbackUrl: vi.fn(),

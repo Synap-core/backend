@@ -44,7 +44,10 @@ import {
 } from "@synap/database/schema";
 
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
-import { verifyTrustedIssuerJwt } from "../../../utils/jwks-client.js";
+import {
+  podAudience,
+  verifyTrustedIssuerJwt,
+} from "../../../utils/jwks-client.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
 /**
@@ -71,7 +74,7 @@ async function verifyCpAssertion(
   const authToken = c.req
     .header("authorization")
     ?.match(/^Bearer\s+(.+)$/i)?.[1];
-  const audience = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+  const audience = podAudience();
   if (!audience) {
     logger.error(
       `mcp/${purposeClaim}: PUBLIC_URL not configured — cannot verify CP assertion`
