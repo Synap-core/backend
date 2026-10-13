@@ -15,7 +15,9 @@
  *             the viewer may approve every member and it takes nothing away;
  *             batchable when the viewer may approve every member.
  *   Asks    — everything else a person owes (an answer, a review, a failed
- *             run to look at). Not decided here: the row opens it.
+ *             run to look at). An agent's question on a session slot is
+ *             answered here (`ask-detail.ts`), one at a time, never batched;
+ *             anything else opens where it lives.
  *
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
@@ -27,7 +29,9 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
+import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
+import { askSlotOf, type AskSlot } from "./ask-detail";
 
 export type ReviewGroup = "access" | "changes" | "asks";
 
@@ -55,6 +59,10 @@ export interface ReviewSignal extends LensNeedsYouSignal {
   proposalIds?: string[] | null;
   /** The most specific readable container — a session or project, named. */
   source?: { kind: string; id: string; label: string } | null;
+  /** `owed-slot`: HOW the person can answer (the slot's typed ask). */
+  ask?: Ask | null;
+  /** `owed-slot`: the agent's own (unverified) claim it produced this. */
+  claimedDone?: boolean | null;
 }
 
 /**
@@ -78,7 +86,13 @@ export type ReviewDetail =
   | { kind: "proposal"; proposalId: string }
   | { kind: "issuer"; issuerId: string }
   | { kind: "app-request"; requestId: string }
-  /** An ask: decided where it lives, so the row opens it there. */
+  /**
+   * An agent's question on a session slot, answered in the detail. `slot` is
+   * the question as it read when the row was built; the page hands the
+   * detail the live one too, so it can tell the question changed.
+   */
+  | { kind: "ask"; sessionId: string; label: string; slot: AskSlot }
+  /** Any other ask: decided where it lives, so the row opens it there. */
   | { kind: "open"; door: LensDoor };
 
 /**
@@ -234,13 +248,18 @@ function askRow(
     { kind: "item", key: s.id, signal: s, session: null },
     "blocking"
   );
+  const slot = askSlotOf(s);
   return {
     nounKind: lens.objectKind,
     who: null,
     where: s.source?.label || s.sessionTitle || null,
     reason: lens.reason,
     expiresAt: null,
-    detail: lens.door ? { kind: "open", door: lens.door } : null,
+    detail: slot
+      ? { kind: "ask", sessionId: slot.sessionId, label: slot.label, slot }
+      : lens.door
+        ? { kind: "open", door: lens.door }
+        : null,
     inlineApprove: false,
     batchIds: null,
     ids: [s.id, ...(s.target ? [s.target.id] : [])],
@@ -281,6 +300,22 @@ export function reviewRows(
       count: Math.max(1, s.count),
     };
   });
+}
+
+/** The live question an open ask detail names, or null once it moved on. */
+export function liveAskSlot(
+  rows: readonly ReviewRow[],
+  detail: { sessionId: string; label: string }
+): AskSlot | null {
+  for (const r of rows) {
+    if (
+      r.detail?.kind === "ask" &&
+      r.detail.sessionId === detail.sessionId &&
+      r.detail.label === detail.label
+    )
+      return r.detail.slot;
+  }
+  return null;
 }
 
 /** Rows per chip: All and each group. */

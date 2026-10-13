@@ -17,6 +17,9 @@
  *   app request    → `useConnectionRequest` + `ConnectionRequestDetails`,
  *                    `/connection-requests/[id]` — without its return-to-app
  *                    redirect: here a decision only closes the drawer.
+ *   agent's ask    → `AskAnswer` (`ask-answer.tsx`): not a grant, so not the
+ *                    trust signals — who asks, what it looked at, and the
+ *                    answer control for its mode.
  *
  * The approve / reject buttons this file owns stay pinned to the bottom of
  * the scrolling detail (`DecisionBar`). Ids and raw requests sit under
@@ -53,6 +56,8 @@ import {
   IssuerScopePicker,
   type TrustedIssuerScope,
 } from "./issuer-review";
+import { AskAnswer } from "./ask-answer";
+import type { AskSlot } from "./ask-detail";
 import type { ReviewDetail } from "./review-rows";
 
 /** Where the viewer is and who they are — the anti-phishing half of a decision. */
@@ -66,26 +71,32 @@ type DrawerDetail = Exclude<ReviewDetail, { kind: "open" }>;
 export interface OpenReview {
   detail: DrawerDetail;
   title: string;
+  /** When the row's ask was raised (ISO), for "asked 2h ago". */
+  occurredAt?: string | null;
 }
 
 interface ReviewFrameProps {
   open: OpenReview | null;
   viewer: ReviewViewer;
   onClose: () => void;
+  /** An open ask's question as the pod holds it NOW (null = moved on). */
+  liveAsk: AskSlot | null;
+  /** An open ask was answered, done or handed back. */
+  onAskSettled: () => void;
 }
 
+type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
+
 /** Below `lg`: the decision in a modal drawer over the list. */
-export function ReviewDrawer({ open, viewer, onClose }: ReviewFrameProps) {
+export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
   return (
     <DetailDrawer
       isOpen={open !== null}
-      onClose={onClose}
+      onClose={rest.onClose}
       title={open?.title ?? "Review"}
       size="lg"
     >
-      {open && (
-        <ReviewDetail detail={open.detail} viewer={viewer} onClose={onClose} />
-      )}
+      {open && <ReviewDetail open={open} {...rest} />}
     </DetailDrawer>
   );
 }
@@ -95,11 +106,14 @@ export function ReviewDrawer({ open, viewer, onClose }: ReviewFrameProps) {
  * scrolls. Its body scrolls on its own, padded like the drawer's so the
  * pinned decision bar sits the same in both.
  */
-export function ReviewDock({ open, viewer, onClose }: ReviewFrameProps) {
+export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
   if (!open) return null;
+  const { onClose } = rest;
   return (
     <aside
-      aria-label="Request details"
+      aria-label={
+        open.detail.kind === "ask" ? "Question details" : "Request details"
+      }
       className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-lg bg-content1 ring-1 ring-inset ring-foreground/10"
     >
       <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-6 py-4">
@@ -119,23 +133,32 @@ export function ReviewDock({ open, viewer, onClose }: ReviewFrameProps) {
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <ReviewDetail detail={open.detail} viewer={viewer} onClose={onClose} />
+        <ReviewDetail open={open} {...rest} />
       </div>
     </aside>
   );
 }
 
 function ReviewDetail({
-  detail,
+  open,
   viewer,
   onClose,
-}: {
-  detail: DrawerDetail;
-  viewer: ReviewViewer;
-  onClose: () => void;
-}) {
+  liveAsk,
+  onAskSettled,
+}: DetailProps) {
+  const { detail } = open;
   return (
     <>
+      {detail.kind === "ask" && (
+        <AskAnswer
+          key={`${detail.sessionId}:${detail.label}`}
+          slot={detail.slot}
+          live={liveAsk}
+          occurredAt={open.occurredAt ?? null}
+          onSettled={onAskSettled}
+          onClose={onClose}
+        />
+      )}
       {detail.kind === "proposal" && (
         <ProposalBody
           key={detail.proposalId}

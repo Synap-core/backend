@@ -15,12 +15,14 @@
  * URL: `?type=access|changes|asks|history` picks the view; `?focus=<id>`
  * opens that row's decision (a row, its target, or any proposal id). From
  * `lg` up the decision docks beside the list; below, it opens in a drawer.
+ * An agent's question is answered in the same place (`ask-answer.tsx`);
+ * once it is, the detail closes and focus moves to the next row.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
-import { ArrowUpRight, Check, Lock, X } from "lucide-react";
+import { ArrowUpRight, Check, Lock, MessageSquare, X } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
@@ -48,6 +50,7 @@ import {
   batchOf,
   exitOf,
   focusedRow,
+  liveAskSlot,
   reviewCounts,
   reviewFilterOf,
   reviewRows,
@@ -65,6 +68,7 @@ import {
   type ReviewViewer,
 } from "./review-drawer";
 import { ReviewHistory } from "./review-history";
+import { nextRowKey } from "./ask-detail";
 
 const TITLE = "Review";
 const DESCRIPTION = "Everything waiting on your decision, in one place.";
@@ -135,8 +139,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       return;
     handledFocus.current = focusId;
     const row = focusedRow(rows, focusId);
-    if (row?.detail && row.detail.kind !== "open") {
-      setOpen({ detail: row.detail, title: row.title });
+    const opened = row ? openOf(row) : null;
+    if (opened) {
+      setOpen(opened);
     } else if (!row && isUuid(focusId)) {
       // Not waiting any more (or never on this page): a proposal id still
       // opens its decision, which says how it ended.
@@ -150,6 +155,30 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   function closeDrawer() {
     setOpen(null);
     if (focusId) replaceParams((params) => params.delete("focus"));
+  }
+
+  // An answered ask leaves the list on the next read: close it, and hand
+  // keyboard focus to the row after it (else the one before).
+  const liveAsk =
+    open?.detail.kind === "ask" ? liveAskSlot(rows, open.detail) : null;
+  function askSettled() {
+    const answered = open ? detailKey(open.detail) : null;
+    const keys = visible.map((r) => r.key);
+    const at = visible.find(
+      (r) =>
+        r.detail && r.detail.kind !== "open" && detailKey(r.detail) === answered
+    );
+    const next = at ? nextRowKey(keys, at.key) : null;
+    closeDrawer();
+    if (next) {
+      window.requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLElement>(
+            `[data-row-id="${CSS.escape(next)}"] button`
+          )
+          ?.focus();
+      });
+    }
   }
 
   // ── Selection + batch (Changes rows the viewer may approve whole) ─────────
@@ -377,11 +406,10 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                   selectable={selectable}
                   selected={selected.has(row.key)}
                   onToggle={() => toggle(row.key)}
-                  onOpen={() =>
-                    row.detail &&
-                    row.detail.kind !== "open" &&
-                    setOpen({ detail: row.detail, title: row.title })
-                  }
+                  onOpen={() => {
+                    const opened = openOf(row);
+                    if (opened) setOpen(opened);
+                  }}
                   onApprove={() => void approveRows([row])}
                   approving={busy}
                 />
@@ -399,12 +427,24 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           )}
         </div>
         {docked && (
-          <ReviewDock open={open} viewer={viewer} onClose={closeDrawer} />
+          <ReviewDock
+            open={open}
+            viewer={viewer}
+            onClose={closeDrawer}
+            liveAsk={liveAsk}
+            onAskSettled={askSettled}
+          />
         )}
       </div>
 
       {!docked && (
-        <ReviewDrawer open={open} viewer={viewer} onClose={closeDrawer} />
+        <ReviewDrawer
+          open={open}
+          viewer={viewer}
+          onClose={closeDrawer}
+          liveAsk={liveAsk}
+          onAskSettled={askSettled}
+        />
       )}
 
       <ConfirmModal
@@ -430,9 +470,23 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   );
 }
 
+/** What a row opens beside the list, or null when its door leads elsewhere. */
+function openOf(row: ReviewRow): OpenReview | null {
+  const detail = row.detail;
+  if (!detail || detail.kind === "open") return null;
+  return {
+    detail,
+    // The question itself is the detail's heading; the frame names the job.
+    title: detail.kind === "ask" ? "Answer the agent" : row.title,
+    occurredAt: row.occurredAt,
+  };
+}
+
 /** One identity per decision, so the row whose detail is open can say so. */
 function detailKey(detail: Exclude<ReviewDetail, { kind: "open" }>): string {
   switch (detail.kind) {
+    case "ask":
+      return `ask:${detail.sessionId}:${detail.label}`;
     case "proposal":
       return `proposal:${detail.proposalId}`;
     case "issuer":
@@ -507,6 +561,7 @@ function ReviewListRow({
 }) {
   const exit = row.detail?.kind === "open" ? exitOf(row.detail) : null;
   const opensHere = row.detail !== null && row.detail.kind !== "open";
+  const isAsk = row.detail?.kind === "ask";
   const actions = (
     <div className="flex items-center gap-1.5">
       {row.inlineApprove && (
@@ -522,8 +577,18 @@ function ReviewListRow({
         </Button>
       )}
       {opensHere && (
-        <Button size="sm" variant="flat" radius="md" onPress={onOpen}>
-          Review
+        <Button
+          size="sm"
+          variant="flat"
+          radius="md"
+          onPress={onOpen}
+          startContent={
+            isAsk ? (
+              <MessageSquare className="h-3.5 w-3.5" aria-hidden />
+            ) : undefined
+          }
+        >
+          {isAsk ? "Answer" : "Review"}
         </Button>
       )}
       {exit && <DoorButton exit={exit} />}
@@ -552,6 +617,13 @@ function ReviewListRow({
               <Lock
                 className="h-3.5 w-3.5 text-foreground/40"
                 aria-label="Access requests are reviewed one at a time"
+              />
+            </span>
+          ) : isAsk ? (
+            <span title="Questions are answered one at a time">
+              <MessageSquare
+                className="h-3.5 w-3.5 text-foreground/40"
+                aria-label="Questions are answered one at a time"
               />
             </span>
           ) : null}
