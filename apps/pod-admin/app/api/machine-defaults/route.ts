@@ -8,15 +8,15 @@
  * procedures are newer than `@synap-core/api-types`; see `lib/pod-trpc.ts`).
  */
 
-import { whoamiFromCookie } from "../../../lib/kratos";
+import { apiSessionDenial } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 import type { MachineDefaults } from "../../../lib/machine-defaults";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  if (!(await whoamiFromCookie(req.headers)))
-    return Response.json({ error: "Not signed in" }, { status: 401 });
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
   const res = await callPodQuery<MachineDefaults>(
     "apiKeys.getMachineDefaults",
     undefined,
@@ -28,8 +28,8 @@ export async function GET(req: Request) {
 }
 
 export async function PUT(req: Request) {
-  if (!(await whoamiFromCookie(req.headers)))
-    return Response.json({ error: "Not signed in" }, { status: 401 });
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
   const body = (await req.json().catch(() => null)) as {
     keyTtlDays?: unknown;
   } | null;

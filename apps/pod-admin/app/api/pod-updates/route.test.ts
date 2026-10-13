@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-let signedIn = true;
+/** What the session check answers: proceed, or the route's 401 / 503. */
+let session: "active" | "none" | "unavailable" = "active";
 vi.mock("../../../lib/kratos", () => ({
-  whoamiFromCookie: async () => (signedIn ? { id: "u1" } : null),
+  apiSessionDenial: async () =>
+    session === "active"
+      ? null
+      : Response.json({}, { status: session === "none" ? 401 : 503 }),
 }));
 
 import { GET } from "./route";
@@ -11,7 +15,7 @@ import { PUT } from "./settings/route";
 const fetchMock = vi.fn();
 
 beforeEach(() => {
-  signedIn = true;
+  session = "active";
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -51,8 +55,14 @@ describe("GET /api/pod-updates", () => {
   });
 
   it("does not call the pod without a session", async () => {
-    signedIn = false;
+    session = "none";
     expect((await get()).status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 503, not 401, when the pod could not check the session", async () => {
+    session = "unavailable";
+    expect((await get()).status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

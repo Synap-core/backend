@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import { router, podAdminProcedure } from "../trpc.js";
+import { assertOwnerCredential } from "../services/app-connect.js";
 import {
   getOauthClient,
   listOauthClients,
@@ -29,10 +30,19 @@ export const oauthClientsRouter = router({
     .input(z.object({ clientId: ClientId }))
     .query(({ input }) => getOauthClient(input.clientId)),
 
-  /** Stop every key the client minted and burn its waiting codes. Idempotent. */
+  /**
+   * Stop every key the client minted and burn its waiting codes. Idempotent.
+   * The admin signed in as themselves only — an agent key resolves `userId`
+   * to the admin it acts for, so without the check a pod admin's agent could
+   * cut off any app; same rule as `apps.adminRevoke`.
+   */
   adminRevoke: podAdminProcedure
     .input(z.object({ clientId: ClientId }))
-    .mutation(({ ctx, input }) =>
-      revokeOauthClient({ clientId: input.clientId, actorUserId: ctx.userId })
-    ),
+    .mutation(({ ctx, input }) => {
+      assertOwnerCredential("revoke an app", ctx.agentUserId);
+      return revokeOauthClient({
+        clientId: input.clientId,
+        actorUserId: ctx.userId,
+      });
+    }),
 });

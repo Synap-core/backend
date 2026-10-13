@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  buildCrudIpCeilingKey,
   buildRateLimitKey,
   classifyRateLimitPath,
   getRateLimitClassConfig,
   hashBearerToken,
+  isDirectLoopbackCall,
+  KRATOS_SESSION_MIN_LENGTH,
   kratosSessionFromCookieHeader,
+  sharedClientIp,
   type RateLimitClass,
 } from "./rate-limit-classes.js";
 
@@ -158,7 +162,9 @@ describe("buildRateLimitKey", () => {
   });
 
   describe("Kratos session cookie", () => {
-    const session = "MTc2MDM0NTY3OHxkZXZpY2Utc2Vzc2lvbi1ibG9i";
+    // Real Kratos cookies are a few hundred characters of securecookie.
+    const session =
+      "MTc2MDM0NTY3OHxkZXZpY2Utc2Vzc2lvbi1ibG9i_Dv-BBAEC_4IAARABEAAAR_-CAAEGc3RyaW5n";
     const cookie = `csrf_token_abc=xyz; ory_kratos_session=${session}; theme=dark`;
 
     it("keys by the hashed session when no Bearer is present", () => {
@@ -169,7 +175,7 @@ describe("buildRateLimitKey", () => {
     });
 
     it("gives two people behind one address two budgets", () => {
-      const other = "ory_kratos_session=another-session-value-0123456789";
+      const other = `ory_kratos_session=${"another-session-value-".padEnd(80, "x")}`;
       expect(
         buildRateLimitKey("crud", undefined, "unknown", "/", cookie)
       ).not.toBe(buildRateLimitKey("crud", undefined, "unknown", "/", other));
@@ -204,6 +210,9 @@ describe("buildRateLimitKey", () => {
         "ory_kratos_session=  ; x=1",
         ";;=;",
         "ory_kratos_session=short",
+        // Long enough for the old 20-char floor, still invented-length.
+        "ory_kratos_session=MTc2MDM0NTY3OHxkZXZpY2Utc2Vzc2lvbi1ibG9i",
+        `ory_kratos_session=${"a".repeat(KRATOS_SESSION_MIN_LENGTH - 1)}`,
         "not_ory_kratos_session=MTc2MDM0NTY3OHxkZXZpY2U",
       ]) {
         expect(buildRateLimitKey("crud", undefined, ip, "/", bad)).toBe(
@@ -266,5 +275,88 @@ describe("getRateLimitClassConfig defaults", () => {
     if (!process.env.RATE_LIMIT_AI_WINDOW_MS) {
       expect(cfg.ai_interactive.windowMs).toBe(5 * 60 * 1000);
     }
+  });
+});
+
+describe("the address-wide crud ceiling", () => {
+  it("defaults to five signed-in people's budget", () => {
+    const cfg = getRateLimitClassConfig();
+    if (
+      !process.env.RATE_LIMIT_CRUD_IP_CEILING &&
+      !process.env.RATE_LIMIT_CRUD_SESSION_MAX
+    ) {
+      expect(cfg.crud.sessionMax).toBe(3000);
+      expect(cfg.crud.ipCeiling).toBe(15000);
+    }
+  });
+
+  it("keys every request from a client address into one bucket", () => {
+    expect(buildCrudIpCeilingKey("203.0.113.9", {})).toBe(
+      "crud:ipall:203.0.113.9"
+    );
+  });
+
+  it("has no ceiling when the address cannot tell callers apart", () => {
+    expect(buildCrudIpCeilingKey("unknown", {})).toBeNull();
+    expect(
+      buildCrudIpCeilingKey("203.0.113.9", { SYNAP_SHARED_CLIENT_IP: "true" })
+    ).toBeNull();
+  });
+
+  it("reads the shared-address signal with the public doors' spellings", () => {
+    for (const on of ["1", "true", "YES", " on "]) {
+      expect(sharedClientIp({ SYNAP_SHARED_CLIENT_IP: on })).toBe(true);
+    }
+    for (const off of [undefined, "", "false", "0", "no"]) {
+      expect(sharedClientIp({ SYNAP_SHARED_CLIENT_IP: off })).toBe(false);
+    }
+  });
+});
+
+describe("isDirectLoopbackCall", () => {
+  const ctx = (
+    peer: string | undefined,
+    headers: Record<string, string> = {}
+  ) => ({
+    env:
+      peer === undefined
+        ? undefined
+        : { incoming: { socket: { remoteAddress: peer } } },
+    req: { header: (name: string) => headers[name.toLowerCase()] },
+  });
+
+  it("is local for a loopback socket peer with no forwarding header", () => {
+    for (const peer of ["127.0.0.1", "127.0.0.53", "::1", "::ffff:127.0.0.1"]) {
+      expect(isDirectLoopbackCall(ctx(peer))).toBe(true);
+    }
+  });
+
+  it("is never local on a header alone", () => {
+    expect(
+      isDirectLoopbackCall(
+        ctx(undefined, { "x-forwarded-for": "127.0.0.1", "x-real-ip": "::1" })
+      )
+    ).toBe(false);
+    expect(
+      isDirectLoopbackCall(
+        ctx("172.18.0.5", { "x-forwarded-for": "127.0.0.1" })
+      )
+    ).toBe(false);
+  });
+
+  it("is not local when a proxy on loopback relayed a client", () => {
+    expect(
+      isDirectLoopbackCall(
+        ctx("127.0.0.1", { "x-forwarded-for": "198.51.100.7" })
+      )
+    ).toBe(false);
+    expect(
+      isDirectLoopbackCall(ctx("127.0.0.1", { "x-real-ip": "198.51.100.7" }))
+    ).toBe(false);
+  });
+
+  it("is not local for a compose-network peer", () => {
+    expect(isDirectLoopbackCall(ctx("172.18.0.5"))).toBe(false);
+    expect(isDirectLoopbackCall(ctx("::ffff:172.18.0.5"))).toBe(false);
   });
 });

@@ -17,7 +17,7 @@
  * `lib/pod-trpc.ts`.
  */
 
-import { whoamiFromCookie } from "../../../lib/kratos";
+import { apiSessionDenial } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 
 export const dynamic = "force-dynamic";
@@ -34,10 +34,8 @@ interface AppRow {
 }
 
 export async function GET(req: Request) {
-  const identity = await whoamiFromCookie(req.headers);
-  if (!identity) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
 
   // One app: the detail page's read. `apps.get` is self-scoped, so a public id
   // that is not the caller's returns NOT_FOUND rather than someone else's app.
@@ -68,10 +66,8 @@ export async function GET(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const identity = await whoamiFromCookie(req.headers);
-  if (!identity) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
   const body = (await req.json().catch(() => null)) as {
     publicId?: unknown;
     action?: unknown;

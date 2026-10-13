@@ -2,8 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls: Array<{ path: string; input: unknown }> = [];
 
+/** What the session check answers: proceed, or the route's 401 / 503. */
+let session: "active" | "none" | "unavailable" = "active";
 vi.mock("../../../lib/kratos", () => ({
-  whoamiFromCookie: async () => ({ id: "u1" }),
+  apiSessionDenial: async () =>
+    session === "active"
+      ? null
+      : Response.json({}, { status: session === "none" ? 401 : 503 }),
 }));
 vi.mock("../../../lib/pod-trpc", () => ({
   callPodQuery: async (path: string, input: unknown) => {
@@ -28,6 +33,7 @@ const put = (body: unknown) =>
   );
 
 beforeEach(() => {
+  session = "active";
   calls.length = 0;
 });
 
@@ -38,6 +44,14 @@ describe("PUT /api/machine-defaults", () => {
     expect(calls).toEqual([
       { path: "apiKeys.setMachineDefaults", input: { keyTtlDays: 30 } },
     ]);
+  });
+
+  it("tells signed out (401) from a pod that could not say (503)", async () => {
+    session = "none";
+    expect((await put({ keyTtlDays: 30 })).status).toBe(401);
+    session = "unavailable";
+    expect((await put({ keyTtlDays: 30 })).status).toBe(503);
+    expect(calls).toEqual([]);
   });
 
   it("refuses a non-integer without calling the pod", async () => {

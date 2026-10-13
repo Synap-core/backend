@@ -10,6 +10,7 @@
  *     consented to is left out unless asked for; a member is refused;
  *   - adminRevoke: every live key of THAT client stops (another client's
  *     key does not), an unexchanged code is burned, the client row stays;
+ *     an agent key linked to an admin is refused;
  *   - the instance id round-trips (`parseOauthKeyInstanceId`).
  */
 
@@ -83,11 +84,12 @@ function ddlFor(table: PgTable): string {
 const q = <T>(text: string, params?: unknown[]) =>
   h.client!.query<T>(text, params).then((r) => r.rows);
 
-const caller = (userId: string) =>
+const caller = (userId: string, agentUserId?: string) =>
   oauthClientsRouter.createCaller({
     authenticated: true,
     userId,
     session: { id: "s" },
+    ...(agentUserId ? { agentUserId } : {}),
   } as never);
 
 async function mintFor(clientId: string, person: string, lastUsed?: string) {
@@ -185,6 +187,16 @@ describe("oauthClients.adminList / adminGet", () => {
 });
 
 describe("oauthClients.adminRevoke", () => {
+  it("refuses an agent key linked to a pod admin, and revokes nothing", async () => {
+    await expect(
+      caller(ADMIN, AGENT).adminRevoke({ clientId: CLAUDE })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const live = await q<{ n: number }>(
+      `select count(*)::int as n from api_keys where is_active`
+    );
+    expect(live[0]!.n).toBe(2);
+  });
+
   it("stops that client's keys only, burns its waiting code, keeps the row", async () => {
     expect(await caller(ADMIN).adminRevoke({ clientId: CLAUDE })).toEqual({
       clientId: CLAUDE,

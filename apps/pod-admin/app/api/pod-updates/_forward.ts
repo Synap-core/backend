@@ -6,10 +6,12 @@
  *
  * The body is plain JSON (no tRPC envelope), so the pod's own status and body
  * pass through untouched: a 503 stays "the pod could not read its setting", a
- * 403 stays "not an admin".
+ * 403 stays "not an admin". A whoami the pod could not answer is a 503 too
+ * (`apiSessionDenial`), never a 401 — the page then offers "try again"
+ * instead of sending a signed-in person to /login.
  */
 
-import { whoamiFromCookie } from "../../../lib/kratos";
+import { apiSessionDenial } from "../../../lib/kratos";
 import { podCallerHeaders } from "../../../lib/pod-caller-headers";
 
 const INTERNAL_POD_URL = (
@@ -21,9 +23,8 @@ export async function forwardToPod(
   path: string,
   write?: { body: unknown }
 ): Promise<Response> {
-  if (!(await whoamiFromCookie(req.headers))) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
   let res: Response;
   try {
     res = await fetch(`${INTERNAL_POD_URL}/api/pod-updates${path}`, {
