@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CATEGORY_LABEL,
   categorize,
+  holderHref,
   holderName,
   keyStatus,
   normalizeScopes,
@@ -83,6 +84,23 @@ describe("holderName", () => {
       null
     );
     expect(holderName(key({}))).toBe(null);
+  });
+});
+
+describe("holderHref", () => {
+  it("opens an app's key on its app page; other holders have none here", () => {
+    expect(
+      holderHref(
+        key({ holder: { kind: "app", name: "Invoicer", appId: "app_x" } })
+      )
+    ).toBe("/applications/key/app_x");
+    // An older pod sends no id: no link rather than a broken one.
+    expect(holderHref(key({ holder: { kind: "app", name: "Invoicer" } }))).toBe(
+      null
+    );
+    expect(holderHref(key({ holder: { kind: "agent", name: "Claude" } }))).toBe(
+      null
+    );
   });
 });
 

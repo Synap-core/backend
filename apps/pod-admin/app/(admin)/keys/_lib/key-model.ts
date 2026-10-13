@@ -6,6 +6,7 @@
 
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
+import { appHref } from "../../applications/_lib/app-inventory";
 
 /**
  * Who holds a key — `apiKeys.list` / `adminListAll` project it (`KeyHolder`
@@ -17,6 +18,8 @@ import type { StatusKind } from "../../components/status-pill";
 export interface KeyHolder {
   kind: "app" | "computer" | "agent" | "person";
   name: string | null;
+  /** An app holder's `public_id` — its page on Apps (`holderHref`). */
+  appId?: string;
 }
 
 export interface UnifiedKey {
@@ -101,6 +104,17 @@ export const CATEGORY_LABEL: Record<KeyCategory, string> = {
 export function holderName(k: UnifiedKey): string | null {
   if (!k.holder || k.holder.kind === "person") return null;
   return k.holder.name?.trim() || null;
+}
+
+/**
+ * Where the key's holder has its own page: an app's key opens its app on
+ * Apps (`appHref`). null = the holder has no page to open from here.
+ */
+export function holderHref(k: UnifiedKey): string | null {
+  if (k.holder?.kind === "app" && k.holder.appId) {
+    return appHref("key", k.holder.appId);
+  }
+  return null;
 }
 
 export function keyStatus(apiKey: {

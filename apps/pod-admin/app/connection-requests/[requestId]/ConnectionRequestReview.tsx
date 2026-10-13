@@ -17,6 +17,7 @@ import {
 import { ArrowUpRight, Check, X } from "lucide-react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { navHref } from "../../../lib/console-nav";
 import {
   ConnectionRequestDetails,
   matchesApprovedConnection,
@@ -60,14 +61,14 @@ export function ConnectionRequestReview({
       if (isRequesterBrowser) {
         window.setTimeout(() => window.location.assign(data.returnUrl), 900);
       } else {
-        // Owner reviewing from App origins: return to the inventory
+        // Owner reviewing from Apps: return to the inventory
         // after a short success beat so the page does not feel stuck.
-        window.setTimeout(() => router.push("/origins"), 1_200);
+        window.setTimeout(() => router.push(navHref("apps")), 1_200);
       }
     },
     onRejected: () => {
       setDeclined(true);
-      window.setTimeout(() => router.push("/origins"), 900);
+      window.setTimeout(() => router.push(navHref("apps")), 900);
     },
   });
   const { request } = review;
@@ -92,7 +93,7 @@ export function ConnectionRequestReview({
   }, []);
 
   function closeReview() {
-    router.push("/origins");
+    router.push(navHref("apps"));
   }
 
   // Expired session → login (bring them back to this exact review), not a dead
@@ -119,7 +120,7 @@ export function ConnectionRequestReview({
           </Alert>
           <div className="flex justify-end">
             <Button variant="flat" className="min-h-11" onPress={closeReview}>
-              Back to App origins
+              Back to Apps
             </Button>
           </div>
         </CardBody>
@@ -237,13 +238,13 @@ export function ConnectionRequestReview({
           <Alert color="success" title="Connection approved" role="status">
             {autoReturning
               ? "Returning to the requesting app now so it can finish the connection."
-              : "Approved. Returning to App origins. The requester’s browser can finish with Check connection."}
+              : "Approved. Returning to Apps. The requester’s browser can finish with Check connection."}
           </Alert>
         ) : null}
 
         {declined ? (
           <Alert color="default" title="Request declined" role="status">
-            Returning to App origins.
+            Returning to Apps.
           </Alert>
         ) : null}
 

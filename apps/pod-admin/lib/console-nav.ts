@@ -184,10 +184,13 @@ export const CONSOLE_NAV = [
       },
       {
         id: "apps",
-        href: "/origins",
+        // Every way an app connects (key, sign in with your pod, Claude/MCP).
+        // `/apps/*` stays the member's self-service app page.
+        href: "/applications",
         label: "Apps",
         icon: "AppWindow",
         kind: "application",
+        legacy: [{ source: "/origins" }],
         audience: "admin",
       },
       {
