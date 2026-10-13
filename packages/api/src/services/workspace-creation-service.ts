@@ -497,6 +497,34 @@ export async function checkOneSpacePerDomain(input: {
   };
 }
 
+/**
+ * A space whose LAYER 2 failed (capabilities / playbooks / automations —
+ * `applyPackagePostWorkspace` writes `failedStep: "post-workspace"`). Layer 1
+ * finished: layer 2 only ever runs on a built space. So it is NEVER resumed
+ * through the core: a row with no `completedSteps` (every space built before
+ * they were recorded) re-runs step 1 there, which mints a second space and
+ * 409s on the name. Its `packageVersion` is not trusted either — the run that
+ * failed may have stamped it before the one finisher existed, which would
+ * short-circuit the re-sync as "unchanged" and skip layer 2 forever. Callers
+ * re-sync it as stale (`withoutStamp`) and re-run layer 2.
+ */
+export function failedInLayerTwo(
+  settings: WorkspaceSettings | null | undefined
+): boolean {
+  return (
+    settings?.provisioningStatus === "failed" &&
+    settings.failedStep === "post-workspace"
+  );
+}
+
+/** The settings a re-sync compares against, with the version stamp dropped. */
+export function withoutStamp(
+  settings: WorkspaceSettings | null | undefined
+): WorkspaceSettings {
+  const { packageVersion: _dropped, ...rest } = settings ?? {};
+  return rest;
+}
+
 /** Deterministic: owned first, then the OLDEST (the original domain space). */
 function pickExisting(
   rows: Array<{ id: string; name: string; ownerId: string; createdAt: Date }>,
@@ -680,6 +708,40 @@ export async function createWorkspaceFromDefinitionIdempotent(
     settings: WorkspaceSettings | null | undefined
   ): Promise<CreateWorkspaceFromDefinitionResult | null> => {
     if (settings?.provisioningStatus !== "failed") return null;
+    if (failedInLayerTwo(settings)) {
+      // Layer 1 is built: re-sync it (stamp ignored) and hand back a
+      // non-"unchanged" outcome so the caller re-runs layer 2 and the
+      // finisher stamps only what then converges.
+      const verdict = await reconcileWorkspaceIfStale({
+        workspaceId,
+        packageSlug,
+        currentSettings: withoutStamp(settings),
+        userId,
+        callerVersion: packageVersion,
+        callerDefinition: definition,
+      });
+      const pending =
+        verdict.pendingVersionStamp ?? (await versionToMaterialize());
+      const { reopenFailedLayerTwo } =
+        await import("./template-apply-finisher.js");
+      await reopenFailedLayerTwo(workspaceId, userId, pending);
+      logger.warn(
+        { userId, workspaceId, packageSlug, reconciled: verdict.reconciled },
+        "createFromDefinition (Hub): layer 2 failed last time — re-synced layer 1, layer 2 re-runs"
+      );
+      return {
+        workspaceId,
+        created: false,
+        outcome: verdict.reconciled ? "reconciled" : "created",
+        ...(verdict.reconciled && verdict.report
+          ? { reconciled: verdict.report }
+          : {}),
+        ...(verdict.packageDefinition
+          ? { packageDefinition: verdict.packageDefinition }
+          : {}),
+        ...(pending ? { pendingVersionStamp: pending } : {}),
+      };
+    }
     logger.warn(
       {
         userId,

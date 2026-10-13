@@ -46,8 +46,13 @@ import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import {
   withWorkspaceProposalIdLock,
   reconcileWorkspaceIfStale,
+  failedInLayerTwo,
+  withoutStamp,
 } from "../../services/workspace-creation-service.js";
-import { finishTemplateApply } from "../../services/template-apply-finisher.js";
+import {
+  finishTemplateApply,
+  reopenFailedLayerTwo,
+} from "../../services/template-apply-finisher.js";
 import { resolveWorkspaceExtends } from "../../services/workspace-composition.js";
 import type { ResolvedPackageDependency } from "../../services/package-dependency-resolver.js";
 import {
@@ -1039,7 +1044,7 @@ export const definitionEngineProcedures = {
               const wsSettings = ws.settings as WorkspaceSettings | null;
               const provStatus = wsSettings?.provisioningStatus;
 
-              if (provStatus === "failed") {
+              if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
                 logger.warn(
                   {
                     userId: ctx.userId,
@@ -1126,9 +1131,18 @@ export const definitionEngineProcedures = {
               // Active workspace already exists → additively sync it to the
               // current template (add-only). Skipped for non-active (pending)
               // workspaces to avoid racing an in-flight provisioning build.
+              if (failedInLayerTwo(wsSettings))
+                await reopenFailedLayerTwo(ws.id, ctx.userId, undefined);
               const reconcileOutcome =
-                provStatus === "active"
-                  ? await reconcileExisting(ws.id, wsSettings)
+                provStatus === "active" || failedInLayerTwo(wsSettings)
+                  ? await reconcileExisting(
+                      ws.id,
+                      // A layer-2 failure re-syncs as stale (its stamp is
+                      // not trusted) so layer 2 re-runs — `failedInLayerTwo`.
+                      failedInLayerTwo(wsSettings)
+                        ? withoutStamp(wsSettings)
+                        : wsSettings
+                    )
                   : undefined;
               const reconciled = reconcileOutcome?.report;
               const layers = reconcileOutcome?.layers ?? [];
@@ -1181,7 +1195,7 @@ export const definitionEngineProcedures = {
               const wsSettings = ws.settings as WorkspaceSettings | null;
               const provStatus = wsSettings?.provisioningStatus;
 
-              if (provStatus === "failed") {
+              if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
                 // Automatically resume from where the previous attempt failed.
                 logger.warn(
                   {
@@ -1258,15 +1272,24 @@ export const definitionEngineProcedures = {
               // Active workspace already exists → additively sync it to the
               // current template (add-only). Skipped for pending workspaces to
               // avoid racing an in-flight provisioning build.
+              if (failedInLayerTwo(wsSettings))
+                await reopenFailedLayerTwo(ws.id, ctx.userId, undefined);
               const reconcileOutcome =
-                provStatus === "active"
-                  ? await reconcileExisting(ws.id, wsSettings)
+                provStatus === "active" || failedInLayerTwo(wsSettings)
+                  ? await reconcileExisting(
+                      ws.id,
+                      // A layer-2 failure re-syncs as stale (its stamp is
+                      // not trusted) so layer 2 re-runs — `failedInLayerTwo`.
+                      failedInLayerTwo(wsSettings)
+                        ? withoutStamp(wsSettings)
+                        : wsSettings
+                    )
                   : undefined;
               const reconciled = reconcileOutcome?.report;
               const layers = reconcileOutcome?.layers ?? [];
               return {
                 status:
-                  provStatus === "active"
+                  provStatus === "active" || failedInLayerTwo(wsSettings)
                     ? ("created" as const)
                     : ("pending" as const),
                 workspaceId: ws.id,

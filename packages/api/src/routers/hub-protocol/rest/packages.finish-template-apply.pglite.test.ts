@@ -60,9 +60,19 @@ vi.mock("@synap/database", async (importOriginal) => {
       workspaceName?: string;
       packageSlug?: string;
       packageVersion?: string;
-      resumeFrom?: { workspaceId: string };
+      resumeFrom?: { workspaceId: string; completedSteps: string[] };
     }) => {
       let workspaceId = input.resumeFrom?.workspaceId;
+      // The real core re-runs step 1 when "workspace" is not among the
+      // completed steps: it creates the space again, and the pod refuses the
+      // second space by name (founder pod 2026-10-13, CRM: 409).
+      if (
+        workspaceId &&
+        !input.resumeFrom!.completedSteps.includes("workspace")
+      )
+        throw new Error(
+          `A space named "${input.workspaceName ?? "New"}" already exists.`
+        );
       if (workspaceId) {
         await client.query(
           `update workspaces set provisioning_status = 'pending', settings = settings || '{"provisioningStatus":"pending","failedStep":null}'::jsonb where id = $1`,
@@ -325,21 +335,22 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     ]);
   });
 
-  it("(2) a failed space resumed and converged: stamped, active, record cleared, health current", async () => {
+  it("(2) a space whose layer 2 failed is re-synced, never re-created: stamped, active, record cleared, health current", async () => {
     const { id } = await space();
+    // As the founder's CRM was left: built before `completedSteps` were
+    // recorded, layer 2 failed, and the run stamped the version early.
     await q(
-      `update workspaces set provisioning_status = 'failed', settings = settings || '{"provisioningStatus":"failed","failedStep":"post-workspace"}'::jsonb where id = $1`,
-      [id]
+      `update workspaces set provisioning_status = 'failed', settings = (settings - 'completedSteps') || jsonb_build_object('provisioningStatus','failed','failedStep','post-workspace','packageVersion',$2::text) where id = $1`,
+      [id, version]
     );
     // The proposal was approved out of band: the playbook can now land.
     h.proposedName = "";
     const { status, body } = await apply();
     expect(status, JSON.stringify(body)).toBe(201);
-    // `resumeIfFailed` re-ran the core: outcome "created" (built by this apply).
-    expect(body.workspace).toMatchObject({
-      outcome: "created",
-      workspaceId: id,
-    });
+    // Not a core resume (that would mint a second space), and not the
+    // "unchanged" the early stamp would claim (that skips layer 2).
+    expect(body.workspace).toMatchObject({ workspaceId: id });
+    expect(body.workspace.outcome).not.toBe("unchanged");
     expect(body.versionStamped).toBe(true);
     expect(body.templateApply).toBeUndefined();
     const { settings } = await space();

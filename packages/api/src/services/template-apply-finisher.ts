@@ -176,3 +176,36 @@ export async function finishTemplateApply(
   await repo.mergeSettings(workspaceId, { ...activate, templateApply }, userId);
   return { state: templateApply.state, versionStamped: false, templateApply };
 }
+
+/**
+ * Re-open a space whose LAYER 2 failed (`failedInLayerTwo`) for a re-run of
+ * layer 2. Layer 1 is built, so the space is what an unfinished apply is:
+ * "active" with `templateApply: layer-2-not-run` — a crash before the finisher
+ * runs still reads drifted, never "failed" forever and never current. The
+ * failure markers are cleared here because the finisher refuses to overwrite
+ * "failed"; if layer 2 throws again, `applyPackagePostWorkspace` re-marks it.
+ */
+export async function reopenFailedLayerTwo(
+  workspaceId: string,
+  userId: string,
+  version: string | undefined
+): Promise<void> {
+  const { getDb, eventRepository, WorkspaceRepository } =
+    await import("@synap/database");
+  const repo = new WorkspaceRepository(await getDb(), eventRepository);
+  const templateApply: TemplateApplyRecord = {
+    state: "layer-2-not-run",
+    version: version ?? null,
+    at: new Date().toISOString(),
+  };
+  await repo.mergeSettings(
+    workspaceId,
+    {
+      provisioningStatus: "active",
+      failedStep: null,
+      failedStepError: null,
+      templateApply,
+    },
+    userId
+  );
+}
