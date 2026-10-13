@@ -70,6 +70,7 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { projectLensWhere, accessScopeWhere } from "../utils/project-scope.js";
+import { membersOfWhere, readMembersOf } from "../utils/members-of-scope.js";
 import {
   viewReadableWhere,
   exposedViewMemberWhere,
@@ -1332,11 +1333,22 @@ export const viewsRouter = router({
             )
       );
 
+      // LIVE SET — a List built from a Library group names its container
+      // (`config.membersOf`): it shows the container's CURRENT members (a
+      // `parent_of` edge each), so a rebuild that attaches a new member grows
+      // the List without editing it. It SUPERSEDES the fixed set below (the
+      // members the List was born with), which would otherwise freeze it.
+      // ANDed with the floor above — it only narrows.
+      const membersOf = readMembersOf(view.config);
+      if (membersOf) {
+        conditions.push(membersOfWhere(entities.id, membersOf));
+      }
+
       // FIXED SET — a view created over named things (`query.entityIds`, e.g.
       // an import group's List) shows exactly those, never more. ANDed with
       // the floor above, so a stored id the caller cannot see stays hidden.
       // An explicit empty set shows nothing (it is not "no constraint").
-      if (Array.isArray(query.entityIds)) {
+      if (!membersOf && Array.isArray(query.entityIds)) {
         const fixedIds = query.entityIds.filter(
           (id): id is string => typeof id === "string" && id.length > 0
         );
