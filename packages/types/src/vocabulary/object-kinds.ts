@@ -499,6 +499,17 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "Agent",
     labelPlural: "Agents",
   },
+  // A computer (MACHINE-IDENTITY-PLAN): an agent user of type `machine` that
+  // holds its own key and hosts agents. "Machine" is the code word; the person
+  // reads "Computer".
+  machine: {
+    kind: "machine",
+    category: "agent",
+    icon: "Laptop",
+    color: AI,
+    label: "Computer",
+    labelPlural: "Computers",
+  },
   // A `governance_rules` row: "which AI writes wait for me?" (concepts.md).
   // The user word is "Approvals" — never "Trust rules" (the old nav label),
   // and never "Rules", which is the automation (`automation` above).
