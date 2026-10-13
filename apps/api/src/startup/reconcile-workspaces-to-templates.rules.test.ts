@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock("@synap-core/core", () => ({
+  // Imported by the real template-state module's identity guard (never hit).
+  ConflictError: class ConflictError extends Error {},
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -33,7 +35,14 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async () => ({
+  // The ONE template-state reader is pure — the real one (its own module, not
+  // the whole package), so the template key is read as the boot pass reads it.
+  readTemplateState: (
+    await vi.importActual<
+      typeof import("../../../../packages/database/src/utils/template-state.js")
+    >("../../../../packages/database/src/utils/template-state.js")
+  ).readTemplateState,
   workspaces: {
     id: "id",
     ownerId: "ownerId",

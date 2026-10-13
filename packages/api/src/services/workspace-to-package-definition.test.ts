@@ -32,7 +32,10 @@ const { sentinel, rowsByTable, workspaceRow } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
+  // The ONE template-state reader is pure — the real one reads `_meta`.
+  const { readTemplateState } =
+    await importOriginal<typeof import("@synap/database")>();
   const chainFor = () => {
     let tbl: unknown;
     const chain = {
@@ -45,6 +48,7 @@ vi.mock("@synap/database", () => {
     return chain;
   };
   return {
+    readTemplateState,
     getDb: async () => ({
       query: {
         workspaces: { findFirst: async () => workspaceRow.ref.current },

@@ -16,7 +16,7 @@
  * otherwise "unknown". An empty result and a failed read are different facts.
  */
 
-import { and, db, eq, isNull } from "@synap/database";
+import { and, db, eq, isNull, readTemplateState } from "@synap/database";
 import { cpCatalogCache, workspaces } from "@synap/database/schema";
 import { getWorkspaceTemplate } from "@synap-core/workspace-templates";
 import {
@@ -90,8 +90,7 @@ export async function readTemplateStanding(
   const catalog = await resolveTemplateCatalog([slug]);
 
   if (held) {
-    const heldSettings = (held.settings ?? {}) as { packageVersion?: string };
-    const version = heldSettings.packageVersion ?? null;
+    const version = readTemplateState(held.settings)?.version ?? null;
     const health = templateHealthFor(slug, version, catalog, held.settings);
     return {
       status: "installed",

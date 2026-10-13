@@ -57,6 +57,7 @@ import {
   workspaces,
   reconcileWorkspaceFromDefinition,
   pendingTemplateDataChanges,
+  readTemplateState,
   type TemplateDataChange,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
@@ -186,13 +187,9 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   // silent mis-identification inside the boot reconciler would additively pour
   // the wrong template's profiles and views into a live workspace.
   const templateKeyOf = (ws: (typeof rows)[number]): string | undefined => {
-    const settings = ws.settings as {
-      packageSlug?: string;
-      workspaceSubtype?: string;
-    } | null;
+    const settings = ws.settings as { workspaceSubtype?: string } | null;
     return (
-      settings?.packageSlug ??
-      ws.packageSlug ??
+      readTemplateState(ws.settings, { packageSlug: ws.packageSlug })?.slug ??
       settings?.workspaceSubtype ??
       undefined
     );

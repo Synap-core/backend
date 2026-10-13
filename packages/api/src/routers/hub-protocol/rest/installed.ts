@@ -69,6 +69,8 @@ import {
   automations,
   capabilities,
   workspaces,
+  readTemplateState,
+  type TemplateState,
 } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 
@@ -79,6 +81,7 @@ import {
   overlayHealthFor,
   templateSlugsOf,
   resolveTemplateCatalog,
+  templateInstallWire,
   type TemplateLifecycle,
   type OverlayTemplateHealth,
 } from "../../../services/template-health.js";
@@ -167,6 +170,11 @@ export interface InstalledRow {
   /** Workspace rows only: each overlay composed onto the space, with its own standing. */
   overlays?: OverlayTemplateHealth[];
   /**
+   * Workspace rows only: the ONE template state (`readTemplateState`) — where
+   * the last apply stands, its layer, the stamp, the packs. Additive.
+   */
+  templateState?: TemplateState | null;
+  /**
    * Free-text note about WHY a field above is what it is — e.g. why drift is
    * unknown for this row. Never a status; always explanatory.
    */
@@ -245,6 +253,13 @@ const InstalledRowSchema = zOpenapi
       .describe(
         "workspace rows only: each overlay composed onto the space (`installedPacks`), with its own catalog standing."
       ),
+    templateState: zOpenapi
+      .record(zOpenapi.string(), zOpenapi.unknown())
+      .nullable()
+      .optional()
+      .describe(
+        "workspace rows only: the space's ONE template state (slug, version stamp, state building|active|awaiting-approval|partial|layer-2-not-run|failed, failedLayer, packs)."
+      ),
     note: zOpenapi.string().optional(),
   })
   .openapi("InstalledRow");
@@ -257,6 +272,26 @@ const ListInstalledResponseSchema = zOpenapi
     counts: zOpenapi.record(zOpenapi.string(), zOpenapi.number()),
   })
   .openapi("ListInstalledResponse");
+
+/**
+ * Why an attached workspace row carries no version stamp. "Never stamped" is
+ * true only when nothing is pending: a space still being built, or whose last
+ * apply did not finish, is unstamped BECAUSE the stamp is earned only on
+ * convergence — and it reads drifted, so `synap templates update` finishes it.
+ */
+export function unstampedNote(state: TemplateState | null): string {
+  switch (state?.state) {
+    case "building":
+      return "still being built — the version is stamped once its template converges";
+    case "failed":
+    case "awaiting-approval":
+    case "partial":
+    case "layer-2-not-run":
+      return `the last template apply did not finish (${state.state}) — the version is stamped once it converges; \`synap templates update\` finishes it`;
+    default:
+      return "attached to a package but never version-stamped — drift cannot be computed";
+  }
+}
 
 /**
  * `cell:<packageSlug>:<key>` → its package slug, or null when unparseable.
@@ -359,15 +394,13 @@ export function registerInstalledRoutes(app: HubHono): void {
         );
         for (const w of active) {
           const s = (w.settings ?? {}) as Record<string, unknown>;
-          const slug = typeof s.packageSlug === "string" ? s.packageSlug : null;
-          const installedPacks = Array.isArray(s.installedPacks)
-            ? (s.installedPacks as unknown[])
-            : [];
+          const state = readTemplateState(s);
+          const slug = state?.slug ?? null;
           // A workspace with NEITHER a packageSlug nor an additive pack was not
           // installed from anything — it is user-created, not an install.
-          if (!slug && installedPacks.length === 0) continue;
-          const installedVersion =
-            typeof s.packageVersion === "string" ? s.packageVersion : null;
+          if (!slug && (state?.packs ?? []).length === 0) continue;
+          const installedVersion = state?.version ?? null;
+          const install = templateInstallWire(state);
           const health = templateHealthFor(
             slug,
             installedVersion,
@@ -388,20 +421,16 @@ export function registerInstalledRoutes(app: HubHono): void {
             drift: health.drifted,
             installedAt: null,
             workspaceId: w.id,
-            provisioningStatus:
-              typeof s.provisioningStatus === "string"
-                ? s.provisioningStatus
-                : null,
-            failedStep: typeof s.failedStep === "string" ? s.failedStep : null,
+            provisioningStatus: install.provisioningStatus,
+            failedStep: install.failedStep,
             lifecycle: health.lifecycle,
             replacedBy: health.replacedBy,
             retiredReason: health.retiredReason,
             lifecycleWarning: health.lifecycleWarning,
             overlays: overlayHealthFor(s, templateCatalog),
+            templateState: state,
             ...(health.attached && !health.stamped
-              ? {
-                  note: "attached to a package but never version-stamped — drift cannot be computed",
-                }
+              ? { note: unstampedNote(state) }
               : {}),
           });
         }

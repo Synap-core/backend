@@ -57,6 +57,7 @@ import {
   widgetDefinitions as widgetDefinitionsTable,
   type PackageDefinition,
   type PackageCellDef,
+  readTemplateState,
   type WorkspaceSettings,
 } from "@synap/database";
 import { isPackageCellRendererType } from "@synap/database/schema";
@@ -99,10 +100,11 @@ export async function workspaceToPackageDefinition(opts: {
     ...(ws.description ? { description: ws.description } : {}),
   };
 
+  const template = readTemplateState(settings);
   const meta: NonNullable<PackageDefinition["_meta"]> = {
-    slug: settings.packageSlug ?? ws.name.toLowerCase().replace(/\s+/g, "-"),
+    slug: template?.slug ?? ws.name.toLowerCase().replace(/\s+/g, "-"),
   };
-  if (settings.packageVersion) meta.version = settings.packageVersion;
+  if (template?.version) meta.version = template.version;
   def._meta = meta;
 
   if (settings.workspaceSubtype)

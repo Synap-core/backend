@@ -34,6 +34,7 @@ import {
   eq,
   isNull,
   drizzleSql,
+  readTemplateState,
   getWorkspaceMembership,
   workspaces,
 } from "@synap/database";
@@ -210,11 +211,8 @@ export async function planRetireInto(input: {
     throw new TRPCError({ code: "NOT_FOUND", message: "Space not found" });
   }
 
-  const s = (ws.settings ?? {}) as {
-    packageSlug?: unknown;
-    packageVersion?: unknown;
-  };
-  const packageSlug = typeof s.packageSlug === "string" ? s.packageSlug : null;
+  const state = readTemplateState(ws.settings);
+  const packageSlug = state?.slug ?? null;
   if (!packageSlug) {
     return refuse(
       "NOT_RETIRED",
@@ -224,7 +222,7 @@ export async function planRetireInto(input: {
   }
   const health = templateHealthFor(
     packageSlug,
-    typeof s.packageVersion === "string" ? s.packageVersion : null,
+    state?.version ?? null,
     await resolveTemplateCatalog([packageSlug]),
     ws.settings
   );

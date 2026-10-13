@@ -28,6 +28,8 @@ import {
   getCatalogSyncStamps,
   type CatalogSyncStamp,
   templateApplyUnfinished,
+  readTemplateState,
+  type TemplateState,
 } from "@synap/database";
 import {
   cpCatalogCache,
@@ -329,33 +331,50 @@ export interface OverlayTemplateHealth {
 export function readOverlayLedger(
   settings: unknown
 ): Array<{ slug: string; version: string | null }> {
-  const s = (settings ?? {}) as {
-    packageSlug?: unknown;
-    installedPacks?: unknown;
-  };
-  const identity = typeof s.packageSlug === "string" ? s.packageSlug : null;
-  if (!Array.isArray(s.installedPacks)) return [];
+  const state = readTemplateState(settings);
+  const identity = state?.slug ?? null;
   const seen = new Set<string>();
   const out: Array<{ slug: string; version: string | null }> = [];
-  for (const e of s.installedPacks as Array<Record<string, unknown> | null>) {
-    const slug = e && typeof e.slug === "string" ? e.slug : null;
-    if (!slug || slug === identity || seen.has(slug)) continue;
-    seen.add(slug);
-    out.push({
-      slug,
-      version: typeof e!.version === "string" ? e!.version : null,
-    });
+  for (const p of state?.packs ?? []) {
+    if (p.slug === identity || seen.has(p.slug)) continue;
+    seen.add(p.slug);
+    out.push({ slug: p.slug, version: p.version });
   }
   return out;
 }
 
 /** Every template slug a workspace's health needs from the catalog: its own + its overlays'. */
 export function templateSlugsOf(settings: unknown): string[] {
-  const s = (settings ?? {}) as { packageSlug?: unknown };
+  const slug = readTemplateState(settings)?.slug;
   return [
-    ...(typeof s.packageSlug === "string" ? [s.packageSlug] : []),
+    ...(slug ? [slug] : []),
     ...readOverlayLedger(settings).map((o) => o.slug),
   ];
+}
+
+/**
+ * The install-health fields the wire has always carried (Hub `GET
+ * /workspaces`, `/installed`), derived from the ONE state — never read
+ * from the legacy keys. `null` everywhere = nothing recorded.
+ */
+export function templateInstallWire(state: TemplateState | null): {
+  provisioningStatus: "pending" | "active" | "failed" | null;
+  failedStep: string | null;
+  failedStepError: string | null;
+} {
+  if (!state)
+    return {
+      provisioningStatus: null,
+      failedStep: null,
+      failedStepError: null,
+    };
+  const failed = state.state === "failed";
+  return {
+    provisioningStatus:
+      state.state === "building" ? "pending" : failed ? "failed" : "active",
+    failedStep: failed ? (state.failedStep ?? null) : null,
+    failedStepError: failed ? (state.error ?? null) : null,
+  };
 }
 
 /** The plain sentence a person reads for an overlay that is not `current`. */
@@ -388,9 +407,9 @@ export function overlayHealthFor(
   catalog: TemplateCatalogView
 ): OverlayTemplateHealth[] {
   const ledger = readOverlayLedger(settings);
-  const s = (settings ?? {}) as { packageSlug?: unknown };
+  const identity = readTemplateState(settings)?.slug;
   const present = new Set<string>([
-    ...(typeof s.packageSlug === "string" ? [s.packageSlug] : []),
+    ...(identity ? [identity] : []),
     ...ledger.map((o) => o.slug),
   ]);
   return ledger.map(({ slug, version }) => {
@@ -439,13 +458,10 @@ export async function awaitingApprovalByWorkspace(
   const UUID =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const recorded = rows.map((r) => {
-    const t = (r.settings as { templateApply?: unknown } | null)
-      ?.templateApply as { state?: unknown; proposals?: unknown } | null;
+    const t = readTemplateState(r.settings);
     const ids =
-      t?.state === "awaiting-approval" && Array.isArray(t.proposals)
-        ? t.proposals.filter(
-            (p): p is string => typeof p === "string" && UUID.test(p)
-          )
+      t?.state === "awaiting-approval"
+        ? (t.proposals ?? []).filter((p) => UUID.test(p))
         : [];
     return { id: r.id, ids };
   });
@@ -484,14 +500,11 @@ export function templateApplyWarning(
   settings: unknown,
   livePending: string[]
 ): string | null {
-  const s = (settings ?? {}) as {
-    provisioningStatus?: unknown;
-    templateApply?: { state?: unknown } | null;
-  };
+  const state = readTemplateState(settings)?.state;
   const run = `\`synap templates update ${slug}\``;
-  if (s.provisioningStatus === "failed")
+  if (state === "failed")
     return `Not finished: the last update of ${slug} failed. Run ${run} to resume.`;
-  switch (s.templateApply?.state) {
+  switch (state) {
     case "awaiting-approval": {
       const n = livePending.length;
       if (n === 0) return null;
@@ -520,8 +533,8 @@ export async function templateApplyWarningFor(
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  const slug = (row?.settings as { packageSlug?: unknown } | null)?.packageSlug;
-  if (!row || typeof slug !== "string") return null;
+  const slug = readTemplateState(row?.settings)?.slug;
+  if (!row || !slug) return null;
   const waiting = await awaitingApprovalByWorkspace([row]);
   return templateApplyWarning(slug, row.settings, waiting.get(row.id) ?? []);
 }
@@ -620,13 +633,9 @@ export async function listWorkspaceTemplateHealth(
   const warningsByWs = await alwaysSkillWarningsByWorkspace(active);
   const waitingByWs = await awaitingApprovalByWorkspace(active);
   return active.map((r) => {
-    const s = (r.settings ?? {}) as {
-      packageSlug?: unknown;
-      packageVersion?: unknown;
-    };
-    const pkgSlug = typeof s.packageSlug === "string" ? s.packageSlug : null;
-    const installedVersion =
-      typeof s.packageVersion === "string" ? s.packageVersion : null;
+    const state = readTemplateState(r.settings);
+    const pkgSlug = state?.slug ?? null;
+    const installedVersion = state?.version ?? null;
     const health = templateHealthFor(
       pkgSlug,
       installedVersion,

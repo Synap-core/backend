@@ -34,6 +34,7 @@ import {
   isNull,
   inArray,
   drizzleSql,
+  readTemplateState,
   type WorkspaceSettings,
   type WorkspaceComposedFromEntry,
 } from "@synap/database";
@@ -149,12 +150,12 @@ function deriveWorkspaceProvenance(
   settings: WorkspaceSettings | null,
   subtype: string | null
 ): WorkspaceProvenance {
-  const packageSlug = settings?.packageSlug;
-  if (packageSlug) {
+  const template = readTemplateState(settings);
+  if (template?.slug) {
     return {
       kind: "marketplace",
-      packageSlug,
-      packageVersion: settings?.packageVersion ?? null,
+      packageSlug: template.slug,
+      packageVersion: template.version,
     };
   }
   const composedFrom = settings?.composedFrom;

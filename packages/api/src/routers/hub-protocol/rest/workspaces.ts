@@ -21,6 +21,7 @@ import {
   WorkspaceRepository,
   isWorkspaceIdentityConflictError,
   nextFreeWorkspaceName,
+  readTemplateState,
   type AgentMetadata,
 } from "@synap/database";
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
@@ -37,6 +38,7 @@ import {
   overlayHealthFor,
   templateSlugsOf,
   resolveTemplateCatalog,
+  templateInstallWire,
 } from "../../../services/template-health.js";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -572,14 +574,11 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       const list = active.map((workspace) => {
         const settings = (workspace.settings ?? {}) as Record<string, unknown>;
         const membership = membershipByWorkspace.get(workspace.id);
-        const pkgSlug =
-          typeof settings.packageSlug === "string"
-            ? settings.packageSlug
-            : null;
-        const installedVersion =
-          typeof settings.packageVersion === "string"
-            ? settings.packageVersion
-            : null;
+        // The ONE template state (settings.template, or derived from the
+        // legacy keys) — every template field below is read from it.
+        const templateState = readTemplateState(settings);
+        const pkgSlug = templateState?.slug ?? null;
+        const installedVersion = templateState?.version ?? null;
         // Compose the health axes through the ONE authority (template-health.ts)
         // rather than re-deriving them here — so this door can never disagree
         // with the MCP verb / the shared service on the same data.
@@ -641,7 +640,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           // `packageSlug` — they carry their own identity here instead. The
           // CLI unions this with `packageSlug` to match the browser's
           // `useInstalledPackageSlugs` "installed" set (see that hook's doc).
-          installedPacks: settings.installedPacks ?? [],
+          installedPacks: (templateState?.packs ?? []).map((p) => ({
+            ...p,
+            version: p.version ?? "",
+          })),
           systemSlug: settings.systemSlug ?? null,
           entityCount: entityCountByWorkspace.get(workspace.id) ?? 0,
           // Additive INDEX: projects that use this workspace. Not an ACL.
@@ -659,18 +661,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           //
           // Recoverable, not fatal: the workspace exists and is usable, and
           // re-running the install resumes exactly this layer (`resumeIfFailed`).
-          provisioningStatus:
-            typeof settings.provisioningStatus === "string"
-              ? settings.provisioningStatus
-              : null,
-          failedStep:
-            typeof settings.failedStep === "string"
-              ? settings.failedStep
-              : null,
-          failedStepError:
-            typeof settings.failedStepError === "string"
-              ? settings.failedStepError
-              : null,
+          ...templateInstallWire(templateState),
+          // The whole state object (additive): where the last apply stands,
+          // its layer, the stamp and the packs — one shape for every client.
+          templateState,
         };
       });
       return c.json({ workspaces: list, podEntityCount });
@@ -1844,10 +1838,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         workspaceType: workspace.workspaceType,
         role: membership?.role ?? "viewer",
         accessKind: membership ? "member" : "pod_visible",
-        packageSlug:
-          typeof settings.packageSlug === "string"
-            ? settings.packageSlug
-            : null,
+        packageSlug: readTemplateState(settings)?.slug ?? null,
         // Additive INDEX: projects that use this workspace. Not an ACL.
         usedByProjectIds,
       });

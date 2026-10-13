@@ -72,29 +72,38 @@ describe("packageSlugFromCellTypeKey — the `unknown` sentinel", () => {
 });
 
 describe("install-health projection tripwires", () => {
-  it("Hub GET /workspaces projects the three fields the applier stamps", () => {
-    // `applyPackagePostWorkspace` writes provisioningStatus / failedStep /
-    // failedStepError into workspace.settings before rethrowing. This door
+  it("Hub GET /workspaces projects the three fields the applier stamps", async () => {
+    // `applyPackagePostWorkspace` records a layer-2 failure. This door
     // projected 20 OTHER settings fields and dropped exactly these three —
     // which is the single line where "partially installed" became "installed"
-    // for every client. Deleting any of them must go red here.
+    // for every client. Since W1 the three come from the ONE template state
+    // (`templateInstallWire(readTemplateState(settings))`), so the guard is
+    // two halves: the door spreads that projection into its row, and the
+    // projection carries the three VALUES for a failed space (reachability,
+    // not shape). Deleting the spread, or a field from the projection, goes red.
     const src = read("./workspaces.ts");
-    for (const field of [
-      "provisioningStatus",
-      "failedStep",
-      "failedStepError",
-    ]) {
-      expect(
-        // Assert the PROJECTION form (`field:` in the returned object literal),
-        // not a bare mention — a comment naming the field is not a projection.
-        new RegExp(`\\n\\s+${field}:\\s`).test(src),
-        `Hub GET /workspaces no longer projects "${field}" — a partial install is being reported as a clean one.`
-      ).toBe(true);
-      expect(
-        src.includes(`settings.${field}`),
-        `Hub GET /workspaces projects "${field}" without reading it from settings.`
-      ).toBe(true);
-    }
+    expect(
+      /\n\s+\.\.\.templateInstallWire\(templateState\),/.test(src),
+      "Hub GET /workspaces no longer projects the install health — a partial install is being reported as a clean one."
+    ).toBe(true);
+    expect(src).toMatch(/const templateState = readTemplateState\(settings\)/);
+    const { templateInstallWire } =
+      await import("../../../services/template-health.js");
+    const { readTemplateState } = await import("@synap/database");
+    expect(
+      templateInstallWire(
+        readTemplateState({
+          packageSlug: "crm",
+          provisioningStatus: "failed",
+          failedStep: "post-workspace",
+          failedStepError: "boom",
+        })
+      )
+    ).toEqual({
+      provisioningStatus: "failed",
+      failedStep: "post-workspace",
+      failedStepError: "boom",
+    });
   });
 
   it("GET /installed never defaults an uncomputed drift to false", () => {

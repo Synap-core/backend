@@ -29,6 +29,7 @@ import {
   createWorkspaceFromDefinition,
   preflightWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
+  readTemplateState,
   type WorkspaceDefinitionInput,
   type ReconcileReport,
   type InstallLayerReport,
@@ -39,6 +40,7 @@ import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { resolvePreflightComposeTarget } from "../../services/preflight-compose-target.js";
 import { recordInstalledPack } from "../../services/compose-overlay.js";
+import { templateInstallWire } from "../../services/template-health.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
@@ -1052,7 +1054,11 @@ export const definitionEngineProcedures = {
             if (existingByProposal?.workspace) {
               const ws = existingByProposal.workspace;
               const wsSettings = ws.settings as WorkspaceSettings | null;
-              const provStatus = wsSettings?.provisioningStatus;
+              // Read through the ONE template state (W3 folds this branch
+              // into the apply core's plan).
+              const tState = readTemplateState(wsSettings);
+              const provStatus =
+                templateInstallWire(tState).provisioningStatus ?? undefined;
 
               if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
                 logger.warn(
@@ -1060,8 +1066,8 @@ export const definitionEngineProcedures = {
                     userId: ctx.userId,
                     proposalId: input.proposalId,
                     workspaceId: ws.id,
-                    failedStep: wsSettings?.failedStep,
-                    completedSteps: wsSettings?.completedSteps,
+                    failedStep: tState?.failedStep,
+                    completedSteps: tState?.completedSteps,
                   },
                   "createFromDefinition: resuming failed workspace (by proposalId)"
                 );
@@ -1070,7 +1076,7 @@ export const definitionEngineProcedures = {
                   data: {
                     step: "resume",
                     pct: 5,
-                    label: `Resuming from step '${wsSettings?.failedStep ?? "unknown"}'`,
+                    label: `Resuming from step '${tState?.failedStep ?? "unknown"}'`,
                     status: "progress",
                   },
                   userId: ctx.userId,
@@ -1084,7 +1090,7 @@ export const definitionEngineProcedures = {
                   linkedAgentId: input.linkedAgentId,
                   resumeFrom: {
                     workspaceId: ws.id,
-                    completedSteps: wsSettings?.completedSteps ?? [],
+                    completedSteps: tState?.completedSteps ?? [],
                   },
                   onProgress: (step, pct, label) => {
                     emitChatEvent({
@@ -1200,7 +1206,11 @@ export const definitionEngineProcedures = {
             if (existingMembership?.workspace) {
               const ws = existingMembership.workspace;
               const wsSettings = ws.settings as WorkspaceSettings | null;
-              const provStatus = wsSettings?.provisioningStatus;
+              // Read through the ONE template state (W3 folds this branch
+              // into the apply core's plan).
+              const tState = readTemplateState(wsSettings);
+              const provStatus =
+                templateInstallWire(tState).provisioningStatus ?? undefined;
 
               if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
                 // Automatically resume from where the previous attempt failed.
@@ -1209,8 +1219,8 @@ export const definitionEngineProcedures = {
                     userId: ctx.userId,
                     packageSlug: input.packageSlug,
                     workspaceId: ws.id,
-                    failedStep: wsSettings?.failedStep,
-                    completedSteps: wsSettings?.completedSteps,
+                    failedStep: tState?.failedStep,
+                    completedSteps: tState?.completedSteps,
                   },
                   "createFromDefinition: resuming failed workspace"
                 );
@@ -1219,7 +1229,7 @@ export const definitionEngineProcedures = {
                   data: {
                     step: "resume",
                     pct: 5,
-                    label: `Resuming from step '${wsSettings?.failedStep ?? "unknown"}'`,
+                    label: `Resuming from step '${tState?.failedStep ?? "unknown"}'`,
                     status: "progress",
                   },
                   userId: ctx.userId,
@@ -1238,7 +1248,7 @@ export const definitionEngineProcedures = {
                   linkedAgentId: input.linkedAgentId,
                   resumeFrom: {
                     workspaceId: ws.id,
-                    completedSteps: wsSettings?.completedSteps ?? [],
+                    completedSteps: tState?.completedSteps ?? [],
                   },
                   onProgress: (step, pct, label) => {
                     emitChatEvent({
@@ -1484,9 +1494,9 @@ export const definitionEngineProcedures = {
               columns: { packageSlug: true, settings: true },
             });
             const identity =
-              target?.packageSlug ??
-              (target?.settings as WorkspaceSettings | null)?.packageSlug ??
-              null;
+              readTemplateState(target?.settings, {
+                packageSlug: target?.packageSlug,
+              })?.slug ?? null;
             return identity !== null && identity !== input.packageSlug
               ? { slug: input.packageSlug, version: input.packageVersion }
               : null;

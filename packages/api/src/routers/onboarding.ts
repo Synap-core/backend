@@ -16,6 +16,7 @@ import {
   profiles,
   projectMembers,
   projects,
+  readTemplateState,
   workspaces,
 } from "@synap/database";
 import type {
@@ -339,7 +340,8 @@ async function assertLensAccess(
     }
     workspaceContext = {
       settings: workspace.settings,
-      packageVersion: workspace.settings.packageVersion,
+      packageVersion:
+        readTemplateState(workspace.settings)?.version ?? undefined,
     };
   }
 
