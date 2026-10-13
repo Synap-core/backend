@@ -60,7 +60,7 @@ export interface LibraryAction {
   /** Stable within the item (`date-0`, `receipt-0`, …). */
   id: string;
   kind: LibraryActionKind;
-  /** Short words for the chip ("Add 14 Nov to calendar"). */
+  /** The chip's words (`libraryActionLabel`: "Add to calendar", "Add expense", "Add person", "Add task"). Chips stored before 2026-10-13 may carry older words; render `libraryActionLabel(kind)`. */
   label: string;
   /** What the chip would file (date, amount + merchant, email, task title…). */
   value: Record<string, unknown>;

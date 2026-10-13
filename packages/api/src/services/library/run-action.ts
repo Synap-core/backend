@@ -1,6 +1,6 @@
 /**
- * RUN ACTION — one tap on a Library chip ("Add 14 Nov to calendar", "Keep
- * receipt", "Save contact", "Add task").
+ * RUN ACTION — one tap on a Library chip ("Add to calendar", "Add expense",
+ * "Add person", "Add task").
  *
  * A chip never writes: it files ONE governed proposal through the capture
  * graph door (`submitCaptureGraph`) with one thing in it, and the item as its

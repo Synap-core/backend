@@ -48,69 +48,30 @@ export const LIBRARY_ACTION_LIMITS = {
 
 // ── Words ──────────────────────────────────────────────────────────────────
 
-const MONTH_ABBR = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-] as const;
-
-function formatDay(isoDate: string): string {
-  const [, m, d] = isoDate.split("-").map(Number);
-  return `${d} ${MONTH_ABBR[(m ?? 1) - 1]}`;
-}
-
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
-function formatAmount(amount: unknown, currency: unknown): string | undefined {
-  if (typeof amount !== "number" || !Number.isFinite(amount)) return undefined;
-  const fixed = Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
-  return str(currency) ? `${fixed} ${String(currency)}` : fixed;
-}
-
 /**
- * The chip's words, from its kind and value. Every client uses this so the
- * pod, the browser and relay say the same thing.
+ * The chip's words — the approved mockup's verbs, one per kind. What the chip
+ * would file (the date, the amount and merchant, the person, the task) is
+ * shown BESIDE it from `value`, never folded into the button. Every client
+ * uses this so the pod, the browser and relay say the same thing.
  */
+export const LIBRARY_ACTION_LABELS: Readonly<
+  Record<LibraryActionKind, string>
+> = {
+  date: "Add to calendar",
+  receipt: "Add expense",
+  contact: "Add person",
+  task: "Add task",
+};
+
 export function libraryActionLabel(
   kind: LibraryActionKind,
-  value: Record<string, unknown>
+  _value?: Record<string, unknown>
 ): string {
-  switch (kind) {
-    case "date": {
-      const date = str(value.date);
-      return date && /^\d{4}-\d{2}-\d{2}$/.test(date)
-        ? `Add ${formatDay(date)} to calendar`
-        : "Add to calendar";
-    }
-    case "receipt": {
-      const parts = [
-        formatAmount(value.amount, value.currency),
-        str(value.merchant),
-      ].filter(Boolean);
-      return parts.length
-        ? `Keep receipt · ${parts.join(" · ")}`
-        : "Keep receipt";
-    }
-    case "contact": {
-      const who = str(value.name) ?? str(value.email) ?? str(value.phone);
-      return who ? `Save contact · ${who}` : "Save contact";
-    }
-    case "task": {
-      const title = str(value.title);
-      return title ? `Add task · ${title}` : "Add task";
-    }
-  }
+  return LIBRARY_ACTION_LABELS[kind];
 }
 
 // ── Ids ────────────────────────────────────────────────────────────────────

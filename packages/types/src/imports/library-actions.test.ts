@@ -3,10 +3,12 @@ import {
   carryRunLibraryActions,
   detectLibraryActions,
   libraryActionLabel,
+  LIBRARY_ACTION_LABELS,
   mergeLibraryActions,
   normalizeLibraryActions,
   parseLibraryAmount,
 } from "./library-actions.js";
+import { LIBRARY_ACTION_KINDS } from "./library.js";
 
 const NOW = new Date("2026-10-13T09:00:00.000Z");
 const kinds = (a: Array<{ kind: string }>) => a.map((x) => x.kind);
@@ -22,7 +24,7 @@ describe("detectLibraryActions — dates", () => {
       kind: "date",
       source: "rule",
       value: { date: "2026-11-14", time: "15:30", title: "Dentist" },
-      label: "Add 14 Nov to calendar",
+      label: "Add to calendar",
     });
     expect(a!.confidence).toBeGreaterThanOrEqual(0.8);
   });
@@ -80,7 +82,7 @@ describe("detectLibraryActions — receipts", () => {
       merchant: "Monoprix",
       date: "2026-10-01",
     });
-    expect(a?.label).toBe("Keep receipt · 42.50 EUR · Monoprix");
+    expect(a?.label).toBe("Add expense");
   });
 
   it("an amount written before its € sign, at the end of a line", () => {
@@ -210,10 +212,21 @@ describe("ids, merge and AI normalisation", () => {
     expect(again).toEqual([inFlight]);
   });
 
-  it("labels come from the value", () => {
-    expect(libraryActionLabel("contact", { phone: "+33 6 12 34 56 78" })).toBe(
-      "Save contact · +33 6 12 34 56 78"
+  it("chip words are the mockup's verbs, one per kind — the value is shown beside", () => {
+    expect(LIBRARY_ACTION_KINDS.map((k) => libraryActionLabel(k))).toEqual(
+      LIBRARY_ACTION_KINDS.map((k) => LIBRARY_ACTION_LABELS[k])
     );
-    expect(libraryActionLabel("date", {})).toBe("Add to calendar");
+    expect(
+      libraryActionLabel("receipt", { amount: 38.4, merchant: "Taberna" })
+    ).toBe("Add expense");
+    expect(libraryActionLabel("date", { date: "2026-11-14" })).toBe(
+      "Add to calendar"
+    );
+    expect(libraryActionLabel("contact", { phone: "+33 6 12 34 56 78" })).toBe(
+      "Add person"
+    );
+    expect(libraryActionLabel("task", { title: "Call the bank" })).toBe(
+      "Add task"
+    );
   });
 });
