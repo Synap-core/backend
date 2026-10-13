@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { computeAgentScorecard } from "./agent-scorecard.js";
 import type { ScorecardProposalRow } from "./agent-scorecard.js";
 import {
+  capabilityVerbListing,
   capabilityVerbPosture,
   summarizeGlobalHealth,
   type GlobalSignals,
@@ -425,8 +426,8 @@ describe("PROBE_ORDER", () => {
   });
 });
 
-// D5 (Pod Console): the container's `capabilities.approved` gates no execution
-// path; the gate reads the VERB (`skills.approved`). The section counts that.
+// The container's `capabilities.approved` gates no execution path; the gate
+// reads the VERB (`skills.approved`). The section counts that.
 describe("capabilities section — counts verbs awaiting enable", () => {
   const base: GlobalSignals = {
     stuckHours: 24,
@@ -479,6 +480,36 @@ describe("capabilities section — counts verbs awaiting enable", () => {
     });
   });
 
+  it("lists containers by whether every verb is turned on", () => {
+    expect(
+      capabilityVerbListing({
+        containers: [
+          { id: "c1", name: "Mail" },
+          { id: "c2", name: "Calendar" },
+          { id: "c3", name: "Empty" },
+        ],
+        members: [
+          { capabilityId: "c1", skillId: "s1" },
+          { capabilityId: "c1", skillId: "s2" },
+          { capabilityId: "c2", skillId: "s2" },
+          { capabilityId: "c3", skillId: "gone" },
+        ],
+        skills: [
+          { id: "s1", name: "send", approved: false },
+          { id: "s2", name: "read", approved: true },
+        ],
+      })
+    ).toEqual({
+      enabled: [
+        { id: "c2", name: "Calendar" },
+        { id: "c3", name: "Empty" },
+      ],
+      awaitingEnable: [
+        { id: "c1", name: "Mail", verbs: [{ id: "s1", name: "send" }] },
+      ],
+    });
+  });
+
   it("is attention when installed verbs are not enabled, and says so", () => {
     const s = section({
       installed: 13,
@@ -488,14 +519,16 @@ describe("capabilities section — counts verbs awaiting enable", () => {
     });
     expect(s.status).toBe("attention");
     expect(s.headline).toBe(
-      "4 verb(s) in 2 capability(ies) installed but not enabled — they refuse to run until enabled"
+      "4 verb(s) in 2 capability(ies) not turned on — they refuse to run until turned on"
     );
+    // `unapproved` survives only as the desktop reader's alias of the verb-based
+    // container count — never the container flag.
     expect(s.detail).toMatchObject({
       verbsAwaitingEnable: 4,
       capabilitiesAwaitingEnable: 2,
+      unapproved: 2,
     });
-    // The old container-flag fields are gone, so no reader keeps counting them.
-    expect(s.detail).not.toHaveProperty("unapproved");
+    expect(s.detail).not.toHaveProperty("notes");
   });
 
   it("is ok when every verb is enabled, and when nothing is installed", () => {
@@ -507,7 +540,7 @@ describe("capabilities section — counts verbs awaiting enable", () => {
     });
     expect(all.status).toBe("ok");
     expect(all.headline).toBe(
-      "13 capability(ies) installed, all 40 verb(s) enabled"
+      "13 capability(ies) installed, all 40 verb(s) turned on"
     );
     const none = section(base.capabilities);
     expect(none.status).toBe("ok");

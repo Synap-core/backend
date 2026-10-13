@@ -38,9 +38,10 @@ export const capabilities = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     /**
-     * Per-capability approval gate. Born NOT approved (DEFAULT false) so an
-     * AI-created bundle can't be treated as trusted until an owner approves it,
-     * exactly like `tools.approved` / `mcp_servers.approved`.
+     * Container approval flag. Born NOT approved (DEFAULT false). It is NOT an
+     * execution gate: no run path reads it. A verb runs only when its member
+     * skill is enabled (`skills.approved`, read by `gateCapabilityExecution`),
+     * so health reports count verbs, never this flag.
      */
     approved: boolean("approved").notNull().default(false),
     /**
