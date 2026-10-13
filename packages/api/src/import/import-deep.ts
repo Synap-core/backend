@@ -2,8 +2,9 @@
  * Deep structuring for prose imports.
  *
  * The canonical "decompose a note into a graph" path — the single source of
- * truth behind both `ImportOrchestrator.submitBatch` (the live product import)
- * and the `/import/analyze` REST route. Where `aiEnrichImportItems` does shallow
+ * truth behind `ImportOrchestrator.analyze` / `analyzeLarge` (tRPC `import.*`,
+ * the REST `/import/analyze` route and the corpus job) when the caller opts in
+ * with `aiStructure: true` — import is deterministic by default. Where `aiEnrichImportItems` does shallow
  * 1-file→1-typed-entity classification (correct for csv/bookmark rows), this
  * runs each prose note through the Intelligence Service's multi-entity
  * `structure` extraction and MERGES the per-note results into one deduplicated
@@ -339,7 +340,7 @@ export interface EntitySearch {
 /**
  * Build a `resolveExisting` that links an extracted entity to a LIVE workspace
  * entity only on a CONFIDENT match. Conservative by design — a wrong merge is
- * worse than a duplicate. Shared by submitBatch + /import/analyze.
+ * worse than a duplicate. Shared by analyze + analyzeLarge.
  *
  * Two-source resolution, SSOT first:
  *   1. `resolveIdentity` (the ONE resolver) — an exact-title / indexed

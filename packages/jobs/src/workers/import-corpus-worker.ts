@@ -33,6 +33,12 @@ export interface ImportCorpusPayload {
    * carry none, and the handler then resolves a session itself.
    */
   sessionId?: string | null;
+  /**
+   * Opt in to the AI read of the corpus (deep structuring). Absent or false ⇒
+   * deterministic — the import default. A job queued before the field existed
+   * carries none and runs deterministic too.
+   */
+  aiStructure?: boolean;
 }
 
 /**

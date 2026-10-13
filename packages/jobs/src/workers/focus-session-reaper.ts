@@ -58,7 +58,10 @@ export const REAPER_STALE_HOURS = 24;
 export const SESSION_IS_STALE = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`,
-  drizzleSql`NOT ${focusSessionWaitsOnPersonWhere()}`
+  drizzleSql`NOT ${focusSessionWaitsOnPersonWhere()}`,
+  // An open import waits on the person (curating can take days): its
+  // `importCuration.phase` is the liveness signal, not `updatedAt`.
+  drizzleSql`coalesce(${focusSessions.metadata} -> 'importCuration' ->> 'phase', 'done') = 'done'`
 );
 
 /**

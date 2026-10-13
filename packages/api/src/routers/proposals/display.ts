@@ -1958,6 +1958,7 @@ function buildConfigReviewItems(
   const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
   const rules: NonNullable<ProposalReviewGraph["rules"]> = [];
   const playbooks: NonNullable<ProposalReviewGraph["playbooks"]> = [];
+  const views: NonNullable<ProposalReviewGraph["views"]> = [];
 
   data.operations.forEach((op, index) => {
     switch (op.op) {
@@ -2010,6 +2011,19 @@ function buildConfigReviewItems(
           bornStatus: "draft",
         });
         return;
+      case "create_view":
+        renderedOpIndexes.add(index);
+        views.push({
+          ref: op.ref,
+          name: op.name,
+          viewType: op.viewType,
+          ...(op.scopeProfileSlugs?.length
+            ? { scopeProfileSlugs: op.scopeProfileSlugs }
+            : {}),
+          memberCount: op.entityRefs?.length ?? 0,
+          ...(op.containerRef ? { containerRef: op.containerRef } : {}),
+        });
+        return;
       default:
         return;
     }
@@ -2020,6 +2034,7 @@ function buildConfigReviewItems(
     ...(automations.length ? { automations } : {}),
     ...(rules.length ? { rules } : {}),
     ...(playbooks.length ? { playbooks } : {}),
+    ...(views.length ? { views } : {}),
   };
 }
 

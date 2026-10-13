@@ -17,7 +17,10 @@ import { fileURLToPath } from "node:url";
 
 const h = vi.hoisted(() => ({
   structureInput: null as null | Record<string, unknown>,
-  analyzeInput: null as null | { items: Array<Record<string, unknown>> },
+  analyzeInput: null as null | {
+    items: Array<Record<string, unknown>>;
+    aiStructure?: boolean;
+  },
 }));
 
 vi.mock("../../../routers/capture.js", () => ({
@@ -99,6 +102,32 @@ describe("rerun replayers name the stored raw they replay", () => {
       { path: "a.md", content: "A", sourceDocumentId: "doc-a" },
       { path: "b.md", content: "B", sourceDocumentId: "doc-b" },
     ]);
+  });
+
+  it("import: replays with the engine the parent run recorded, not today's default", async () => {
+    const source = {
+      sourceDocumentId: "doc-a",
+      door: "import" as const,
+      kind: "import_item" as const,
+      degraded: false,
+      item: { path: "a.md", content: "A" },
+    };
+    const replay = (engine?: "structure" | "deterministic" | "unknown") =>
+      defaultReplayers("u", null, undefined).import([source], {
+        ...ARGS,
+        ...(engine ? { engine } : {}),
+      });
+    // A deep (AI-read) run is read again — the import default is now off.
+    await replay("structure");
+    expect(h.analyzeInput!.aiStructure).toBe(true);
+    await replay("unknown");
+    expect(h.analyzeInput!.aiStructure).toBe(true);
+    // A deterministic run stays deterministic.
+    await replay("deterministic");
+    expect(h.analyzeInput!.aiStructure).toBe(false);
+    // No recorded engine: today's default (the flag is not sent).
+    await replay();
+    expect(h.analyzeInput).not.toHaveProperty("aiStructure");
   });
 
   it("capture.structure forwards its sourceDocumentId input to recordStructureIntake as reuseSourceDocumentId", () => {

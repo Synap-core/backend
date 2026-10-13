@@ -102,6 +102,7 @@ export * from "./utils/knowledge-contract.js";
 export * from "./utils/message-shape.js";
 export * from "./utils/config-settings.js";
 export * from "./utils/structure-context.js";
+export * from "./utils/import-staging.js";
 
 // Server-side vault encryption
 export {

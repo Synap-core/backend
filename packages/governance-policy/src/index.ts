@@ -2476,6 +2476,8 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_rule: { subjectType: "rule", action: "create" },
   // A DRAFT process from a capture — the `playbooks.create` door.
   create_playbook: { subjectType: "playbook", action: "create" },
+  // A List over the bundle's things — the `views.create` door.
+  create_view: { subjectType: "view", action: "create" },
 } as const satisfies Record<string, GovernedWritePair>;
 
 /** The composite operation arms this module knows how to gate. */
@@ -2503,6 +2505,9 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   create_playbook: 2.5,
   create_automation: 2,
   create_entity: 1,
+  // A saved query over data that already exists: presentational, reversible,
+  // mints no identity — below an entity, above a bare edge.
+  create_view: 0.5,
   create_relation: 0,
 };
 

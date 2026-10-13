@@ -375,6 +375,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         workspaceId: acting.workspaceId,
         source: body.source,
         items: body.items,
+        aiStructure: body.aiStructure,
         ...(session.sessionId ? { sessionId: session.sessionId } : {}),
       });
 

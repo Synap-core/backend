@@ -52,9 +52,11 @@ export interface PlanPreflightResult {
 export async function preflightPlanOperations(
   database: PlanDb,
   operations: CompositeProposalOperation[],
-  userId: string
+  userId: string,
+  /** Where the batch will be filed — see `validatePlanOperations`. */
+  placement?: { workspaceId: string | null }
 ): Promise<PlanPreflightResult> {
-  const problems = validatePlanOperations(operations);
+  const problems = validatePlanOperations(operations, placement);
   const push = (opIndex: number, message: string) => {
     const op = operations[opIndex];
     const ref = (op as { ref?: unknown }).ref;

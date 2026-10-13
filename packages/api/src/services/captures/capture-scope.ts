@@ -4,7 +4,14 @@
  * never reach a row the caller's own capture reads would not.
  */
 
-import { and, eq, isNull, drizzleSql, documents } from "@synap/database";
+import {
+  and,
+  eq,
+  isNull,
+  drizzleSql,
+  documents,
+  notStagedImportItemWhere,
+} from "@synap/database";
 import {
   INTAKE_SOURCE_METADATA_KEY,
   type IntakeSourceMetadata,
@@ -26,11 +33,16 @@ export const CAPTURE_LIST_KINDS = [
  * Own, live intake source documents. Read through `scopedDb` (the `documents`
  * VisibilityRule) and NARROWED to the caller: the rule lets a workspace member
  * see a colleague's documents, but "my captures" is the caller's own.
+ *
+ * A STAGED import item (`intakeSource.pending = "awaiting_curation"`) is not a
+ * capture: nothing read it and nobody decided what it is, so it would only ever
+ * read "Not structured". It joins "my captures" once its group is built.
  */
 export function ownCapturesWhere(userId: string) {
   return and(
     eq(documents.userId, userId),
     isNull(documents.deletedAt),
-    drizzleSql`${documents.metadata} ? ${INTAKE_SOURCE_METADATA_KEY}`
+    drizzleSql`${documents.metadata} ? ${INTAKE_SOURCE_METADATA_KEY}`,
+    notStagedImportItemWhere(documents.metadata)
   )!;
 }

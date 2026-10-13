@@ -38,6 +38,7 @@ import {
   eventRepository,
   createDocumentWithContent,
   resolveWorkspacePlacement,
+  notStagedImportItemWhere,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
@@ -760,6 +761,9 @@ export const documentsRouter = router({
           sessionRoster: rosterReadFor(ctx),
         }),
       ];
+      // A STAGED import item is nobody's document yet (Import → Curate → Build):
+      // it joins the list once its group is built.
+      conditions.push(notStagedImportItemWhere(documents.metadata));
       if (input.type) {
         conditions.push(eq(documents.type, input.type));
       }
@@ -804,7 +808,8 @@ export const documentsRouter = router({
       const base = and(
         eq(documents.workspaceId, workspaceId),
         isNull(documents.deletedAt),
-        isNotNull(documents.storageKey)
+        isNotNull(documents.storageKey),
+        notStagedImportItemWhere(documents.metadata)
       );
 
       const markdownish = or(

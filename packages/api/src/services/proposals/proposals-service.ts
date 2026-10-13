@@ -712,7 +712,7 @@ async function validateRevisedOperations(
   if (!isCompositeProposalData(candidate as never)) {
     return {
       problems: [
-        "`operations` must be a non-empty array of recognized composite operations (create_entity, create_relation, create_skill, create_automation, create_rule, create_project, create_session, create_document, create_link)",
+        "`operations` must be a non-empty array of recognized composite operations (create_entity, create_relation, create_skill, create_automation, create_rule, create_playbook, create_view, create_project, create_session, create_document, create_link)",
       ],
       operations: revised,
     };

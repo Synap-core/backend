@@ -62,6 +62,10 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   automationIds?: string[];
   /** Rules are `skills` rows (`kind: "rule"`). */
   ruleIds?: string[];
+  /** DRAFT playbooks created by `create_playbook` ops (revert archives them). */
+  playbookIds?: string[];
+  /** Lists created by `create_view` ops (revert deletes them while untouched). */
+  viewIds?: string[];
   /**
    * Body documents created WITH an entity. They ride the entity's soft delete
    * (a restored entity keeps its body), so revert never deletes them on their
@@ -97,6 +101,7 @@ export interface MaterializedOpRecord {
     | "create_automation"
     | "create_rule"
     | "create_playbook"
+    | "create_view"
     | "create_session"
     | "create_document"
     | "create_project"
@@ -111,6 +116,8 @@ export interface MaterializedOpRecord {
   ruleId?: string;
   /** `create_playbook`: the DRAFT playbook it created. */
   playbookId?: string;
+  /** `create_view`: the List it created. */
+  viewId?: string;
   sessionId?: string;
   projectId?: string;
   documentId?: string;
@@ -153,6 +160,7 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "automations"
       | "rules"
       | "playbooks"
+      | "views"
       | "projects"
       | "sessions"
       | "links"
@@ -228,6 +236,21 @@ export function buildMaterializedRecord(
  * an entity/relation graph's record keeps exactly the shape it always had.
  */
 function planRecordFields(
+  result: RecordSource
+): Partial<CompleteMaterializedRecord> {
+  // Draft playbooks and lists are resilient config ops, not plan ops — but
+  // they are rows this run CREATED, so the record names them or a revert
+  // leaves them behind. Present only when the run made some.
+  const playbookIds = unique((result.playbooks ?? []).map((p) => p.playbookId));
+  const viewIds = unique((result.views ?? []).map((v) => v.viewId));
+  const configRows: Partial<CompleteMaterializedRecord> = {
+    ...(playbookIds.length > 0 ? { playbookIds } : {}),
+    ...(viewIds.length > 0 ? { viewIds } : {}),
+  };
+  return { ...configRows, ...planOnlyRecordFields(result) };
+}
+
+function planOnlyRecordFields(
   result: RecordSource
 ): Partial<CompleteMaterializedRecord> {
   const sessions = result.sessions ?? [];
@@ -310,6 +333,9 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const p of result.playbooks ?? []) {
     byOp[p.ref] = { op: "create_playbook", playbookId: p.playbookId };
+  }
+  for (const v of result.views ?? []) {
+    byOp[v.ref] = { op: "create_view", viewId: v.viewId };
   }
   for (const p of result.projects ?? []) {
     byOp[p.ref] = {
@@ -427,6 +453,8 @@ const ID_FIELDS = [
   "skillIds",
   "automationIds",
   "ruleIds",
+  "playbookIds",
+  "viewIds",
   "entityDocumentIds",
   "sessionIds",
   "projectIds",

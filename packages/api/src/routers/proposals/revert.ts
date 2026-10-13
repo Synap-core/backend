@@ -49,6 +49,9 @@ export type ProposalRevertPlan =
       automationIds: string[];
       ruleIds: string[];
       propertyDiffs: EntityPropertyDiff[];
+      /** Draft playbooks / lists a bundle created — optional, like the plan rows. */
+      playbookIds?: string[];
+      viewIds?: string[];
       /** Connected plan rows — optional so every older plan literal still types. */
       sessionIds?: string[];
       projectIds?: string[];
@@ -269,6 +272,8 @@ export function planProposalRevert(
       plan.automationIds.length === 0 &&
       plan.ruleIds.length === 0 &&
       plan.propertyDiffs.length === 0 &&
+      (plan.playbookIds?.length ?? 0) === 0 &&
+      (plan.viewIds?.length ?? 0) === 0 &&
       (plan.sessionIds?.length ?? 0) === 0 &&
       (plan.projectIds?.length ?? 0) === 0 &&
       (plan.linkIds?.length ?? 0) === 0;
@@ -447,6 +452,8 @@ export function creationsPlanFromRecord(
     automationIds: [...(record.automationIds ?? [])],
     ruleIds: [...(record.ruleIds ?? [])],
     propertyDiffs: [...(record.propertyDiffs ?? [])],
+    playbookIds: [...(record.playbookIds ?? [])],
+    viewIds: [...(record.viewIds ?? [])],
     sessionIds: [...(record.sessionIds ?? [])],
     projectIds: [...(record.projectIds ?? [])],
     linkIds: [...(record.linkIds ?? [])],
@@ -526,6 +533,8 @@ export function planProposalOpRevert(
     automationIds: entry.automationId ? [entry.automationId] : [],
     ruleIds: entry.ruleId ? [entry.ruleId] : [],
     propertyDiffs: [],
+    playbookIds: entry.playbookId ? [entry.playbookId] : [],
+    viewIds: entry.viewId ? [entry.viewId] : [],
   };
   const opKeys = [opKey];
 
@@ -578,6 +587,8 @@ export function planProposalOpRevert(
       plan.skillIds.length +
       plan.automationIds.length +
       plan.ruleIds.length +
+      (plan.playbookIds?.length ?? 0) +
+      (plan.viewIds?.length ?? 0) +
       plan.propertyDiffs.length ===
     0;
   if (empty) {
