@@ -18,11 +18,9 @@
  * read. A failed admin check or table read throws, and the caller names the
  * half unreadable (`settle`).
  *
- * Before this read, the issuer ask reached needs-you only as the
- * `system.issuer_pending_approval` notification: no door, and never cleared
- * by the decision. The table is the ask now; the notification is bell news
- * (registry `needsYou: "informational"`), actioned on the decision
- * (`TrustedIssuerService`).
+ * The table is the ask; the `system.issuer_pending_approval` notification is
+ * bell news only (registry `needsYou: "informational"`), actioned on the
+ * decision (`TrustedIssuerService`), so needs-you never counts an issuer twice.
  */
 
 import {

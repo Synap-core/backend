@@ -8,13 +8,6 @@
  * maps the tone onto its own marks — app-bases onto `--synap-tone-*` tokens
  * (via `getEnumUnitTone`), pod-admin onto its `StatusPill` kinds — so the CSS
  * variables stay with the web skin and this module stays pure.
- *
- * HOME: here (`@synap-core/types/property-render`), moved down from app-bases
- * `@synap-core/headless/property-renderer/utils/statusSemantics.ts` (the pure
- * half: `ENUM_TONE_TOKEN` / `ENUM_TONE_INK` / `getEnumColor` / `getEnumInk`
- * wrap these tones in web tokens and stay there, as does the web StatusPill's
- * own `STATUS_PILL_MAP`). Follow-up: re-point that file's tone and priority
- * functions here.
  */
 
 import type { UnitTone } from "../units/state.js";

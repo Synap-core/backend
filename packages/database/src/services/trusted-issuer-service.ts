@@ -24,9 +24,8 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /**
  * A decided issuer's "needs approval" notifications leave every admin's bell
  * IN THE SAME TRANSACTION as the decision — whichever door decided it (the
- * console, the first-link flow, a revoke of a still-pending row). Until
- * 2026-10-12 nothing cleared them, so a decided issuer stayed "needs
- * approval" in browser and relay forever (console plan, bug 1).
+ * console, the first-link flow, a revoke of a still-pending row), so a
+ * decided issuer never stays "needs approval" in browser or relay.
  */
 async function actionPendingNotifications(tx: Tx, issuerId: string) {
   await tx
@@ -98,45 +97,21 @@ export class TrustedIssuerService {
   }
 
   /**
-   * Approve a pending issuer, granting it the specified scopes.
+   * Approve an issuer with `allowedScopes`, ONLY if it is still in
+   * `fromStatus` — the status the deciding person saw. A compare-and-set, so
+   * a stale screen can never resurrect an issuer someone else rejected or
+   * revoked, and two reviewers cannot both decide one request. Returns `null`
+   * when the row is missing or its status moved; callers say which.
+   *
+   * `fromStatus: "approved"` re-approves with new scopes (a scope change);
+   * `"rejected"` / `"revoked"` reinstate deliberately. Deciding a pending row
+   * actions its "needs approval" notifications in the same transaction.
    */
-  async approve(
+  async approveFromStatus(
     id: string,
     reviewedBy: string,
-    allowedScopes: string[]
-  ): Promise<TrustedIssuer> {
-    const updated = await db.transaction(async (tx) => {
-      const [row] = await tx
-        .update(trustedIssuers)
-        .set({
-          status: "approved",
-          allowedScopes,
-          reviewedBy,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(trustedIssuers.id, id))
-        .returning();
-      if (row) await actionPendingNotifications(tx, id);
-      return row;
-    });
-
-    if (!updated) {
-      throw new Error(`TrustedIssuerService.approve: issuer ${id} not found`);
-    }
-
-    return updated;
-  }
-
-  /**
-   * Atomically approve a pending issuer during the locally authenticated
-   * first-link flow. Unlike the administrative `approve` operation, this
-   * cannot resurrect an issuer another Pod owner has rejected or revoked.
-   */
-  async approvePending(
-    id: string,
-    reviewedBy: string,
-    allowedScopes: string[]
+    allowedScopes: string[],
+    fromStatus: TrustedIssuer["status"]
   ): Promise<TrustedIssuer | null> {
     return db.transaction(async (tx) => {
       const [updated] = await tx
@@ -149,12 +124,22 @@ export class TrustedIssuerService {
           updatedAt: new Date(),
         })
         .where(
-          and(eq(trustedIssuers.id, id), eq(trustedIssuers.status, "pending"))
+          and(eq(trustedIssuers.id, id), eq(trustedIssuers.status, fromStatus))
         )
         .returning();
-      if (updated) await actionPendingNotifications(tx, id);
+      if (updated && fromStatus === "pending")
+        await actionPendingNotifications(tx, id);
       return updated ?? null;
     });
+  }
+
+  /** `approveFromStatus(…, "pending")` — the first-decision door. */
+  async approvePending(
+    id: string,
+    reviewedBy: string,
+    allowedScopes: string[]
+  ): Promise<TrustedIssuer | null> {
+    return this.approveFromStatus(id, reviewedBy, allowedScopes, "pending");
   }
 
   /**

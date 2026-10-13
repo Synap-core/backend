@@ -9618,9 +9618,10 @@ export interface RunGroup {
 	/**
 	 * Runs that FAILED (`failed` only — a `blocked_by_policy` run is a calm
 	 * governance outcome, not a failure) within the last
-	 * `RECENT_FAILURE_WINDOW_DAYS` (7) days —
-	 * the HEALTH number (W2 calm). A flow is "failing" iff this is > 0; a flow
-	 * that failed 271 times in June and has run clean since is not failing now.
+	 * `RECENT_FAILURE_WINDOW_DAYS` (7, `@synap-core/types/run-activity`) days,
+	 * each dated by `coalesce(completedAt, startedAt)` — the HEALTH number. A
+	 * flow is "failing" iff this is > 0; a flow that failed 271 times in June
+	 * and has run clean since is not failing now.
 	 */
 	recentFailedCount: number;
 	/** Runs still running. */
@@ -35405,6 +35406,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "provision" | "tier_update" | "membership:grant" | "source-config:write" | "membership:activate")[];
+				expectedStatus?: "approved" | "pending" | "revoked" | "rejected" | undefined;
 			};
 			output: {
 				description: string | null;
@@ -40723,6 +40725,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				limit?: number | undefined;
 				cursor?: string | undefined;
+				flowId?: string | undefined;
 			};
 			output: RunGroupsPage;
 			meta: object;

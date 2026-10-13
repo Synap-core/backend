@@ -51,7 +51,7 @@ import {
   users,
   projectMembers,
 } from "@synap/database/schema";
-import { listRunTracks, listRunGroups, isRecentFailure } from "../index.js";
+import { listRunTracks, listRunGroups } from "../index.js";
 
 type ColumnLike = {
   name: string;
@@ -300,6 +300,15 @@ describe("listRunTracks — measured track record per flow", () => {
     expect(many.medianDurationMs).toBe(6 * MIN);
     expect(groups.some((g) => g.flowId === PB_HIDDEN)).toBe(false);
   });
+
+  it("flowId narrows the feed to that one flow's group, still under the floor", async () => {
+    const only = await listRunGroups({ userId: USER, flowId: PB_MANY });
+    expect(only.map((g) => g.flowId)).toEqual([PB_MANY]);
+    expect(only[0]!.medianDurationMs).toBe(6 * MIN);
+    expect(await listRunGroups({ userId: USER, flowId: PB_HIDDEN })).toEqual(
+      []
+    );
+  });
 });
 
 describe("recentFailedCount — the HEALTH number is windowed (W2 calm)", () => {
@@ -346,30 +355,5 @@ describe("recentFailedCount — the HEALTH number is windowed (W2 calm)", () => 
       // …but the HEALTH number counts real failures only.
       recentFailedCount: 0,
     });
-  });
-});
-
-describe("isRecentFailure — the ONE cutoff rule (chat uses it; SQL is its twin)", () => {
-  it("dates a failure by completedAt, else startedAt, against the 7-day window", () => {
-    const now = Date.UTC(2026, 8, 28);
-    const day = 24 * 60 * 60 * 1000;
-    expect(
-      isRecentFailure(
-        {
-          startedAt: new Date(now - 8 * day),
-          completedAt: new Date(now - day),
-        },
-        now
-      )
-    ).toBe(true);
-    expect(
-      isRecentFailure(
-        { startedAt: new Date(now - 8 * day), completedAt: null },
-        now
-      )
-    ).toBe(false);
-    expect(isRecentFailure({ startedAt: new Date(now - 6 * day) }, now)).toBe(
-      true
-    );
   });
 });

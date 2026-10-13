@@ -104,8 +104,8 @@ export function inferOpenTypeFromId(id: string): TypedOpenKind | undefined {
  * Kinds pod-admin HOSTS at `/open/<kind>/<id>` for a signed-in human. Must
  * equal pod-admin `HOST_TYPES` (`apps/pod-admin/app/open/open-params.ts`;
  * frozen copy in `open-kinds.lock.tripwire.test.ts`). `automation` and
- * `session` joined in wave 5 (D6): the console reads them and offers their
- * de-escalating acts (pause, cancel) on the web.
+ * `session` are hosted so the console can offer their de-escalating acts
+ * (pause, cancel) on the web.
  */
 export const WEB_HOSTED_OPEN_KINDS = [
   "entity",

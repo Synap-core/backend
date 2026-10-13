@@ -72,7 +72,12 @@ import {
   automationDispatchFootprints,
   type AutomationDispatchFootprint,
 } from "./automation-dispatch.js";
-import { diagnoseGlobal } from "./global.js";
+import {
+  capabilityVerbListing,
+  capabilityVerbPosture,
+  diagnoseGlobal,
+  readCapabilityVerbGraph,
+} from "./global.js";
 import {
   findCapabilityShadows,
   type CapabilityShadow,
@@ -1026,24 +1031,18 @@ async function diagnoseClass(
       };
     }
 
-    // Capability health table — approved vs awaiting approval.
+    // Capability health table — which installed verbs are turned on. Counted
+    // on the verb (`skills.approved`, what the execution gate reads), never
+    // the container flag, so this agrees with the global `capabilities`
+    // section and the Marketplace's Tools list.
     case "capability": {
-      const rows = await db
-        .select({
-          id: capabilities.id,
-          name: capabilities.name,
-          approved: capabilities.approved,
-          workspaceId: capabilities.workspaceId,
-        })
-        .from(capabilities)
-        .where(
-          and(
-            userVisibleWhere(capabilities.workspaceId, userId),
-            workspaceId ? eq(capabilities.workspaceId, workspaceId) : undefined
-          )
-        );
-      const approved = rows.filter((r) => r.approved);
-      const awaiting = rows.filter((r) => !r.approved);
+      const graph = await readCapabilityVerbGraph(userId, workspaceId ?? null);
+      const posture = capabilityVerbPosture({
+        containerIds: graph.containers.map((c) => c.id),
+        members: graph.members,
+        skills: graph.skills,
+      });
+      const { enabled, awaitingEnable } = capabilityVerbListing(graph);
       // Stale same-named copies outside every pack. A failed read is reported
       // as such — never as "no shadows", which would read as all-clear.
       let shadows: CapabilityShadow[] | null = null;
@@ -1063,13 +1062,16 @@ async function diagnoseClass(
         mode: "class",
         type,
         summary:
-          (rows.length === 0
+          (graph.containers.length === 0
             ? "No capabilities configured."
-            : `${approved.length} approved, ${awaiting.length} awaiting approval.`) +
+            : posture.verbsAwaitingEnable > 0
+              ? `${posture.verbsAwaitingEnable} verb(s) in ${posture.capabilitiesAwaitingEnable} capability(ies) not turned on — they refuse to run until turned on; ${enabled.length} capability(ies) fully on.`
+              : `${posture.installed} capability(ies), all ${posture.verbs} verb(s) turned on.`) +
           shadowLine,
         detail: {
-          approved: approved.map((r) => ({ id: r.id, name: r.name })),
-          awaiting: awaiting.map((r) => ({ id: r.id, name: r.name })),
+          ...posture,
+          enabled,
+          awaitingEnable,
           ...(shadows !== null ? { shadows } : { shadowsError }),
         },
       };

@@ -651,6 +651,30 @@ export const agentUsersRouter = router({
   governance: protectedProcedure
     .input(z.object({ agentUserId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      // An agent's posture is read by those it answers to: the agent itself,
+      // its owner (the `disconnect` predicate), a person it acts for (a live
+      // key linked to them), or a pod admin. Anyone else gets NOT_FOUND, so
+      // the door never confirms an agent exists.
+      const [agent] = await db
+        .select({ id: users.id, createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
+        .limit(1);
+      const mayRead =
+        !!agent &&
+        (ctx.agentUserId === agent.id ||
+          ctx.userId === agent.id ||
+          (!!agent.createdByUserId && agent.createdByUserId === ctx.userId) ||
+          (await agentsOperatedBy(ctx.userId, [agent.id])).has(agent.id) ||
+          (await isPodAdmin(ctx.userId)));
+      if (!mayRead) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
+      }
       const state = await readAgentGovernance({
         db,
         agentUserId: input.agentUserId,

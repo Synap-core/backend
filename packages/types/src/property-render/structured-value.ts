@@ -12,11 +12,6 @@
  *
  * Pure: no React, no DOM. Labels go through `humanizeToken` (the vocabulary
  * door), never a local humanizer.
- *
- * HOME: here (`@synap-core/types/property-render`), moved down from app-bases
- * `@synap-core/headless/property-renderer/structured-value.ts` so pod-admin and
- * the app-bases surfaces read ONE copy. Follow-up: re-point that file's
- * importers here and delete it (see `./index.ts`).
  */
 
 import { humanizeToken } from "../vocabulary/index.js";

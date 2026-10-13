@@ -258,7 +258,7 @@ describe("application connection request boundary", () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
       error:
-        "This Pod needs a secure Pod Admin URL before application access can be set up",
+        "This Pod needs a secure Pod Console URL before application access can be set up",
       code: "POD_ADMIN_URL_REQUIRED",
       remediation: "configure_pod_admin_url",
     });

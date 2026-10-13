@@ -31,22 +31,21 @@ import {
   ownAgentUserFilter,
   authoredByUser,
 } from "../agent-identity-service.js";
+import { listRuns, listRunGroups } from "../runs/index.js";
 import {
-  listRuns,
-  listRunGroups,
+  DEFAULT_STUCK_THRESHOLD_HOURS,
   RECENT_FAILURE_WINDOW_DAYS,
   isRecentFailure,
-} from "../runs/index.js";
+} from "@synap-core/types/run-activity";
 import {
   collapseProposalsToClusters,
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
 import { agentProposalCap } from "../../utils/permission-check.js";
-import {
-  DEFAULT_STUCK_THRESHOLD_HOURS,
-  type GlobalHealthReport,
-  type HealthSection,
-  type HealthStatus,
+import type {
+  GlobalHealthReport,
+  HealthSection,
+  HealthStatus,
 } from "./types.js";
 import {
   IDLE_STALL_MINUTES,
@@ -132,6 +131,48 @@ export function capabilityVerbPosture(input: {
     verbsAwaitingEnable: awaiting.size,
     capabilitiesAwaitingEnable: awaitingCaps.size,
   };
+}
+
+/** A container whose verbs are not all turned on, with the verbs that refuse. */
+export interface CapabilityAwaitingEnable {
+  id: string;
+  name: string;
+  verbs: Array<{ id: string; name: string }>;
+}
+
+/**
+ * PURE: the per-container view of the same graph `capabilityVerbPosture`
+ * counts — which containers are fully on, and which hold verbs that refuse.
+ * A container with no live member verb has nothing to turn on and is "enabled".
+ */
+export function capabilityVerbListing(graph: CapabilityVerbGraph): {
+  enabled: Array<{ id: string; name: string }>;
+  awaitingEnable: CapabilityAwaitingEnable[];
+} {
+  const skillById = new Map(graph.skills.map((s) => [s.id, s]));
+  const offByContainer = new Map<string, Map<string, string>>();
+  for (const m of graph.members) {
+    const skill = skillById.get(m.skillId);
+    if (!skill || skill.approved) continue;
+    const off = offByContainer.get(m.capabilityId) ?? new Map<string, string>();
+    off.set(skill.id, skill.name);
+    offByContainer.set(m.capabilityId, off);
+  }
+  const enabled: Array<{ id: string; name: string }> = [];
+  const awaitingEnable: CapabilityAwaitingEnable[] = [];
+  for (const c of graph.containers) {
+    const off = offByContainer.get(c.id);
+    if (!off) {
+      enabled.push({ id: c.id, name: c.name });
+      continue;
+    }
+    awaitingEnable.push({
+      id: c.id,
+      name: c.name,
+      verbs: [...off].map(([id, name]) => ({ id, name })),
+    });
+  }
+  return { enabled, awaitingEnable };
 }
 
 export interface GlobalSignals {
@@ -335,9 +376,11 @@ export function summarizeGlobalHealth(
     detail: { clusters: signals.duplicateClusters.slice(0, 10) },
   });
 
-  // Capabilities — attention when installed verbs are not enabled: those are
-  // the runs that refuse (see `CapabilityVerbPosture`). Live per-connection
-  // outage detection is deferred (see NEEDS-DOGFOOD in the impl).
+  // Capabilities — attention when installed verbs are not turned on: those
+  // are the runs that refuse (see `CapabilityVerbPosture`). A verb runs only
+  // when its backing skill is enabled (`skills.approved`); the container's own
+  // `approved` flag gates nothing, so it is not counted. Live per-connection
+  // outage detection is not part of this section.
   const cap = signals.capabilities;
   sections.push({
     key: "capabilities",
@@ -346,13 +389,13 @@ export function summarizeGlobalHealth(
       cap.installed === 0
         ? "No capabilities installed"
         : cap.verbsAwaitingEnable > 0
-          ? `${cap.verbsAwaitingEnable} verb(s) in ${cap.capabilitiesAwaitingEnable} capability(ies) installed but not enabled — they refuse to run until enabled`
-          : `${cap.installed} capability(ies) installed, all ${cap.verbs} verb(s) enabled`,
+          ? `${cap.verbsAwaitingEnable} verb(s) in ${cap.capabilitiesAwaitingEnable} capability(ies) not turned on — they refuse to run until turned on`
+          : `${cap.installed} capability(ies) installed, all ${cap.verbs} verb(s) turned on`,
     detail: {
       ...cap,
-      notes: {
-        gate: "a verb runs only when its backing skill is enabled (skills.approved); the container's own approved flag gates nothing and is not counted",
-      },
+      // Read by the desktop app's FlowHealthBand until it reads
+      // `verbsAwaitingEnable`; drop it once that reader moves.
+      unapproved: cap.capabilitiesAwaitingEnable,
     },
   });
 
@@ -499,18 +542,26 @@ export function failingFlowOfGroup(g: {
 
 // ── DB tier: gather the signals, then summarize ──────────────────────────────
 
+/** The three hops behind the posture, with names for a per-container listing. */
+export interface CapabilityVerbGraph {
+  containers: Array<{ id: string; name: string }>;
+  members: Array<{ capabilityId: string; skillId: string }>;
+  skills: Array<{ id: string; name: string; approved: boolean }>;
+}
+
 /**
  * The containers the caller can see (same floor and lens as the rest of this
  * report), their `member_of` verbs, and those verbs' enable flags — the same
  * three hops `buildCapabilityCatalog` folds into a card's `verbs[].enabled`,
- * so this count and the Marketplace's Tools list cannot disagree.
+ * so this count and the Marketplace's Tools list cannot disagree. Shared with
+ * the `type:"capability"` class arm so both surfaces count the same thing.
  */
-async function readCapabilityVerbPosture(
+export async function readCapabilityVerbGraph(
   userId: string,
   workspaceId: string | null
-): Promise<CapabilityVerbPosture> {
+): Promise<CapabilityVerbGraph> {
   const containers = await db
-    .select({ id: capabilities.id })
+    .select({ id: capabilities.id, name: capabilities.name })
     .from(capabilities)
     .where(
       and(
@@ -519,7 +570,7 @@ async function readCapabilityVerbPosture(
       )
     );
   const containerIds = containers.map((c) => c.id);
-  const memberRows =
+  const members =
     containerIds.length > 0
       ? await db
           .select({ capabilityId: links.toId, skillId: links.fromId })
@@ -533,18 +584,30 @@ async function readCapabilityVerbPosture(
             )
           )
       : [];
-  const skillIds = [...new Set(memberRows.map((m) => m.skillId))];
+  const skillIds = [...new Set(members.map((m) => m.skillId))];
   const skillRows =
     skillIds.length > 0
       ? await db
-          .select({ id: skills.id, approved: skills.approved })
+          .select({
+            id: skills.id,
+            name: skills.name,
+            approved: skills.approved,
+          })
           .from(skills)
           .where(inArray(skills.id, skillIds))
       : [];
+  return { containers, members, skills: skillRows };
+}
+
+async function readCapabilityVerbPosture(
+  userId: string,
+  workspaceId: string | null
+): Promise<CapabilityVerbPosture> {
+  const graph = await readCapabilityVerbGraph(userId, workspaceId);
   return capabilityVerbPosture({
-    containerIds,
-    members: memberRows,
-    skills: skillRows,
+    containerIds: graph.containers.map((c) => c.id),
+    members: graph.members,
+    skills: graph.skills,
   });
 }
 

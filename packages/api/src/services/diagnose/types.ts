@@ -79,9 +79,6 @@ export type ObjectKind =
    */
   | "external_send";
 
-/** Default "stuck" boundary: a run still `running` past this age is flagged. */
-export const DEFAULT_STUCK_THRESHOLD_HOURS = 24;
-
 /** A single global-health section verdict. */
 export type HealthStatus = "ok" | "attention" | "degraded";
 

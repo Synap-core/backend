@@ -126,7 +126,7 @@ describe("hosted kinds match pod-admin", () => {
   });
 });
 
-describe("dispatchOpen — automation / session are web-hosted (D6)", () => {
+describe("dispatchOpen — automation / session are web-hosted", () => {
   it.each(["automation", "session"])(
     "%s + human + admin → pod-admin /open/%s/",
     (type) => {

@@ -1,36 +1,16 @@
-/**
- * Field labels — SINGLE SOURCE OF TRUTH for the words a property shows.
- *
- * HOME: here (`@synap-core/types/property-render`), moved down from app-bases
- * `@synap-core/headless/property-renderer/utils/fieldFormatters.ts`. Follow-up:
- * re-point that copy's importers here and delete it (see `./index.ts`).
- */
+/** Field labels — the one source of the words a property shows. */
 
 import { humanizeToken } from "../vocabulary/index.js";
 
 /**
- * Resolve the label to show for a property definition.
- *
- * Precedence: `uiHints.displayName` → `uiHints.label` → humanized slug.
- *
- * Two things this fixes, and both must stay true:
- *
- *  1. `label` is honoured. The system-profile seeds write `uiHints.label`
- *     (~138 sites in `ensure-system-profiles.ts`) while every reader read
- *     `uiHints.displayName`, so seeded properties displayed their humanized
- *     SLUG — "Ek Claim" instead of "Claim" — in detail cards and view column
- *     headers alike.
- *  2. An AUTHORED label is used verbatim. Only slugs get humanized. Running an
- *     authored label through `formatFieldLabel` lowercases inside words and
- *     mangles deliberate casing ("MRR" → "Mrr", "ID" → "Id").
+ * The label for a property: `uiHints.displayName` → `uiHints.label` →
+ * humanized slug. `label` counts because the system-profile seeds write it;
+ * an authored label is used verbatim, since humanizing it would mangle
+ * deliberate casing ("MRR" → "Mrr").
  */
 export function resolvePropertyLabel(property: {
   slug: string;
-  /**
-   * `unknown` members on purpose: a wire def's `uiHints` is an untyped JSON
-   * record (`EffectivePropertyDef.uiHints`), so a non-string label stored by
-   * hand falls through to the slug rather than being trusted.
-   */
+  /** `unknown`: a hand-stored non-string label falls through to the slug. */
   uiHints?: { displayName?: unknown; label?: unknown } | null;
 }): string {
   const hints = property.uiHints ?? {};
@@ -43,17 +23,9 @@ function trimmed(value: unknown): string {
 }
 
 /**
- * Format field key into human-readable label.
- *
- * Sentence case, through the vocabulary's `humanizeToken`.
- * This used to Title-Case every word itself ("Due Date", "First Name") while
- * every other label door in the product — `humanizeToken`, `resolveStatusLabel`,
- * the special cases right below — is sentence case, so one property list read
- * "Due date" beside "Start Date".
- *
- * A dotted slug keeps EVERY segment ("billing.city" → "Billing city"): a
- * property key's path is what tells `billing.city` from `shipping.city`, so it
- * is never cut to its last segment the way an action/event token is.
+ * A field key as a sentence-case label, like every other label door. A dotted
+ * slug keeps every segment ("billing.city" → "Billing city"): the path is what
+ * tells `billing.city` from `shipping.city`.
  */
 export function formatFieldLabel(key: string): string {
   const label = key.replace(/^metadata\./, "");

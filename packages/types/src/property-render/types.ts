@@ -2,9 +2,6 @@
  * The data shapes the property-render rules read. Framework-agnostic: no
  * React, no design system — every renderer (pod-admin HeroUI, app-bases web,
  * relay) maps these onto its own widgets.
- *
- * Moved down from app-bases `@synap-core/hooks/profile-renderer/entity-types.ts`
- * (the two pure types only; the React renderer contract stays there).
  */
 
 /**
