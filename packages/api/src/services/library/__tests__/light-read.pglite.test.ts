@@ -1,0 +1,591 @@
+/**
+ * The Library LIGHT READ and its CHIPS on a real Postgres (PGlite).
+ *
+ * Driven through the service doors and read back from the rows:
+ *   - a typed-text item / a public page is read for free; long text gets ONE
+ *     AI summary, which reserves the person's daily budget (`importRead.aiAt`);
+ *   - the read text is stored BESIDE the item (`libraryReadTextKey`), never
+ *     over its body, and the item is queued for the search index;
+ *   - over budget ⇒ `over_budget`, never a drop; the sweep re-enqueues it only
+ *     once the person's window has room, and re-enqueues never-read items;
+ *   - Instagram/TikTok stay `needs_file` with no reader called; an IS failure
+ *     stays `not_read` and becomes `unreadable` after the last attempt;
+ *   - a chip files ONE pending proposal through the capture graph door, with
+ *     the item as its source; a second tap returns the same proposal; a
+ *     failed filing releases the chip; a re-read keeps the run chip;
+ *   - another person's item is invisible to both doors.
+ *
+ * Stubbed, and why: `@synap/storage` (object storage, in-memory); the IS
+ * (extract / transcribe / summarize), the public reader and the submit door
+ * are injected deps (own suites).
+ */
+
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+
+const h = vi.hoisted(() => ({
+  client: null as null | {
+    exec: (sql: string) => Promise<unknown>;
+    query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
+  },
+  objects: new Map<string, Buffer>(),
+}));
+
+vi.mock("@synap/storage", () => ({
+  storage: {
+    upload: async (key: string, body: Buffer | string) => {
+      const buf = Buffer.isBuffer(body) ? body : Buffer.from(body);
+      h.objects.set(key, buf);
+      return { url: `mem://${key}`, path: key, size: buf.length };
+    },
+    downloadBuffer: async (key: string) => {
+      const b = h.objects.get(key);
+      if (!b) throw new Error(`no object ${key}`);
+      return b;
+    },
+  },
+}));
+
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const { PGlite } = await import("@electric-sql/pglite");
+  const { drizzle } = await import("drizzle-orm/pglite");
+  const client = new PGlite();
+  h.client = client as unknown as typeof h.client;
+  return { ...actual, db: drizzle(client) };
+});
+
+import { db, documents, libraryReadTextKey } from "@synap/database";
+import type {
+  ImportItemMetadata,
+  LibraryItemRead,
+} from "@synap-core/types/imports";
+import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
+import { lightReadLibraryItem, type LightReadDeps } from "../light-read.js";
+import { reserveLibraryReadAi } from "../read-budget.js";
+import { sweepLibraryLightReads } from "../light-read-queue.js";
+import { LibraryActionError, runLibraryAction } from "../run-action.js";
+import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
+
+const USER = "user-lib-1";
+const OTHER = "user-lib-2";
+const NOW = new Date("2026-10-13T09:00:00.000Z");
+const q = <T>(sql: string, params?: unknown[]) =>
+  h.client!.query<T>(sql, params);
+
+const LONG_PAGE =
+  "The conference opens with a keynote on local-first software. " +
+  "Speakers cover sync engines, CRDTs and offline UX. ".repeat(12) +
+  "Registration closes soon.";
+
+let seq = 0;
+async function stageItem(over: {
+  userId?: string;
+  item: Partial<ImportItemMetadata> & Pick<ImportItemMetadata, "source">;
+  body?: string;
+  mimeType?: string;
+  read?: Partial<LibraryItemRead> & Record<string, unknown>;
+  ageMinutes?: number;
+}): Promise<string> {
+  const key = `obj/${++seq}`;
+  if (over.body !== undefined) h.objects.set(key, Buffer.from(over.body));
+  const item: ImportItemMetadata = {
+    version: 1,
+    title: over.item.title ?? `Item ${seq}`,
+    contentStatus: over.item.contentStatus ?? "readable",
+    stagedAt: NOW.toISOString(),
+    ...over.item,
+  } as ImportItemMetadata;
+  const { rows } = await q<{ id: string }>(
+    `insert into documents (user_id, title, type, storage_key, mime_type, metadata, created_at)
+     values ($1, $2, 'text', $3, $4, $5::jsonb, now() - ($6 || ' minutes')::interval) returning id`,
+    [
+      over.userId ?? USER,
+      item.title,
+      over.body !== undefined ? key : null,
+      over.mimeType ?? "text/plain",
+      JSON.stringify({
+        importItem: item,
+        importCuration: { decision: "keep", groupKeys: [] },
+        ...(over.read ? { importRead: over.read } : {}),
+      }),
+      String(over.ageMinutes ?? 0),
+    ]
+  );
+  return rows[0]!.id;
+}
+
+async function readOf(id: string) {
+  const { rows } = await q<{ metadata: Record<string, any> }>(
+    `select metadata from documents where id = $1`,
+    [id]
+  );
+  return rows[0]!.metadata.importRead as Record<string, any> | undefined;
+}
+
+interface Calls {
+  summarize: number;
+  extract: number;
+  transcribe: number;
+  readUrl: number;
+  indexed: string[];
+}
+
+function makeDeps(over: Partial<LightReadDeps> & { perDay?: number } = {}): {
+  deps: LightReadDeps;
+  calls: Calls;
+} {
+  const calls: Calls = {
+    summarize: 0,
+    extract: 0,
+    transcribe: 0,
+    readUrl: 0,
+    indexed: [],
+  };
+  const deps: LightReadDeps = {
+    async readUrl(url) {
+      calls.readUrl++;
+      return {
+        kind: "read",
+        title: "Local-first conf",
+        author: null,
+        text: LONG_PAGE,
+        imageUrl: null,
+        sourceUrl: url,
+      };
+    },
+    readBytes: async (k) => {
+      const b = h.objects.get(k);
+      if (!b) throw new Error(`no object ${k}`);
+      return b;
+    },
+    writeText: async (k, t) => void h.objects.set(k, Buffer.from(t)),
+    async extractFile() {
+      calls.extract++;
+      return { text: "TOTAL 42,50 €\nReceipt from Monoprix" };
+    },
+    async transcribe() {
+      calls.transcribe++;
+      return { ok: true, text: "Remember to call the bank tomorrow." };
+    },
+    async summarize() {
+      calls.summarize++;
+      return {
+        summary: "A conference on local-first software.",
+        actions: [
+          {
+            kind: "date",
+            value: { date: "2026-11-20", title: "Local-first conf" },
+            confidence: 0.8,
+          },
+        ],
+      };
+    },
+    reserveAi: (r) =>
+      reserveLibraryReadAi(db as never, { ...r, perDay: over.perDay ?? 50 }),
+    index: async (id) => void calls.indexed.push(id),
+    now: () => NOW,
+    ...over,
+  };
+  return { deps, calls };
+}
+
+const read = (itemId: string, deps: LightReadDeps, extra = {}) =>
+  lightReadLibraryItem({
+    database: db as never,
+    userId: USER,
+    itemId,
+    deps,
+    ...extra,
+  });
+
+beforeAll(async () => {
+  await h.client!.exec(pgliteSchemaDdl([documents]));
+});
+beforeEach(async () => {
+  h.objects.clear();
+  await h.client!.exec(`delete from documents;`);
+});
+
+describe("light read", () => {
+  it("typed text is read for free: text beside the item, chips, indexed", async () => {
+    const id = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "Groceries\nTODO: buy oat milk",
+    });
+    const { deps, calls } = makeDeps();
+    const res = await read(id, deps);
+    expect(res).toMatchObject({ status: "read", usedAi: false });
+    const r = (await readOf(id))!;
+    expect(r.status).toBe("read");
+    expect(r.summary).toBe("Groceries TODO: buy oat milk");
+    expect(r.textKey).toBe(libraryReadTextKey(USER, id));
+    expect(h.objects.get(r.textKey)!.toString()).toContain("buy oat milk");
+    // The item's own body is untouched.
+    const { rows } = await q<{ storage_key: string }>(
+      `select storage_key from documents where id = $1`,
+      [id]
+    );
+    expect(rows[0]!.storage_key).not.toBe(r.textKey);
+    expect(r.suggestedActions.map((a: any) => a.value.title)).toEqual([
+      "Buy oat milk",
+    ]);
+    expect(r.aiAt).toBeUndefined();
+    expect(calls.summarize).toBe(0);
+    expect(calls.indexed).toEqual([id]);
+  });
+
+  it("a long page gets ONE AI summary that spends the budget; AI chips merge after rules", async () => {
+    const id = await stageItem({
+      item: {
+        source: {
+          kind: "url",
+          url: "https://conf.example/2026",
+          host: "conf.example",
+        },
+      },
+    });
+    const { deps, calls } = makeDeps();
+    expect(await read(id, deps)).toMatchObject({
+      status: "read",
+      usedAi: true,
+    });
+    const r = (await readOf(id))!;
+    expect(r.summary).toBe("A conference on local-first software.");
+    expect(typeof r.aiAt).toBe("string");
+    expect(r.suggestedActions.map((a: any) => [a.kind, a.source])).toEqual([
+      ["date", "ai"],
+    ]);
+    expect(calls).toMatchObject({ readUrl: 1, summarize: 1 });
+    // A final read is not read twice.
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.summarize).toBe(1);
+  });
+
+  it("an AI summary that fails keeps the first sentences, still read", async () => {
+    const id = await stageItem({
+      item: { source: { kind: "url", url: "https://conf.example/x" } },
+    });
+    const { deps } = makeDeps({
+      summarize: async () => {
+        throw new Error("IS down");
+      },
+    });
+    await read(id, deps);
+    const r = (await readOf(id))!;
+    expect(r.status).toBe("read");
+    expect(r.summary.startsWith("Local-first conf")).toBe(true);
+  });
+
+  it("a photo is read with AI; over the budget it is MARKED over_budget, never dropped", async () => {
+    const a = await stageItem({
+      item: {
+        source: { kind: "file", mimeType: "image/jpeg" },
+        contentStatus: "file",
+      },
+      body: "jpegbytes",
+      mimeType: "image/jpeg",
+    });
+    const b = await stageItem({
+      item: {
+        source: { kind: "file", mimeType: "image/png" },
+        contentStatus: "file",
+      },
+      body: "pngbytes",
+      mimeType: "image/png",
+    });
+    const { deps, calls } = makeDeps({ perDay: 1 });
+    expect(await read(a, deps)).toMatchObject({ status: "read", usedAi: true });
+    expect((await readOf(a))!.suggestedActions[0]).toMatchObject({
+      kind: "receipt",
+      value: { amount: 42.5, currency: "EUR", merchant: "Monoprix" },
+    });
+    expect(await read(b, deps)).toMatchObject({ status: "over_budget" });
+    expect((await readOf(b))!.status).toBe("over_budget");
+    expect(calls.extract).toBe(1);
+  });
+
+  it("audio is transcribed", async () => {
+    const id = await stageItem({
+      item: {
+        source: { kind: "file", mimeType: "audio/m4a" },
+        contentStatus: "file",
+      },
+      body: "audio",
+      mimeType: "audio/m4a",
+    });
+    const { deps, calls } = makeDeps();
+    await read(id, deps);
+    expect(calls.transcribe).toBe(1);
+    expect((await readOf(id))!.suggestedActions[0]).toMatchObject({
+      kind: "task",
+      value: { title: "Call the bank tomorrow" },
+    });
+  });
+
+  it("Instagram stays needs_file and title-only stays title_only — no reader runs", async () => {
+    const ig = await stageItem({
+      item: {
+        source: {
+          kind: "url",
+          url: "https://instagram.com/p/x",
+          platform: "instagram",
+        },
+        contentStatus: "needs_file",
+      },
+    });
+    const t = await stageItem({
+      item: {
+        source: { kind: "url", url: "https://x.example" },
+        contentStatus: "title_only",
+      },
+    });
+    const { deps, calls } = makeDeps();
+    expect(await read(ig, deps)).toMatchObject({ status: "needs_file" });
+    expect(await read(t, deps)).toMatchObject({ status: "title_only" });
+    expect(calls).toMatchObject({ readUrl: 0, extract: 0, summarize: 0 });
+  });
+
+  it("an IS failure stays not_read, then unreadable after the last attempt", async () => {
+    const id = await stageItem({
+      item: {
+        source: { kind: "file", mimeType: "application/pdf" },
+        contentStatus: "file",
+      },
+      body: "%PDF",
+      mimeType: "application/pdf",
+    });
+    const { deps } = makeDeps({ extractFile: async () => null });
+    expect(await read(id, deps)).toMatchObject({ status: "not_read" });
+    expect(await read(id, deps)).toMatchObject({ status: "not_read" });
+    expect(await read(id, deps)).toMatchObject({ status: "unreadable" });
+    expect((await readOf(id))!.attempts).toBe(3);
+  });
+
+  it("another person's item is skipped", async () => {
+    const id = await stageItem({
+      userId: OTHER,
+      item: { source: { kind: "text" } },
+      body: "secret",
+    });
+    const { deps } = makeDeps();
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect(await readOf(id)).toBeUndefined();
+  });
+});
+
+describe("sweep", () => {
+  it("re-enqueues never-read items, and over_budget ones only when the window has room", async () => {
+    const fresh = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "x",
+    });
+    const old = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "x",
+      ageMinutes: 30,
+    });
+    const held = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "x",
+      ageMinutes: 30,
+      read: { status: "over_budget", suggestedActions: [] },
+    });
+    await stageItem({
+      item: { source: { kind: "text" } },
+      body: "x",
+      ageMinutes: 30,
+      read: { status: "read", suggestedActions: [] },
+    });
+    // A needs_file link whose file was attached since; and one still waiting.
+    const attached = await stageItem({
+      item: {
+        source: {
+          kind: "url",
+          url: "https://instagram.com/p/a",
+          documentId: "00000000-0000-4000-8000-000000000001",
+        },
+        contentStatus: "file",
+      },
+      ageMinutes: 30,
+      read: { status: "needs_file", suggestedActions: [] },
+    });
+    await stageItem({
+      item: {
+        source: { kind: "url", url: "https://instagram.com/p/b" },
+        contentStatus: "needs_file",
+      },
+      ageMinutes: 30,
+      read: { status: "needs_file", suggestedActions: [] },
+    });
+    // The window is full: one item read with AI in the last hour, cap 1.
+    await stageItem({
+      item: { source: { kind: "text" } },
+      ageMinutes: 60,
+      read: { status: "read", suggestedActions: [], aiAt: NOW.toISOString() },
+    });
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importRead,aiAt}', to_jsonb(now())) where metadata->'importRead'->>'aiAt' is not null`
+    );
+    const sent: string[] = [];
+    const send = async (_q: string, data: { itemId: string }) =>
+      void sent.push(data.itemId);
+    await sweepLibraryLightReads({ database: db as never, send, perDay: 1 });
+    expect(sent.sort()).toEqual([old, attached].sort());
+    sent.length = 0;
+    await sweepLibraryLightReads({ database: db as never, send, perDay: 5 });
+    expect(sent.sort()).toEqual([old, held, attached].sort());
+    expect(sent).not.toContain(fresh);
+  });
+});
+
+describe("run a chip", () => {
+  async function readTodo() {
+    const id = await stageItem({
+      item: { title: "Notes", source: { kind: "text" } },
+      body: "TODO: renew passport by 2026-12-01",
+    });
+    await read(id, makeDeps().deps);
+    const action = (await readOf(id))!.suggestedActions[0];
+    return { id, actionId: action.id as string };
+  }
+
+  it("files ONE pending proposal with the item as source; a second tap returns it", async () => {
+    const { id, actionId } = await readTodo();
+    const submitted: SubmitCaptureGraphInput[] = [];
+    const submit = async (input: SubmitCaptureGraphInput) => {
+      submitted.push(input);
+      return { proposalId: "prop-1", applied: false };
+    };
+    const args = {
+      database: db as never,
+      userId: USER,
+      itemId: id,
+      actionId,
+      submit,
+    };
+    expect(await runLibraryAction(args)).toEqual({
+      proposalId: "prop-1",
+      status: "proposed",
+    });
+    expect(await runLibraryAction(args)).toEqual({
+      proposalId: "prop-1",
+      status: "proposed",
+    });
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]).toMatchObject({
+      userId: USER,
+      sourceDocumentIds: [id],
+      entities: [
+        {
+          profileSlug: "task",
+          title: "Renew passport by 2026-12-01",
+          properties: { dueDate: "2026-12-01" },
+        },
+      ],
+    });
+    expect(submitted[0]!.agentUserId).toBeUndefined();
+    const a = (await readOf(id))!.suggestedActions[0];
+    expect(a.proposalId).toBe("prop-1");
+    expect(a.claimedAt).toBeUndefined();
+
+    // A forced re-read keeps the chip that was run.
+    await read(id, makeDeps().deps, { force: true });
+    expect((await readOf(id))!.suggestedActions[0].proposalId).toBe("prop-1");
+  });
+
+  it("a failed filing releases the chip; a tap during a filing is refused", async () => {
+    const { id, actionId } = await readTodo();
+    const base = { database: db as never, userId: USER, itemId: id, actionId };
+    await expect(
+      runLibraryAction({
+        ...base,
+        submit: async () => {
+          throw new Error("validation");
+        },
+      })
+    ).rejects.toThrow("validation");
+    expect((await readOf(id))!.suggestedActions[0].claimedAt).toBeUndefined();
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = runLibraryAction({
+      ...base,
+      submit: async () => {
+        await gate;
+        return { proposalId: "prop-2", applied: false };
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    await expect(
+      runLibraryAction({
+        ...base,
+        submit: async () => ({ proposalId: "x", applied: false }),
+      })
+    ).rejects.toMatchObject({ code: "IN_FLIGHT" });
+    release();
+    expect(await slow).toEqual({ proposalId: "prop-2", status: "proposed" });
+  });
+
+  it("maps each chip to its one thing", async () => {
+    const { libraryActionEntity } = await import("../run-action.js");
+    expect(
+      libraryActionEntity(
+        {
+          kind: "date",
+          value: { date: "2026-11-14", time: "15:30", title: "Dentist" },
+        },
+        { title: "Mail" }
+      )
+    ).toMatchObject({
+      profileSlug: "event",
+      title: "Dentist",
+      properties: { startDate: "2026-11-14T15:30:00", isAllDay: false },
+    });
+    expect(
+      libraryActionEntity(
+        {
+          kind: "receipt",
+          value: { amount: 42.5, currency: "EUR", merchant: "Monoprix" },
+        },
+        { title: "Receipt" }
+      )
+    ).toMatchObject({
+      profileSlug: "note",
+      title: "Receipt · Monoprix · 42.50 EUR",
+      properties: { amount: 42.5, currency: "EUR", merchant: "Monoprix" },
+    });
+    expect(
+      libraryActionEntity(
+        { kind: "contact", value: { email: "ada@x.org", name: "Ada" } },
+        { title: "Card" }
+      )
+    ).toMatchObject({
+      profileSlug: "person",
+      title: "Ada",
+      properties: { email: "ada@x.org" },
+    });
+  });
+
+  it("another person's item and an unknown chip are refused", async () => {
+    const { id, actionId } = await readTodo();
+    const submit = async () => ({ proposalId: "p", applied: false });
+    await expect(
+      runLibraryAction({
+        database: db as never,
+        userId: OTHER,
+        itemId: id,
+        actionId,
+        submit,
+      })
+    ).rejects.toMatchObject({ code: "ITEM_NOT_FOUND" });
+    await expect(
+      runLibraryAction({
+        database: db as never,
+        userId: USER,
+        itemId: id,
+        actionId: "nope",
+        submit,
+      })
+    ).rejects.toBeInstanceOf(LibraryActionError);
+  });
+});

@@ -203,6 +203,14 @@ export async function attachImportItemFile(args: {
     .where(
       and(eq(documents.id, itemRow.id), eq(documents.userId, args.userId))
     );
+  // The Library reads the file now (light read); its content changed, so an
+  // earlier read (a `needs_file` mark) is redone. A failed enqueue is left to
+  // the hourly sweep.
+  const { enqueueLibraryLightRead } =
+    await import("../library/light-read-queue.js");
+  await enqueueLibraryLightRead([
+    { userId: args.userId, itemId: itemRow.id, force: true },
+  ]);
   return toItemView({
     id: itemRow.id,
     metadata,

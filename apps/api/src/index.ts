@@ -1885,6 +1885,24 @@ try {
             apiLogger.info("Registered import-corpus handler (IoC)");
           }
 
+          // IoC: the Library light read (one item) and its hourly sweep. jobs
+          // owns both queues; the readers, the IS client and the AI budget live
+          // in api, so the handlers are filled here.
+          {
+            const {
+              registerLibraryLightReadHandler,
+              registerLibraryLightReadSweepHandler,
+            } =
+              await import("@synap/jobs/workers/library-light-read-worker.js");
+            const { runLibraryLightReadJob, sweepLibraryLightReads } =
+              await import("@synap/api");
+            registerLibraryLightReadHandler((p) => runLibraryLightReadJob(p));
+            registerLibraryLightReadSweepHandler(() =>
+              sweepLibraryLightReads()
+            );
+            apiLogger.info("Registered library light-read handlers (IoC)");
+          }
+
           // IoC: fill the capability / signal / feed-runner slots owned by
           // @synap/jobs with the @synap/api implementations. The pg-boss workers
           // run IN this process, but @synap/jobs can't statically import
