@@ -166,7 +166,9 @@ export function fallbackGroupProposals(
   }
   const buckets = new Map<string, GroupProposal>();
   for (const i of items) {
-    let { name, kind } = fallbackBucket(i);
+    const bucket = fallbackBucket(i);
+    const { kind } = bucket;
+    let { name } = bucket;
     const host = i.source.host;
     if (
       i.source.kind === "url" &&
