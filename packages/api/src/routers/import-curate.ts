@@ -69,6 +69,8 @@ export const ImportStageItemSchema: z.ZodType<ImportStageItemInput> =
       url: z.string().min(1).max(4000),
       title: z.string().max(500).optional(),
       note: itemNote,
+      /** The page as the browser rendered it (a login-only page). */
+      html: z.string().max(L.pageHtmlMax).optional(),
     }),
     z.object({
       kind: z.literal("text"),

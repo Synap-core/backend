@@ -91,6 +91,8 @@ export const IMPORT_LIMITS = {
   groupNoteMax: 1200,
   itemNoteMax: 600,
   groupNameMax: 80,
+  /** Page HTML a url item may carry, in characters (the same cap as capture). */
+  pageHtmlMax: 50_000,
   /** Inline file bytes accepted by `imports.stage` (bigger files go through presigned upload). */
   inlineFileBytesMax: 8 * 1024 * 1024,
 } as const;
@@ -206,7 +208,18 @@ export interface ImportCounts {
 
 /** Input of `imports.stage`: one entry per item. */
 export type ImportStageItemInput =
-  | { kind: "url"; url: string; title?: string; note?: string }
+  | {
+      kind: "url";
+      url: string;
+      title?: string;
+      note?: string;
+      /**
+       * The page as the person's browser rendered it (≤
+       * `IMPORT_LIMITS.pageHtmlMax`) — a login-only page the pod cannot fetch.
+       * Kept beside the item (never as its body); the light read prefers it.
+       */
+      html?: string;
+    }
   | { kind: "text"; text: string; title?: string; note?: string }
   | {
       kind: "file";

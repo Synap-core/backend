@@ -53,7 +53,12 @@ import {
 } from "../intake/stage-intake-source.js";
 import { recordSessionRunManifest } from "../intake/record-session-run-manifest.js";
 import {
+  keepLibraryPageHtml,
+  readLibraryPageMeta,
+} from "../library/page-html.js";
+import {
   lonePublicHttpUrl,
+  readHtmlPage,
   readPublicUrl,
   type PublicUrlRead,
 } from "../capabilities/read-public-url.js";
@@ -84,6 +89,7 @@ export type ImportStageRefusal =
   | "document_not_found"
   | "document_in_other_import"
   | "note_too_long"
+  | "page_too_large"
   | "stage_failed";
 
 export interface ImportStageOutcome {
@@ -178,6 +184,8 @@ type Prepared =
       card?: ImportItemCard;
       note?: string;
       needsCard?: boolean;
+      /** Page HTML the person's browser sent with a link (kept beside the item). */
+      html?: string;
     }
   | {
       kind: "adopt";
@@ -196,6 +204,9 @@ async function prepare(item: ImportStageItemInput): Promise<Prepared> {
   if (item.kind === "url") {
     const url = lonePublicHttpUrl(item.url ?? "");
     if (!url) return { kind: "refuse", reason: "invalid_url" };
+    if ((item.html?.length ?? 0) > IMPORT_LIMITS.pageHtmlMax) {
+      return { kind: "refuse", reason: "page_too_large" };
+    }
     const normalized = new URL(url).toString();
     const host = importHostOf(normalized);
     const platform = importPlatformOf(normalized) ?? "web";
@@ -220,6 +231,7 @@ async function prepare(item: ImportStageItemInput): Promise<Prepared> {
       source,
       needsCard: true,
       ...(item.note ? { note: item.note } : {}),
+      ...(item.html?.trim() ? { html: item.html } : {}),
     };
   }
   if (item.kind === "text") {
@@ -307,7 +319,13 @@ async function stageOne(args: {
     args.dedupScope === "library" ? null : session.id,
     prepared.contentHash
   );
-  if (existing) return { itemId: existing, deduplicated: true };
+  if (existing) {
+    // The same link kept again, this time WITH the page: keep the page if the
+    // item has none, and read it again from it.
+    if (prepared.html)
+      await keepPageOnExisting(database, userId, existing, prepared.html);
+    return { itemId: existing, deduplicated: true };
+  }
   if (!args.claimRoom()) return { refused: "import_full" };
 
   let card = prepared.card;
@@ -315,7 +333,10 @@ async function stageOne(args: {
   if (prepared.needsCard && prepared.url) {
     let read: PublicUrlRead = { kind: "unavailable", sourceUrl: prepared.url };
     try {
-      read = await args.readUrl(prepared.url);
+      // The page the person sent is read first: no request, and it is the
+      // page they saw (a login-only page fetched by the pod is a login wall).
+      if (prepared.html) read = readHtmlPage(prepared.html, prepared.url);
+      if (read.kind !== "read") read = await args.readUrl(prepared.url);
     } catch (err) {
       // A preview that could not be read is a card-less item, not a failure.
       logger.warn(
@@ -361,7 +382,48 @@ async function stageOne(args: {
       [IMPORT_ITEM_CURATION_KEY]: defaultCuration(prepared.note),
     },
   });
+  if (prepared.html && !staged.deduplicated) {
+    try {
+      await keepLibraryPageHtml({
+        database,
+        userId,
+        itemId: staged.documentId,
+        html: prepared.html,
+      });
+    } catch (err) {
+      // The item is kept; its read falls back to fetching the URL.
+      logger.warn(
+        { err, itemId: staged.documentId },
+        "import stage: page HTML NOT kept — the read will fetch the URL"
+      );
+    }
+  }
   return { itemId: staged.documentId, deduplicated: staged.deduplicated };
+}
+
+async function keepPageOnExisting(
+  database: ImportDb,
+  userId: string,
+  itemId: string,
+  html: string
+): Promise<void> {
+  try {
+    const [row] = await database
+      .select({ metadata: documents.metadata })
+      .from(documents)
+      .where(and(eq(documents.id, itemId), eq(documents.userId, userId)))
+      .limit(1);
+    if (!row || readLibraryPageMeta(row.metadata)) return;
+    await keepLibraryPageHtml({ database, userId, itemId, html });
+    const { enqueueLibraryLightRead } =
+      await import("../library/light-read-queue.js");
+    await enqueueLibraryLightRead([{ userId, itemId, force: true }]);
+  } catch (err) {
+    logger.warn(
+      { err, itemId },
+      "import stage: page HTML NOT kept on the existing item"
+    );
+  }
 }
 
 /**
