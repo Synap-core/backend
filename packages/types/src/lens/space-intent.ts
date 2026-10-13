@@ -477,6 +477,53 @@ export function movingNowRowModel(
   };
 }
 
+/** An open work session with no subject yet, as `lifecycle.moving` sends it (`unattached`). */
+export interface UnattachedLineInput {
+  sessionId: string;
+  label: string;
+  actor?: string;
+  live: boolean;
+  asksYou: boolean;
+  since: string;
+}
+
+/** The words of a subjectless session's row (homes A7) — one copy, both apps. */
+export const UNATTACHED_TITLE = "No thing yet";
+export const UNATTACHED_INVITE = "attach one";
+
+/**
+ * A session working on NO thing yet, as a "Moving now" row (homes A7):
+ * "No thing yet · attach one", with the session as its one work line. The
+ * mark and class follow the line exactly as a thing's row does (asks you ⇒
+ * Blocking, live ⇒ Happening, else Happened — `movingNowRowModel`). The row's
+ * door is the SESSION, where the subject is set (there is no server-side
+ * set-subject door yet).
+ */
+export function unattachedRowModel(
+  line: UnattachedLineInput
+): MovingNowRowModel {
+  const m = movingNowRowModel({
+    entityId: line.sessionId,
+    title: null,
+    profileSlug: null,
+    workspaceId: null,
+    status: null,
+    category: null,
+    work: [{ kind: "session", ...line }],
+  });
+  return {
+    ...m,
+    row: {
+      ...m.row,
+      key: `unattached:${line.sessionId}`,
+      objectKind: "session",
+      title: UNATTACHED_TITLE,
+      reason: UNATTACHED_INVITE,
+      door: { kind: "session", id: line.sessionId },
+    },
+  };
+}
+
 // ── The joins around the rows (ONE rule for browser and relay) ──────────────
 //
 // Moving now and a space home join two reads: `lifecycle.moving` (the things)

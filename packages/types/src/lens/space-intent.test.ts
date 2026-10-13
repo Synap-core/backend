@@ -17,6 +17,9 @@ import {
   kindBarA11y,
   kindBarSegments,
   movingNowRowModel,
+  unattachedRowModel,
+  UNATTACHED_TITLE,
+  UNATTACHED_INVITE,
   spaceIntentCardModel,
   spaceIntentTitle,
   type SpaceIntentInput,
@@ -593,5 +596,38 @@ describe("the row/space joins (one rule, browser + relay)", () => {
       },
     ]);
     expect(alsoInKinds(crm, profiles, null)).toBeNull();
+  });
+});
+
+describe("unattachedRowModel (homes A7)", () => {
+  const line = {
+    sessionId: "s9",
+    label: "Explore the pricing page",
+    actor: "Claude Code",
+    live: false,
+    asksYou: true,
+    since: "2026-10-13T08:00:00Z",
+  };
+
+  it("draws 'No thing yet · attach one', its door the SESSION, its one line the session", () => {
+    const m = unattachedRowModel(line);
+    expect(m.row.title).toBe(UNATTACHED_TITLE);
+    expect(m.row.reason).toBe(UNATTACHED_INVITE);
+    expect(m.row.door).toEqual({ kind: "session", id: "s9" });
+    expect(m.row.key).toBe("unattached:s9");
+    expect(m.row.source).toBeNull();
+    expect(m.work.map((w) => w.text)).toEqual([
+      "Explore the pricing page · Claude Code · Asks you",
+    ]);
+  });
+
+  it("its mark follows the line: asks you => Blocking, live => Happening, else Happened", () => {
+    expect(unattachedRowModel(line).row.cls).toBe("blocking");
+    expect(
+      unattachedRowModel({ ...line, asksYou: false, live: true }).row.cls
+    ).toBe("happening");
+    expect(unattachedRowModel({ ...line, asksYou: false }).row.cls).toBe(
+      "happened"
+    );
   });
 });
