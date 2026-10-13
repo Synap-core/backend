@@ -25,6 +25,27 @@ import {
 } from "./ensure-system-lifecycles.js";
 
 /**
+ * What Knowledge is — and, as importantly, what it is NOT (the routing rule
+ * taught by skills/synap/writing-titles.md). Agents read this on the profile.
+ */
+export const KNOWLEDGE_PROFILE_DESCRIPTION =
+  "What stays true and useful in three months: a fact (how something works), " +
+  "a caution (a pitfall and how to avoid it) or a convention (how we do things " +
+  "here). Not knowledge: progress or status (a session outcome), a choice " +
+  "(decision), an open bug or problem (issue), an idea or plan (note), steps " +
+  "to follow (a skill), a fact about an outside tool or vendor (research).";
+
+/**
+ * Earlier SYSTEM-written Knowledge descriptions. Only these are rewritten to
+ * the current one on an existing pod; any other text is a user's own and is
+ * left untouched.
+ */
+const SUPERSEDED_KNOWLEDGE_DESCRIPTIONS: ReadonlyArray<string> = [
+  "Validated knowledge: gotchas, lessons, decisions, references",
+  "Reusable insights and cautions, with evidence and related graph entities.",
+];
+
+/**
  * Profile-property links this seeder must actively REMOVE from pods that were
  * seeded by an older version of it.
  *
@@ -479,9 +500,10 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "tags", required: false, displayOrder: 6 },
     ],
   },
-  // Knowledge — one required canonical form plus optional compact metadata.
-  // Historic entities receive a form only when their legacy payload is
-  // explicitly normalised at a write/import/capture door; no JSONB backfill.
+  // Knowledge — one required canonical form, the required claim, and compact
+  // metadata. Historic entities receive a form/claim only when their payload
+  // passes a write/import/capture door (knowledge-contract.ts); the one data
+  // rewrite is migration 0326 (`insight` → `fact`).
   {
     profileSlug: "knowledge",
     propertySlugs: [
@@ -490,10 +512,34 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
         required: true,
         displayOrder: 0,
       },
-      { slug: "ek_claim", required: false, displayOrder: 1 },
+      { slug: "ek_claim", required: true, displayOrder: 1 },
       { slug: "ek_why", required: false, displayOrder: 2 },
       { slug: "ek_evidence", required: false, displayOrder: 3 },
       { slug: "ek_tags", required: false, displayOrder: 4 },
+      { slug: "verifiedAt", required: false, displayOrder: 5 },
+      // Linked to a Knowledge-scoped def that targets `knowledge` (see the
+      // contract reconcile below), never decision's global `supersededBy`.
+      { slug: "supersededBy", required: false, displayOrder: 6 },
+    ],
+  },
+  // Issue — an open bug or problem. The routing rule every agent is taught
+  // (skills/synap/writing-titles.md: "an open bug or problem → issue") is
+  // pod-agnostic, so the kind is seeded on every pod. Its ONE lifecycle is
+  // `issueStatus`, declared in ensure-system-lifecycles.ts.
+  {
+    profileSlug: "issue",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      {
+        slug: "issueStatus",
+        required: false,
+        defaultValue: "open",
+        displayOrder: 1,
+      },
+      { slug: "projectId", required: false, displayOrder: 2 },
+      { slug: "tags", required: false, displayOrder: 3 },
+      // description = what happens, where, and how to reproduce it
+      { slug: "description", required: false, displayOrder: 4 },
     ],
   },
   // User Observation — uo_* properties
@@ -613,6 +659,7 @@ export const SYSTEM_PROFILE_SLUGS: ReadonlySet<string> = new Set([
   "question",
   "research",
   "knowledge",
+  "issue",
   "report",
   "user_observation",
   // Demand signal — a tool the user uses that Synap cannot connect yet
@@ -1148,6 +1195,16 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
+      // Issue status — the issue kind's ONE lifecycle (categories in
+      // ensure-system-lifecycles.ts).
+      {
+        slug: "issueStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["open", "investigating", "fixed", "wont_fix"],
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
       {
         slug: "conclusion",
         valueType: PropertyValueType.STRING,
@@ -1313,13 +1370,17 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       {
         slug: "knowledgeForm",
         valueType: PropertyValueType.STRING,
-        constraints: { enum: ["insight", "caution"] },
+        // = KNOWLEDGE_FORMS (knowledge-contract.ts), written as a literal so
+        // the discover⇄validator parity tripwire can read it; the PGlite seed
+        // test pins the two equal. A stored `insight` reads and writes as
+        // `fact` through the contract's legacy alias.
+        constraints: { enum: ["fact", "caution", "convention"] },
         uiHints: {
           label: "Knowledge form",
           inputType: "select",
           required: true,
           helpText:
-            "Insight is a reusable conclusion; caution is a failure mode or caveat.",
+            "Fact: how something works. Caution: a pitfall and how to avoid it. Convention: how we do things here.",
         },
       },
       // `ek_type` is retained for historic entities and import compatibility.
@@ -1338,13 +1399,24 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       {
         slug: "ek_claim",
         valueType: PropertyValueType.STRING,
-        // Retained compact summary for legacy captures and Sheet/search use.
-        // Long-form readable knowledge belongs in the linked document instead.
+        // The full knowledge sentence (required); the title is its short
+        // handle. Long-form explanation belongs in the linked document.
         constraints: { maxLength: 8000 },
         uiHints: {
-          label: "Summary",
+          label: "Claim",
           inputType: "text",
-          placeholder: "Optional one-line summary",
+          required: true,
+          placeholder: "The full sentence that stays true",
+        },
+      },
+      {
+        slug: "verifiedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: {
+          label: "Last verified",
+          inputType: "date",
+          helpText: "When someone last checked this is still true.",
         },
       },
       {
@@ -1648,16 +1720,26 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
             "An investigation: sources consulted, findings, confidence, and conclusion. Answers a question; informs a decision.",
         },
       },
-      // Knowledge — reusable insights and cautions, connected to decisions and
-      // sources as separate graph entities when those relationships matter.
+      // Knowledge — what stays true: facts, cautions, conventions. Decisions,
+      // issues and sources are separate graph entities, linked when relevant.
       {
         slug: "knowledge",
         displayName: "Knowledge",
         uiHints: {
           icon: "brain",
           color: "#6366F1",
+          description: KNOWLEDGE_PROFILE_DESCRIPTION,
+        },
+      },
+      // Issue — an open bug or problem (see its link entry above).
+      {
+        slug: "issue",
+        displayName: "Issue",
+        uiHints: {
+          icon: "bug",
+          color: "#EF4444",
           description:
-            "Reusable insights and cautions, with evidence and related graph entities.",
+            "An open bug or problem, titled as the problem itself. Moves open → investigating → fixed or won't fix.",
         },
       },
       // Report — a generated, read-only narrative artifact over a lens.
@@ -1737,6 +1819,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       "question",
       "research",
       "knowledge",
+      "issue",
       "user_observation",
       "file",
       "tool_request",
@@ -1762,14 +1845,15 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
             unknown
           >;
           if (
-            existingHints.description ===
-            "Validated knowledge: gotchas, lessons, decisions, references"
+            typeof existingHints.description === "string" &&
+            SUPERSEDED_KNOWLEDGE_DESCRIPTIONS.includes(
+              existingHints.description
+            )
           ) {
             await profileRepo.update(existing.id, {
               uiHints: {
                 ...existingHints,
-                description:
-                  "Reusable insights and cautions, with evidence and related graph entities.",
+                description: KNOWLEDGE_PROFILE_DESCRIPTION,
               },
             });
           }
@@ -1795,7 +1879,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     // retained raw on historic entities, but no longer linked/editable.
     const knowledgeProfileId = createdProfiles.get("knowledge");
     const knowledgeContractDefs = capturePropertyDefs.filter((propDef) =>
-      ["knowledgeForm", "ek_claim"].includes(propDef.slug)
+      ["knowledgeForm", "ek_claim", "verifiedAt"].includes(propDef.slug)
     );
     if (!knowledgeProfileId) {
       throw new Error("System knowledge profile was not created or resolved");
@@ -1844,6 +1928,62 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           constraints: propDef.constraints,
           uiHints: propDef.uiHints,
         });
+      }
+    }
+
+    // `supersededBy` on Knowledge points at another KNOWLEDGE entity. The
+    // global `supersededBy` def belongs to `decision` (and must not gain a
+    // knowledge target), so Knowledge always gets its own profile-scoped def
+    // with `targetProfileId` = knowledge, converged on every pass (no marker:
+    // the whole projection is rewritten when it differs). The link pass below
+    // reads it from `knowledgeScopedDefIds`, never from the shared slug map.
+    const knowledgeScopedDefIds = new Map<string, string>();
+    {
+      const desired = {
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: {
+          label: "Superseded by",
+          inputType: "entity-select" as const,
+          helpText:
+            "The knowledge that replaced this one, when it stopped being true.",
+        },
+        targetProfileId: knowledgeProfileId,
+      };
+      const scoped = await propertyDefRepo.getBySlug(
+        "supersededBy",
+        knowledgeProfileId,
+        null
+      );
+      if (scoped?.profileId === knowledgeProfileId) {
+        // Compared field by field (jsonb does not keep key order); these are
+        // exactly the fields `update` writes.
+        const hints = (scoped.uiHints ?? {}) as Record<string, unknown>;
+        if (
+          scoped.valueType !== desired.valueType ||
+          scoped.targetProfileId !== desired.targetProfileId ||
+          Object.keys(scoped.constraints ?? {}).length !== 0 ||
+          Object.keys(hints).length !== Object.keys(desired.uiHints).length ||
+          (
+            Object.keys(desired.uiHints) as Array<keyof typeof desired.uiHints>
+          ).some((k) => hints[k] !== desired.uiHints[k])
+        ) {
+          await propertyDefRepo.update(scoped.id, desired);
+        }
+        knowledgeScopedDefIds.set("supersededBy", scoped.id);
+      } else {
+        const created = await propertyDefRepo.create({
+          slug: "supersededBy",
+          ...desired,
+          profileId: knowledgeProfileId,
+          workspaceId: null,
+        });
+        knowledgeScopedDefIds.set("supersededBy", created.id);
+        propertiesCreated++;
+      }
+      const globalId = createdPropertyDefs.get("supersededBy");
+      if (globalId) {
+        await profilePropertyRepo.unlink(knowledgeProfileId, globalId);
       }
     }
 
@@ -1971,7 +2111,10 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       if (!profileId) continue;
 
       for (const prop of link.propertySlugs) {
-        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        const propertyDefId =
+          (link.profileSlug === "knowledge"
+            ? knowledgeScopedDefIds.get(prop.slug)
+            : undefined) ?? createdPropertyDefs.get(prop.slug);
         if (!propertyDefId) continue;
 
         // Link is idempotent (onConflictDoUpdate), so safe to call always

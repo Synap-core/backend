@@ -29,6 +29,7 @@ import {
   upsertOutcomes,
 } from "../../../services/focus-sessions/outcome-declarations.js";
 import { z } from "@hono/zod-openapi";
+import { TRPCError } from "@trpc/server";
 import {
   sessionCriteriaSchema,
   sessionEvidenceSchema,
@@ -61,6 +62,10 @@ import {
 import { type AskAnswerValue, type Ask } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import {
+  resolveSessionSubject,
+  type SessionSubject,
+} from "../../../services/focus-sessions/session-subject.js";
 import {
   isTerminalSessionStatus,
   SESSION_STATUSES,
@@ -558,6 +563,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // `metadata.automationId`, NOT `automationRunId`.
         playbookId: z.string().uuid().optional(),
         automationId: z.string().uuid().optional(),
+        // SUBJECT filters (`services/focus-sessions/session-subject.ts`, the
+        // predicate tRPC `focusSessions.list({ subject })` reads): sessions
+        // whose subject is the thing, OR worker sessions targeting it. A
+        // profile slug names every thing of a kind / carrying a role (the
+        // pipeline board's rule). One of the two, not both.
+        subjectEntityId: z.string().uuid().optional(),
+        subjectProfileSlug: z.string().min(1).optional(),
         limit: z.coerce.number().int().min(1).max(50).optional(),
       }),
     },
@@ -970,17 +982,45 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const playbookId = c.req.query("playbookId");
     const automationId = c.req.query("automationId");
 
-    // Optional: narrow to sessions ABOUT a specific subject entity (the
-    // subject-spine anchor). Lets a caller fetch "the sessions linked to this
-    // client/person/deal" — the session half of an entity's neighborhood.
-    const subjectEntityId = c.req.query("subjectEntityId");
+    // Optional: narrow to sessions ON a thing — "the sessions on this
+    // client/person/deal" (the session half of an entity's neighborhood), or
+    // on every thing of a kind/role (an intent surface). ONE predicate with
+    // the tRPC door (`session-subject.ts`): the subject anchor OR a worker's
+    // target link.
+    const subjectEntityId = c.req.query("subjectEntityId") || undefined;
+    const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
+    if (subjectEntityId && subjectProfileSlug) {
+      return c.json(
+        { error: "Pass subjectEntityId or subjectProfileSlug, not both" },
+        400
+      );
+    }
+    if (subjectEntityId && !isUuid(subjectEntityId)) {
+      return c.json(
+        { error: `subjectEntityId is not a valid id: ${subjectEntityId}` },
+        400
+      );
+    }
+    let subject: SessionSubject | undefined;
+    try {
+      subject = subjectEntityId
+        ? await resolveSessionSubject({ entityIds: [subjectEntityId] })
+        : subjectProfileSlug
+          ? await resolveSessionSubject({ profileSlug: subjectProfileSlug })
+          : undefined;
+    } catch (err) {
+      // An unknown slug is "no such vocabulary", never an empty list.
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        return c.json({ error: err.message }, 404);
+      }
+      throw err;
+    }
 
     try {
       // The SAME WHERE clause the tRPC door builds. This door used to hand-write
       // its own copy (status, triage, kind, flow), the twin that could drift.
       // What differs here is only what it passes: the agent-facing `"all"`
-      // defaults resolved above, and the one narrowing it owns alone,
-      // `subjectEntityId`. See `session-list-conditions.ts`.
+      // defaults resolved above. See `session-list-conditions.ts`.
       const conditions = sessionListConditions({
         userId: acting.userId,
         scope: {
@@ -991,10 +1031,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         lens,
         kind,
         flow: { playbookId, automationId },
+        subject,
       });
-      if (subjectEntityId) {
-        conditions.push(eq(focusSessions.subjectEntityId, subjectEntityId));
-      }
 
       const rows = await db
         .select()

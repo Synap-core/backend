@@ -1299,6 +1299,25 @@ export interface WorkspaceSettings {
 	 */
 	provisioningStatus?: "pending" | "active" | "failed";
 	/**
+	 * Why the last template apply did NOT earn its version stamp, written by the
+	 * ONE finisher (`finishTemplateApply`, api `services/template-apply-finisher.ts`).
+	 * `null` = the last apply converged (the stamp, if any, was earned).
+	 * - "awaiting-approval" — layer 2 only filed proposals (nothing failed)
+	 * - "partial"           — a layer-2 item errored
+	 * - "layer-2-not-run"   — this door ran layer 1 only; the template's living
+	 *                         layers were never applied
+	 * Template health reads any of these as drifted, so `synap templates update`
+	 * offers the space and the next apply finishes it.
+	 */
+	templateApply?: {
+		state: "awaiting-approval" | "partial" | "layer-2-not-run";
+		/** The version this apply was converging to (not stamped). */
+		version: string | null;
+		at: string;
+		proposals?: string[];
+		failures?: string[];
+	} | null;
+	/**
 	 * The step at which provisioning failed.
 	 * Only set when provisioningStatus === "failed"; explicitly `null` clears it
 	 * on a successful (re)provision — the JSONB `||` merge overwrites the stale
@@ -19830,7 +19849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20582,7 +20601,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20684,7 +20703,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20800,7 +20819,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -37514,6 +37533,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includeTrackedRuns?: boolean | undefined;
 				trackId?: string | undefined;
 				order?: "started" | "open_first" | undefined;
+				subject?: {
+					profileSlug: string;
+				} | {
+					entityIds: string[];
+				} | undefined;
 				playbookId?: string | undefined;
 				automationId?: string | undefined;
 			};
@@ -37578,6 +37602,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unfiled?: boolean | undefined;
 				includeTrackedRuns?: boolean | undefined;
 				trackId?: string | undefined;
+				subject?: {
+					profileSlug: string;
+				} | {
+					entityIds: string[];
+				} | undefined;
 				liveness?: boolean | undefined;
 				limit?: number | undefined;
 			};

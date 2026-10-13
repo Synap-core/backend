@@ -186,7 +186,6 @@ export function registerPodAdoptRoutes(app: HubHono): void {
       const settingsPatch: Partial<WorkspaceSettings> = {
         packageSlug: templateSlug,
         proposalId: templateSlug,
-        ...(resolved.version ? { packageVersion: resolved.version } : {}),
       };
       const dbConn = await getDb();
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
@@ -211,6 +210,19 @@ export function registerPodAdoptRoutes(app: HubHono): void {
         >[0]["definition"],
         mergeCapabilities: true,
       });
+      // Adopt binds the identity and reconciles layer 1 only: the version is
+      // NOT earned here. The finisher records "layer-2-not-run", health reads
+      // the space drifted, and `synap templates update` applies the rest and
+      // stamps it.
+      const { finishTemplateApply } =
+        await import("../../../services/template-apply-finisher.js");
+      const finished = await finishTemplateApply({
+        workspaceId,
+        userId: actingUserId,
+        built: false,
+        pendingVersionStamp: resolved.version ?? undefined,
+        post: null,
+      });
 
       // Always "reconciled" here, never "created" — adopt only ever operates
       // on a pre-existing workspace (the `outcome` field mirrors
@@ -222,6 +234,10 @@ export function registerPodAdoptRoutes(app: HubHono): void {
         workspaceId,
         templateSlug,
         packageVersion: resolved.version ?? null,
+        versionStamped: finished.versionStamped,
+        ...(finished.templateApply
+          ? { templateApply: finished.templateApply }
+          : {}),
         reconcile: {
           profilesAdded: report.profiles.added.length,
           propertiesAdded: report.properties.added.length,

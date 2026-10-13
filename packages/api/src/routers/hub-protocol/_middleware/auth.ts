@@ -29,6 +29,9 @@ import {
   runWithClientKey,
   runWithGrant,
   clientKeyForApiKey,
+  requestConversationId,
+  CONVERSATION_HEADER,
+  CONVERSATION_CWD_HEADER,
   isProbeApiKey,
 } from "@synap/database";
 
@@ -408,8 +411,13 @@ export const hubAuthMiddleware = async (
     // W1: the key's grant bounds every write gate and scoped read below.
     return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
       runWithActingAgent(c.get("agentUserId") as string | undefined, () =>
-        runWithClientKey(clientKeyForApiKey(keyRecord), () =>
-          runWithGrant(keyIdentity.grant, () => next())
+        runWithClientKey(
+          clientKeyForApiKey(
+            keyRecord,
+            requestConversationId(c.req.header(CONVERSATION_HEADER))
+          ),
+          () => runWithGrant(keyIdentity.grant, () => next()),
+          c.req.header(CONVERSATION_CWD_HEADER)
         )
       )
     );

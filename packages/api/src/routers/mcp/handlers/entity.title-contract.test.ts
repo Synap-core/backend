@@ -162,3 +162,22 @@ describe("synap_update_entity — the title contract", () => {
     expect(h.updateCalls).toHaveLength(0);
   });
 });
+
+describe("synap_update_entity — kind conversion (c-kind-convert)", () => {
+  const entityId = "eeeeeeee-3333-4333-8333-333333333333";
+
+  it("forwards profileSlug, and a kind-only call is not a no-op", async () => {
+    const out = payload(await update({ entityId, profileSlug: "decision" }));
+    expect(h.updateCalls).toHaveLength(1);
+    expect(h.updateCalls[0]).toMatchObject({
+      entityId,
+      profileSlug: "decision",
+    });
+    expect(out.status).toBe("updated");
+  });
+
+  it("CONTROL: an ordinary update sends no profileSlug", async () => {
+    await update({ entityId, title: "Agent deletes always go to review" });
+    expect(h.updateCalls[0]).not.toHaveProperty("profileSlug");
+  });
+});

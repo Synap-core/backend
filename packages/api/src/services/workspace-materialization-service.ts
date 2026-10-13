@@ -165,6 +165,12 @@ export type MaterializeCoreResult =
       dependencies: ResolvedPackageDependency[];
       /** Schema reconcile + the overlay's adopted/created seeds (W4b). */
       reconcile: ComposeReport;
+      /**
+       * Install-onto-existing (`targetWorkspaceId`) only: the version this
+       * package binds the target to — NOT stamped here. The caller hands it to
+       * `finishTemplateApply` with its layer-2 result.
+       */
+      pendingVersionStamp?: string;
     }
   | {
       /**
@@ -237,12 +243,6 @@ export interface MaterializeWorkspaceCoreInput {
   packageVersion?: string;
   workspaceType?: "personal" | "agent" | "project" | "operational";
   createdBy?: "user" | "provisioning" | "plugin";
-  /**
-   * Idempotent re-hit only: leave the new version unstamped and return it as
-   * `created.pendingVersionStamp`, for a caller that stamps it once the
-   * post-workspace layers applied (see `reconcileWorkspaceIfStale`).
-   */
-  deferVersionStamp?: boolean;
 }
 
 /**
@@ -312,12 +312,9 @@ export async function materializeWorkspaceCore(
       // escape hatch). A NATURAL declared compose (`input.targetWorkspaceId`
       // absent → base resolved from the package's own `compose:` dep) must NOT
       // stamp: it would clobber the shared base's own package identity.
-      ...(input.targetWorkspaceId
-        ? {
-            packageSlug: input.packageSlug,
-            packageVersion: input.packageVersion,
-          }
-        : {}),
+      // The VERSION is not stamped here: it is handed back as
+      // `pendingVersionStamp` for the caller's finisher (layer 2 has not run).
+      ...(input.targetWorkspaceId ? { packageSlug: input.packageSlug } : {}),
       // Always record the overlay in the target's `installedPacks` so the boot
       // reconcile re-syncs it and drift surfaces see it. `composeOntoBaseWorkspace`
       // stamps the `--onto` slug as IDENTITY only on an unidentified target.
@@ -332,6 +329,9 @@ export async function materializeWorkspaceCore(
       composeTargetWorkspaceId,
       dependencies,
       reconcile,
+      ...(reconcile.identityStamped && input.packageVersion
+        ? { pendingVersionStamp: input.packageVersion }
+        : {}),
     };
   }
 
@@ -389,7 +389,6 @@ export async function materializeWorkspaceCore(
     packageVersion: input.packageVersion,
     workspaceType: input.workspaceType,
     createdBy: input.createdBy,
-    deferVersionStamp: input.deferVersionStamp,
   });
   return {
     status: "created",

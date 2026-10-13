@@ -125,9 +125,8 @@ import {
   resolveProjectPlacement,
   resolveKindWritePin,
   loadFacetSlugsBatch,
-  inferKnowledgeForm,
+  completeKnowledgeProperties,
   KnowledgeFormConflictError,
-  normalizeKnowledgeProperties,
   type ResolutionRung,
 } from "@synap/database";
 import {
@@ -286,15 +285,15 @@ export const FALLBACK_CAPTURE_KIND = "note";
 // ek_type values remain intact but are mapped by the shared database utility
 // at every capture door, so old payloads stay valid without pretending that a
 // decision/reference has already been converted into another graph entity.
+//
+// `claimFrom` feeds the required `ek_claim` when the structurer sent none
+// (title first — a knowledge title is the claim's short handle — then body).
 export function normalizeCapturedKnowledgeProperties(
   properties: Record<string, unknown>,
-  text: string
+  text: string,
+  claimFrom: ReadonlyArray<unknown> = [text]
 ): Record<string, unknown> {
-  const normalized = normalizeKnowledgeProperties(properties);
-  if (!("knowledgeForm" in normalized)) {
-    normalized.knowledgeForm = inferKnowledgeForm(text);
-  }
-  return normalized;
+  return completeKnowledgeProperties(properties, text, claimFrom);
 }
 
 // ── Dedup candidate scoring (honest title similarity) ───────────────────────
@@ -785,7 +784,8 @@ const captureBaseRouter = router({
           if (profileSlug === "knowledge") {
             properties = normalizeCapturedKnowledgeProperties(
               properties,
-              input.content.slice(0, 200)
+              input.content.slice(0, 200),
+              [title, input.content]
             );
           }
 

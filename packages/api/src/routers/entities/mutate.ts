@@ -208,6 +208,25 @@ export const mutateProcs = {
         await assertDocumentAttachable(ctx.userId, existing, input.documentId);
       }
 
+      // KIND CHANGE (c-kind-convert): the target kind must resolve NOW, the
+      // same way the repository will resolve it at write time. Unchecked, an
+      // unknown slug was filed as a proposal and, once approved, silently
+      // changed nothing — the entity kept its kind under an "applied" receipt.
+      if (
+        input.profileSlug !== undefined &&
+        input.profileSlug !== existing.type &&
+        !(await new ProfileResolutionService(db).resolveProfile(
+          input.profileSlug,
+          ctx.userId,
+          existing.workspaceId ?? ""
+        ))
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `No kind "${input.profileSlug}" resolves for this entity — list the kinds with synap_list_profiles.`,
+        });
+      }
+
       if (input.targetWorkspaceId) {
         const { validateWorkspaceAccess } =
           await import("../../utils/workspace-membership.js");

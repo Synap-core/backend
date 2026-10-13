@@ -579,6 +579,11 @@ export function registerEntityExecutors(): void {
         description: innerData.description as string | undefined,
         properties: reconciledUpdateProps,
         deleteProperties: innerData.deleteProperties as string[] | undefined,
+        // A kind change rides the same proposal (c-kind-convert). Dropping it
+        // here approved the proposal and changed nothing.
+        ...(typeof innerData.profileSlug === "string"
+          ? { profileSlug: innerData.profileSlug }
+          : {}),
         source: "system",
       });
 

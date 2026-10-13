@@ -367,6 +367,20 @@ export const workspaceHandlers: McpHandlerMap = {
           "Workspace materialize returned resolved-without-create (unexpected)",
       });
     }
+    // This door runs layer 1 only: the finisher marks a newly built space
+    // active, and a template version it cannot earn here is recorded
+    // "layer-2-not-run" (health: drifted, `templates update` finishes it).
+    if (core.status === "created") {
+      const { finishTemplateApply } =
+        await import("../../../services/template-apply-finisher.js");
+      await finishTemplateApply({
+        workspaceId: core.workspaceId,
+        userId,
+        built: core.created.outcome === "created",
+        pendingVersionStamp: core.created.pendingVersionStamp,
+        post: null,
+      });
+    }
     const materializeStatus = materializeReportStatus(core);
     return ok({
       // The outcome, never the branch: an idempotent re-hit is "reused".

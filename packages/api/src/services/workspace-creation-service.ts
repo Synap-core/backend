@@ -70,11 +70,11 @@ export interface ReconcileIfStaleResult {
    */
   packageDefinition?: ResolvedWorkspaceTemplate["packageDefinition"];
   /**
-   * Set when the caller asked to `deferVersionStamp` and layer 1 reconciled to
-   * a NEW version: the stamp this pass did NOT write. The caller writes it with
-   * `stampWorkspacePackageVersion` only once its post-workspace layers
-   * (capabilities / playbooks / automations) actually applied — the stamp says
-   * "this space is at template version X", and layer 1 alone has not earned it.
+   * Set when layer 1 reconciled to a NEW version: the stamp this pass did NOT
+   * write. This function never stamps — the caller hands it to the ONE
+   * finisher (`finishTemplateApply`) with its layer-2 result, which stamps it
+   * only once layer 2 converged: the stamp says "this space is at template
+   * version X", and layer 1 alone has not earned it.
    */
   pendingVersionStamp?: string;
 }
@@ -85,10 +85,9 @@ export interface ReconcileIfStaleResult {
  * to date. Merged atomically from the database's current value: replacing the
  * whole JSONB document would erase settings a reconcile just persisted.
  *
- * The ONE writer of a reconciled version stamp: `reconcileWorkspaceIfStale`
- * calls it inline, and a caller that deferred the stamp calls it once its
- * post-workspace layers converged. Throws on a failed write — the caller
- * decides whether that is fatal.
+ * Called ONLY by `finishTemplateApply` (services/template-apply-finisher.ts),
+ * once a door's layer 2 converged — tripwire
+ * `__tripwires__/template-apply-one-finisher.test.ts`. Throws on a failed write.
  */
 export async function stampWorkspacePackageVersion(
   workspaceId: string,
@@ -119,8 +118,9 @@ export async function stampWorkspacePackageVersion(
  * (the CP only reissues a new hash when the template content actually
  * changed). Equal ⇒ genuinely nothing to do (skip, `checked:true,
  * reconciled:false`). Different ⇒ `reconcileWorkspaceFromDefinition`
- * (additive, non-destructive — never deletes/mutates existing data) +
- * re-stamp `settings.packageVersion` so the NEXT hit short-circuits clean.
+ * (additive, non-destructive — never deletes/mutates existing data), and the
+ * new version is handed back as `pendingVersionStamp` — NEVER stamped here
+ * (the caller's finisher stamps it once layer 2 converged).
  *
  * Never throws — `checked:false` (no `packageSlug`, template unresolvable, or
  * the resolved template carries no version signal, e.g. a bundle-fallback
@@ -154,13 +154,6 @@ export async function reconcileWorkspaceIfStale(opts: {
    * `workspaceDefinition` are unavailable, so a reconcile write has
    * something to apply. */
   callerDefinition?: WorkspaceDefinitionInput;
-  /**
-   * Do NOT stamp the new version here; hand it back as `pendingVersionStamp`.
-   * For a caller that also applies the post-workspace layers and must stamp
-   * only what was earned (the proposal approve executor). Omitted ⇒ the
-   * historical behavior: stamp right after layer 1.
-   */
-  deferVersionStamp?: boolean;
 }): Promise<ReconcileIfStaleResult> {
   const {
     workspaceId,
@@ -169,7 +162,6 @@ export async function reconcileWorkspaceIfStale(opts: {
     userId,
     callerVersion,
     callerDefinition,
-    deferVersionStamp,
   } = opts;
   if (!packageSlug) return { reconciled: false, checked: false };
 
@@ -200,20 +192,9 @@ export async function reconcileWorkspaceIfStale(opts: {
       definition: workspaceDefinition,
     });
 
-    // Stamp the new version so the NEXT idempotent hit short-circuits as
-    // up to date instead of re-reconciling every time — unless the caller
-    // deferred it until its post-workspace layers have applied too.
-    if (!deferVersionStamp) {
-      try {
-        await stampWorkspacePackageVersion(workspaceId, version);
-      } catch (err) {
-        logger.warn(
-          { err, workspaceId },
-          "reconcileWorkspaceIfStale: failed to stamp reconciled packageVersion (non-fatal)"
-        );
-      }
-    }
-
+    // The new version is NOT stamped here: it rides back as
+    // `pendingVersionStamp` to the caller's finisher, which stamps it only
+    // once layer 2 converged.
     return {
       reconciled: true,
       checked: true,
@@ -222,7 +203,7 @@ export async function reconcileWorkspaceIfStale(opts: {
       // Hand back the SAME source layer 1 reconciled against so a caller
       // syncing layer 2 stays in lockstep with it (see the field's doc).
       packageDefinition: resolved?.packageDefinition,
-      ...(deferVersionStamp ? { pendingVersionStamp: version } : {}),
+      pendingVersionStamp: version,
     };
   } catch (err) {
     logger.warn(
@@ -552,12 +533,6 @@ export interface CreateWorkspaceFromDefinitionInput {
   linkedAgentId?: string;
   /** Audit field — who/what triggered this creation. */
   createdBy?: "user" | "provisioning" | "plugin";
-  /**
-   * On an idempotent re-hit that reconciles to a newer template, do not stamp
-   * the new version — return it as `pendingVersionStamp` (see
-   * `reconcileWorkspaceIfStale`). Has no effect on a fresh create.
-   */
-  deferVersionStamp?: boolean;
 }
 
 export interface CreateWorkspaceFromDefinitionResult {
@@ -590,7 +565,12 @@ export interface CreateWorkspaceFromDefinitionResult {
    * `ReconcileIfStaleResult.packageDefinition`).
    */
   packageDefinition?: ReconcileIfStaleResult["packageDefinition"];
-  /** `deferVersionStamp` only: the version this re-hit did NOT stamp yet. */
+  /**
+   * The version this call materialized (create / resume) or reconciled to
+   * (re-hit) — NEVER stamped by it. The caller hands it to `finishTemplateApply`
+   * with its layer-2 result; on `"created"` the space is also left "pending"
+   * for the finisher to mark "active".
+   */
   pendingVersionStamp?: string;
 }
 
@@ -653,7 +633,6 @@ export async function createWorkspaceFromDefinitionIdempotent(
     workspaceType,
     linkedAgentId,
     createdBy = "user",
-    deferVersionStamp,
   } = input;
 
   // A re-hit's reconcile verdict → the result fields every re-hit branch
@@ -682,6 +661,20 @@ export async function createWorkspaceFromDefinitionIdempotent(
   // Resume is step-granular idempotent (steps enter completedSteps only after
   // fully done). Returns a result to return directly, or null when the workspace
   // is not in a failed state (fall through to the normal reconcile path).
+  // The version a create / resume materializes: the caller's explicit
+  // `packageVersion`, else the CP's freshest hash for `packageSlug` (W2a), so a
+  // Hub-door create records the same hash the tRPC door's passthrough does.
+  // Best-effort — a failed resolve never blocks the create. Handed back as
+  // `pendingVersionStamp`, never written here.
+  const versionToMaterialize = async (): Promise<string | undefined> => {
+    if (packageVersion || !packageSlug) return packageVersion;
+    try {
+      return (await resolveWorkspaceTemplate(packageSlug))?.version;
+    } catch {
+      return undefined;
+    }
+  };
+
   const resumeIfFailed = async (
     workspaceId: string,
     settings: WorkspaceSettings | null | undefined
@@ -702,7 +695,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
       definition,
       userId,
       packageSlug,
-      packageVersion,
+      packageVersion: await versionToMaterialize(),
       templateId,
       templateName,
       workspaceName,
@@ -718,6 +711,9 @@ export async function createWorkspaceFromDefinitionIdempotent(
       workspaceId: resumeResult.workspaceId,
       created: true,
       outcome: "created",
+      ...(resumeResult.pendingVersionStamp
+        ? { pendingVersionStamp: resumeResult.pendingVersionStamp }
+        : {}),
     };
   };
 
@@ -759,7 +755,6 @@ export async function createWorkspaceFromDefinitionIdempotent(
           userId,
           callerVersion: packageVersion,
           callerDefinition: definition,
-          deferVersionStamp,
         });
         logger.info(
           {
@@ -827,7 +822,6 @@ export async function createWorkspaceFromDefinitionIdempotent(
             userId,
             callerVersion: packageVersion,
             callerDefinition: definition,
-            deferVersionStamp,
           })
         : { reconciled: false, checked: false };
       logger.info(
@@ -863,7 +857,6 @@ export async function createWorkspaceFromDefinitionIdempotent(
           userId,
           callerVersion: packageVersion,
           callerDefinition: definition,
-          deferVersionStamp,
         });
 
         // Adopt the identity so the NEXT call hits the fast path (step 1)
@@ -903,25 +896,11 @@ export async function createWorkspaceFromDefinitionIdempotent(
     }
 
     // ── 2. Create new workspace ────────────────────────────────────────────────
-    // Resolve the version to stamp: prefer an explicit caller-supplied
-    // `packageVersion`; otherwise, when `packageSlug` is known, resolve the
-    // CP's freshest hash via `resolveWorkspaceTemplate` (W2a) so a Hub-door
-    // create records the same hash the tRPC door's `input.packageVersion`
-    // passthrough already recorded — closing the "only tRPC stamps it" gap.
-    let versionToStamp = packageVersion;
-    if (!versionToStamp && packageSlug) {
-      try {
-        const resolved = await resolveWorkspaceTemplate(packageSlug);
-        versionToStamp = resolved?.version;
-      } catch {
-        // Best-effort — a failed resolve here must never block workspace creation.
-      }
-    }
     const result = await createWorkspaceFromDefinition({
       definition,
       userId,
       packageSlug,
-      packageVersion: versionToStamp,
+      packageVersion: await versionToMaterialize(),
       templateId,
       templateName,
       workspaceName,
@@ -981,6 +960,9 @@ export async function createWorkspaceFromDefinitionIdempotent(
       workspaceId: result.workspaceId,
       created: true,
       outcome: "created",
+      ...(result.pendingVersionStamp
+        ? { pendingVersionStamp: result.pendingVersionStamp }
+        : {}),
     };
   });
 }

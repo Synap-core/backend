@@ -225,7 +225,8 @@ export async function planRetireInto(input: {
   const health = templateHealthFor(
     packageSlug,
     typeof s.packageVersion === "string" ? s.packageVersion : null,
-    await resolveTemplateCatalog([packageSlug])
+    await resolveTemplateCatalog([packageSlug]),
+    ws.settings
   );
   if (health.lifecycle !== "retired") {
     return refuse(

@@ -50,7 +50,16 @@ import {
  * onto the base by `(kind, title)` (W4b — before, an overlay install applied
  * schema only, so its seed entities never landed on any install door).
  */
-export type ComposeReport = ReconcileReport & { seeds?: DefinitionSeedResult };
+export type ComposeReport = ReconcileReport & {
+  seeds?: DefinitionSeedResult;
+  /**
+   * The explicit `--onto` slug became the target's template IDENTITY (an
+   * unidentified target, or a re-attach of the same slug) — as opposed to an
+   * overlay pack recorded in `installedPacks`. The version that identity is at
+   * is the caller's to stamp, through `finishTemplateApply`.
+   */
+  identityStamped?: boolean;
+};
 
 /**
  * The compose base workspace row was gone by the time we loaded it (a delete /
@@ -92,7 +101,9 @@ export interface ComposeOntoBaseInput {
    * `business-model`, so Foundation stopped reconciling to foundation.yaml.
    */
   packageSlug?: string;
-  packageVersion?: string;
+  // No `packageVersion`: the version an identity is at is stamped only by
+  // `finishTemplateApply`, once the caller's layer 2 converged — the caller
+  // gets it back as `MaterializeCoreResult.pendingVersionStamp`.
   /**
    * The overlay package's own identity — recorded in the target's
    * `settings.installedPacks` on EVERY compose (natural, transitive, or
@@ -214,12 +225,7 @@ export async function composeOntoBaseWorkspace(
           ? overlayDefinitionForIdentifiedBase(definition)
           : definition,
       mergeCapabilities: true,
-      ...(stampIdentity
-        ? {
-            packageSlug: input.packageSlug,
-            packageVersion: input.packageVersion,
-          }
-        : {}),
+      ...(stampIdentity ? { packageSlug: input.packageSlug } : {}),
     });
     if (recordPack && !stampIdentity) {
       const repo = new WorkspaceRepository(db, eventRepository);
@@ -230,7 +236,7 @@ export async function composeOntoBaseWorkspace(
             baseSettings.installedPacks,
             {
               slug: overlaySlug!,
-              version: input.overlay?.version ?? input.packageVersion,
+              version: input.overlay?.version,
             },
             new Date().toISOString()
           ),
@@ -241,7 +247,8 @@ export async function composeOntoBaseWorkspace(
     // Seeds — adopt what the base already holds, create only what is missing.
     // Per-seed failures are collected (never thrown), like the other doors.
     const seedList = definitionSeedEntities(definition);
-    if (seedList.length === 0) return report;
+    if (seedList.length === 0)
+      return { ...report, identityStamped: stampIdentity };
     const seeds = await applyDefinitionSeeds({
       database: db,
       eventRepo: eventRepository,
@@ -252,7 +259,7 @@ export async function composeOntoBaseWorkspace(
         definition as { suggestedRelations?: DefinitionSeedRelation[] }
       ).suggestedRelations,
     });
-    return { ...report, seeds };
+    return { ...report, seeds, identityStamped: stampIdentity };
   } catch (e) {
     throw new ComposeOverlayError((e as Error).message);
   }

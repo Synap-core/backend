@@ -245,11 +245,41 @@ export function templateLifecycleWarning(
   return null;
 }
 
-/** Compose the axes from a workspace's slug/version + a resolved catalog view. */
+/**
+ * Did the last template apply on this space NOT finish? Read from the two
+ * durable records an apply writes: `provisioningStatus: "failed"` (a layer-2
+ * throw — `applyPackagePostWorkspace`) and `templateApply` (layer 2 did not
+ * converge — awaiting approval, partial, or never run — written by the ONE
+ * finisher, `finishTemplateApply`). Either way the version stamp was not
+ * earned by that apply, whatever it says.
+ */
+export function templateApplyUnfinished(settings: unknown): boolean {
+  const s = (settings ?? {}) as {
+    provisioningStatus?: unknown;
+    templateApply?: unknown;
+  };
+  return (
+    s.provisioningStatus === "failed" ||
+    (!!s.templateApply && typeof s.templateApply === "object")
+  );
+}
+
+/**
+ * Compose the axes from a workspace's slug/version + a resolved catalog view.
+ *
+ * `settings` is REQUIRED (the workspace's settings, or `null` where there are
+ * none, e.g. an overlay) so no caller can forget it: a space whose last apply
+ * did not finish (`templateApplyUnfinished`) reads DRIFTED whatever its stamp
+ * says, so `synap templates update` offers it and the apply door finishes it
+ * (`resumeIfFailed` already bypasses the stamp compare on `"failed"`). Founder
+ * pod 2026-10-12: CRM carried `failed` AND the new stamp (layer 1 stamped
+ * before layer 2 threw), so health read "current" and the update was skipped.
+ */
 export function templateHealthFor(
   packageSlug: string | null,
   installedVersion: string | null,
-  catalog: TemplateCatalogView
+  catalog: TemplateCatalogView,
+  settings: unknown
 ): TemplateHealth {
   const latestVersion = packageSlug
     ? (catalog.latestBySlug.get(packageSlug) ?? null)
@@ -262,7 +292,9 @@ export function templateHealthFor(
     stamped: installedVersion != null,
     installedVersion,
     latestVersion,
-    drifted: isTemplateDrifted(installedVersion, latestVersion),
+    drifted:
+      isTemplateDrifted(installedVersion, latestVersion) ||
+      (packageSlug != null && templateApplyUnfinished(settings)),
     lifecycle: standing?.lifecycle ?? null,
     replacedBy: standing?.replacedBy ?? null,
     retiredReason: standing?.retiredReason ?? null,
@@ -376,7 +408,9 @@ export function overlayHealthFor(
     ...ledger.map((o) => o.slug),
   ]);
   return ledger.map(({ slug, version }) => {
-    const h = templateHealthFor(slug, version, catalog);
+    // An overlay has no apply record of its own — the space's is the
+    // workspace row's, not the pack's.
+    const h = templateHealthFor(slug, version, catalog, null);
     const lifecycle = h.lifecycle!; // attached: `slug` is non-null
     const replacementHere =
       lifecycle === "retired" &&
@@ -495,7 +529,12 @@ export async function listWorkspaceTemplateHealth(
     const pkgSlug = typeof s.packageSlug === "string" ? s.packageSlug : null;
     const installedVersion =
       typeof s.packageVersion === "string" ? s.packageVersion : null;
-    const health = templateHealthFor(pkgSlug, installedVersion, catalog);
+    const health = templateHealthFor(
+      pkgSlug,
+      installedVersion,
+      catalog,
+      r.settings
+    );
     const overlays = overlayHealthFor(r.settings, catalog);
     return {
       workspaceId: r.id,

@@ -287,6 +287,20 @@ describe("entity/update — pod-wide (NULL workspaceId) approval", () => {
     });
   });
 
+  it("c-kind-convert: an approved KIND CHANGE reaches the write (it was dropped)", async () => {
+    await executor("entity/update").execute(
+      runArgs({
+        workspaceId: null,
+        data: { data: { id: "e-1", profileSlug: "decision" } },
+      })
+    );
+    expect(entityUpdateCalls).toHaveLength(1);
+    expect(entityUpdateCalls[0].args).toMatchObject({
+      id: "e-1",
+      profileSlug: "decision",
+    });
+  });
+
   it("workspace-scoped: UNCHANGED — verifies membership and carries its role", async () => {
     membership = { role: "editor" };
 

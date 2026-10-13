@@ -18,6 +18,7 @@ import {
   drizzleSql,
   findClientSession,
   clientKeyScope,
+  conversationCwdPatch,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
   isProbeWriteContext,
@@ -898,7 +899,9 @@ export async function createFocusSession(
           isProbeWriteContext()
             ? {
                 metadata: stampProbeMarker({
-                  ...(clientKey ? { clientKey } : {}),
+                  ...(clientKey
+                    ? { clientKey, ...conversationCwdPatch(clientKey) }
+                    : {}),
                   ...(title
                     ? titleSourcePatch(agentUserId ? "agent" : "human")
                     : derivedTitle

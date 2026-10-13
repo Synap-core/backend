@@ -1019,6 +1019,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // and relay — it was "Unclassified" on one and "Not a declared status" on
   // the other.
   __unclassified: "Not a declared status",
+  // ISSUE lifecycle (`issueStatus`, the system `issue` kind): humanized it
+  // read "Wont fix" — no apostrophe. `open` / `investigating` / `fixed`
+  // humanize correctly and need no row.
+  wont_fix: "Won't fix",
 };
 
 /**

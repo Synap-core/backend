@@ -35,6 +35,7 @@ import {
   registerIdentitySignals,
 } from "../services/identity-resolution-service.js";
 import {
+  completeKnowledgeClaim,
   KnowledgeFormConflictError,
   normalizeKnowledgeProperties,
 } from "../utils/knowledge-contract.js";
@@ -745,6 +746,12 @@ export class EntityRepository extends BaseRepository<
       if ((newType || existing.type) === "knowledge") {
         try {
           mergedProperties = normalizeKnowledgeProperties(mergedProperties);
+          // `ek_claim` became required after most Knowledge rows were written
+          // (and a row moved INTO Knowledge has none): derive it from the
+          // title rather than make every historic row un-updatable.
+          mergedProperties = completeKnowledgeClaim(mergedProperties, [
+            data.title ?? existing.title,
+          ]);
         } catch (error) {
           if (error instanceof KnowledgeFormConflictError) {
             throw new Error(`Property validation failed: ${error.message}`);

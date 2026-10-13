@@ -59,11 +59,15 @@ export interface LintTitleOptions {
 /** Kinds whose title may not be one or two words (a bare label says nothing). */
 const NEEDS_THREE_WORDS = new Set(["note", "item", "task", "session"]);
 
+// A word inside a hyphenated compound ("deployed-agent", "live-reload") is part
+// of a name, not a status — hence the hyphen-aware edges.
 const STATUS_WORDS =
-  /\b(SHIPPED|LIVE|FIXED|DONE|VERIFIED|CORRECTION|DEPLOYED|MERGED|RESOLVED|WIP)\b/;
+  /(?<![\w-])(SHIPPED|LIVE|FIXED|DONE|VERIFIED|CORRECTION|DEPLOYED|MERGED|RESOLVED|WIP)(?![\w-])/;
 /** Past-tense progress words: they describe an event, not a lasting thing. */
-const STATUS_PHRASES = /\b(shipped|verified|deployed)\b/i;
-const EMOJI = /\p{Extended_Pictographic}/u;
+const STATUS_PHRASES = /(?<![\w-])(shipped|verified|deployed)(?![\w-])/i;
+// Emoji that render as emoji: default-emoji glyphs, or a pictograph forced to
+// emoji style (U+FE0F). Text symbols such as ↔ © ™ are not emoji.
+const EMOJI = /\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F/u;
 const PLACEHOLDER =
   /^(untitled(\s+\w+)?|test|testing|todo|tbd|placeholder|no title|new (note|entity|task|item|session))$/i;
 const SPEECH =
