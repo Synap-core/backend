@@ -233,6 +233,12 @@ export const PackageApplySchema = z.object({
    * this schema is a plain `z.object`, so an undeclared key is stripped.
    */
   intent: workspaceIntentDefinitionSchema.optional(),
+  /**
+   * What the space needs to function → `settings.taskIntents` (the
+   * declared-intent sink, `createWorkspaceFromDefinition`). Declared for the
+   * same reason as `intent`: an undeclared key is stripped here.
+   */
+  taskIntents: z.array(z.string()).optional(),
   sourceRoles: z
     .record(z.string(), z.enum(["provider", "consumer", "provider-consumer"]))
     .optional(),
