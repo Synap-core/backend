@@ -31,6 +31,7 @@ import {
   type EffectiveRelationType,
 } from "../../../utils/relation-types.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { EXPOSURE_RELATION_TYPES } from "../../../utils/project-scope.js";
 import {
   resolveByName,
   resolveProfileByName,
@@ -592,6 +593,12 @@ export const readHandlers: McpHandlerMap = {
         const out: EffectiveRelationType[] = [];
         for (const lens of lenses) {
           for (const t of await listEffectiveRelationTypes(database, lens)) {
+            // Exposure edges (`belongs_to_project`, `visible_to`) resolve in the
+            // vocabulary but every generic relation door REFUSES them — each
+            // has its own writer (`synap_file_into_project` for a project).
+            // Listing them here broke "a slug listed is a slug a write accepts".
+            if ((EXPOSURE_RELATION_TYPES as readonly string[]).includes(t.slug))
+              continue;
             const key = `${t.workspaceId ?? ""}:${t.slug}`;
             if (seen.has(key)) continue;
             seen.add(key);

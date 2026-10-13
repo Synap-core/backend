@@ -44,6 +44,7 @@ function actorOf(ctx: McpToolContext): TrackActor {
     userId: ctx.userId,
     agentUserId: ctx.agentUserId ?? null,
     isHubProtocol: true,
+    sessionId: ctx.sessionId ?? null,
     source: "mcp",
     reasoning: str(ctx.args.reasoning),
   };

@@ -2777,6 +2777,11 @@ export const tools = {
                 "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
               items: { type: "object" },
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
           },
           required: ["name", "goalTemplate"],
         },
@@ -3172,7 +3177,7 @@ export const tools = {
             profileSlug: {
               type: "string",
               description:
-                "Optional profile hint to guide entity type extraction (work lane)",
+                "Optional kind hint for the work lane. It guides extraction, and if AI structuring is unavailable the text is still saved as this kind (marked degraded) when it is a kind in your lens; otherwise as a note.",
             },
             global: {
               type: "boolean",
@@ -3488,6 +3493,11 @@ export const tools = {
               type: "string",
               description:
                 "Why you are starting it, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
             },
           },
           required: ["projectId"],

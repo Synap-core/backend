@@ -1354,9 +1354,23 @@ export const skillsRouter = router({
         });
       }
 
+      // The acting agent, derived exactly as `delete` derives it: the ambient
+      // ALS value first (set server-side at every key-auth entry point, so an
+      // agent key cannot drop it by omitting `input.agentUserId`), then
+      // `input`/`ctx` where no scope was entered. Read by the gate AND by the
+      // body re-approval reset below — the reset once read `input.agentUserId`
+      // alone, so a direct tRPC call from an agent key that left the field out
+      // kept its body rewrite approved.
+      const actingAgentUserId =
+        getActingAgentUserId() ??
+        input.agentUserId ??
+        ctx.agentUserId ??
+        undefined;
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId,
+        agentUserId: actingAgentUserId,
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "update",
@@ -1417,7 +1431,7 @@ export const skillsRouter = router({
         // stop. A human editing their own skill is unaffected. Deliberately
         // PRESENCE-based, not value-based: an agent that submits a body must
         // re-earn approval even in the edge case where the text is unchanged.
-        (updateData.body !== undefined && !!input.agentUserId) ||
+        (updateData.body !== undefined && !!actingAgentUserId) ||
         // Widening the sandbox's egress allowlist is an execution change: it is
         // what decides which hosts an approved skill may reach. It cannot ride
         // in `RE_APPROVAL_FIELDS` because `metadata` is peeled off `updateData`

@@ -1507,6 +1507,26 @@ export const createProcs = {
         });
       }
 
+      // A short body inlined as `properties.content` is the entity's BODY, not
+      // a key the caller invented — so on a profile that does not model
+      // `content` it must not come back as `unmodeled` (here and on the
+      // approve-time replay, which runs this same door). Same rule as the
+      // capture preflight (`submit-capture-graph.ts`): only a body that came
+      // from `input.content` is dropped; a `content` the caller put in
+      // `properties` still reports. Done here, not in the repository: only
+      // this door knows where the key came from.
+      if (
+        inlineContent !== undefined &&
+        !("content" in effectiveProperties) &&
+        Array.isArray(createdEntity?.unmodeled)
+      ) {
+        const { unmodeled: reported, ...row } = createdEntity;
+        const unmodeled = (reported as Array<{ key: string }>).filter(
+          (u) => u.key !== "content"
+        );
+        createdEntity = unmodeled.length ? { ...row, unmodeled } : row;
+      }
+
       // Register the external_id identity anchor on the freshly created row.
       // Unlike email/phone/url (auto-extracted inside EntityRepository.create),
       // external_id is not derived from any property, so it must be registered
