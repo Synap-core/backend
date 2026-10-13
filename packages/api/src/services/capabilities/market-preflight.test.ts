@@ -27,6 +27,7 @@ describe("summarizeMarketInstall", () => {
         description: null,
         required: true,
         hasDefault: false,
+        secret: true,
       },
       {
         name: "region",
@@ -34,6 +35,7 @@ describe("summarizeMarketInstall", () => {
         description: null,
         required: false,
         hasDefault: true,
+        secret: false,
       },
     ]);
     expect(s.notices).toEqual(["Stores 1 secret in this pod's vault."]);

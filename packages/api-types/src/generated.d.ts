@@ -17047,6 +17047,11 @@ export interface MarketInstallParam {
 	description: string | null;
 	required: boolean;
 	hasDefault: boolean;
+	/**
+	 * The value lands in the pod's vault (a `vault[].value` template names it)
+	 * — a credential, so a form masks it.
+	 */
+	secret: boolean;
 }
 export interface MarketInstallSummary {
 	workspace: MarketWorkspaceNeed;

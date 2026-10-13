@@ -35,6 +35,11 @@ export interface MarketInstallParam {
   description: string | null;
   required: boolean;
   hasDefault: boolean;
+  /**
+   * The value lands in the pod's vault (a `vault[].value` template names it)
+   * — a credential, so a form masks it.
+   */
+  secret: boolean;
 }
 
 export interface MarketInstallSummary {
@@ -84,6 +89,9 @@ function part(kind: string, items: unknown[]): MarketInstallPart[] {
 }
 
 function paramsOf(def: Def): MarketInstallParam[] {
+  const vaultValues = asArray(def.vault)
+    .map((v) => asRecord(v)?.value)
+    .filter((v): v is string => typeof v === "string");
   return asArray(def.params).flatMap((p) => {
     const r = asRecord(p);
     const name = r ? str(r.name) : null;
@@ -95,6 +103,7 @@ function paramsOf(def: Def): MarketInstallParam[] {
         description: str(r.description),
         required: r.required === true,
         hasDefault: r.default !== undefined,
+        secret: vaultValues.some((v) => v.includes(`{{${name}}}`)),
       },
     ];
   });
