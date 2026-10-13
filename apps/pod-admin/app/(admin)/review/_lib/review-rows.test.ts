@@ -4,6 +4,7 @@ import {
   exitOf,
   focusedRow,
   isRemoval,
+  liveAskSlot,
   reviewCounts,
   reviewFilterOf,
   reviewGroupOf,
@@ -195,16 +196,45 @@ describe("reviewRows", () => {
     });
   });
 
-  it("an ask opens where it lives, with the shared lens row's noun and chip", () => {
+  it("an agent's question is answered here, never inline or batched", () => {
     const [row] = reviewRows([ask], new Map());
     expect(row).toMatchObject({
       group: "asks",
       nounKind: "owed",
       where: "Content OS session",
-      detail: { kind: "open", door: { kind: "session", id: "s1" } },
+      detail: {
+        kind: "ask",
+        sessionId: "s1",
+        label: "Pick the headline",
+        slot: { sessionId: "s1", label: "Pick the headline", ask: null },
+      },
       inlineApprove: false,
       batchIds: null,
     });
+  });
+
+  it("a criterion slot is graded on the scorecard, so it opens where it lives", () => {
+    const [row] = reviewRows([{ ...ask, slotKind: "criterion" }], new Map());
+    expect(row!.detail).toEqual({
+      kind: "open",
+      door: { kind: "session", id: "s1" },
+    });
+  });
+
+  it("finds the live question an open ask names, and null once it moved on", () => {
+    const rows = reviewRows(
+      [
+        {
+          ...ask,
+          ask: { mode: "confirm", prompt: "Ship it?" },
+        },
+      ],
+      new Map()
+    );
+    expect(
+      liveAskSlot(rows, { sessionId: "s1", label: "Pick the headline" })?.ask
+    ).toEqual({ mode: "confirm", prompt: "Ship it?" });
+    expect(liveAskSlot(rows, { sessionId: "s1", label: "Other" })).toBeNull();
   });
 
   it("keeps the server's order", () => {
