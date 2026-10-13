@@ -2267,6 +2267,25 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
  * devplane_environment, devplane_deployment) plus their property defs.
  * All profiles are workspace-scoped.
  */
+/**
+ * The feature's DECLARED lifecycle keys — a mirror of builder.yaml's
+ * `featureStatus` lifecycle (the catalog is the source; pinned by
+ * `devplane-feature-status.mirror.test.ts`). This seeder once declared
+ * `planned | in-progress | done | error`, values no lifecycle knows; the H0
+ * conversion `h0.devplane-feature.legacy-values-*` folds rows still holding
+ * them.
+ */
+export const DEVPLANE_FEATURE_STATUS_KEYS = [
+  "backlog",
+  "spec",
+  "in_progress",
+  "in_review",
+  "done",
+  "cancelled",
+] as const;
+export type DevplaneFeatureStatusKey =
+  (typeof DEVPLANE_FEATURE_STATUS_KEYS)[number];
+
 export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResult> {
   const db = await getDb();
   const propertyDefRepo = new PropertyDefRepository(db);
@@ -2321,7 +2340,7 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
       {
         slug: "featureStatus",
         valueType: PropertyValueType.STRING,
-        constraints: { enum: ["planned", "in-progress", "done", "error"] },
+        constraints: { enum: [...DEVPLANE_FEATURE_STATUS_KEYS] },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
       {
@@ -2879,7 +2898,7 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           {
             slug: "featureStatus",
             required: false,
-            defaultValue: "planned",
+            defaultValue: "backlog" satisfies DevplaneFeatureStatusKey,
             displayOrder: 1,
           },
           { slug: "priority", required: false, displayOrder: 2 },

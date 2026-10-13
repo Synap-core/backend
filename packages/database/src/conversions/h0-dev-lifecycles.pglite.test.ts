@@ -184,22 +184,98 @@ describe("h0 story in-review → In feature (in-progress)", () => {
   it("moves only in-review stories, leaves no aside key, and is idempotent", async () => {
     const story = await profile("devplane_story", "kind", "workspace");
     const task = await profile("task", "kind", "system");
-    const s1 = await entity(story, "devplane_story", { storyStatus: "in-review", priority: "high" });
-    const s2 = await entity(story, "devplane_story", { storyStatus: "backlog" });
-    const s3 = await entity(story, "devplane_story", { storyStatus: "planned" });
+    const s1 = await entity(story, "devplane_story", {
+      storyStatus: "in-review",
+      priority: "high",
+    });
+    const s2 = await entity(story, "devplane_story", {
+      storyStatus: "backlog",
+    });
+    const s3 = await entity(story, "devplane_story", {
+      storyStatus: "planned",
+    });
     const t1 = await entity(task, "task", { storyStatus: "in-review" });
 
     const s = await run(STORY_FOLD);
     expect(errorsOf(s), errorsOf(s).join("\n")).toEqual([]);
 
-    expect(await propsOf(s1)).toEqual({ storyStatus: "in-progress", priority: "high" });
+    expect(await propsOf(s1)).toEqual({
+      storyStatus: "in-progress",
+      priority: "high",
+    });
     expect(await propsOf(s2)).toEqual({ storyStatus: "backlog" });
     expect(await propsOf(s3)).toEqual({ storyStatus: "planned" });
     expect(await propsOf(t1)).toEqual({ storyStatus: "in-review" });
 
     const again = await run(STORY_FOLD);
     expect(errorsOf(again)).toEqual([]);
-    expect(await propsOf(s1)).toEqual({ storyStatus: "in-progress", priority: "high" });
+    expect(await propsOf(s1)).toEqual({
+      storyStatus: "in-progress",
+      priority: "high",
+    });
+  });
+});
+
+const LEGACY_VALUES = [
+  "h0.devplane-feature.legacy-values-aside",
+  "h0.devplane-feature.legacy-values-into-lifecycle",
+  "h0.devplane-story.planned-aside",
+  "h0.devplane-story.planned-into-lifecycle",
+];
+
+describe("h0 legacy dev-lifecycle VALUES → the declared keys (homes A5)", () => {
+  it("planned/in-progress/error fold by meaning; declared values and other kinds untouched; idempotent", async () => {
+    const feature = await profile("devplane_feature", "kind", "workspace");
+    const story = await profile("devplane_story", "kind", "workspace");
+    const task = await profile("task", "kind", "system");
+    const f1 = await entity(feature, "devplane_feature", {
+      featureStatus: "planned",
+      priority: "p1",
+    });
+    const f2 = await entity(feature, "devplane_feature", {
+      featureStatus: "in-progress",
+    });
+    const f3 = await entity(feature, "devplane_feature", {
+      featureStatus: "error",
+    });
+    // Declared values never move aside (rules out a whole-key rename).
+    const f4 = await entity(feature, "devplane_feature", {
+      featureStatus: "in_review",
+    });
+    const s1 = await entity(story, "devplane_story", {
+      storyStatus: "planned",
+    });
+    // A story's own `in-progress` is DECLARED (In feature): never touched.
+    const s2 = await entity(story, "devplane_story", {
+      storyStatus: "in-progress",
+    });
+    // Another kind holding the same values: rules out a slug-blind remap.
+    const t1 = await entity(task, "task", {
+      featureStatus: "planned",
+      storyStatus: "planned",
+    });
+
+    const s = await run(LEGACY_VALUES);
+    expect(errorsOf(s), errorsOf(s).join("\n")).toEqual([]);
+
+    expect(await propsOf(f1)).toEqual({
+      featureStatus: "backlog",
+      priority: "p1",
+    });
+    expect(await propsOf(f2)).toEqual({ featureStatus: "in_progress" });
+    expect(await propsOf(f3)).toEqual({ featureStatus: "in_progress" });
+    expect(await propsOf(f4)).toEqual({ featureStatus: "in_review" });
+    expect(await propsOf(s1)).toEqual({ storyStatus: "backlog" });
+    expect(await propsOf(s2)).toEqual({ storyStatus: "in-progress" });
+    expect(await propsOf(t1)).toEqual({
+      featureStatus: "planned",
+      storyStatus: "planned",
+    });
+
+    const again = await run(LEGACY_VALUES);
+    expect(errorsOf(again)).toEqual([]);
+    expect(await propsOf(f3)).toEqual({ featureStatus: "in_progress" });
+    expect(await propsOf(s1)).toEqual({ storyStatus: "backlog" });
   });
 });
 
@@ -208,7 +284,10 @@ describe("h0 stray `status` → the dev lifecycles", () => {
     const feature = await profile("devplane_feature", "kind", "workspace");
     const story = await profile("devplane_story", "kind", "workspace");
     const f1 = await entity(feature, "devplane_feature", { status: "todo" });
-    const f2 = await entity(feature, "devplane_feature", { status: "in-progress", featureStatus: "in_review" });
+    const f2 = await entity(feature, "devplane_feature", {
+      status: "in-progress",
+      featureStatus: "in_review",
+    });
     const f3 = await entity(feature, "devplane_feature", { status: "stable" });
     const f4 = await entity(feature, "devplane_feature", { status: "weird" });
     const st1 = await entity(story, "devplane_story", { status: "building" });

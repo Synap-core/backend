@@ -187,6 +187,8 @@ export {
 export {
   ensureSystemProfiles,
   ensureDevplaneProfiles,
+  DEVPLANE_FEATURE_STATUS_KEYS,
+  type DevplaneFeatureStatusKey,
   ensureTeamMemberRoleProfile,
   RETIRED_PROFILE_PROPERTIES,
   SYSTEM_PROFILE_PROPERTY_LINKS,

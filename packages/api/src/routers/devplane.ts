@@ -18,6 +18,7 @@ import {
   workspaces,
   materializeEntity,
   eventRepository,
+  type DevplaneFeatureStatusKey,
 } from "@synap/database";
 import { entities, secrets } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -636,7 +637,11 @@ export const devplaneRouter = router({
       }
 
       // ── Features ──────────────────────────────────────────────────────────
-      const features: Array<[string, string, string, string]> = [
+      // Status = a DECLARED `featureStatus` key (builder.yaml's lifecycle:
+      // backlog · spec · in_progress · in_review · done · cancelled).
+      const features: Array<
+        [string, DevplaneFeatureStatusKey, string, string]
+      > = [
         // [title, status, linkedAppSlugs, description]
         [
           "AI Chat",
@@ -718,7 +723,7 @@ export const devplaneRouter = router({
         ],
         [
           "Connectors (Nango)",
-          "in-progress",
+          "in_progress",
           "synap-app",
           "39 OAuth integrations via Nango — CP broker + pod connection sync, source tracking on entities",
         ],
@@ -742,31 +747,31 @@ export const devplaneRouter = router({
         ],
         [
           "DevPlane",
-          "in-progress",
+          "in_progress",
           "devplane",
           "Infra management app — apps, services, packages, environments, SSH terminal, recipe runner, prompt snippets",
         ],
         [
           "MCP Integration",
-          "in-progress",
+          "in_progress",
           "synap-intelligence-service,browser",
           "MCP server support — hidden from default UX, adminOnly gate in settings, tool discovery",
         ],
         [
           "Background Agents",
-          "in-progress",
+          "in_progress",
           "synap-intelligence-service",
           "Long-running autonomous agents — heartbeat, pg-boss orchestration, proactive intelligence layer",
         ],
         [
           "Native OS Integrations",
-          "in-progress",
+          "in_progress",
           "relay-app",
           "7 sub-packages — share sheet, Spotlight search, home screen widgets, Live Activities, vision capture",
         ],
         [
           "Timeline View",
-          "planned",
+          "backlog",
           "synap-app,browser",
           "Gantt-like timeline — date ranges, dependency lines, groupBy, milestone markers",
         ],
