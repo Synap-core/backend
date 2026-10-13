@@ -26,8 +26,13 @@ import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { LG_UP, useMediaQuery } from "../../../../lib/use-media-query";
-import { openIn, type Exit } from "../../../../lib/open-in";
-import { ExitFallback, externalProps } from "../../../../lib/exit-link";
+import type { Exit } from "../../../../lib/open-in";
+import {
+  ExitFallback,
+  externalProps,
+  rowHref,
+  usePlacedExit,
+} from "../../../../lib/exit-link";
 import { PageHeader, PageShell } from "../../components/page-header";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { FilterChips } from "../../components/filter-chips";
@@ -41,6 +46,7 @@ import {
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import {
   batchOf,
+  exitOf,
   focusedRow,
   reviewCounts,
   reviewFilterOf,
@@ -386,7 +392,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           {filter !== "history" && (desktopExit || shownOfTotal) && (
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[12px] text-foreground/65">
               <span>{shownOfTotal}</span>
-              {desktopExit && <ExitFallback exit={desktopExit} />}
+              {desktopExit && (
+                <ExitFallback exit={desktopExit} showWeb={false} />
+              )}
             </div>
           )}
         </div>
@@ -434,13 +442,32 @@ function detailKey(detail: Exclude<ReviewDetail, { kind: "open" }>): string {
   }
 }
 
-/** An ask's door, resolved through the one exit door. */
-function exitOf(detail: Extract<ReviewDetail, { kind: "open" }>): Exit {
-  return openIn({
-    kind: "object",
-    objectKind: detail.door.kind,
-    id: detail.door.id,
-  });
+/**
+ * An ask's "Review" when its door leads out of this page. On a phone a door
+ * the mobile app cannot open becomes its web page, or no button — the line
+ * beneath the list says why.
+ */
+function DoorButton({ exit }: { exit: Exit }) {
+  const placed = usePlacedExit(exit);
+  const href = rowHref(placed);
+  if (href === null) return null;
+  return (
+    <Button
+      as="a"
+      href={href}
+      {...externalProps(href)}
+      size="sm"
+      variant="flat"
+      radius="md"
+      endContent={
+        placed.href !== null && placed.isDesktopLink ? (
+          <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden />
+        ) : undefined
+      }
+    >
+      Review
+    </Button>
+  );
 }
 
 /** "Agent · Claude · Synap · 3 grouped · expires in 20m · 2h ago" */
@@ -499,27 +526,7 @@ function ReviewListRow({
           Review
         </Button>
       )}
-      {exit && (
-        <Button
-          as="a"
-          href={exit.href}
-          {...externalProps(exit.href)}
-          size="sm"
-          variant="flat"
-          radius="md"
-          endContent={
-            exit.isDesktopLink ? (
-              <ArrowUpRight
-                className="h-3 w-3"
-                strokeWidth={1.75}
-                aria-hidden
-              />
-            ) : undefined
-          }
-        >
-          Review
-        </Button>
-      )}
+      {exit && <DoorButton exit={exit} />}
     </div>
   );
   return (

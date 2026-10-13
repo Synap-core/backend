@@ -22,7 +22,11 @@ import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { navHref } from "../../../../lib/console-nav";
 import { openIn } from "../../../../lib/open-in";
-import { DesktopFallbackLink, ExitLink } from "../../../../lib/exit-link";
+import {
+  ExitFallback,
+  ExitLink,
+  usePlacedExit,
+} from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { PageHeader, PageShell } from "../../components/page-header";
@@ -220,6 +224,9 @@ function TidySection({
   outcomes: Record<string, { message: string; proposalId: string | null }>;
   onRetire: (item: TidyItem) => void;
 }) {
+  // `null` on a phone: the mobile app cannot open the desktop Data app, so the
+  // row offers no dead link and the line beneath the list says why.
+  const appHref = usePlacedExit(DATA_APP).href;
   if (loading)
     return (
       <SectionCard title="Needs tidying">
@@ -291,10 +298,10 @@ function TidySection({
                   >
                     Retire
                   </Button>
-                ) : (
+                ) : appHref === null ? null : (
                   <Button
                     as="a"
-                    href={DATA_APP.href}
+                    href={appHref}
                     size="sm"
                     variant="flat"
                     radius="md"
@@ -316,7 +323,7 @@ function TidySection({
       </ul>
       {anyInApp && (
         <div className="pt-2 text-[12px]">
-          <DesktopFallbackLink />
+          <ExitFallback exit={DATA_APP} />
         </div>
       )}
     </SectionCard>

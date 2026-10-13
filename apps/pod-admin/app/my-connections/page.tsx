@@ -35,6 +35,7 @@ import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
 import {
   categorize,
   CATEGORY_LABEL,
+  holderName,
   keyStatus,
   type UnifiedKey,
 } from "../(admin)/keys/_lib/key-model";
@@ -482,6 +483,7 @@ function KeyCard({
   onRevoke?: () => void;
 }) {
   const category = categorize(apiKey);
+  const holder = holderName(apiKey);
   // Honest STATUS (Active / Expiring soon / Expired / Revoked) — separate from
   // the TYPE badge, so an expired key never reads as a green "active" one.
   const status = keyStatus(apiKey);
@@ -512,6 +514,7 @@ function KeyCard({
           <div className="min-w-0">
             <p className="break-words text-sm font-medium">{apiKey.keyName}</p>
             <p className="mt-1 text-xs text-foreground/55">
+              {holder ? `${holder} · ` : null}
               {connectionLabel(apiKey.hubId)} ·{" "}
               <span className="font-mono">{apiKey.keyPrefix}…</span>
             </p>

@@ -51,7 +51,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
-import { ExitFallback } from "../../../lib/exit-link";
+import { ExitFallback, rowHref, usePlacedExit } from "../../../lib/exit-link";
 import {
   formatRelative,
   humanizeBytes,
@@ -324,12 +324,17 @@ function NeedsYouRowView({ row }: { row: NeedsYouRow }) {
  * The row's one primary action. A console route navigates in place via
  * `Link`; an `openIn` desktop exit is a plain anchor (the `synap://` handler
  * is the OS's, not Next's), with its fallback offered once beneath the list.
+ * A phone that cannot follow it gets the console page that covers it, or no
+ * button (the line beneath the list says why).
  */
 function ActionLink({ exit, label }: { exit: Exit; label: string }) {
+  const placed = usePlacedExit(exit);
+  const href = rowHref(placed);
+  if (href === null) return null;
   return (
     <Button
-      as={exit.isDesktopLink ? "a" : Link}
-      href={exit.href}
+      as={placed.href !== null && placed.isDesktopLink ? "a" : Link}
+      href={href}
       size="sm"
       variant="flat"
       radius="md"
@@ -345,12 +350,16 @@ const ITEM_LINK_CLASS =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 function ItemLink({ exit, label }: { exit: Exit; label: string }) {
-  return exit.isDesktopLink ? (
-    <a href={exit.href} className={ITEM_LINK_CLASS}>
+  const placed = usePlacedExit(exit);
+  const href = rowHref(placed);
+  if (href === null)
+    return <span className="truncate text-foreground">{label}</span>;
+  return placed.href !== null && placed.isDesktopLink ? (
+    <a href={href} className={ITEM_LINK_CLASS}>
       {label}
     </a>
   ) : (
-    <Link href={exit.href} className={ITEM_LINK_CLASS}>
+    <Link href={href} className={ITEM_LINK_CLASS}>
       {label}
     </Link>
   );
@@ -367,7 +376,7 @@ function DesktopFallbackOnce({ rows }: { rows: NeedsYouRow[] }) {
   if (!desktopExit) return null;
   return (
     <div className="mt-1 flex justify-end px-1">
-      <ExitFallback exit={desktopExit} />
+      <ExitFallback exit={desktopExit} showWeb={false} />
     </div>
   );
 }

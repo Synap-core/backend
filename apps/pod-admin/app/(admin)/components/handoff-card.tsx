@@ -20,12 +20,18 @@
  * `exit` comes from `openIn()` — the one door. When it resolves to a
  * `synap://` link the fallback is rendered automatically, because a desktop
  * link that does not resolve fails silently and would strand the reader.
+ * On a phone that cannot follow it, the button is not drawn at all: the line
+ * beneath says so, with the web page that covers it when there is one.
  */
 
 import { Button } from "@heroui/react";
 import { ArrowUpRight, type LucideIcon } from "lucide-react";
 import type { Exit } from "../../../lib/open-in";
-import { ExitFallback, externalProps } from "../../../lib/exit-link";
+import {
+  PlacedFallback,
+  externalProps,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 
 interface HandoffCardProps {
   /** What lives elsewhere, phrased as a statement of fact. */
@@ -46,6 +52,7 @@ export function HandoffCard({
   cta,
   icon: Icon,
 }: HandoffCardProps) {
+  const placed = usePlacedExit(exit);
   return (
     <div className="flex flex-col gap-3 rounded-lg bg-content2/40 px-4 py-4 ring-1 ring-inset ring-foreground/[0.06]">
       <div className="flex items-start gap-3">
@@ -69,22 +76,24 @@ export function HandoffCard({
             rounded than its parent is the most common reason a surface reads
             as slightly off. `min-h-10` because this is the primary door out of
             a dead end, and `size="sm"` alone gives a 32px target. */}
-        <Button
-          as="a"
-          href={exit.href}
-          {...externalProps(exit.href)}
-          size="sm"
-          radius="sm"
-          variant="flat"
-          className="min-h-10"
-          endContent={<ArrowUpRight className="h-3.5 w-3.5" />}
-        >
-          {cta}
-        </Button>
+        {placed.href !== null && (
+          <Button
+            as="a"
+            href={placed.href}
+            {...externalProps(placed.href)}
+            size="sm"
+            radius="sm"
+            variant="flat"
+            className="min-h-10"
+            endContent={<ArrowUpRight className="h-3.5 w-3.5" />}
+          >
+            {cta}
+          </Button>
+        )}
 
         {/* A `synap://` href does nothing at all when the app isn't installed —
             the browser shows no error. This is the way out of that silence. */}
-        <ExitFallback exit={exit} />
+        <PlacedFallback placed={placed} />
       </div>
     </div>
   );

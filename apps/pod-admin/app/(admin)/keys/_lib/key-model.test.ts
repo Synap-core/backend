@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CATEGORY_LABEL,
   categorize,
+  holderName,
   keyStatus,
   normalizeScopes,
   type UnifiedKey,
@@ -33,6 +35,54 @@ describe("categorize", () => {
     [{ keyType: null }, "operator"],
   ] as const)("%o → %s", (over, expected) => {
     expect(categorize(key(over))).toBe(expected);
+  });
+
+  // App and computer keys are minted `user_pat` (app-connect.ts,
+  // machine-connect.ts): only the holder keeps them out of "Operator".
+  it.each([
+    [{ keyType: "user_pat", holder: { kind: "app", name: "Invoicer" } }, "app"],
+    [
+      { keyType: "user_pat", holder: { kind: "computer", name: "Studio" } },
+      "computer",
+    ],
+    [
+      { keyType: "user_pat", holder: { kind: "agent", name: "Claude" } },
+      "agent",
+    ],
+    [
+      { keyType: "user_pat", holder: { kind: "person", name: "Ada" } },
+      "operator",
+    ],
+    [{ keyType: "user_pat", holder: null }, "operator"],
+    // keyType still wins where it is the real signal.
+    [{ keyType: "service", holder: { kind: "agent", name: "x" } }, "service"],
+    [
+      { keyType: "is_internal", holder: { kind: "agent", name: "x" } },
+      "system",
+    ],
+  ] as const)("holder %o → %s", (over, expected) => {
+    expect(categorize(key(over))).toBe(expected);
+  });
+
+  it("labels app, computer and agent with the vocabulary's nouns", () => {
+    expect(CATEGORY_LABEL.app).toBe("App");
+    expect(CATEGORY_LABEL.computer).toBe("Computer");
+    expect(CATEGORY_LABEL.agent).toBe("Agent");
+  });
+});
+
+describe("holderName", () => {
+  it("names the app, computer or agent that holds a key, never a person", () => {
+    expect(holderName(key({ holder: { kind: "app", name: "Invoicer" } }))).toBe(
+      "Invoicer"
+    );
+    expect(holderName(key({ holder: { kind: "person", name: "Ada" } }))).toBe(
+      null
+    );
+    expect(holderName(key({ holder: { kind: "computer", name: "  " } }))).toBe(
+      null
+    );
+    expect(holderName(key({}))).toBe(null);
   });
 });
 

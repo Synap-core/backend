@@ -49,6 +49,7 @@ import { formatRelative, shortId } from "../../../../lib/format";
 import {
   CATEGORY_LABEL,
   categorize,
+  holderName,
   keyStatus,
   normalizeScopes,
   type KeyCategory,
@@ -458,6 +459,8 @@ function KeyRow({
     : null;
 
   const secondary = [
+    // Which app / computer / agent holds it — the badge says what it is.
+    holderName(apiKey),
     apiKey.keyPrefix ? `${apiKey.keyPrefix}…` : shortId(apiKey.id),
     scopes.length > 0
       ? scopes.slice(0, 2).join(", ") +

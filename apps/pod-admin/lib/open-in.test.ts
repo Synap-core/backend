@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { openIn, BROWSER_SETTINGS_SECTIONS, ACCOUNT_PAGES } from "./open-in";
+import {
+  openIn,
+  placeExit,
+  BROWSER_SETTINGS_SECTIONS,
+  ACCOUNT_PAGES,
+  MOBILE_FALLBACK,
+  PHONE_UNAVAILABLE_NOTE,
+} from "./open-in";
 
 const ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
@@ -102,5 +109,121 @@ describe("openIn — objectInApp", () => {
     expect(web.href).toBe(`/proposal/${ID}`);
     expect(app.href).toBe(`synap://open/proposal/${ID}`);
     expect(app.fallback).toBeDefined();
+  });
+});
+
+describe("openIn — a viewed object hands off with its view", () => {
+  it("a session's Intake Room bounces to the apps with ?view=room", () => {
+    // The web page draws the plain session; serving it for `view: "room"`
+    // would silently drop the reading the link asked for.
+    const exit = openIn({
+      kind: "object",
+      objectKind: "session",
+      id: ID,
+      view: "room",
+    });
+    expect(exit.href).toBe(`synap://open/session/${ID}?view=room`);
+    expect(exit.isDesktopLink).toBe(true);
+    expect(exit.fallback).toBeDefined();
+  });
+
+  it("without a view the session stays on the web", () => {
+    expect(openIn({ kind: "object", objectKind: "session", id: ID }).href).toBe(
+      `/open/session/${ID}`
+    );
+  });
+});
+
+describe("placeExit — the device decides what a hand-off shows", () => {
+  it("leaves every exit untouched off a phone", () => {
+    const exit = openIn({ kind: "settings", section: "vault" });
+    expect(placeExit(exit, false)).toBe(exit);
+  });
+
+  it("leaves web exits untouched on a phone", () => {
+    const exit = openIn({ kind: "object", objectKind: "proposal", id: ID });
+    expect(placeExit(exit, true)).toBe(exit);
+    const account = openIn({ kind: "account", page: "billing" });
+    expect(placeExit(account, true)).toBe(account);
+  });
+
+  it.each(["playbook", "session", "automation", "owed"])(
+    "keeps the link for %s, which the mobile app opens, with the mobile hatch",
+    (objectKind) => {
+      const placed = placeExit(
+        openIn({ kind: "objectInApp", objectKind, id: ID }),
+        true
+      );
+      expect(placed.href).toBe(`synap://open/${objectKind}/${ID}`);
+      expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+      expect(placed.fallback?.href).toContain("/download/relay");
+      expect(placed.unavailable).toBeUndefined();
+    }
+  );
+
+  it("keeps the Intake Room link on a phone (Relay routes session?view=room)", () => {
+    const placed = placeExit(
+      openIn({ kind: "object", objectKind: "session", id: ID, view: "room" }),
+      true
+    );
+    expect(placed.href).toBe(`synap://open/session/${ID}?view=room`);
+    expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+  });
+
+  it.each([
+    ["vault", "/my-vault"],
+    ["connectors", "/sources"],
+    ["ai-governance", "/intelligence"],
+  ] as const)(
+    "settings/%s is unavailable on a phone and points at %s",
+    (section, href) => {
+      const placed = placeExit(openIn({ kind: "settings", section }), true);
+      expect(placed.href).toBeNull();
+      expect(placed.fallback).toBeUndefined();
+      expect(placed.unavailable?.note).toBe(PHONE_UNAVAILABLE_NOTE);
+      expect(placed.unavailable?.web?.href).toBe(href);
+    }
+  );
+
+  it("a space is unavailable on a phone and points at its console page", () => {
+    const placed = placeExit(
+      openIn({ kind: "object", objectKind: "workspace", id: ID }),
+      true
+    );
+    expect(placed.href).toBeNull();
+    expect(placed.unavailable?.web?.href).toBe(`/workspaces/${ID}`);
+  });
+
+  it.each([
+    ["a channel", { kind: "object", objectKind: "channel", id: ID }],
+    ["a desktop app", { kind: "app", appId: "marketplace" }],
+    [
+      "a Settings section with no web twin",
+      { kind: "settings", section: "pod" },
+    ],
+  ] as const)(
+    "%s on a phone is a plain 'open on your computer' note",
+    (_label, target) => {
+      const placed = placeExit(openIn(target), true);
+      expect(placed.href).toBeNull();
+      expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
+    }
+  );
+
+  it("never hands a phone a desktop-app link or the desktop install hatch", () => {
+    const targets = [
+      ...BROWSER_SETTINGS_SECTIONS.map(
+        (section) => ({ kind: "settings", section }) as const
+      ),
+      { kind: "app", appId: "data" } as const,
+      ...["workspace", "channel", "cell", "capability", "skill", "view"].map(
+        (objectKind) => ({ kind: "objectInApp", objectKind, id: ID }) as const
+      ),
+    ];
+    for (const target of targets) {
+      const placed = placeExit(openIn(target), true);
+      expect(placed.href).toBeNull();
+      expect(placed.fallback).toBeUndefined();
+    }
   });
 });

@@ -10927,6 +10927,28 @@ export interface OAuthConsentContext {
 	redirectHost: string;
 	scopes: string[];
 }
+/**
+ * API Keys Router
+ *
+ * Synchronous CRUD with inline permission checks and bcrypt hashing.
+ * SECURITY: Keys are displayed ONCE and never stored in plaintext.
+ */
+/**
+ * WHO holds a key, as a key list names it. The key's own `keyType` cannot say:
+ * an app key (`app-connect.ts`), a computer key (`machine-connect.ts`) and a
+ * person's own token are ALL `user_pat` — only the holder tells them apart.
+ *
+ *   app      — the holder is some app's own agent principal (`apps.agent_user_id`,
+ *              the same fact `notAnAppAgent` reads); `name` is the app's.
+ *   computer — an agent user with `agent_type = 'machine'`.
+ *   agent    — any other agent user.
+ *   person   — a human.
+ * `null` = the holder row is gone.
+ */
+export interface KeyHolder {
+	kind: "app" | "computer" | "agent" | "person";
+	name: string | null;
+}
 export interface QueueHealth {
 	failed: number;
 	pastDue: number;
@@ -22532,6 +22554,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linkedUserId: string | null;
 				heldByAgent: boolean;
 				holderUserId: string;
+				holder: KeyHolder | null;
 				actsAsYou: boolean;
 			}[];
 			meta: object;
@@ -22543,6 +22566,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				id: string;
 				userId: string;
+				holder: KeyHolder | null;
 				keyName: string;
 				keyPrefix: string;
 				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";

@@ -14,7 +14,11 @@ import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
-import { ExitFallback } from "../../../../lib/exit-link";
+import {
+  ExitFallback,
+  rowHref,
+  usePlacedExit,
+} from "../../../../lib/exit-link";
 import { useOperatorEmail } from "../../components/admin-shell";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { DetailDrawer } from "../../components/detail-drawer";
@@ -34,10 +38,14 @@ function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
     objectKind: "workspace",
     id: workspaceId,
   });
+  // On a phone the mobile app has no space screen: the arrow opens the
+  // space's console page instead.
+  const href = rowHref(usePlacedExit(exit));
+  if (href === null) return null;
   return (
     <Button
       as="a"
-      href={exit.href}
+      href={href}
       isIconOnly
       size="sm"
       radius="full"
@@ -212,6 +220,7 @@ export function MemberDrawer({
                     objectKind: "workspace",
                     id: member.workspaces[0]!.id,
                   })}
+                  showWeb={false}
                 />
               </p>
             )}
