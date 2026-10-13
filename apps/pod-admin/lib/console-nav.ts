@@ -67,7 +67,7 @@ export interface NavItem {
    * the tripwire, so a registry rename cannot silently fork the nav's word.
    */
   kind?: string;
-  /** Who sees it: members get Home + Review (D8); everything else is admin. */
+  /** Who sees it: members get Home + Review; everything else is admin. */
   audience: NavAudience;
 }
 
@@ -332,6 +332,15 @@ export function navHref(
   return query ? `${href}?${query}` : href;
 }
 
+/**
+ * One computer's page in the console — the ONE spelling of "open this
+ * computer", for every surface that names one (Keys, Agents, search, the
+ * Computers list).
+ */
+export function computerHref(id: string): string {
+  return `${navHref("computers")}/${encodeURIComponent(id)}`;
+}
+
 /** True when a viewer with `role` may open (and so see) this item. */
 export function navVisibleTo(item: NavItem, role: NavAudience): boolean {
   return role === "admin" || item.audience === "member";
@@ -426,7 +435,7 @@ export const SEARCH_DESTINATION: Readonly<
   computer: {
     nav: "computers",
     label: "Computers",
-    href: (id) => `${navHref("computers")}/${encodeURIComponent(id)}`,
+    href: computerHref,
   },
   issuer: {
     nav: "security",

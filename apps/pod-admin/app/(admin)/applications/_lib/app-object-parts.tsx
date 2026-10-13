@@ -2,10 +2,10 @@
 
 /**
  * The pieces the three app pages share between the header and the danger
- * zone: a titled section, a copyable id, a list of exact values (origins,
- * redirect URIs), the people who use an app and the keys it holds. Each page
- * composes them inside `ObjectPage` (via `consoleFrame`), so an app reads the
- * same whichever way it connects.
+ * zone: a copyable id, a list of exact values (origins, redirect URIs), the
+ * people who use an app and the keys it holds, and how a failed read reads.
+ * Each page composes them inside `ObjectPage` (via `consoleFrame`), in flat
+ * `SectionCard`s, so an app reads the same whichever way it connects.
  */
 
 import Link from "next/link";
@@ -15,33 +15,15 @@ import { navHref } from "../../../../lib/console-nav";
 import { formatRelative } from "../../../../lib/format";
 import { CopyButton } from "../../../_lib/copy-button";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
-import type { TrpcErrorLike } from "../../../_lib/object/load-failure";
+import {
+  couldNotLoad,
+  loadFailure,
+  type FailureWording,
+  type TrpcErrorLike,
+} from "../../../_lib/object/load-failure";
 import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
 import { keyStatus } from "../../keys/_lib/key-model";
 import { personName } from "./app-inventory";
-import { appLoadFailure } from "./app-load-failure";
-
-export function AppSection({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-2" aria-label={title}>
-      <h2 className="text-sm font-medium text-foreground">{title}</h2>
-      {hint && (
-        <p className="max-w-2xl text-[12.5px] leading-5 text-foreground/65">
-          {hint}
-        </p>
-      )}
-      {children}
-    </section>
-  );
-}
 
 /** An id the reader may need to paste somewhere, with its one copy. */
 export function CopyableId({
@@ -137,7 +119,8 @@ export function PeopleList({
             actions={
               <Link
                 href={navHref("members", { focus: p.id })}
-                className="px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline"
+                aria-label={`Open ${personName(p) ?? "this person"} on Members`}
+                className="rounded-sm px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 Members
               </Link>
@@ -193,7 +176,8 @@ export function KeyList({
           actions={
             <Link
               href={navHref("keys", { focus: k.id })}
-              className="px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline"
+              aria-label={`Open ${k.keyName} on Keys`}
+              className="rounded-sm px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Keys
             </Link>
@@ -206,22 +190,29 @@ export function KeyList({
 }
 
 /**
- * A failed read, drawn in the console frame. Not `frame.failure`: that one
- * offers "Open in app", and an app's page lives only here — the desktop app
- * has no page for a connected app to open (`appLoadFailure`).
+ * A failed app read, in the console frame. An app's page lives only here —
+ * the Synap app has no page for a connected app — so neither the words nor
+ * the frame offer to open it there; the sentences say where to look instead.
  */
+const APP_WORDING: FailureWording = {
+  inApp: false,
+  notFound:
+    "It may have been removed for good, or the link is stale. Every app still connected is on the Apps list.",
+  forbidden:
+    "An app's page is for pod admins. Your own apps are on your Connected page.",
+};
+
 export function appFailure(
   frame: ObjectFrame,
+  id: string,
   error: TrpcErrorLike
 ): ReactNode {
-  const failure = appLoadFailure(error);
-  return frame.object({
-    header: {
-      kind: "application",
-      title: failure.title,
-      summary: failure.message,
-      status: { kind: "unknown", label: failure.chip },
-      breadcrumb: frame.breadcrumb?.(failure.chip),
-    },
+  return frame.failure({
+    kind: "application",
+    id,
+    failure:
+      loadFailure(error, "App", APP_WORDING) ??
+      couldNotLoad("App", APP_WORDING),
+    openIn: false,
   });
 }

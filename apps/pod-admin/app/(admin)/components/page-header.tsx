@@ -38,18 +38,23 @@ export function PageHeader({
 /**
  * The column every console page sits in — one width and one gutter for all
  * of them, so moving between pages never shifts the content edge.
+ * `personal` is the narrower column of the self-service pages (Connected,
+ * My vault, My computers), which sit outside the console's side nav.
  */
 export function PageShell({
   children,
   className,
+  width = "console",
 }: {
   children: ReactNode;
   className?: string;
+  width?: "console" | "personal";
 }) {
   return (
     <div
       className={[
-        "mx-auto max-w-[1100px] px-4 py-6 sm:px-6",
+        "mx-auto px-4 sm:px-6",
+        width === "personal" ? "max-w-[900px] py-10" : "max-w-[1100px] py-6",
         className ?? "",
       ].join(" ")}
     >

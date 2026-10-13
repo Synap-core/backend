@@ -4,24 +4,26 @@
  * the workspace keys tab read one rule and cannot drift.
  */
 
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { navHref } from "../../../../lib/console-nav";
+import { computerHref } from "../../../../lib/console-nav";
+import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 import { appHref } from "../../applications/_lib/app-inventory";
 
 /**
  * Who holds a key — `apiKeys.list` / `adminListAll` project it (`KeyHolder`
- * in `packages/api/src/routers/api-keys.ts`). An app key, a computer key and
+ * in `packages/api/src/routers/api-keys.ts`), read off the generated router
+ * so a change on the pod is a type error here. An app key, a computer key and
  * a person's own token share `keyType: "user_pat"`; only this tells them
  * apart. `null` = the holder row is gone; absent = a list that does not carry
- * it (`listSystemKeys`).
+ * it (`listSystemKeys`). An app holder's `appId` is its page on Apps
+ * (`holderHref`).
  */
-export interface KeyHolder {
-  kind: "app" | "computer" | "agent" | "person";
-  name: string | null;
-  /** An app holder's `public_id` — its page on Apps (`holderHref`). */
-  appId?: string;
-}
+export type KeyHolder = NonNullable<
+  inferRouterOutputs<AppRouter>["apiKeys"]["list"][number]["holder"]
+>;
 
 export interface UnifiedKey {
   id: string;
@@ -113,8 +115,7 @@ export function holderName(k: UnifiedKey): string | null {
  * Apps. null = the holder has no page to open from here — the row stays a row.
  */
 export function holderHref(k: UnifiedKey): string | null {
-  if (k.holder?.kind === "computer" && k.userId)
-    return `${navHref("computers")}/${encodeURIComponent(k.userId)}`;
+  if (k.holder?.kind === "computer" && k.userId) return computerHref(k.userId);
   if (k.holder?.kind === "app" && k.holder.appId) {
     return appHref("key", k.holder.appId);
   }
@@ -129,7 +130,7 @@ export function keyStatus(apiKey: {
   if (apiKey.expiresAt) {
     const exp = new Date(apiKey.expiresAt).getTime();
     if (exp < Date.now()) return { kind: "stale", label: "Expired" };
-    if (exp - Date.now() < 7 * 24 * 60 * 60 * 1000)
+    if (exp - Date.now() < 7 * DAY_MS)
       return { kind: "stale", label: "Expiring soon" };
   }
   return { kind: "healthy", label: "Active" };

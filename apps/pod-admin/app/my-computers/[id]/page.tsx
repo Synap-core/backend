@@ -13,7 +13,11 @@ import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { consoleFrame } from "../../_lib/object/views/object-frame";
 import { ComputerObject } from "../../(admin)/computers/_lib/computer-object";
 
-const FRAME = consoleFrame({ label: "My computers", href: "/my-computers" });
+const FRAME = consoleFrame({
+  label: "My computers",
+  href: "/my-computers",
+  width: "personal",
+});
 
 export default function MyComputerPage() {
   const { id } = useParams<{ id: string }>();

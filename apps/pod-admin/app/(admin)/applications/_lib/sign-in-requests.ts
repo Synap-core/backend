@@ -2,7 +2,6 @@
  * "Sign in with your pod" connection REQUESTS that are not waiting on anyone
  * here: mid-flight handshakes and the archive. Waiting ones are decided in
  * Review (`pendingSummary` only counts them); these are shown for visibility.
- * Moved from the retired `/origins` page.
  */
 
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";

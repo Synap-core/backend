@@ -34,6 +34,6 @@ export default function AppPage() {
       return <McpAppObject clientId={id} frame={FRAME} />;
     default:
       // An unknown model is a stale link, read as "not found".
-      return appFailure(FRAME, { data: { code: "NOT_FOUND" } });
+      return appFailure(FRAME, id, { data: { code: "NOT_FOUND" } });
   }
 }

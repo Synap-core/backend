@@ -6,6 +6,9 @@
  * was never used, "—" for a column with no value).
  */
 
+/** One day in milliseconds — the one spelling every day-count rule uses. */
+export const DAY_MS = 24 * 60 * 60 * 1000;
+
 export function formatRelative(
   date: Date | string | null | undefined,
   { empty = "—" }: { empty?: string } = {}

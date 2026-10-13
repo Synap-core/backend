@@ -9,7 +9,9 @@
  * does not remove people or end their pod sessions (the consequence says so).
  */
 
+import { ExitLink } from "../../../../lib/exit-link";
 import { formatRelative } from "../../../../lib/format";
+import { publisherExit } from "../../../../lib/open-in";
 import { trpc } from "../../../../lib/trpc";
 import { applicationConnectionCapabilities } from "../../../_lib/application-connection-capabilities";
 import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
@@ -24,12 +26,12 @@ import {
   statePill,
 } from "./app-inventory";
 import {
-  AppSection,
   CopyableId,
   ExactValues,
   PeopleList,
   appFailure,
 } from "./app-object-parts";
+import { SectionCard } from "../../components/section-card";
 import { ViaChip } from "./via-chip";
 
 export function SignInAppObject({
@@ -55,10 +57,13 @@ export function SignInAppObject({
 
   if (query.isLoading) return frame.loading("Loading app…");
   const conn = query.data;
-  if (query.error || !conn) return appFailure(frame, query.error);
+  if (query.error || !conn) return appFailure(frame, id, query.error);
 
   const state = signInState(conn);
   const publisher = hostOf(conn.publisherUrl);
+  // Only an https address is followed (`publisherExit`); anything else is
+  // named, never linked.
+  const publisherSite = publisherExit(conn.publisherUrl);
   const revoking = revoke.isPending;
   const danger: DangerAction[] =
     conn.status === "approved"
@@ -90,27 +95,25 @@ export function SignInAppObject({
   return frame.object({
     header: {
       kind: "application",
-      noun: "App",
+      noun: (
+        <>
+          App <ViaChip via="sign-in" />
+        </>
+      ),
       title: conn.displayName,
       summary: `${SIGN_IN_REACH}.`,
       status: statePill(state),
       breadcrumb: frame.breadcrumb?.(conn.displayName),
-      secondaryActions: <ViaChip via="sign-in" />,
     },
     facts: [
       ...(publisher
         ? [
             {
               label: "Publisher",
-              value: (
-                <a
-                  href={conn.publisherUrl ?? undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-primary underline-offset-2 hover:underline"
-                >
-                  {publisher}
-                </a>
+              value: publisherSite ? (
+                <ExitLink exit={publisherSite} label={publisher} />
+              ) : (
+                publisher
               ),
             },
           ]
@@ -134,7 +137,7 @@ export function SignInAppObject({
           />
         )}
 
-        <AppSection title="Identity">
+        <SectionCard variant="flat" title="Identity">
           <CopyableId label="App id" value={conn.clientId} />
           <ExactValues
             label="Allowed browser origins"
@@ -144,9 +147,10 @@ export function SignInAppObject({
             label="Allowed return URLs"
             values={conn.allowedCallbackUrls}
           />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="What it can reach"
           hint="It acts as the person who signed in, and sees only what that person can see in the pod. Allowing it gives no one access to data."
         >
@@ -154,9 +158,10 @@ export function SignInAppObject({
             label="Noted at approval"
             values={[applicationConnectionCapabilities(conn.allowedScopes)]}
           />
-        </AppSection>
+        </SectionCard>
 
-        <AppSection
+        <SectionCard
+          variant="flat"
           title="Who uses it"
           hint="People who signed in through the identity service this app was registered with. Last used is when that service last acted for one of them."
         >
@@ -169,7 +174,7 @@ export function SignInAppObject({
             }))}
             empty="No one has signed in through it yet."
           />
-        </AppSection>
+        </SectionCard>
       </>
     ),
     advanced: {

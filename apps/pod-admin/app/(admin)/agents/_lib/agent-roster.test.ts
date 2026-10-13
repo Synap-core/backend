@@ -216,10 +216,10 @@ describe("agentReviewHref", () => {
 });
 
 describe("hostComputerHref", () => {
-  it("lands on the computer's row in Computers; null off a computer", () => {
+  it("opens the computer it runs on; null off a computer", () => {
     expect(
       hostComputerHref(row({ hostComputer: { id: "c 1", name: "devbox" } }))
-    ).toBe("/computers?focus=c%201");
+    ).toBe("/computers/c%201");
     expect(hostComputerHref(row({ hostComputer: null }))).toBeNull();
     expect(hostComputerHref(row({}))).toBeNull();
   });

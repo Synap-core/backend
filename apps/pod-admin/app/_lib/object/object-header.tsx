@@ -26,6 +26,40 @@ export interface ObjectCrumb {
   href?: string;
 }
 
+/** The crumbs back to where this page sits, the last one the page itself. */
+export function Breadcrumbs({ crumbs }: { crumbs: ObjectCrumb[] }) {
+  return (
+    <nav aria-label="Breadcrumb">
+      <ol className="flex flex-wrap items-center gap-1 text-[12px] text-foreground/65">
+        {crumbs.map((crumb, i) => (
+          <li
+            key={`${crumb.label}-${i}`}
+            className="flex min-w-0 items-center gap-1"
+          >
+            {i > 0 && (
+              <span aria-hidden className="text-foreground/40">
+                /
+              </span>
+            )}
+            {crumb.href ? (
+              <Link
+                href={crumb.href}
+                className="truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
+                {crumb.label}
+              </Link>
+            ) : (
+              <span aria-current="page" className="truncate">
+                {crumb.label}
+              </span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
 export interface ObjectHeaderProps {
   /** Registry kind (`automation`, `session`, `entity`, …) — icon + noun. */
   kind: string;
@@ -33,9 +67,10 @@ export interface ObjectHeaderProps {
   profile?: ProfileIdentityInput | null;
   /**
    * The noun line, when the registry noun is not the whole story (an entity's
-   * profile name, "Rule · cron"). Defaults to the registry noun.
+   * profile name, "Rule · cron"), or the noun with a neutral fact chip beside
+   * it (an app's "how it connects"). Defaults to the registry noun.
    */
-  noun?: string;
+  noun?: ReactNode;
   title: string;
   /** One plain sentence: what this is doing, or what is wrong with it. */
   summary?: ReactNode;
@@ -63,34 +98,7 @@ export function ObjectHeader({
   return (
     <header className="flex flex-col gap-3">
       {breadcrumb && breadcrumb.length > 0 && (
-        <nav aria-label="Breadcrumb">
-          <ol className="flex flex-wrap items-center gap-1 text-[12px] text-foreground/65">
-            {breadcrumb.map((crumb, i) => (
-              <li
-                key={`${crumb.label}-${i}`}
-                className="flex min-w-0 items-center gap-1"
-              >
-                {i > 0 && (
-                  <span aria-hidden className="text-foreground/40">
-                    /
-                  </span>
-                )}
-                {crumb.href ? (
-                  <Link
-                    href={crumb.href}
-                    className="truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                  >
-                    {crumb.label}
-                  </Link>
-                ) : (
-                  <span aria-current="page" className="truncate">
-                    {crumb.label}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ol>
-        </nav>
+        <Breadcrumbs crumbs={breadcrumb} />
       )}
 
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -107,9 +115,9 @@ export function ObjectHeader({
                 {title}
               </h1>
               {status && <StatusPill kind={status.kind} label={status.label} />}
-              <span className="text-[12.5px] text-foreground/65">
+              <div className="flex items-center gap-1.5 text-[12.5px] text-foreground/65">
                 {nounLine}
-              </span>
+              </div>
             </div>
             {summary && (
               <p className="max-w-2xl text-[13px] leading-relaxed text-foreground/65">

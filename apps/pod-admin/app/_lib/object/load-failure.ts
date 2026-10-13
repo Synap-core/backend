@@ -13,12 +13,27 @@ export interface LoadFailure {
 }
 
 /**
+ * How a page words its failures when the default does not fit. An object
+ * with no page in the Synap app (a computer, a connected app — the console is
+ * the only place they are drawn) passes `inApp: false`, so no sentence sends
+ * the reader there; the frame then drops its "Open in app" too
+ * (`ObjectFrame.failure`'s `openIn`). `notFound` / `forbidden` replace those
+ * two sentences when the page knows where the reader should look instead.
+ */
+export interface FailureWording {
+  inApp?: boolean;
+  notFound?: string;
+  forbidden?: string;
+}
+
+/**
  * A failed object read, in words. `noun` is the registry noun ("Rule"), read
  * lowercase inside the sentences. Null when there is no error.
  */
 export function loadFailure(
   error: TrpcErrorLike,
-  noun: string
+  noun: string,
+  wording: FailureWording = {}
 ): LoadFailure | null {
   if (!error) return null;
   const n = noun.toLowerCase();
@@ -30,29 +45,53 @@ export function loadFailure(
         chip: "Sign in required",
       };
     case "NOT_FOUND":
-      return {
-        title: `This ${n} couldn’t be found`,
-        message:
-          "It may have been deleted, or the link is stale. You can still try opening it in the Synap app.",
-        chip: "Not found",
-      };
+      return notFound(noun, wording);
     case "FORBIDDEN":
       return {
         title: `You don’t have access to this ${n}`,
-        message: `You’re signed in, but this ${n} isn’t visible to you. Ask the owner to share it, or open it in the Synap app if you have access there.`,
+        message:
+          wording.forbidden ??
+          (wording.inApp === false
+            ? `You’re signed in, but this ${n} isn’t visible to you. Ask the owner to share it.`
+            : `You’re signed in, but this ${n} isn’t visible to you. Ask the owner to share it, or open it in the Synap app if you have access there.`),
         chip: "No access",
       };
     default:
-      return couldNotLoad(noun);
+      return couldNotLoad(noun, wording);
   }
 }
 
+/**
+ * Not there — also what a successful read that does not hold the object (a
+ * list without that id) reads as.
+ */
+export function notFound(
+  noun: string,
+  wording: FailureWording = {}
+): LoadFailure {
+  return {
+    title: `This ${noun.toLowerCase()} couldn’t be found`,
+    message:
+      wording.notFound ??
+      (wording.inApp === false
+        ? "It may have been deleted, or the link is stale."
+        : "It may have been deleted, or the link is stale. You can still try opening it in the Synap app."),
+    chip: "Not found",
+  };
+}
+
 /** The generic failure — also what an empty successful read reads as. */
-export function couldNotLoad(noun: string): LoadFailure {
+export function couldNotLoad(
+  noun: string,
+  wording: FailureWording = {}
+): LoadFailure {
   const n = noun.toLowerCase();
   return {
     title: `This ${n} couldn’t be loaded`,
-    message: `Something went wrong while loading this ${n}. Try again, or open it in the Synap app.`,
+    message:
+      wording.inApp === false
+        ? `Something went wrong while loading this ${n}. Try again.`
+        : `Something went wrong while loading this ${n}. Try again, or open it in the Synap app.`,
     chip: "Couldn’t load",
   };
 }

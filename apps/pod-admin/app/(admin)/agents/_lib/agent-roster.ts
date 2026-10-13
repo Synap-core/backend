@@ -17,7 +17,7 @@ import {
   type AgentMarkRowLike,
   type AgentReachRowLike,
 } from "@synap-core/types/agents";
-import { navHref } from "../../../../lib/console-nav";
+import { computerHref, navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
 import { AGENT_MARK_STATUS } from "../../components/status-tone";
 
@@ -95,11 +95,9 @@ export function agentReviewHref(row: AgentRosterRowLike): string {
   });
 }
 
-/** Where the computer an agent runs on is listed; null when it runs on none. */
+/** The page of the computer an agent runs on; null when it runs on none. */
 export function hostComputerHref(row: AgentRosterRowLike): string | null {
-  return row.hostComputer
-    ? navHref("computers", { focus: row.hostComputer.id })
-    : null;
+  return row.hostComputer ? computerHref(row.hostComputer.id) : null;
 }
 
 /** Why the pod cannot hand this agent work, as a sentence. */

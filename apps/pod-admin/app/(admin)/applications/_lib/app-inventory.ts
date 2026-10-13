@@ -29,6 +29,7 @@ import {
 } from "@synap-core/types/membrane";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { resolveConnectionStateLabel } from "@synap-core/types/vocabulary";
+import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 
 // ─── How it connects ─────────────────────────────────────────────────────────
@@ -84,8 +85,6 @@ export function statePill(state: ConnectionState): {
     label: resolveConnectionStateLabel(state, "app"),
   };
 }
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 function time(value: Date | string | null | undefined): number | null {
   if (!value) return null;

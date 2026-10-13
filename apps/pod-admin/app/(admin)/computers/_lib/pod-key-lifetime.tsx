@@ -16,8 +16,8 @@ import { Button, Input, addToast } from "@heroui/react";
 import { useCallback, useEffect, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import type { MachineDefaults } from "../../../../lib/machine-defaults";
-import { days } from "./computer-model";
-import { FormModal } from "./computer-modals";
+import { FormModal } from "../../components/form-modal";
+import { days, validKeyTtl } from "./computer-model";
 
 type Read =
   | { state: "loading" }
@@ -132,8 +132,7 @@ function PodKeyLifetimeModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const n = Number(draft);
-  const valid =
-    Number.isInteger(n) && n >= value.minKeyTtlDays && n <= value.maxKeyTtlDays;
+  const valid = validKeyTtl(n, value);
 
   const save = async () => {
     setSaving(true);

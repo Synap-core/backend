@@ -3,10 +3,11 @@
 /**
  * Updates — which version this pod runs and how it updates.
  *
- *   • Release        — the release the last record proves, the channel the pod
- *                      follows, and what the last update did (applied / rolled
- *                      back / failed) with its recorded reason in plain words.
- *   • Auto-update    — the switch and the channel, both stored on the POD
+ *   • Release        — the release the last record proves, and what the last
+ *                      update did (applied / rolled back / failed) with its
+ *                      recorded reason in plain words.
+ *   • Auto-update    — the switch and the channel (shown here only, once),
+ *                      both stored on the POD
  *                      (`/api/pod-updates`). Editable only by a pod admin
  *                      (`canEdit`); the pod re-checks on every write.
  *   • Update now     — the exact host command. The console cannot run host
@@ -20,7 +21,7 @@
 import { Radio, RadioGroup, Switch, addToast } from "@heroui/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { CopyButton } from "../../_lib/copy-button";
+import { CommandLine } from "../../_lib/command-line";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
 import { PageHeader, PageShell } from "../components/page-header";
 import {
@@ -56,9 +57,14 @@ export default function UpdatesPage() {
         description="Which version your pod runs and how it updates."
       />
       {q.isLoading ? (
-        <SectionCard title="Release">
-          <ResourceRowSkeleton count={2} />
-        </SectionCard>
+        // The three cards the page lands with, so nothing jumps on arrival.
+        <div className="flex flex-col gap-4" aria-busy="true">
+          {["Release", "Auto-update", "How to update now"].map((title) => (
+            <SectionCard key={title} title={title}>
+              <ResourceRowSkeleton count={title === "Release" ? 2 : 1} />
+            </SectionCard>
+          ))}
+        </div>
       ) : q.isError || !q.data ? (
         <SectionCard title="Release">
           {q.error instanceof PodUpdatesError && q.error.status === 404 ? (
@@ -97,12 +103,11 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
 }
 
 function ReleaseCard({ view }: { view: PodUpdatesView }) {
-  const { lastUpdate, settings } = view;
+  const { lastUpdate } = view;
   const release = currentRelease(lastUpdate);
   const outcome =
     lastUpdate.kind === "recorded" ? outcomeView(lastUpdate.outcome) : null;
   const when = lastUpdate.kind === "recorded" ? lastUpdate.outcome.at : null;
-  const channel = UPDATE_CHANNELS.find((c) => c.id === settings.channel);
 
   return (
     <SectionCard title="Release" hint="What this pod runs, and the last update">
@@ -117,10 +122,6 @@ function ReleaseCard({ view }: { view: PodUpdatesView }) {
                 "Not recorded"
               )
             }
-          />
-          <Fact
-            label="Channel"
-            value={channel ? `${channel.label} — ${channel.description}` : null}
           />
           {when && (
             <Fact
@@ -257,12 +258,7 @@ function UpdateNowCard({ channel }: { channel: UpdateChannel }) {
           This console can&apos;t run commands on the host, so updating by hand
           happens in a terminal there.
         </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <code className="min-w-0 max-w-full flex-1 overflow-x-auto whitespace-nowrap rounded-medium bg-foreground/[0.06] px-3 py-2 font-mono text-[12.5px] text-foreground">
-            {command}
-          </code>
-          <CopyButton text={command} label="Copy" />
-        </div>
+        <CommandLine command={command} />
       </div>
     </SectionCard>
   );

@@ -22,7 +22,7 @@
  * (the pod-wide Keys list skips workspace keys, so focusing one there would
  * show nothing).
  *
- * A member (D8) only searches what they can open — proposals, in Review. The
+ * A member only searches what they can open — proposals, in Review. The
  * other categories' reads are admin procedures and are never sent.
  *
  * Keyboard model (a combobox: focus stays in the input, the highlighted
@@ -51,6 +51,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
   useEffect,
   useId,
@@ -280,13 +281,14 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     // Agents
     bucket = [];
     const agentItems = agentsQuery.data?.users ?? [];
-    // A computer is an agent user too, but it has its own page and bucket.
-    const computerIds = new Set((computersQuery.data ?? []).map((c) => c.id));
     for (const a of agentItems) {
-      if (computerIds.has(a.id)) continue;
+      const meta = (a.agentMetadata ?? {}) as { agentType?: string };
+      // A computer is an agent user too, but it has its own page and bucket.
+      // Read off the row itself, so a failed computers read never lets one
+      // through as an agent.
+      if (meta.agentType === MACHINE_AGENT_TYPE) continue;
       const hay = `${a.name ?? ""} ${a.email}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
-      const meta = (a.agentMetadata ?? {}) as { agentType?: string };
       bucket.push({
         id: a.id,
         category: "agent",
