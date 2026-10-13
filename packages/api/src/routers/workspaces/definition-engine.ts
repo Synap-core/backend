@@ -121,6 +121,15 @@ const templateLifecycleSchema = z.object({
   options: z.array(z.record(z.string(), z.unknown())),
 });
 
+/**
+ * `settings || patch` — only the patch's keys, merged in the UPDATE itself.
+ * These stamps used to write back a settings blob read earlier, which reverted
+ * whatever landed in between (the finisher, a reconcile, layer 2).
+ */
+function mergedSettings(patch: Partial<WorkspaceSettings>) {
+  return drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+}
+
 export const definitionEngineProcedures = {
   /**
    * PREFLIGHT the create path — write-free. The missing half of this door.
@@ -1118,10 +1127,7 @@ export const definitionEngineProcedures = {
                   await db
                     .update(workspaces)
                     .set({
-                      settings: {
-                        ...(wsSettings ?? {}),
-                        appId: input.appId,
-                      } satisfies WorkspaceSettings,
+                      settings: mergedSettings({ appId: input.appId }),
                     })
                     .where(eq(workspaces.id, ws.id));
                 } catch {
@@ -1540,16 +1546,13 @@ export const definitionEngineProcedures = {
                   with: { workspace: true },
                 });
                 if (failedWs?.workspace) {
-                  const existingSettings = (failedWs.workspace.settings ??
-                    {}) as WorkspaceSettings;
                   await db
                     .update(workspaces)
                     .set({
-                      settings: {
-                        ...existingSettings,
+                      settings: mergedSettings({
                         proposalId: input.proposalId,
                         ...(input.appId ? { appId: input.appId } : {}),
-                      } satisfies WorkspaceSettings,
+                      }),
                       provisioningProposalId: input.proposalId,
                     })
                     .where(eq(workspaces.id, failedWs.workspace.id));
@@ -1574,23 +1577,16 @@ export const definitionEngineProcedures = {
           // "from <source>" tag (composedFrom).
           if (input.proposalId || input.appId || composedFrom.length > 0) {
             try {
-              const ws = await db.query.workspaces.findFirst({
-                where: eq(workspaces.id, result.workspaceId),
-                columns: { settings: true },
-              });
-              const existingSettings = (ws?.settings ??
-                {}) as WorkspaceSettings;
               await db
                 .update(workspaces)
                 .set({
-                  settings: {
-                    ...existingSettings,
+                  settings: mergedSettings({
                     ...(input.proposalId
                       ? { proposalId: input.proposalId }
                       : {}),
                     ...(input.appId ? { appId: input.appId } : {}),
                     ...(composedFrom.length > 0 ? { composedFrom } : {}),
-                  } satisfies WorkspaceSettings,
+                  }),
                   ...(input.proposalId
                     ? { provisioningProposalId: input.proposalId }
                     : {}),

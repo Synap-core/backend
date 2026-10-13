@@ -250,6 +250,15 @@ interface LegacyWorkspaceMatch {
 }
 
 /**
+ * `settings || {proposalId}` — the idempotency key written into the stored
+ * blob in the same statement, so a write never carries back a settings object
+ * read before someone else (the reconcile) merged into it.
+ */
+function withProposalId(proposalId: string) {
+  return drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || jsonb_build_object('proposalId', ${proposalId}::text)`;
+}
+
+/**
  * Fallback identity match for workspaces installed BEFORE migration 0039
  * promoted `proposalId`/`packageSlug` to indexed columns. Those rows have
  * `provisioning_proposal_id = NULL`, so the primary predicate in step 1 below
@@ -925,15 +934,16 @@ export async function createWorkspaceFromDefinitionIdempotent(
         // instead of re-running this fallback — mirrors the existing
         // "stamp so next hit short-circuits" pattern used for packageVersion
         // in `reconcileWorkspaceIfStale` above.
+        //
+        // Writes ONLY its key, atomically: `currentSettings` was read BEFORE
+        // `reconcileWorkspaceIfStale` merged its patch, so writing it back
+        // whole reverted the reconcile.
         try {
           await db
             .update(workspaces)
             .set({
               provisioningProposalId: packageSlug,
-              settings: {
-                ...(currentSettings ?? {}),
-                proposalId: packageSlug,
-              } satisfies WorkspaceSettings,
+              settings: withProposalId(packageSlug),
             })
             .where(eq(workspaces.id, fallback.id));
         } catch (err) {
@@ -979,19 +989,12 @@ export async function createWorkspaceFromDefinitionIdempotent(
     // a setup endpoint).
     if (proposalId) {
       try {
-        const ws = await db.query.workspaces.findFirst({
-          where: eq(workspaces.id, result.workspaceId),
-          columns: { settings: true },
-        });
-        const existingSettings = (ws?.settings ?? {}) as WorkspaceSettings;
+        // Key-only and atomic (never a read-then-write-back of the blob).
         await db
           .update(workspaces)
           .set({
             provisioningProposalId: proposalId,
-            settings: {
-              ...existingSettings,
-              proposalId,
-            } satisfies WorkspaceSettings,
+            settings: withProposalId(proposalId),
           })
           .where(eq(workspaces.id, result.workspaceId));
       } catch (err) {

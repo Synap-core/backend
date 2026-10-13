@@ -33,6 +33,9 @@ const h = vi.hoisted(() => ({
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
+  /** What the stubbed layer-1 reconcile writes (default: nothing). */
+  onReconcile: null as
+    null | ((input: { workspaceId: string }) => Promise<void>),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -49,7 +52,12 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db,
     getDb: async () => db,
-    reconcileWorkspaceFromDefinition: async () => ({}),
+    reconcileWorkspaceFromDefinition: async (input: {
+      workspaceId: string;
+    }) => {
+      await h.onReconcile?.(input);
+      return {};
+    },
     // The create: the REAL repository insert (so the identity pre-check and
     // the 0308 indexes are live) + an owner membership.
     createWorkspaceFromDefinition: async (input: {
@@ -331,6 +339,46 @@ describe("a template is installed once per pod (PGlite, real 0308 indexes)", () 
     const twin = await seed({ name: `Lone ${slug}`, owner: U, subtype: slug });
     const r = await install(U, slug, `Lone ${slug}`);
     expect(r).toMatchObject({ workspaceId: twin, created: false });
+  });
+
+  it("adopting a legacy twin keeps what the reconcile merged (writes only its key)", async () => {
+    const U = randomUUID();
+    const slug = `adopt-${uniq()}`;
+    const twin = await seed({ name: `Adopt ${slug}`, owner: U, subtype: slug });
+    // The reconcile merges into the stored row AFTER the adopt branch read it.
+    h.onReconcile = async ({ workspaceId }) => {
+      await q(
+        `update workspaces set settings = settings || '{"intent":{"label":"Reconciled"}}'::jsonb where id = $1`,
+        [workspaceId]
+      );
+    };
+    try {
+      const r = await createWorkspaceFromDefinitionIdempotent({
+        definition: { workspaceName: `Adopt ${slug}` } as never,
+        userId: U,
+        packageSlug: slug,
+        packageVersion: "2.0.0",
+        workspaceName: `Adopt ${slug}`,
+      });
+      expect(r).toMatchObject({ workspaceId: twin, created: false });
+    } finally {
+      h.onReconcile = null;
+    }
+    const [row] = (
+      await q<{
+        settings: Record<string, unknown>;
+        provisioning_proposal_id: string | null;
+      }>(
+        `select settings, provisioning_proposal_id from workspaces where id = $1`,
+        [twin]
+      )
+    ).rows;
+    expect(row.settings).toMatchObject({
+      workspaceSubtype: slug,
+      intent: { label: "Reconciled" },
+      proposalId: slug,
+    });
+    expect(row.provisioning_proposal_id).toBe(slug);
   });
 
   it("an ARCHIVED template space blocks nothing — a fresh install creates", async () => {
