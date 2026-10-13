@@ -16,6 +16,10 @@ import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
+import {
+  UpdateEntitiesInputSchema,
+  updateEntities,
+} from "../../services/entities/update-entities.js";
 
 export const entitiesRouter = router({
   /**
@@ -353,6 +357,45 @@ export const entitiesRouter = router({
         // when there are none, so the common envelope is byte-identical.
         ...(unmodeled.length ? { unmodeled } : {}),
       };
+    }),
+
+  /**
+   * Update up to 500 entities in ONE governed call (R1 batch writes).
+   * Requires: hub-protocol.write scope
+   *
+   * A thin door over `updateEntities` (services/entities/update-entities.ts):
+   * each item is written through `entities.update` or collected into ONE
+   * review pack; the answer lists applied / proposed / denied / skipped.
+   */
+  updateEntities: scopedProcedure(["hub-protocol.write"])
+    .input(
+      UpdateEntitiesInputSchema.extend({
+        userId: z.string(),
+        // agentUserId: the per-human agent user acting on behalf of userId.
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      assertMayActAs(ctx, input.userId);
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined,
+        agentUserId
+      );
+      return updateEntities({
+        ctx: callerContext,
+        items: input.items,
+        agentUserId,
+        // "agent" is not a valid EventSource — agent identity is on agentUserId.
+        source: "intelligence",
+        reasoning: input.reasoning,
+        idempotencyKey: input.idempotencyKey,
+        validate: input.validate,
+      });
     }),
 
   /**

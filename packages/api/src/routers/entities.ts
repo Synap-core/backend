@@ -238,6 +238,7 @@ export const entitiesRouter = router({
     }),
 
   update: mutateProcs.update,
+  updateMany: mutateProcs.updateMany,
   attachFacet: facetProcs.attachFacet,
   updateFacet: facetProcs.updateFacet,
   detachFacet: facetProcs.detachFacet,

@@ -13,7 +13,11 @@
  * grammar test checks the list against the known kinds.
  */
 import { describe, expect, it } from "vitest";
-import { DESTRUCTIVE_ACTIONS, GOVERNED_WRITE_DOORS } from "./index.js";
+import {
+  DESTRUCTIVE_ACTIONS,
+  GOVERNED_WRITE_DOORS,
+  grantRequestKey,
+} from "./index.js";
 import {
   GRANT_ACTIONS,
   GRANT_GATE_ACTIONS,
@@ -30,7 +34,12 @@ const entityDoorVerbs = Object.keys(GOVERNED_WRITE_DOORS)
 const derived = [
   ...new Set(
     [...entityDoorVerbs, ...DESTRUCTIVE_ACTIONS].filter(
-      (v) => SEGMENT.test(v) && !crud.includes(v)
+      // A door whose grant FOLDS onto a CRUD verb (`update_pack` → `update`)
+      // is granted by that verb and never spelled in a pattern.
+      (v) =>
+        SEGMENT.test(v) &&
+        !crud.includes(v) &&
+        !crud.includes(grantRequestKey("entity", v).action)
     )
   ),
 ];

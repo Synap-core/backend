@@ -165,6 +165,14 @@
       "types": "./dist/proposals/intent.d.ts",
       "import": "./dist/proposals/intent.js"
     },
+    "./proposals/item-pack": {
+      "types": "./dist/proposals/item-pack.d.ts",
+      "import": "./dist/proposals/item-pack.js"
+    },
+    "./proposals/deferred-writes": {
+      "types": "./dist/proposals/deferred-writes.d.ts",
+      "import": "./dist/proposals/deferred-writes.js"
+    },
     "./proposals/attention": {
       "types": "./dist/proposals/attention.d.ts",
       "import": "./dist/proposals/attention.js"
@@ -300,10 +308,6 @@
     "./attention-order": {
       "types": "./dist/attention-order.d.ts",
       "import": "./dist/attention-order.js"
-    },
-    "./proposals/deferred-writes": {
-      "types": "./dist/proposals/deferred-writes.d.ts",
-      "import": "./dist/proposals/deferred-writes.js"
     }
   },
   "scripts": {

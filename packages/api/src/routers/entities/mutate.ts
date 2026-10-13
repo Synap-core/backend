@@ -55,6 +55,10 @@ import {
 } from "../../services/proposals/stamp-materialized.js";
 import { createLogger } from "@synap-core/core";
 import {
+  UpdateEntitiesInputSchema,
+  updateEntities,
+} from "../../services/entities/update-entities.js";
+import {
   entityWriteVisibleWhere,
   runSignalWrite,
   mergeSystemData,
@@ -153,6 +157,12 @@ export const mutateProcs = {
          * stale value gets CONFLICT and NOTHING in the call is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /**
+         * The `updateEntities` call this write belongs to. Stamped on the
+         * gate data, so the AUTO_APPROVED receipt carries it and a feed can
+         * fold one batch into one line. Never changes the verdict.
+         */
+        batchId: z.string().uuid().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
         /** Workspace used for permission, audit, overlays, and side effects. */
@@ -415,6 +425,7 @@ export const mutateProcs = {
           deleteProperties: input.deleteProperties,
           documentId: input.documentId,
           profileSlug: input.profileSlug,
+          ...(input.batchId ? { batchId: input.batchId } : {}),
         },
       });
 
@@ -691,6 +702,31 @@ export const mutateProcs = {
         },
       };
     }),
+  /**
+   * Update up to 500 records in ONE governed call (R1 batch writes). Each item
+   * is written through `update` above or collected into ONE review pack — see
+   * `services/entities/update-entities.ts`.
+   */
+  updateMany: podProcedure
+    .input(
+      UpdateEntitiesInputSchema.extend({
+        agentUserId: z.string().uuid().optional(),
+        source: z
+          .enum(["user", "ai", "intelligence", "system", "agent", "extension"])
+          .optional(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      updateEntities({
+        ctx,
+        items: input.items,
+        agentUserId: input.agentUserId,
+        source: input.source,
+        reasoning: input.reasoning,
+        idempotencyKey: input.idempotencyKey,
+        validate: input.validate,
+      })
+    ),
   delete: podProcedure
     .input(
       z.object({

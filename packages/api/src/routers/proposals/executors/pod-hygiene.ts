@@ -26,6 +26,7 @@ import {
   type ReadCleanupPackItem,
 } from "@synap-core/types/pod-hygiene";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import type { StoredItemOutcome } from "@synap-core/types/proposals/item-pack";
 import type { Context } from "../../../context.js";
 import { automationsRouter } from "../../automations.js";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
@@ -44,47 +45,14 @@ import {
   type ProposalExecutorResult,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import { applyItemPack } from "../../../services/proposals/item-pack.js";
 
-/** What one pack item did — stored on `data.outcomes[ref]` the moment it happens. */
-interface StoredOutcome {
-  outcome: "applied" | "skipped_by_reviewer" | "refused";
-  reason?: string;
-  at: string;
-}
-
-type ItemOutcome = StoredOutcome & {
+type ItemOutcome = StoredItemOutcome & {
   ref: string;
   subjectId: string;
   name: string;
   subjectKind: string;
 };
-
-/**
- * Write ONE item's outcome into the pack row as it happens, so a crash midway
- * leaves a true partial record rather than invisible side effects. A legacy v1
- * `outcomes` array is replaced by the keyed object.
- */
-async function recordOutcome(
-  packId: string,
-  ref: string,
-  stored: StoredOutcome
-): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      data: drizzleSql`jsonb_set(
-        COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
-          'outcomes',
-          CASE WHEN jsonb_typeof(${proposals.data}->'outcomes') = 'object'
-            THEN ${proposals.data}->'outcomes' ELSE '{}'::jsonb END
-        ),
-        ARRAY['outcomes', ${ref}::text],
-        ${JSON.stringify(stored)}::jsonb,
-        true
-      )`,
-    })
-    .where(eq(proposals.id, packId));
-}
 
 async function alreadyApproved(proposalId: string): Promise<boolean> {
   const [row] = await db
@@ -250,67 +218,28 @@ export async function applyCleanupPack(args: ProposalExecutorArgs): Promise<{
 }> {
   const { proposal, userId, input } = args;
   const ownerUserId = packOwner(proposal);
-  const data = (proposal.data ?? {}) as Record<string, unknown>;
-  const dispositions = (data.dispositions ?? {}) as Record<
-    string,
-    { status?: string }
-  >;
-  // Outcomes a previous, interrupted approve already recorded. An item recorded
-  // `applied` is not run again: its door would now refuse ("Already closed")
-  // and overwrite a true record with a false one.
-  const prior =
-    data.outcomes &&
-    typeof data.outcomes === "object" &&
-    !Array.isArray(data.outcomes)
-      ? (data.outcomes as Record<string, StoredOutcome | undefined>)
-      : {};
-  const read = readPackItems(data);
-  const outcomes: ItemOutcome[] = [];
-  const appliedIds: string[] = [];
-
-  for (const item of read.items) {
-    const at = new Date().toISOString();
-    const identity = {
-      ref: item.ref,
-      subjectId: item.subject.id,
-      name: item.subject.name,
-      subjectKind: item.subject.kind,
-    };
-    const previous = prior[item.ref];
-    if (previous?.outcome === "applied") {
-      outcomes.push({ ...previous, ...identity });
-      appliedIds.push(item.subject.id);
-      continue;
-    }
-    let stored: StoredOutcome;
-    if (dispositions[item.ref]?.status === "reject") {
-      stored = { outcome: "skipped_by_reviewer", at };
-    } else {
-      try {
-        await applyPackItem(item, {
-          ownerUserId,
-          approverUserId: userId,
-          packId: input.proposalId,
-        });
-        stored = { outcome: "applied", at };
-        appliedIds.push(item.subject.id);
-      } catch (err) {
-        stored = {
-          outcome: "refused",
-          reason: err instanceof Error ? err.message : String(err),
-          at,
-        };
-      }
-    }
-    await recordOutcome(input.proposalId, item.ref, stored);
-    outcomes.push({
-      ...stored,
-      ref: item.ref,
-      subjectId: item.subject.id,
-      name: item.subject.name,
-      subjectKind: item.subject.kind,
-    });
-  }
+  const read = readPackItems(proposal.data ?? {});
+  const results = await applyItemPack({
+    packId: input.proposalId,
+    data: proposal.data,
+    items: read.items,
+    apply: (item) =>
+      applyPackItem(item, {
+        ownerUserId,
+        approverUserId: userId,
+        packId: input.proposalId,
+      }),
+  });
+  const outcomes: ItemOutcome[] = results.map(({ item, outcome }) => ({
+    ...outcome,
+    ref: item.ref,
+    subjectId: item.subject.id,
+    name: item.subject.name,
+    subjectKind: item.subject.kind,
+  }));
+  const appliedIds = outcomes
+    .filter((o) => o.outcome === "applied")
+    .map((o) => o.subjectId);
   return { outcomes, appliedIds, unreadable: read.unreadable };
 }
 

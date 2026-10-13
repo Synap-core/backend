@@ -40,6 +40,7 @@ import {
   type MergeMaterializedStamp,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { readItemPackRefs } from "@synap-core/types/proposals/item-pack";
 import { ProposalStatus } from "@synap/database/schema";
 import type {
   StoredProposalData,
@@ -232,7 +233,7 @@ const LIST_TARGET_TYPES = [
  * unfiltered lens, whose floor is the visibility predicate applied downstream,
  * not workspace membership.
  */
-async function assertProposalWorkspaceRead(
+export async function assertProposalWorkspaceRead(
   workspaceId: string,
   userId: string
 ): Promise<void> {
@@ -288,8 +289,8 @@ async function returnRejectedSlot(
 /**
  * The per-item doors (`rejectItem` / `restoreItem`) act on a PENDING proposal
  * only — a disposition written after approval is a decision nobody reads. And
- * when the proposal carries an item list whose entries name a `ref` (the
- * cleanup-pack shape), the ref must be one of them: a typo would otherwise
+ * when the proposal carries an item list whose entries name a `ref` (an item
+ * pack: the cleanup pack, the update pack), the ref must be one of them: a typo would otherwise
  * persist a disposition that silently matches nothing. A composite graph has no
  * `items[].ref` and keeps its existing `$opN` / op-ref keys unchecked here.
  */
@@ -303,15 +304,7 @@ function assertItemDoorWritable(
       message: `Items can only be reviewed on a pending proposal (this one is ${proposal.status}).`,
     });
   }
-  const items = (proposal.data as { items?: unknown } | null)?.items;
-  if (!Array.isArray(items)) return;
-  const refs = items
-    .map((item) =>
-      item && typeof item === "object"
-        ? (item as { ref?: unknown }).ref
-        : undefined
-    )
-    .filter((ref): ref is string => typeof ref === "string");
+  const refs = readItemPackRefs(proposal.data);
   if (refs.length > 0 && !refs.includes(itemRef)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
