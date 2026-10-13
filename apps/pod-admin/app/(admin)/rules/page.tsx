@@ -6,14 +6,18 @@
  * Rows are `automations.listPage` (user-floored, D1a) followed to its end so
  * the filter counts are true over every rule, joined on `flowId` with the
  * `runs.groups` automation rows for health (latest run, failures this week).
- * Each row is identity + one line + one act (`rule-rows.ts` decides which);
- * the row opens `/rules/[id]`. Authoring stays in the desktop app.
+ * The first page draws at once; the counts say "…" until both reads are
+ * drained, and a pill waits for its health rather than guessing. Each row is
+ * identity + one line + one act (`rule-rows.ts` decides which), a table from
+ * `md` up and a stacked row on a phone; the row opens `/rules/[id]`.
+ * Authoring stays in the desktop app.
  *
  * Receivers: `?filter=` (active · failing · never-ran · paused · drafts) and
  * `?focus=<automationId>` — Home's "rule never ran" links send both.
  */
 
 import { addToast, Button } from "@heroui/react";
+import type { ReactNode } from "react";
 import { Zap } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -25,7 +29,9 @@ import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
+import { MD_UP, useMediaQuery } from "../../../lib/use-media-query";
 import { ConfirmModal } from "../components/confirm-modal";
+import { StatusPill, type StatusKind } from "../components/status-pill";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
@@ -46,7 +52,9 @@ import {
   ruleRowAction,
   runResultMessage,
   runsPhrase,
+  type RuleFacts,
   type RuleHealth,
+  type RuleRowAction,
 } from "./_lib/rule-rows";
 import { useDrainPages } from "../../../lib/use-drain-pages";
 
@@ -120,15 +128,13 @@ function RulesInner() {
       id ? (byId.get(id) ?? "A space") : "All spaces";
   }, [spaces.data]);
 
+  const loading = rules.isLoading || isAuthRedirecting;
   // Counts and pills wait for health too: "Failing" read before the groups
   // land would undercount and then jump.
-  const loading =
-    rules.isLoading ||
-    ruleDrain.draining ||
-    groups.isLoading ||
-    groupDrain.draining ||
-    isAuthRedirecting;
+  const healthReady = !groups.isLoading && !groupDrain.draining;
+  const counting = ruleDrain.draining || !healthReady;
   const counts = ruleCounts(all, healthOf);
+  const wide = useMediaQuery(MD_UP);
   const visible = all.filter((r) => ruleMatches(filter, r, healthOf(r.id)));
   const focusId = useFocusRow({ ready: !loading });
   const [expanded, setExpanded] = useState(false);
@@ -144,7 +150,7 @@ function RulesInner() {
   const [actError, setActError] = useState<string | null>(null);
   const refresh = async () => {
     await Promise.all([
-      utils.automations.listPage.invalidate(),
+      utils.automations.invalidate(),
       utils.runs.groups.invalidate(),
     ]);
   };
@@ -177,6 +183,30 @@ function RulesInner() {
 
   const appExit = openIn({ kind: "app", appId: "rules" });
 
+  /** One rule's cells, shared by the table and the stacked row. */
+  function rowOf(rule: RuleRow): RuleRowView {
+    const health = healthOf(rule.id);
+    const act = ruleRowAction(rule, health);
+    return {
+      when: ruleWhenWords(
+        rule.triggerType,
+        rule.triggerConfig as Record<string, unknown> | null
+      ).text,
+      space: spaceName(rule.workspaceId),
+      lastRun: formatRelative(rule.lastRunAt, { empty: "never" }),
+      pill: healthReady ? rulePill(rule, health) : undefined,
+      action: act ? (
+        <RuleActButton
+          act={act}
+          onPress={() => {
+            setActError(null);
+            setPending({ kind: act, id: rule.id, name: rule.name });
+          }}
+        />
+      ) : undefined,
+    };
+  }
+
   return (
     <PageShell>
       <PageHeader
@@ -192,11 +222,16 @@ function RulesInner() {
         chips={RULE_FILTERS.map((f) => ({
           key: f.key,
           label: f.label,
-          count: loading || rules.isError ? undefined : counts[f.key],
+          count:
+            loading || rules.isError
+              ? undefined
+              : counting
+                ? "…"
+                : counts[f.key],
         }))}
       />
 
-      {callout && !loading && (
+      {callout && !loading && !ruleDrain.draining && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 ring-1 ring-inset ring-foreground/10">
           <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-foreground/80">
             {callout}
@@ -218,12 +253,16 @@ function RulesInner() {
         hint={
           loading || rules.isError
             ? undefined
-            : `${counts.active} active · ${counts.failing} failing${
-                ruleDrain.capped ? " · counts cover the first 2,000 rules" : ""
-              }`
+            : counting
+              ? "Counting…"
+              : `${counts.active} active · ${counts.failing} failing${
+                  ruleDrain.capped
+                    ? " · counts cover the first 2,000 rules"
+                    : ""
+                }`
         }
       >
-        {loading ? (
+        {loading || (visible.length === 0 && counting) ? (
           <ResourceRowSkeleton count={4} />
         ) : rules.isError ? (
           <ResourceRowError
@@ -233,62 +272,46 @@ function RulesInner() {
         ) : visible.length === 0 ? (
           <ResourceRowEmpty message={emptyMessage(filter, all.length)} />
         ) : (
-          <div className="-mx-2 divide-y divide-foreground/[0.05]">
-            {shown.map((rule) => {
-              const health = healthOf(rule.id);
-              const act = ruleRowAction(rule, health);
-              const when = ruleWhenWords(
-                rule.triggerType,
-                rule.triggerConfig as Record<string, unknown> | null
-              ).text;
-              const secondary = [
-                when,
-                spaceName(rule.workspaceId),
-                `Last run ${formatRelative(rule.lastRunAt, { empty: "never" })}`,
-                runsPhrase(rule),
-              ].join(" · ");
-              return (
-                <div
-                  key={rule.id}
-                  data-row-id={rule.id}
-                  className="rounded-md transition-shadow"
-                >
-                  <ResourceRow
-                    Icon={Zap}
-                    primary={rule.name}
-                    secondary={secondary}
-                    status={rulePill(rule, health)}
-                    onSelect={() =>
-                      router.push(`/rules/${encodeURIComponent(rule.id)}`)
-                    }
-                    wrap
-                    actions={
-                      act ? (
-                        <Button
-                          size="sm"
-                          variant="flat"
-                          radius="md"
-                          className="min-h-9"
-                          color={act === "pause" ? "warning" : "default"}
-                          onPress={() => {
-                            setActError(null);
-                            setPending({
-                              kind: act,
-                              id: rule.id,
-                              name: rule.name,
-                            });
-                          }}
-                        >
-                          {act === "pause" ? "Pause" : "Run now"}
-                        </Button>
-                      ) : undefined
-                    }
-                  />
-                </div>
-              );
-            })}
+          <>
+            {wide ? (
+              <RuleTable
+                rules={shown}
+                rowOf={rowOf}
+                onOpen={(id) => router.push(`/rules/${encodeURIComponent(id)}`)}
+              />
+            ) : (
+              <div className="-mx-2 divide-y divide-foreground/[0.05]">
+                {shown.map((rule) => {
+                  const row = rowOf(rule);
+                  return (
+                    <div
+                      key={rule.id}
+                      data-row-id={rule.id}
+                      className="rounded-md transition-shadow"
+                    >
+                      <ResourceRow
+                        Icon={Zap}
+                        primary={rule.name}
+                        secondary={[
+                          row.when,
+                          row.space,
+                          `Last run ${row.lastRun}`,
+                          runsPhrase(rule),
+                        ].join(" · ")}
+                        status={row.pill}
+                        onSelect={() =>
+                          router.push(`/rules/${encodeURIComponent(rule.id)}`)
+                        }
+                        wrap
+                        actions={row.action}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {shown.length < visible.length && (
-              <div className="px-3 pt-3">
+              <div className="px-1 pt-3">
                 <Button
                   size="sm"
                   variant="light"
@@ -299,7 +322,7 @@ function RulesInner() {
                 </Button>
               </div>
             )}
-          </div>
+          </>
         )}
         {groups.isError && !loading && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
@@ -348,6 +371,126 @@ function RulesInner() {
         )}
       </ConfirmModal>
     </PageShell>
+  );
+}
+
+type RuleRow = RuleFacts & {
+  workspaceId: string | null;
+  triggerConfig: unknown;
+};
+
+interface RuleRowView {
+  when: string;
+  space: string;
+  lastRun: string;
+  /** Absent until the rule's run health is read. */
+  pill: { kind: StatusKind; label: string } | undefined;
+  action: ReactNode;
+}
+
+function RuleActButton({
+  act,
+  onPress,
+}: {
+  act: NonNullable<RuleRowAction>;
+  onPress: () => void;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="flat"
+      radius="md"
+      className="min-h-9"
+      onPress={onPress}
+    >
+      {act === "pause" ? "Pause" : "Run now"}
+    </Button>
+  );
+}
+
+const TABLE_COLUMNS =
+  "grid grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,1.2fr)_6.5rem] items-center gap-3";
+
+/** The rules as a table: one line per rule, the act at the end of it. */
+function RuleTable({
+  rules,
+  rowOf,
+  onOpen,
+}: {
+  rules: readonly RuleRow[];
+  rowOf: (rule: RuleRow) => RuleRowView;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div role="table" aria-label="Rules" className="-mx-2">
+      <div
+        role="row"
+        className={`${TABLE_COLUMNS} border-b border-foreground/[0.06] px-2 pb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65`}
+      >
+        <div role="columnheader">Name</div>
+        <div role="columnheader">Trigger</div>
+        <div role="columnheader">Space</div>
+        <div role="columnheader">Last run</div>
+        <div role="columnheader">Runs / fails</div>
+        <div role="columnheader">Status</div>
+        <div role="columnheader">
+          <span className="sr-only">Action</span>
+        </div>
+      </div>
+      <div role="rowgroup" className="divide-y divide-foreground/[0.05]">
+        {rules.map((rule) => {
+          const row = rowOf(rule);
+          return (
+            <div
+              key={rule.id}
+              role="row"
+              data-row-id={rule.id}
+              className={`${TABLE_COLUMNS} min-h-11 rounded-md px-2 py-1.5 text-[12.5px] transition-colors hover:bg-foreground/[0.03]`}
+            >
+              <div role="cell" className="min-w-0">
+                <button
+                  type="button"
+                  onClick={() => onOpen(rule.id)}
+                  className="max-w-full truncate rounded-sm text-left text-[13px] font-medium text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  {rule.name}
+                </button>
+              </div>
+              <Cell>{row.when}</Cell>
+              <Cell>{row.space}</Cell>
+              <Cell>{row.lastRun}</Cell>
+              <Cell>
+                <span className="tabular">
+                  {rule.runCount.toLocaleString("en-US")} /{" "}
+                  {rule.failureCount.toLocaleString("en-US")}
+                </span>
+              </Cell>
+              <div role="cell" className="min-w-0">
+                {row.pill ? (
+                  <StatusPill kind={row.pill.kind} label={row.pill.label} />
+                ) : (
+                  <span
+                    aria-label="Reading run health"
+                    className="inline-block h-4 w-16 rounded bg-foreground/[0.07] shimmer-pulse"
+                  />
+                )}
+              </div>
+              <div role="cell" className="flex justify-end">
+                {row.action}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Cell({ children }: { children: ReactNode }) {
+  return (
+    <div role="cell" className="min-w-0 truncate text-foreground/65">
+      {children}
+    </div>
   );
 }
 

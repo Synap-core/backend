@@ -10,11 +10,14 @@
  */
 
 import { addToast, Button } from "@heroui/react";
+import type { inferRouterInputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
 import { useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { formatRelative, formatTimestamp } from "../../../../lib/format";
+import { FactsGrid } from "../../../_lib/object/facts-grid";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { StatusPill } from "../../components/status-pill";
@@ -27,13 +30,7 @@ import { runResultMessage } from "../../rules/_lib/rule-rows";
 import { flowNoun, runActions, triggeredByLabel } from "./run-board";
 
 export type RunFlowType =
-  | "automation"
-  | "playbook"
-  | "capture"
-  | "capability"
-  | "session"
-  | "chat"
-  | "agent_write";
+  inferRouterInputs<AppRouter>["runs"]["get"]["flowType"];
 
 export interface RunTarget {
   flowType: RunFlowType;
@@ -44,6 +41,8 @@ export interface RunTarget {
 
 /** Timeline entries drawn; the rest is one click away in the app. */
 const TIMELINE_MAX = 30;
+/** How often an open drawer re-reads a run that is still going. */
+const LIVE_POLL_MS = 5_000;
 
 export function RunDrawer({
   target,
@@ -55,7 +54,13 @@ export function RunDrawer({
   const utils = trpc.useUtils();
   const detail = trpc.runs.get.useQuery(
     { flowType: target?.flowType ?? "automation", id: target?.id ?? "" },
-    { enabled: target !== null, retry: false }
+    {
+      enabled: target !== null,
+      retry: false,
+      // A live run's status, steps and timeline move while the drawer is open.
+      refetchInterval: (query) =>
+        query.state.data?.run.status === "running" ? LIVE_POLL_MS : false,
+    }
   );
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const cancel = trpc.playbookRuns.cancelRun.useMutation();
@@ -152,30 +157,31 @@ export function RunDrawer({
           />
         ) : (
           <div className="flex flex-col gap-5">
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[12.5px]">
-              <Fact label="Started" value={formatTimestamp(run.startedAt)} />
-              <Fact
-                label="Finished"
-                value={
-                  run.completedAt
-                    ? formatRelative(run.completedAt)
+            <FactsGrid
+              columns={2}
+              facts={[
+                { label: "Started", value: formatTimestamp(run.startedAt) },
+                {
+                  label: "Finished",
+                  value: run.completedAt
+                    ? formatTimestamp(run.completedAt)
                     : run.status === "running"
                       ? "Still running"
-                      : "—"
-                }
-              />
-              {who && <Fact label="Started by" value={who} />}
-              {run.stepsCompleted !== null && (
-                <Fact
-                  label="Steps"
-                  value={
-                    run.stepsFailed
-                      ? `${run.stepsCompleted} done · ${run.stepsFailed} failed`
-                      : `${run.stepsCompleted} done`
-                  }
-                />
-              )}
-            </dl>
+                      : "—",
+                },
+                ...(who ? [{ label: "Started by", value: who }] : []),
+                ...(run.stepsCompleted !== null
+                  ? [
+                      {
+                        label: "Steps",
+                        value: run.stepsFailed
+                          ? `${run.stepsCompleted} done · ${run.stepsFailed} failed`
+                          : `${run.stepsCompleted} done`,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
 
             {run.error?.trim() && (
               <section className="flex flex-col gap-1 rounded-lg bg-status-down/[0.06] px-3 py-2.5 ring-1 ring-inset ring-status-down/30">
@@ -290,14 +296,5 @@ export function RunDrawer({
         )}
       </ConfirmModal>
     </>
-  );
-}
-
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      <dt className="text-[11.5px] text-foreground/65">{label}</dt>
-      <dd className="break-words text-foreground">{value}</dd>
-    </div>
   );
 }

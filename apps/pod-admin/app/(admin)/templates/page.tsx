@@ -29,8 +29,7 @@ import {
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
 import { useDrainPages } from "../../../lib/use-drain-pages";
-import { flowHealthSentence } from "../runs/_lib/run-board";
-import { templateHealthPill } from "./_lib/template-model";
+import { flowHealthPill, flowHealthSentence } from "../runs/_lib/run-board";
 
 const TITLE = "Templates";
 const DESCRIPTION =
@@ -143,7 +142,7 @@ function TemplatesInner() {
                     Icon={BookOpen}
                     primary={p.name}
                     secondary={secondary}
-                    status={templateHealthPill(p.status, g)}
+                    status={flowHealthPill(p.status, g)}
                     onSelect={() =>
                       router.push(`/templates/${encodeURIComponent(p.id)}`)
                     }

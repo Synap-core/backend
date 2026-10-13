@@ -11,6 +11,7 @@
  */
 
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
+import type { StatusKind } from "../../components/status-pill";
 import {
   formatRelative,
   isUuid,
@@ -101,8 +102,70 @@ export function flowIsFailing(g: FlowGroupFacts): boolean {
   return g.recentFailedCount > 0;
 }
 
-/** Days `recentFailedCount` looks back (`RECENT_FAILURE_WINDOW_DAYS`, api). */
-const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** The `runs.groups` columns a flow's health pill reads. */
+export interface FlowHealthFacts {
+  latestStatus: string;
+  recentFailedCount: number;
+  runningCount?: number;
+}
+
+/**
+ * A rule's or template's pill — the ONE severity order every flow list and
+ * flow page shares:
+ *   its own status first (stopped on error, paused, draft, archived: however
+ *   its old runs went), then never ran, then the LAST run failed (down), then
+ *   failures inside the window with a clean last run (stale — it recovered),
+ *   then running, then working.
+ * `status` is null where the flow's own row was not read (the Runs board);
+ * `group` is absent for a flow with no runs.
+ */
+export function flowHealthPill(
+  status: string | null,
+  group: FlowHealthFacts | null | undefined
+): { kind: StatusKind; label: string } {
+  switch (status) {
+    case "error":
+      return { kind: "down", label: "Stopped on error" };
+    case "paused":
+      return { kind: "unknown", label: "Paused" };
+    case "draft":
+      return { kind: "unknown", label: "Draft" };
+    case "archived":
+      return { kind: "unknown", label: "Archived" };
+  }
+  if (!group) return { kind: "unknown", label: "Never ran" };
+  if (group.latestStatus === "failed") {
+    return { kind: "down", label: "Failed last run" };
+  }
+  if (group.recentFailedCount > 0) {
+    const n = group.recentFailedCount;
+    return { kind: "stale", label: `${n} ${n === 1 ? "failure" : "failures"}` };
+  }
+  if ((group.runningCount ?? 0) > 0)
+    return { kind: "healthy", label: "Running" };
+  return { kind: "healthy", label: "Working" };
+}
+
+/**
+ * Days `recentFailedCount` looks back — the pod's `RECENT_FAILURE_WINDOW_DAYS`.
+ * The pod measures a run at `completedAt ?? startedAt`; so does `runInWindow`.
+ */
+export const RECENT_FAILURE_WINDOW_DAYS = 7;
+const RECENT_WINDOW_MS = RECENT_FAILURE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+/** Inside the recent-failure window, measured where the pod measures it. */
+export function runInWindow(
+  run: {
+    startedAt: Date | string | null;
+    completedAt?: Date | string | null;
+  },
+  now: Date
+): boolean {
+  const at = run.completedAt ?? run.startedAt;
+  return (
+    at !== null && new Date(at).getTime() > now.getTime() - RECENT_WINDOW_MS
+  );
+}
 
 /**
  * Has the Failing board seen every failing flow?

@@ -10,6 +10,7 @@
  */
 
 import type { StatusKind } from "../../components/status-pill";
+import { flowHealthPill } from "../../runs/_lib/run-board";
 
 export const RULE_FILTERS = [
   { key: "active", label: "Active" },
@@ -110,28 +111,14 @@ export function rulePill(
   rule: RuleFacts,
   health: RuleHealth | undefined
 ): { kind: StatusKind; label: string } {
-  switch (rule.status) {
-    case "error":
-      return { kind: "down", label: "Stopped on error" };
-    case "paused":
-      return { kind: "unknown", label: "Paused" };
-    case "draft":
-      return { kind: "unknown", label: "Draft" };
-    case "archived":
-      return { kind: "unknown", label: "Archived" };
-  }
-  if (ruleNeverRan(rule)) return { kind: "unknown", label: "Never ran" };
-  if (health?.latestStatus === "failed") {
-    return { kind: "down", label: "Failed last run" };
-  }
-  const recent = health?.recentFailedCount ?? 0;
-  if (recent > 0) {
-    return {
-      kind: "stale",
-      label: `${recent} ${recent === 1 ? "failure" : "failures"}`,
-    };
-  }
-  return { kind: "healthy", label: "Working" };
+  // A rule that ran but whose group is not loaded reads as clean: its
+  // lifetime counters are not "failing now".
+  return flowHealthPill(
+    rule.status,
+    ruleNeverRan(rule)
+      ? null
+      : (health ?? { latestStatus: "", recentFailedCount: 0 })
+  );
 }
 
 export type RuleRowAction = "pause" | "run" | null;
