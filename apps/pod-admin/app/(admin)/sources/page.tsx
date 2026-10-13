@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Connectors tab — pod-wide aggregate / health-grid view.
+ * Sources — pod-wide aggregate / health-grid view of the pod's connectors.
  *
- * Pod Admin's Connectors tab is the META picture: how many providers are
+ * The Sources page is the META picture: how many providers are
  * connected on this pod, how many of those are healthy, plus a per-workspace
  * grid that hands operators off to the desktop app when something needs
  * hands-on editing. Per-workspace connector configuration lives in the
- * desktop app's Settings → Connectors — Pod Admin does not duplicate it.
+ * desktop app's Settings → Connectors — the console does not duplicate it.
  *
  * Sections:
  *   1. Health grid — one card per Nango provider type (aggregate)
@@ -32,6 +32,7 @@ import {
   Server,
 } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { navLabel } from "../../../lib/console-nav";
 import { openIn } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -51,31 +52,31 @@ import { formatRelative } from "../../../lib/format";
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
-export default function ConnectorsPage() {
-  // Connectors uses `useSearchParams` indirectly via `useFocusRow` — wrap
+export default function SourcesPage() {
+  // Sources uses `useSearchParams` indirectly via `useFocusRow` — wrap
   // in Suspense per Next 16's App Router contract.
   return (
-    <Suspense fallback={<ConnectorsFallback />}>
-      <ConnectorsInner />
+    <Suspense fallback={<SourcesFallback />}>
+      <SourcesInner />
     </Suspense>
   );
 }
 
-function ConnectorsFallback() {
+function SourcesFallback() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <PageHeader title="Connectors" />
+      <PageHeader title={navLabel("sources")} />
       <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
     </div>
   );
 }
 
-function ConnectorsInner() {
+function SourcesInner() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
       <PageHeader
-        title="Connectors"
-        description="External services connected to this pod. Per-workspace configuration happens in the desktop app — Pod Admin shows the aggregate health."
+        title={navLabel("sources")}
+        description="External services connected to this pod. Per-workspace configuration happens in the desktop app — the console shows the aggregate health."
       />
 
       <div className="flex flex-col gap-6">

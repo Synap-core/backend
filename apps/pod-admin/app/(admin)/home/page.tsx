@@ -1,15 +1,20 @@
 "use client";
 
 /**
- * Overview — the console's home. It answers "what needs me?" first.
+ * Home — where the console opens. It answers "what needs me?" first.
  *
  *   1. Status line   — one sentence from `diagnose.global` + the admin alerts.
  *   2. Needs you     — the non-ok diagnose sections plus pending trusted
  *                      issuers and failing sync peers, ranked and capped
  *                      (`_lib/needs-you.ts`). Passing checks collapse into
  *                      one disclosure.
- *   3. Approval queue — pending proposals, each a door to `/proposal/<id>`.
+ *   3. Approval queue — a short peek into Review, never a second queue:
+ *                      every row and the count lead into `/review`.
  *   4. Pod at a glance — sync, backups and contents as three compact rows.
+ *
+ * Members (D8) get 1–3 scoped to themselves: `diagnose` and `signals` are
+ * user-floored, the admin alerts and the glance band read admin-only
+ * procedures, and rows whose page a member cannot open are dropped.
  *
  * Every band owns its queries and its loading/error state: one failing read
  * must never blank the page. Every number shown is one a procedure actually
@@ -50,7 +55,8 @@ import {
   humanizeBytes,
   truncateMiddle,
 } from "../../../lib/format";
-import { openIn, type Exit } from "../../../lib/open-in";
+import { navHref, navLabel } from "../../../lib/console-nav";
+import type { Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { PageHeader } from "../components/page-header";
 import { RecoveryCodesNudge } from "../components/recovery-codes-nudge";
@@ -61,36 +67,37 @@ import {
   ResourceRowSkeleton,
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
+import { useConsoleBadges } from "../components/side-nav-badges";
+import { useConsoleRole } from "../components/side-nav-role";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import {
   buildNeedsYou,
+  DIAGNOSE_QUERY_OPTIONS,
   statusLine,
   type HealthStatus,
   type NeedsYouRow,
 } from "./_lib/needs-you";
 
-/**
- * `diagnose.global` runs ~a dozen aggregate reads server-side; it is a health
- * snapshot, not a live feed. Two minutes keeps tab switches free without
- * letting the page drift far from what the pod reports.
- */
-const DIAGNOSE_STALE_MS = 120_000;
-
-export default function OverviewPage() {
+export default function HomePage() {
+  const isAdmin = useConsoleRole() === "admin";
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <div className="max-w-[1400px] px-4 py-6 sm:px-6">
       <PageHeader
-        title="Overview"
-        description="What needs you, then the pod at a glance."
+        title={navLabel("home")}
+        description={
+          isAdmin
+            ? "What needs you, then the pod at a glance."
+            : "What needs you on this pod."
+        }
       />
 
       <RecoveryCodesNudge />
 
-      <NeedsYouBand />
+      <NeedsYouBand isAdmin={isAdmin} />
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <ApprovalQueueCard />
-        <GlanceCard />
+        <ApprovalQueueCard isAdmin={isAdmin} />
+        {isAdmin && <GlanceCard />}
       </div>
     </div>
   );
@@ -119,18 +126,24 @@ const TONE_PILL: Record<HealthStatus, { kind: StatusKind; label: string }> = {
   degraded: { kind: "down", label: "Act now" },
 };
 
-function NeedsYouBand() {
-  const diagnose = trpc.diagnose.global.useQuery(undefined, {
-    staleTime: DIAGNOSE_STALE_MS,
-  });
+function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
+  const diagnose = trpc.diagnose.global.useQuery(
+    undefined,
+    DIAGNOSE_QUERY_OPTIONS
+  );
   // The two signals the old Alerts card read. Admin-gated
-  // (`podAdminProcedure`), which this whole route already is.
+  // (`podAdminProcedure`), so a member never asks for them.
   const issuers = trpc.trustedIssuers.list.useQuery(undefined, {
     staleTime: 60_000,
+    enabled: isAdmin,
   });
-  const sync = trpc.sync.getStatus.useQuery(undefined, { staleTime: 60_000 });
+  const sync = trpc.sync.getStatus.useQuery(undefined, {
+    staleTime: 60_000,
+    enabled: isAdmin,
+  });
 
   const needsYou = buildNeedsYou({
+    audience: isAdmin ? "admin" : "member",
     sections: diagnose.data?.sections ?? [],
     pendingIssuers: (issuers.data ?? [])
       .filter((i) => i.status === "pending")
@@ -424,56 +437,59 @@ function PassingChecks({
   );
 }
 
-// ─── 3. Approval queue ────────────────────────────────────────────────
+// ─── 3. Approval queue (a peek into Review) ───────────────────────────
 
-function ApprovalQueueCard() {
+/** How many pending changes the peek names before "See all in Review". */
+const QUEUE_PEEK = 4;
+
+function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
   // `workspaceId` is OMITTED, not `null`. `null` means "pod-wide only", which
   // hid every workspace-scoped proposal — nearly the whole queue, since almost
   // every governed AI write is workspace-scoped. Omitted, the server falls to
   // `proposalUserFloor`: the viewer's own lens ∪ what they authored. Same
   // entitlement, honest count.
   const { data, isLoading, isError, refetch } = trpc.proposals.list.useQuery(
-    { status: "pending", limit: 25 },
+    { status: "pending", limit: QUEUE_PEEK },
     { staleTime: 30_000 }
   );
+  // The count is Review's own (`signals.count`, via the nav's badge read), so
+  // "See all N" always equals the number on the Review badge.
+  const reviewCount = useConsoleBadges().review;
 
   // The row carries only `workspaceId`; `proposals.list` resolves author and
-  // target names but no workspace name. Without it a cross-workspace queue
-  // reads as an undifferentiated pile.
+  // target names but no workspace name. The name lookup is admin-only, so a
+  // member's peek reads "Workspace" instead.
   const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
+    enabled: isAdmin,
   });
   const workspaceNames = new Map(
     (workspaces.data ?? []).map((w) => [w.id, w.name] as const)
   );
-
-  // Proposals only. Pending Kratos signups are NOT in this queue and the
-  // card must not imply they are — there is no identity-introspection
-  // procedure, so a reader who trusted this card would miss every signup.
 
   const pending = data?.items ?? [];
 
   return (
     <SectionCard
       title="Approval queue"
-      hint="Proposals awaiting your review"
+      hint="The oldest decisions waiting in Review"
       actions={
-        pending.length > 0 ? (
-          <Button
-            as={Link}
-            href="/audit?section=queue"
-            size="sm"
-            variant="flat"
-            radius="md"
-            endContent={<ChevronRight className="h-3 w-3" />}
-          >
-            Open queue
-          </Button>
-        ) : null
+        <Button
+          as={Link}
+          href={navHref("review")}
+          size="sm"
+          variant="flat"
+          radius="md"
+          endContent={<ChevronRight className="h-3 w-3" />}
+        >
+          {reviewCount
+            ? `See all ${reviewCount.text} in ${navLabel("review")}`
+            : `Open ${navLabel("review")}`}
+        </Button>
       }
     >
       {isLoading ? (
-        <ResourceRowSkeleton count={3} />
+        <ResourceRowSkeleton count={2} />
       ) : isError || !data ? (
         <ResourceRowError
           message="Couldn't load proposals."
@@ -483,23 +499,17 @@ function ApprovalQueueCard() {
         <ResourceRowEmpty message="Nothing waiting for your review." />
       ) : (
         <div className="-mx-2">
-          {pending.slice(0, 4).map((proposal) => {
+          {pending.map((proposal) => {
             const workspaceLabel =
               proposal.workspaceId == null
                 ? "Pod-wide"
                 : (workspaceNames.get(proposal.workspaceId) ?? "Workspace");
             return (
-              // Each row opens the self-service review page — the queue was
-              // a list of names you could read but not act on.
+              // Each row opens the same change inside Review — one queue,
+              // with its drawer and batch rules, rather than a second one.
               <Link
                 key={proposal.id}
-                href={
-                  openIn({
-                    kind: "object",
-                    objectKind: "proposal",
-                    id: proposal.id,
-                  }).href
-                }
+                href={navHref("review", { focus: proposal.id })}
                 className="block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-content2/50"
               >
                 <ResourceRow
@@ -521,16 +531,11 @@ function ApprovalQueueCard() {
                   ]
                     .filter(Boolean)
                     .join(" · ")}
-                  status={{ kind: "stale", label: "Pending" }}
+                  wrap
                 />
               </Link>
             );
           })}
-          {pending.length > 4 && (
-            <p className="mt-2 px-3 text-[11.5px] text-foreground/65">
-              +{pending.length - 4} more
-            </p>
-          )}
         </div>
       )}
     </SectionCard>

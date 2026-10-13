@@ -149,7 +149,7 @@ describe("buildNeedsYou unknown and malformed sections", () => {
     ]);
   });
 
-  it("falls back to the server headline when a known section's detail drifted", () => {
+  it("falls back to the server headline, linked to the section's page, when its detail drifted", () => {
     const { rows } = buildNeedsYou({
       sections: [
         section("review_backlog", "attention", { pending: "15" }, "15 pending"),
@@ -157,44 +157,60 @@ describe("buildNeedsYou unknown and malformed sections", () => {
     });
     expect(rows[0]).toMatchObject({
       headline: "15 pending",
-      action: { kind: "none" },
+      action: {
+        kind: "link",
+        label: "Open review",
+        exit: { href: "/review", isDesktopLink: false },
+      },
+    });
+  });
+
+  it("links a placed section with no row builder to its page", () => {
+    const [row] = buildNeedsYou({
+      sections: [
+        section("quality_by_prompt_version", "attention", {}, "Quality dipped"),
+      ],
+    }).rows;
+    expect(row.headline).toBe("Quality dipped");
+    expect(row.action).toEqual({
+      kind: "link",
+      label: "Open intelligence",
+      exit: { href: "/intelligence", isDesktopLink: false },
     });
   });
 });
 
 describe("buildNeedsYou link building", () => {
-  it("sends the review backlog to the console queue with a plain headline", () => {
+  it("sends the review backlog to Review with a plain headline", () => {
     const [row] = buildNeedsYou({ sections: [backlog] }).rows;
     expect(row.headline).toBe("15 changes waiting for review · oldest 8 days");
     expect(row.action).toEqual({
       kind: "link",
       label: "Review",
-      exit: { href: "/audit?section=queue", isDesktopLink: false },
+      exit: { href: "/review", isDesktopLink: false },
     });
   });
 
-  it("hands unapproved capabilities to the desktop app through openIn", () => {
+  it("sends unapproved capabilities to Marketplace → Installed", () => {
     const [row] = buildNeedsYou({
       sections: [section("capabilities", "attention", { unapproved: 13 })],
     }).rows;
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open in app",
-      exit: openIn({ kind: "settings", section: "capabilities" }),
+      label: "Review in Marketplace",
+      exit: { href: "/marketplace?tab=installed", isDesktopLink: false },
     });
-    expect(row.action.kind === "link" && row.action.exit.isDesktopLink).toBe(
-      true
-    );
   });
 
-  it("links a single addressed failing flow straight to it", () => {
+  it("names the worst failing flow and opens Runs", () => {
     const [row] = buildNeedsYou({
       sections: [
         section("failed_flows", "degraded", {
-          failingFlows: 1,
-          failedTotal: 10,
+          failingFlows: 2,
+          failedTotal: 11,
           windowDays: 7,
           flows: [
+            { flowName: "CRM Hygiene", failedCount: 1, flowType: "playbook" },
             {
               flowName: "AI Dev Session",
               failedCount: 10,
@@ -206,49 +222,29 @@ describe("buildNeedsYou link building", () => {
         }),
       ],
     }).rows;
-    expect(row.headline).toBe("1 flow failing in the last 7 days");
+    expect(row.headline).toBe("2 flows failing in the last 7 days");
+    expect(row.secondary).toBe("“AI Dev Session” failed 10 times");
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open flow",
-      exit: openIn({ kind: "object", objectKind: "playbook", id: "pb-1" }),
+      label: "Open runs",
+      exit: { href: "/runs", isDesktopLink: false },
     });
   });
 
-  it("expands several failing flows, sending Chat to Intelligence", () => {
+  it("falls back to the failed-run total when no flow is named", () => {
     const [row] = buildNeedsYou({
       sections: [
         section("failed_flows", "degraded", {
-          failingFlows: 2,
-          flows: [
-            {
-              flowName: "Nightly digest",
-              failedCount: 3,
-              flowType: "automation",
-              flowId: "au-1",
-            },
-            { flowName: "Chat", failedCount: 1, hasRunning: false },
-          ],
+          failingFlows: 1,
+          failedTotal: 3,
+          flows: [],
         }),
       ],
     }).rows;
-    expect(row.action).toEqual({ kind: "expand", label: "Show flows" });
-    expect(row.items).toEqual([
-      {
-        id: "au-1",
-        label: "Nightly digest",
-        meta: "failed 3 times",
-        exit: openIn({ kind: "object", objectKind: "automation", id: "au-1" }),
-      },
-      {
-        id: "Chat-1",
-        label: "Chat",
-        meta: "failed 1 time",
-        exit: { href: "/intelligence", isDesktopLink: false },
-      },
-    ]);
+    expect(row.secondary).toBe("3 failed runs");
   });
 
-  it("expands stuck runs inline with names and ages, no links", () => {
+  it("sends stuck runs to Sessions, naming the oldest", () => {
     const [row] = buildNeedsYou({
       sections: [
         section("stuck_runs", "degraded", {
@@ -265,14 +261,58 @@ describe("buildNeedsYou link building", () => {
       ],
     }).rows;
     expect(row.headline).toBe("1 run still going after 24h, 1 more idle");
-    expect(row.action).toEqual({ kind: "expand", label: "Show runs" });
-    expect(row.items).toEqual([
-      { id: "r1", label: "Sync", meta: "running 30h" },
-      { id: "idle-r2", label: "Import", meta: "no progress for 42m" },
+    expect(row.secondary).toBe("Oldest: “Sync”, 30h");
+    expect(row.action).toEqual({
+      kind: "link",
+      label: "Open sessions",
+      exit: { href: "/sessions", isDesktopLink: false },
+    });
+  });
+
+  it("sends agents at their proposal cap to Agents", () => {
+    const [row] = buildNeedsYou({
+      sections: [
+        section("agent_activity", "attention", { overCap: [{}], nearCap: [] }),
+      ],
+    }).rows;
+    expect(row.action.kind === "link" && row.action.exit.href).toBe("/agents");
+  });
+
+  it("links tidy-up items to the page that owns each", () => {
+    const [row] = buildNeedsYou({
+      sections: [
+        section("schema_hygiene", "attention", {
+          zeroEntityKinds: [{ profileId: "pr-1", displayName: "Recipe" }],
+          neverRunAutomations: [{ id: "au-1", name: "Nightly digest" }],
+        }),
+      ],
+    }).rows;
+    expect(row.action).toEqual({ kind: "expand", label: "Show items" });
+    expect(row.items.map((i) => i.exit?.href)).toEqual([
+      "/kinds?focus=pr-1",
+      "/rules?filter=never-ran&focus=au-1",
     ]);
   });
 
-  it("focuses the single pending issuer; failing peers expand in place", () => {
+  it("sends a schema-contract drift to Kinds", () => {
+    const [row] = buildNeedsYou({
+      sections: [section("schema_contract", "attention")],
+    }).rows;
+    expect(row.action.kind === "link" && row.action.exit.href).toBe("/kinds");
+  });
+
+  it("keeps the approve-rate finding's tuning in the app", () => {
+    const [row] = buildNeedsYou({
+      sections: [section("review_queue", "attention")],
+    }).rows;
+    expect(row.action).toEqual({
+      kind: "link",
+      label: "Tune rules",
+      exit: openIn({ kind: "settings", section: "ai-governance" }),
+    });
+  });
+
+  it("focuses the single pending issuer in Review; failing peers expand in place", () => {
     const { rows } = buildNeedsYou({
       sections: [],
       pendingIssuers: [{ id: "a b", issuerUrl: null }],
@@ -282,11 +322,11 @@ describe("buildNeedsYou link building", () => {
     expect(sync.action).toEqual({ kind: "expand", label: "Show peers" });
     expect(sync.items).toEqual([{ id: "peer/1", label: "Laptop", meta: "x" }]);
     expect(issuer.action.kind === "link" && issuer.action.exit.href).toBe(
-      "/trust-keys?section=issuers&focus=a%20b"
+      "/review?type=issuer&focus=a%20b"
     );
   });
 
-  it("sends several pending issuers to the issuers list without a focus", () => {
+  it("sends several pending issuers to Review's issuer filter without a focus", () => {
     const [row] = buildNeedsYou({
       sections: [],
       pendingIssuers: [
@@ -296,8 +336,34 @@ describe("buildNeedsYou link building", () => {
     }).rows;
     expect(row.headline).toBe("2 trusted issuers awaiting approval");
     expect(row.action.kind === "link" && row.action.exit.href).toBe(
-      "/trust-keys?section=issuers"
+      "/review?type=issuer"
     );
+  });
+});
+
+describe("buildNeedsYou for a member (D8)", () => {
+  const sections = [
+    backlog,
+    section("failed_flows", "degraded", { failingFlows: 1, flows: [] }),
+    section("capabilities", "attention", { unapproved: 2 }),
+    section("review_queue", "attention"),
+    section("brand_new_check", "attention", {}, "Something new"),
+    section("stuck_runs", "ok", {}, "No stuck runs"),
+    section("duplicate_proposals", "ok", {}, "No duplicates"),
+  ];
+
+  it("keeps only rows whose page a member can open, plus unplaced keys", () => {
+    const result = buildNeedsYou({ sections, audience: "member" });
+    expect(result.rows.map((r) => r.key)).toEqual([
+      "review_backlog",
+      "review_queue",
+      "brand_new_check",
+    ]);
+    expect(result.passing.map((p) => p.key)).toEqual(["duplicate_proposals"]);
+  });
+
+  it("shows an admin every row", () => {
+    expect(buildNeedsYou({ sections }).rows).toHaveLength(5);
   });
 });
 

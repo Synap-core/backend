@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
+import { navHref } from "../lib/console-nav";
 
 /**
- * Root → Overview. The pod-admin shell never renders at `/` directly;
- * every operator surface is a tab under `(admin)/<tab>`. The default
- * tab is Overview.
+ * Root → Home. The console shell never renders at `/` directly; every
+ * surface is a page under `(admin)/<page>`, and Home is where it opens.
  */
 export default function RootPage() {
-  redirect("/overview");
+  redirect(navHref("home"));
 }
