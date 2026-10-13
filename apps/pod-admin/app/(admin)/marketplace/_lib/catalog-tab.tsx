@@ -226,11 +226,11 @@ function PackageCard({ pkg }: { pkg: CatalogPackage }) {
         </Chip>
       </div>
 
-      <p className="line-clamp-2 text-[12px] leading-relaxed text-foreground/60">
+      <p className="line-clamp-2 text-[12px] leading-relaxed text-foreground/65">
         {readableDescription(pkg.description) ?? "No description."}
       </p>
 
-      <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] text-foreground/40">
+      <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] text-foreground/65">
         <span className="font-mono">{pkg.slug}</span>
         {pkg.domain && <span>· {pkg.domain}</span>}
       </div>

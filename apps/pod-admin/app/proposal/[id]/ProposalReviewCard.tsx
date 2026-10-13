@@ -61,9 +61,9 @@ export function useProposalReview(proposalId: string) {
     { enabled: !!workspaceId && isUuid(workspaceId), retry: false }
   );
 
-  /* Provenance targets, resolved through the ONE exit door. Every kind
-     `source` can return (session, channel, automation, skill, playbook, agent)
-     lives in the desktop app, so each resolves to a `synap://` link. */
+  /* Provenance targets, resolved through the ONE exit door. A session or an
+     automation opens on its web page; every other kind `source` can return
+     (channel, skill, playbook, agent) lives in the desktop app. */
   const sourceExits = (source.data?.targets ?? []).map((target) => ({
     target,
     exit: openIn({ kind: "object", objectKind: target.kind, id: target.id }),

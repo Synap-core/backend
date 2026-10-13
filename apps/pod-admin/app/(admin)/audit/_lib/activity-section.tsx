@@ -192,7 +192,7 @@ export function ActivitySection({
     onClose: () => setSelected(null),
   });
 
-  // ?focus=<eventId> from ⌘K or Overview alerts. Open the drawer for the
+  // ?focus=<eventId> from ⌘K. Open the drawer for the
   // matching event once data has landed; the row will scroll-and-highlight
   // as long as the event is on the current page.
   const focusId = useFocusRow({ ready: !auditQuery.isLoading });
@@ -273,7 +273,7 @@ function ActivityRow({
   const actorLabel = actor?.email ?? actor?.name ?? shortId(event.userId);
   const subjectLabel = subjectTypeLabel(event.subjectType);
 
-  const { Icon, tone } = actionPresentation(event.action);
+  const Icon = actionIcon(event.action);
 
   return (
     <li data-row-id={event.id} className="rounded-md transition-shadow">
@@ -287,17 +287,15 @@ function ActivityRow({
         "
       >
         {/* Timestamp */}
-        <div className="flex w-[110px] shrink-0 flex-col text-[10.5px] tabular text-foreground/45">
+        <div className="flex w-[110px] shrink-0 flex-col text-[10.5px] tabular text-foreground/65">
           <span title={new Date(event.timestamp).toISOString()}>
             {formatRelative(event.timestamp)}
           </span>
-          <span className="text-foreground/30">
-            {formatTimestamp(event.timestamp)}
-          </span>
+          <span>{formatTimestamp(event.timestamp)}</span>
         </div>
 
         {/* Actor */}
-        <div className="flex w-[150px] shrink-0 items-center gap-1.5">
+        <div className="hidden w-[150px] shrink-0 items-center gap-1.5 sm:flex">
           <Avatar
             size="sm"
             name={actorLabel}
@@ -319,8 +317,8 @@ function ActivityRow({
             variant="flat"
             startContent={<Icon className="ml-1 h-3 w-3" />}
             classNames={{
-              base: `${tone.bg} ring-1 ring-inset ${tone.ring}`,
-              content: `text-[11px] font-medium ${tone.text}`,
+              base: "bg-foreground/[0.06]",
+              content: "text-[11px] font-medium text-foreground/80",
             }}
           >
             {event.action || "—"}
@@ -330,11 +328,11 @@ function ActivityRow({
         {/* Subject */}
         <div className="min-w-0 flex-1 truncate text-[11.5px]">
           <span className="text-foreground/85">{subjectLabel}</span>{" "}
-          <code className="text-foreground/45">{shortId(event.subjectId)}</code>
+          <code className="text-foreground/65">{shortId(event.subjectId)}</code>
         </div>
 
         {/* Workspace */}
-        <div className="w-[160px] shrink-0 truncate text-right text-[11px] text-foreground/45">
+        <div className="hidden w-[160px] shrink-0 truncate text-right text-[11px] text-foreground/65 md:block">
           {workspace ? workspace.name : event.workspaceId ? "—" : "Pod-wide"}
         </div>
       </button>
@@ -342,50 +340,18 @@ function ActivityRow({
   );
 }
 
-function actionPresentation(action: string): {
-  Icon: LucideIcon;
-  tone: { bg: string; text: string; ring: string };
-} {
-  if (
-    action === "create" ||
-    action === "approve" ||
-    action === "validate" ||
-    action === "grant"
-  )
-    return {
-      Icon: action === "create" ? Plus : Check,
-      tone: {
-        bg: "bg-status-healthy/10",
-        text: "text-status-healthy",
-        ring: "ring-status-healthy/30",
-      },
-    };
-  if (action === "update" || action === "rotate")
-    return {
-      Icon: RotateCw,
-      tone: {
-        bg: "bg-status-stale/10",
-        text: "text-status-stale",
-        ring: "ring-status-stale/30",
-      },
-    };
-  if (action === "delete" || action === "revoke" || action === "reject")
-    return {
-      Icon: action === "delete" ? Trash2 : X,
-      tone: {
-        bg: "bg-status-down/10",
-        text: "text-status-down",
-        ring: "ring-status-down/30",
-      },
-    };
-  return {
-    Icon: Activity,
-    tone: {
-      bg: "bg-foreground/5",
-      text: "text-foreground/55",
-      ring: "ring-foreground/10",
-    },
-  };
+/**
+ * The glyph is the only cue: an audit action is a fact about what happened, not
+ * a health state, so the chip stays neutral and never borrows the status tones.
+ */
+function actionIcon(action: string): LucideIcon {
+  if (action === "create") return Plus;
+  if (action === "approve" || action === "validate" || action === "grant")
+    return Check;
+  if (action === "update" || action === "rotate") return RotateCw;
+  if (action === "delete") return Trash2;
+  if (action === "revoke" || action === "reject") return X;
+  return Activity;
 }
 
 // ─── Drawer ───────────────────────────────────────────────────────────────
@@ -423,7 +389,7 @@ function EventDrawer({
       {event ? (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
-            <Field k="When" v={new Date(event.timestamp).toLocaleString()} />
+            <Field k="When" v={formatTimestamp(event.timestamp)} />
             <Field k="Action" v={event.action || "—"} />
             <Field k="Phase" v={event.phase || "—"} />
             <Field k="Subject" v={subjectTypeLabel(event.subjectType)} />
@@ -431,7 +397,7 @@ function EventDrawer({
             <Field k="Actor" v={actor?.email ?? actor?.name ?? event.userId} />
             <Field k="Actor ID" v={event.userId} mono />
             <Field
-              k="Workspace"
+              k="Space"
               v={
                 workspace
                   ? `${workspace.name}`

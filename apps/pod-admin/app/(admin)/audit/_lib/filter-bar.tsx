@@ -84,7 +84,7 @@ export function FilterBar({
   return (
     <div
       className={[
-        "sticky top-0 z-10 -mx-6 mb-5 px-6 py-3",
+        "-mx-4 mb-5 px-4 py-3 sm:-mx-6 sm:px-6 md:sticky md:top-0 md:z-10",
         "bg-background/85 backdrop-blur",
         "border-b border-foreground/[0.05]",
       ].join(" ")}

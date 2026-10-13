@@ -13,7 +13,7 @@ export interface UrlTab {
 
 /**
  * Underlined tab strip whose active tab lives in a URL query param, so deep
- * links (`?section=queue`) land on the right tab. The first tab is the default
+ * links (`?tab=installed`) land on the right tab. The first tab is the default
  * and is encoded by omitting the param. Other params (`?focus=`) survive a
  * switch, and the history entry is replaced: a tab is a view of the page, not
  * a place to go back to. Must sit under a Suspense boundary

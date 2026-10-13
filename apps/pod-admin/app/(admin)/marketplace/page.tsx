@@ -17,7 +17,7 @@ import { ToolsTab } from "./_lib/tools-tab";
 
 const TITLE = "Marketplace";
 const DESCRIPTION =
-  "Install from the Synap catalog, see what this pod has installed, and choose which of its verbs are on.";
+  "Install from the Synap catalog, see what this pod has installed, and choose which of its tools are turned on.";
 
 export default function MarketplacePage() {
   return (

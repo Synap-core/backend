@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { readableError } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import {
   ResourceRowEmpty,
@@ -86,14 +87,22 @@ export function AIProvidersSection() {
     onSuccess: () => void utils.aiProviders.list.invalidate(),
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
-      addToast({ title: "Failed", description: e.message, color: "danger" });
+      addToast({
+        title: "Couldn't enable the provider",
+        description: readableError(e.message),
+        color: "danger",
+      });
     },
   });
   const disableMutation = trpc.aiProviders.disable.useMutation({
     onSuccess: () => void utils.aiProviders.list.invalidate(),
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
-      addToast({ title: "Failed", description: e.message, color: "danger" });
+      addToast({
+        title: "Couldn't disable the provider",
+        description: readableError(e.message),
+        color: "danger",
+      });
     },
   });
   const removeMutation = trpc.aiProviders.remove.useMutation({
@@ -105,8 +114,8 @@ export function AIProvidersSection() {
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
-        title: "Remove failed",
-        description: e.message,
+        title: "Couldn't remove the provider",
+        description: readableError(e.message),
         color: "danger",
       });
     },
@@ -115,14 +124,14 @@ export function AIProvidersSection() {
     onSuccess: (r) => {
       if (r.ok) {
         addToast({
-          title: `Probe OK (${r.latencyMs}ms)`,
+          title: `Provider reachable (${r.latencyMs}ms)`,
           description: `${r.models.length} models available`,
           color: "default",
         });
       } else {
         addToast({
-          title: "Probe failed",
-          description: r.error ?? "unknown",
+          title: "The provider didn't respond correctly",
+          description: readableError(r.error),
           color: "warning",
         });
       }
@@ -130,8 +139,8 @@ export function AIProvidersSection() {
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
-        title: "Probe error",
-        description: e.message,
+        title: "Couldn't test the provider",
+        description: readableError(e.message),
         color: "danger",
       });
     },
@@ -139,14 +148,14 @@ export function AIProvidersSection() {
   const syncMutation = trpc.aiProviders.sync.useMutation({
     onSuccess: (r) =>
       addToast({
-        title: `Synced ${r.count} providers to IS`,
+        title: `Synced ${r.count} ${r.count === 1 ? "provider" : "providers"} to the intelligence service`,
         color: "default",
       }),
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
-        title: "Sync failed",
-        description: e.message,
+        title: "Couldn't sync providers",
+        description: readableError(e.message),
         color: "danger",
       });
     },
@@ -277,7 +286,7 @@ export function AIProvidersSection() {
                         else
                           disableMutation.mutate({ providerId: p.providerId });
                       }}
-                      aria-label={p.enabled ? "Enabled" : "Disabled"}
+                      aria-label={`${p.enabled ? "Disable" : "Enable"} ${p.name}`}
                     />
                     <Button
                       size="sm"
@@ -291,7 +300,7 @@ export function AIProvidersSection() {
                       onPress={() =>
                         probeMutation.mutate({ providerId: p.providerId })
                       }
-                      aria-label="Test"
+                      aria-label={`Test ${p.name}`}
                     >
                       {probeMutation.isPending &&
                       probeMutation.variables?.providerId === p.providerId ? (
@@ -306,7 +315,7 @@ export function AIProvidersSection() {
                       radius="md"
                       isIconOnly
                       onPress={() => setFormTarget(p)}
-                      aria-label="Edit"
+                      aria-label={`Edit ${p.name}`}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
@@ -316,7 +325,7 @@ export function AIProvidersSection() {
                       radius="md"
                       isIconOnly
                       onPress={() => setDeleteTarget(p)}
-                      aria-label="Delete"
+                      aria-label={`Delete ${p.name}`}
                       className="text-danger/70 hover:text-danger"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -411,7 +420,7 @@ function ProviderFormModal({
     onSuccess: () => {
       addToast({
         title: initial ? "Provider updated" : "Provider added",
-        description: "IS sync triggered.",
+        description: "The intelligence service is syncing.",
         color: "default",
       });
       onSaved();
@@ -419,8 +428,8 @@ function ProviderFormModal({
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
-        title: "Save failed",
-        description: e.message,
+        title: "Couldn't save the provider",
+        description: readableError(e.message),
         color: "danger",
       });
     },

@@ -292,7 +292,7 @@ export default function PackageDetailPage() {
                 size="sm"
                 radius="sm"
                 variant="flat"
-                className="text-[11px] text-foreground/60"
+                className="text-[11px] text-foreground/65"
               >
                 {tag}
               </Chip>
@@ -392,7 +392,7 @@ function KindHandoff({ category, slug }: { category: string; slug: string }) {
         cta="Open the marketplace in the app"
       />
       <div className="flex flex-col gap-1.5">
-        <p className="text-[11.5px] text-foreground/50">
+        <p className="text-[11.5px] text-foreground/65">
           Or install it from a terminal:
         </p>
         <code className="w-fit rounded-md bg-foreground/[0.06] px-2.5 py-1.5 font-mono text-[11.5px] text-foreground/80">
@@ -494,7 +494,7 @@ function InstallPanel({
               </p>
             )}
             {stage.error.conflicts && stage.error.conflicts.length > 0 && (
-              <ul className="flex flex-col gap-1 text-[12px] text-foreground/60">
+              <ul className="flex flex-col gap-1 text-[12px] text-foreground/65">
                 {stage.error.conflicts.map((c) => (
                   <li key={c.slug}>
                     <span className="font-mono">{c.slug}</span> — this package
@@ -731,7 +731,7 @@ function PlanGroup({
   return (
     <div className="flex flex-col gap-1">
       <p className={`text-[12.5px] font-medium ${toneClass}`}>{heading}</p>
-      <ul className="flex flex-col gap-0.5 pl-3 text-[12px] text-foreground/60">
+      <ul className="flex flex-col gap-0.5 pl-3 text-[12px] text-foreground/65">
         {children}
       </ul>
     </div>
@@ -759,11 +759,11 @@ function Provenance({
           : "The catalog records no publishing source for this package."}
       </p>
       {vendorId ? (
-        <p className="font-mono text-[11px] text-foreground/40">
+        <p className="font-mono text-[11px] text-foreground/65">
           vendor {vendorId}
         </p>
       ) : (
-        <p className="text-[11.5px] text-foreground/40">
+        <p className="text-[11.5px] text-foreground/65">
           No vendor is named — the catalog stores publisher ids, not names.
         </p>
       )}

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { readableError } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { SectionCard } from "../../components/section-card";
 
@@ -101,7 +102,7 @@ export function DefaultModelsSection() {
   return (
     <SectionCard
       title="Default models"
-      hint="Pod-wide defaults — workspaces inherit unless overridden in Studio"
+      hint="Pod-wide defaults — spaces inherit unless overridden in the app"
       actions={
         <Button
           size="sm"
@@ -188,8 +189,8 @@ function DefaultModelsModal({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Save failed",
-        description: err.message,
+        title: "Couldn't save the model defaults",
+        description: readableError(err.message),
         color: "danger",
       });
     },

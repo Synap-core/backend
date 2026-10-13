@@ -90,3 +90,18 @@ const UUID_RE =
 export function isUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
+
+/**
+ * A server error message worth showing a person, or `undefined`. tRPC surfaces
+ * zod issue arrays, SQL and stack fragments as `message`; those belong in logs,
+ * not under a toast title. A readable message is one short plain sentence.
+ */
+export function readableError(
+  message: string | null | undefined
+): string | undefined {
+  const text = message?.trim();
+  if (!text || text.length > 160) return undefined;
+  if (/[{}[\]<>]|\bat \S+:\d+|\bERR_|\bTRPC|\bSELECT\b|\bINSERT\b/.test(text))
+    return undefined;
+  return /\s/.test(text) ? text : undefined;
+}

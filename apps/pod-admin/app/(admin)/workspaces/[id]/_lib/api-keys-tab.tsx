@@ -141,7 +141,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     <div className="flex flex-col gap-5">
       <SectionCard
         title="API keys"
-        hint="Keys scoped to this workspace"
+        hint="Keys scoped to this space"
         actions={
           <Button
             size="sm"
@@ -163,7 +163,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
             onRetry={() => void keysQuery.refetch()}
           />
         ) : keys.length === 0 ? (
-          <ResourceRowEmpty message="No keys for this workspace." />
+          <ResourceRowEmpty message="No keys for this space." />
         ) : (
           <div className="flex flex-col divide-y divide-foreground/[0.05] pt-1">
             {active.map((k) => (
@@ -273,12 +273,10 @@ function KeyRow({
             </span>
           ) : null}
         </div>
-        <span className="text-[11px] text-foreground/40">
+        <span className="text-[11px] text-foreground/65">
           {apiKey.keyPrefix ? `${apiKey.keyPrefix}…` : ""} · last used{" "}
           {formatRelative(apiKey.lastUsedAt, { empty: "never" })} · created{" "}
-          {apiKey.createdAt
-            ? new Date(apiKey.createdAt).toLocaleDateString()
-            : "—"}
+          {formatRelative(apiKey.createdAt)}
         </span>
       </div>
 
@@ -596,7 +594,7 @@ function RevealKeyModal({
           </Snippet>
           <p className="text-[11.5px] text-foreground/55">
             Treat this like a password. Anyone with the key can act on this
-            workspace within its scopes.
+            space within its scopes.
           </p>
         </ModalBody>
         <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">

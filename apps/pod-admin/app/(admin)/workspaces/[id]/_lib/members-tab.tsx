@@ -81,7 +81,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
     <div className="flex flex-col gap-5">
       <SectionCard
         title="Members"
-        hint="All members of this workspace"
+        hint="All members of this space"
         actions={
           <Button
             size="sm"
@@ -187,7 +187,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
                     removeTarget.user.email ??
                     removeTarget.userId}
                 </span>{" "}
-                loses access to this workspace immediately.
+                loses access to this space immediately.
               </p>
               <p className="mt-2 text-foreground/65">
                 This does not remove them from the pod, revoke their API keys,

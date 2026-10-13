@@ -163,7 +163,7 @@ function describe(state: Exclude<BrokerTrustState, { kind: "not-managed" }>): {
       return {
         status: down,
         title: "The owner's control plane account is not linked to this pod",
-        body: "Relay-key delivery is refused until it is. Link it from the Synap Control Plane while signed in to this pod as the owner — Pod Admin has no link action. Then rotate the relay key from the control plane.",
+        body: "Relay-key delivery is refused until it is. Link it from the Synap Control Plane while signed in to this pod as the owner — Pod Console has no link action. Then rotate the relay key from the control plane.",
       };
     case "credential-missing":
       return {

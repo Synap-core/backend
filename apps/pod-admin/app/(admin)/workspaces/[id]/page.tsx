@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Workspace detail page — /workspaces/[id]
+ * Space detail page — /workspaces/[id]
  *
  * 4 tabs: Overview · Members · API Keys · Connections
  * Tab state encoded in ?tab=... URL param (see UrlTabs).
@@ -14,6 +14,7 @@ import { trpc } from "../../../../lib/trpc";
 import { StatusPill } from "../../components/status-pill";
 import { UrlTabs } from "../../components/url-tabs";
 import { formatRelative } from "../../../../lib/format";
+import { navLabel } from "../../../../lib/console-nav";
 import { openIn } from "../../../../lib/open-in";
 import { ExitLink } from "../../../../lib/exit-link";
 import { OverviewTab } from "./_lib/overview-tab";
@@ -51,7 +52,7 @@ function DesktopExit({ workspaceId }: { workspaceId: string }) {
         objectKind: "workspace",
         id: workspaceId,
       })}
-      label="Open in the desktop app"
+      label="Open in app"
     />
   );
 }
@@ -123,7 +124,7 @@ function WorkspaceDetailInner() {
         className="mb-5 flex items-center gap-1.5 text-[12.5px] text-foreground/55 hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
-        Workspaces
+        {navLabel("spaces")}
       </button>
 
       {/* Header */}
@@ -161,9 +162,7 @@ function WorkspaceDetailInner() {
                 <div className="h-3.5 w-72 rounded bg-foreground/[0.05] shimmer-pulse mt-1" />
               </>
             ) : (
-              <p className="text-[13px] text-foreground/55">
-                Workspace not found.
-              </p>
+              <p className="text-[13px] text-foreground/55">Space not found.</p>
             )}
           </div>
         </div>
@@ -171,10 +170,10 @@ function WorkspaceDetailInner() {
         {ws ? (
           <div className="flex items-center gap-2 sm:shrink-0">
             <span className="text-[11.5px] text-foreground/40">
-              updated {formatRelative(new Date(ws.updatedAt))}
+              updated {formatRelative(ws.updatedAt)}
             </span>
-            {/* This page owns the workspace's admin surfaces; its CONTENTS
-                live in the desktop app. That is a `synap://` link, which does
+            {/* This page owns the space's admin surfaces; its CONTENTS
+                live in the app. That is a `synap://` link, which does
                 nothing at all when the app is not installed — so the download
                 fallback sits right beside it. */}
             <DesktopExit workspaceId={ws.id} />
@@ -185,12 +184,12 @@ function WorkspaceDetailInner() {
       {/* Tabs */}
       {wsQuery.isError ? (
         <p className="text-[12.5px] text-status-down">
-          Could not load workspace: {wsQuery.error.message}
+          Couldn't load this space. Try again in a moment.
         </p>
       ) : (
         <UrlTabs
           param="tab"
-          ariaLabel="Workspace sections"
+          ariaLabel="Space sections"
           tabs={[
             {
               key: "overview",

@@ -73,7 +73,7 @@ describe("capabilityPill — what needs a look first", () => {
   it("verbs off outrank stuck runs and quiet states", () => {
     expect(
       capabilityPill({ status: "degraded", failedRuns: 0, stuckRuns: 1 }, 1)
-    ).toEqual({ kind: "stale", label: "1 verb off" });
+    ).toEqual({ kind: "stale", label: "1 tool turned off" });
     expect(
       capabilityPill({ status: "degraded", failedRuns: 0, stuckRuns: 1 }, 0)
     ).toEqual({ kind: "stale", label: "1 stuck run" });
@@ -110,7 +110,7 @@ describe("installedRows", () => {
       verbsOff: 1,
       wired: 2,
       members: 3,
-      pill: { kind: "stale", label: "1 verb off" },
+      pill: { kind: "stale", label: "1 tool turned off" },
     });
   });
 
@@ -161,8 +161,10 @@ describe("toolGroups", () => {
     expect(groups[0]!.verbs.map((v) => v.enabled)).toEqual([false, true]);
     expect(groups[0]!.off).toBe(1);
     expect(toolsSummary(groups)).toBe(
-      "1 verb off in 1 capability. Anything that calls one is refused until it is on."
+      "1 tool turned off in 1 capability. Anything that calls one is refused until it is turned on."
     );
-    expect(toolsSummary(groups.slice(1))).toBe("Every installed verb is on.");
+    expect(toolsSummary(groups.slice(1))).toBe(
+      "Every installed tool is turned on."
+    );
   });
 });

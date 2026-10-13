@@ -40,7 +40,7 @@ import {
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatRelative, isUuid } from "../../../lib/format";
+import { formatRelative, isUuid, readableError } from "../../../lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -227,8 +227,8 @@ function EntitiesInner() {
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Bulk delete failed",
-        description: err.message,
+        title: "Couldn't delete the selected entities",
+        description: readableError(err.message),
         color: "danger",
       });
       setConfirmBulkDelete(false);
@@ -243,11 +243,11 @@ function EntitiesInner() {
     <PageShell>
       <PageHeader
         title="Entities"
-        description="All entities on this pod. Deletions are permanent and cannot be undone."
+        description="Every entity on this pod, across all spaces. Deletions are permanent."
         actions={
           someSelected && (
             <>
-              <span className="text-[12.5px] text-foreground/55">
+              <span className="text-[12.5px] text-foreground/65">
                 {selectedIds.size} selected
               </span>
               <Button
@@ -301,7 +301,7 @@ function EntitiesInner() {
               ...profiles.map((p) => (
                 <SelectItem key={p.profileSlug} textValue={p.profileSlug}>
                   {p.profileSlug}{" "}
-                  <span className="text-foreground/45">({p.count})</span>
+                  <span className="text-foreground/65">({p.count})</span>
                 </SelectItem>
               )),
             ]}
@@ -317,7 +317,7 @@ function EntitiesInner() {
                 setPodWideOnly(v);
                 if (v) setWorkspaceIdInput("");
               }}
-              aria-label="Pod-wide only (no workspace)"
+              aria-label="Pod-wide only (no space)"
             />
             Pod-wide only
           </label>
@@ -326,7 +326,7 @@ function EntitiesInner() {
         {!podWideOnly && (
           <div className="w-72">
             <Input
-              placeholder="Filter by workspace UUID…"
+              placeholder="Filter by space ID…"
               value={workspaceIdInput}
               onValueChange={setWorkspaceIdInput}
               radius="md"
@@ -341,7 +341,6 @@ function EntitiesInner() {
 
       <SectionCard
         title={`Entities${total > 0 ? ` (${total})` : ""}`}
-        hint="Click the trash icon to delete a row · use checkboxes for bulk deletion"
         actions={
           pageCount > 1 ? (
             <div className="flex items-center gap-1.5">
@@ -424,13 +423,13 @@ function EntitiesInner() {
                 onValueChange={toggleAll}
                 aria-label="Select all on this page"
               />
-              <div className="grid flex-1 grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 text-[10.5px] font-medium uppercase tracking-wider text-foreground/40">
+              <div className="grid flex-1 grid-cols-[1fr_auto] gap-3 text-[10.5px] font-medium uppercase tracking-wider text-foreground/65 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
                 <span>Title</span>
-                <span>Type</span>
-                <span>Workspace</span>
-                <span>Created by</span>
-                <span>Created</span>
-                <span />
+                <span className="hidden sm:block">Type</span>
+                <span className="hidden sm:block">Space</span>
+                <span className="hidden sm:block">Created by</span>
+                <span className="hidden sm:block">Created</span>
+                <span className="hidden sm:block" />
               </div>
             </div>
 
@@ -508,8 +507,8 @@ function EntityTableRow({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Delete failed",
-        description: err.message,
+        title: "Couldn't delete the entity",
+        description: readableError(err.message),
         color: "danger",
       });
       setConfirmDelete(false);
@@ -529,7 +528,7 @@ function EntityTableRow({
           onValueChange={onToggle}
           aria-label={`Select entity ${item.id}`}
         />
-        <div className="grid flex-1 grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] items-center gap-3">
+        <div className="grid flex-1 grid-cols-[1fr_auto] items-center gap-3 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
           <div className="flex min-w-0 items-center gap-2">
             <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
             <span className="truncate text-[12.5px] text-foreground">
@@ -538,29 +537,23 @@ function EntityTableRow({
               )}
             </span>
           </div>
-          <span className="truncate font-mono text-[11px] text-foreground/65">
+          <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.profileSlug}
           </span>
-          <span className="truncate font-mono text-[11px] text-foreground/55">
+          <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.workspaceName ? (
               item.workspaceName
             ) : item.workspaceId ? (
               item.workspaceId.slice(0, 8) + "…"
             ) : (
-              <span className="text-foreground/35">Pod-wide</span>
+              <span>Pod-wide</span>
             )}
           </span>
-          <span className="truncate font-mono text-[11px] text-foreground/45">
+          <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.userId.slice(0, 8)}…
           </span>
-          <span className="truncate text-[11px] text-foreground/45">
-            {item.createdAt
-              ? formatRelative(
-                  item.createdAt instanceof Date
-                    ? item.createdAt
-                    : new Date(item.createdAt)
-                )
-              : "—"}
+          <span className="hidden truncate text-[11px] text-foreground/65 sm:block">
+            {formatRelative(item.createdAt)}
           </span>
           <Button
             isIconOnly
@@ -569,7 +562,7 @@ function EntityTableRow({
             radius="full"
             color="danger"
             aria-label={`Delete entity ${item.id}`}
-            className="opacity-0 transition-opacity group-hover:opacity-100"
+            className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
             onPress={() => setConfirmDelete(true)}
           >
             <Trash2 className="h-3.5 w-3.5" />

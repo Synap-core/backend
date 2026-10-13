@@ -47,7 +47,7 @@ export function OpenClawSummarySection() {
   return (
     <SectionCard
       title="OpenClaw"
-      hint="Pod-wide agent runtime — configured outside Pod Admin"
+      hint="Pod-wide agent runtime — configured outside Pod Console"
       actions={<StatusPill kind={status} label={statusLabel} />}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -71,7 +71,7 @@ export function OpenClawSummarySection() {
             <span className="text-[11.5px] text-foreground/55">
               {query.data?.lifecycleDomains?.runtime
                 ? `Runtime managed by ${query.data.lifecycleDomains.runtime}`
-                : "Skills and agents are configured outside Pod Admin"}
+                : "Skills and agents are configured outside Pod Console"}
             </span>
           </div>
         </div>
