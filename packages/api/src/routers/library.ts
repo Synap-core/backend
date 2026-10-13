@@ -324,11 +324,24 @@ export const libraryRouter = router({
     .input(z.object({ groupId: uuid }))
     .mutation(async ({ ctx, input }): Promise<ImportBuildResult> => {
       const userId = requireUserId(ctx.userId);
-      return buildLibraryGroup({
+      const result = await buildLibraryGroup({
         userId,
         groupId: input.groupId,
         depsFor: depsFor(ctx, userId),
       });
+      if (
+        result.status === "refused" &&
+        result.reason === "previous_build_pending"
+      ) {
+        // A rebuild now would twin what the waiting bundle makes.
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This group's last build is still waiting for your review. Approve or reject it, then build again.",
+          cause: { reason: "previous_build_pending" },
+        });
+      }
+      return result;
     }),
 
   /** Unread / groups waiting / oldest wait. */

@@ -94,6 +94,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { db, documents } from "@synap/database";
 import {
   documentVersions,
+  entities,
   focusSessions,
   libraryGroups,
   proposals,
@@ -194,13 +195,14 @@ beforeAll(async () => {
       documentVersions,
       proposals,
       libraryGroups,
+      entities,
     ])
   );
 });
 beforeEach(async () => {
   h.objects.clear();
   await h.client!.exec(
-    `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals; delete from library_groups;`
+    `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals; delete from library_groups; delete from entities;`
   );
 });
 
@@ -727,5 +729,112 @@ describe("relay's needs", () => {
       lens: { workspaceId: WS },
     });
     expect(lensed.groups.map((g) => g.name)).toEqual(["In space"]);
+  });
+});
+
+describe("rebuild = update mode", () => {
+  /** A submit door that files REAL pending proposals, like the pod's. */
+  function filingDeps(submitted: SubmitCaptureGraphInput[]) {
+    const deps = buildDeps(submitted);
+    return {
+      ...deps,
+      submit: async (input: SubmitCaptureGraphInput) => {
+        submitted.push(input);
+        const { rows } = await q<{ id: string }>(
+          `insert into proposals (status, proposal_type, target_type, target_id, data, subject_user_id)
+           values ('pending', 'create', 'entity', gen_random_uuid(), '{}'::jsonb, $1) returning id`,
+          [USER]
+        );
+        return { proposalId: rows[0]!.id, applied: false };
+      },
+    } satisfies ImportBuildDeps;
+  }
+  /** Approving a bundle materializes its container; the stamp names it. */
+  async function approve(proposalId: string, containerId: string) {
+    await q(
+      `insert into entities (id, user_id, title, properties) values ($1, $2, 'Reading', '{}'::jsonb)
+       on conflict (id) do nothing`,
+      [containerId, USER]
+    );
+    await q(
+      `update proposals set status = 'approved', data = $2::jsonb where id = $1`,
+      [
+        proposalId,
+        JSON.stringify({
+          materialized: { byOp: { group: { entityId: containerId } } },
+        }),
+      ]
+    );
+  }
+  async function addTo(groupId: string, url: string) {
+    const r = await keep([url]);
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.items", groupId, add: [r.staged[0]!.itemId] }],
+    });
+  }
+
+  it("reuses the group's container on every rebuild — never a twin; waits while the last bundle is pending", async () => {
+    const r = await keep(["https://example.com/r1"]);
+    const g = await newGroup("Reading", [r.staged[0]!.itemId]);
+    const submitted: SubmitCaptureGraphInput[] = [];
+    const deps = filingDeps(submitted);
+
+    const first = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => deps,
+    });
+    expect(first.status).toBe("proposed");
+    expect(submitted[0]!.entities.map((e) => e.ref)).toContain("group");
+    expect(
+      (await loadLibraryGroup({ userId: USER, groupId: g })).containerEntityId
+    ).toBeNull();
+
+    // A rebuild while the first bundle waits would twin it: refused, claim released.
+    await addTo(g, "https://example.com/r2");
+    const waiting = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => deps,
+    });
+    expect(waiting).toMatchObject({
+      status: "refused",
+      reason: "previous_build_pending",
+    });
+    expect(
+      (await loadLibraryGroup({ userId: USER, groupId: g })).buildingAt
+    ).toBeNull();
+
+    // Approved: the rebuild resolves the container from the stamp, reuses it, records it.
+    const container = "00000000-0000-4000-8000-00000000c0c0";
+    await approve(first.proposalId!, container);
+    const second = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => deps,
+    });
+    expect(second.status).toBe("proposed");
+    expect(submitted[1]!.entities.map((e) => e.ref)).not.toContain("group");
+    expect(JSON.stringify(submitted[1])).toContain(container);
+    expect(
+      (await loadLibraryGroup({ userId: USER, groupId: g })).containerEntityId
+    ).toBe(container);
+
+    // And again: the recorded container, still no twin.
+    await approve(second.proposalId!, container);
+    await addTo(g, "https://example.com/r3");
+    const third = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => deps,
+    });
+    expect(third.status).toBe("proposed");
+    expect(submitted[2]!.entities.map((e) => e.ref)).not.toContain("group");
+    expect(JSON.stringify(submitted[2])).toContain(container);
+    const { rows } = await q<{ n: number }>(
+      `select count(*)::int as n from entities`
+    );
+    expect(rows[0]!.n).toBe(1);
   });
 });

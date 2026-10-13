@@ -44,8 +44,27 @@ Hub REST for the CLI, the extension and Raycast: `POST /api/hub/library/add`, `G
 
 A group made in an import session (before the Library) is **adopted lazily**: the first Library read turns it into a `library_groups` row (note, outputs, origin, built state carried over), stamps `libraryGroupId` on the session's group and adds the id to its members — once, idempotently. No data migration rewrites rows.
 
+## Rebuild = update mode
+
+A group built before is **rebuilt, never twinned**. `library.build` passes the group's earlier bundles (`build_proposal_ids`) and its recorded container to the Build core, which reads what they made from their stamped `proposals.data.materialized.byOp` (`resolvePriorBuild`, live rows only) and files `update_*` ops (`update_entity` / `update_skill` / `update_playbook` / `update_automation` / `update_rule` / `update_view`, each stamped `{before, patch}` so revert restores `before`) plus new things only where nothing exists.
+
+- **The container.** Before approval a first bundle has only a ref, so nothing is recorded then. The next build resolves the real container from that bundle's stamp, reuses it, and records it in `library_groups.container_entity_id`; a bundle that applies at once records it immediately. Every later rebuild reuses the same entity.
+- **A rebuild waits for review.** While the group's newest bundle is still pending, a rebuild would twin what it makes: the service refuses with `previous_build_pending` and the tRPC door answers `CONFLICT` ("approve or reject it, then build again"). The claim is released.
+- A rebuild reads only the items staged after `built_at`; nothing new is refused (`nothing_new`).
+
+## Lists stay alive
+
+A List a Build makes for a group carries `config.membersOf = <container entity id>`, a **view scope** in `views.execute`: it shows the container's CURRENT members (a `parent_of` edge each), so a rebuild that attaches new members grows the List without editing it. The scope only narrows: it is ANDed with the access floor and the List's own filters, so a member of a kind the List does not show stays out.
+
+## Keep it alive (L5)
+
+A daily pass (`library-keep-alive` queue, **04:23 UTC**) keeps the Library from becoming a pile without making it an inbox:
+
+- **Quiet archive.** An ungrouped, never-built item unseen for 90 days (clock: `importCuration.seenAt`, else the day it was kept) gets `importCuration.archivedAt`. Still searchable; a grouped item is never archived from under its group.
+- **"Build one group"** (`library.build_suggestion`): the person's longest-waiting group, at most once a week, as a notification with registry role `suggestion` — never a pending proposal (pending reads as blocking).
+- **Resurfacing** (`library.resurface`): "From your Library, for <project>" for kept items that name a project worked on this week, or were kept into it.
+- **Pod setting** `pod_settings.settings.libraryKeepAlive` `{ enabled (default true), archiveAfterDays (90; 0 = never) }`, through `proactive.getLibraryKeepAlive` / `setLibraryKeepAlive` (pod admins).
+
 ## Not yet
 
-- AI group suggestions for new items (`suggestedGroupIds` is read and curated; nothing writes it yet).
-- Update mode of a rebuild (reusing `container_entity_id`, `update_*` ops for what the group made before) is the Build core's (L3).
-- Keep-alive (weekly "Build one group", resurfacing, quiet auto-archive) is L5.
+- AI group suggestions for new items: `suggestedGroupIds` is read and curated here; the light-read wave writes it.

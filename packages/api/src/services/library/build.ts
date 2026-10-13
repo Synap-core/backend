@@ -33,6 +33,7 @@ import {
 import type { ImportBuildResult, ImportGroup } from "@synap-core/types/imports";
 import {
   buildImportMembers,
+  resolvePriorBuild,
   BUILD_CLAIM_TTL_MS,
   type ImportBuildDeps,
 } from "../imports/build.js";
@@ -186,6 +187,11 @@ export async function buildLibraryGroup(args: {
     });
     const group = asImportGroup(groupRow);
     const workspaceId = groupRow.workspaceId ?? run.workspaceId;
+    const priorProposalIds = Array.isArray(groupRow.buildProposalIds)
+      ? groupRow.buildProposalIds.filter(
+          (id): id is string => typeof id === "string"
+        )
+      : [];
     const built = await buildImportMembers({
       database,
       userId: args.userId,
@@ -194,9 +200,37 @@ export async function buildLibraryGroup(args: {
       groups: [group],
       members: asMembers(rows, group),
       deps: args.depsFor({ workspaceId }),
+      // UPDATE MODE: a group built before updates what its earlier bundles
+      // made and reuses its container — never a twin.
+      ...(priorProposalIds.length > 0 || groupRow.builtAt
+        ? {
+            rebuild: {
+              proposalIds: priorProposalIds,
+              containerEntityId: groupRow.containerEntityId,
+            },
+          }
+        : {}),
     });
     if (built.result.status === "refused") return built.result;
     const at = new Date();
+    // The container, once it is a real row: reused by this rebuild, or made
+    // by a bundle that applied at once. A first bundle still pending has only
+    // a ref; the NEXT build resolves it from that bundle's stamped
+    // `materialized.byOp` (`resolvePriorBuild`) and records it here.
+    let containerEntityId = built.containerEntityId;
+    if (
+      !containerEntityId &&
+      built.result.status === "applied" &&
+      built.result.proposalId
+    ) {
+      containerEntityId = (
+        await resolvePriorBuild({
+          database,
+          userId: args.userId,
+          proposalIds: [built.result.proposalId],
+        })
+      ).prior.containerEntityId;
+    }
     await markItemsBuiltAt(
       database,
       args.userId,
@@ -209,6 +243,7 @@ export async function buildLibraryGroup(args: {
         buildingAt: null,
         builtAt: at,
         updatedAt: at,
+        ...(containerEntityId ? { containerEntityId } : {}),
         ...(built.result.proposalId
           ? {
               buildProposalIds: drizzleSql`(CASE WHEN jsonb_typeof(${libraryGroups.buildProposalIds}) = 'array' THEN ${libraryGroups.buildProposalIds} ELSE '[]'::jsonb END) || ${JSON.stringify([built.result.proposalId])}::jsonb`,
