@@ -164,7 +164,12 @@
     # path and the Host header must reach MinIO unchanged (Caddy's default).
     # Active once the backend has MINIO_PUBLIC_URL = this pod's origin; the
     # bucket name must match MINIO_BUCKET (compose: synap-storage).
+    # A stored blob is served with its UPLOAD Content-Type on THIS origin, so an
+    # SVG (or any script-capable type) opened directly would run as the pod.
+    # `sandbox` gives the response an opaque origin and no script; <img>/<video>
+    # embeds are unaffected (a CSP on a subresource response does not apply).
     handle /synap-storage/* {
+        header Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
         reverse_proxy minio:9000
     }
 
