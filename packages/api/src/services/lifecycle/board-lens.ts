@@ -31,10 +31,12 @@ import {
  */
 export interface BoardLensMemo {
   slugRows: Map<string, ReturnType<typeof assertKnownProfileSlug>>;
+  /** `profileId|workspaceId` → the effective lifecycle (overlays are per space). */
+  lifecycles: Map<string, Promise<EffectiveLifecycle | null>>;
 }
 
 export function newBoardLensMemo(): BoardLensMemo {
-  return { slugRows: new Map() };
+  return { slugRows: new Map(), lifecycles: new Map() };
 }
 
 export interface ResolvedProfile {
@@ -68,7 +70,13 @@ export async function resolveProfileLifecycle(
   const resolver = new ProfileResolutionService(db);
   let lifecycle: EffectiveLifecycle | null = null;
   for (const r of chosen) {
-    lifecycle = await resolver.getEffectiveLifecycle(r.id, workspaceId ?? null);
+    const key = `${r.id}|${workspaceId ?? ""}`;
+    let effective = memo?.lifecycles.get(key);
+    if (!effective) {
+      effective = resolver.getEffectiveLifecycle(r.id, workspaceId ?? null);
+      memo?.lifecycles.set(key, effective);
+    }
+    lifecycle = await effective;
     if (lifecycle) break;
   }
   if (!lifecycle || lifecycle.options.length === 0) {

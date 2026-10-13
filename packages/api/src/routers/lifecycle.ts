@@ -239,20 +239,6 @@ const spaceIntentWire = z.object({
 const homeWire = z.object({
   /** Producing spaces first (most live things first), then libraries by name. */
   spaces: z.array(spaceIntentWire),
-  /**
-   * POD-WIDE things (no space) of produced slugs no stored intent claims —
-   * counted once here, never in every card. null = the read failed.
-   */
-  podWide: z
-    .array(
-      z.object({
-        profileSlug: z.string(),
-        label: z.string(),
-        plural: z.string(),
-        count: z.number(),
-      })
-    )
-    .nullable(),
   needsYou: z.object({
     /** `signals.count` on the caller's floor (narrowed to the project). */
     total: z.number().nullable(),

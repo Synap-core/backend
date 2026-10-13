@@ -44,6 +44,8 @@ const h = vi.hoisted(() => ({
   countCalls: [] as Array<Record<string, unknown>>,
   failSpaceCount: null as string | null,
   failLiveness: false,
+  /** `getEffectiveLifecycle` calls — counted by the Q-S4 ratchet. */
+  lifecycleReads: 0,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -68,6 +70,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       db: unknown
     ) => object) {
       async getEffectiveLifecycle(profileId: string) {
+        h.lifecycleReads++;
         if (profileId === "22222222-2222-4222-8222-222222222222") {
           return {
             propertySlug: "leadStage",
@@ -607,7 +610,7 @@ describe("lifecycle.home", () => {
   });
 });
 
-describe("lifecycle.home — pod-wide things count ONCE (homes X1)", () => {
+describe("lifecycle.home — pod-wide things (homes X1, review #5)", () => {
   async function decisionRow(ws: string | null): Promise<string> {
     const id = randomUUID();
     await q(
@@ -617,21 +620,10 @@ describe("lifecycle.home — pod-wide things count ONCE (homes X1)", () => {
     );
     return id;
   }
-  const total = (
-    sp:
-      | {
-          produces: Array<{
-            profileSlug: string;
-            columns: Array<{ count: number }>;
-          }>;
-        }
-      | undefined
-  ) =>
-    sp?.produces
-      .find((p) => p.profileSlug === "decision")
-      ?.columns.reduce((n, c) => n + c.count, 0);
+  const sum = (cols: Array<{ count: number }> | undefined) =>
+    cols?.reduce((n, c) => n + c.count, 0);
 
-  it("a pod-wide row counts in the first STORED producer only; inferred spaces and other producers never; unowned ⇒ podWide", async () => {
+  it("a card counts what its board shows (pod-wide rows included); only OWNED rows make a space produce", async () => {
     await q(
       `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'decision','Decision','Decisions','kind','pod',true)`,
       [DECISION]
@@ -640,42 +632,47 @@ describe("lifecycle.home — pod-wide things count ONCE (homes X1)", () => {
       `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,gen_random_uuid(),true)`,
       [DECISION]
     );
-    const intent = (label: string) => ({
+    const beta = await space("Beta decisions", {
       settings: {
-        intent: { label, produces: ["decision"], source: "template" },
+        intent: { label: "Beta", produces: ["decision"], source: "template" },
       },
     });
-    const beta = await space("Beta decisions", intent("Beta"));
-    const alpha = await space("Alpha decisions", intent("Alpha"));
+    // No intent and no decision of its own: only pod-wide ones reach it.
+    const gamma = await space("Gamma nothing", {});
     const rows: string[] = [];
     try {
       for (let i = 0; i < 3; i++) rows.push(await decisionRow(null)); // pod-wide
-      rows.push(await decisionRow(alpha));
       rows.push(await decisionRow(beta), await decisionRow(beta));
       rows.push(await decisionRow(MISC)); // MISC infers `decision`
 
       const home = await caller().home();
-      const of = (id: string) => home.spaces.find((s) => s.workspaceId === id);
-      expect(total(of(alpha))).toBe(1 + 3); // the owner: first by name
-      expect(total(of(beta))).toBe(2); // its own only
-      expect(total(of(MISC))).toBe(1); // inferred: its own only
-      expect(home.podWide).toEqual([]); // owned ⇒ never counted twice
-
-      // No stored producer left: the pod-wide rows are counted ONCE, at pod level.
-      await q(
-        `update workspaces set archived_at = now() where id = any($1::uuid[])`,
-        [[alpha, beta]]
-      );
-      const unowned = await caller().home();
-      expect(total(unowned.spaces.find((s) => s.workspaceId === MISC))).toBe(1);
-      expect(unowned.podWide).toEqual([
-        {
+      for (const ws of [beta, MISC]) {
+        const card = home.spaces
+          .find((s) => s.workspaceId === ws)!
+          .produces.find((p) => p.profileSlug === "decision")!;
+        const board = await caller().board({
           profileSlug: "decision",
-          label: "Decision",
-          plural: "Decisions",
-          count: 3,
-        },
-      ]);
+          workspaceId: ws,
+        });
+        // The card's door opens this board: the two counts are one count.
+        expect(sum(card.columns)).toBe(sum(board.columns));
+      }
+      const cardOf = (ws: string) =>
+        sum(
+          home.spaces
+            .find((s) => s.workspaceId === ws)!
+            .produces.find((p) => p.profileSlug === "decision")!.columns
+        );
+      expect(cardOf(beta)).toBe(2 + 3);
+      expect(cardOf(MISC)).toBe(1 + 3);
+      // Inference reads OWNED rows only: pod-wide decisions never make
+      // Gamma (or a Finance / Foundation) a producer of decisions.
+      expect(
+        home.spaces
+          .find((s) => s.workspaceId === gamma)
+          ?.produces.some((p) => p.profileSlug === "decision") ?? false
+      ).toBe(false);
+      expect("podWide" in home).toBe(false);
     } finally {
       await q(
         `update entities set deleted_at = now() where id = any($1::uuid[])`,
@@ -683,7 +680,7 @@ describe("lifecycle.home — pod-wide things count ONCE (homes X1)", () => {
       );
       await q(
         `update workspaces set archived_at = now() where id = any($1::uuid[])`,
-        [[alpha, beta]]
+        [[beta, gamma]]
       );
     }
   });
@@ -691,17 +688,19 @@ describe("lifecycle.home — pod-wide things count ONCE (homes X1)", () => {
 
 describe("lifecycle.home cost (homes review Q-S4)", () => {
   /**
-   * Queries one home read issues. NOT covered: the lifecycle declaration read
-   * (`getEffectiveLifecycle`, mocked here, one per pair in prod) and the
-   * in-flight bound (`HOME_KIND_CONCURRENCY`) — this counts queries, not
-   * their overlap.
+   * Reads one home issues: SQL queries PLUS the lifecycle declaration reads
+   * (`getEffectiveLifecycle`, stubbed here, so each counts as ONE read — its
+   * own internal queries are proven in its suites, not counted here). NOT
+   * covered: the in-flight bound (`HOME_KIND_CONCURRENCY`) — this counts
+   * reads, not their overlap.
    */
   async function homeQueries(): Promise<number> {
     const spy = vi.spyOn(h.client!, "query");
     try {
       spy.mockClear();
+      h.lifecycleReads = 0;
       await caller().home();
-      return spy.mock.calls.length;
+      return spy.mock.calls.length + h.lifecycleReads;
     } finally {
       spy.mockRestore();
     }
@@ -727,6 +726,8 @@ describe("lifecycle.home cost (homes review Q-S4)", () => {
       // … and the per-pair cost never grows back.
       expect(one - base).toBeLessThanOrEqual(HOME_QUERIES_PER_KIND);
       expect(base).toBeLessThanOrEqual(HOME_QUERIES_FIXTURE);
+      // Non-vacuity: the lifecycle declaration reads ARE in the count.
+      expect(h.lifecycleReads).toBeGreaterThan(0);
     } finally {
       for (const id of extra)
         await q(`update workspaces set archived_at = now() where id = $1`, [
@@ -740,8 +741,10 @@ describe("lifecycle.home cost (homes review Q-S4)", () => {
  * The ratchet's ceilings, measured on this fixture (Q-S4). Lower them when a
  * change earns it; raising one is a decision the commit message must name.
  */
-const HOME_QUERIES_PER_KIND = 2;
-const HOME_QUERIES_FIXTURE = 23;
+// 2 SQL + 1 lifecycle declaration read (counted since the final review #6;
+// it was there all along, the ratchet could not see it).
+const HOME_QUERIES_PER_KIND = 3;
+const HOME_QUERIES_FIXTURE = 26;
 
 describe("lifecycle.moving", () => {
   it("things with open work, the work under each, most urgent first", async () => {
