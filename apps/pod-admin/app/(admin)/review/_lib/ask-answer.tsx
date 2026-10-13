@@ -8,8 +8,9 @@
  *   act                              → `attestOutput` ("I did this") ·
  *                                      `unblockOutput` ("Not mine")
  *   provide                          → nothing here can hand a secret, file
- *                                      or connection over yet: the shared copy
- *                                      and "Ask the agent about it"
+ *                                      or connection over yet: the shared
+ *                                      copy, "Open in app" and "Ask the agent
+ *                                      about it"
  *   every mode                       → `askAboutSlot`, then the session room
  *
  * The shapes and checks are `ask-detail.ts` (pure, tested); the rules and the
@@ -37,13 +38,14 @@ import {
   Textarea,
   addToast,
 } from "@heroui/react";
-import { Check, ExternalLink, MessageSquare, X } from "lucide-react";
+import { ArrowUpRight, Check, MessageSquare, X } from "lucide-react";
 import { ASK_COPY, classifyAskRefusal } from "@synap-core/types/ask";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import {
+  ExitFallback,
   ExitLink,
   externalProps,
   rowHref,
@@ -178,6 +180,13 @@ export function AskAnswer({
     id: seen.sessionId,
     view: "room",
   });
+  // A chip whose object only opens in the desktop app: the install hatch,
+  // once, under the chips — not once per chip.
+  const lookedAtDesktop = view.lookedAt
+    .map((item) =>
+      openIn({ kind: "object", objectKind: item.kind, id: item.id })
+    )
+    .find((exit) => exit.isDesktopLink);
 
   return (
     <div className="flex flex-col gap-5 pb-4">
@@ -232,6 +241,9 @@ export function AskAnswer({
               <LookedAtChip key={`${item.kind}:${item.id}`} item={item} />
             ))}
           </div>
+          {lookedAtDesktop && (
+            <ExitFallback exit={lookedAtDesktop} showWeb={false} />
+          )}
         </Section>
       )}
 
@@ -408,10 +420,14 @@ function Controls(props: ControlsProps) {
               <a
                 href={control.url}
                 {...externalProps(control.url)}
-                className="inline-flex items-start gap-1.5 break-all font-mono text-[12px] text-primary underline-offset-2 hover:underline"
+                className="inline-flex items-start gap-1.5 break-all rounded-sm font-mono text-[12px] text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 {control.url}
-                <ExternalLink className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+                <ArrowUpRight
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                  strokeWidth={1.75}
+                  aria-hidden
+                />
               </a>
             )}
             {control.steps.length > 0 && (
@@ -426,13 +442,24 @@ function Controls(props: ControlsProps) {
         </div>
       );
     case "provide":
+      // Nothing here can hand a secret, file or connection over: the app can.
       return (
-        <Alert color="default" variant="flat" title={control.title}>
-          <span className="flex flex-col gap-1">
-            <span>{control.wants}.</span>
-            <span>{control.body}</span>
-          </span>
-        </Alert>
+        <div className="flex flex-col gap-2">
+          <Alert color="default" variant="flat" title={control.title}>
+            <span className="flex flex-col gap-1">
+              <span>{control.wants}.</span>
+              <span>{control.body}</span>
+            </span>
+          </Alert>
+          <ExitLink
+            exit={openIn({
+              kind: "objectInApp",
+              objectKind: "session",
+              id: props.slot.sessionId,
+            })}
+            label="Open in app"
+          />
+        </div>
       );
     case "legacy":
       return <LegacyControl {...props} />;
@@ -516,7 +543,7 @@ function ConfirmControl({
       </div>
       <Input
         size="sm"
-        label="Note for the agent"
+        label="Note for the agent (optional)"
         placeholder={ASK_COPY.notePlaceholder}
         value={note}
         onValueChange={setNote}
@@ -593,7 +620,7 @@ function ChooseControl({
           isDisabled={busy || !ready}
           onPress={() => onAnswer({ type: "choose", key, other })}
         >
-          Answer
+          Send answer
         </Button>
       </div>
     </div>
@@ -657,7 +684,7 @@ function FormControl({
           isLoading={pending}
           isDisabled={busy}
         >
-          Send
+          Send answer
         </Button>
       </div>
     </form>
