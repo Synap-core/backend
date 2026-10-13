@@ -14,7 +14,8 @@
  *   - a (space, kind) resolves through `resolveBoardLens` — the board that
  *     kind's door opens reads the same lifecycle, conditions and subject;
  *   - columns come from THE status grouping (`groupThingsByStatus`);
- *   - needs-you is `signals.count` / `signals.countByProfile` themselves;
+ *   - needs-you is `countNeedsYouByScope` — `signals.count`'s own read and
+ *     count, read ONCE and narrowed per space / kind;
  *   - "being worked" is the board's workedBy predicate (`loadOpenWork`).
  *
  * The intent is the template's (`settings.intent`, projected on install); a
@@ -67,7 +68,7 @@ import {
   groupThingsByStatus,
   type StatusGroup,
 } from "../../routers/entities/status-groups.js";
-import { signalsRouter } from "../../routers/signals.js";
+import { countNeedsYouByScope } from "../../routers/signals.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
 import { resolveBoardLens } from "./board-lens.js";
 import { loadOpenWork, type OpenWorkRow } from "./worked-by.js";
@@ -151,12 +152,6 @@ export interface HomesCtx {
   workspaceId?: string | null;
   agentUserId?: string | null;
 }
-
-type SignalsCaller = ReturnType<typeof signalsRouter.createCaller>;
-const signalsOf = (ctx: HomesCtx): SignalsCaller =>
-  signalsRouter.createCaller(
-    ctx as unknown as Parameters<typeof signalsRouter.createCaller>[0]
-  );
 
 const readerOf = (ctx: HomesCtx) => ({
   userId: ctx.userId,
@@ -597,8 +592,6 @@ export async function readHome(
         };
   });
 
-  const signals = signalsOf(ctx);
-  const lens = input.projectId ? { projectId: input.projectId } : {};
   const settle = async <T>(what: string, read: () => Promise<T>) => {
     try {
       return await read();
@@ -608,45 +601,28 @@ export async function readHome(
     }
   };
 
-  const [words, openWork, total, bySpace, byKind] = await Promise.all([
+  const [words, openWork, needs] = await Promise.all([
     profileWords([...new Set(intents.flatMap((i) => i.produces))]),
     settle("open work", () => loadOpenWork(readerOf(ctx), null)),
-    settle(
-      "needs-you total",
-      async () => (await signals.count({ ...lens })).needsYou
-    ),
-    Promise.all(
-      spaces.map(async (s) => ({
-        workspaceId: s.id,
-        count: await settle(
-          "needs-you space",
-          async () =>
-            (await signals.count({ ...lens, workspaceId: s.id })).needsYou
-        ),
-      }))
-    ),
-    Promise.all(
-      intents.map(async (i) => {
-        if (i.produces.length === 0) return new Map<string, number | null>();
-        const rows = await settle("needs-you kinds", () =>
-          signals.countByProfile({
-            ...lens,
-            workspaceId: i.space.id,
-            profileSlugs: i.produces,
-          })
-        );
-        return new Map(
-          i.produces.map((slug) => {
-            const r = rows?.find((x) => x.profileSlug === slug);
-            return [
-              slug,
-              r && r.status === "ok" ? r.count.needsYou : null,
-            ] as const;
-          })
-        );
+    // ONE attention read for every scope on the page (null per failed scope).
+    settle("needs-you", () =>
+      countNeedsYouByScope(ctx as never, {
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        spaces: intents.map((i) => ({
+          workspaceId: i.space.id,
+          profileSlugs: i.produces,
+        })),
       })
     ),
   ]);
+  const total = needs?.total ?? null;
+  const bySpace = spaces.map((s) => ({
+    workspaceId: s.id,
+    count: needs?.bySpace.get(s.id) ?? null,
+  }));
+  const byKind = intents.map(
+    (i) => needs?.byKind.get(i.space.id) ?? new Map<string, number | null>()
+  );
 
   const out = await Promise.all(
     intents.map(async (i, idx): Promise<SpaceIntent> => {

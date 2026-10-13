@@ -11,7 +11,7 @@
  *   - per produced kind: the board's columns (done counted within the window,
  *     the unclassified column when it holds any), live / doneWindowed /
  *     total, being-worked (live things with open work), needs-you from
- *     `signals.countByProfile`, and the headline by the first reason that
+ *     the grouped needs-you read, and the headline by the first reason that
  *     holds (needs_you → being_worked → stuck → recent);
  *   - a failed sub-read is null, never 0; an unknown produced slug is left out.
  *  moving
@@ -19,9 +19,10 @@
  *     scheduled prep), visible to the caller, the work under each with its
  *     kind / live / asksYou / actor; most urgent first; space + project lens.
  *
- * Stubbed: `getEffectiveLifecycle` (its own suites prove it) and the signals
- * router (needs-you is `signals.count` / `countByProfile` themselves, proven
- * in the signals suites — this pins that the home READS them, per scope).
+ * Stubbed: `getEffectiveLifecycle` (its own suites prove it) and
+ * `countNeedsYouByScope` (the grouped needs-you read: its own PGlite suite
+ * proves it equals `signals.count` per scope — this pins that the home asks
+ * it ONCE, for every space and kind on the page).
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -37,7 +38,6 @@ const h = vi.hoisted(() => ({
   },
   tables: [] as unknown[],
   countCalls: [] as Array<Record<string, unknown>>,
-  byProfileCalls: [] as Array<Record<string, unknown>>,
   failSpaceCount: null as string | null,
   failLiveness: false,
 }));
@@ -81,26 +81,35 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("./signals.js", () => ({
-  signalsRouter: {
-    createCaller: () => ({
-      count: async (input: Record<string, unknown>) => {
-        h.countCalls.push(input);
-        if (h.failSpaceCount && input.workspaceId === h.failSpaceCount)
-          throw new Error("signals down");
-        return { needsYou: input.workspaceId ? 2 : 5 };
-      },
-      countByProfile: async (input: {
-        profileSlugs: string[];
-        workspaceId?: string;
-      }) => {
-        h.byProfileCalls.push(input);
-        return input.profileSlugs.map((profileSlug) =>
-          profileSlug === "deal"
-            ? { profileSlug, status: "ok", count: { needsYou: 3 } }
-            : { profileSlug, status: "unavailable" }
-        );
-      },
-    }),
+  // The ONE grouped needs-you read (its own suite proves it equals
+  // `signals.count` per scope); here: what the home asks it, and that it
+  // asks ONCE.
+  countNeedsYouByScope: async (
+    _ctx: unknown,
+    input: {
+      projectId?: string;
+      spaces: Array<{ workspaceId: string; profileSlugs: string[] }>;
+    }
+  ) => {
+    h.countCalls.push(input as never);
+    return {
+      total: 5,
+      bySpace: new Map(
+        input.spaces.map((s) => [
+          s.workspaceId,
+          s.workspaceId === h.failSpaceCount ? null : 2,
+        ])
+      ),
+      byKind: new Map(
+        input.spaces.map((s) => [
+          s.workspaceId,
+          new Map(
+            s.profileSlugs.map((slug) => [slug, slug === "deal" ? 3 : null])
+          ),
+        ])
+      ),
+      attentionReads: 1,
+    };
   },
 }));
 
@@ -377,7 +386,7 @@ describe("lifecycle.home", () => {
     ]);
   });
 
-  it("needs-you reads signals per scope; a failed read is null, never 0", async () => {
+  it("needs-you: ONE grouped read for the page; a failed scope is null, never 0", async () => {
     h.countCalls.length = 0;
     h.failSpaceCount = MISC;
     try {
@@ -390,6 +399,17 @@ describe("lifecycle.home", () => {
       expect(by.get(MISC)).toBeNull();
       const dev = home.spaces.find((s) => s.workspaceId === DEV)!;
       expect(dev.produces[0]!.needsYou).toBe(3);
+      // One read, asked for every listed space and its produced kinds.
+      expect(h.countCalls).toHaveLength(1);
+      const asked = h.countCalls[0] as unknown as {
+        spaces: Array<{ workspaceId: string; profileSlugs: string[] }>;
+      };
+      expect(asked.spaces.map((x) => x.workspaceId).sort()).toEqual(
+        home.spaces.map((x) => x.workspaceId).sort()
+      );
+      expect(
+        asked.spaces.find((x) => x.workspaceId === DEV)?.profileSlugs
+      ).toEqual(["deal", "no_such_kind"]);
     } finally {
       h.failSpaceCount = null;
     }
@@ -402,10 +422,9 @@ describe("lifecycle.home", () => {
       [USER, T.neg, P]
     );
     h.countCalls.length = 0;
-    h.byProfileCalls.length = 0;
     const home = await caller().home({ projectId: P });
-    expect(h.countCalls.every((c) => c.projectId === P)).toBe(true);
-    expect(h.byProfileCalls.every((c) => c.projectId === P)).toBe(true);
+    expect(h.countCalls).toHaveLength(1);
+    expect(h.countCalls[0]!.projectId).toBe(P);
     const deal = home.spaces.find((s) => s.workspaceId === DEV)!.produces[0]!;
     expect(deal.total).toBe(1);
     expect(deal.live).toBe(1);

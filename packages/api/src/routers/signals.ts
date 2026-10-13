@@ -96,7 +96,7 @@ import {
 } from "@synap-core/types/lens";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import { requireUserId } from "../utils/user-scoped.js";
-import { proposalsRouter } from "./proposals.js";
+import { proposalsRouter, assertProposalWorkspaceRead } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
 import { eventsRouter } from "./events.js";
 import {
@@ -141,6 +141,8 @@ import {
   resolveThingsLens,
   type ThingsLens,
 } from "../services/focus-sessions/session-subject.js";
+import { sessionSubjectWhere } from "../services/focus-sessions/session-subject-where.js";
+import type { ProposalCluster } from "../services/proposals/fingerprint.js";
 import {
   listUnfinishedCaptures,
   type UnfinishedCapture,
@@ -1220,6 +1222,268 @@ async function countSignals(ctx: SignalsCtx, input: SignalScopeInput) {
     ...attention.failures.proposed,
   ]);
   return countOf(attention);
+}
+
+/** The scopes a grouped needs-you read answers: each space, and kinds in it. */
+export interface NeedsYouScopes {
+  projectId?: string;
+  spaces: ReadonlyArray<{ workspaceId: string; profileSlugs: string[] }>;
+}
+
+/** Per-scope needs-you numbers; null = that scope's read failed (never 0). */
+export interface NeedsYouByScope {
+  total: number | null;
+  bySpace: Map<string, number | null>;
+  /** workspaceId → profileSlug → count. */
+  byKind: Map<string, Map<string, number | null>>;
+  /** Attention reads made — 1 when grouped, more when it fell back. */
+  attentionReads: number;
+}
+
+/**
+ * The attention read narrowed to ONE scope, by filtering a WIDER read rather
+ * than reading again: the rows each half's lensed read would have returned.
+ * Every half's workspace lens is a row equality (`proposals.groups` →
+ * `workspace_id = W`, a cluster has a member there; notifications, owed
+ * slots and review sessions → their `workspaceId`), and a kind lens is a set
+ * the caller resolved with the halves' own predicates. Captures live in no
+ * space; notifications never follow a kind (`notificationsFollow`).
+ */
+function narrowAttention(
+  a: Attention,
+  scope: {
+    workspaceId: string;
+    /** A kind lens: its clusters (`proposals.groups({ profileSlug })`). */
+    kindClusters?: ProposalCluster[];
+    /** A kind lens: the sessions ON its things (`sessionSubjectWhere`). */
+    kindSessionIds?: ReadonlySet<string>;
+  }
+): Attention {
+  const inSpace = (ws: string | null | undefined) => ws === scope.workspaceId;
+  const onKind = (sessionId: string) =>
+    !scope.kindSessionIds || scope.kindSessionIds.has(sessionId);
+  const clusters = (scope.kindClusters ?? a.groups.groups).filter((c) =>
+    c.workspaceIds.includes(scope.workspaceId)
+  );
+  return {
+    ...a,
+    groups: {
+      ...a.groups,
+      groups: clusters,
+      distinct: clusters.length,
+      scanTruncated: false,
+    },
+    notifications: scope.kindClusters
+      ? []
+      : a.notifications.filter((r) =>
+          inSpace((r as { workspaceId?: string | null }).workspaceId)
+        ),
+    notificationsTruncated: false,
+    owed: a.owed.filter(
+      (o) =>
+        inSpace((o as { workspaceId?: string | null }).workspaceId) &&
+        onKind(o.sessionId)
+    ),
+    owedTruncated: false,
+    review: {
+      sessions: a.review.sessions.filter(
+        (r) => inSpace(r.workspaceId) && onKind(r.id)
+      ),
+      truncated: false,
+    },
+    captures: { captures: [], truncated: false },
+  };
+}
+
+/** A grouped read is exact only while no half of the wide read was capped. */
+function attentionIsComplete(a: Attention): boolean {
+  return (
+    !a.groups.scanTruncated &&
+    a.groups.distinct === a.groups.groups.length &&
+    !a.notificationsTruncated &&
+    !a.owedTruncated &&
+    !a.review.truncated &&
+    a.failures.blocking.length === 0 &&
+    a.failures.proposed.length === 0
+  );
+}
+
+/**
+ * NEEDS-YOU FOR MANY SCOPES IN ONE ATTENTION READ (the homes): the floor
+ * (narrowed to the project) read ONCE, then every space and (space, kind)
+ * count is that read narrowed (`narrowAttention`) and counted by THE count
+ * (`countOf`) — never a second rule. Per kind, one `proposals.groups` (the
+ * kind lens is a proposal predicate a cluster cannot be filtered by) and one
+ * session query (`sessionSubjectWhere`).
+ *
+ * The answer must equal `count` per scope. Where the narrowing cannot prove
+ * that — a half of the wide read hit its cap, or failed — the scope is read
+ * the old way (`countSignals` per scope), so a grouped number is never a
+ * floor passed off as a total. A space the caller cannot read proposals in
+ * fails as its own `count` would (`assertProposalWorkspaceRead`): null.
+ */
+export async function countNeedsYouByScope(
+  ctx: SignalsCtx,
+  input: NeedsYouScopes
+): Promise<NeedsYouByScope> {
+  const userId = requireUserId(ctx.userId);
+  const lens = input.projectId ? { projectId: input.projectId } : {};
+  let attentionReads = 0;
+  const countScope = async (scope: SignalScopeInput) => {
+    attentionReads += 1;
+    try {
+      return (await countSignals(ctx, { ...lens, ...scope })).needsYou;
+    } catch (err) {
+      logger.warn({ err, scope }, "needs-you scope read failed — null");
+      return null;
+    }
+  };
+  const perScope = async (): Promise<NeedsYouByScope> => {
+    const [total, spaces] = await Promise.all([
+      countScope({}),
+      Promise.all(
+        input.spaces.map(async (s) => ({
+          workspaceId: s.workspaceId,
+          count: await countScope({ workspaceId: s.workspaceId }),
+          kinds: await Promise.all(
+            s.profileSlugs.map(
+              async (slug) =>
+                [
+                  slug,
+                  await countScope({
+                    workspaceId: s.workspaceId,
+                    profileSlug: slug,
+                  }),
+                ] as const
+            )
+          ),
+        }))
+      ),
+    ]);
+    return {
+      total,
+      bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
+      byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+      attentionReads,
+    };
+  };
+
+  attentionReads += 1;
+  let floor: Attention;
+  try {
+    floor = await readAttention(ctx, lens, CLUSTER_PAGE_LIMIT);
+  } catch (err) {
+    logger.warn({ err }, "grouped needs-you read failed — per scope");
+    return perScope();
+  }
+  if (!attentionIsComplete(floor)) {
+    logger.info("grouped needs-you read capped — reading per scope");
+    return perScope();
+  }
+
+  // Per kind: its clusters + the sessions on its things, once for every space.
+  const sessionIds = [
+    ...new Set([
+      ...floor.owed.map((o) => o.sessionId),
+      ...floor.review.sessions.map((r) => r.id),
+    ]),
+  ];
+  const slugs = [...new Set(input.spaces.flatMap((s) => s.profileSlugs))];
+  const kinds = new Map(
+    await Promise.all(
+      slugs.map(async (slug) => {
+        try {
+          const things = await resolveThingsLens(slug);
+          const [groups, onThings] = await Promise.all([
+            proposalsRouter.createCaller(ctx).groups({
+              ...lens,
+              profileSlug: slug,
+              status: "pending",
+              limit: CLUSTER_PAGE_LIMIT,
+              excludeDraftSessions: true,
+              splitBySession: true,
+            }),
+            sessionIds.length
+              ? db
+                  .select({ id: focusSessions.id })
+                  .from(focusSessions)
+                  .where(
+                    and(
+                      inArray(focusSessions.id, sessionIds),
+                      sessionSubjectWhere(things.subject)
+                    )
+                  )
+              : Promise.resolve([] as Array<{ id: string }>),
+          ]);
+          const complete =
+            !groups.scanTruncated && groups.distinct === groups.groups.length;
+          return [
+            slug,
+            complete
+              ? {
+                  clusters: groups.groups,
+                  sessionIds: new Set(onThings.map((r) => r.id)),
+                }
+              : ("per-scope" as const),
+          ] as const;
+        } catch (err) {
+          logger.warn({ err, slug }, "needs-you kind lens failed — null");
+          return [slug, null] as const;
+        }
+      })
+    )
+  );
+
+  const spaces = await Promise.all(
+    input.spaces.map(async (s) => {
+      try {
+        await assertProposalWorkspaceRead(s.workspaceId, userId);
+      } catch {
+        // The space's own `count` throws here: null, never a number.
+        return {
+          workspaceId: s.workspaceId,
+          count: null,
+          kinds: s.profileSlugs.map((slug) => [slug, null] as const),
+        };
+      }
+      const kindCounts = await Promise.all(
+        s.profileSlugs.map(async (slug) => {
+          const kind = kinds.get(slug);
+          if (kind === null || kind === undefined) return [slug, null] as const;
+          if (kind === "per-scope")
+            return [
+              slug,
+              await countScope({
+                workspaceId: s.workspaceId,
+                profileSlug: slug,
+              }),
+            ] as const;
+          return [
+            slug,
+            countOf(
+              narrowAttention(floor, {
+                workspaceId: s.workspaceId,
+                kindClusters: kind.clusters,
+                kindSessionIds: kind.sessionIds,
+              })
+            ).needsYou,
+          ] as const;
+        })
+      );
+      return {
+        workspaceId: s.workspaceId,
+        count: countOf(narrowAttention(floor, { workspaceId: s.workspaceId }))
+          .needsYou,
+        kinds: kindCounts,
+      };
+    })
+  );
+  return {
+    total: countOf(floor).needsYou,
+    bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
+    byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+    attentionReads,
+  };
 }
 
 const LensCaps = z
