@@ -18,9 +18,12 @@ const path = require("path");
 const { execFile, spawn } = require("child_process");
 const {
   commandErrorStatus,
-  normalizeHttpsUrl,
+  configureEnvEntries,
+  createJwksKeyResolver,
+  parseImmutableEnvKeys,
   resolveCommandName,
   resolvePodAgentTrust,
+  validateConfigurePayload,
   validateSignedCommandClaims,
   validateUpdateTargetVersion,
 } = require("./trust");
@@ -60,6 +63,13 @@ const HOST_LOG_ALLOWLIST = new Set([
 
 const HOST_LOG_MAX_BYTES = 256 * 1024; // 256 KB — tail from end if larger
 
+/**
+ * Add-ons GET /addon-health/:name may report on (it is unauthenticated). Only
+ * the compose opt-in add-on the control plane polls after provisioning
+ * (openclaw-provision.ts). Anything else is a 404 without touching docker.
+ */
+const ADDON_HEALTH_ALLOWLIST = new Set(["openclaw"]);
+
 // ── Generic trust anchor ──
 // The Pod agent deliberately has no default issuer. Its issuer and local
 // audience are configured independently of any service implementation.
@@ -69,8 +79,6 @@ const POD_AGENT_JWKS_URL = POD_AGENT_TRUST.configured
   : "";
 
 // ── JWKS Cache ──
-
-const jwksCache = new Map(); // url -> { keys: Map<kid, KeyObject>, t }
 
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
@@ -107,32 +115,12 @@ function decodeJwtHeader(token) {
   return header;
 }
 
-async function getPublicKey(jwksUrl, kid) {
-  const cached = jwksCache.get(jwksUrl);
-  let keys = cached && Date.now() - cached.t < 86_400_000 ? cached.keys : null;
-  if (!keys) {
-    const body = await fetchJson(jwksUrl);
-    if (!Array.isArray(body.keys)) throw new Error("invalid JWKS");
-    keys = new Map();
-    for (const jwk of body.keys) {
-      if (
-        jwk &&
-        typeof jwk.kid === "string" &&
-        jwk.kid.length > 0 &&
-        jwk.kty === "EC" &&
-        jwk.alg === "ES256"
-      ) {
-        keys.set(jwk.kid, crypto.createPublicKey({ key: jwk, format: "jwk" }));
-      }
-    }
-    jwksCache.set(jwksUrl, { keys, t: Date.now() });
-    log(`JWKS cached from ${jwksUrl}`);
-  }
-
-  const key = keys.get(kid);
-  if (!key) throw new Error("unknown signing key");
-  return key;
-}
+// 24 h cache, refetched (rate-limited) on an unknown kid — see trust.js.
+const getPublicKey = createJwksKeyResolver({
+  fetchJson,
+  createPublicKey: (jwk) => crypto.createPublicKey({ key: jwk, format: "jwk" }),
+  onFetched: (jwksUrl) => log(`JWKS cached from ${jwksUrl}`),
+});
 
 // ── JWT Verification ──
 
@@ -220,11 +208,8 @@ const COMMANDS = {
   configure: {
     script: "configure-pod.sh",
     args: (p) => {
-      const envVars = Array.isArray(p.envVars)
-        ? p.envVars
-        : p.envVars && typeof p.envVars === "object"
-          ? Object.entries(p.envVars).map(([k, v]) => `${k}=${String(v)}`)
-          : [];
+      // The SAME entries validateConfigurePayload checked before dispatch.
+      const envVars = configureEnvEntries(p);
       // Each flag + value must be a separate argv element so the shell sees
       // them as distinct positional parameters. Passing "--profile canary"
       // as a single string would make $1="--profile canary" and the
@@ -252,24 +237,20 @@ const COMMANDS = {
   },
 };
 
-function configureEnvironment(payload) {
-  const entries = Array.isArray(payload.envVars)
-    ? payload.envVars
-    : payload.envVars && typeof payload.envVars === "object"
-      ? Object.entries(payload.envVars).map(
-          ([key, value]) => `${key}=${String(value)}`
-        )
-      : [];
-  const values = new Map();
-
-  for (const entry of entries) {
-    if (typeof entry !== "string") throw new Error("invalid configure env var");
-    const separator = entry.indexOf("=");
-    if (separator <= 0) throw new Error("invalid configure env var");
-    values.set(entry.slice(0, separator), entry.slice(separator + 1));
+/**
+ * The `immutable` keys of this Pod's env.schema (the one schema env-config.sh
+ * reads). Read per configure so a schema shipped by an update is honoured
+ * without restarting the agent; an unreadable schema yields null and the
+ * configure is refused (fail closed) by validateConfigurePayload.
+ */
+function readImmutableEnvKeys() {
+  try {
+    return parseImmutableEnvKeys(
+      fs.readFileSync(path.join(DEPLOY_DIR, "env.schema"), "utf8")
+    );
+  } catch {
+    return null;
   }
-
-  return values;
 }
 
 function validateCommandPayload(commandName, payload) {
@@ -278,32 +259,7 @@ function validateCommandPayload(commandName, payload) {
     return;
   }
   if (commandName !== "configure") return;
-
-  const environment = configureEnvironment(payload);
-  if (environment.has("POD_AGENT_ISSUER_URL")) {
-    throw new Error("POD_AGENT_ISSUER_URL cannot be changed by a command");
-  }
-
-  const nextAudience = environment.get("POD_AGENT_AUDIENCE");
-  const nextPublicUrl = environment.get("PUBLIC_URL");
-  if (nextAudience === undefined && nextPublicUrl === undefined) return;
-  if (nextAudience === undefined || nextPublicUrl === undefined) {
-    throw new Error("POD_AGENT_AUDIENCE and PUBLIC_URL must change together");
-  }
-
-  const normalizedAudience = normalizeHttpsUrl(nextAudience);
-  const normalizedPublicUrl = normalizeHttpsUrl(nextPublicUrl);
-  if (
-    !normalizedAudience ||
-    !normalizedPublicUrl ||
-    normalizedAudience !== nextAudience ||
-    normalizedPublicUrl !== nextPublicUrl ||
-    normalizedAudience !== normalizedPublicUrl
-  ) {
-    throw new Error(
-      "POD_AGENT_AUDIENCE must be the canonical PUBLIC_URL for this Pod"
-    );
-  }
+  validateConfigurePayload(payload, readImmutableEnvKeys());
 }
 
 // ── HTTP Server ──
@@ -358,6 +314,12 @@ http
       );
     if (addonHealthMatch) {
       const addonName = addonHealthMatch[1];
+      // Unauthenticated, so it answers ONLY for the opt-in add-ons an operator
+      // polls after provisioning — never an oracle for which containers run on
+      // this host, nor a `docker inspect` per anonymous request.
+      if (!ADDON_HEALTH_ALLOWLIST.has(addonName)) {
+        return respond(res, 404, { error: "not found" });
+      }
       // Try exact container name first, then synap-{addon} prefix (Docker Compose convention)
       const candidates = [addonName, `synap-${addonName}`];
 

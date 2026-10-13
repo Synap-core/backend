@@ -10,6 +10,7 @@
 import type { Server as SocketIOServer } from "socket.io";
 import type { IncomingMessage, ServerResponse } from "http";
 import * as Y from "yjs";
+import { safeTokenEqual } from "@synap/auth";
 // Import the schema lookup via the dedicated subpath so the bridge doesn't
 // pull in `@synap/events`' boss/db side-effects (which require DATABASE_URL).
 import { getSchemaForEvent } from "@synap/events/realtime-schemas";
@@ -235,7 +236,7 @@ export function bridgeSecretOk(
   }
 
   const provided = req.headers["x-bridge-secret"];
-  if (provided !== bridgeSecret) {
+  if (typeof provided !== "string" || !safeTokenEqual(provided, bridgeSecret)) {
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Unauthorized" }));
     return false;

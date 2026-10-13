@@ -14,6 +14,7 @@ import {
 } from "@synap/database/schema";
 import { eq, and, gte, isNull } from "drizzle-orm";
 import crypto from "crypto";
+import { safeTokenEqual } from "@synap/auth";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "admin-router" });
@@ -62,7 +63,7 @@ adminRouter.post("/bootstrap/claim", async (c) => {
       return c.json({ error: "Invalid email address" }, 400);
     }
 
-    if (token !== expectedToken) {
+    if (!safeTokenEqual(token, expectedToken)) {
       return c.json({ error: "Invalid bootstrap token" }, 401);
     }
 
@@ -200,7 +201,7 @@ adminRouter.post("/invite", async (c) => {
   }
 
   // Validate token matches
-  if (providedToken !== expectedToken) {
+  if (!safeTokenEqual(providedToken, expectedToken)) {
     logger.warn("Invalid provisioning token provided");
     return c.json({ error: "Invalid provisioning token" }, 401);
   }

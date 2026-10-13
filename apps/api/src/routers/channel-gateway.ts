@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { randomUUID, createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
+import { safeTokenEqual } from "@synap/auth";
 import { db, eq, and, drizzleSql } from "@synap/database";
 import {
   channelConnections,
@@ -81,7 +82,7 @@ channelGatewayApp.use("/*", async (c, next) => {
     return c.json({ error: "Service not configured" }, 503);
   }
 
-  if (!key || key !== expected) {
+  if (!key || !safeTokenEqual(key, expected)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 

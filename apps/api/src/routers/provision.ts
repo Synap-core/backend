@@ -24,7 +24,7 @@
 import { Hono, type Context } from "hono";
 import { probeIntelligenceService } from "./provision-intelligence-probe.js";
 import { z } from "zod";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, createHash } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
 import {
@@ -1077,6 +1077,16 @@ provisionRouter.get("/debug", async (c) => {
   });
 });
 
+/**
+ * `sha256:` + the first 8 hex of the key's SHA-256 — enough for an operator to
+ * tell two keys apart, nothing of the key itself. `/diagnose-intelligence` is
+ * unauthenticated and used to return the first 12 characters of the decrypted
+ * IS key.
+ */
+export function keyFingerprintOf(key: string): string {
+  return `sha256:${createHash("sha256").update(key).digest("hex").slice(0, 8)}`;
+}
+
 // ─── GET /api/provision/diagnose-intelligence ────────────────────────────────
 //
 // Diagnostic endpoint: resolves the IS URL, probes health/ready, validates auth.
@@ -1099,7 +1109,8 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
   let resolvedUrl: string | null = null;
   let resolvedSource: "database" | "env" | "none" = "none";
   let resolvedVia: string | null = null;
-  let keyPrefix: string | null = null;
+  // A fingerprint, never characters of the key: this route is public.
+  let keyFingerprint: string | null = null;
 
   try {
     const serving = await describeServingIntelligence({
@@ -1112,9 +1123,9 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
       resolvedSource = "database";
       try {
         const decrypted = resolveServiceKey(svc.apiKey);
-        keyPrefix = decrypted ? decrypted.slice(0, 12) + "..." : null;
+        keyFingerprint = decrypted ? keyFingerprintOf(decrypted) : null;
       } catch {
-        keyPrefix = null;
+        keyFingerprint = null;
         issues.push("key_decrypt_failed");
       }
       if (!svc.enabled) issues.push("service_disabled");
@@ -1185,9 +1196,12 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
   // POST /api/provision/validate-credentials — which holds the decrypted key
   // and refreshes the cached `intelligenceServices.status`. `null` here means
   // "not checked on this path", which is the truth.
-  const authResult: { valid: boolean | null; keyPrefix?: string | null } = {
+  const authResult: {
+    valid: boolean | null;
+    keyFingerprint: string | null;
+  } = {
     valid: null,
-    keyPrefix,
+    keyFingerprint,
   };
 
   return c.json({
