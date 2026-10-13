@@ -32,15 +32,15 @@ describe("activeNavId", () => {
 describe("navHref", () => {
   it("encodes params and drops undefined ones", () => {
     expect(navHref("members", { focus: "a b" })).toBe("/members?focus=a%20b");
-    expect(navHref("review", { type: "issuer", focus: undefined })).toBe(
-      "/review?type=issuer"
+    expect(navHref("review", { type: "access", focus: undefined })).toBe(
+      "/review?type=access"
     );
     expect(navHref("home")).toBe("/home");
   });
 
-  it("routes pending issuers into Review", () => {
-    expect(pendingIssuerHref()).toBe("/review?type=issuer");
-    expect(pendingIssuerHref("iss-1")).toBe("/review?type=issuer&focus=iss-1");
+  it("routes pending issuers into Review's Access filter", () => {
+    expect(pendingIssuerHref()).toBe("/review?type=access");
+    expect(pendingIssuerHref("iss-1")).toBe("/review?type=access&focus=iss-1");
   });
 });
 
@@ -104,7 +104,7 @@ describe("SEARCH_DESTINATION", () => {
     expect(SEARCH_DESTINATION.workspace.href("w1")).toBe(
       "/workspaces?focus=w1"
     );
-    expect(SEARCH_DESTINATION.entity.href("e1")).toBe("/entities");
+    expect(SEARCH_DESTINATION.entity.href("e1")).toBe("/entities?focus=e1");
   });
 
   it("labels the result chip with the nav's word", () => {

@@ -35,6 +35,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { pendingIssuerHref } from "../../../../lib/console-nav";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -215,7 +216,7 @@ export function IssuersSection() {
 
       {pendingCount > 0 && (
         <Link
-          href="/review?type=issuer"
+          href={pendingIssuerHref()}
           className="flex min-h-10 items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
         >
           <span>
@@ -265,7 +266,7 @@ export function IssuersSection() {
       </div>
 
       {/* List */}
-      <div className="rounded-lg ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]">
+      <div className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
         {list.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={3} />
         ) : list.isError ? (
@@ -350,7 +351,7 @@ function IssuerRow({
   ].join(" · ");
 
   return (
-    <div className="border-b border-foreground/[0.05] last:border-b-0">
+    <div>
       <ResourceRow
         Icon={Icon}
         primary={issuer.displayName}

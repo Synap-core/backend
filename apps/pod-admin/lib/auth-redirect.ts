@@ -29,8 +29,9 @@ export function redirectToLoginIfUnauthorized(
  * bounced through login and landed on the bare tab with the target gone —
  * silently, and precisely for the deep links the wave exists to make work.
  *
- * `/login`'s `safeReturnTo` already accepts a query string (it only refuses
- * off-origin and `/login` itself), so the receiver needed nothing.
+ * `/login`'s `safeReturnTo` keeps the query string (it only refuses what
+ * would leave the origin, and `/login` itself), so the receiver needed
+ * nothing.
  */
 function currentPath(): string {
   return `${window.location.pathname}${window.location.search}`;

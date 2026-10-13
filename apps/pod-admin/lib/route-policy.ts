@@ -99,14 +99,18 @@ export function isSelfService(path: string): boolean {
  * `/`, which only redirects to Home. Their data is user-floored server-side
  * (`diagnose.global`, `signals`), so opening them grants no reach — the role
  * only decides which nav the viewer is shown.
+ *
+ * Exact paths, not prefixes: a page added later under `/home/…` or
+ * `/review/…` is an admin page until someone decides otherwise here.
  */
-const MEMBER_CONSOLE_ROOTS = ["/home", "/review"] as const;
+const MEMBER_CONSOLE_PATHS: ReadonlySet<string> = new Set([
+  "/",
+  "/home",
+  "/review",
+]);
 
 export function isMemberConsolePath(path: string): boolean {
-  return (
-    path === "/" ||
-    MEMBER_CONSOLE_ROOTS.some((p) => path === p || path.startsWith(`${p}/`))
-  );
+  return MEMBER_CONSOLE_PATHS.has(path);
 }
 
 export type RouteAccess = "public" | "signed-in" | "admin";

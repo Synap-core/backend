@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "./providers";
+import { navCollapsedScript } from "../lib/nav-collapsed";
 
 /**
  * SELF-HOSTED, deliberately — `next/font/google` fetches from
@@ -88,6 +89,7 @@ export default function RootLayout({
         className="bg-background text-foreground antialiased min-h-screen font-sans"
       >
         <script dangerouslySetInnerHTML={{ __html: runtimeConfigScript() }} />
+        <script dangerouslySetInnerHTML={{ __html: navCollapsedScript() }} />
         <Providers>{children}</Providers>
       </body>
     </html>

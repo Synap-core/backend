@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -30,6 +30,14 @@ import {
 const NAV_IDS = new Set(NAV_ITEMS.map((i) => i.id));
 
 describe("console nav", () => {
+  it("points every nav item at a page that exists", () => {
+    const adminDir = fileURLToPath(new URL("../app/(admin)", import.meta.url));
+    const missing = NAV_ITEMS.filter(
+      (i) => !existsSync(join(adminDir, i.href, "page.tsx"))
+    ).map((i) => i.href);
+    expect(missing).toEqual([]);
+  });
+
   it("has unique ids and unique hrefs", () => {
     expect(NAV_IDS.size).toBe(NAV_ITEMS.length);
     expect(new Set(NAV_ITEMS.map((i) => i.href)).size).toBe(NAV_ITEMS.length);

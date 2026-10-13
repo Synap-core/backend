@@ -8,7 +8,7 @@
  *   • Review   — `signals.count`, the number browser and relay badge too;
  *   • Sessions — the stuck-runs section; Runs — the failing-flows section.
  *
- * `diagnose.global` is called with Home's own `DIAGNOSE_QUERY_OPTIONS`, so the
+ * `diagnose.global` is called with the shared `DIAGNOSE_QUERY_OPTIONS`, so the
  * nav and Home share one cached query rather than racing two.
  */
 
@@ -18,11 +18,8 @@ import {
   type NavId,
 } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
-import {
-  buildNeedsYou,
-  DIAGNOSE_QUERY_OPTIONS,
-  type DiagnoseSection,
-} from "../home/_lib/needs-you";
+import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
+import { buildNeedsYou, type DiagnoseSection } from "../home/_lib/needs-you";
 import { useConsoleRole } from "./side-nav-role";
 
 /** `down`/`stale` follow StatusPill's palette; `review` is a decision, not a fault. */
@@ -101,13 +98,25 @@ export function buildNavBadges({
   return badges;
 }
 
+/**
+ * Review's number (`signals.count`). Every reader — the nav badge, Review's
+ * "showing N of M" — goes through here, so they share one cached query and
+ * can never show two different numbers.
+ */
+export function useNeedsYouCount() {
+  return trpc.signals.count.useQuery(undefined, {
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+}
+
 export function useConsoleBadges(): NavBadges {
   const role = useConsoleRole();
   const diagnose = trpc.diagnose.global.useQuery(
     undefined,
     DIAGNOSE_QUERY_OPTIONS
   );
-  const review = trpc.signals.count.useQuery(undefined, { staleTime: 60_000 });
+  const review = useNeedsYouCount();
   return buildNavBadges({
     sections: diagnose.data?.sections,
     review: review.data,

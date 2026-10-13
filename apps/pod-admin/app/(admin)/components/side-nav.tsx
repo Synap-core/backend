@@ -10,8 +10,9 @@
  *                Search first (the top bar has no room for it on a phone),
  *                then the same groups with 44px touch rows, the viewer last.
  *
- * Width is CSS (no layout flash on first paint); JS only decides whether the
- * rail's tooltips are live. Members see Home + Review only (D8) — the role
+ * Width is CSS (no layout flash on first paint), the collapse choice included
+ * (`lib/nav-collapsed.ts`); JS only decides whether the rail's tooltips are
+ * live. Members see Home + Review only (D8) — the role
  * shapes the offer, never the data.
  */
 
@@ -62,6 +63,10 @@ import {
   type NavItem,
 } from "../../../lib/console-nav";
 import {
+  NAV_COLLAPSED_ATTR,
+  NAV_COLLAPSED_KEY,
+} from "../../../lib/nav-collapsed";
+import {
   useConsoleBadges,
   type BadgeTone,
   type NavBadge,
@@ -104,26 +109,22 @@ const BADGE_DOT: Record<BadgeTone, string> = {
 
 // ─── Preferences ────────────────────────────────────────────────────
 
-const COLLAPSED_KEY = "pod-console.nav-collapsed";
-
 /**
- * The ≥lg collapse choice, per browser. Storage can be absent or throw
- * (private windows, blocked site data), so every access is guarded and the
- * nav simply starts expanded.
+ * The ≥lg collapse choice. The pre-paint script already put it on `<html>`;
+ * state starts false on server and client alike (no hydration mismatch) and
+ * reads the attribute once mounted — it only drives aria and tooltips, the
+ * widths follow the attribute in CSS.
  */
 function useCollapsedPreference(): [boolean, (next: boolean) => void] {
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
-    try {
-      setCollapsed(window.localStorage.getItem(COLLAPSED_KEY) === "1");
-    } catch {
-      // Storage unavailable — keep the default.
-    }
+    setCollapsed(document.documentElement.hasAttribute(NAV_COLLAPSED_ATTR));
   }, []);
   const update = (next: boolean) => {
     setCollapsed(next);
+    document.documentElement.toggleAttribute(NAV_COLLAPSED_ATTR, next);
     try {
-      window.localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
+      window.localStorage.setItem(NAV_COLLAPSED_KEY, next ? "1" : "0");
     } catch {
       // Not remembered this time; the toggle still works.
     }
@@ -161,7 +162,7 @@ export function SideNav() {
       aria-label="Console"
       className={[
         "hidden shrink-0 flex-col overflow-y-auto border-r border-foreground/[0.05] px-2 py-3 md:flex",
-        collapsed ? "w-14" : "w-14 lg:w-56",
+        "w-14 lg:w-56 lg:nav-collapsed:w-14",
       ].join(" ")}
     >
       {navForRole(role).map((group) => (
@@ -171,17 +172,9 @@ export function SideNav() {
               {/* Rail: a hairline between groups; wide: the group's name. */}
               <div
                 aria-hidden
-                className={[
-                  "mx-2 my-2 h-px bg-foreground/[0.06]",
-                  collapsed ? "" : "lg:hidden",
-                ].join(" ")}
+                className="mx-2 my-2 h-px bg-foreground/[0.06] lg:hidden lg:nav-collapsed:block"
               />
-              <p
-                className={[
-                  "px-2.5 pb-1.5 pt-3.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-foreground/45",
-                  collapsed ? "hidden" : "hidden lg:block",
-                ].join(" ")}
-              >
+              <p className="hidden px-2.5 pb-1.5 pt-3.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-foreground/45 lg:block lg:nav-collapsed:hidden">
                 {group.label}
               </p>
             </>
@@ -193,7 +186,6 @@ export function SideNav() {
                   item={item}
                   active={active === item.id}
                   badge={badges[item.id as NavId]}
-                  collapsed={collapsed}
                   rail={rail}
                 />
               </li>
@@ -212,17 +204,18 @@ export function SideNav() {
             "flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-[12.5px] text-foreground/65",
             "transition-colors hover:bg-content2/50 hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-            collapsed ? "justify-center px-0" : "",
+            "nav-collapsed:justify-center nav-collapsed:px-0",
           ].join(" ")}
         >
-          {collapsed ? (
-            <PanelLeftOpen className="h-4 w-4 shrink-0" aria-hidden />
-          ) : (
-            <>
-              <PanelLeftClose className="h-4 w-4 shrink-0" aria-hidden />
-              Collapse
-            </>
-          )}
+          <PanelLeftOpen
+            className="hidden h-4 w-4 shrink-0 nav-collapsed:block"
+            aria-hidden
+          />
+          <PanelLeftClose
+            className="h-4 w-4 shrink-0 nav-collapsed:hidden"
+            aria-hidden
+          />
+          <span className="nav-collapsed:hidden">Collapse</span>
         </button>
       </div>
     </nav>
@@ -233,19 +226,17 @@ function SidebarLink({
   item,
   active,
   badge,
-  collapsed,
   rail,
 }: {
   item: NavItem;
   active: boolean;
   badge: NavBadge | undefined;
-  collapsed: boolean;
   rail: boolean;
 }) {
   const Icon = NAV_ICONS[item.icon];
   // Wide-only pieces: hidden in the rail (md–lg, or collapsed at lg).
-  const wideOnly = collapsed ? "hidden" : "hidden lg:inline-flex";
-  const railOnly = collapsed ? "" : "lg:hidden";
+  const wideOnly = "hidden lg:inline-flex lg:nav-collapsed:hidden";
+  const railOnly = "lg:hidden lg:nav-collapsed:block";
 
   return (
     <Tooltip
@@ -261,16 +252,15 @@ function SidebarLink({
         className={[
           "relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] tracking-tight transition-colors",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-          collapsed
-            ? "justify-center px-0"
-            : "justify-center px-0 lg:justify-start lg:px-2.5",
+          "justify-center px-0 lg:justify-start lg:px-2.5",
+          "lg:nav-collapsed:justify-center lg:nav-collapsed:px-0",
           active
             ? "bg-foreground/[0.07] font-semibold text-foreground"
             : "font-medium text-foreground/65 hover:bg-content2/50 hover:text-foreground",
         ].join(" ")}
       >
         <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
-        <span className={collapsed ? "sr-only" : "sr-only lg:not-sr-only"}>
+        <span className="sr-only lg:not-sr-only lg:nav-collapsed:sr-only">
           {item.label}
         </span>
         {badge && (
@@ -278,7 +268,7 @@ function SidebarLink({
             <BadgePill badge={badge} className={`ml-auto ${wideOnly}`} />
             <span
               aria-hidden
-              className={`absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full ${BADGE_DOT[badge.tone]} ${railOnly}`}
+              className={`absolute right-1.5 top-1 h-1.5 w-1.5 rounded-full ${BADGE_DOT[badge.tone]} ${railOnly}`}
             />
           </>
         )}
@@ -340,10 +330,15 @@ export function NavDrawer({
       onClose={onClose}
       placement="left"
       size="xs"
-      classNames={{ base: "max-w-[300px] rounded-none" }}
+      classNames={{
+        base: "max-w-[300px] rounded-none",
+        // A 44px target: HeroUI's default ✕ is too small for a thumb.
+        closeButton:
+          "right-2 top-2 flex h-11 w-11 items-center justify-center text-foreground/65",
+      }}
     >
       <DrawerContent>
-        <DrawerHeader className="flex flex-col gap-0.5 px-4 pb-2 pt-4">
+        <DrawerHeader className="flex flex-col gap-0.5 pb-2 pl-4 pr-14 pt-4">
           <span className="text-[13.5px] font-semibold text-foreground">
             Pod Console
           </span>

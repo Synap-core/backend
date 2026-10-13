@@ -100,21 +100,22 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
 });
 
 describe("member console (D8)", () => {
-  it.each(["/", "/home", "/review", "/review/abc"])(
-    "%s opens for any member",
-    (path) => {
-      expect(isMemberConsolePath(path)).toBe(true);
-      expect(routeAccess(path)).toBe("signed-in");
-    }
-  );
+  it.each(["/", "/home", "/review"])("%s opens for any member", (path) => {
+    expect(isMemberConsolePath(path)).toBe(true);
+    expect(routeAccess(path)).toBe("signed-in");
+  });
 
-  it.each(["/homepage", "/reviews", "/members", "/workspaces/1"])(
-    "%s stays admin",
-    (path) => {
-      expect(isMemberConsolePath(path)).toBe(false);
-      expect(routeAccess(path)).toBe("admin");
-    }
-  );
+  it.each([
+    "/homepage",
+    "/reviews",
+    "/home/anything",
+    "/review/abc",
+    "/members",
+    "/workspaces/1",
+  ])("%s stays admin", (path) => {
+    expect(isMemberConsolePath(path)).toBe(false);
+    expect(routeAccess(path)).toBe("admin");
+  });
 
   it("public paths never reach the gate", () => {
     expect(routeAccess("/login")).toBe("public");

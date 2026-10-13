@@ -7,6 +7,7 @@
  * Mirror of the Eve dashboard marketplace handoff:
  *   document.querySelector(`[data-row-id="<id>"]`)
  *     → scrollIntoView({ behavior: "smooth", block: "center" })
+ *       (instant under prefers-reduced-motion)
  *     → add ring-2 ring-primary/60 for ~2.4s
  *
  * Pages call this once at mount; the hook handles its own deduplication
@@ -59,12 +60,23 @@ export function useFocusRow(options: UseFocusRowOptions = {}): string | null {
         return;
       }
       handledRef.current = focusId;
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      el.classList.add("ring-2", "ring-primary/60", "ring-offset-2");
-      window.setTimeout(
-        () => el.classList.remove("ring-2", "ring-primary/60", "ring-offset-2"),
-        2400
-      );
+      const reduce = window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+      el.scrollIntoView({
+        behavior: reduce ? "auto" : "smooth",
+        block: "center",
+      });
+      // The offset is painted in the page colour, not white, so the ring
+      // reads as a halo on the dark theme too.
+      const ring = [
+        "ring-2",
+        "ring-primary/60",
+        "ring-offset-2",
+        "ring-offset-background",
+      ];
+      el.classList.add(...ring);
+      window.setTimeout(() => el.classList.remove(...ring), 2400);
     };
     tryFocus();
   }, [focusId, ready, attribute]);

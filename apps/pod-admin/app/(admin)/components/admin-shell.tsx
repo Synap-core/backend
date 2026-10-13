@@ -4,14 +4,12 @@
  * Client-side wrapper for the console layout. Owns the cross-cut state the
  * chrome shares:
  *
- *   1. `lastRefreshed` — drives the TopNav refresh chip.
- *   2. `handleRefresh` — invalidates queries on the active route.
- *   3. `searchOpen`    — controls the global ⌘K palette.
- *   4. `navOpen`       — the phone nav drawer (< md).
+ *   1. `searchOpen` — controls the global ⌘K palette.
+ *   2. `navOpen`    — the phone nav drawer (< md).
  *
  * The TopNav reads operator email + pod host from the parent server
- * layout (cookie / header — not state), and gets the dynamic state
- * (refresh + search trigger) as props. The viewer's role arrives the same
+ * layout (cookie / header — not state), and gets the search and drawer
+ * triggers as props. The viewer's role arrives the same
  * way and is provided to the nav, palette and Home through
  * `ConsoleRoleProvider`.
  *
@@ -21,8 +19,6 @@
  * meta key isn't held.
  */
 
-import { useQueryClient } from "@tanstack/react-query";
-import { usePathname } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -65,30 +61,10 @@ export function AdminShell({
   role,
   children,
 }: AdminShellProps) {
-  const queryClient = useQueryClient();
-  const pathname = usePathname();
-  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(
-    () => new Date()
-  );
   const [searchOpen, setSearchOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const closeNav = useCallback(() => setNavOpen(false), []);
   const openSearch = useCallback(() => setSearchOpen(true), []);
-
-  // Refresh: invalidate everything and stamp the chip. We invalidate
-  // globally rather than per-route because the cards on Home pull from
-  // many routers — narrowing would require predicate plumbing the chip
-  // doesn't really need.
-  const handleRefresh = useCallback(() => {
-    void queryClient.invalidateQueries();
-    setLastRefreshed(new Date());
-  }, [queryClient]);
-
-  // Whenever the route changes, stamp `lastRefreshed` so the chip resets
-  // and reflects the page we're now on.
-  useEffect(() => {
-    setLastRefreshed(new Date());
-  }, [pathname]);
 
   // Global ⌘K / Ctrl+K listener.
   useEffect(() => {
@@ -106,12 +82,10 @@ export function AdminShell({
   return (
     <ConsoleRoleProvider role={role}>
       <OperatorEmailContext.Provider value={operatorEmail}>
-        <div className="flex h-screen min-h-0 flex-col">
+        <div className="flex h-dvh min-h-0 flex-col">
           <TopNav
             operatorEmail={operatorEmail}
             podHost={podHost}
-            lastRefreshed={lastRefreshed}
-            onRefresh={handleRefresh}
             onOpenSearch={openSearch}
             onOpenNav={() => setNavOpen(true)}
           />

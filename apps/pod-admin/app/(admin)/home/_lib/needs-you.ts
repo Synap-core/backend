@@ -1,6 +1,7 @@
 /**
- * "What needs me?" — `diagnose.global` sections (plus the two admin alerts the
- * old Alerts card read) mapped to the ranked rows Home renders.
+ * "What needs me?" — `diagnose.global` sections (plus failing sync peers)
+ * mapped to the ranked rows Home renders. Pending trusted issuers are not
+ * here: they are decisions, so they arrive as signals in Review.
  *
  * PURE and DB-free, so the ranking and the link targets are tested at the
  * seam. The page only renders what this returns.
@@ -22,20 +23,10 @@ import {
   navItem,
   navLabel,
   navVisibleTo,
-  pendingIssuerHref,
   type NavAudience,
   type NavId,
 } from "../../../../lib/console-nav";
 import { openIn, type Exit } from "../../../../lib/open-in";
-
-/**
- * `diagnose.global` runs ~a dozen aggregate reads server-side; it is a health
- * snapshot, not a live feed. Two minutes keeps tab switches free without
- * letting the page drift far from what the pod reports. Home AND the nav's
- * badges (`useConsoleBadges`) pass exactly these options, so they share one
- * cached query instead of racing two.
- */
-export const DIAGNOSE_QUERY_OPTIONS = { staleTime: 120_000 } as const;
 
 export type HealthStatus = "ok" | "attention" | "degraded";
 
@@ -46,12 +37,6 @@ export interface DiagnoseSection {
   status: HealthStatus;
   headline: string;
   detail: Record<string, unknown>;
-}
-
-/** A pending trusted issuer (`trustedIssuers.list`, status `pending`). */
-export interface PendingIssuer {
-  id: string;
-  issuerUrl: string | null;
 }
 
 /** A sync peer whose last attempt errored (`sync.getStatus`). */
@@ -257,7 +242,8 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
           : failedTotal !== null
             ? plural(failedTotal, "failed run")
             : undefined,
-      action: openPage("runs"),
+      // The board's failing view lists exactly the flows this row counts.
+      action: openPage("runs", { filter: "failing" }),
       items: [],
     };
   },
@@ -281,7 +267,8 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
         oldestName && oldestAge !== null
           ? `Oldest: “${oldestName}”, ${formatAgeHours(oldestAge)}`
           : undefined,
-      action: openPage("sessions"),
+      // Sessions' Stuck segment draws the line where this section does.
+      action: openPage("sessions", { filter: "stuck" }),
       items: [],
     };
   },
@@ -406,28 +393,7 @@ function sectionVisibleTo(key: string, audience: NavAudience): boolean {
   return !page || navVisibleTo(navItem(page), audience);
 }
 
-// ── The two admin alerts the old Alerts card read ───────────────────────────
-
-function issuerRow(issuers: PendingIssuer[]): NeedsYouRow | null {
-  if (issuers.length === 0) return null;
-  const only = issuers.length === 1 ? issuers[0] : undefined;
-  return {
-    key: "trusted_issuer",
-    tone: "attention",
-    headline: only
-      ? "A trusted issuer is awaiting approval"
-      : `${issuers.length} trusted issuers awaiting approval`,
-    secondary: only ? (only.issuerUrl ?? only.id) : undefined,
-    action: {
-      kind: "link",
-      label: "Review",
-      // A pending issuer is a decision, so it lands in Review's issuer
-      // filter; with one issuer, focus its row.
-      exit: consoleRoute(pendingIssuerHref(only?.id)),
-    },
-    items: [],
-  };
-}
+// ── Failing sync peers (not a diagnose section) ─────────────────────────────
 
 function syncRow(errors: SyncError[]): NeedsYouRow | null {
   if (errors.length === 0) return null;
@@ -459,17 +425,15 @@ function importance(key: string): number {
  *
  * `audience: "member"` (D8) drops the sections whose page only an admin can
  * open — a row whose one action is a /forbidden is not something the reader
- * can act on. The admin alerts are the caller's to omit: members cannot read
- * issuers or sync peers at all.
+ * can act on. Sync errors are the caller's to omit: members cannot read sync
+ * peers at all.
  */
 export function buildNeedsYou({
   sections,
-  pendingIssuers = [],
   syncErrors = [],
   audience = "admin",
 }: {
   sections: DiagnoseSection[];
-  pendingIssuers?: PendingIssuer[];
   syncErrors?: SyncError[];
   audience?: NavAudience;
 }): NeedsYou {
@@ -477,7 +441,6 @@ export function buildNeedsYou({
     ...sections
       .filter((s) => s.status !== "ok" && sectionVisibleTo(s.key, audience))
       .map(sectionRow),
-    issuerRow(pendingIssuers),
     syncRow(syncErrors),
   ]
     .filter((r): r is NeedsYouRow => r !== null)

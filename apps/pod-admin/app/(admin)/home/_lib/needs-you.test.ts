@@ -48,16 +48,14 @@ describe("buildNeedsYou ranking", () => {
     ]);
   });
 
-  it("folds the admin alerts in by severity: sync error is degraded, issuer is attention", () => {
+  it("folds failing sync peers in by severity", () => {
     const { rows } = buildNeedsYou({
       sections: [backlog],
-      pendingIssuers: [{ id: "iss-1", issuerUrl: "https://idp.example" }],
       syncErrors: [{ id: "peer-1", label: "Laptop", error: "timeout" }],
     });
     expect(rows.map((r) => [r.key, r.tone])).toEqual([
       ["sync_error", "degraded"],
       ["review_backlog", "attention"],
-      ["trusted_issuer", "attention"],
     ]);
   });
 
@@ -255,7 +253,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.action).toEqual({
       kind: "link",
       label: "Open runs",
-      exit: { href: "/runs", isDesktopLink: false },
+      exit: { href: "/runs?filter=failing", isDesktopLink: false },
     });
   });
 
@@ -293,7 +291,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.action).toEqual({
       kind: "link",
       label: "Open sessions",
-      exit: { href: "/sessions", isDesktopLink: false },
+      exit: { href: "/sessions?filter=stuck", isDesktopLink: false },
     });
   });
 
@@ -340,32 +338,13 @@ describe("buildNeedsYou link building", () => {
     });
   });
 
-  it("focuses the single pending issuer in Review; failing peers expand in place", () => {
-    const { rows } = buildNeedsYou({
+  it("lets failing peers expand in place", () => {
+    const [sync] = buildNeedsYou({
       sections: [],
-      pendingIssuers: [{ id: "a b", issuerUrl: null }],
       syncErrors: [{ id: "peer/1", label: "Laptop", error: "x" }],
-    });
-    const [sync, issuer] = rows;
+    }).rows;
     expect(sync.action).toEqual({ kind: "expand", label: "Show peers" });
     expect(sync.items).toEqual([{ id: "peer/1", label: "Laptop", meta: "x" }]);
-    expect(issuer.action.kind === "link" && issuer.action.exit.href).toBe(
-      "/review?type=issuer&focus=a%20b"
-    );
-  });
-
-  it("sends several pending issuers to Review's issuer filter without a focus", () => {
-    const [row] = buildNeedsYou({
-      sections: [],
-      pendingIssuers: [
-        { id: "a", issuerUrl: null },
-        { id: "b", issuerUrl: null },
-      ],
-    }).rows;
-    expect(row.headline).toBe("2 trusted issuers awaiting approval");
-    expect(row.action.kind === "link" && row.action.exit.href).toBe(
-      "/review?type=issuer"
-    );
   });
 });
 

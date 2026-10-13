@@ -25,7 +25,8 @@
  * A member (D8) only searches what they can open — proposals, in Review. The
  * other categories' reads are admin procedures and are never sent.
  *
- * Keyboard model:
+ * Keyboard model (a combobox: focus stays in the input, the highlighted
+ * result is announced through `aria-activedescendant`):
  *   ⌘K / Ctrl+K  — toggle open
  *   ↑ / ↓        — move highlight
  *   Enter        — navigate
@@ -51,6 +52,7 @@ import {
 import { useRouter } from "next/navigation";
 import {
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -69,6 +71,7 @@ import {
   SEARCH_DESTINATION,
   type SearchCategory,
 } from "../../../lib/console-nav";
+import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import { useConsoleRole } from "./side-nav-role";
 
@@ -135,6 +138,8 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const listboxId = useId();
+  const optionId = (idx: number) => `${listboxId}-option-${idx}`;
   const role = useConsoleRole();
   // Only the categories whose destination this viewer may open: a result
   // that lands on /forbidden is not a result.
@@ -375,7 +380,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         id: p.id,
         category: "proposal",
         primary: title,
-        secondary: `${resolveStatusLabel(p.status)} · ${workspaceLabel} · ${new Date(p.createdAt).toLocaleString()}`,
+        secondary: `${resolveStatusLabel(p.status)} · ${workspaceLabel} · ${formatRelative(p.createdAt)}`,
         href: SEARCH_DESTINATION.proposal.href(p.id),
       });
       if (bucket.length >= cap) break;
@@ -393,7 +398,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         id: ev.id,
         category: "audit",
         primary: `${ev.action} · ${ev.subjectType}`,
-        secondary: new Date(ev.timestamp).toLocaleString(),
+        secondary: formatRelative(ev.timestamp),
         href: SEARCH_DESTINATION.audit.href(ev.id),
       });
       if (bucket.length >= cap) break;
@@ -462,7 +467,6 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
       onClose={onClose}
       placement="top"
       size="xl"
-      backdrop="blur"
       hideCloseButton
       classNames={{
         base: "mt-[10vh]",
@@ -488,6 +492,13 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                   <Search className="h-3.5 w-3.5 text-foreground/45" />
                 }
                 aria-label="Pod Console search"
+                role="combobox"
+                aria-expanded={results.length > 0}
+                aria-controls={listboxId}
+                aria-autocomplete="list"
+                aria-activedescendant={
+                  results.length > 0 ? optionId(activeIdx) : undefined
+                }
                 classNames={{
                   inputWrapper: "h-10 bg-transparent shadow-none",
                   input: "text-[13.5px]",
@@ -495,7 +506,12 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
               />
             </div>
 
-            <div className="max-h-[60vh] overflow-y-auto py-2">
+            <div
+              id={listboxId}
+              role="listbox"
+              aria-label="Search results"
+              className="max-h-[60vh] overflow-y-auto py-2"
+            >
               {results.length === 0 ? (
                 <SearchEmpty
                   hasQuery={query.trim().length > 0}
@@ -504,9 +520,18 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
               ) : (
                 groupedResults.map((g) => {
                   const meta = categoryMeta(g.category);
+                  const headingId = `${listboxId}-${g.category}`;
                   return (
-                    <div key={g.category} className="px-2 pb-1">
-                      <div className="px-2 py-1 text-[10.5px] font-medium uppercase tracking-wider text-foreground/45">
+                    <div
+                      key={g.category}
+                      role="group"
+                      aria-labelledby={headingId}
+                      className="px-2 pb-1"
+                    >
+                      <div
+                        id={headingId}
+                        className="px-2 py-1 text-[10.5px] font-medium uppercase tracking-wider text-foreground/45"
+                      >
                         {meta.label}
                       </div>
                       {g.items.map((r) => {
@@ -516,6 +541,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                         return (
                           <SearchRow
                             key={`${r.category}-${r.id}`}
+                            id={optionId(idx)}
                             result={r}
                             active={active}
                             onSelect={handleSelect}
@@ -549,11 +575,13 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
 // ─── Sub-components ─────────────────────────────────────────────────
 
 function SearchRow({
+  id,
   result,
   active,
   onSelect,
   onHover,
 }: {
+  id: string;
   result: SearchResult;
   active: boolean;
   onSelect: (r: SearchResult) => void;
@@ -562,12 +590,17 @@ function SearchRow({
   const meta = categoryMeta(result.category);
   const Icon = meta.Icon;
 
+  // An option, not a button: focus stays in the input and the keyboard moves
+  // the highlight there; a pointer picks the row directly.
   return (
-    <button
-      type="button"
+    <div
+      id={id}
+      role="option"
+      aria-selected={active}
       onClick={() => onSelect(result)}
       onMouseEnter={onHover}
       className={[
+        "cursor-pointer",
         "flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left",
         "transition-colors",
         active
@@ -590,10 +623,10 @@ function SearchRow({
           </span>
         )}
       </div>
-      <span className="shrink-0 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] tracking-wider text-foreground/55">
+      <span className="shrink-0 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] tracking-wider text-foreground/65">
         {meta.tab}
       </span>
-    </button>
+    </div>
   );
 }
 

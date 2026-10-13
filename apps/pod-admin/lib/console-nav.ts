@@ -350,9 +350,12 @@ export function activeNavId(pathname: string): NavId | null {
 
 // ─── Where other surfaces send people ────────────────────────────────────────
 
-/** A pending trusted issuer is a decision, so it lives in Review. */
+/**
+ * A pending trusted issuer is a decision, so it lives in Review — under
+ * Access, the filter that holds every request for reach into the pod.
+ */
 export function pendingIssuerHref(id?: string): string {
-  return navHref("review", { type: "issuer", focus: id });
+  return navHref("review", { type: "access", focus: id });
 }
 
 export type SearchCategory =
@@ -408,11 +411,11 @@ export const SEARCH_DESTINATION: Readonly<
     label: "API keys",
     href: (id) => navHref("keys", { focus: id }),
   },
-  // `/entities` does not honour `?focus=`, so an entity links to the list.
+  // The id travels with the link so the list can land on the entity.
   entity: {
     nav: "entities",
     label: "Entities",
-    href: () => navHref("entities"),
+    href: (id) => navHref("entities", { focus: id }),
   },
   proposal: {
     nav: "review",

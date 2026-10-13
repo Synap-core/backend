@@ -72,15 +72,11 @@ export function LoginForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Use router.replace for in-app navigation (preserves the Next.js bundle)
-  // and a hard navigate as fallback when the destination is outside the app.
+  // `returnTo` is always a path on this origin (`lib/safe-return-to.ts`), so
+  // an in-app navigation is enough and keeps the Next.js bundle.
   const goReturn = useCallback(() => {
-    if (returnTo.startsWith("/")) {
-      router.replace(returnTo);
-      router.refresh();
-      return;
-    }
-    window.location.assign(returnTo);
+    router.replace(returnTo);
+    router.refresh();
   }, [returnTo, router]);
 
   // Mount: create or fetch a flow. If Kratos signals an existing session,

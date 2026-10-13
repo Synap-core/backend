@@ -3,17 +3,19 @@
 /**
  * Home — where the console opens. It answers "what needs me?" first.
  *
- *   1. Status line   — one sentence from `diagnose.global` + the admin alerts.
- *   2. Needs you     — the non-ok diagnose sections plus pending trusted
- *                      issuers and failing sync peers, ranked and capped
- *                      (`_lib/needs-you.ts`). Passing checks collapse into
- *                      one disclosure.
+ *   1. Status line   — one sentence from `diagnose.global` + failing sync
+ *                      peers, when the pod was last checked, and "Check
+ *                      again".
+ *   2. Needs you     — the non-ok diagnose sections plus failing sync peers,
+ *                      ranked and capped (`_lib/needs-you.ts`). Passing
+ *                      checks collapse into one disclosure. Pending trusted
+ *                      issuers are decisions: they wait in Review.
  *   3. Approval queue — a short peek into Review, never a second queue:
  *                      every row and the count lead into `/review`.
  *   4. Pod at a glance — sync, backups and contents as three compact rows.
  *
  * Members (D8) get 1–3 scoped to themselves: `diagnose` and `signals` are
- * user-floored, the admin alerts and the glance band read admin-only
+ * user-floored, the sync peers and the glance band read admin-only
  * procedures, and rows whose page a member cannot open are dropped.
  *
  * Every band owns its queries and its loading/error state: one failing read
@@ -37,7 +39,6 @@ import {
   Layers,
   Mailbox,
   PackageCheck,
-  ShieldQuestion,
   Sparkles,
   Wrench,
   type LucideIcon,
@@ -58,7 +59,7 @@ import {
 import { navHref, navLabel } from "../../../lib/console-nav";
 import type { Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
-import { PageHeader } from "../components/page-header";
+import { PageHeader, PageShell } from "../components/page-header";
 import { RecoveryCodesNudge } from "../components/recovery-codes-nudge";
 import {
   ResourceRow,
@@ -67,21 +68,17 @@ import {
   ResourceRowSkeleton,
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
+import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
 import { useConsoleBadges } from "../components/side-nav-badges";
 import { useConsoleRole } from "../components/side-nav-role";
 import { StatusPill, type StatusKind } from "../components/status-pill";
-import {
-  buildNeedsYou,
-  DIAGNOSE_QUERY_OPTIONS,
-  statusLine,
-  type HealthStatus,
-  type NeedsYouRow,
-} from "./_lib/needs-you";
+import { HEALTH_PILL } from "../components/status-tone";
+import { buildNeedsYou, statusLine, type NeedsYouRow } from "./_lib/needs-you";
 
 export default function HomePage() {
   const isAdmin = useConsoleRole() === "admin";
   return (
-    <div className="max-w-[1400px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader
         title={navLabel("home")}
         description={
@@ -99,7 +96,7 @@ export default function HomePage() {
         <ApprovalQueueCard isAdmin={isAdmin} />
         {isAdmin && <GlanceCard />}
       </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -111,7 +108,6 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   failed_flows: AlertTriangle,
   stuck_runs: Clock,
   sync_error: GitBranch,
-  trusted_issuer: ShieldQuestion,
   agent_activity: Bot,
   duplicate_proposals: Layers,
   review_queue: Activity,
@@ -120,23 +116,13 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   schema_contract: Database,
 };
 
-const TONE_PILL: Record<HealthStatus, { kind: StatusKind; label: string }> = {
-  ok: { kind: "healthy", label: "All good" },
-  attention: { kind: "stale", label: "Worth a look" },
-  degraded: { kind: "down", label: "Act now" },
-};
-
 function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
   const diagnose = trpc.diagnose.global.useQuery(
     undefined,
     DIAGNOSE_QUERY_OPTIONS
   );
-  // The two signals the old Alerts card read. Admin-gated
-  // (`podAdminProcedure`), so a member never asks for them.
-  const issuers = trpc.trustedIssuers.list.useQuery(undefined, {
-    staleTime: 60_000,
-    enabled: isAdmin,
-  });
+  // Sync peers are not a diagnose section. Admin-gated (`podAdminProcedure`),
+  // so a member never asks for them.
   const sync = trpc.sync.getStatus.useQuery(undefined, {
     staleTime: 60_000,
     enabled: isAdmin,
@@ -145,9 +131,6 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
   const needsYou = buildNeedsYou({
     audience: isAdmin ? "admin" : "member",
     sections: diagnose.data?.sections ?? [],
-    pendingIssuers: (issuers.data ?? [])
-      .filter((i) => i.status === "pending")
-      .map((i) => ({ id: i.id, issuerUrl: i.issuerUrl ?? null })),
     syncErrors: (sync.data ?? []).flatMap((p) =>
       p.syncState?.lastError
         ? [
@@ -172,13 +155,6 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
       retry: () => void diagnose.refetch(),
     });
   }
-  if (issuers.isError) {
-    failures.push({
-      key: "issuers",
-      message: "Couldn't load trusted issuers.",
-      retry: () => void issuers.refetch(),
-    });
-  }
   if (sync.isError) {
     failures.push({
       key: "sync",
@@ -187,7 +163,11 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
     });
   }
 
-  const loading = diagnose.isLoading || issuers.isLoading || sync.isLoading;
+  const loading = diagnose.isLoading || sync.isLoading;
+  const utils = trpc.useUtils();
+  // Every band on Home reads through tRPC, so one invalidate re-asks them all.
+  const checkAgain = () => void utils.invalidate();
+  const checking = diagnose.isFetching || sync.isFetching;
   // A status line computed without the health checks would say "All good"
   // about a pod nobody checked — so it waits for diagnose, and says so when
   // diagnose failed.
@@ -203,14 +183,36 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
         ) : line ? (
           <>
             <StatusPill
-              kind={TONE_PILL[line.tone].kind}
-              label={TONE_PILL[line.tone].label}
+              kind={HEALTH_PILL[line.tone].kind}
+              label={HEALTH_PILL[line.tone].label}
             />
             <p className="text-[13px] text-foreground">{line.sentence}</p>
           </>
         ) : (
           <p className="text-[13px] text-foreground/65">
             Pod health is unknown right now.
+          </p>
+        )}
+        {!diagnose.isLoading && (
+          <p className="flex items-center gap-1.5 text-[12.5px] text-foreground/65 sm:ml-auto">
+            {diagnose.dataUpdatedAt > 0 && (
+              <>
+                <span>
+                  Checked {formatRelative(new Date(diagnose.dataUpdatedAt))}
+                </span>
+                <span aria-hidden>·</span>
+              </>
+            )}
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              isLoading={checking}
+              onPress={checkAgain}
+              className="h-8 min-w-0 px-2 text-[12.5px] text-foreground/80"
+            >
+              Check again
+            </Button>
           </p>
         )}
       </div>
@@ -233,7 +235,7 @@ function NeedsYouBand({ isAdmin }: { isAdmin: boolean }) {
               </div>
             )}
             {needsYou.rows.length > 0 && (
-              <div className="-mx-2">
+              <div className="-mx-2 divide-y divide-foreground/[0.05]">
                 {needsYou.rows.map((row) => (
                   <NeedsYouRowView key={row.key} row={row} />
                 ))}
@@ -260,7 +262,7 @@ function NeedsYouRowView({ row }: { row: NeedsYouRow }) {
   const [open, setOpen] = useState(false);
   // Only the urgent rows wear a pill: the list is already ranked, and below
   // `sm` the row drops it (via `wrap`) so the headline keeps the room.
-  const pill = row.tone === "degraded" ? TONE_PILL.degraded : undefined;
+  const pill = row.tone === "degraded" ? HEALTH_PILL.degraded : undefined;
 
   let action = null;
   if (row.action.kind === "link") {
@@ -388,7 +390,7 @@ function HiddenRows({ rows }: { rows: NeedsYouRow[] }) {
         />
       </button>
       {open && (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {rows.map((row) => (
             <NeedsYouRowView key={row.key} row={row} />
           ))}
@@ -498,7 +500,7 @@ function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
       ) : pending.length === 0 ? (
         <ResourceRowEmpty message="Nothing waiting for your review." />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {pending.map((proposal) => {
             const workspaceLabel =
               proposal.workspaceId == null
@@ -547,7 +549,7 @@ function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
 function GlanceCard() {
   return (
     <SectionCard title="Pod at a glance" hint="Sync, backups and contents">
-      <div className="-mx-2">
+      <div className="-mx-2 divide-y divide-foreground/[0.05]">
         <SyncRow />
         <BackupsRow />
         <ContentsRow />

@@ -13,6 +13,7 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { whoamiFromCookie } from "../../lib/kratos";
+import { safeReturnTo } from "../../lib/safe-return-to";
 import { LoginForm } from "./LoginForm";
 
 export const dynamic = "force-dynamic";
@@ -41,16 +42,4 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
       refresh={refresh}
     />
   );
-}
-
-/**
- * Constrain `?return=` to same-origin pathnames so a malicious link can't
- * bounce a logged-in operator to an attacker-controlled URL.
- */
-function safeReturnTo(raw: string | undefined): string {
-  if (!raw) return "/";
-  if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
-  // `/login` itself would loop — kick to root instead.
-  if (raw === "/login" || raw.startsWith("/login?")) return "/";
-  return raw;
 }
