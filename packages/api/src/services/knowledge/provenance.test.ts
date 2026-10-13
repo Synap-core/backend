@@ -122,3 +122,45 @@ describe("buildSynthesisContext puts provenance in the entry prefix", () => {
     expect(context).toContain("never re-verified");
   });
 });
+
+describe("a record updated long after creation (ticket 8b2245e4)", () => {
+  const daysAgo = (n: number) =>
+    new Date(Date.now() - n * 86_400_000).toISOString();
+  const run = (extra: Record<string, unknown>) =>
+    buildSynthesisContext([
+      {
+        substrate: "semantic",
+        status: "ok",
+        items: [
+          {
+            id: "9d43e988-620f-41f7-8362-00b87126885d",
+            title: "Brand voice rules",
+            createdAt: daysAgo(70),
+            createdByKind: "ai_agent",
+            ...extra,
+          },
+        ],
+      },
+    ]).context;
+
+  it("labels the last change, keeps the creator as creator, never names an updater", () => {
+    const context = run({ updatedAt: daysAgo(0) });
+    expect(context).toMatch(
+      /created 2mo ago, last updated today, created by an AI agent/
+    );
+    expect(context).not.toContain("never re-verified");
+    expect(context).toContain("no verification date recorded");
+    expect(context).not.toContain("recorded 2mo ago");
+  });
+
+  it("an insert-time updatedAt (a few ms after createdAt) is not an update", () => {
+    const created = daysAgo(70);
+    const context = run({
+      createdAt: created,
+      updatedAt: new Date(new Date(created).getTime() + 5).toISOString(),
+    });
+    expect(context).toMatch(
+      /recorded 2mo ago, by an AI agent, never re-verified/
+    );
+  });
+});

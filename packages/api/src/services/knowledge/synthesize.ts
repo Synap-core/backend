@@ -320,6 +320,16 @@ export function describeItemProvenance(
   };
 
   const created = asDate(rec.createdAt);
+  // The row's LAST CHANGE, not just its birth: a record created in June and
+  // rewritten today is today's content. Only a material gap counts — `updatedAt`
+  // is stamped at insert too, a few ms after `createdAt`. Who made the update is
+  // NOT stored (`entities` carries only the creator's `agentUserId`/
+  // `createdByKind`, no updater column), so the label never names an updater.
+  const updatedRaw = asDate(rec.updatedAt);
+  const updated =
+    created && updatedRaw && updatedRaw.getTime() - created.getTime() > 60_000
+      ? updatedRaw
+      : null;
   const props =
     rec.properties && typeof rec.properties === "object"
       ? (rec.properties as Record<string, unknown>)
@@ -340,16 +350,29 @@ export function describeItemProvenance(
   const verified = asDate(pick(props) ?? pick(rec));
 
   const bits: string[] = [];
-  if (created) bits.push(`recorded ${ago(created)}`);
+  if (created) {
+    bits.push(
+      updated
+        ? `created ${ago(created)}, last updated ${ago(updated)}`
+        : `recorded ${ago(created)}`
+    );
+  }
   // `createdByKind` is the row's own attribution; an agent-authored claim is
   // an OPINION a model wrote down, not an observation the product made.
+  // When the row was later updated this attribution is the CREATOR's, so it is
+  // worded as such — the updater is unknown and must not inherit the label.
+  const by = updated ? "created by" : "by";
   if (rec.createdByKind === "ai_agent" || rec.agentUserId) {
-    bits.push("by an AI agent");
+    bits.push(`${by} an AI agent`);
   } else if (rec.createdByKind === "human") {
-    bits.push("by the user");
+    bits.push(`${by} the user`);
   }
   if (verified) {
     bits.push(`last verified ${ago(verified)}`);
+  } else if (updated) {
+    // An update is not a verification (nothing here records one), but "never
+    // re-verified" would read as "untouched since creation" — which is false.
+    bits.push("no verification date recorded");
   } else if (created) {
     // EMPTY and UNKNOWN are different facts — say which this is.
     bits.push("never re-verified");
