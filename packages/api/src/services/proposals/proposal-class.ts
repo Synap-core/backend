@@ -157,6 +157,9 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // R8a — granting a workspace access to a SHARED kind (`profiles.grantAccess`)
   // widens which workspaces may see and use it. ADMIN-floored for agents.
   "profile/grant_access",
+  // D13 — changing a kind's scope / grants / entityScope widens (or narrows)
+  // which spaces see the kind and its records. ADMIN-floored for agents.
+  "profile/change_scope",
 ]);
 
 /**

@@ -179,6 +179,8 @@ describe("resolveActionLabel — two moods", () => {
     // The stored proposalType reads as the act a person recognises.
     expect(resolveActionLabel("grant_access", "imperative")).toBe("Share");
     expect(resolveActionLabel("profile.grant_access", "past")).toBe("Shared");
+    expect(resolveActionLabel("change_scope", "imperative")).toBe("Rescope");
+    expect(resolveActionLabel("profile.change_scope", "past")).toBe("Rescoped");
   });
 
   it("names project filing in both moods (humanize would read 'File entities')", () => {
@@ -963,7 +965,7 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural("some_key_way")).toBe("Some key ways");
   });
 
-  it("an uncountable noun stays; a sibilant ending takes -es (dogfood-2: \"Researchs\")", () => {
+  it('an uncountable noun stays; a sibilant ending takes -es (dogfood-2: "Researchs")', () => {
     expect(resolveObjectNounPlural("research")).toBe("Research");
     expect(resolveObjectNounPlural("market_research")).toBe("Market research");
     expect(resolveObjectNounPlural("some_box")).toBe("Some boxes");

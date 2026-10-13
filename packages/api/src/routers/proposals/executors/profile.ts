@@ -12,6 +12,27 @@ import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 
+/** Idempotency: approve is not status-guarded before dispatch. */
+async function alreadyApproved(proposalId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, proposalId));
+  return row?.status === ProposalStatus.APPROVED;
+}
+
+async function markApproved(proposalId: string, userId: string) {
+  await db
+    .update(proposals)
+    .set({
+      status: ProposalStatus.APPROVED,
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(proposals.id, proposalId));
+}
+
 /** Register the profile/* approve executors. */
 export function registerProfileExecutors(): void {
   // ── profile / create ─────────────────────────────────────────────────────────
@@ -254,11 +275,7 @@ export function registerProfileExecutors(): void {
         });
       }
 
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+      if (await alreadyApproved(input.proposalId)) {
         return { success: true, alreadyApproved: true };
       }
 
@@ -292,15 +309,98 @@ export function registerProfileExecutors(): void {
         });
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+      await markApproved(input.proposalId, userId);
+
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: profileId };
+    },
+  });
+
+  // ── profile / change_scope ──────────────────────────────────────────────────
+  // Filed by `changeKindScope` (D13, `services/profiles/change-kind-scope.ts`)
+  // — ADMIN-floored and `forcePropose`d, so an agent's scope change always
+  // lands here. REPLAY through `profilesRouter.update` as the APPROVER, acting
+  // in the proposal's workspace: the owner / pod-admin gate, the grant
+  // revocation on leaving "shared", the grants on entering it and the
+  // resolution-cache invalidation all re-run NOW (a proposal can sit for days).
+  // `profiles.update` files no proposal, so a caller without authority throws
+  // FORBIDDEN instead of flipping APPROVED with nothing changed.
+  //
+  // PAYLOAD: `data: { profileId, slug, displayName, scope?, fromScope?,
+  // allowedWorkspaceIds?, entityScope?, fromEntityScope? }` (nested as
+  // `data.data`).
+  registerProposalExecutor({
+    key: "profile/change_scope",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw) as Record<string, unknown>;
+      const profileId = inner.profileId;
+      const workspaceId = proposal.workspaceId ?? null;
+      const scope =
+        inner.scope === "shared" || inner.scope === "workspace"
+          ? inner.scope
+          : undefined;
+      const entityScope =
+        inner.entityScope === "pod" || inner.entityScope === "workspace"
+          ? inner.entityScope
+          : undefined;
+      const allowedWorkspaceIds = Array.isArray(inner.allowedWorkspaceIds)
+        ? inner.allowedWorkspaceIds.filter(
+            (id): id is string => typeof id === "string"
+          )
+        : undefined;
+      if (typeof profileId !== "string" || !workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Kind scope proposal is missing profileId or its workspace",
+        });
+      }
+      if (
+        scope === undefined &&
+        entityScope === undefined &&
+        !allowedWorkspaceIds?.length
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Kind scope proposal carries no change",
+        });
+      }
+
+      if (await alreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const membership = await getWorkspaceMembership(db, workspaceId, userId);
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      const profileCaller = profilesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+      // Grants ride only with `shared` — the same rule the door enforced.
+      await profileCaller.update({
+        id: profileId,
+        ...(scope !== undefined || allowedWorkspaceIds?.length
+          ? { scope: scope ?? "shared" }
+          : {}),
+        ...(allowedWorkspaceIds?.length ? { allowedWorkspaceIds } : {}),
+        ...(entityScope !== undefined ? { entityScope } : {}),
+      });
+
+      await markApproved(input.proposalId, userId);
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(

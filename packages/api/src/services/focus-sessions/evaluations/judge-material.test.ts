@@ -340,7 +340,7 @@ describe("buildJudgeMaterial — budget", () => {
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(material).toContain("### document: A");
     expect(material).toContain("### document: B");
-    expect(material).toContain("…[truncated]");
+    expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
   });
 });
 
@@ -409,7 +409,7 @@ describe("buildJudgeMaterial — fair budget", () => {
       },
     ]);
     expect(material).toContain("FRICTION: none observed");
-    expect(material).toContain("…[truncated]…");
+    expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
   });
 
   it("budget a short item leaves goes to the long one (not split evenly)", () => {
@@ -439,6 +439,63 @@ describe("buildJudgeMaterial — fair budget", () => {
     expect(material).toContain("msg-19 ");
     expect(material).not.toContain("msg-0 ");
     expect(material).toContain("EARLIER-ROW");
+  });
+
+  it("a cut names how much it dropped, and the material opens with the CLIPPED note", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [
+      { kind: "document", title: "Huge", text: "x".repeat(60_000) },
+      { kind: "document", title: "Small", text: "SMALL-DOC" },
+    ]);
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+    // The count is the truth: kept + omitted = the document's length.
+    const omitted = Number(
+      /\[clipped: (\d+) chars omitted\]/.exec(material)![1]
+    );
+    const kept = (material.match(/x/g) ?? []).length;
+    expect(kept + omitted).toBe(60_000);
+    expect(material).toContain("SMALL-DOC");
+  });
+
+  it("a material that fits whole carries no note and no mark", () => {
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [{ kind: "document", title: "D", text: "all of it" }],
+      { status: "ok", messages: [{ author: "agent", text: "done" }] }
+    );
+    expect(material).not.toContain("CLIPPED");
+    expect(material).not.toContain("[clipped:");
+  });
+
+  it("room messages cut on read count as a clipped section", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [], {
+      status: "ok",
+      messages: [
+        { author: "agent", text: "short…[clipped: 9 chars omitted]…" },
+      ],
+      clippedMessages: 1,
+    });
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+  });
+
+  it("an over-long goal cuts the WHOLE material, marked, within the cap", () => {
+    const material = buildJudgeMaterial(
+      { ...S, goal: "g".repeat(20_000) },
+      [],
+      undefined,
+      [{ kind: "document", title: "D", text: "y".repeat(5_000) }]
+    );
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 2 sections below were cut")
+    ).toBe(true);
+    expect(material).toMatch(/\[clipped: \d+ chars omitted\]…$/);
   });
 
   it("fairShares: short items keep everything, never over budget", () => {

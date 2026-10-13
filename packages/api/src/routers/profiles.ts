@@ -1211,9 +1211,19 @@ export const profilesRouter = router({
           : {}),
       });
 
-      // Invalidate entityScope cache when changed
-      if (input.entityScope !== undefined) {
+      // Invalidate entityScope cache when changed. A `scope` change (or new
+      // grants) changes WHICH row `getBySlugForWorkspace` resolves for a
+      // (slug, workspace) pair — and both 60s caches are keyed on exactly that
+      // pair — so it invalidates them too.
+      const resolutionChanged =
+        (input.scope !== undefined && input.scope !== existing.scope) ||
+        (input.scope === "shared" &&
+          (input.allowedWorkspaceIds?.length ?? 0) > 0);
+      if (input.entityScope !== undefined || resolutionChanged) {
         ProfileResolutionService.invalidateEntityScopeCache(existing.slug);
+      }
+      if (resolutionChanged) {
+        ProfileResolutionService.invalidateAiPostureCache(existing.slug);
       }
       if (input.aiPosture !== undefined) {
         ProfileResolutionService.invalidateAiPostureCache(existing.slug);
@@ -1482,6 +1492,10 @@ export const profilesRouter = router({
       }
 
       await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
+      // The grant changes which row the target workspace resolves for this
+      // slug — the key both resolution caches are stored under.
+      ProfileResolutionService.invalidateEntityScopeCache(profile.slug);
+      ProfileResolutionService.invalidateAiPostureCache(profile.slug);
 
       logger.info(
         {

@@ -832,6 +832,28 @@ export function registerFocusSessionExecutors(): void {
           set.projectId = innerData.projectId;
         }
 
+        // SPACE MOVE. Carried by `updateFocusSession`'s gate payload; RE-FLOORED
+        // here on the approver, BEFORE any write of this patch, through the same
+        // check the direct write uses (the space or the room's roster may have
+        // changed since the proposal was filed). `null` = make it personal.
+        const moveWorkspaceId =
+          innerData.workspaceId === null ||
+          typeof innerData.workspaceId === "string"
+            ? innerData.workspaceId
+            : undefined;
+        if (moveWorkspaceId !== undefined) {
+          const { checkSessionWorkspaceMove } =
+            await import("../../../services/focus-sessions/move-session-workspace.js");
+          const move = await checkSessionWorkspaceMove({
+            session,
+            workspaceId: moveWorkspaceId,
+            userId,
+          });
+          if (!move.ok) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: move.reason });
+          }
+        }
+
         // TRACK FILING (adopt into a step). Carried by `updateFocusSession`'s
         // gate payload; RE-RESOLVED here through the same door the direct
         // write uses, so a track archived, unshared or re-pinned since the
@@ -916,6 +938,20 @@ export function registerFocusSessionExecutors(): void {
             agentId: innerData.addAgentId,
             userId: session.userId,
           });
+        }
+
+        // SPACE MOVE — floored above, applied here: the session, its room and
+        // its artifacts move in ONE transaction.
+        if (moveWorkspaceId !== undefined) {
+          const { applySessionWorkspaceMove } =
+            await import("../../../services/focus-sessions/move-session-workspace.js");
+          await db.transaction((tx) =>
+            applySessionWorkspaceMove(tx, {
+              sessionId,
+              channelId: session.channelId,
+              workspaceId: moveWorkspaceId,
+            })
+          );
         }
 
         let [updated] = await db

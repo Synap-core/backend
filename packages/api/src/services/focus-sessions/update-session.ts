@@ -145,6 +145,15 @@ export interface UpdateFocusSessionParams {
    */
   projectId?: string | null;
   /**
+   * MOVE the session into another space, or make it personal with an explicit
+   * `null`. Omitted (or equal to its space) leaves it alone. Mirrors
+   * `projectId`: the target is floored (`checkSessionWorkspaceMove` — the caller
+   * writes it, and everyone in the room is a member of it) before governance,
+   * and an AGENT's move is always a proposal. Moves the session, its room and
+   * its artifacts in one transaction; never the entities it produced.
+   */
+  workspaceId?: string | null;
+  /**
    * ADOPT this session into a TRACK step, or UNFILE it from its track with an
    * explicit `null`. Resolved by `resolveSessionTrackFiling` (the track must be
    * visible and not archived; the session's project must be the track's — a
@@ -1324,6 +1333,13 @@ export async function updateFocusSession(
   ) {
     params = { ...params, projectId: undefined };
   }
+  // The same for a space move: the session's own space is not a move.
+  if (
+    params.workspaceId !== undefined &&
+    params.workspaceId === (existing.workspaceId ?? null)
+  ) {
+    params = { ...params, workspaceId: undefined };
+  }
   // The same for CRITERIA: carried to the membrane only when they DIFFER from
   // the stored list. An agent changing its own acceptance criteria is floored
   // to a proposal (`CRITERIA_CHANGE`, see `isFocusSessionCriteriaUpdate`), and
@@ -1443,6 +1459,21 @@ export async function updateFocusSession(
     filingProjectName = project.name;
   }
 
+  // THE SAME FLOOR for a space move — refused here, never laundered into a
+  // proposal that explodes on the human at approval time.
+  let moveWorkspaceName: string | null | undefined;
+  if (params.workspaceId !== undefined) {
+    const { checkSessionWorkspaceMove } =
+      await import("./move-session-workspace.js");
+    const move = await checkSessionWorkspaceMove({
+      session: existing,
+      workspaceId: params.workspaceId,
+      userId,
+    });
+    if (!move.ok) return { status: "denied", reason: move.reason };
+    moveWorkspaceName = move.workspaceName;
+  }
+
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
   // same reason as the floors above: a track the caller cannot see, a stage it
   // did not pin or a cross-project filing is refused to the caller, never
@@ -1519,7 +1550,9 @@ export async function updateFocusSession(
     source: "intelligence",
     // Filing is always reviewed when an agent does it (honoured on the AI
     // paths only — a person filing their own session is never forced).
-    ...(params.projectId !== undefined || trackFiling
+    ...(params.projectId !== undefined ||
+    trackFiling ||
+    params.workspaceId !== undefined
       ? { forcePropose: true }
       : {}),
     data: {
@@ -1562,6 +1595,16 @@ export async function updateFocusSession(
       // Display only — the proposal title names WHICH project (the executor
       // applies `projectId` and ignores this).
       ...(filingProjectName ? { projectName: filingProjectName } : {}),
+      // SPACE MOVE — carried so approval applies it (the executor re-floors
+      // it); `null` (make personal) must survive. The name is display only.
+      // Governance above resolved on the CURRENT space's rules; once moved,
+      // the session follows the new space's.
+      ...(params.workspaceId !== undefined
+        ? {
+            workspaceId: params.workspaceId,
+            ...(moveWorkspaceName ? { workspaceName: moveWorkspaceName } : {}),
+          }
+        : {}),
       // TRACK FILING — carried so approval applies it (the executor
       // RE-resolves it). `null` (unfile) must survive. The names are display
       // only: the proposal title says WHICH track and step, and — when filing
@@ -1676,6 +1719,15 @@ export async function updateFocusSession(
   let outputsAfter: OutputItem[] = [];
 
   const [updated] = await db.transaction(async (tx) => {
+    if (params.workspaceId !== undefined) {
+      const { applySessionWorkspaceMove } =
+        await import("./move-session-workspace.js");
+      await applySessionWorkspaceMove(tx, {
+        sessionId,
+        channelId: existing.channelId,
+        workspaceId: params.workspaceId,
+      });
+    }
     if (mutatesOutputs) {
       const [locked] = await tx
         .select({ expectedOutputs: focusSessions.expectedOutputs })

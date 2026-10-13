@@ -287,6 +287,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   move: { imperative: "Move", past: "Moved" },
   rename: { imperative: "Rename", past: "Renamed" },
   grant_access: { imperative: "Share", past: "Shared" },
+  // `profile.change_scope` (D13): a kind's scope / grants / entity placement
+  // changed. One word so "<verb> <noun>" reads "Rescope kind"; humanize had no
+  // past tense ("Change scope" on a receipt).
+  change_scope: { imperative: "Rescope", past: "Rescoped" },
   // Filing EXISTING records into a project (`project/file_entities`) and
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".

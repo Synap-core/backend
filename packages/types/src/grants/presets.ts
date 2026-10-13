@@ -158,6 +158,8 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
   "app.connect": "Access: what an app may reach is a person's approval.",
   "session.grant_capability": "Access: widens what a session's agent may do.",
   "profile.grant_access": "Access: shares a kind with another space.",
+  "profile.change_scope":
+    "Access: changes which spaces see a kind and its records.",
   "relation.expose": "Access: widens who may see a record.",
   "share.create": "Sharing exposes a record to guests: an access decision.",
   "project_member.create":

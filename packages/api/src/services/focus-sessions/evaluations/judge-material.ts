@@ -27,7 +27,11 @@
  * a short section keeps all of its text, what it leaves is re-split among the
  * rest), so a long first document can no longer starve a later one. A clipped
  * document keeps its head AND its tail (conclusions and logs land at the
- * end); a clipped room keeps its newest messages. Every cut says `[truncated]`.
+ * end); a clipped room keeps its newest messages. Every cut says how much it
+ * dropped (`[clipped: N chars omitted]`), and a material with ANY cut opens
+ * with a "CLIPPED MATERIAL" note — a criterion is never judged on a truncated
+ * view without the judge being told (the IS judge prompt then prefers
+ * "unmeasured" over a guess about the omitted part).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -66,7 +70,15 @@ const EARLIER_MAX = 1200;
 /** How many of the room's latest messages the judge reads. */
 export const ROOM_MESSAGES_N = 20;
 const ROOM_MESSAGE_MAX = 800;
-const TRUNCATED = "…[truncated]…";
+/** The marker a cut leaves behind, naming how much it dropped. */
+const clipMark = (omitted: number) => `…[clipped: ${omitted} chars omitted]…`;
+/** The header note of a material with any cut in it. */
+const clipNote = (sections: number) =>
+  `NOTE: CLIPPED MATERIAL — ${sections} section${sections === 1 ? "" : "s"} below ${
+    sections === 1 ? "was" : "were"
+  } cut to fit (each cut says "[clipped: N chars omitted]"). Judge only what is shown; a criterion that needs an omitted part is "unmeasured".`;
+/** Room for the note at its widest (a 4-digit section count) + its separator. */
+const CLIP_NOTE_RESERVE = clipNote(9999).length + 2;
 
 /** One produced thing, with the text a judge can read. */
 export interface ProducedMaterial {
@@ -212,7 +224,12 @@ export async function loadProducedMaterial(params: {
  * that did not happen, and the material says so.
  */
 export type RoomMaterial =
-  | { status: "ok"; messages: Array<{ author: string; text: string }> }
+  | {
+      status: "ok";
+      messages: Array<{ author: string; text: string }>;
+      /** How many of `messages` were cut to `ROOM_MESSAGE_MAX` on read. */
+      clippedMessages?: number;
+    }
   | { status: "refused" }
   | { status: "failed"; reason: string };
 
@@ -244,8 +261,12 @@ export async function loadRoomMaterial(params: {
         MessageAuthorType.AI_AGENT,
       ]),
     });
+    const clippedMessages = rows.filter(
+      (r) => r.content.length > ROOM_MESSAGE_MAX
+    ).length;
     return {
       status: "ok",
+      ...(clippedMessages > 0 ? { clippedMessages } : {}),
       messages: rows.reverse().map((r) => ({
         author: r.authorType === MessageAuthorType.HUMAN ? "person" : "agent",
         text: clip(r.content, ROOM_MESSAGE_MAX),
@@ -265,13 +286,20 @@ export async function loadRoomMaterial(params: {
  * ≤ `max` chars. `ends` keeps the head and the tail (a document's verdict and
  * logs are often at its end); `tail` keeps only the end (the newest messages).
  */
-function clip(s: string, max: number, keep: "ends" | "tail" = "ends"): string {
+function clip(
+  s: string,
+  max: number,
+  keep: "ends" | "tail" | "head" = "ends"
+): string {
   if (s.length <= max) return s;
-  const room = max - TRUNCATED.length;
-  if (room <= 0) return max > 0 ? TRUNCATED.slice(0, max) : "";
-  if (keep === "tail") return `${TRUNCATED}${s.slice(s.length - room)}`;
+  // Sized for the widest count (the whole string), so the real mark fits.
+  const room = max - clipMark(s.length).length;
+  if (room <= 0) return max > 0 ? clipMark(s.length).slice(0, max) : "";
+  const mark = clipMark(s.length - room);
+  if (keep === "tail") return `${mark}${s.slice(s.length - room)}`;
+  if (keep === "head") return `${s.slice(0, room)}${mark}`;
   const head = Math.ceil(room / 2);
-  return `${s.slice(0, head)}${TRUNCATED}${s.slice(s.length - (room - head))}`;
+  return `${s.slice(0, head)}${mark}${s.slice(s.length - (room - head))}`;
 }
 
 /**
@@ -376,25 +404,45 @@ export function buildJudgeMaterial(
     (roomHeading ? roomHeading.length + 3 : 0) +
     texts.filter(Boolean).length +
     8;
-  const shares = fairShares(
-    texts.map((t) => t.length),
-    max - fixed - overhead
-  );
 
-  const producedPart = produced.length
-    ? [
-        producedHeading,
-        ...produced.map((p, i) =>
-          p.text ? `${headers[i]}\n${clip(p.text, shares[i]!)}` : headers[i]
-        ),
-      ].join("\n")
-    : "";
-  const roomPart = roomText
-    ? `${roomHeading}\n${clip(roomText, shares[produced.length]!, "tail")}`
-    : roomHeading;
+  // `reserve` = room kept for the clipped note. Returns the body and how many
+  // content sections the fair split had to cut.
+  const assemble = (reserve: number) => {
+    const shares = fairShares(
+      texts.map((t) => t.length),
+      max - fixed - overhead - reserve
+    );
+    const producedPart = produced.length
+      ? [
+          producedHeading,
+          ...produced.map((p, i) =>
+            p.text ? `${headers[i]}\n${clip(p.text, shares[i]!)}` : headers[i]
+          ),
+        ].join("\n")
+      : "";
+    const roomPart = roomText
+      ? `${roomHeading}\n${clip(roomText, shares[produced.length]!, "tail")}`
+      : roomHeading;
+    const roomCut =
+      roomText.length > shares[produced.length]! ||
+      (room.status === "ok" && (room.clippedMessages ?? 0) > 0);
+    return {
+      body: [...head, producedPart, roomPart, earlier]
+        .filter(Boolean)
+        .join("\n\n"),
+      cut:
+        produced.filter((p, i) => p.text.length > shares[i]!).length +
+        (roomCut ? 1 : 0),
+    };
+  };
 
-  return [...head, producedPart, roomPart, earlier]
-    .filter(Boolean)
-    .join("\n\n")
-    .slice(0, max);
+  const plain = assemble(0);
+  if (plain.cut === 0 && plain.body.length <= max) return plain.body;
+  // Something was cut: say so up top, so the judge never grades a truncated
+  // view as if it were whole. The fixed facts alone can overflow (a long goal
+  // or evidence), so the WHOLE body is cut last, and marked like any other.
+  const { body, cut } = assemble(CLIP_NOTE_RESERVE);
+  const whole = body.length > max - CLIP_NOTE_RESERVE;
+  const note = clipNote(cut + (whole ? 1 : 0));
+  return `${note}\n\n${clip(body, max - note.length - 2, "head")}`;
 }
