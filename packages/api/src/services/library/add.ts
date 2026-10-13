@@ -336,3 +336,39 @@ export async function addToLibrary(args: {
   }
   return result;
 }
+
+/**
+ * What follows a keep, for what is NEW to the Library: the light read is
+ * queued, and a title-only search row so a kept item is findable at once (the
+ * light read re-indexes it with its text). A failed enqueue is said in the log
+ * and left to the hourly sweep / the next full reindex — the item is kept and
+ * reads "Not read yet", never lost.
+ */
+export async function startKeptItemReads(
+  userId: string,
+  result: Pick<LibraryAddResult, "staged">
+): Promise<void> {
+  const fresh = result.staged
+    .filter((s) => !s.deduplicated)
+    .map((s) => s.itemId);
+  if (fresh.length === 0) return;
+  const { enqueueLibraryLightRead } = await import("./light-read-queue.js");
+  await enqueueLibraryLightRead(fresh.map((itemId) => ({ userId, itemId })));
+  try {
+    const { getBoss } = await import("@synap/jobs");
+    const boss = getBoss();
+    for (const documentId of fresh) {
+      await boss.send("search-index", {
+        collection: "documents",
+        operation: "upsert",
+        documentId,
+        timestamp: Date.now(),
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { err, count: fresh.length },
+      "library add: search-index enqueue FAILED — findable after the next reindex"
+    );
+  }
+}

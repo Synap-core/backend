@@ -21,7 +21,6 @@
  */
 
 import { z } from "zod";
-import { createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
@@ -45,7 +44,7 @@ import {
 } from "@synap-core/types/imports";
 import { ImportStageItemSchema } from "./import-curate.js";
 import { defaultImportBuildDeps } from "../services/imports/build.js";
-import { addToLibrary } from "../services/library/add.js";
+import { addToLibrary, startKeptItemReads } from "../services/library/add.js";
 import { listLibraryItems } from "../services/library/read-model.js";
 import {
   adoptImportGroups,
@@ -59,15 +58,12 @@ import {
   LibraryActionError,
   runLibraryAction,
 } from "../services/library/run-action.js";
-import { enqueueLibraryLightRead } from "../services/library/light-read-queue.js";
 import { db } from "@synap/database";
 import { libraryHealth, searchLibrary } from "../services/library/search.js";
 import {
   buildLibraryGroup,
   readNowLibraryItem,
 } from "../services/library/build.js";
-
-const logger = createLogger({ module: "routers/library" });
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -190,27 +186,6 @@ async function runLibraryActionDoor(args: {
   }
 }
 
-async function indexKeptItems(itemIds: readonly string[]): Promise<void> {
-  if (itemIds.length === 0) return;
-  try {
-    const { getBoss } = await import("@synap/jobs");
-    const boss = getBoss();
-    for (const documentId of itemIds) {
-      await boss.send("search-index", {
-        collection: "documents",
-        operation: "upsert",
-        documentId,
-        timestamp: Date.now(),
-      });
-    }
-  } catch (err) {
-    logger.warn(
-      { err, count: itemIds.length },
-      "library add: search-index enqueue FAILED — findable after the next reindex"
-    );
-  }
-}
-
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const libraryRouter = router({
@@ -243,14 +218,7 @@ export const libraryRouter = router({
       });
       // The light read, for what is new to the Library. A failed enqueue is
       // left to the hourly sweep (the item reads "Not read yet", never lost).
-      const fresh = result.staged.filter((s) => !s.deduplicated);
-      await enqueueLibraryLightRead(
-        fresh.map((s) => ({ userId, itemId: s.itemId }))
-      );
-      // Kept means findable now: a title-only index row until the light read
-      // re-indexes it with its text. A failed enqueue is said; the next full
-      // reindex picks the item up.
-      await indexKeptItems(fresh.map((s) => s.itemId));
+      await startKeptItemReads(userId, result);
       return result;
     }),
 

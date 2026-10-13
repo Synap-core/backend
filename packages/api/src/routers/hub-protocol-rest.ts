@@ -70,6 +70,7 @@ import {
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
   registerBriefsRoutes,
+  registerLibraryRoutes,
   registerToolsRoutes,
   registerTerminalRoutes,
   registerThreadsRoutes,
@@ -289,6 +290,7 @@ registerDocumentsRoutes(app); // /documents*
 registerProposalsRoutes(app); // /proposals*
 registerSkillsRoutes(app); // /skills/system (static doc)
 registerBriefsRoutes(app); // GET /briefs (AI Teaching Substrate composed teaching briefs)
+registerLibraryRoutes(app); // /library/{add,list,search} — first-party Library doors (never agents)
 registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD seam)
 registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
 registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)
