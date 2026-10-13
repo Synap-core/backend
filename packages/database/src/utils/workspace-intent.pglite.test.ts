@@ -13,8 +13,10 @@
  *      changed intent converges;
  *  (3) a definition that is NOT the space's identity (an overlay — intent
  *      stripped, no subtype — or the base-defaults pass) never clears it;
- *  (4) the identity definition that stopped declaring one retires the
- *      template's stored intent (null → the read infers again);
+ *  (4) an ABSENT intent never clears one — the space's own definition
+ *      served by a control plane that stripped the field (pre-b3243b4d)
+ *      keeps it; only an IDENTITY CHANGE (another template now owns the
+ *      space and declares none) retires it (null → the read infers again);
  *  (5) a malformed intent writes nothing half-shaped.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
@@ -185,15 +187,42 @@ describe("settings.intent — projected by the create and reconcile writers", ()
     });
   });
 
-  it("(4) the identity definition without an intent retires the template's", async () => {
+  it("(4a) the space's own definition WITHOUT the field keeps it (a CP that stripped it)", async () => {
+    const { workspaceId } = await createWorkspaceFromDefinition({
+      definition: { workspaceName: "Served", intent: INTENT },
+      userId: USER,
+      createdBy: "provisioning",
+    });
+    await q(
+      `update workspaces set settings = settings || '{"packageSlug":"builder-workspace"}'::jsonb where id = $1`,
+      [workspaceId]
+    );
+    await reconcileWorkspaceFromDefinition({
+      workspaceId,
+      userId: USER,
+      packageSlug: "builder-workspace",
+      definition: { workspaceSubtype: "builder" } as never,
+    });
+    expect((await settingsOf(workspaceId)).intent).toMatchObject({
+      label: "Product",
+      source: "template",
+    });
+  });
+
+  it("(4b) an identity change to a template with no intent retires the old one", async () => {
     const { workspaceId } = await createWorkspaceFromDefinition({
       definition: { workspaceName: "Retired", intent: INTENT },
       userId: USER,
       createdBy: "provisioning",
     });
+    await q(
+      `update workspaces set settings = settings || '{"packageSlug":"old-template"}'::jsonb where id = $1`,
+      [workspaceId]
+    );
     await reconcileWorkspaceFromDefinition({
       workspaceId,
       userId: USER,
+      packageSlug: "new-template",
       definition: { workspaceSubtype: "builder" } as never,
     });
     expect((await settingsOf(workspaceId)).intent).toBeNull();

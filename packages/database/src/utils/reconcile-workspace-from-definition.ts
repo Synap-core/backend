@@ -541,19 +541,33 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
   // What the space produces (`settings.intent`). Converges to the template on
-  // every pass — the version stamp below covers the whole template, so the
-  // field is written whenever the definition carries it, never gated on a
-  // marker. Only the space's IDENTITY definition owns it (the brief's rule,
-  // 1b): an overlay arrives with `intent` stripped and the base-defaults pass
-  // carries none, so neither clears it. An identity definition that stopped
-  // declaring an intent retires the template's stored one (null → the read
-  // infers again).
+  // every pass the definition CARRIES one — written, never gated on a marker.
+  //
+  // An ABSENT intent proves nothing, so it never clears one (homes A-M1). The
+  // field crosses transports that did not always carry it: a control plane
+  // older than b3243b4d stripped `intent` at publish, so every definition it
+  // serves arrives without one, and an overlay / the base-defaults pass carry
+  // none by design. "Absent ⇒ retire" read those as "the template dropped its
+  // intent" and wiped live intents on the next reconcile — a claim no
+  // comparator checked. The ONE clear: an IDENTITY CHANGE — another template
+  // now owns the space (`opts.packageSlug` ≠ the stored `settings.packageSlug`)
+  // and declares none, so the old template's intent is no longer anyone's
+  // (null → the read infers again).
+  //
+  // Classified per the convergence rules: a template that stops declaring an
+  // intent under the SAME identity keeps the last one it declared — HONEST
+  // UNDER-CONVERGENCE (the stored intent is still that template's, stamped
+  // `source: "template"`), never a durable lie; the version stamp below is
+  // unchanged by this field.
   const intent = projectTemplateIntent(definition.intent);
+  const stored = ws.settings as WorkspaceSettings | null;
   if (intent) {
     settingsPatch.intent = intent;
   } else if (
-    (definition.workspaceSubtype !== undefined || opts.packageSlug) &&
-    (ws.settings as WorkspaceSettings | null)?.intent?.source === "template"
+    stored?.intent?.source === "template" &&
+    opts.packageSlug &&
+    typeof stored.packageSlug === "string" &&
+    stored.packageSlug !== opts.packageSlug
   ) {
     settingsPatch.intent = null;
   }
