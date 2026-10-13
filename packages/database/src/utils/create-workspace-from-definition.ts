@@ -14,6 +14,7 @@ import { eq, sql as drizzleSql } from "drizzle-orm";
 import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { WorkspaceMemberRepository } from "../repositories/workspace-member-repository.js";
+import { templateStateSettings, writeTemplateState } from "./template-state.js";
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
@@ -1014,14 +1015,15 @@ export async function createWorkspaceFromDefinition(
   const provisioningStartedAt = new Date().toISOString();
 
   // Build workspace settings with provenance
+  // The template state (identity, "building", resume ledger) is NOT in this
+  // blob: it goes through the ONE template-state writer (utils/template-state.ts)
+  // — seeded into the INSERT, or written under the row lock on a resume. The
+  // build starts "building" so a crash mid-way leaves an inspectable workspace
+  // instead of silent data loss; "active" is the caller's finisher's to write
+  // once layer 2 ran (`finishTemplateApply`, api).
   const settings: WorkspaceSettings = {
-    // Provisioning lifecycle — status starts "pending" so a crash mid-way leaves
-    // an inspectable workspace instead of silent data loss. Marked "active" by
-    // the caller's finisher once layer 2 ran (`finishTemplateApply`, api).
-    provisioningStatus: "pending",
     provisioningStartedAt,
     createdBy,
-    completedSteps: [],
   };
 
   if (definition.layoutConfig) {
@@ -1083,7 +1085,7 @@ export async function createWorkspaceFromDefinition(
       })),
     };
   }
-  if (packageSlug) settings.packageSlug = packageSlug;
+  // `packageSlug` is the state's `slug` (written with it, below).
   // `packageVersion` is NOT written here: it is handed back as
   // `pendingVersionStamp` (see `CreateFromDefinitionResult`).
   if (templateId) settings.templateId = templateId;
@@ -1108,7 +1110,17 @@ export async function createWorkspaceFromDefinition(
         id: workspaceId,
         name: workspaceName ?? definition.workspaceName ?? "New Workspace",
         ownerId: userId,
-        settings: settings as Record<string, unknown>,
+        settings: {
+          ...settings,
+          ...templateStateSettings(
+            {
+              slug: packageSlug ?? null,
+              state: "building",
+              completedSteps: [],
+            },
+            provisioningStartedAt
+          ),
+        } as Record<string, unknown>,
       },
       userId
     );
@@ -1117,6 +1129,18 @@ export async function createWorkspaceFromDefinition(
     // When resuming (populating an existing workspace), update the workspace
     // name and settings from the definition so the AI-proposed name is applied.
     const resolvedName = workspaceName ?? definition.workspaceName ?? undefined;
+    // Back to "building", the ledger of what already exists kept (a crash
+    // mid-resume resumes from it again, never from step 1).
+    await writeTemplateState(
+      dbConn,
+      workspaceId,
+      {
+        ...(packageSlug ? { slug: packageSlug } : {}),
+        state: "building",
+        completedSteps: [...completedSteps],
+      },
+      { userId }
+    );
     if (resolvedName || Object.keys(settings).length > 0) {
       await workspaceRepo.mergeSettings(workspaceId, settings, userId);
       if (resolvedName) {
@@ -1163,15 +1187,17 @@ export async function createWorkspaceFromDefinition(
     );
     // Best-effort: persist failure state so it can be inspected/retried
     try {
-      await workspaceRepo.mergeSettings(
+      await writeTemplateState(
+        dbConn,
         workspaceId,
         {
-          provisioningStatus: "failed",
+          state: "failed",
+          failedLayer: 1,
           failedStep: step,
-          failedStepError: message.slice(0, 500),
+          error: message.slice(0, 500),
           completedSteps: [...completedSteps],
         },
-        userId
+        { userId }
       );
     } catch (settingsErr) {
       logger.warn(
@@ -2301,20 +2327,20 @@ export async function createWorkspaceFromDefinition(
     };
   }
 
-  // Atomically persist all accumulated settings in ONE call:
-  // profileBentoViewIds, profileEntityBentoTemplates, homeDashboardViewId,
-  // and completedSteps. `provisioningStatus` stays "pending" (written when
-  // this run began): "active" is the finisher's to write, once the caller's
+  // The full resume ledger, through the ONE template-state writer. The state
+  // stays "building": "active" is the finisher's to write, once the caller's
   // layer 2 has run (`finishTemplateApply`, api) — a crash in between leaves
-  // an honest "pending", never an "active" space missing its living layers.
-  const finalSettingsPatch: Partial<WorkspaceSettings> = {
-    completedSteps,
-    // Clear any stale failure markers from a prior failed attempt this run just
-    // resumed past — nulled (not omitted) because mergeSettings' JSONB `||`
-    // merge overwrites keys but cannot delete them.
-    failedStep: null,
-    failedStepError: null,
-  };
+  // an honest "building", never an "active" space missing its living layers.
+  // (Leaving "failed" behind also clears a prior attempt's failure fields.)
+  await writeTemplateState(
+    dbConn,
+    workspaceId,
+    { state: "building", completedSteps: [...completedSteps] },
+    { userId }
+  );
+  // Atomically persist the accumulated view settings in ONE call:
+  // profileBentoViewIds, profileEntityBentoTemplates, homeDashboardViewId.
+  const finalSettingsPatch: Partial<WorkspaceSettings> = {};
   if (resolvedLayout) {
     finalSettingsPatch.layout = resolvedLayout;
   }

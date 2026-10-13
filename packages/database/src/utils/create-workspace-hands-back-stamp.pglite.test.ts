@@ -54,6 +54,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "../schema/index.js";
 import { createWorkspaceFromDefinition } from "./create-workspace-from-definition.js";
 import { reconcileWorkspaceFromDefinition } from "./reconcile-workspace-from-definition.js";
+import { readTemplateState, writeTemplateState } from "./template-state.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -133,6 +134,11 @@ describe("the create/resume core hands the stamp back", () => {
     expect(s.packageSlug).toBe("hand-back");
     expect(s.packageVersion).toBeUndefined();
     expect(s.provisioningStatus).toBe("pending");
+    expect(readTemplateState(s)).toMatchObject({
+      slug: "hand-back",
+      version: null,
+      state: "building",
+    });
   });
 
   it("(2) a resume of a failed space clears the failure and stays pending, unstamped", async () => {
@@ -142,10 +148,11 @@ describe("the create/resume core hands the stamp back", () => {
       packageSlug: "resumed",
       createdBy: "provisioning",
     });
-    await q(
-      `update workspaces set settings = settings || '{"provisioningStatus":"failed","failedStep":"views"}'::jsonb where id = $1`,
-      [first.workspaceId]
-    );
+    await writeTemplateState(h.db, first.workspaceId, {
+      state: "failed",
+      failedLayer: 1,
+      failedStep: "views",
+    });
     const r = await createWorkspaceFromDefinition({
       definition: { workspaceName: "Resumed" },
       userId: USER,
@@ -162,6 +169,11 @@ describe("the create/resume core hands the stamp back", () => {
     expect(s.provisioningStatus).toBe("pending");
     expect(s.failedStep).toBeNull();
     expect(s.packageVersion).toBeUndefined();
+    expect(readTemplateState(s)).toMatchObject({
+      state: "building",
+      version: null,
+    });
+    expect(readTemplateState(s)?.failedStep).toBeUndefined();
   });
 
   it("(3) the reconcile util never stamps over an unfinished apply", async () => {
@@ -171,10 +183,10 @@ describe("the create/resume core hands the stamp back", () => {
       packageSlug: "boot-held",
       createdBy: "provisioning",
     });
-    await q(
-      `update workspaces set settings = settings || '{"templateApply":{"state":"awaiting-approval","version":"h-3","at":"t"}}'::jsonb where id = $1`,
-      [workspaceId]
-    );
+    await writeTemplateState(h.db, workspaceId, {
+      state: "awaiting-approval",
+      pendingVersion: "h-3",
+    });
     const reconcile = () =>
       reconcileWorkspaceFromDefinition({
         workspaceId,
@@ -187,10 +199,7 @@ describe("the create/resume core hands the stamp back", () => {
     await reconcile();
     expect((await settingsOf(workspaceId)).packageVersion).toBeUndefined();
     // The update door's finisher cleared the record: now the version lands.
-    await q(
-      `update workspaces set settings = settings || '{"templateApply":null}'::jsonb where id = $1`,
-      [workspaceId]
-    );
+    await writeTemplateState(h.db, workspaceId, { state: "active" });
     await reconcile();
     expect((await settingsOf(workspaceId)).packageVersion).toBe("h-3");
   });

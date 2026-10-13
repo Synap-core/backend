@@ -101,6 +101,10 @@ import {
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
 import { templateApplyUnfinished } from "./template-apply-state.js";
+import {
+  isTemplateApplyUnfinished,
+  writeTemplateState,
+} from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
 import {
   holdsTemplateStamp,
@@ -574,7 +578,8 @@ export async function reconcileWorkspaceFromDefinition(
   // Package provenance stamp — additive, mirrors the create path. Only written
   // when provided (install-onto-existing), so a re-attach with the same version
   // is a no-op and a natural compose never clobbers the base's own stamp.
-  if (opts.packageSlug) settingsPatch.packageSlug = opts.packageSlug;
+  // Written through the ONE template-state writer (below), not this patch.
+  let stampVersion: string | undefined;
   if (opts.packageVersion) {
     // MARKER INVARIANT: the version stamp claims the template converged. A
     // pending data change the template depends on means it did not, so the
@@ -624,13 +629,34 @@ export async function reconcileWorkspaceFromDefinition(
         "reconcile: template version stamp HELD — the last template apply did not finish (synap templates update)"
       );
     } else {
-      settingsPatch.packageVersion = opts.packageVersion;
+      stampVersion = opts.packageVersion;
     }
   }
-  if (Object.keys(settingsPatch).length > 0) {
-    report.settings.merged = Object.keys(settingsPatch);
-    if (!dryRun)
+  const identityKeys = [
+    ...(opts.packageSlug ? ["packageSlug"] : []),
+    ...(stampVersion ? ["packageVersion"] : []),
+  ];
+  if (Object.keys(settingsPatch).length > 0 || identityKeys.length > 0) {
+    report.settings.merged = [...Object.keys(settingsPatch), ...identityKeys];
+    if (!dryRun && Object.keys(settingsPatch).length > 0)
       await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
+    // Identity + stamp through the ONE template-state writer. The unfinished
+    // check is re-made under its row lock, so an apply recorded unfinished
+    // between the read above and this write still holds the stamp.
+    if (!dryRun && identityKeys.length > 0)
+      await writeTemplateState(
+        dbConn,
+        workspaceId,
+        (current) => {
+          const stamp = stampVersion && !isTemplateApplyUnfinished(current);
+          if (!opts.packageSlug && !stamp) return null;
+          return {
+            ...(opts.packageSlug ? { slug: opts.packageSlug } : {}),
+            ...(stamp ? { version: stampVersion } : {}),
+          };
+        },
+        { userId }
+      );
   }
 
   // ── 1b. Space brief — THREE-WAY stamp (utils/space-brief-seed.ts) ─────────
