@@ -155,6 +155,8 @@ export const KIND_INTENT: Readonly<Record<string, ProposalIntent>> = {
   composite: "create",
 
   update: "change",
+  // N entity updates in one governed proposal (entity/update_pack, 2026-10-13).
+  update_pack: "change",
   document: "change",
   facet: "change",
 
