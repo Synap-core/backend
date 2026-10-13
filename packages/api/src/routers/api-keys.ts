@@ -170,6 +170,8 @@ async function loadKeyReach(keyIds: readonly string[]) {
 export interface KeyHolder {
   kind: "app" | "computer" | "agent" | "person";
   name: string | null;
+  /** An app holder's `public_id` — what its console page is keyed by. */
+  appId?: string;
 }
 
 async function loadKeyHolders(userIds: readonly string[]) {
@@ -186,19 +188,23 @@ async function loadKeyHolders(userIds: readonly string[]) {
           .from(users)
           .where(inArray(users.id, ids)),
         db
-          .select({ agentUserId: apps.agentUserId, name: apps.name })
+          .select({
+            agentUserId: apps.agentUserId,
+            name: apps.name,
+            publicId: apps.publicId,
+          })
           .from(apps)
           .where(inArray(apps.agentUserId, ids)),
       ])
     : [[], []];
-  const appName = new Map(appRows.map((a) => [a.agentUserId, a.name]));
+  const appOf = new Map(appRows.map((a) => [a.agentUserId, a]));
   const byId = new Map<string, KeyHolder>();
   for (const u of holders) {
-    const app = appName.get(u.id);
+    const app = appOf.get(u.id);
     byId.set(
       u.id,
       app !== undefined
-        ? { kind: "app", name: app }
+        ? { kind: "app", name: app.name, appId: app.publicId }
         : u.userType !== "agent"
           ? { kind: "person", name: u.name }
           : u.agentType === MACHINE_AGENT_TYPE

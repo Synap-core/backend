@@ -10949,6 +10949,8 @@ export interface OAuthConsentContext {
 export interface KeyHolder {
 	kind: "app" | "computer" | "agent" | "person";
 	name: string | null;
+	/** An app holder's `public_id` — what its console page is keyed by. */
+	appId?: string;
 }
 export interface QueueHealth {
 	failed: number;
@@ -13986,6 +13988,41 @@ export interface BrokerTrustDiagnostics {
 		kind: "control-plane" | "local";
 		reason: string | null;
 	};
+}
+/**
+ * The clients the pod's OWN OAuth authorization server registered (Path B:
+ * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
+ * and cut off as a pod admin sees them — the service behind `oauthClients.*`.
+ *
+ * A registration (`oauth_clients`, RFC 7591) is public and unauthenticated —
+ * anyone may register — so it reaches NOTHING. Reach is the key the token
+ * endpoint mints after a person consents: an `api_keys` row held by the
+ * `claude-web-direct` agent, linked to that person, carrying
+ * `instance_id = oauth:<client_id>:<user_id>` (`oauthKeyInstanceId`). Clients
+ * are read THROUGH those keys: who connected one, how many keys it holds, when
+ * one was last used.
+ *
+ * Revoke = stop every key minted for the client (and their grants) and burn
+ * any authorization code still waiting to be exchanged. The client row is
+ * KEPT: deleting it would only make the next registration a new row (claude.ai
+ * re-registers on demand) while erasing the record of what was cut off. A
+ * revoked client reaches nothing until a person consents again — the same
+ * human act that connected it the first time.
+ *
+ * Pod-wide and unfloored on purpose: the caller gates (pod admin only).
+ */
+/** One key minted for a client, as the console shows it — never the secret. */
+export interface MintedKey {
+	id: string;
+	keyName: string;
+	createdAt: Date;
+	lastUsedAt: Date | null;
+	usageCount: number;
+	isActive: boolean;
+	revokedAt: Date | null;
+	expiresAt: Date | null;
+	/** The person who consented (the key's `linked_user_id`). */
+	personId: string;
 }
 export interface SourceProviderCapabilities {
 	/** True when the provider honors and returns cursors across fetches. */
@@ -19936,7 +19973,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20688,7 +20725,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20790,7 +20827,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20906,7 +20943,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -23398,6 +23435,112 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		remove: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				removed: boolean;
+				publicId: string;
+			};
+			meta: object;
+		}>;
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeRevoked?: boolean | undefined;
+			} | undefined;
+			output: {
+				keys: AppKeySummary[];
+				owner: {
+					id: string;
+					name: string | null;
+					email: string;
+				} | null;
+				workspace_names: Record<string, string>;
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			}[];
+			meta: object;
+		}>;
+		adminGet: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				keys: AppKeySummary[];
+				owner: {
+					id: string;
+					name: string | null;
+					email: string;
+				} | null;
+				workspace_names: Record<string, string>;
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		adminRevoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+			};
+			output: {
+				revoked: boolean;
+				publicId: string;
+			};
+			meta: object;
+		}>;
+		adminRemove: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				publicId: string;
 			};
@@ -35648,6 +35791,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				connections: {
+					lastUsedAt: Date | null;
+					peopleCount: number;
 					issuerUrl: string;
 					id: string;
 					issuerId: string;
@@ -35692,6 +35837,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				people: {
+					userId: string;
+					name: string | null;
+					email: string;
+					linkedAt: Date;
+				}[];
+				lastUsedAt: Date | null;
+				peopleCount: number;
+				issuerUrl: string;
+				id: string;
+				issuerId: string;
+				clientId: string;
+				displayName: string;
+				publisherUrl: string | null;
+				allowedOrigins: string[];
+				allowedCallbackUrls: string[];
+				allowedScopes: ("auth:exchange-user" | "identity:link-user")[];
+				status: "approved" | "pending" | "revoked" | "rejected";
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				initialRequestData: unknown;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
 		approveRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				requestId: string;
@@ -35716,6 +35893,89 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: void;
+			meta: object;
+		}>;
+	}>>;
+	oauthClients: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				reasonCode?: string;
+				expectedStatus?: string | null;
+				currentStatus?: string | null;
+				opRef?: string | undefined;
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				includeUnused?: boolean | undefined;
+			} | undefined;
+			output: {
+				clientId: string;
+				clientName: string;
+				redirectUris: string[];
+				redirectHosts: string[];
+				scopes: string[];
+				createdAt: Date;
+				mintedKeys: number;
+				activeKeys: number;
+				lastUsedAt: Date | null;
+				people: {
+					id: string;
+					name: string | null;
+					email: string | null;
+					active: boolean;
+				}[];
+			}[];
+			meta: object;
+		}>;
+		adminGet: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				clientId: string;
+			};
+			output: {
+				clientId: string;
+				clientName: string;
+				redirectUris: string[];
+				redirectHosts: string[];
+				scopes: string[];
+				createdAt: Date;
+				mintedKeys: number;
+				activeKeys: number;
+				lastUsedAt: Date | null;
+				people: {
+					id: string;
+					name: string | null;
+					email: string | null;
+					active: boolean;
+				}[];
+				keys: MintedKey[];
+			};
+			meta: object;
+		}>;
+		adminRevoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				clientId: string;
+			};
+			output: {
+				clientId: string;
+				revokedKeys: number;
+			};
 			meta: object;
 		}>;
 	}>>;

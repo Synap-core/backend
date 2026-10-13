@@ -22,6 +22,38 @@ import { canonicalizeIssuerUrl } from "./protocol.js";
 export const OAUTH_AGENT_TYPE = "claude-web-direct";
 
 /**
+ * The `api_keys.instance_id` a token minted for (client, human) carries —
+ * `oauth:<client_id>:<user_id>`. It is the ONLY link from a minted key back to
+ * the client that asked for it (the agent user is shared by every client the
+ * same human connects), so the token endpoint writes it and the console's
+ * client inventory (`oauthClients.*`) reads it through these two functions.
+ * A `dcr_` client id is base64url — it never contains `:`.
+ */
+const OAUTH_INSTANCE_PREFIX = "oauth:";
+
+export function oauthKeyInstanceId(clientId: string, userId: string): string {
+  return `${OAUTH_INSTANCE_PREFIX}${clientId}:${userId}`;
+}
+
+/** Every key minted for one client starts with this (`starts_with` on `instance_id`). */
+export function oauthClientInstancePrefix(clientId?: string): string {
+  return clientId === undefined
+    ? OAUTH_INSTANCE_PREFIX
+    : `${OAUTH_INSTANCE_PREFIX}${clientId}:`;
+}
+
+/** `oauthKeyInstanceId` read back; null for any other instance id. */
+export function parseOauthKeyInstanceId(
+  instanceId: string | null | undefined
+): { clientId: string; userId: string } | null {
+  if (!instanceId?.startsWith(OAUTH_INSTANCE_PREFIX)) return null;
+  const rest = instanceId.slice(OAUTH_INSTANCE_PREFIX.length);
+  const cut = rest.indexOf(":");
+  if (cut <= 0 || cut === rest.length - 1) return null;
+  return { clientId: rest.slice(0, cut), userId: rest.slice(cut + 1) };
+}
+
+/**
  * Scopes this AS advertises and is willing to grant, in POD grammar.
  *
  * Pod grammar (dot) rather than the CP's wire grammar (colon) because these

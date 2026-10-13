@@ -392,6 +392,28 @@ export class AppRepository {
     return this.project(rows);
   }
 
+  /**
+   * EVERY owner's apps (newest first), through the same projection as
+   * `listForOwner` — the pod admin's inventory (`apps.adminList`). Unfloored on
+   * purpose: the caller gates (pod admin only). Revoked apps are included by
+   * default (an admin must see what was cut off to remove it for good); a
+   * removed app is never listed.
+   */
+  async listAll(
+    opts: { includeRevoked?: boolean } = {}
+  ): Promise<AppWithGrants[]> {
+    const where =
+      opts.includeRevoked === false
+        ? and(isNull(apps.revokedAt), isNull(apps.removedAt))
+        : isNull(apps.removedAt);
+    const rows = await this.db
+      .select()
+      .from(apps)
+      .where(where)
+      .orderBy(desc(apps.createdAt));
+    return this.project(rows);
+  }
+
   /** One app + its grants, floored on the owner — null when not theirs. */
   async getForOwner(
     appId: string,
