@@ -1023,6 +1023,14 @@ export interface SpaceBriefSeed {
 	v: 1;
 	fields: Partial<Record<string, string>>;
 }
+/** `settings.intent` — what a space produces, as its template declared it. */
+export interface WorkspaceIntentSettings {
+	/** The purpose word shown first ("Product · Dev"). */
+	label: string;
+	/** Produced profile slugs (kinds or roles), in order; [] = a library. */
+	produces: string[];
+	source: "template";
+}
 export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
@@ -1249,6 +1257,15 @@ export interface WorkspaceSettings {
 	 * external capability requirements, which is a real answer, not a missing one.
 	 */
 	taskIntents?: string[];
+	/**
+	 * WHAT THIS SPACE PRODUCES (object-first homes) — the template's
+	 * `meta.intent`, projected on install/reconcile by the settings-merge writer
+	 * (`projectTemplateIntent`). `produces` = profile slugs (kinds or roles), in
+	 * the template's order; empty = a LIBRARY. Absent (or null, once a template
+	 * stopped declaring it) → `lifecycle.home` INFERS one at read time; an
+	 * inferred intent is never stored.
+	 */
+	intent?: WorkspaceIntentSettings | null;
 	/**
 	 * System-reserved slug identifying built-in workspaces created by the backend.
 	 * Used for idempotent re-creation (e.g. 'pod-admin').
@@ -5405,6 +5422,33 @@ export interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
+export type ResolutionRung = 1 | 2 | 3 | 4 | 5 | 6;
+export interface WorkspaceCandidate {
+	id: string;
+	name: string;
+}
+export interface WorkspacePlacement {
+	/** The resolved lens — `null` means pod-wide (visible in every workspace). */
+	workspaceId: string | null;
+	/** Which rung decided (for telemetry + explainability, invariant I6). */
+	rung: ResolutionRung;
+	/** Code-generated, auditable reason. Never references a non-member workspace. */
+	reason: string;
+	/** 1.0 for deterministic rungs (1–4, 6); the hint's confidence for rung 5. */
+	confidence: number;
+	/**
+	 * The reduced set surfaced when a rung couldn't pick a single winner.
+	 * When `ask` is true, `candidates[0]` IS the suggested workspace.
+	 */
+	candidates: WorkspaceCandidate[];
+	/**
+	 * A suggestion the caller must confirm before moving. Set by EVERY rung-5
+	 * resolution (a rung-5 AI guess proposes, it never acts), regardless of
+	 * routing mode. `workspaceId` stays on the ambient workspace when this is
+	 * true, so ignoring it is safe — it means "didn't move", never "didn't write".
+	 */
+	ask: boolean;
+}
 /**
  * 3.5 is deliberately fractional: the declared-focus rung was inserted BETWEEN
  * the channel and relational rungs, and renumbering 4 → 5 would silently move
@@ -8041,6 +8085,22 @@ export interface SubmitCaptureGraphResult {
 	/** True when this call returned a PRIOR proposal instead of filing one. */
 	deduped?: true;
 	/**
+	 * How the graph was placed when the caller gave no workspace (D14): each
+	 * entity resolves on its OWN kind and roles; unanimous → placed, split →
+	 * abstain (`workspaceId` null) with every workspace the entities named in
+	 * `candidates`, most entities first. Omitted when the caller pinned a
+	 * workspace (rung 1), on a re-submit (the prior row's `scope` is what
+	 * landed), and when the resolver failed (logged; the graph stays pod-wide).
+	 */
+	placement?: Pick<WorkspacePlacement, "workspaceId" | "rung" | "reason" | "candidates">;
+	/**
+	 * The graph abstained between workspaces: nothing was moved, it stays
+	 * pod-wide. The SAME shape the text lane returns — to place it, re-file with
+	 * `workspaceId` set to `suggestedWorkspaceId` (the workspace most entities
+	 * named). Omitted when the graph was placed or no workspace was named.
+	 */
+	pendingWorkspaceSwitch?: PendingWorkspaceSwitch;
+	/**
 	 * ADVISORY: entities whose properties carry keys their profile does not
 	 * model (stored verbatim, not queryable), with a `didYouMean` when a real
 	 * property is close. Omitted when every key is modelled.
@@ -8159,7 +8219,9 @@ export type DegradedCaptureReason = "is_auth_error" | "is_invalid_response" | "i
  * a generic pod one — see the empty-result guard in `structure`.
  */
 export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
-declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown): {
+declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown, 
+/** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
+kind?: string): {
 	proposals: {
 		tempId: string;
 		profileSlug: string;
@@ -17673,6 +17735,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				url?: string | undefined;
 				html?: string | undefined;
 				context?: string | undefined;
+				profileSlug?: string | undefined;
 				previousEntities?: {
 					tempId: string;
 					profileSlug: string;
@@ -28095,6 +28158,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							confirmLabel?: string | undefined;
 						} | undefined;
 					}[] | undefined;
+					intent?: {
+						label: string;
+						produces?: {
+							profile: string;
+						}[] | undefined;
+					} | undefined;
 					rules?: unknown[] | undefined;
 					skills?: unknown[] | undefined;
 				};
@@ -28278,6 +28347,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							confirmLabel?: string | undefined;
 						} | undefined;
 					}[] | undefined;
+					intent?: {
+						label: string;
+						produces?: {
+							profile: string;
+						}[] | undefined;
+					} | undefined;
 					rules?: unknown[] | undefined;
 					skills?: unknown[] | undefined;
 				};
@@ -41565,6 +41640,78 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					bucketStart: string;
 					done: number;
 					lost: number;
+				}[];
+			};
+			meta: object;
+		}>;
+		home: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId?: string | undefined;
+			} | undefined;
+			output: {
+				spaces: {
+					workspaceId: string;
+					name: string;
+					label: string;
+					source: "template" | "inferred";
+					kind: "library" | "producing";
+					produces: {
+						profileSlug: string;
+						label: string;
+						plural: string;
+						live: number;
+						total: number;
+						doneWindowed: number;
+						windowDays: number;
+						columns: {
+							key: string;
+							label: string;
+							category: "active" | "paused" | "open" | "done" | "lost" | null;
+							count: number;
+						}[];
+						needsYou: number | null;
+						beingWorked: number | null;
+						headline: {
+							entityId: string;
+							title: string | null;
+							status: string | null;
+							reason: "recent" | "needs_you" | "being_worked" | "stuck";
+						} | null;
+					}[];
+				}[];
+				needsYou: {
+					total: number | null;
+					bySpace: {
+						workspaceId: string;
+						count: number | null;
+					}[];
+				};
+			};
+			meta: object;
+		}>;
+		moving: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId?: string | undefined;
+				workspaceId?: string | undefined;
+				limit?: number | undefined;
+			} | undefined;
+			output: {
+				items: {
+					entityId: string;
+					title: string | null;
+					profileSlug: string | null;
+					workspaceId: string | null;
+					status: string | null;
+					category: string | null;
+					work: {
+						kind: "session" | "scheduled" | "worker";
+						sessionId: string;
+						label: string;
+						live: boolean;
+						asksYou: boolean;
+						since: string;
+						actor?: string | undefined;
+					}[];
 				}[];
 			};
 			meta: object;
