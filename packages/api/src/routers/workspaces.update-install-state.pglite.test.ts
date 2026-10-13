@@ -206,3 +206,15 @@ describe("workspaces.update — the template install record is server-owned", ()
     expect(row.package_slug).toBeNull();
   });
 });
+
+describe("workspaces.get — template action placements reach the client (defect D)", () => {
+  it("projects `actionPlacements` (the entity-action hooks read it from here)", async () => {
+    await seedInstalled();
+    const ws = await caller().get({ id: WS });
+    const settings = ws.settings as Record<string, unknown>;
+    expect(settings.actionPlacements).toEqual(INSTALL.actionPlacements);
+    // Still withheld: the install bookkeeping no client reads.
+    expect(settings.templateApply).toBeUndefined();
+    expect(settings.completedSteps).toBeUndefined();
+  });
+});

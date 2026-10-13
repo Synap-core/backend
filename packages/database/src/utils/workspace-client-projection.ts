@@ -36,6 +36,11 @@ export const CLIENT_SAFE_WORKSPACE_SETTINGS_KEYS = [
   "profileRenderers",
   "sidebarItems",
   "installedPacks",
+  // Template-declared entity actions (`{ [profileSlug]: placement[] }`: labels,
+  // playbook / automation ids, capability verb keys) — the app's entity-action
+  // hooks read it from `workspaces.get`. No credential. Read-only for clients:
+  // server-owned, so a settings save can neither change nor erase it.
+  "actionPlacements",
   // Agent / governance configuration surfaced in settings.
   "intelligenceServiceId",
   "agentPersonality",
