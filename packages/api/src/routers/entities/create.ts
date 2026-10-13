@@ -1232,12 +1232,18 @@ export const createProcs = {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Entity creation proposed for review"
+            "Entity creation proposed for review",
+            perm.deferred
           ),
           entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
+          // Join gate that KEPT the write: it is replayed once the join is
+          // approved — the caller must not resend it.
+          ...(perm.deferred
+            ? { deferred: true as const, ref: perm.deferredRef }
+            : {}),
           // Only real on the entity path: on a join gate no entity id was ever
           // allocated, and an unresolvable id is worse than an absent field.
           ...(joinGate ? {} : { proposedEntityId: entityId }),
@@ -1251,9 +1257,11 @@ export const createProcs = {
             // `status` deprecated (operation-outcome overload) — read `outcome`.
             status: "pending",
             outcome: "pending",
-            message: joinGate
-              ? "Not attached — no entity was proposed; approve the workspace-join request first."
-              : "Role will attach when this create proposal is approved",
+            message: !joinGate
+              ? "Role will attach when this create proposal is approved"
+              : perm.deferred
+                ? "Kept with the write — attaches when the write is replayed after the join is approved."
+                : "Not attached — no entity was proposed; approve the workspace-join request first.",
           })),
         };
       }

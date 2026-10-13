@@ -39,6 +39,10 @@ describe("item pack model", () => {
     ]);
     // A plain proposal whose nested data has items is not a pack.
     expect(readItemPackRefs({ data: { items: [{ ref: "x" }] } })).toEqual([]);
+    // A join's kept writes are its items.
+    expect(
+      readItemPackRefs({ deferredWrites: [{ ref: "dw1" }, { ref: "dw2" }] })
+    ).toEqual(["dw1", "dw2"]);
   });
 
   it("tallies rejected, to-apply and recorded outcomes", () => {

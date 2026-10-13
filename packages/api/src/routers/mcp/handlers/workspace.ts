@@ -39,6 +39,7 @@ import {
   focusScopeReply,
 } from "../../../services/agent-identity-service.js";
 import { workspacesRouter } from "../../workspaces.js";
+import { changeKindScope } from "../../../services/profiles/change-kind-scope.js";
 import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
 import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
@@ -984,6 +985,43 @@ export const workspaceHandlers: McpHandlerMap = {
       await grantProfileAccessDoor(opsActor(ctx), {
         profileId,
         targetWorkspaceId,
+        workspaceId:
+          typeof args.workspaceId === "string" ? args.workspaceId : undefined,
+        reasoning: readReasoning(args),
+      })
+    );
+  },
+  /**
+   * Rescope a kind (D13): which Spaces see it, and where its NEW records live.
+   * Always a proposal for an agent (`changeKindScope` owns the gate).
+   */
+  synap_change_kind_scope: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (typeof args.profileId !== "string") {
+      return ok({ error: "profileId is required" });
+    }
+    const scope =
+      args.scope === "shared" || args.scope === "workspace"
+        ? args.scope
+        : undefined;
+    const entityScope =
+      args.entityScope === "pod" || args.entityScope === "workspace"
+        ? args.entityScope
+        : undefined;
+    const allowedWorkspaceIds = Array.isArray(args.allowedWorkspaceIds)
+      ? args.allowedWorkspaceIds.filter(
+          (id): id is string => typeof id === "string"
+        )
+      : undefined;
+    return ok(
+      await changeKindScope(opsActor(ctx), {
+        profileId: args.profileId,
+        scope,
+        allowedWorkspaceIds,
+        entityScope,
         workspaceId:
           typeof args.workspaceId === "string" ? args.workspaceId : undefined,
         reasoning: readReasoning(args),

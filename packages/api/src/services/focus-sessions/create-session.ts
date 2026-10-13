@@ -348,6 +348,13 @@ export type CreateFocusSessionResult =
       reasoning?: string;
       reviewPath?: string;
       reviewUrl?: string;
+      /**
+       * Join gate that KEPT the write (`perm.deferred`): it is replayed as the
+       * agent once the join is approved — the caller must not resend it.
+       */
+      deferred?: true;
+      /** The kept write's ref on the join (`data.deferredOutcomes[ref]`). */
+      ref?: string;
     };
 
 export async function createFocusSession(
@@ -387,7 +394,9 @@ export async function createFocusSession(
   // PROPOSED start still carries the full roster: the person approving the
   // start approves who it is handed to.
   const handedOff = handedOffAgentIds(agentUserId, requestedAgentIds);
-  const directAgentIds = agentIds.filter((id) => !handedOff.includes(id.trim()));
+  const directAgentIds = agentIds.filter(
+    (id) => !handedOff.includes(id.trim())
+  );
 
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
@@ -688,12 +697,16 @@ export async function createFocusSession(
       proposalType: perm.proposalType,
       message: proposedMessageFor(
         perm.proposalType,
-        "Focus session creation proposed for review"
+        "Focus session creation proposed for review",
+        perm.deferred
       ),
       summary: perm.summary,
       reasoning: perm.reasoning,
       reviewPath: perm.reviewPath,
       reviewUrl: perm.reviewUrl,
+      ...(perm.deferred
+        ? { deferred: true as const, ref: perm.deferredRef }
+        : {}),
     };
   }
 

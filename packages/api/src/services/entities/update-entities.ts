@@ -141,7 +141,16 @@ export interface UpdateEntitiesResult {
     reviewUrl?: string;
   } | null;
   denied: Array<{ id: string; reason: string }>;
-  skipped: Array<{ id: string; reason: string; proposalId?: string }>;
+  /**
+   * `deferred: true` = the write was KEPT on a workspace-join request and is
+   * replayed for the caller once the join is approved — never resend it.
+   */
+  skipped: Array<{
+    id: string;
+    reason: string;
+    proposalId?: string;
+    deferred?: true;
+  }>;
 }
 
 const NOT_WRITABLE = "Not found or not writable by you";
@@ -247,11 +256,16 @@ export async function updateEntities(
       });
       if (written.status === "proposed" && written.proposalId) {
         // The door re-gated and disagreed with the preview (a concurrent write
-        // crossed the ceiling, a rule changed). Reported, never hidden.
+        // crossed the ceiling, a rule changed). Reported, never hidden. A join
+        // gate that KEPT the write replays it once the join is approved.
+        const kept = (written as { deferred?: true }).deferred;
         result.skipped.push({
           id: item.id,
-          reason: "Filed for review on its own",
+          reason: kept
+            ? "Kept on a request to join its space — replayed for you once approved; do not resend it"
+            : "Filed for review on its own",
           proposalId: written.proposalId,
+          ...(kept ? { deferred: true as const } : {}),
         });
       } else {
         result.applied.push(item.id);

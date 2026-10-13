@@ -40,6 +40,10 @@ import {
 } from "@synap-core/types/titles";
 import { titleSourceFromProperties } from "../../hub-protocol/write-receipt.js";
 import { recordSessionArtifact } from "../../../services/focus-sessions/record-session-artifact.js";
+import {
+  requestAgentUpload,
+  finalizeAgentUpload,
+} from "../../../services/files/agent-upload.js";
 
 export const entityHandlers: McpHandlerMap = {
   synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -280,6 +284,38 @@ export const entityHandlers: McpHandlerMap = {
       ...(titleLint.length ? { titleLint } : {}),
     });
   },
+  /**
+   * Up to 500 entity updates in ONE governed call (R1) — a thin door over hub
+   * `entities.updateEntities` (services/entities/update-entities.ts), through
+   * the same lens as `synap_update_entity`. Per-item governance; the items
+   * that need review ride ONE pack. The hub re-validates with the strict zod
+   * schema, so an unknown patch field is a 400, never dropped.
+   */
+  synap_update_entities: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const reasoning = readReasoning(args);
+    const result = await lensCaller.entities.updateEntities({
+      userId,
+      ...(agentUserId ? { agentUserId } : {}),
+      items: args.items as Array<{
+        id: string;
+        patch: Record<string, unknown>;
+        expected?: { title?: string | null };
+      }>,
+      ...(typeof args.validate === "boolean"
+        ? { validate: args.validate }
+        : {}),
+      ...(typeof args.idempotencyKey === "string"
+        ? { idempotencyKey: args.idempotencyKey }
+        : {}),
+      ...(reasoning ? { reasoning } : {}),
+    });
+    return ok(result);
+  },
   synap_create_document: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
@@ -362,6 +398,32 @@ export const entityHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * Step 1 of the large-file lane (D10/L1): a signed PUT URL + an upload token
+   * bound to this user + agent + session. Same presigned lane as the REST/Hub
+   * `/uploads` doors; `synap_store_file({uploadToken})` finalizes.
+   */
+  synap_request_upload: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const ticket = await requestAgentUpload({
+      userId,
+      agentUserId,
+      // The CONFINED workspace (service-key clamp), never a raw model id;
+      // the service write-checks it.
+      workspaceId: ctx.requestedWorkspaceId,
+      filename: typeof args.filename === "string" ? args.filename.trim() : "",
+      mimeType: typeof args.mimeType === "string" ? args.mimeType.trim() : "",
+      size: Number(args.size),
+      ...(sessionId ? { sessionId } : {}),
+    });
+    if (!ticket.ok) throw new Error(ticket.error);
+    const { ok: _ok, ...rest } = ticket;
+    return ok(rest);
+  },
   synap_store_file: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
       toolName,
@@ -375,6 +437,45 @@ export const entityHandlers: McpHandlerMap = {
       requestedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    // Large-file lane, step 3: the bytes were PUT to the URL from
+    // `synap_request_upload`. Finalize through the shared presigned door with
+    // the same governance as the inline path below (attach gate / governed
+    // create, `proposed` is normal, session artifact on a real write). Before
+    // the rate limit: the service applies the same bucket itself.
+    if (typeof args.uploadToken === "string" && args.uploadToken.trim()) {
+      if (
+        typeof args.content === "string" ||
+        typeof args.contentBase64 === "string"
+      ) {
+        throw new Error(
+          "Provide either `uploadToken` or inline `content`/`contentBase64`, not both."
+        );
+      }
+      const fin = await finalizeAgentUpload({
+        userId,
+        agentUserId,
+        scopes: apiKeyScopes,
+        keyType,
+        keyWorkspaceId,
+        uploadToken: args.uploadToken.trim(),
+        ...(typeof args.title === "string" && args.title.trim()
+          ? { title: args.title.trim() }
+          : {}),
+        ...(typeof args.attachToEntityId === "string" &&
+        args.attachToEntityId.trim()
+          ? { attachToEntityId: args.attachToEntityId.trim() }
+          : {}),
+        // An explicit/derived handle on THIS call wins; otherwise the service
+        // uses the session the upload was requested in.
+        ...(sessionId ? { sessionId } : {}),
+        ...(typeof args.expectedLabel === "string"
+          ? { expectedLabel: args.expectedLabel }
+          : {}),
+      });
+      if (!fin.ok) throw new Error(fin.error);
+      const { ok: _ok, ...rest } = fin;
+      return ok(rest);
+    }
     // Bound the unreviewed-upload vector, same limiter bucket as POST /files.
     // MCP hardcodes apiKeyId ("mcp") in the ctx, so key the limit on the acting
     // caller identity (agent, else operator) for per-caller isolation.
@@ -413,7 +514,7 @@ export const entityHandlers: McpHandlerMap = {
     if (buffer.length > MAX_FILE_SIZE) {
       throw new Error(
         `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB via this inline path. ` +
-          "For a large file on disk, use the CLI `synap upload`."
+          "For a bigger file, call `synap_request_upload`, PUT the bytes, then `synap_store_file({uploadToken})`."
       );
     }
 

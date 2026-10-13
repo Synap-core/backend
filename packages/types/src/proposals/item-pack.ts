@@ -127,11 +127,15 @@ export function tallyItemPack(
  */
 export function readItemPackRefs(data: unknown): string[] {
   const top = asRecord(data);
+  // A workspace JOIN keeps the agent's blocked writes on `deferredWrites`
+  // (each with a `ref`), so a per-item drop on a join is checked too.
   const items = Array.isArray(top?.items)
     ? top.items
     : isUpdatePackData(top?.data)
       ? (top.data as { items: unknown[] }).items
-      : [];
+      : Array.isArray(top?.deferredWrites)
+        ? top.deferredWrites
+        : [];
   return items
     .map((item) => asRecord(item)?.ref)
     .filter((ref): ref is string => typeof ref === "string");

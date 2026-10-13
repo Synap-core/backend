@@ -345,6 +345,14 @@ export const entitiesRouter = router({
         // graphs. Only populated when the action was proposal-gated.
         proposedEntityId: (result as { proposedEntityId?: string })
           .proposedEntityId,
+        // Join gate that KEPT the write: replayed once the join is approved —
+        // the caller must not resend it.
+        ...((result as { deferred?: true }).deferred
+          ? {
+              deferred: true as const,
+              ref: (result as { ref?: string }).ref,
+            }
+          : {}),
         // Echo the ambient workspace lens for the caller. NOTE: this is the
         // GOVERNANCE context, not necessarily the entity's placement — a
         // pod-scope kind lands at workspaceId=null even though the ambient lens
@@ -479,6 +487,8 @@ export const entitiesRouter = router({
         } = await import("../../utils/permission-check.js");
         const proposalType = (result as { proposalType?: string }).proposalType;
         const joinGate = isJoinGate(proposalType);
+        // Join gate that KEPT the write (replayed once the join is approved).
+        const kept = result as { deferred?: true; ref?: string };
         const envelope = buildProposalResponseFields({
           proposalId: result.proposalId,
           subjectType: "entity",
@@ -491,17 +501,22 @@ export const entitiesRouter = router({
           // update was NOT proposed — a workspace-join request was filed
           // instead — so both the message and the SYNTHESIZED summary/reasoning
           // must not narrate an "Update entity …" that does not exist.
-          message: proposedMessageFor(proposalType, result.message),
+          message: proposedMessageFor(
+            proposalType,
+            result.message,
+            kept.deferred
+          ),
           proposalId: result.proposalId,
           // Same forwarding the sibling `createEntity` already does, so hub
           // callers (CLI, MCP, Discord bridge) can tell the two apart at all.
           proposalType,
           summary: joinGate ? JOIN_GATE_SUMMARY : envelope.summary,
           reasoning: joinGate
-            ? proposedMessageFor(proposalType, result.message)
+            ? proposedMessageFor(proposalType, result.message, kept.deferred)
             : envelope.reasoning,
           reviewPath: envelope.reviewPath,
           reviewUrl: envelope.reviewUrl,
+          ...(kept.deferred ? { deferred: true as const, ref: kept.ref } : {}),
         };
       }
 

@@ -574,6 +574,84 @@
       }
     },
     {
+      "name": "synap_update_entities",
+      "annotations": {
+        "title": "Update many entities",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "description": "Change up to 500 existing entities in ONE call — retitles, property fixes, status moves. Use it for any change set; never script many single updates or Hub REST calls. Each item is {id, patch, expected?}; patch fields: title, description, properties, deleteProperties, expectedStatus (no kind change, no body — use synap_update_entity / synap_update_document for those). Governance is per item: each is written now (when it would auto-approve), or collected into ONE review for the person, or denied, or skipped (not found, changed since you read it, nothing to change). The answer lists applied, proposed {proposalId, count, reviewUrl}, denied, skipped, plus items[] with each verdict — a partial result is normal. 'proposed' is success: do not resend those items; a skipped item with `deferred: true` was kept on a space-join request and is replayed for you. Pass validate:true first to see the verdicts without writing. Pass an idempotencyKey so a retried call returns the first answer instead of acting twice.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "The entity id."
+                },
+                "patch": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "properties": {
+                      "type": "object",
+                      "description": "Partial properties to merge into the entity."
+                    },
+                    "deleteProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "expectedStatus": {
+                      "type": ["string", "null"],
+                      "description": "When the patch moves the status: the status you SAW. If it moved meanwhile the item is skipped."
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "expected": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": ["string", "null"],
+                      "description": "The title you read. If it changed meanwhile the item is skipped, not overwritten."
+                    }
+                  }
+                }
+              },
+              "required": ["id", "patch"]
+            }
+          },
+          "validate": {
+            "type": "boolean",
+            "description": "Dry run: return each item's verdict, write nothing."
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "description": "8–256 chars. The same key with the same items returns the first call's answer."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "WHY these changes — shown to the person who reviews them. One line."
+          }
+        },
+        "required": ["items"]
+      }
+    },
+    {
       "name": "synap_create_document",
       "annotations": {
         "title": "Create document",
@@ -581,7 +659,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store a real binary from disk, that's the CLI `synap upload` / the multipart upload door — an agent can't do it here. Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+      "description": "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -705,6 +783,41 @@
       }
     },
     {
+      "name": "synap_request_upload",
+      "annotations": {
+        "title": "Request upload",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Get a URL to upload a file too large for `synap_store_file` inline (over 10MB, up to 500MB for video). Returns `{uploadUrl, headers, uploadToken, expiresAt, maxBytes}`: PUT the exact bytes to `uploadUrl` with exactly `headers` before `expiresAt`, then call `synap_store_file({uploadToken})` within the hour to save it. `size` must be the exact byte count.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "description": "The file name (e.g. 'launch.mp4', 'deck.html')."
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "The content type (e.g. 'video/mp4', 'application/pdf'). Must be an allowed type."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Exact size of the file in bytes."
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "OPTIONAL focus-session override, same rules as on `synap_store_file`. The upload's `synap_store_file` call defaults to this session."
+          }
+        },
+        "required": ["filename", "mimeType", "size"]
+      }
+    },
+    {
       "name": "synap_store_file",
       "annotations": {
         "title": "Store file",
@@ -712,7 +825,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a large file sitting on a local disk, that's the CLI `synap upload` (an agent can't stream bytes it doesn't hold). For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB via this inline path.",
+      "description": "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB inline; for a bigger file call `synap_request_upload`, PUT the bytes, then call this with `uploadToken`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -731,6 +844,10 @@
           "contentBase64": {
             "type": "string",
             "description": "Base64-encoded BINARY content. Mutually exclusive with `content`."
+          },
+          "uploadToken": {
+            "type": "string",
+            "description": "The `uploadToken` from `synap_request_upload`, after you PUT the bytes. Replaces `content`/`contentBase64`/`filename`/`mimeType`."
           },
           "title": {
             "type": "string",
@@ -751,8 +868,7 @@
             "type": "string",
             "description": "The declared output slot this fulfils, exactly as declared on the session."
           }
-        },
-        "required": ["filename", "mimeType"]
+        }
       }
     },
     {
@@ -2107,7 +2223,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2601,6 +2717,10 @@
           "projectId": {
             "type": ["string", "null"],
             "description": "FILE this session into a project (its UUID from synap_list_projects), or pass null to UNFILE it; omit to leave it alone. Always filed as a PROPOSAL the person approves — which project work belongs to is their call, so suggest it, never assume it. REFUSED if the project is not one you can see."
+          },
+          "moveToWorkspaceId": {
+            "type": ["string", "null"],
+            "description": "Move this session (with its room and outputs list) into another Space, or null to make it personal. The records it produced stay where they are (use synap_move_entities). Always a proposal for an agent; refused when someone in the session room is not a member of that space."
           },
           "trackId": {
             "type": ["string", "null"],
@@ -4693,7 +4813,7 @@
           },
           "workspaceId": {
             "type": "string",
-            "description": "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`)."
+            "description": "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`). An `entities[]` graph with no `workspaceId` is placed only when every entity's kind (and roles) points at the same space; otherwise it stays pod-wide and returns `placement` (reason + candidates) and, when there is a candidate, `pendingWorkspaceSwitch`."
           },
           "projectId": {
             "type": "string",
@@ -5505,6 +5625,51 @@
           }
         },
         "required": ["profileId", "targetWorkspaceId"]
+      }
+    },
+    {
+      "name": "synap_change_kind_scope",
+      "annotations": {
+        "title": "Change kind scope",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Change which Spaces see a kind (profile) and where its NEW records live. scope \"shared\" (+ allowedWorkspaceIds) makes the kind resolve in those spaces; \"workspace\" pins it to its home and revokes grants. entityScope \"pod\" makes NEW records pod-wide (existing records keep their space). Use it when another space needs a kind — never define a twin kind. Always a proposal for an agent; the kind's owner (or a pod admin for a system kind) approves. To add one space to an already-shared kind, use synap_grant_profile_access.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profileId": {
+            "type": "string",
+            "description": "Profile UUID."
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["shared", "workspace"],
+            "description": "New kind scope."
+          },
+          "allowedWorkspaceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Space UUIDs granted access. Only with scope \"shared\"."
+          },
+          "entityScope": {
+            "type": "string",
+            "enum": ["pod", "workspace"],
+            "description": "Whether NEW records of this kind are pod-wide or stay in one space."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Acting workspace UUID; omit to use the kind's home workspace."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why — shown to the reviewer. One line."
+          }
+        },
+        "required": ["profileId"]
       }
     },
     {

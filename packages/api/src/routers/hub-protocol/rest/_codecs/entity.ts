@@ -271,6 +271,16 @@ export const CreateEntityResponseSchema = z
       .describe(
         'Present when status is "proposed". Absolute URL to review the proposal in the Studio.'
       ),
+    deferred: z
+      .literal(true)
+      .optional()
+      .describe(
+        'Workspace-join gate only (proposalType "join"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it.'
+      ),
+    ref: z
+      .string()
+      .optional()
+      .describe("With `deferred`: the kept write's ref on the join proposal."),
     facets: z
       .array(
         z.object({
@@ -359,6 +369,16 @@ export const UpdateEntityResponseSchema = z
     reasoning: z.string().optional(),
     reviewPath: z.string().optional(),
     reviewUrl: z.string().optional(),
+    deferred: z
+      .literal(true)
+      .optional()
+      .describe(
+        'Workspace-join gate only (proposalType "join"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it.'
+      ),
+    ref: z
+      .string()
+      .optional()
+      .describe("With `deferred`: the kept write's ref on the join proposal."),
   })
   .openapi("UpdateEntityResponse");
 

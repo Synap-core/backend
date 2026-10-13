@@ -437,11 +437,16 @@ export const mutateProcs = {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Update proposed for review"
+            "Update proposed for review",
+            perm.deferred
           ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
+          // Join gate that KEPT the write: replayed once the join is approved.
+          ...(perm.deferred
+            ? { deferred: true as const, ref: perm.deferredRef }
+            : {}),
           ...(statusMove ? { statusMove } : {}),
         };
       }

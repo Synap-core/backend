@@ -1181,6 +1181,26 @@ PATCH /api/hub/entities/{entityId}
 
 **Properties are deep-merged — send only the keys you want to change.** An update with `{ "status": "done" }` leaves all other properties untouched. You never need to re-send the full properties object.
 
+**Many changes → ONE call: `synap_update_entities`** (up to 500 items
+`{id, patch, expected?}`; Hub: `POST /api/hub/entities/batch-update`). Never
+script a loop of single updates, and never apply a change set over Hub REST with
+a user key. Governance is per item: some apply now, the rest ride ONE review for
+the person; the answer lists `applied` / `proposed` / `denied` / `skipped` — a
+partial result is normal. Send `validate: true` first to see each verdict without
+writing, and an `idempotencyKey` so a retry never acts twice.
+
+**A write blocked on a space join is KEPT.** When you write into a space your
+agent has not joined (`synap_orient` marks it `joined: false`), the answer is
+`proposed` with `proposalType: "join"`, `deferred: true` and a `ref`: the write
+rides the join request and is replayed for you once it is approved. Do not
+resend it, and do not retry it into another space.
+
+**Moving, not recreating.** A session into another space:
+`synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is
+the connection's lens). A kind another space needs: `synap_change_kind_scope`
+(`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
+`synap_move_entities`. All three are reviewed.
+
 ### Authored text is content, not a `file`
 
 Something **you** author — a pitch deck, a strategic plan, a note body — is
@@ -1189,8 +1209,8 @@ kind (`note`, `knowledge`, or a fitting domain kind) with `content` set to the
 Markdown body; Synap **auto-materializes** that `content` into a real
 versioned document behind the scenes (`entities WHERE documentId = ?`) — no
 upload step needed. `file` is reserved for real uploaded bytes you actually
-have (the upload door / `synap upload`) — an agent has no filesystem, so it
-rarely touches `file` at all. Reach for `synap_create_document` /
+have (`synap_store_file`; over 10MB `synap_request_upload`) — authored text
+never becomes a `file`. Reach for `synap_create_document` /
 `POST /api/hub/documents` directly only for a standalone rich document that
 isn't itself a title-worthy entity (see below) — never as a substitute for an
 entity's `content`.
@@ -1204,7 +1224,7 @@ You CAN store content you **hold** — you send it inline. Pick by what you have
 | **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
 | Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
 | Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
-| A **large file on a local disk** you don't hold in context                                  | the CLI `synap upload <path>` (streams it) — an agent can't send bytes it doesn't have          | a `file` entity backed by stored bytes                               |
+| A **large file** (over 10MB, up to 500MB video)                                             | `synap_request_upload` → PUT the bytes to `uploadUrl` → `synap_store_file({ uploadToken })`     | a `file` entity backed by stored bytes                               |
 | Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
 **A typed thing with a file → the KIND first, the bytes on it.** When a kind
@@ -1212,7 +1232,7 @@ exists for the thing (a logo is a `brand-asset`, not a `file`; check the space
 brief or `synap_list_profiles`): (1) resolve-or-create that entity
 (`synap_ask`, then `synap_create_entity`); (2) `synap_store_file` with
 `attachToEntityId` = its id (`content` for SVG/text, `contentBase64` for
-binary, ≤10MB inline; larger local files: CLI `synap upload`); (3) link it /
+binary, ≤10MB inline; larger: `synap_request_upload`, then `uploadToken`); (3) link it /
 `synap_file_into_project` if asked. A `proposed` create has no live id yet —
 attach after approval. A bare `file` is only for bytes with no kind.
 
@@ -1356,7 +1376,7 @@ POST /api/hub/entities
 
 This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
 
-**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
+**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. A person-owned slot blocked on a decision is ANSWERED by them (Yes/No or a choice) — it is never closed by marking it done. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
 
 ### Post to the user's personal channel
 

@@ -877,6 +877,15 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.projectId === "string"
           ? { projectId: args.projectId }
           : {}),
+      // MOVE into another Space (D12). A DISTINCT arg on purpose: the MCP URL
+      // lens injects `workspaceId` into every call, so reusing that name would
+      // file a move on every update. `null` = personal; the floor (room
+      // members must belong) and the always-propose rule live in the service.
+      ...(typeof args.moveToWorkspaceId === "string"
+        ? { workspaceId: args.moveToWorkspaceId }
+        : args.moveToWorkspaceId === null
+          ? { workspaceId: null }
+          : {}),
       // ADOPT into a track step, NARROWED like `projectId`: `null` unfiles, a
       // string files, anything else leaves it. The rules (visible track, pinned
       // stage, same project) and the always-propose rule for an agent live in

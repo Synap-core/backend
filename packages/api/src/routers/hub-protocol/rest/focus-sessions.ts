@@ -1292,6 +1292,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           summary: result.summary,
           reviewPath: result.reviewPath,
           reviewUrl: result.reviewUrl,
+          // Join gate that KEPT the start: replayed once the join is approved.
+          ...(result.deferred ? { deferred: true, ref: result.ref } : {}),
           session: null,
         });
       }
@@ -1476,7 +1478,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // it; when nothing else was asked for, the proposal IS the answer.
       const handOffs: AgentHandOffDecision[] = [];
       if (agentUserId) {
-        const roster = Array.isArray(existing.agentIds) ? existing.agentIds : [];
+        const roster = Array.isArray(existing.agentIds)
+          ? existing.agentIds
+          : [];
         const added = handedOffAgentIds(agentUserId, [
           ...(patch.agentIds ?? []).filter((a) => !roster.includes(a.trim())),
           ...(patch.addAgentId !== undefined ? [patch.addAgentId] : []),
@@ -1514,7 +1518,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             delete patch.addAgentId;
           }
           const sameRoster = (ids: readonly string[]) =>
-            ids.length === roster.length && ids.every((a) => roster.includes(a));
+            ids.length === roster.length &&
+            ids.every((a) => roster.includes(a));
           const asksForMore = Object.entries(patch).some(
             ([key, value]) =>
               value !== undefined &&
