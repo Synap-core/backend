@@ -854,7 +854,7 @@ async function buildClaimedGroup(
   session: ImportSessionRow,
   group: ImportGroup
 ): Promise<ImportBuildResult> {
-  const { database, deps } = args;
+  const { database } = args;
 
   const rows = await loadImportItemRows({
     database,
@@ -867,8 +867,101 @@ async function buildClaimedGroup(
       (m): m is { row: ImportItemRow; view: ImportItemView } =>
         m.view !== null && m.view.groupKeys.includes(group.key)
     );
+  const built = await buildImportMembers({
+    database,
+    userId: args.userId,
+    session: {
+      id: session.id,
+      workspaceId: session.workspaceId,
+      projectId: session.projectId,
+    },
+    group,
+    groups: session.curation.groups,
+    members,
+    deps: args.deps,
+  });
+  if (built.result.status === "refused") return built.result;
+  const submitted = {
+    proposalId: built.result.proposalId,
+  };
+
+  // Mark the group built, under the session lock.
+  await database.transaction(async (tx) => {
+    const t = tx as unknown as ImportDb;
+    const locked = await loadImportSession({
+      database: t,
+      userId: args.userId,
+      sessionId: session.id,
+      forUpdate: true,
+    });
+    const groups = locked.curation.groups.map((g) =>
+      g.key === group.key
+        ? {
+            ...withoutClaim(g),
+            builtAt: new Date().toISOString(),
+            ...(submitted.proposalId
+              ? { buildProposalId: submitted.proposalId }
+              : {}),
+          }
+        : g
+    );
+    const fresh = await loadImportItemRows({
+      database: t,
+      userId: args.userId,
+      sessionId: session.id,
+    });
+    const next: ImportSessionCuration = {
+      ...locked.curation,
+      groups,
+      phase: deriveImportPhase(
+        groups,
+        new Map(fresh.map((r) => [r.id, readItemCuration(r.metadata)])),
+        locked.curation.groupedAt
+      ),
+    };
+    await writeImportCuration({
+      database: t,
+      userId: args.userId,
+      sessionId: session.id,
+      curation: next,
+    });
+  });
+  return built.result;
+}
+
+/** What one group's Build read and filed — the shared core of both Build doors. */
+export interface ImportMembersBuild {
+  result: ImportBuildResult;
+  /** Items Build read (their staged marker is cleared). Empty when refused. */
+  builtIds: string[];
+}
+
+/**
+ * THE shared core of Build: read + structure the kept members of ONE group and
+ * file ONE governed bundle in `session`. Writes the proposal provenance, clears
+ * the members' staged marker and records the run manifest; it does NOT mark
+ * any group built — the caller owns its group store (an import session's
+ * `importCuration.groups`, or the Library's `library_groups`).
+ *
+ * `group.key` must be in each member's `groupKeys` for its note to steer
+ * (`importItemInstructions`); `groups` is every group whose note may steer.
+ */
+export async function buildImportMembers(args: {
+  database: ImportDb;
+  userId: string;
+  session: {
+    id: string;
+    workspaceId: string | null;
+    projectId: string | null;
+  };
+  group: ImportGroup;
+  groups: readonly ImportGroup[];
+  members: ReadonlyArray<{ row: ImportItemRow; view: ImportItemView }>;
+  deps: ImportBuildDeps;
+}): Promise<ImportMembersBuild> {
+  const { database, deps, session, group, members } = args;
   const skipped: Array<{ itemId: string; reason: ImportBuildSkipReason }> = [];
-  const toBuild: typeof members = [];
+  const toBuild: Array<{ row: ImportItemRow; view: ImportItemView }> = [];
   for (const m of members) {
     if (m.view.decision === "later" || m.view.decision === "exclude") {
       skipped.push({
@@ -885,7 +978,15 @@ async function buildClaimedGroup(
     }
   }
   if (toBuild.length === 0) {
-    return { status: "refused", reason: "nothing_to_build", read: 0, skipped };
+    return {
+      result: {
+        status: "refused",
+        reason: "nothing_to_build",
+        read: 0,
+        skipped,
+      },
+      builtIds: [],
+    };
   }
 
   // Files attached to a needs_file link live on their own row.
@@ -926,7 +1027,7 @@ async function buildClaimedGroup(
             ? (attached.get(m.view.source.documentId) ?? null)
             : null,
           index,
-          groups: session.curation.groups,
+          groups: args.groups,
           deps,
         });
       })
@@ -1017,48 +1118,6 @@ async function buildClaimedGroup(
   }
   await markItemsBuilt(database, args.userId, builtIds);
 
-  // Mark the group built, under the session lock.
-  await database.transaction(async (tx) => {
-    const t = tx as unknown as ImportDb;
-    const locked = await loadImportSession({
-      database: t,
-      userId: args.userId,
-      sessionId: session.id,
-      forUpdate: true,
-    });
-    const groups = locked.curation.groups.map((g) =>
-      g.key === group.key
-        ? {
-            ...withoutClaim(g),
-            builtAt: new Date().toISOString(),
-            ...(submitted.proposalId
-              ? { buildProposalId: submitted.proposalId }
-              : {}),
-          }
-        : g
-    );
-    const fresh = await loadImportItemRows({
-      database: t,
-      userId: args.userId,
-      sessionId: session.id,
-    });
-    const next: ImportSessionCuration = {
-      ...locked.curation,
-      groups,
-      phase: deriveImportPhase(
-        groups,
-        new Map(fresh.map((r) => [r.id, readItemCuration(r.metadata)])),
-        locked.curation.groupedAt
-      ),
-    };
-    await writeImportCuration({
-      database: t,
-      userId: args.userId,
-      sessionId: session.id,
-      curation: next,
-    });
-  });
-
   const meta = extractions.reduce<StructureRunMeta | null>(
     (acc, x) => mergeStructureRunMeta(acc, x.meta),
     null
@@ -1077,14 +1136,17 @@ async function buildClaimedGroup(
   }
 
   return {
-    status: submitted.applied ? "applied" : "proposed",
-    ...(submitted.proposalId ? { proposalId: submitted.proposalId } : {}),
-    read: extractions.filter((x) => x.contentRead).length,
-    skipped,
-    ...(infra.matchedTemplate
-      ? { matched: [{ kind: "template" as const, ...infra.matchedTemplate }] }
-      : {}),
-    ...(infra.degraded ? { infrastructureDegraded: true } : {}),
+    result: {
+      status: submitted.applied ? "applied" : "proposed",
+      ...(submitted.proposalId ? { proposalId: submitted.proposalId } : {}),
+      read: extractions.filter((x) => x.contentRead).length,
+      skipped,
+      ...(infra.matchedTemplate
+        ? { matched: [{ kind: "template" as const, ...infra.matchedTemplate }] }
+        : {}),
+      ...(infra.degraded ? { infrastructureDegraded: true } : {}),
+    },
+    builtIds,
   };
 }
 
