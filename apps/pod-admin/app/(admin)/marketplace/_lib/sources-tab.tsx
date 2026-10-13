@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Marketplace › Sources — where the Catalog comes from (Pod Console D11).
+ * Marketplace › Sources — where the Catalog comes from.
  *
  * Synap's catalog is built in (it can be turned off, never removed); anything
  * else is a source a pod admin added, with the trust they chose and the key
@@ -23,7 +23,7 @@ import {
   Switch,
   addToast,
 } from "@heroui/react";
-import { Globe, Plus, ShieldCheck } from "lucide-react";
+import { Check, Eye, Globe, Plus, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   ADDABLE_TRUST_LEVELS,
@@ -32,6 +32,9 @@ import {
   type AddableTrust,
 } from "@synap-core/types/marketplace-source";
 import { trpc } from "../../../../lib/trpc";
+import { formatDate, readableError } from "../../../../lib/format";
+import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
+import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { DetailDrawer } from "../../components/detail-drawer";
@@ -82,7 +85,7 @@ export function SourcesTab() {
           !adding ? (
             <Button
               size="sm"
-              radius="sm"
+              radius="md"
               variant="flat"
               startContent={<Plus size={14} />}
               onPress={() => setAdding(true)}
@@ -92,12 +95,12 @@ export function SourcesTab() {
           ) : undefined
         }
       >
-        <div className="-mx-3 divide-y divide-foreground/[0.05]">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {sources.isLoading ? (
             <ResourceRowSkeleton count={2} />
           ) : sources.isError ? (
             <ResourceRowError
-              message={`Couldn't load the sources: ${sources.error.message}`}
+              message="Couldn't load the sources."
               onRetry={() => void sources.refetch()}
             />
           ) : list.length === 0 ? (
@@ -147,11 +150,16 @@ function SourceRow({
 }) {
   const utils = trpc.useUtils();
   const sync = trpc.marketplace.sources.syncNow.useMutation({
-    onSettled: () => void utils.marketplace.sources.list.invalidate(),
+    // A sync can add, change or drop packages — the Catalog reads them too.
+    onSettled: () =>
+      void Promise.all([
+        utils.marketplace.sources.list.invalidate(),
+        utils.marketplace.list.invalidate(),
+      ]),
     onError: (err) =>
       addToast({
         title: "Sync didn't run",
-        description: err.message,
+        description: readableError(err.message) ?? "Try again in a minute.",
         color: "danger",
       }),
   });
@@ -164,7 +172,8 @@ function SourceRow({
     onError: (err) =>
       addToast({
         title: "Couldn't turn it on",
-        description: err.message,
+        description:
+          readableError(err.message) ?? "Nothing changed — try again.",
         color: "danger",
       }),
   });
@@ -227,20 +236,26 @@ function SourceRow({
   );
 }
 
+const TRUST_ICON = {
+  official: ShieldCheck,
+  trusted: Check,
+  showcase: Eye,
+} as const;
+
+/**
+ * How far this pod trusts a source — a neutral fact chip (like the Apps
+ * page's `ViaChip`), never a status colour: "Trusted" is a choice the admin
+ * made, not a health signal.
+ */
 export function TrustChip({ trust }: { trust: MarketSource["trust"] }) {
+  const Icon = TRUST_ICON[trust];
   return (
     <Chip
       size="sm"
       radius="sm"
       variant="flat"
-      color={
-        trust === "official"
-          ? "primary"
-          : trust === "trusted"
-            ? "success"
-            : "default"
-      }
-      className="text-[11px]"
+      className="bg-foreground/[0.05] text-[11px] text-foreground/75 ring-1 ring-inset ring-foreground/10"
+      startContent={<Icon className="ml-1 h-3 w-3" aria-hidden />}
     >
       {trustLabel(trust)}
     </Chip>
@@ -299,7 +314,7 @@ function SourceDrawer({
               variant="light"
               onPress={() => setRemoving(true)}
             >
-              Remove…
+              Remove source
             </Button>
           )
         }
@@ -323,7 +338,7 @@ function SourceDrawer({
               className="w-fit"
               onPress={() => onReviewKey(source)}
             >
-              Review the new key
+              Review new key
             </Button>
           )}
           {source.message && (
@@ -341,8 +356,12 @@ function SourceDrawer({
             >
               {signing.text}
             </dd>
-            <dt className="text-foreground/65">Id</dt>
-            <dd className="font-mono text-[11.5px]">{source.id}</dd>
+            {source.addedAt && (
+              <>
+                <dt className="text-foreground/65">Added</dt>
+                <dd>{formatDate(source.addedAt)}</dd>
+              </>
+            )}
           </dl>
 
           {source.official ? (
@@ -359,7 +378,7 @@ function SourceDrawer({
               </Switch>
               <p className="text-[11.5px] leading-relaxed text-foreground/65">
                 {source.lockedOff
-                  ? "Switched off on this server (SYNAP_CATALOG_SOURCE=off), so it can't be turned on here."
+                  ? "Turned off by whoever runs this server, so it can't be turned on here."
                   : "Built in — it can be turned off, never removed. What you installed from it stays."}
               </p>
             </div>
@@ -411,7 +430,30 @@ function SourceDrawer({
               )}
             </div>
           )}
-          {error && <p className="text-status-down">{error.message}</p>}
+          {error && (
+            <ErrorNote
+              message={
+                readableError(error.message) ??
+                "That change didn't save. Nothing changed — try again."
+              }
+              detail={errorDetail(error)}
+            />
+          )}
+          <AdvancedPanel
+            ids={[
+              { label: "Source id", value: source.id },
+              { label: "Address", value: source.url },
+            ]}
+            explanation={
+              source.lockedOff ? (
+                <>
+                  Turned off with{" "}
+                  <span className="font-mono">SYNAP_CATALOG_SOURCE=off</span> in
+                  the server&apos;s settings.
+                </>
+              ) : undefined
+            }
+          />
         </div>
       </DetailDrawer>
 
@@ -426,9 +468,15 @@ function SourceDrawer({
             forgets its key. What you already installed from it stays, and no
             longer gets updates from it.
             {remove.error && (
-              <span className="mt-2 block text-status-down">
-                {remove.error.message}
-              </span>
+              <div className="mt-3">
+                <ErrorNote
+                  message={
+                    readableError(remove.error.message) ??
+                    "Couldn't remove it. Nothing changed — try again."
+                  }
+                  detail={errorDetail(remove.error)}
+                />
+              </div>
             )}
           </>
         }
@@ -499,7 +547,13 @@ function KeyReviewModal({
             </p>
           </div>
           {approve.error && (
-            <p className="text-status-down">{approve.error.message}</p>
+            <ErrorNote
+              message={
+                readableError(approve.error.message) ??
+                "The new key wasn't trusted. Nothing changed — try again."
+              }
+              detail={errorDetail(approve.error)}
+            />
           )}
         </div>
       }

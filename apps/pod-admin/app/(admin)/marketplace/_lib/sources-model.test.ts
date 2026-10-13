@@ -103,8 +103,21 @@ describe("source rows", () => {
     expect(sourcePill(source())).toBeUndefined();
     expect(sourcePill(source({ state: "key_changed" }))).toEqual({
       kind: "down",
-      label: "Key changed — re-approve",
+      label: "New signing key",
     });
+    // Primary copy stays plain: no "index", "digest" or "fingerprint".
+    for (const state of [
+      "pending",
+      "unreachable",
+      "expired",
+      "invalid",
+      "bad_signature",
+      "key_changed",
+    ] as const) {
+      expect(sourcePill(source({ state }))?.label).not.toMatch(
+        /index|digest|fingerprint/i
+      );
+    }
     expect(sourcePill(source({ state: "unreachable" }))?.kind).toBe("stale");
     expect(sourcePill(source({ state: "bad_signature" }))?.kind).toBe("down");
     expect(sourcePill(source({ enabled: false, state: "off" }))).toEqual({
@@ -128,7 +141,7 @@ describe("source rows", () => {
       signingLine(
         source({ keyFingerprint: null, official: true, trust: "official" })
       ).text
-    ).toMatch(/Control Plane/);
+    ).toBe("Synap's own catalog, checked over a secure connection");
   });
 
   it("offers the one action the source needs most", () => {

@@ -25,7 +25,7 @@ import {
   Switch,
 } from "@heroui/react";
 import { CircleAlert, TriangleAlert } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ADDABLE_TRUST_LEVELS,
   TRUST_CONSEQUENCE,
@@ -33,6 +33,8 @@ import {
   type AddableTrust,
 } from "@synap-core/types/marketplace-source";
 import { trpc } from "../../../../lib/trpc";
+import { readableError } from "../../../../lib/format";
+import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
 import { SectionCard } from "../../components/section-card";
 import { trustLabel } from "./sources-model";
 import type { SourcePreview } from "./types";
@@ -52,6 +54,12 @@ export function AddSourcePanel({
   const [agentsMayPropose, setAgentsMayPropose] = useState(false);
   const inspect = trpc.marketplace.sources.add.useMutation();
   const confirm = trpc.marketplace.sources.confirm.useMutation();
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // The panel opens under the sources list, often below the fold on a phone.
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   async function fetchIndex() {
     setPreview(null);
@@ -95,13 +103,21 @@ export function AddSourcePanel({
 
   return (
     <SectionCard title="Add a source">
-      <div className="flex flex-col gap-5">
+      <div ref={panelRef} className="flex scroll-mt-4 flex-col gap-5">
         {/* ── 1 · Where is it ─────────────────────────────────────── */}
         <Step label="1 · Where is it">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+          {/* A form, so Enter in the address field fetches. */}
+          <form
+            className="flex flex-col gap-2 sm:flex-row sm:items-start"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (address.trim() && !inspect.isPending) void fetchIndex();
+            }}
+          >
             <Input
+              autoFocus
               size="sm"
-              radius="sm"
+              radius="md"
               variant="bordered"
               label="Source address"
               placeholder="https://packages.example.com"
@@ -112,23 +128,28 @@ export function AddSourcePanel({
                 inspect.reset();
               }}
               isInvalid={!!inspect.error}
-              errorMessage={inspect.error?.message}
+              errorMessage={
+                inspect.error
+                  ? (readableError(inspect.error.message) ??
+                    "Couldn't read a source at that address. Check it and try again.")
+                  : undefined
+              }
               className="sm:max-w-md"
               autoComplete="off"
               spellCheck="false"
             />
             <Button
+              type="submit"
               size="sm"
-              radius="sm"
+              radius="md"
               variant="flat"
               className="w-fit sm:mt-1.5"
               isLoading={inspect.isPending}
               isDisabled={!address.trim() || inspect.isPending}
-              onPress={() => void fetchIndex()}
             >
               Fetch
             </Button>
-          </div>
+          </form>
         </Step>
 
         {preview && (
@@ -167,8 +188,7 @@ export function AddSourcePanel({
                       onValueChange={setKeyChecked}
                     >
                       <span className="text-[12.5px] text-foreground">
-                        Trust this key? It matches the fingerprint the publisher
-                        gave me.
+                        This key matches the one the publisher gave me.
                       </span>
                     </Checkbox>
                     <p className="text-[11.5px] leading-relaxed text-foreground/65">
@@ -241,25 +261,35 @@ export function AddSourcePanel({
         </p>
 
         {confirm.error && (
-          <p className="text-[12.5px] text-status-down">
-            {confirm.error.message}
-          </p>
+          <ErrorNote
+            message={
+              readableError(confirm.error.message) ??
+              "The source wasn't added. Nothing changed — try again."
+            }
+            detail={errorDetail(confirm.error)}
+          />
         )}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-foreground/[0.07] pt-3">
           <Button
             size="sm"
-            radius="sm"
+            radius="md"
             color="primary"
             isDisabled={!canAdd}
             isLoading={confirm.isPending}
             onPress={() => void add()}
           >
-            {preview?.signed ? "Trust key and add source" : "Add as showcase"}
+            {/* Neutral until the pod has read the source: before that, nobody
+                knows whether it is signed. */}
+            {!preview
+              ? "Add source"
+              : preview.signed
+                ? "Trust key and add source"
+                : "Add as showcase"}
           </Button>
           <Button
             size="sm"
-            radius="sm"
+            radius="md"
             variant="light"
             isDisabled={confirm.isPending}
             onPress={onCancel}

@@ -1,7 +1,6 @@
 /**
  * Marketplace › Sources — the pure shaping between `marketplace.sources.*`
- * and what the console says (Pod Console D11). No React, so every sentence
- * is tested.
+ * and what the console says. No React, so every sentence is tested.
  *
  * Trust words and their consequences come from ONE place,
  * `@synap-core/types/marketplace-source` — the module the pod's install door
@@ -52,13 +51,13 @@ export function sourcePill(
     case "unreachable":
       return { kind: "stale", label: "Couldn't reach" };
     case "expired":
-      return { kind: "stale", label: "Index expired" };
+      return { kind: "stale", label: "Out of date" };
     case "invalid":
-      return { kind: "down", label: "Index refused" };
+      return { kind: "down", label: "Couldn't be read" };
     case "bad_signature":
       return { kind: "down", label: "Signature doesn't match" };
     case "key_changed":
-      return { kind: "down", label: "Key changed — re-approve" };
+      return { kind: "down", label: "New signing key" };
     case "off":
       return { kind: "unknown", label: "Off" };
   }
@@ -95,7 +94,7 @@ export function signingLine(
   if (source.official) {
     return {
       mono: false,
-      text: "Trusted as this pod's Control Plane address, over TLS",
+      text: "Synap's own catalog, checked over a secure connection",
     };
   }
   return { mono: false, text: "No signing key — listings only" };
