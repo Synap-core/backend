@@ -21,13 +21,10 @@ export function redirectToLoginIfUnauthorized(
 /**
  * Where to come back to — the LIVE url, including its query string.
  *
- * This used to be a hardcoded pathname passed by each caller (`"/audit"`,
- * `"/trust-keys"`…), which threw the query away. That is the whole address on
- * the surfaces this app just built: ⌘K emits
- * `/audit?section=proposals&focus=<id>` and Overview's alerts emit
- * `/trust-keys?section=issuers&focus=<id>`. An expired session on one of those
- * bounced through login and landed on the bare tab with the target gone —
- * silently, and precisely for the deep links the wave exists to make work.
+ * The query is the address on the deep links this app emits: ⌘K and Home's
+ * "Needs you" rows produce e.g. `/review?type=access&focus=<id>` or
+ * `/security?section=issuers&focus=<id>`. Returning to a bare pathname would
+ * drop the target after an expired session bounced through login.
  *
  * `/login`'s `safeReturnTo` keeps the query string (it only refuses what
  * would leave the origin, and `/login` itself), so the receiver needed

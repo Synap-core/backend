@@ -92,7 +92,7 @@ export async function POST(req: Request) {
     return Response.json(
       {
         error:
-          `Pod Admin can't preview or install a ${pkg.category} package yet — ` +
+          `Pod Console can't preview or install a ${pkg.category} package yet — ` +
           "only workspace packages, whose definition this pod can check " +
           "against your data before writing anything.",
         reason: "kind_not_installable_here",

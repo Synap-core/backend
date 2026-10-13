@@ -255,8 +255,8 @@ export function ConnectionRequestReview({
           >
             You&apos;re signed in to the Pod, but only a Pod owner or
             administrator can approve an external application. Ask one to review
-            it from Pod Admin. Keep the requesting app available; it can resume
-            after approval without sharing your Pod credentials.
+            it from Pod Console. Keep the requesting app available; it can
+            resume after approval without sharing your Pod credentials.
           </Alert>
         ) : null}
 

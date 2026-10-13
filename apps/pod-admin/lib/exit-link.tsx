@@ -16,7 +16,7 @@
  * one goes back to hand-rolling it.
  */
 
-import { ExternalLink } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import { DESKTOP_FALLBACK, type Exit } from "./open-in";
 
 /**
@@ -84,7 +84,9 @@ export function ExitLink({ exit, label }: { exit: Exit; label: string }) {
         {/* The icon is a promise about behaviour: it means "this opens away
             from here". pod-admin's own routes (`/proposal/:id`, `/open/:kind/:id`)
             navigate in place, so they must not wear it. */}
-        {leavesThisApp(exit.href) && <ExternalLink size={14} aria-hidden />}
+        {leavesThisApp(exit.href) && (
+          <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden />
+        )}
       </a>
       <ExitFallback exit={exit} />
     </span>

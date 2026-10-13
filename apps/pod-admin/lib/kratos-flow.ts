@@ -201,7 +201,7 @@ export async function createLoginFlow(
   if (res.status === 200) {
     const flow = await readJsonResponse<KratosFlow>(
       res,
-      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Console deployment addresses."
     );
     return { flow };
   }
@@ -227,10 +227,7 @@ export async function createLoginFlow(
 
 /** Every self-service flow kind a `?flow=` id can belong to. */
 export type AnySelfServiceFlowKind =
-  | "login"
-  | "registration"
-  | "recovery"
-  | "settings";
+  "login" | "registration" | "recovery" | "settings";
 
 /**
  * Fetch the flow behind a `?flow=` id. Kratos sends recovery and settings
@@ -292,7 +289,7 @@ export function pageForFlow(
 }
 
 const UNEXPECTED_RESPONSE =
-  "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses.";
+  "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Console deployment addresses.";
 
 /** Fetch a flow of a KNOWN kind (the page already knows which one it renders). */
 export async function fetchFlow(
@@ -311,7 +308,8 @@ export async function fetchFlow(
     /* not JSON */
   }
   throw new FlowLoadError(
-    body.error?.message ?? `This ${kind} link could not be loaded (${res.status})`,
+    body.error?.message ??
+      `This ${kind} link could not be loaded (${res.status})`,
     res.status,
     body.error?.id
   );
@@ -328,9 +326,7 @@ export class FlowLoadError extends Error {
 }
 
 export type CreateFlowResult =
-  | { flow: KratosFlow }
-  | { existingSession: true }
-  | { signInRequired: true };
+  { flow: KratosFlow } | { existingSession: true } | { signInRequired: true };
 
 /**
  * Start a recovery or settings BROWSER flow. Recovery refuses while signed in
@@ -347,7 +343,9 @@ export async function createBrowserFlow(
     headers: { Accept: "application/json" },
   });
   if (res.ok) {
-    return { flow: await readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE) };
+    return {
+      flow: await readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE),
+    };
   }
   let body: { error?: { id?: string; message?: string; reason?: string } } = {};
   try {
@@ -473,7 +471,8 @@ export async function revokeOtherSessions(): Promise<number> {
     credentials: "include",
     headers: { Accept: "application/json" },
   });
-  if (!res.ok) throw new Error(`Could not sign out other devices (${res.status})`);
+  if (!res.ok)
+    throw new Error(`Could not sign out other devices (${res.status})`);
   try {
     const body = (await res.json()) as { count?: number };
     return typeof body.count === "number" ? body.count : 0;

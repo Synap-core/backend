@@ -107,7 +107,7 @@ export function ReceiverShell({
   const host = podHost ?? inherited.podHost;
   const who = identity ?? inherited.identity;
   return (
-    <main className="flex min-h-screen flex-col items-center px-6 py-12 sm:py-16">
+    <main className="flex min-h-screen flex-col items-center px-4 py-12 sm:px-6 sm:py-16">
       <div
         className={`flex w-full flex-col gap-4 ${receiverWidthClass(width)}`}
       >

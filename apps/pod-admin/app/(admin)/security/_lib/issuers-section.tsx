@@ -110,8 +110,8 @@ export function IssuersSection() {
   }, [list.isError, list.error]);
   const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
 
-  // ?focus=<issuerId> from ⌘K or Overview's pending-issuer alert. Receiver
-  // is `data-row-id` on the wrapping div around each IssuerRow.
+  // ?focus=<issuerId> from ⌘K or a Review deep link. Receiver is
+  // `data-row-id` on the wrapping div around each IssuerRow.
   useFocusRow({ ready: !list.isLoading });
 
   const utils = trpc.useUtils();
