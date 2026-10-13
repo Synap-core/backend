@@ -21,6 +21,32 @@ function answer(res: () => Response | Promise<Response>) {
 
 afterEach(() => vi.unstubAllGlobals());
 
+/** The inbound browser request, as Caddy hands it to pod-admin. */
+const CALLER = new Headers({
+  cookie: "c=1",
+  "x-forwarded-for": "198.51.100.7",
+});
+
+describe("every pod call carries the caller", () => {
+  // Without the address the pod keyed every console call as IP "unknown":
+  // one shared rate-limit budget for every operator.
+  it.each([
+    ["checkSession", () => checkSession(CALLER)],
+    ["podAdminRole", () => podAdminRole(CALLER)],
+  ])("%s sends the cookie and the client address", async (_, call) => {
+    const fetchMock = vi.fn(async () => json(ACTIVE));
+    vi.stubGlobal("fetch", fetchMock);
+    await call();
+    const init = (
+      fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    )[1];
+    expect(init.headers).toMatchObject({
+      Cookie: "c=1",
+      "x-forwarded-for": "198.51.100.7",
+    });
+  });
+});
+
 const ACTIVE = {
   id: "s1",
   active: true,
@@ -30,7 +56,7 @@ const ACTIVE = {
 describe("checkSession", () => {
   it("is active with the identity on a live session", async () => {
     answer(() => json(ACTIVE));
-    expect(await checkSession("c=1")).toEqual({
+    expect(await checkSession(CALLER)).toEqual({
       state: "active",
       identity: { id: "u1", email: "a@b.c", name: "Ada" },
     });
@@ -38,19 +64,19 @@ describe("checkSession", () => {
 
   it.each([401, 403])("is none when Kratos answers %i", async (status) => {
     answer(() => json({ error: { code: status } }, status));
-    expect(await checkSession("c=1")).toEqual({ state: "none" });
+    expect(await checkSession(CALLER)).toEqual({ state: "none" });
   });
 
   it("is none for an inactive session", async () => {
     answer(() => json({ ...ACTIVE, active: false }));
-    expect(await checkSession("c=1")).toEqual({ state: "none" });
+    expect(await checkSession(CALLER)).toEqual({ state: "none" });
   });
 
   it.each([429, 500, 502, 503])(
     "is unavailable — never none — when the pod answers %i",
     async (status) => {
       answer(() => json({ error: "Rate limit exceeded" }, status));
-      expect(await checkSession("c=1")).toEqual({
+      expect(await checkSession(CALLER)).toEqual({
         state: "unavailable",
         status,
       });
@@ -59,7 +85,7 @@ describe("checkSession", () => {
 
   it("is unavailable when the pod is unreachable", async () => {
     answer(() => Promise.reject(new TypeError("fetch failed")));
-    expect(await checkSession("c=1")).toEqual({
+    expect(await checkSession(CALLER)).toEqual({
       state: "unavailable",
       status: null,
     });
@@ -69,14 +95,14 @@ describe("checkSession", () => {
 describe("podAdminRole", () => {
   it("maps 200 to admin and 403 to member", async () => {
     answer(() => json({}));
-    expect(await podAdminRole("c=1")).toBe("admin");
+    expect(await podAdminRole(CALLER)).toBe("admin");
     answer(() => json({}, 403));
-    expect(await podAdminRole("c=1")).toBe("member");
+    expect(await podAdminRole(CALLER)).toBe("member");
   });
 
   it("is unavailable on a 429, so an admin is not sent to /forbidden", async () => {
     answer(() => json({}, 429));
-    expect(await podAdminRole("c=1")).toBe("unavailable");
+    expect(await podAdminRole(CALLER)).toBe("unavailable");
   });
 });
 

@@ -58,7 +58,6 @@ export const config = {
 };
 
 export async function proxy(req: NextRequest) {
-  const cookie = req.headers.get("cookie") ?? "";
   const currentUrl = req.nextUrl.pathname + req.nextUrl.search;
   const path = req.nextUrl.pathname;
 
@@ -86,7 +85,7 @@ export async function proxy(req: NextRequest) {
   }
 
   // ── 1. Kratos session ─────────────────────────────────────────────
-  const session = await checkSession(cookie);
+  const session = await checkSession(req.headers);
   if (session.state === "unavailable") return podUnavailable();
   if (session.state === "none") {
     const loginUrl = new URL(
@@ -104,7 +103,7 @@ export async function proxy(req: NextRequest) {
   // renders depends on it. Everything else is pod_admin or /forbidden.
   let role: ConsoleRole | null = null;
   if (isMemberConsolePath(path) || !isSelfService(path)) {
-    const answer = await podAdminRole(cookie);
+    const answer = await podAdminRole(req.headers);
     if (answer === "unavailable") return podUnavailable();
     if (answer === "member" && !isMemberConsolePath(path)) {
       return NextResponse.redirect(new URL("/forbidden", req.url));

@@ -1,6 +1,6 @@
 /**
  * Forwards one call to the pod's REST `/api/pod-updates/*` with the caller's
- * cookie. REST rather than tRPC because that is the door the pod exposes for
+ * cookie and address (`podCallerHeaders`). REST rather than tRPC because that is the door the pod exposes for
  * updates (`apps/api/src/routers/pod-updates.ts`); the pod re-checks the
  * session and, for a write, the pod_admin role — this only relays.
  *
@@ -10,6 +10,7 @@
  */
 
 import { whoamiFromCookie } from "../../../lib/kratos";
+import { podCallerHeaders } from "../../../lib/pod-caller-headers";
 
 const INTERNAL_POD_URL = (
   process.env.POD_URL ?? "http://localhost:4000"
@@ -20,8 +21,7 @@ export async function forwardToPod(
   path: string,
   write?: { body: unknown }
 ): Promise<Response> {
-  const cookie = req.headers.get("cookie") ?? "";
-  if (!(await whoamiFromCookie(cookie))) {
+  if (!(await whoamiFromCookie(req.headers))) {
     return Response.json({ error: "Not signed in" }, { status: 401 });
   }
   let res: Response;
@@ -30,7 +30,7 @@ export async function forwardToPod(
       method: write ? "PUT" : "GET",
       headers: {
         Accept: "application/json",
-        Cookie: cookie,
+        ...podCallerHeaders(req.headers),
         ...(write ? { "Content-Type": "application/json" } : {}),
       },
       body: write ? JSON.stringify(write.body) : undefined,

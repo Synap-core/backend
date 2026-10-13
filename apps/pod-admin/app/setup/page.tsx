@@ -8,7 +8,9 @@
  * Renders <SetupForm /> when setup is still required.
  */
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { forwardedHeaders } from "../../lib/pod-caller-headers";
 import { SetupForm } from "./SetupForm";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +26,7 @@ async function fetchSetupStatus(): Promise<SetupStatus | null> {
   try {
     const res = await fetch(
       `${INTERNAL_POD_URL.replace(/\/$/, "")}/api/hub/setup/status`,
-      { cache: "no-store" }
+      { cache: "no-store", headers: forwardedHeaders(await headers()) }
     );
     if (!res.ok) return null;
     return (await res.json()) as SetupStatus;

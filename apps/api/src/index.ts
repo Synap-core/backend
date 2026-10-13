@@ -268,7 +268,9 @@ app.use("*", podEdgeCorsMiddleware);
 
 // Security Middleware
 app.use("*", requestSizeLimit); // Max 10MB requests
-app.use("*", rateLimitMiddleware); // multi-class: free/import/ai/crud; Bearer-hash or IP
+// Mounted on "*" BEFORE every route, so tRPC and the backend's own
+// /.ory/kratos/public/* proxy (pod-admin's whoami) are keyed alike.
+app.use("*", rateLimitMiddleware); // multi-class; Bearer, session or IP keyed
 app.use("*", secureHeaders()); // Hono built-in security headers
 
 // 5xx egress sanitizer — registered as the OUTERMOST response-shaping

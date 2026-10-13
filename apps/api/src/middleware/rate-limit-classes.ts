@@ -353,13 +353,17 @@ export function buildPublicDoorKey(
 }
 
 /**
- * Stable SHA-256 prefix of a bearer token. Never log the raw token.
- */
-/**
  * The client IP every pod-edge limiter keys on. Caddy and Traefik (without
  * trusted upstreams) replace an incoming X-Forwarded-For with the peer they
  * saw, so its first entry is the connecting client — or the CDN edge when one
  * fronts the pod.
+ *
+ * TRUST: the header is believed as-is, which is only sound because the
+ * backend publishes no port (deploy/docker-compose.yml) — every caller is
+ * Caddy or a service on the compose network. Pod-admin is one such service:
+ * it relays the X-Forwarded-For Caddy set on the browser's request
+ * (apps/pod-admin/lib/pod-caller-headers.ts), so its server-side calls are
+ * keyed by the real client rather than "unknown".
  */
 export function clientIp(c: {
   req: { header(name: string): string | undefined };
@@ -371,14 +375,39 @@ export function clientIp(c: {
   );
 }
 
+/**
+ * Stable SHA-256 prefix of a bearer token. Never log the raw token.
+ */
 export function hashBearerToken(token: string): string {
   return createHash("sha256").update(token).digest("hex").slice(0, 32);
 }
 
 /**
- * Key by API-key material when Authorization: Bearer is present (hashed),
- * else by client IP. Class-prefixed so budgets are independent.
+ * The Kratos browser-session cookie. Kratos's default name: the pod's
+ * kratos.yml (install.sh) sets only `session.cookie.domain`/`same_site`, and
+ * every auth path in the pod reads this same literal.
  */
+export const KRATOS_SESSION_COOKIE = "ory_kratos_session";
+
+/**
+ * The `ory_kratos_session` value from a raw Cookie header, or null. Lenient on
+ * purpose — a malformed header (no `=`, stray `;`, empty value) just yields no
+ * session and the request falls back to the IP key; it never throws on the
+ * limiter's hot path. The value is only ever hashed, never logged.
+ */
+export function kratosSessionFromCookieHeader(
+  cookieHeader: string | undefined
+): string | null {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0 || part.slice(0, eq).trim() !== KRATOS_SESSION_COOKIE) continue;
+    const value = part.slice(eq + 1).trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
 /** Path token from `/calendar/feed/{token}.ics` — hashed, never logged raw. */
 export function calendarFeedTokenFromPath(path: string): string | null {
   const p = path.split(/[?#]/, 1)[0] || "/";
@@ -386,11 +415,30 @@ export function calendarFeedTokenFromPath(path: string): string | null {
   return m?.[1] ?? null;
 }
 
+/**
+ * The bucket a request spends from. Class-prefixed so budgets are independent.
+ * First match wins:
+ *
+ *   1. calendar feed — the hashed path token;
+ *   2. `Authorization: Bearer` with real key material — the hashed key;
+ *   3. a Kratos session cookie — the hashed session, so each signed-in person
+ *      has their own budget whatever address they arrive from. Pod-admin's
+ *      gate checks and API routes reach `backend:4000` server-side; keyed by
+ *      IP alone they all shared ONE `<class>:ip:unknown` budget, and one busy
+ *      console drained everyone's;
+ *   4. the client IP (anonymous callers).
+ *
+ * Like the Bearer key, the cookie is not validated here (the limiter runs
+ * before auth), so a caller inventing values buys a bucket per value — the
+ * exposure an invented Bearer already has. The same length floor keeps
+ * trivial values in the IP bucket.
+ */
 export function buildRateLimitKey(
   className: RateLimitClass | string,
   authHeader: string | undefined,
   ip: string,
-  path?: string
+  path?: string,
+  cookieHeader?: string
 ): string {
   if (className === "calendar_feed" && path) {
     const token = calendarFeedTokenFromPath(path);
@@ -404,6 +452,10 @@ export function buildRateLimitKey(
     if (token.length > 0) {
       return `${className}:key:${hashBearerToken(token)}`;
     }
+  }
+  const session = kratosSessionFromCookieHeader(cookieHeader);
+  if (session && session.length >= 20) {
+    return `${className}:session:${hashBearerToken(session)}`;
   }
   return `${className}:ip:${ip}`;
 }

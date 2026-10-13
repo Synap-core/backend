@@ -26,11 +26,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const sp = await searchParams;
   const returnTo = safeReturnTo(sp.return);
 
-  const cookie = (await headers()).get("cookie") ?? "";
   // `?refresh=1`: a signed-in user re-confirms it's them (settings needs a
   // sign-in inside Kratos' privileged window) — do not bounce them on.
   const refresh = sp.refresh === "1";
-  const session = await checkSession(cookie);
+  const session = await checkSession(await headers());
   if (session.state === "active" && !refresh) {
     redirect(returnTo);
   }

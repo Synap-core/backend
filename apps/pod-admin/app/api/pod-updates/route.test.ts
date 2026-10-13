@@ -25,7 +25,7 @@ const pod = (status: number, body: unknown) =>
 const get = () =>
   GET(
     new Request("http://pod-admin.test/api/pod-updates", {
-      headers: { cookie: "s=1" },
+      headers: { cookie: "s=1", "x-forwarded-for": "198.51.100.7" },
     })
   );
 
@@ -39,7 +39,7 @@ const put = (body: unknown) =>
   );
 
 describe("GET /api/pod-updates", () => {
-  it("forwards the cookie and relays the pod's answer", async () => {
+  it("forwards the cookie and client address, and relays the pod's answer", async () => {
     fetchMock.mockResolvedValue(pod(200, { canEdit: true }));
     const res = await get();
     expect(res.status).toBe(200);
@@ -47,6 +47,7 @@ describe("GET /api/pod-updates", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toMatch(/\/api\/pod-updates$/);
     expect(init.headers.Cookie).toBe("s=1");
+    expect(init.headers["x-forwarded-for"]).toBe("198.51.100.7");
   });
 
   it("does not call the pod without a session", async () => {

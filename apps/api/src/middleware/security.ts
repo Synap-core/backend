@@ -32,7 +32,8 @@ export {
 } from "./rate-limit-classes.js";
 
 /**
- * Shared key-generator: class + Bearer-hash (or IP), with dev/localhost bypasses.
+ * Shared key-generator: class + Bearer hash, Kratos session hash or IP
+ * (`buildRateLimitKey`), with dev/localhost bypasses.
  * Bypass keys are unique so they never collide with a shared bucket.
  */
 function classKeyGenerator(className: RateLimitClass) {
@@ -60,7 +61,8 @@ function classKeyGenerator(className: RateLimitClass) {
       className,
       c.req.header("Authorization"),
       ip,
-      c.req.path
+      c.req.path,
+      c.req.header("Cookie")
     );
   };
 }
@@ -308,7 +310,7 @@ const keyStateRateLimiter = rateLimiter({
 /**
  * Multi-class pod-edge rate limiting.
  *
- * Classifies by path, keys by Bearer token hash (or IP), and applies
+ * Classifies by path, keys by Bearer hash, Kratos session hash or IP, and applies
  * per-class windows/limits. Health/metrics are skipped (unlimited).
  */
 export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {

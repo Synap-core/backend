@@ -34,8 +34,7 @@ interface AppRow {
 }
 
 export async function GET(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  const identity = await whoamiFromCookie(cookie);
+  const identity = await whoamiFromCookie(req.headers);
   if (!identity) {
     return Response.json({ error: "Not signed in" }, { status: 401 });
   }
@@ -44,7 +43,11 @@ export async function GET(req: Request) {
   // that is not the caller's returns NOT_FOUND rather than someone else's app.
   const publicId = new URL(req.url).searchParams.get("publicId");
   if (publicId) {
-    const one = await callPodQuery<AppRow>("apps.get", { publicId }, cookie);
+    const one = await callPodQuery<AppRow>(
+      "apps.get",
+      { publicId },
+      req.headers
+    );
     if (!one.ok) {
       return Response.json({ error: one.message }, { status: one.status });
     }
@@ -56,7 +59,7 @@ export async function GET(req: Request) {
   const res = await callPodQuery<AppRow[]>(
     "apps.list",
     { includeRevoked: true },
-    cookie
+    req.headers
   );
   if (!res.ok) {
     return Response.json({ error: res.message }, { status: res.status });
@@ -65,8 +68,7 @@ export async function GET(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  const identity = await whoamiFromCookie(cookie);
+  const identity = await whoamiFromCookie(req.headers);
   if (!identity) {
     return Response.json({ error: "Not signed in" }, { status: 401 });
   }
@@ -88,7 +90,7 @@ export async function DELETE(req: Request) {
   const res = await callPodMutation<{ revoked?: boolean; removed?: boolean }>(
     END_PROCEDURE[action],
     { publicId },
-    cookie
+    req.headers
   );
   if (!res.ok) {
     return Response.json({ error: res.message }, { status: res.status });

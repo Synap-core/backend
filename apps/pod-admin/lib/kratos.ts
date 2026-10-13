@@ -9,6 +9,8 @@
  * the login form).
  */
 
+import { podCallerHeaders } from "./pod-caller-headers";
+
 // Server-side URL: this Next.js process to the backend. Reads POD_URL first
 // (set to `http://backend:4000` in compose), falls back to the public URL
 // when running locally outside docker.
@@ -37,14 +39,11 @@ export interface KratosWhoamiResponse {
  *                     an inactive one). Only this answer may send someone to
  *                     /login.
  *   • `unavailable` — the pod did not answer the question: unreachable, 5xx,
- *                     or 429 from the pod-edge rate limiter. Every server-side
- *                     call this process makes reaches `backend:4000` without
- *                     an `X-Forwarded-For`, so they all share ONE
- *                     `crud:ip:unknown` bucket (apps/api rate-limit-classes)
- *                     and a burst of page prefetches can drain it. Reading
- *                     that 429 as "signed out" bounced a signed-in operator to
- *                     /login, where the browser's own Kratos call then refused
- *                     a new login flow (`session_already_available`).
+ *                     or 429 from the pod-edge rate limiter (budgeted per
+ *                     session or client, see `pod-caller-headers.ts`). Reading
+ *                     a 429 as "signed out" once bounced a signed-in operator
+ *                     to /login, where the browser's own Kratos call then
+ *                     refused a new login flow (`session_already_available`).
  */
 export type SessionCheck =
   | { state: "active"; identity: KratosIdentity }
@@ -52,22 +51,18 @@ export type SessionCheck =
   | { state: "unavailable"; status: number | null };
 
 /**
- * Check the inbound cookie against
- * `${POD_URL}/.ory/kratos/public/sessions/whoami`.
+ * Check the inbound request's cookie against
+ * `${POD_URL}/.ory/kratos/public/sessions/whoami`. Takes the inbound HEADERS,
+ * not just the cookie, so the call also carries the client's address.
  */
-export async function checkSession(
-  cookieHeader: string
-): Promise<SessionCheck> {
+export async function checkSession(incoming: Headers): Promise<SessionCheck> {
   const url = `${INTERNAL_POD_URL.replace(/\/$/, "")}/.ory/kratos/public/sessions/whoami`;
 
   let res: Response;
   try {
     res = await fetch(url, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-        Cookie: cookieHeader,
-      },
+      headers: { Accept: "application/json", ...podCallerHeaders(incoming) },
       cache: "no-store",
     });
   } catch {
@@ -102,9 +97,9 @@ export async function checkSession(
  * apart.
  */
 export async function whoamiFromCookie(
-  cookieHeader: string
+  incoming: Headers
 ): Promise<KratosIdentity | null> {
-  const check = await checkSession(cookieHeader);
+  const check = await checkSession(incoming);
   return check.state === "active" ? check.identity : null;
 }
 
@@ -114,7 +109,7 @@ export async function whoamiFromCookie(
  * "sign in again" from "try again" and never confuse the two.
  */
 export async function apiSessionDenial(req: Request): Promise<Response | null> {
-  const check = await checkSession(req.headers.get("cookie") ?? "");
+  const check = await checkSession(req.headers);
   if (check.state === "active") return null;
   return check.state === "none"
     ? Response.json({ error: "Not signed in" }, { status: 401 })
@@ -134,7 +129,7 @@ export async function apiSessionDenial(req: Request): Promise<Response | null> {
  * send an admin to /forbidden or shrink their nav.
  */
 export async function podAdminRole(
-  cookieHeader: string
+  incoming: Headers
 ): Promise<"admin" | "member" | "unavailable"> {
   // Use the non-batched single-call form for simplicity. The tRPC HTTP
   // contract supports both — see https://trpc.io/docs/client/links/httpLink.
@@ -144,10 +139,7 @@ export async function podAdminRole(
   try {
     res = await fetch(url, {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-        Cookie: cookieHeader,
-      },
+      headers: { Accept: "application/json", ...podCallerHeaders(incoming) },
       cache: "no-store",
     });
   } catch {

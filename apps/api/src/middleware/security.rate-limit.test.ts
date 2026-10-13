@@ -5,6 +5,7 @@ import {
   classifyRateLimitPath,
   getRateLimitClassConfig,
   hashBearerToken,
+  kratosSessionFromCookieHeader,
   type RateLimitClass,
 } from "./rate-limit-classes.js";
 
@@ -154,6 +155,85 @@ describe("buildRateLimitKey", () => {
     expect(key.startsWith("calendar_feed:token:")).toBe(true);
     expect(key).not.toContain("secret-token-value");
     expect(key).not.toContain(ip);
+  });
+
+  describe("Kratos session cookie", () => {
+    const session = "MTc2MDM0NTY3OHxkZXZpY2Utc2Vzc2lvbi1ibG9i";
+    const cookie = `csrf_token_abc=xyz; ory_kratos_session=${session}; theme=dark`;
+
+    it("keys by the hashed session when no Bearer is present", () => {
+      const key = buildRateLimitKey("crud", undefined, ip, "/trpc/x", cookie);
+      expect(key).toBe(`crud:session:${hashBearerToken(session)}`);
+      expect(key).not.toContain(session);
+      expect(key).not.toContain(ip);
+    });
+
+    it("gives two people behind one address two budgets", () => {
+      const other = "ory_kratos_session=another-session-value-0123456789";
+      expect(
+        buildRateLimitKey("crud", undefined, "unknown", "/", cookie)
+      ).not.toBe(buildRateLimitKey("crud", undefined, "unknown", "/", other));
+    });
+
+    it("keys by IP when the session cookie is absent", () => {
+      expect(
+        buildRateLimitKey("crud", undefined, ip, "/", "theme=dark; csrf=1")
+      ).toBe(`crud:ip:${ip}`);
+      expect(buildRateLimitKey("crud", undefined, ip, "/", undefined)).toBe(
+        `crud:ip:${ip}`
+      );
+    });
+
+    it("lets a real Bearer win over the cookie", () => {
+      const token = "synap_live_abcdefghijklmnop";
+      expect(
+        buildRateLimitKey("crud", `Bearer ${token}`, ip, "/", cookie)
+      ).toBe(`crud:key:${hashBearerToken(token)}`);
+    });
+
+    it("falls to the cookie when the Bearer is too short to be a key", () => {
+      expect(buildRateLimitKey("crud", "Bearer x", ip, "/", cookie)).toBe(
+        `crud:session:${hashBearerToken(session)}`
+      );
+    });
+
+    it("falls back to IP on a malformed or trivial cookie header", () => {
+      for (const bad of [
+        "ory_kratos_session",
+        "ory_kratos_session=",
+        "ory_kratos_session=  ; x=1",
+        ";;=;",
+        "ory_kratos_session=short",
+        "not_ory_kratos_session=MTc2MDM0NTY3OHxkZXZpY2U",
+      ]) {
+        expect(buildRateLimitKey("crud", undefined, ip, "/", bad)).toBe(
+          `crud:ip:${ip}`
+        );
+      }
+    });
+
+    it("keeps the calendar feed on its path token", () => {
+      const path = "/api/hub/calendar/feed/secret-token-value.ics";
+      expect(
+        buildRateLimitKey("calendar_feed", undefined, ip, path, cookie)
+      ).toMatch(/^calendar_feed:token:/);
+    });
+  });
+});
+
+describe("kratosSessionFromCookieHeader", () => {
+  it("reads the first ory_kratos_session value, trimmed", () => {
+    expect(
+      kratosSessionFromCookieHeader(
+        " a=1 ;ory_kratos_session= v1 ; ory_kratos_session=v2"
+      )
+    ).toBe("v1");
+  });
+
+  it("answers null for missing or empty values", () => {
+    expect(kratosSessionFromCookieHeader(undefined)).toBeNull();
+    expect(kratosSessionFromCookieHeader("")).toBeNull();
+    expect(kratosSessionFromCookieHeader("ory_kratos_session=")).toBeNull();
   });
 });
 

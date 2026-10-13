@@ -38,8 +38,7 @@ export const dynamic = "force-dynamic";
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export async function POST(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  const identity = await whoamiFromCookie(cookie);
+  const identity = await whoamiFromCookie(req.headers);
   if (!identity) {
     return Response.json({ error: "Not signed in" }, { status: 401 });
   }
@@ -109,7 +108,7 @@ export async function POST(req: Request) {
     const result = await callPodMutation<unknown>(
       "workspaces.preflightFromDefinition",
       { definition },
-      cookie
+      req.headers
     );
     if (!result.ok) {
       return Response.json(
@@ -130,7 +129,7 @@ export async function POST(req: Request) {
       packageSlug: pkg.slug,
       packageVersion: pkg.version,
     },
-    cookie
+    req.headers
   );
   if (!result.ok) {
     return Response.json(
