@@ -300,6 +300,10 @@
     "./attention-order": {
       "types": "./dist/attention-order.d.ts",
       "import": "./dist/attention-order.js"
+    },
+    "./proposals/deferred-writes": {
+      "types": "./dist/proposals/deferred-writes.d.ts",
+      "import": "./dist/proposals/deferred-writes.js"
     }
   },
   "scripts": {

@@ -979,11 +979,12 @@ async function materializeCell(
  * (PRODUCT DECISION "agent asks to join").
  *
  * The proposal was filed by `checkPermissionOrPropose` when an agent actor was
- * not a member of the workspace; on approval the proposals router emits
- * `workspace.join.validated`, which the materialization hook routes here. This
- * inserts the `workspace_members` row idempotently (onConflictDoNothing), so a
- * pg-boss retry — or an agent that already gained membership another way — is a
- * no-op rather than a duplicate/error.
+ * not a member of the workspace; on approval the `workspace/join` executor
+ * inserts the membership itself (synchronously, so deferred writes can replay)
+ * and emits `workspace.join.validated`, which the materialization hook routes
+ * here. This inserts the `workspace_members` row idempotently
+ * (onConflictDoNothing), so it finds the executor's row and is a no-op — as is
+ * a pg-boss retry, or an agent that gained membership another way.
  *
  * subjectId is the workspaceId (the proposal's targetId). The agent to add comes
  * from `data.agentUserId`; the role from `data.role` (default editor).
@@ -1268,7 +1269,9 @@ async function materializeWorkspace(
 
   const role = (data.role as string) || "editor";
 
-  // Idempotency: skip if the agent is already a member.
+  // Idempotency: skip if the agent is already a member. Since #6 this is the
+  // NORMAL path — the `workspace/join` executor inserts the row in the approval
+  // transaction; this worker is the backstop for any other route here.
   const existing = await sharedDb.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, targetWorkspaceId),
@@ -1277,7 +1280,7 @@ async function materializeWorkspace(
     columns: { id: true },
   });
   if (existing) {
-    logger.warn(
+    logger.info(
       { targetWorkspaceId, agentUserId },
       "Agent already a workspace member, skipping join materialization"
     );

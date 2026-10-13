@@ -2,11 +2,15 @@ import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  drizzleSql,
   proposals,
   eq,
   getWorkspaceMembership,
+  users,
+  workspaceMembers,
   workspaces,
 } from "@synap/database";
+import { readDeferredWrites } from "@synap-core/types/proposals/deferred-writes";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../../utils/audit-log.js";
@@ -368,6 +372,38 @@ export function registerWorkspaceExecutors(): void {
         }
       }
 
+      const agentUserId =
+        proposal.agentUserId ??
+        (typeof joinData.agentUserId === "string"
+          ? joinData.agentUserId
+          : null);
+      const role =
+        joinData.role === "owner" ||
+        joinData.role === "editor" ||
+        joinData.role === "viewer"
+          ? joinData.role
+          : "editor";
+      // Defence-in-depth, the materializer's rule: a join only ever makes an
+      // AGENT user row a member.
+      const [agentRow] = agentUserId
+        ? await db
+            .select({ userType: users.userType })
+            .from(users)
+            .where(eq(users.id, agentUserId))
+        : [];
+      if (
+        !targetWorkspaceId ||
+        !agentUserId ||
+        agentRow?.userType !== "agent"
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This join request names no agent to add (or its requester is not " +
+            "an agent), so no membership can be granted — reject it.",
+        });
+      }
+
       const validatedEvent = await auditLog({
         subjectType: "workspace",
         action: "join",
@@ -392,21 +428,37 @@ export function registerWorkspaceExecutors(): void {
         source: "api",
       });
 
-      const joinUpdatedData = {
-        ...joinData,
-        ...(validatedEvent ? { validatedEventId: validatedEvent.id } : {}),
-      };
-
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          data: joinUpdatedData,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+      // MEMBERSHIP IS SYNCHRONOUS (#6): the row lands in the SAME transaction
+      // as the APPROVED flip, so the moment the join reads approved the agent
+      // IS a member — the deferred writes below replay against it. The
+      // materializer still receives `workspace.join.validated` and finds the
+      // row already there (its existing idempotent skip); it is the backstop
+      // for any other route into that insert, no longer the writer.
+      const { rows: inserted, approved } = await db.transaction(async (tx) => {
+        const rows = await tx
+          .insert(workspaceMembers)
+          .values({ workspaceId: targetWorkspaceId, userId: agentUserId, role })
+          .onConflictDoNothing()
+          .returning({ id: workspaceMembers.id });
+        const [approved] = await tx
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            // MERGED into the row, never the copy read above: a write kept
+            // (or an item the reviewer dropped) since then must survive.
+            ...(validatedEvent
+              ? {
+                  data: drizzleSql`coalesce(${proposals.data}, '{}'::jsonb) || jsonb_build_object('validatedEventId', ${validatedEvent.id}::text)`,
+                }
+              : {}),
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId))
+          .returning({ data: proposals.data });
+        return { rows, approved };
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -417,7 +469,32 @@ export function registerWorkspaceExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+
+      // Replay the writes the agent made while it waited, AS THE AGENT, each
+      // through its own door — the ladder decides each one again (access was
+      // approved here, content was not). Outcomes land on the join row.
+      // Read from the row as approved: a write kept after this executor read
+      // the proposal is in it too.
+      if (readDeferredWrites(approved?.data).writes.length > 0) {
+        const { replayDeferredWrites } =
+          await import("../../../services/governance/deferred-writes.js");
+        await replayDeferredWrites({
+          proposalId: input.proposalId,
+          workspaceId: targetWorkspaceId,
+        });
+      }
+
+      return {
+        success: true,
+        // The storage engine's own answer: 1 = the agent became a member now,
+        // 0 = it already was (the conflict was the row).
+        effect: {
+          applied: "verified",
+          rows: inserted.length,
+          ids: inserted.map((r) => r.id),
+          subject: "workspace_members",
+        },
+      };
     },
   });
 
