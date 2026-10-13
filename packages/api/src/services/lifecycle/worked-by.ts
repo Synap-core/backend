@@ -25,6 +25,7 @@ import {
   and,
   desc,
   inArray,
+  isNotNull,
   drizzleSql,
   focusSessions,
   links,
@@ -48,16 +49,48 @@ export interface WorkedBy {
   live: boolean;
 }
 
-export async function loadWorkedBy(
+/**
+ * ONE open session ON a thing — a row of the predicate above, with its
+ * liveness resolved. `thingId` is the entity it is on (its subject, or a
+ * worker's target). A session on several things appears once per thing.
+ */
+export interface OpenWorkRow {
+  thingId: string;
+  sessionId: string;
+  status: string;
+  title: string | null;
+  goal: string | null;
+  agentIds: string[];
+  expectedOutputs: unknown;
+  /** The session's `metadata.automationId` — set on every worker session. */
+  automationId: string | null;
+  startedAt: Date;
+  updatedAt: Date;
+  /** Working RIGHT NOW (`isSessionWorkingNow`). */
+  live: boolean;
+}
+
+/**
+ * The open work on things, per thing (most recently moved first): over
+ * `entityIds`, or — `null` — over EVERY thing the reader has open work on
+ * (the homes' "being worked" and "Moving now" reads; bounded by the reader's
+ * open sessions, never by the number of things). Floored by
+ * `sessionReadableWhere`; a failed liveness read THROWS.
+ */
+export async function loadOpenWork(
   reader: { userId: string; roster: boolean },
-  entityIds: readonly string[]
-): Promise<Map<string, WorkedBy[]>> {
-  const out = new Map<string, WorkedBy[]>();
-  const ids = [...new Set(entityIds)];
-  if (ids.length === 0) return out;
+  entityIds: readonly string[] | null
+): Promise<Map<string, OpenWorkRow[]>> {
+  const out = new Map<string, OpenWorkRow[]>();
+  const ids = entityIds === null ? null : [...new Set(entityIds)];
+  if (ids !== null && ids.length === 0) return out;
 
   const cols = {
     id: focusSessions.id,
+    status: focusSessions.status,
+    title: focusSessions.title,
+    goal: focusSessions.goal,
+    agentIds: focusSessions.agentIds,
     channelId: focusSessions.channelId,
     expectedOutputs: focusSessions.expectedOutputs,
     startedAt: focusSessions.startedAt,
@@ -77,7 +110,9 @@ export async function loadWorkedBy(
       .where(
         and(
           floor,
-          inArray(focusSessions.subjectEntityId, ids),
+          ids === null
+            ? isNotNull(focusSessions.subjectEntityId)
+            : inArray(focusSessions.subjectEntityId, ids),
           inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
         )
       )
@@ -98,7 +133,7 @@ export async function loadWorkedBy(
           drizzleSql`${links.linkType} = 'targets'`,
           drizzleSql`${links.metadata}->>'role' = ${WORKER_TARGET_LINK_ROLE}`,
           drizzleSql`${links.metadata}->>'result' IS NULL`,
-          inArray(links.toId, ids),
+          ...(ids === null ? [] : [inArray(links.toId, ids)]),
           inArray(focusSessions.status, [...WORKER_IN_FLIGHT_SESSION_STATUSES])
         )
       )
@@ -122,12 +157,41 @@ export async function loadWorkedBy(
     m.set(r.id, r);
   }
   for (const [thingId, m] of perThing) {
-    const marks = [...m.values()]
+    out.set(
+      thingId,
+      [...m.values()]
+        .map((r) => ({
+          thingId,
+          sessionId: r.id,
+          status: r.status as string,
+          title: r.title ?? null,
+          goal: r.goal ?? null,
+          agentIds: r.agentIds ?? [],
+          expectedOutputs: r.expectedOutputs,
+          automationId: r.automationId ?? null,
+          startedAt: new Date(r.startedAt),
+          updatedAt: new Date(r.updatedAt),
+          live: isSessionWorkingNow(live.get(r.id), now),
+        }))
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    );
+  }
+  return out;
+}
+
+export async function loadWorkedBy(
+  reader: { userId: string; roster: boolean },
+  entityIds: readonly string[]
+): Promise<Map<string, WorkedBy[]>> {
+  const out = new Map<string, WorkedBy[]>();
+  const work = await loadOpenWork(reader, entityIds);
+  for (const [thingId, rows] of work) {
+    const marks = rows
       .map((r) => ({
-        sessionId: r.id,
+        sessionId: r.sessionId,
         kind: r.automationId ? ("worker" as const) : ("session" as const),
-        live: isSessionWorkingNow(live.get(r.id), now),
-        at: new Date(r.updatedAt).getTime(),
+        live: r.live,
+        at: r.updatedAt.getTime(),
       }))
       .sort((a, b) => Number(b.live) - Number(a.live) || b.at - a.at)
       .slice(0, WORKED_BY_CAP)

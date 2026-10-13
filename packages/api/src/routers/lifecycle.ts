@@ -25,20 +25,20 @@ import {
   db,
   inArray,
   declaredLifecycleProfilesStatement,
-  ProfileResolutionService,
-  type EffectiveLifecycle,
 } from "@synap/database";
 import { profiles } from "@synap/database/schema";
 import {
   LIFECYCLE_CATEGORIES,
   isTerminalLifecycleCategory,
   type LifecycleOption,
-  lifecycleOptionLabel,
-  lifecycleOptionTone,
   UNCLASSIFIED_STATUS,
 } from "@synap-core/types/lifecycle";
-import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
-import { getTrack } from "../services/tracks/tracks-service.js";
+import {
+  resolveBoardLens,
+  resolveProfileLifecycle,
+  toLifecycleWire,
+} from "../services/lifecycle/board-lens.js";
+import { readHome, readMoving } from "../services/lifecycle/homes.js";
 import { listEnabledWorkers } from "../services/playbooks/workers.js";
 import { loadWorkedBy } from "../services/lifecycle/worked-by.js";
 import { loadCardFaces } from "../services/lifecycle/card-face.js";
@@ -51,7 +51,6 @@ import {
   kindVisibilityConditions,
   pageThingsInColumn,
   roleVisibilityConditions,
-  statusSubjectOfRows,
 } from "./entities/status-groups.js";
 
 /** W17: below this many LIVE things a pipeline defaults to a list. */
@@ -175,7 +174,101 @@ const lifecycleSummaryWire = z.object({
   total: z.number(),
 });
 
+/** A (space, produced kind) on a home — `services/lifecycle/homes.ts`. */
+const producedKindWire = z.object({
+  profileSlug: z.string(),
+  label: z.string(),
+  plural: z.string(),
+  /** Open + active + paused + unclassified things (the board's `live`). */
+  live: z.number(),
+  /** Every visible thing, all statuses, unwindowed. */
+  total: z.number(),
+  /** Things that entered a `done` option within `windowDays`. */
+  doneWindowed: z.number(),
+  windowDays: z.number(),
+  /**
+   * The pipeline bar: declared options in order (done/lost counted within the
+   * window, like the board), then `__unclassified` when it holds any.
+   */
+  columns: z.array(
+    z.object({
+      key: z.string(),
+      label: z.string(),
+      category: categorySchema.nullable(),
+      count: z.number(),
+    })
+  ),
+  /** `signals.countByProfile` for this space + kind; null = that read failed. */
+  needsYou: z.number().nullable(),
+  /** Live things someone is on (the board's workedBy rule); null = read failed. */
+  beingWorked: z.number().nullable(),
+  /** The ONE thing worth naming: needs_you → being_worked → stuck → recent. */
+  headline: z
+    .object({
+      entityId: z.string(),
+      title: z.string().nullable(),
+      status: z.string().nullable(),
+      reason: z.enum(["needs_you", "being_worked", "stuck", "recent"]),
+    })
+    .nullable(),
+});
+
+const spaceIntentWire = z.object({
+  workspaceId: z.string(),
+  name: z.string(),
+  /** The purpose word ("Product" → "Product · Dev"); the name when inferred. */
+  label: z.string(),
+  /** `template` = settings.intent; `inferred` = read-time, never stored. */
+  source: z.enum(["template", "inferred"]),
+  /** `library` = produces nothing (the template's word, or nothing inferred). */
+  kind: z.enum(["producing", "library"]),
+  produces: z.array(producedKindWire),
+});
+
+const homeWire = z.object({
+  /** Producing spaces first (most live things first), then libraries by name. */
+  spaces: z.array(spaceIntentWire),
+  needsYou: z.object({
+    /** `signals.count` on the caller's floor (narrowed to the project). */
+    total: z.number().nullable(),
+    bySpace: z.array(
+      z.object({ workspaceId: z.string(), count: z.number().nullable() })
+    ),
+  }),
+});
+
+const movingWire = z.object({
+  /** Most urgent first: asks you, then live, then the longest-running. */
+  items: z.array(
+    z.object({
+      entityId: z.string(),
+      title: z.string().nullable(),
+      profileSlug: z.string().nullable(),
+      workspaceId: z.string().nullable(),
+      status: z.string().nullable(),
+      category: z.string().nullable(),
+      work: z.array(
+        z.object({
+          /** `worker` = an automation's session; `scheduled` = a scheduled prep. */
+          kind: z.enum(["session", "worker", "scheduled"]),
+          sessionId: z.string(),
+          label: z.string(),
+          /** The agent on it, by name; absent when none is named. */
+          actor: z.string().optional(),
+          /** Working RIGHT NOW (`isSessionWorkingNow`). */
+          live: z.boolean(),
+          /** The session holds a deliverable owed by you (an open ask). */
+          asksYou: z.boolean(),
+          since: z.string(),
+        })
+      ),
+    })
+  ),
+});
+
 export type LifecycleWire = z.infer<typeof lifecycleWire>;
+export type LifecycleHomeWire = z.infer<typeof homeWire>;
+export type LifecycleMovingWire = z.infer<typeof movingWire>;
 
 /**
  * COMPILE-TIME PIN: a wire option IS a `@synap-core/types` `LifecycleOption`
@@ -199,72 +292,6 @@ function readCursor(cursor: string | undefined): number {
   return n;
 }
 
-interface ResolvedProfile {
-  profileKind: "kind" | "role";
-  profileIds: string[];
-  podScopeKind: boolean;
-  lifecycle: EffectiveLifecycle;
-}
-
-/**
- * The slug → its rows of ONE kind (a role row wins: a slug that is a role
- * groups facets) and the effective lifecycle of the first row that declares
- * one. No declaration → PRECONDITION_FAILED naming the fix (a lifecycle is
- * declared once, on the profile — never guessed from a select's name).
- */
-async function resolveProfileLifecycle(
-  profileSlug: string,
-  workspaceId: string | null | undefined
-): Promise<ResolvedProfile> {
-  const rows = await assertKnownProfileSlug(db, profileSlug);
-  const { chosen, profileKind, podScopeKind } = statusSubjectOfRows(
-    profileSlug,
-    rows
-  );
-  const resolver = new ProfileResolutionService(db);
-  let lifecycle: EffectiveLifecycle | null = null;
-  for (const r of chosen) {
-    lifecycle = await resolver.getEffectiveLifecycle(r.id, workspaceId ?? null);
-    if (lifecycle) break;
-  }
-  if (!lifecycle || lifecycle.options.length === 0) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message:
-        `"${profileSlug}" has no declared lifecycle, so it has no pipeline. ` +
-        `Declare one on the profile (lifecycle: { property, options: [{ key, category }] }) ` +
-        `— categories are open · active · paused · done · lost.`,
-    });
-  }
-  return {
-    profileKind,
-    profileIds: chosen.map((r) => r.id),
-    podScopeKind,
-    lifecycle,
-  };
-}
-
-function toLifecycleWire(
-  profileSlug: string,
-  p: ResolvedProfile
-): LifecycleWire {
-  return {
-    profileSlug,
-    profileKind: p.profileKind,
-    property: p.lifecycle.propertySlug,
-    options: p.lifecycle.options.map((o) => ({
-      key: o.key,
-      label: lifecycleOptionLabel(o),
-      category: o.category,
-      tone: lifecycleOptionTone(o),
-      humanOnly: o.humanOnly === true,
-      ...(o.stuckAfterDays !== undefined
-        ? { stuckAfterDays: o.stuckAfterDays }
-        : {}),
-    })),
-  };
-}
-
 /** The lens every pipeline read takes — `board` and `throughput` alike. */
 const boardLensInput = {
   /** A kind (grouped by `entities.status`) or a role (by facet status). */
@@ -275,73 +302,6 @@ const boardLensInput = {
   /** `undefined` → the active workspace header; `null` → pod-wide only. */
   workspaceId: z.string().uuid().nullable().optional(),
 };
-
-/**
- * ONE resolution of a pipeline lens: the track → its project, the workspace
- * three-state, the declared lifecycle, the access-layer visibility conditions
- * and the grouping subject. `board` and `throughput` read through it, so the
- * goal line can never count things the board does not show.
- */
-async function resolveBoardLens(
-  input: {
-    profileSlug: string;
-    projectId?: string;
-    trackId?: string;
-    workspaceId?: string | null;
-  },
-  ctx: { userId: string; workspaceId?: string | null }
-) {
-  let projectId = input.projectId;
-  if (input.trackId) {
-    const track = await getTrack(input.trackId, {
-      userId: ctx.userId,
-      agentUserId: (ctx as { agentUserId?: string | null }).agentUserId,
-    });
-    if (!track) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "Track not found",
-      });
-    }
-    if (projectId && projectId !== track.projectId) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "trackId belongs to another project than projectId.",
-      });
-    }
-    projectId = track.projectId;
-  }
-  const lensWorkspaceId =
-    input.workspaceId !== undefined
-      ? input.workspaceId
-      : (ctx.workspaceId ?? undefined);
-  const p = await resolveProfileLifecycle(input.profileSlug, lensWorkspaceId);
-  const lifecycle = toLifecycleWire(input.profileSlug, p);
-
-  const conditions =
-    p.profileKind === "role"
-      ? await roleVisibilityConditions({
-          userId: ctx.userId,
-          lensWorkspaceId,
-          projectId,
-        })
-      : kindVisibilityConditions({
-          userId: ctx.userId,
-          lensWorkspaceId,
-          explicitWorkspace: input.workspaceId !== undefined,
-          projectId,
-          podScopeKind: p.podScopeKind,
-        });
-  const subject =
-    p.profileKind === "role"
-      ? {
-          kind: "role" as const,
-          profileIds: p.profileIds,
-          roleSlug: input.profileSlug,
-        }
-      : { kind: "kind" as const, profileIds: p.profileIds };
-  return { projectId, p, lifecycle, conditions, subject };
-}
 
 const THROUGHPUT_BUCKETS = ["day", "week", "month"] as const;
 
@@ -687,6 +647,36 @@ export const lifecycleRouter = router({
       });
       return { bucket, since: since.toISOString(), buckets };
     }),
+
+  /**
+   * HOME (object-first homes): every space the caller sees, with what it
+   * PRODUCES — the template's `settings.intent`, else one inferred at read
+   * time — and per produced kind its pipeline in one line, needs-you,
+   * being-worked and a headline thing. `projectId` narrows every count to
+   * the project. See `services/lifecycle/homes.ts`.
+   */
+  home: podProcedure
+    .input(z.object({ projectId: z.string().uuid().optional() }).default({}))
+    .output(homeWire)
+    .query(({ input, ctx }) => readHome(ctx, input)),
+
+  /**
+   * MOVING NOW: the things with open work on them (a session on it, an
+   * in-flight worker targeting it, a scheduled prep), the work under each,
+   * most urgent first. Narrowed to the thing's space and/or a project.
+   */
+  moving: podProcedure
+    .input(
+      z
+        .object({
+          projectId: z.string().uuid().optional(),
+          workspaceId: z.string().uuid().optional(),
+          limit: z.number().int().min(1).max(100).default(30),
+        })
+        .default({ limit: 30 })
+    )
+    .output(movingWire)
+    .query(({ input, ctx }) => readMoving(ctx, input)),
 
   /**
    * The pipelines IN SCOPE (a project's pipeline doors): every kind AND role
