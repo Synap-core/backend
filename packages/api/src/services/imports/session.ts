@@ -33,6 +33,7 @@ import {
 } from "@synap-core/types/imports";
 import { resolveImportOriginLabel } from "@synap-core/types/vocabulary";
 import { ensureIntakeSession } from "../intake/ensure-intake-session.js";
+import { markAdoptionDirty } from "../library/adoption-memo.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 
 export type ImportDb = typeof defaultDb;
@@ -204,6 +205,8 @@ export async function writeImportCuration(args: {
   curation: ImportSessionCuration;
 }): Promise<void> {
   const database = args.database ?? defaultDb;
+  // New or renamed groups here are the Library's to adopt on its next read.
+  markAdoptionDirty(args.userId);
   const curation = { ...args.curation, updatedAt: new Date().toISOString() };
   await database
     .update(focusSessions)

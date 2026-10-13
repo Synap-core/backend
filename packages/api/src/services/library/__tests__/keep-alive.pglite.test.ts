@@ -146,12 +146,16 @@ describe("library keep-alive", () => {
       keptDaysAgo: 10,
       curation: { groupIds: [groupNew] },
     });
-    // Built group: its member predates built_at — nothing waits.
+    // Built group: its member was read by a Build of THAT group that still
+    // counts (`builtBy`, the shared waiting rule) — nothing waits.
     await item({
       user: A,
       title: "Dune",
       keptDaysAgo: 5,
-      curation: { groupIds: [groupBuilt] },
+      curation: {
+        groupIds: [groupBuilt],
+        builtBy: { [groupBuilt]: "applied" },
+      },
     });
     // Person C's only group is built, its member read by that Build: nothing waits.
     const groupC = randomUUID();
@@ -164,7 +168,22 @@ describe("library keep-alive", () => {
       user: "user-c",
       title: "Alien",
       keptDaysAgo: 30,
-      curation: { groupIds: [groupC] },
+      curation: { groupIds: [groupC], builtBy: { [groupC]: "applied" } },
+    });
+    // Person D's group was built two days ago; an item kept a MONTH ago joined
+    // it afterwards (no Build of that group read it): it waits — the shared
+    // per-item rule, not "kept after built_at".
+    const groupD = randomUUID();
+    await client.query(
+      `insert into library_groups (id, user_id, key, name, origin, outputs, build_proposal_ids, built_at)
+       values ($1, 'user-d', 'notes', 'Notes', 'user', '[]'::jsonb, '[]'::jsonb, $2::timestamptz)`,
+      [groupD, daysAgo(2)]
+    );
+    await item({
+      user: "user-d",
+      title: "Joined late",
+      keptDaysAgo: 30,
+      curation: { groupIds: [groupD] },
     });
     const built = await item({
       user: A,
@@ -219,7 +238,8 @@ describe("library keep-alive", () => {
       calls
         .filter((c) => c.type === "library.build_suggestion")
         .map((c) => c.userId)
-    ).toEqual([A]);
+        .sort()
+    ).toEqual([A, "user-d"].sort());
 
     // REACHABILITY: each notification, stored as the door stores it, is a
     // union row that OPENS something — and its push carries the same door.

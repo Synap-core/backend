@@ -26,6 +26,7 @@
  * The AI's capture door is untouched; this reads the person's own Library only.
  */
 
+import { waitingInGroupSql } from "./read-model.js";
 import { db as defaultDb, podSettings, drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
@@ -152,7 +153,7 @@ export async function longestWaitingGroups(
      AND d.metadata ? 'importItem'
      AND COALESCE(d.metadata -> 'importCuration' -> 'groupIds', '[]'::jsonb) ? g.id::text
      AND (d.metadata #>> '{importCuration,archivedAt}') IS NULL
-     AND (g.built_at IS NULL OR d.created_at > g.built_at)
+     AND ${waitingInGroupSql(drizzleSql.raw("d.metadata"), drizzleSql.raw("g.id::text"))}
     WHERE g.archived_at IS NULL AND g.building_at IS NULL
     GROUP BY g.id
     ORDER BY g.user_id, min(d.created_at) ASC`);

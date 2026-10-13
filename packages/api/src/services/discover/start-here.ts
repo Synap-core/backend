@@ -5,6 +5,7 @@
  * an empty list or a zero.
  */
 
+import { createLogger } from "@synap-core/core";
 import type { HubProtocolCaller } from "../../routers/hub-protocol/rest/_shared.js";
 import { openLink } from "../../utils/deep-links.js";
 import {
@@ -32,6 +33,8 @@ export const HANDED_TO_YOU_READ_CAP = 5;
 export type PendingReviewState =
   | { status: "ok"; count: number; oldestDays: number; oldestId?: string }
   | { status: "unavailable" };
+
+const logger = createLogger({ module: "discover/start-here" });
 
 const UNAVAILABLE = { status: "unavailable" } as const;
 
@@ -280,7 +283,11 @@ async function readLibrary(userId: string): Promise<StartHere["library"]> {
   try {
     const { libraryHealth } = await import("../library/search.js");
     return await libraryHealth({ userId });
-  } catch {
+  } catch (err) {
+    logger.warn(
+      { err },
+      "orient: Library health NOT read — reported unavailable"
+    );
     return UNAVAILABLE;
   }
 }

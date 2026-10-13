@@ -16,6 +16,7 @@
  * missing id reads NOT_FOUND.
  */
 
+import { isAdoptionClean, markAdoptionClean } from "./adoption-memo.js";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import {
@@ -23,6 +24,7 @@ import {
   documents,
   focusSessions,
   libraryGroups,
+  proposals,
   and,
   eq,
   inArray,
@@ -45,6 +47,8 @@ import {
   libraryItemsWhere,
   libraryLensWhere,
   readStatusSql,
+  waitingGroupIdsSql,
+  LIBRARY_BUILT_WITHOUT_PROPOSAL,
   ungroupedSql,
   type LibraryDb,
 } from "./read-model.js";
@@ -79,7 +83,8 @@ const ZERO: LibraryGroupCounts = {
 
 export function toGroupView(
   row: LibraryGroupRow,
-  counts: LibraryGroupCounts = ZERO
+  counts: LibraryGroupCounts = ZERO,
+  pendingBuildProposalId?: string
 ): LibraryGroupView {
   return {
     id: row.id,
@@ -93,6 +98,7 @@ export function toGroupView(
       : {}),
     ...(row.builtAt ? { builtAt: row.builtAt.toISOString() } : {}),
     ...(row.buildingAt ? { buildingAt: row.buildingAt.toISOString() } : {}),
+    ...(pendingBuildProposalId ? { pendingBuildProposalId } : {}),
     counts,
     ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
     ...(row.archivedAt ? { archivedAt: row.archivedAt.toISOString() } : {}),
@@ -182,8 +188,7 @@ export async function countGroups(args: {
     .select({
       groupIds: drizzleSql<unknown>`${documents.metadata} -> 'importCuration' -> 'groupIds'`,
       status: drizzleSql<string>`${readStatusSql}`,
-      decision: drizzleSql<string>`COALESCE(${documents.metadata} #>> '{importCuration,decision}', 'keep')`,
-      createdAt: documents.createdAt,
+      waitingIn: waitingGroupIdsSql,
       actions: drizzleSql<unknown>`${documents.metadata} -> 'importRead' -> 'suggestedActions'`,
     })
     .from(documents)
@@ -195,7 +200,6 @@ export async function countGroups(args: {
         drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb) ?| ${`{${ids.join(",")}}`}::text[]`
       )
     );
-  const builtAt = new Map(args.groups.map((g) => [g.id, g.builtAt]));
   const wanted = new Set(ids);
   for (const r of rows.flatMap((row) =>
     (Array.isArray(row.groupIds) ? (row.groupIds as unknown[]) : [])
@@ -213,13 +217,83 @@ export async function countGroups(args: {
     else if (r.status === "not_read" || r.status === "over_budget")
       c.notRead += 1;
     else if (r.status === "needs_file") c.needsFile += 1;
-    const built = builtAt.get(r.groupId);
-    if (r.decision === "keep" && (!built || r.createdAt > built)) {
+    // The ONE "waiting" rule (`waitingInGroupSql`): kept, and not read by a
+    // Build of THIS group that still counts.
+    if (Array.isArray(r.waitingIn) && r.waitingIn.includes(r.groupId)) {
       c.newSinceBuilt += 1;
     }
     out.set(r.groupId, c);
   }
   return out;
+}
+
+/**
+ * Per group, the NEWEST of its bundles when that one still waits for review —
+ * what "Open the review" opens, and why a rebuild is refused. One query.
+ */
+export async function pendingBuildProposalIds(
+  database: LibraryDb,
+  groups: ReadonlyArray<{ groupId: string; proposalIds: readonly string[] }>
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const all = [
+    ...new Set(groups.flatMap((g) => g.proposalIds.filter(Boolean))),
+  ];
+  if (all.length === 0) return out;
+  const rows = await database
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      createdAt: proposals.createdAt,
+    })
+    .from(proposals)
+    .where(inArray(proposals.id, all));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  for (const g of groups) {
+    const newest = g.proposalIds
+      .map((id) => byId.get(id))
+      .filter((r): r is NonNullable<typeof r> => Boolean(r))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    if (newest?.status === "pending") out.set(g.groupId, newest.id);
+  }
+  return out;
+}
+
+export function proposalIdsOf(row: LibraryGroupRow): string[] {
+  return Array.isArray(row.buildProposalIds)
+    ? row.buildProposalIds.filter((id): id is string => typeof id === "string")
+    : [];
+}
+
+/** Rows → views: counts (optionally lensed) and the waiting bundle, in two queries. */
+export async function groupViews(args: {
+  database?: LibraryDb;
+  userId: string;
+  rows: readonly LibraryGroupRow[];
+  lens?: SQL;
+}): Promise<{
+  views: LibraryGroupView[];
+  counts: Map<string, LibraryGroupCounts>;
+}> {
+  const database = args.database ?? defaultDb;
+  const [counts, pending] = await Promise.all([
+    countGroups({
+      database,
+      userId: args.userId,
+      groups: args.rows,
+      ...(args.lens ? { lens: args.lens } : {}),
+    }),
+    pendingBuildProposalIds(
+      database,
+      args.rows.map((r) => ({ groupId: r.id, proposalIds: proposalIdsOf(r) }))
+    ),
+  ]);
+  return {
+    views: args.rows.map((r) =>
+      toGroupView(r, counts.get(r.id), pending.get(r.id))
+    ),
+    counts,
+  };
 }
 
 /** Unarchived items in no group, and archived items. */
@@ -254,29 +328,42 @@ export async function insertLibraryGroup(args: {
   builtAt?: Date | null;
   buildProposalIds?: string[];
 }): Promise<LibraryGroupRow> {
-  const taken = await args.database
-    .select({ key: libraryGroups.key })
-    .from(libraryGroups)
-    .where(eq(libraryGroups.userId, args.userId));
-  const key = importGroupKey(
-    args.name,
-    taken.map((t) => t.key)
-  );
-  const [row] = await args.database
-    .insert(libraryGroups)
-    .values({
-      userId: args.userId,
-      key,
-      name: args.name,
-      note: args.note?.trim() ? args.note.trim() : null,
-      origin: args.origin,
-      outputs: args.outputs ?? ["things"],
-      workspaceId: args.workspaceId ?? null,
-      builtAt: args.builtAt ?? null,
-      buildProposalIds: args.buildProposalIds ?? [],
-    })
-    .returning();
-  return row!;
+  // The key is unique per person. Computed from what is taken, then
+  // inserted with ON CONFLICT DO NOTHING: a concurrent create of the same name
+  // (two devices, a list racing a curate) takes the next suffix instead of
+  // failing the request — and never aborts the caller's transaction.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const taken = await args.database
+      .select({ key: libraryGroups.key })
+      .from(libraryGroups)
+      .where(eq(libraryGroups.userId, args.userId));
+    const key = importGroupKey(
+      args.name,
+      taken.map((t) => t.key)
+    );
+    const [row] = await args.database
+      .insert(libraryGroups)
+      .values({
+        userId: args.userId,
+        key,
+        name: args.name,
+        note: args.note?.trim() ? args.note.trim() : null,
+        origin: args.origin,
+        outputs: args.outputs ?? ["things"],
+        workspaceId: args.workspaceId ?? null,
+        builtAt: args.builtAt ?? null,
+        buildProposalIds: args.buildProposalIds ?? [],
+      })
+      .onConflictDoNothing({
+        target: [libraryGroups.userId, libraryGroups.key],
+      })
+      .returning();
+    if (row) return row;
+  }
+  throw new TRPCError({
+    code: "CONFLICT",
+    message: "This group name is being used right now. Try again.",
+  });
 }
 
 /** Add / remove group ids on items (owner-floored, one statement per item set). */
@@ -317,6 +404,7 @@ export async function adoptImportGroups(args: {
   userId: string;
 }): Promise<number> {
   const database = args.database ?? defaultDb;
+  if (isAdoptionClean(args.userId)) return 0;
   const sessions = await database
     .select({
       id: focusSessions.id,
@@ -333,6 +421,7 @@ export async function adoptImportGroups(args: {
       )
     );
   let adopted = 0;
+  let failed = false;
   for (const s of sessions) {
     try {
       adopted += await database.transaction(async (tx) => {
@@ -385,6 +474,26 @@ export async function adoptImportGroups(args: {
             itemIds: members.map((m) => m.id),
             add: row.id,
           });
+          if (g.builtAt) {
+            // Items that group's Build already read (their staged marker was
+            // cleared) are built FOR the adopted group — by the same bundle —
+            // so the Library never rebuilds them into twins.
+            await t
+              .update(documents)
+              .set({
+                metadata: drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,builtBy}', COALESCE(${documents.metadata} -> 'importCuration' -> 'builtBy', '{}'::jsonb) || ${JSON.stringify({ [row.id]: g.buildProposalId ?? LIBRARY_BUILT_WITHOUT_PROPOSAL })}::jsonb, true)`,
+              })
+              .where(
+                and(
+                  libraryItemsWhere(args.userId),
+                  inArray(
+                    documents.id,
+                    members.map((m) => m.id)
+                  ),
+                  drizzleSql`(${documents.metadata} #>> '{intakeSource,pending}') IS NULL`
+                )
+              );
+          }
           groups.push({ ...g, libraryGroupId: row.id });
           n += 1;
         }
@@ -402,13 +511,16 @@ export async function adoptImportGroups(args: {
         return n;
       });
     } catch (err) {
+      // Said, retried on the next read — never a failed Library read: the
+      // items are all there, this import's groups just join later.
       logger.error(
         { err, sessionId: s.id },
-        "library: import groups NOT adopted"
+        "library: import groups NOT adopted — retried on the next read"
       );
-      throw err;
+      failed = true;
     }
   }
+  if (!failed) markAdoptionClean(args.userId);
   return adopted;
 }
 
@@ -434,10 +546,10 @@ export async function readLibraryGroups(args: {
     archived: false,
   });
   const lens = args.lens ? libraryLensWhere(args.userId, args.lens) : undefined;
-  const counts = await countGroups({
+  const shown = await groupViews({
     database,
     userId: args.userId,
-    groups: rows,
+    rows,
     ...(lens ? { lens } : {}),
   });
   const loose = await countLooseItems({
@@ -446,9 +558,9 @@ export async function readLibraryGroups(args: {
     ...(lens ? { lens } : {}),
   });
   return {
-    groups: rows
-      .filter((r) => !lens || (counts.get(r.id)?.items ?? 0) > 0)
-      .map((r) => toGroupView(r, counts.get(r.id))),
+    groups: shown.views.filter(
+      (v) => !lens || (shown.counts.get(v.id)?.items ?? 0) > 0
+    ),
     ...loose,
   };
 }

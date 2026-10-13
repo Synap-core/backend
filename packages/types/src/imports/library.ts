@@ -116,6 +116,11 @@ export interface LibraryGroupView {
   builtAt?: string;
   /** Set while a Build holds the group. */
   buildingAt?: string;
+  /**
+   * The group's newest bundle while it still waits for review: a rebuild is
+   * refused until it is decided (`previous_build_pending`). "Open the review".
+   */
+  pendingBuildProposalId?: string;
   counts: {
     items: number;
     read: number;

@@ -39,12 +39,19 @@ import {
 } from "../imports/build.js";
 import { loadImportSession } from "../imports/session.js";
 import { toItemView, type ImportItemRow } from "../imports/read-model.js";
-import { asImportGroup, loadLibraryGroup } from "./groups.js";
+import {
+  asImportGroup,
+  loadLibraryGroup,
+  pendingBuildProposalIds,
+} from "./groups.js";
 import {
   inGroupSql,
   isArchivedSql,
+  builtForGroupSql,
   libraryItemsWhere,
   loadLibraryItemRows,
+  readLibraryCuration,
+  LIBRARY_BUILT_WITHOUT_PROPOSAL,
   selectLibraryItemRows,
   type LibraryDb,
   type LibraryItemRow,
@@ -83,17 +90,27 @@ function asMembers(rows: readonly LibraryItemRow[], group: ImportGroup) {
   });
 }
 
+/**
+ * Stamp the items a Build READ: `builtAt` (display) and, for a group build,
+ * `builtBy[groupId]` = the bundle that read them (or "applied" when none was
+ * filed). "Built for this group" is derived from that bundle's status
+ * (`builtForGroupSql`), so a rejected / reverted bundle unbuilds them.
+ */
 async function markItemsBuiltAt(
   database: LibraryDb,
   userId: string,
   ids: readonly string[],
-  at: string
+  at: string,
+  forGroup?: { groupId: string; proposalId?: string }
 ) {
   if (ids.length === 0) return;
+  const stamped = drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,builtAt}', ${JSON.stringify(at)}::jsonb, true)`;
   await database
     .update(documents)
     .set({
-      metadata: drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,builtAt}', ${JSON.stringify(at)}::jsonb, true)`,
+      metadata: forGroup
+        ? drizzleSql`jsonb_set(${stamped}, '{importCuration,builtBy}', COALESCE(${documents.metadata} -> 'importCuration' -> 'builtBy', '{}'::jsonb) || ${JSON.stringify({ [forGroup.groupId]: forGroup.proposalId ?? LIBRARY_BUILT_WITHOUT_PROPOSAL })}::jsonb, true)`
+        : stamped,
     })
     .where(
       and(
@@ -168,13 +185,17 @@ export async function buildLibraryGroup(args: {
         libraryItemsWhere(args.userId),
         inGroupSql(groupRow.id),
         drizzleSql`NOT ${isArchivedSql}`,
-        groupRow.builtAt
-          ? drizzleSql`${documents.createdAt} > ${groupRow.builtAt.toISOString()}::timestamptz`
-          : undefined
+        // Not read by a Build that still counts — per item, per group, from
+        // the bundle's status (an old item that joined later, a rejected
+        // bundle's items, one added mid-build: all unbuilt here).
+        drizzleSql`NOT ${builtForGroupSql(drizzleSql`${documents.metadata}`, drizzleSql`${groupRow.id}::text`)}`
       )!,
       order: "oldest",
     });
-    if (rows.length === 0) {
+    const keptRows = rows.filter(
+      (r) => readLibraryCuration(r.metadata).decision === "keep"
+    );
+    if (keptRows.length === 0) {
       return refused(groupRow.builtAt ? "nothing_new" : "nothing_to_build");
     }
     // The newest member's run: still the person's, and the unit of undo.
@@ -211,7 +232,17 @@ export async function buildLibraryGroup(args: {
           }
         : {}),
     });
-    if (built.result.status === "refused") return built.result;
+    if (built.result.status === "refused") {
+      if (built.result.reason === "previous_build_pending") {
+        // Name the bundle that waits, so the client can open its review.
+        const waiting = await pendingBuildProposalIds(database, [
+          { groupId: groupRow.id, proposalIds: priorProposalIds },
+        ]);
+        const id = waiting.get(groupRow.id);
+        if (id) return { ...built.result, proposalId: id };
+      }
+      return built.result;
+    }
     const at = new Date();
     // The container, once it is a real row: reused by this rebuild, or made
     // by a bundle that applied at once. A first bundle still pending has only
@@ -235,7 +266,13 @@ export async function buildLibraryGroup(args: {
       database,
       args.userId,
       built.builtIds,
-      at.toISOString()
+      at.toISOString(),
+      {
+        groupId: groupRow.id,
+        ...(built.result.proposalId
+          ? { proposalId: built.result.proposalId }
+          : {}),
+      }
     );
     await database
       .update(libraryGroups)

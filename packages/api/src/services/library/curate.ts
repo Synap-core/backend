@@ -36,10 +36,10 @@ import {
   type LibraryItemCurationMeta,
 } from "./read-model.js";
 import {
-  countGroups,
+  groupViews,
+  insertLibraryGroup,
   listLibraryGroupRows,
   readOutputs,
-  toGroupView,
 } from "./groups.js";
 
 export class LibraryCurateError extends Error {
@@ -382,19 +382,15 @@ export async function curateLibrary(args: {
     const realId = new Map<string, string>();
     for (const placeholder of change.createdGroupIds) {
       const g = change.state.groups.get(placeholder)!;
-      const [row] = await t
-        .insert(libraryGroups)
-        .values({
-          userId: args.userId,
-          key: g.key,
-          name: g.name,
-          note: g.note,
-          origin: "user",
-          outputs: g.outputs,
-          buildProposalIds: [],
-        })
-        .returning({ id: libraryGroups.id });
-      realId.set(placeholder, row!.id);
+      const row = await insertLibraryGroup({
+        database: t,
+        userId: args.userId,
+        name: g.name,
+        note: g.note,
+        origin: "user",
+        outputs: g.outputs,
+      });
+      realId.set(placeholder, row.id);
     }
     const resolve = (id: string) => realId.get(id) ?? id;
     const now = new Date();
@@ -449,13 +445,6 @@ export async function curateLibrary(args: {
         ids: touched,
       })
     : [];
-  const counts = await countGroups({
-    database,
-    userId: args.userId,
-    groups: rows,
-  });
-  return {
-    ...written,
-    groups: rows.map((r) => toGroupView(r, counts.get(r.id))),
-  };
+  const { views } = await groupViews({ database, userId: args.userId, rows });
+  return { ...written, groups: views };
 }

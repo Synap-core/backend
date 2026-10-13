@@ -109,7 +109,11 @@ import { curateImport } from "../../imports/curate.js";
 import { addToLibrary, libraryRunTitle } from "../add.js";
 import { listLibraryItems } from "../read-model.js";
 import { curateLibrary } from "../curate.js";
-import { loadLibraryGroup, readLibraryGroups } from "../groups.js";
+import {
+  insertLibraryGroup,
+  loadLibraryGroup,
+  readLibraryGroups,
+} from "../groups.js";
 import { libraryHealth, searchLibrary } from "../search.js";
 import { buildLibraryGroup, readNowLibraryItem } from "../build.js";
 
@@ -152,7 +156,6 @@ async function myCaptureIds(userId = USER): Promise<string[]> {
 }
 
 function buildDeps(submitted: SubmitCaptureGraphInput[]): ImportBuildDeps {
-  let n = 0;
   return {
     structure: async ({ text }) => ({
       entities: [
@@ -168,13 +171,17 @@ function buildDeps(submitted: SubmitCaptureGraphInput[]): ImportBuildDeps {
     generate: async () => ({}),
     readUrl,
     readBytes: async (key) => h.objects.get(key) ?? Buffer.alloc(0),
+    // Files a REAL proposal row: "built for this group" is derived from the
+    // bundle's status. Approved here (a review that went through); the
+    // update-mode suite files pending ones.
     submit: async (input) => {
       submitted.push(input);
-      n += 1;
-      return {
-        proposalId: `11111111-1111-4111-8111-00000000000${n}`,
-        applied: false,
-      };
+      const { rows } = await q<{ id: string }>(
+        `insert into proposals (status, proposal_type, target_type, target_id, data, subject_user_id)
+         values ('approved', 'create', 'entity', gen_random_uuid(), '{}'::jsonb, $1) returning id`,
+        [USER]
+      );
+      return { proposalId: rows[0]!.id, applied: false };
     },
   };
 }
@@ -197,6 +204,11 @@ beforeAll(async () => {
       libraryGroups,
       entities,
     ])
+  );
+  // The schema DDL helper emits columns only; the per-person key index is
+  // what the group insert's ON CONFLICT leans on (migration 0326).
+  await h.client!.exec(
+    `create unique index library_groups_user_key_unique on library_groups (user_id, key)`
   );
 });
 beforeEach(async () => {
@@ -857,5 +869,283 @@ describe("rebuild = update mode", () => {
       `select count(*)::int as n from entities`
     );
     expect(rows[0]!.n).toBe(1);
+  });
+});
+
+describe("what a rebuild reads — per item, per group, from the bundle's status", () => {
+  async function groupOf(urls: string[], name = "Shelf") {
+    const r = await keep(urls);
+    const ids = r.staged.map((s) => s.itemId);
+    return { g: await newGroup(name, ids), ids };
+  }
+  const waiting = async (g: string) =>
+    (await readLibraryGroups({ userId: USER })).groups.find((x) => x.id === g)!
+      .counts.newSinceBuilt;
+
+  it("an OLD item that joins a built group waits, and the next build reads it", async () => {
+    const early = await keep(["https://example.com/kept-long-ago"]);
+    const { g, ids } = await groupOf(["https://example.com/a"]);
+    const submitted: SubmitCaptureGraphInput[] = [];
+    await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => buildDeps(submitted),
+    });
+    expect(await waiting(g)).toBe(0);
+    // Kept BEFORE the build, joins after: created_at < built_at.
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.items", groupId: g, add: [early.staged[0]!.itemId] }],
+    });
+    expect(await waiting(g)).toBe(1);
+    expect((await libraryHealth({ userId: USER })).groupsWaiting).toBe(1);
+    const again = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => buildDeps(submitted),
+    });
+    expect(again.status).toBe("proposed");
+    expect(submitted[1]!.sourceDocumentIds).toEqual([early.staged[0]!.itemId]);
+    expect(ids).toHaveLength(1);
+  });
+
+  for (const status of ["rejected", "reverted"] as const) {
+    it(`a ${status} bundle leaves its items unbuilt — the next build reads them again`, async () => {
+      const { g, ids } = await groupOf([
+        "https://example.com/x",
+        "https://example.com/y",
+      ]);
+      const submitted: SubmitCaptureGraphInput[] = [];
+      const first = await buildLibraryGroup({
+        userId: USER,
+        groupId: g,
+        depsFor: () => buildDeps(submitted),
+      });
+      expect(await waiting(g)).toBe(0);
+      await q(`update proposals set status = $2 where id = $1`, [
+        first.proposalId,
+        status,
+      ]);
+      expect(await waiting(g)).toBe(2);
+      const again = await buildLibraryGroup({
+        userId: USER,
+        groupId: g,
+        depsFor: () => buildDeps(submitted),
+      });
+      expect(again.status).toBe("proposed");
+      expect([...submitted[1]!.sourceDocumentIds!].sort()).toEqual(
+        [...ids].sort()
+      );
+    });
+  }
+
+  it("an item added to the group WHILE a build runs is not stranded", async () => {
+    const late = await keep(["https://example.com/late"]);
+    const { g, ids } = await groupOf(["https://example.com/m"]);
+    const submitted: SubmitCaptureGraphInput[] = [];
+    const deps = buildDeps(submitted);
+    const racing: ImportBuildDeps = {
+      ...deps,
+      submit: async (input) => {
+        // The person drops another item into the group mid-build.
+        await curateLibrary({
+          userId: USER,
+          ops: [
+            { op: "group.items", groupId: g, add: [late.staged[0]!.itemId] },
+          ],
+        });
+        return deps.submit(input);
+      },
+    };
+    await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => racing,
+    });
+    expect(submitted[0]!.sourceDocumentIds).toEqual(ids);
+    expect(await waiting(g)).toBe(1);
+    await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => buildDeps(submitted),
+    });
+    expect(submitted[1]!.sourceDocumentIds).toEqual([late.staged[0]!.itemId]);
+  });
+
+  it('a group whose last bundle waits names it ("Open the review"), and the refusal does too', async () => {
+    const { g } = await groupOf(["https://example.com/p"]);
+    const submitted: SubmitCaptureGraphInput[] = [];
+    const pending: ImportBuildDeps = {
+      ...buildDeps(submitted),
+      submit: async (input) => {
+        submitted.push(input);
+        const { rows } = await q<{ id: string }>(
+          `insert into proposals (status, proposal_type, target_type, target_id, data, subject_user_id)
+           values ('pending', 'create', 'entity', gen_random_uuid(), '{}'::jsonb, $1) returning id`,
+          [USER]
+        );
+        return { proposalId: rows[0]!.id, applied: false };
+      },
+    };
+    const first = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => pending,
+    });
+    const view = (await readLibraryGroups({ userId: USER })).groups.find(
+      (x) => x.id === g
+    )!;
+    expect(view.pendingBuildProposalId).toBe(first.proposalId);
+    await addTo(g);
+    const refusedNow = await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => pending,
+    });
+    expect(refusedNow).toMatchObject({
+      status: "refused",
+      reason: "previous_build_pending",
+      proposalId: first.proposalId,
+    });
+    async function addTo(groupId: string) {
+      const r = await keep(["https://example.com/p2"]);
+      await curateLibrary({
+        userId: USER,
+        ops: [{ op: "group.items", groupId, add: [r.staged[0]!.itemId] }],
+      });
+    }
+  });
+});
+
+describe("hardening", () => {
+  it("a forged cursor is BAD_REQUEST, never a database error", async () => {
+    const forge = (c: unknown, i: unknown) =>
+      Buffer.from(JSON.stringify({ c, i })).toString("base64url");
+    for (const cursor of [
+      forge("2026-10-13 10:00:00.123+00", "not-a-uuid"),
+      forge("2026-02-30 10:00:00+00", "00000000-0000-4000-8000-000000000001"),
+      forge("yesterday", "00000000-0000-4000-8000-000000000001"),
+      "%%%",
+    ]) {
+      await expect(
+        listLibraryItems({ userId: USER, input: { cursor } })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+  });
+
+  it("a key taken between the read and the insert takes the next suffix, never a 500", async () => {
+    // PGlite runs one statement at a time, so the race is staged: the first
+    // read of taken keys is STALE (empty) while "films" already exists.
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.create", name: "Films" }],
+    });
+    let stale = true;
+    const racing = new Proxy(db, {
+      get(target, prop) {
+        if (prop === "select" && stale) {
+          stale = false;
+          return () => ({ from: () => ({ where: async () => [] }) });
+        }
+        const v = (target as unknown as Record<PropertyKey, unknown>)[prop];
+        return typeof v === "function" ? (v as Function).bind(target) : v;
+      },
+    }) as typeof db;
+    const row = await insertLibraryGroup({
+      database: racing,
+      userId: USER,
+      name: "Films",
+      origin: "user",
+    });
+    expect(stale).toBe(false);
+    expect(row.key).toBe("films-2");
+  });
+
+  it("adopting an import group that was built marks its items built — no twin rebuild", async () => {
+    const { sessionId } = await openImportSession({
+      userId: USER,
+      origin: "relay",
+    });
+    const session = await loadImportSession({ userId: USER, sessionId });
+    const staged = await stageImportItems({
+      userId: USER,
+      session,
+      items: [{ kind: "url", url: "https://example.com/built-before" }],
+      deps: { readUrl },
+    });
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [
+        {
+          op: "createGroup",
+          name: "Done",
+          itemIds: staged.staged.map((s) => s.itemId),
+        },
+      ],
+    });
+    // The import's own Build ran: marker cleared, group stamped built.
+    await q(
+      `update documents set metadata = metadata #- '{intakeSource,pending}' where id = $1`,
+      [staged.staged[0]!.itemId]
+    );
+    await q(
+      `update focus_sessions set metadata = jsonb_set(metadata, '{importCuration,groups,0,builtAt}', to_jsonb(now()::text)) where id = $1`,
+      [sessionId]
+    );
+    const { groups } = await readLibraryGroups({ userId: USER });
+    expect(groups[0]!.name).toBe("Done");
+    expect(groups[0]!.counts.newSinceBuilt).toBe(0);
+  });
+});
+
+describe("adoption is not a scan on every read", () => {
+  it("once clean, reads skip the scan until an import's curation is written again", async () => {
+    const { sessionId } = await openImportSession({
+      userId: USER,
+      origin: "relay",
+    });
+    const session = await loadImportSession({ userId: USER, sessionId });
+    const staged = await stageImportItems({
+      userId: USER,
+      session,
+      items: [{ kind: "url", url: "https://example.com/memo" }],
+      deps: { readUrl },
+    });
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [
+        {
+          op: "createGroup",
+          name: "First",
+          itemIds: staged.staged.map((s) => s.itemId),
+        },
+      ],
+    });
+    expect(
+      (await readLibraryGroups({ userId: USER })).groups.map((g) => g.name)
+    ).toEqual(["First"]);
+    // A group appears WITHOUT the one curation writer: the memo says clean,
+    // so the read does not scan for it (proof the scan is skipped).
+    await q(
+      `update focus_sessions set metadata = jsonb_set(metadata, '{importCuration,groups}',
+         (metadata -> 'importCuration' -> 'groups') || '[{"key":"sneaky","name":"Sneaky","origin":"user","outputs":[]}]'::jsonb) where id = $1`,
+      [sessionId]
+    );
+    expect(
+      (await readLibraryGroups({ userId: USER })).groups.map((g) => g.name)
+    ).toEqual(["First"]);
+    // The writer marks the person dirty: the next read adopts.
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [{ op: "renameGroup", groupKey: "sneaky", name: "Sneaky one" }],
+    });
+    expect(
+      (await readLibraryGroups({ userId: USER })).groups
+        .map((g) => g.name)
+        .sort()
+    ).toEqual(["First", "Sneaky one"]);
   });
 });

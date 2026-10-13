@@ -33,6 +33,7 @@ import {
   libraryItemsWhere,
   libraryTextMatchSql,
   readStatusSql,
+  waitingInGroupSql,
   toLibraryItemView,
   selectLibraryItemRows,
   type LibraryDb,
@@ -111,8 +112,11 @@ export async function libraryHealth(args: {
   const waiting = groups.filter(
     (g) => (counts.get(g.id)?.newSinceBuilt ?? 0) > 0
   );
+  // The oldest item still waiting in a live group — ONE aggregate, the same
+  // waiting rule as the counts (`waitingInGroupSql`).
   let oldestWaitDays: number | null = null;
-  for (const g of waiting) {
+  if (waiting.length > 0) {
+    const live = `{${waiting.map((g) => g.id).join(",")}}`;
     const [row] = await database
       .select({
         oldest: drizzleSql<
@@ -124,18 +128,17 @@ export async function libraryHealth(args: {
         and(
           libraryItemsWhere(args.userId),
           drizzleSql`NOT ${isArchivedSql}`,
-          drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb) ? ${g.id}`,
-          drizzleSql`COALESCE(${documents.metadata} #>> '{importCuration,decision}', 'keep') = 'keep'`,
-          g.builtAt
-            ? drizzleSql`${documents.createdAt} > ${g.builtAt.toISOString()}::timestamptz`
-            : undefined
+          drizzleSql`EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb)) AS hg(id)
+            WHERE hg.id = ANY(${live}::text[])
+              AND ${waitingInGroupSql(drizzleSql`${documents.metadata}`, drizzleSql`hg.id`)})`
         )
       );
-    if (row?.oldest === null || row?.oldest === undefined) continue;
-    const days = Math.floor(
-      (now.getTime() - Number(row.oldest) * 1000) / 86_400_000
-    );
-    oldestWaitDays = Math.max(oldestWaitDays ?? 0, Math.max(days, 0));
+    if (row?.oldest !== null && row?.oldest !== undefined) {
+      oldestWaitDays = Math.max(
+        0,
+        Math.floor((now.getTime() - Number(row.oldest) * 1000) / 86_400_000)
+      );
+    }
   }
   return {
     unread: Number(unreadRow?.n ?? 0),

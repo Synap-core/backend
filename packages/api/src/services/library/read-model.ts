@@ -111,6 +111,56 @@ export const readStatusSql = drizzleSql<string>`COALESCE(
 
 export const isArchivedSql = drizzleSql`(${documents.metadata} #>> '{importCuration,archivedAt}') IS NOT NULL`;
 
+/**
+ * Proposal statuses under which a Build still COUNTS for its items: waiting
+ * for review, or applied. A rejected, reverted, withdrawn, expired or failed
+ * bundle leaves its items unbuilt again — so the next build reads them.
+ */
+export const LIBRARY_BUILT_PROPOSAL_STATUSES = [
+  "pending",
+  "approved",
+  "auto_approved",
+] as const;
+
+/** `importCuration.builtBy[groupId]` when a Build applied with no proposal row. */
+export const LIBRARY_BUILT_WITHOUT_PROPOSAL = "applied";
+
+/**
+ * THE "built for this group" predicate — ONE fragment shared by Build, group
+ * counts (`newSinceBuilt`), health and the keep-alive job.
+ *
+ * An item is built for group G iff `importCuration.builtBy[G]` names a bundle
+ * that still counts ({@link LIBRARY_BUILT_PROPOSAL_STATUSES}) — DERIVED from
+ * the proposal's status, so a rejected or reverted bundle needs no clean-up
+ * hook and can never strand its items. Per item and per group: an old item
+ * joining a built group, or one added while a build ran, is unbuilt there.
+ *
+ * `metadata` / `groupId` are SQL expressions so a raw query with its own
+ * aliases (`d.metadata`, `g.id::text`) uses the same rule.
+ */
+export function builtForGroupSql(metadata: SQL, groupId: SQL): SQL {
+  const by = drizzleSql`(${metadata} -> 'importCuration' -> 'builtBy' ->> (${groupId}))`;
+  return drizzleSql`(CASE
+    WHEN ${by} IS NULL THEN false
+    WHEN ${by} = ${LIBRARY_BUILT_WITHOUT_PROPOSAL} THEN true
+    WHEN ${by} ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      THEN EXISTS (SELECT 1 FROM proposals bp
+                    WHERE bp.id = (${by})::uuid
+                      AND bp.status = ANY(${`{${LIBRARY_BUILT_PROPOSAL_STATUSES.join(",")}}`}::text[]))
+    ELSE false END)`;
+}
+
+/** A kept member of group G that no counting Build has read: what a rebuild reads. */
+export function waitingInGroupSql(metadata: SQL, groupId: SQL): SQL {
+  return drizzleSql`(COALESCE(${metadata} #>> '{importCuration,decision}', 'keep') = 'keep'
+    AND NOT ${builtForGroupSql(metadata, groupId)})`;
+}
+
+/** The ids of this row's groups it is WAITING in, as a jsonb array (per-row subquery). */
+export const waitingGroupIdsSql = drizzleSql<unknown>`(SELECT COALESCE(jsonb_agg(wg.id), '[]'::jsonb)
+  FROM jsonb_array_elements_text(COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb)) AS wg(id)
+  WHERE ${waitingInGroupSql(drizzleSql`${documents.metadata}`, drizzleSql`wg.id`)})`;
+
 export function inGroupSql(groupId: string): SQL {
   return drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb) ? ${groupId}`;
 }
@@ -188,13 +238,46 @@ function encodeCursor(row: { createdAtText: string; id: string }): string {
   ).toString("base64url");
 }
 
-function decodeCursor(cursor: string): { createdAt: string; id: string } {
+const CURSOR_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Postgres `timestamptz::text`: `2026-10-13 10:00:00.123007+00`. */
+const CURSOR_TS =
+  /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)(Z|[+-]\d{2}(?::?\d{2})?)$/;
+
+/** True when the cursor's timestamp is a real instant (not just shaped like one). */
+function cursorInstantOk(text: string): boolean {
+  const m = CURSOR_TS.exec(text);
+  if (!m) return false;
+  // A real calendar day (JS rolls 2026-02-30 over to March; Postgres refuses it).
+  const [y, mo, d] = m[1]!.split("-").map(Number) as [number, number, number];
+  const day = new Date(Date.UTC(y, mo - 1, d));
+  if (day.getUTCMonth() !== mo - 1 || day.getUTCDate() !== d) return false;
+  const zone =
+    m[3] === "Z"
+      ? "Z"
+      : m[3]!.length === 3
+        ? `${m[3]}:00`
+        : m[3]!.includes(":")
+          ? m[3]!
+          : `${m[3]!.slice(0, 3)}:${m[3]!.slice(3)}`;
+  // Millisecond precision is enough to validate; the TEXT (with its
+  // microseconds) is what pages.
+  const ms = m[2]!.replace(/(\.\d{3})\d+$/, "$1");
+  return !Number.isNaN(Date.parse(`${m[1]}T${ms}${zone}`));
+}
+
+/** A forged or odd cursor is BAD_REQUEST — never a cast error from Postgres. */
+export function decodeCursor(cursor: string): {
+  createdAt: string;
+  id: string;
+} {
   try {
     const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString());
     if (
       typeof parsed.c !== "string" ||
       typeof parsed.i !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}[ T][\d:.]+([+-]\d{2}(:?\d{2})?|Z)?$/.test(parsed.c)
+      !CURSOR_UUID.test(parsed.i) ||
+      !cursorInstantOk(parsed.c)
     ) {
       throw new Error("malformed");
     }
