@@ -7,6 +7,7 @@ import {
   STATUS_LABELS,
   humanizeToken,
   sentenceCaseLabel,
+  nounInSentence,
   resolveActionLabel,
   resolveActionProgressive,
   resolveActionPresent,
@@ -132,6 +133,18 @@ describe("sentenceCaseLabel", () => {
     expect(sentenceCaseLabel("works_at")).toBe("Works at");
     expect(sentenceCaseLabel("worksAt")).toBe("Works at");
     expect(sentenceCaseLabel("")).toBe("");
+  });
+});
+
+describe("nounInSentence", () => {
+  it("lower-cases plain words and keeps acronyms (never a raw toLowerCase)", () => {
+    expect(nounInSentence("User stories")).toBe("user stories");
+    expect(nounInSentence("Features")).toBe("features");
+    expect(nounInSentence("UI designs")).toBe("UI designs");
+    expect(nounInSentence("MCP server")).toBe("MCP server");
+    expect(nounInSentence("Uses iPhone")).toBe("uses iPhone");
+    expect(nounInSentence(" Relation Type ")).toBe("relation type");
+    expect(nounInSentence("")).toBe("");
   });
 });
 

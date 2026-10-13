@@ -92,6 +92,30 @@ export function sentenceCaseLabel(label: string): string {
 }
 
 /**
+ * A noun as it reads MID-SENTENCE ("Makes features, user stories and UI
+ * designs"): plain words lower-case, words carrying deliberate casing stay
+ * (acronyms "UI", "MCP", mixed "iPhone") — the same per-word rule as
+ * {@link sentenceCaseLabel}, with no capital on the first word. The one door
+ * for lower-casing a kind's noun or plural: never `.toLowerCase()` it at a
+ * call site ("UI designs" would read "ui designs").
+ *
+ *   "User stories" → "user stories"
+ *   "UI designs"   → "UI designs"
+ *   "MCP server"   → "MCP server"
+ */
+export function nounInSentence(noun: string): string {
+  return noun
+    .trim()
+    .split(/\s+/)
+    .map((word) =>
+      /^[A-Z]?[a-z]*$/.test(word.replace(/[^A-Za-z]/g, ""))
+        ? word.toLowerCase()
+        : word
+    )
+    .join(" ");
+}
+
+/**
  * An action's two MOODS. Both are correct; they are not interchangeable:
  *   - `imperative` — what approving it WILL do. Buttons, pending proposals.
  *   - `past`       — what already happened. History, event feeds, receipts.
