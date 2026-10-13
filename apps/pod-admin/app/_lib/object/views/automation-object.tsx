@@ -30,15 +30,14 @@ import {
   ResourceRowSkeleton,
 } from "../../../(admin)/components/resource-row";
 import { ErrorNote, errorDetail } from "../../copy-button";
-import { statusPillFor } from "../tone";
+import { statusPillFor } from "../../../(admin)/components/status-tone";
 import {
   automationSummary,
-  couldNotLoad,
-  loadFailure,
   runLine,
   shortDescription,
 } from "../../../open/open-model";
-import { useReauthOnUnauthorized } from "../../../open/_views/use-reauth";
+import { couldNotLoad, loadFailure } from "../load-failure";
+import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
 
 /** Runs the Runs tab lists — the same window the console's run drawer reads. */
@@ -199,7 +198,7 @@ export function AutomationObject({
             ) : runRows.length === 0 ? (
               <ResourceRowEmpty message="This rule hasn’t run yet." />
             ) : (
-              <div className="-mx-2">
+              <div className="-mx-2 divide-y divide-foreground/[0.05]">
                 {runRows.map((run) => {
                   const line = runLine(run);
                   return (

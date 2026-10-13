@@ -8,12 +8,13 @@
  */
 
 import type { ReactNode } from "react";
-import { CardBody, Spinner } from "@heroui/react";
-import { openIn } from "../../lib/open-in";
-import { ExitLink } from "../../lib/exit-link";
+import { CardBody } from "@heroui/react";
 import { ReceiverShell } from "../_lib/receiver-shell";
+import { PageSkeleton } from "../(admin)/components/page-header";
 import { ObjectPage, type ObjectPageProps } from "../_lib/object/object-page";
-import type { LoadFailure } from "./open-model";
+import type { LoadFailure } from "../_lib/object/load-failure";
+import { OpenInAppLink } from "../_lib/object/open-in-app-link";
+import type { ObjectFrame } from "../_lib/object/views/object-frame";
 import { labelForOpenType } from "./open-params";
 
 export function OpenCard({ children }: { children: ReactNode }) {
@@ -26,11 +27,9 @@ export function OpenCard({ children }: { children: ReactNode }) {
 
 export function OpenLoading({ label = "Loading…" }: { label?: string }) {
   return (
-    <ReceiverShell>
-      <CardBody className="items-center gap-3 px-7 py-16">
-        <Spinner label={label} />
-      </CardBody>
-    </ReceiverShell>
+    <OpenCard>
+      <PageSkeleton rows={3} label={label} />
+    </OpenCard>
   );
 }
 
@@ -97,18 +96,12 @@ export function OpenFailure({
   );
 }
 
-/**
- * The desktop form of the object. A bare `synap://` does NOTHING when the app
- * is not installed, and these links arrive by email and CLI, so "not
- * installed" is the common case — `ExitLink` carries the way out with it.
- * `objectInApp` even for hosted kinds: this page IS the web host, so the
- * sub-action must name the app.
- */
-export function OpenInAppLink({ type, id }: { type: string; id: string }) {
-  return (
-    <ExitLink
-      exit={openIn({ kind: "objectInApp", objectKind: type, id })}
-      label="Open in app"
-    />
-  );
-}
+/** The receiver card as an object page's frame — every hosted kind draws in it. */
+export const OPEN_FRAME: ObjectFrame = {
+  loading: (label) => <OpenLoading label={label} />,
+  failure: ({ kind, id, failure }) => (
+    <OpenFailure kind={kind} id={id} failure={failure} />
+  ),
+  object: (props) => <OpenObject {...props} />,
+  pathFor: (kind, id) => `/open/${kind}/${encodeURIComponent(id)}`,
+};

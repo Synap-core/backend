@@ -20,19 +20,11 @@ import {
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
-import {
-  couldNotLoad,
-  entitySummary,
-  loadFailure,
-  redactSecretProperties,
-} from "../open-model";
-import {
-  OpenFailure,
-  OpenInAppLink,
-  OpenLoading,
-  OpenObject,
-} from "../open-shell";
-import { useReauthOnUnauthorized } from "./use-reauth";
+import { entitySummary, redactSecretProperties } from "../open-model";
+import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
+import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 /** The slice of `entities.get({ includeProfile: true })` this page reads. */
 type EntityPayload = {

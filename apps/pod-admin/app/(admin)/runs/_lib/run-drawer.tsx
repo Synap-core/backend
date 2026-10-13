@@ -22,7 +22,7 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import { statusPillFor } from "../../../_lib/object/tone";
+import { statusPillFor } from "../../components/status-tone";
 import { runResultMessage } from "../../rules/_lib/rule-rows";
 import { flowNoun, runActions, triggeredByLabel } from "./run-board";
 

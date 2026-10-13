@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { formatRelative } from "./format";
+import { formatRelative, isUuid, oneLine } from "./format";
 
 const NOW = new Date("2026-06-15T12:00:00Z");
 const at = (ms: number) => new Date(NOW.getTime() + ms);
@@ -30,5 +30,27 @@ describe("formatRelative", () => {
     expect(formatRelative(at(2 * HOUR))).toBe("in 2h");
     expect(formatRelative(at(-3 * DAY))).toBe("3d ago");
     expect(formatRelative(at(-45 * DAY))).toBe("1mo ago");
+  });
+});
+
+describe("oneLine", () => {
+  it("folds whitespace and keeps short text whole", () => {
+    expect(oneLine("  a\n\t b  ", 10)).toBe("a b");
+  });
+
+  it("cuts long text at max with an ellipsis, no trailing space", () => {
+    expect(oneLine("abc def ghi", 4)).toBe("abc…");
+  });
+});
+
+describe("isUuid", () => {
+  it("accepts a canonical uuid in either case", () => {
+    expect(isUuid("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")).toBe(true);
+    expect(isUuid("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")).toBe(true);
+  });
+
+  it("rejects anything else", () => {
+    expect(isUuid("not-a-uuid")).toBe(false);
+    expect(isUuid("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/x")).toBe(false);
   });
 });

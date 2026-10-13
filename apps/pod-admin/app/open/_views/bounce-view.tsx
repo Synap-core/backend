@@ -19,9 +19,11 @@
 
 import { trpc } from "../../../lib/trpc";
 import { bounceReceipt, bounceSummary } from "../open-model";
-import { isUuid, labelForOpenType, type KnownOpenType } from "../open-params";
-import { OpenInAppLink, OpenLoading, OpenObject } from "../open-shell";
-import { useReauthOnUnauthorized } from "./use-reauth";
+import { labelForOpenType, type KnownOpenType } from "../open-params";
+import { isUuid } from "../../../lib/format";
+import { OpenLoading, OpenObject } from "../open-shell";
+import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 const PLACEHOLDER_UUID = "00000000-0000-4000-8000-000000000000";
 

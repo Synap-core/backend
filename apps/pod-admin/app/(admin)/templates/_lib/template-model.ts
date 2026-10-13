@@ -6,6 +6,7 @@
  */
 
 import type { StatusKind } from "../../components/status-pill";
+import { oneLine } from "../../../../lib/format";
 
 /** The `runs.groups` columns template health reads. */
 export interface TemplateGroupFacts {
@@ -67,9 +68,7 @@ export function templateSummary(
     .replace(/\s+/g, " ")
     .trim();
   const sentence = /^(.+?[.!?])(\s|$)/.exec(text)?.[1] ?? text;
-  return sentence.length > SUMMARY_MAX
-    ? `${sentence.slice(0, SUMMARY_MAX).trimEnd()}…`
-    : sentence;
+  return oneLine(sentence, SUMMARY_MAX);
 }
 
 /** Who carries out a run (`playbooks.executor`). */
@@ -160,9 +159,7 @@ export function stageNames(stages: unknown): string[] {
 
 /** A run error on one line, for a list or a sentence. */
 export function errorLine(error: string | null | undefined): string | null {
-  const flat = error?.replace(/\s+/g, " ").trim();
-  if (!flat) return null;
-  return flat.length > 160 ? `${flat.slice(0, 160).trimEnd()}…` : flat;
+  return error?.trim() ? oneLine(error, 160) : null;
 }
 
 /**

@@ -28,7 +28,7 @@ import {
   type SessionLiveFacts,
 } from "@synap-core/types/run-activity";
 import { formatRelative } from "../../../../lib/format";
-import { statusPillFor } from "../../../_lib/object/tone";
+import { statusPillFor } from "../../components/status-tone";
 import type { StatusKind } from "../../components/status-pill";
 
 // Here, not in the client page: the server `page.tsx` renders them in its

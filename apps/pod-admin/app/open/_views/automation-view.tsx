@@ -7,16 +7,7 @@
  */
 
 import { AutomationObject } from "../../_lib/object/views/automation-object";
-import type { ObjectFrame } from "../../_lib/object/views/object-frame";
-import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
-
-const OPEN_FRAME: ObjectFrame = {
-  loading: (label) => <OpenLoading label={label} />,
-  failure: ({ kind, id, failure }) => (
-    <OpenFailure kind={kind} id={id} failure={failure} />
-  ),
-  object: (props) => <OpenObject {...props} />,
-};
+import { OPEN_FRAME } from "../open-shell";
 
 export function AutomationView({ id }: { id: string }) {
   return <AutomationObject id={id} frame={OPEN_FRAME} />;

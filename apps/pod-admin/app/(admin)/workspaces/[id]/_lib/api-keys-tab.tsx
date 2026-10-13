@@ -39,6 +39,7 @@ import {
 } from "../../../keys/_lib/grant-role-picker";
 import { useOfferedKeyScopes } from "../../../keys/_lib/key-scopes";
 import type { GrantMintInput } from "@synap-core/types/grants";
+import { formatRelative } from "../../../../../lib/format";
 
 interface ApiKey {
   id: string;
@@ -59,18 +60,6 @@ function normalizeScopes(s: string[] | string | null | undefined): string[] {
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-}
-
-function formatRelTime(d: Date | string | null | undefined): string {
-  if (!d) return "never";
-  const diff = Date.now() - new Date(d).getTime();
-  if (diff < 60_000) return "just now";
-  const m = Math.floor(diff / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const days = Math.floor(h / 24);
-  return `${days}d ago`;
 }
 
 function keyStatus(k: ApiKey): {
@@ -286,7 +275,7 @@ function KeyRow({
         </div>
         <span className="text-[11px] text-foreground/40">
           {apiKey.keyPrefix ? `${apiKey.keyPrefix}…` : ""} · last used{" "}
-          {formatRelTime(apiKey.lastUsedAt)} · created{" "}
+          {formatRelative(apiKey.lastUsedAt, { empty: "never" })} · created{" "}
           {apiKey.createdAt
             ? new Date(apiKey.createdAt).toLocaleDateString()
             : "—"}

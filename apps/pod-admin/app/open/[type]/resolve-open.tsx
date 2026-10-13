@@ -17,9 +17,10 @@ import { useRouter } from "next/navigation";
 import { Button } from "@heroui/react";
 import { trpc } from "../../../lib/trpc";
 import { openPathForResolved } from "../open-model";
-import { isUuid, labelForOpenType } from "../open-params";
+import { labelForOpenType } from "../open-params";
+import { isUuid } from "../../../lib/format";
 import { OpenLoading, OpenMessage, OpenObject } from "../open-shell";
-import { useReauthOnUnauthorized } from "../_views/use-reauth";
+import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 const PLACEHOLDER_UUID = "00000000-0000-4000-8000-000000000000";
 

@@ -15,10 +15,10 @@ import {
   type AgentDirection,
   type AgentMark,
   type AgentMarkRowLike,
-  type AgentMarkTone,
   type AgentReachRowLike,
 } from "@synap-core/types/agents";
 import type { StatusKind } from "../../components/status-pill";
+import { AGENT_MARK_STATUS } from "../../components/status-tone";
 
 /** The slice of an `agentUsers.list` row this page reads. */
 export interface AgentRosterRowLike
@@ -60,13 +60,6 @@ export interface AgentRowView<
   /** Lifetime approve / refuse standing, when the viewer may see it. */
   standing: AgentStandingLike | null;
 }
-
-export const MARK_TONE_TO_STATUS: Record<AgentMarkTone, StatusKind> = {
-  success: "healthy",
-  warning: "stale",
-  danger: "down",
-  neutral: "unknown",
-};
 
 /** Short pill words per mark — the sentence carries the detail. */
 const PILL_LABEL: Record<AgentMark["kind"], string> = {
@@ -143,7 +136,7 @@ export function buildAgentRoster<R extends AgentRosterRowLike>(
         ? { kind: "stale" as const, label: PILL_LABEL.approve }
         : {
             kind:
-              mark.kind === "stale" ? "stale" : MARK_TONE_TO_STATUS[mark.tone],
+              mark.kind === "stale" ? "stale" : AGENT_MARK_STATUS[mark.tone],
             label: PILL_LABEL[mark.kind],
           };
     return {

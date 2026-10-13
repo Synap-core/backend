@@ -3,11 +3,12 @@ import {
   planEntityFields,
   type EffectivePropertyDef,
 } from "@synap-core/types/property-render";
-import type { DeclarativeBlock } from "@synap-core/types/renderer-ref";
-import { declarativeSegments } from "./declarative";
 import { factsGridClass } from "./facts-grid";
 import { FIELD_LIST_MIN_SHOWN, fieldRows } from "./field-rows";
-import { statusKindForTone, statusPillFor } from "./tone";
+import {
+  statusKindForTone,
+  statusPillFor,
+} from "../../(admin)/components/status-tone";
 
 const def = (
   slug: string,
@@ -117,35 +118,6 @@ describe("fieldRows — the shared plan drawn as rows", () => {
     const { shown, more } = fieldRows(sparse);
     expect(shown).toHaveLength(FIELD_LIST_MIN_SHOWN);
     expect(more).toEqual([]);
-  });
-});
-
-describe("declarativeSegments", () => {
-  it("groups runs of stats and buttons; keeps everything else in order", () => {
-    const blocks: DeclarativeBlock[] = [
-      { type: "heading", text: "Health" },
-      { type: "stat", label: "Runs", value: 12 },
-      { type: "stat", label: "Failed", value: 10, hint: "this week" },
-      { type: "text", text: "Builds time out." },
-      { type: "list", items: ["a", "b"], ordered: true },
-      { type: "button", label: "Run", action: "playbook.run" },
-      { type: "button", label: "Edit", action: "/edit" },
-      { type: "stat", label: "Last", value: "4h ago" },
-    ];
-    expect(declarativeSegments(blocks).map((s) => s.kind)).toEqual([
-      "heading",
-      "stats",
-      "text",
-      "list",
-      "buttons",
-      "stats",
-    ]);
-    const [, stats] = declarativeSegments(blocks);
-    expect(stats?.kind === "stats" && stats.blocks).toHaveLength(2);
-  });
-
-  it("an empty schema draws nothing", () => {
-    expect(declarativeSegments([])).toEqual([]);
   });
 });
 

@@ -13,6 +13,7 @@
  */
 
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { isUuid } from "../../lib/format";
 
 export const HOST_TYPES = ["entity", "view", "automation", "session"] as const;
 export type HostType = (typeof HOST_TYPES)[number];
@@ -43,15 +44,8 @@ export type ParsedOpen =
   | { status: "invalid-id"; type: KnownOpenType; id: string }
   | { status: "not-found"; type: string; id: string };
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Same allowlist Hono uses for `/open/:type/:id` interpolation. */
 const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-
-export function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
 
 export function isSafeOpenId(value: string): boolean {
   return SAFE_ID_RE.test(value);

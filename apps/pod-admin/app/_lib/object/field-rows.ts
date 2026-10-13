@@ -17,8 +17,9 @@ import {
 } from "@synap-core/types/property-render";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { formatTimestamp } from "../../../lib/format";
-import { statusPillFor } from "./tone";
+import { statusPillFor } from "../../(admin)/components/status-tone";
 import type { StatusKind } from "../../(admin)/components/status-pill";
+import { oneLine } from "../../../lib/format";
 
 export interface FieldRow {
   key: string;
@@ -36,13 +37,8 @@ const ROW_TEXT_MAX = 160;
 /** At least this many rows show before the disclosure, when the plan has them. */
 export const FIELD_LIST_MIN_SHOWN = 3;
 
-function clamp(text: string): string {
-  const t = text.trim();
-  return t.length > ROW_TEXT_MAX ? `${t.slice(0, ROW_TEXT_MAX).trimEnd()}…` : t;
-}
-
 /** One planned field → its row, or null when it has nothing a row can show. */
-export function fieldRow(field: PlannedEntityField): FieldRow | null {
+function fieldRow(field: PlannedEntityField): FieldRow | null {
   const { def, value, renderKind } = field;
   const base = { key: def.slug, label: resolvePropertyLabel(def) };
 
@@ -80,7 +76,11 @@ export function fieldRow(field: PlannedEntityField): FieldRow | null {
   if (shape.kind === "empty") return null;
   const text = summarizeShape(shape);
   if (!text) return null;
-  return { ...base, value: clamp(text), mono: shape.kind === "id" };
+  return {
+    ...base,
+    value: oneLine(text, ROW_TEXT_MAX),
+    mono: shape.kind === "id",
+  };
 }
 
 /**

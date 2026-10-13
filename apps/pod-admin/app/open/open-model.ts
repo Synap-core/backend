@@ -9,7 +9,7 @@ import {
   resolveObjectNounPlural,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { formatRelative } from "../../lib/format";
+import { formatRelative, oneLine } from "../../lib/format";
 import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
 
 /**
@@ -23,60 +23,6 @@ export function bounceSummary(): string {
       ? `${nouns.slice(0, -1).join(", ")} and ${nouns[nouns.length - 1]}`
       : nouns.join("");
   return `The web shows ${list}. Open this one in the Synap app for the full surface.`;
-}
-
-export type TrpcErrorLike =
-  { data?: { code?: string | null } | null } | null | undefined;
-
-export interface LoadFailure {
-  title: string;
-  message: string;
-  chip: string;
-}
-
-/**
- * A failed object read, in words. `noun` is the registry noun ("Rule"), read
- * lowercase inside the sentences. Null when there is no error.
- */
-export function loadFailure(
-  error: TrpcErrorLike,
-  noun: string
-): LoadFailure | null {
-  if (!error) return null;
-  const n = noun.toLowerCase();
-  switch (error.data?.code) {
-    case "UNAUTHORIZED":
-      return {
-        title: "Signing you in",
-        message: "Your session expired. Taking you to sign in…",
-        chip: "Sign in required",
-      };
-    case "NOT_FOUND":
-      return {
-        title: `This ${n} couldn’t be found`,
-        message:
-          "It may have been deleted, or the link is stale. You can still try opening it in the Synap app.",
-        chip: "Not found",
-      };
-    case "FORBIDDEN":
-      return {
-        title: `You don’t have access to this ${n}`,
-        message: `You’re signed in, but this ${n} isn’t visible to you. Ask the owner to share it, or open it in the Synap app if you have access there.`,
-        chip: "No access",
-      };
-    default:
-      return couldNotLoad(noun);
-  }
-}
-
-/** The generic failure — also what an empty successful read reads as. */
-export function couldNotLoad(noun: string): LoadFailure {
-  const n = noun.toLowerCase();
-  return {
-    title: `This ${n} couldn’t be loaded`,
-    message: `Something went wrong while loading this ${n}. Try again, or open it in the Synap app.`,
-    chip: "Couldn’t load",
-  };
 }
 
 /** `diagnose.resolveOpen`'s body (`OpenTarget`, resolve-open-target.ts). */
@@ -134,11 +80,7 @@ const MAX_SUMMARY = 280;
 /** One readable paragraph, or null. */
 export function shortDescription(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.length > MAX_SUMMARY
-    ? `${trimmed.slice(0, MAX_SUMMARY).trimEnd()}…`
-    : trimmed;
+  return oneLine(value, MAX_SUMMARY) || null;
 }
 
 /** The property an entity's summary line is read from, first match wins. */
@@ -244,8 +186,7 @@ export function runLine(run: RunFacts): {
   if (error) {
     return {
       primary,
-      secondary:
-        error.length > 140 ? `${error.slice(0, 140).trimEnd()}…` : error,
+      secondary: oneLine(error, 140),
     };
   }
   const steps = run.stepsCompleted ?? 0;

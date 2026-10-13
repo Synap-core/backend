@@ -22,7 +22,7 @@ import { ExitFallback, externalProps } from "../../../lib/exit-link";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
    non-uuid workspace ref would fire a request that can only fail. */
-import { isUuid } from "../../open/open-params";
+import { isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
 import { proposalHeading } from "./proposal-heading";

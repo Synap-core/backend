@@ -4,7 +4,6 @@ import {
   bounceReceipt,
   bounceSummary,
   entitySummary,
-  loadFailure,
   openPathForResolved,
   redactSecretProperties,
   sessionCanCancel,
@@ -23,24 +22,6 @@ const resolved = (over: Partial<ResolvedOpen>): ResolvedOpen => ({
   workspaceId: WS,
   openable: true,
   ...over,
-});
-
-describe("loadFailure", () => {
-  it("speaks in the registry noun, lowercased", () => {
-    expect(loadFailure({ data: { code: "NOT_FOUND" } }, "Rule")?.title).toBe(
-      "This rule couldn’t be found"
-    );
-    expect(loadFailure({ data: { code: "FORBIDDEN" } }, "Session")?.chip).toBe(
-      "No access"
-    );
-    expect(loadFailure({ data: { code: "BOOM" } }, "View")?.chip).toBe(
-      "Couldn’t load"
-    );
-  });
-
-  it("is null without an error", () => {
-    expect(loadFailure(null, "Entity")).toBeNull();
-  });
 });
 
 describe("bounceReceipt — diagnose.resolveOpen names the bounced object", () => {

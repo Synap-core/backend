@@ -9,14 +9,11 @@
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
-import { couldNotLoad, loadFailure, shortDescription } from "../open-model";
-import {
-  OpenFailure,
-  OpenInAppLink,
-  OpenLoading,
-  OpenObject,
-} from "../open-shell";
-import { useReauthOnUnauthorized } from "./use-reauth";
+import { shortDescription } from "../open-model";
+import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
+import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 /** Canvas lenses have no prose description worth showing on the web. */
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);

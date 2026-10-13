@@ -31,10 +31,10 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import { statusPillFor } from "../../../_lib/object/tone";
+import { statusPillFor } from "../../components/status-tone";
 import { consoleFrame } from "../../../_lib/object/views/object-frame";
-import { couldNotLoad, loadFailure } from "../../../open/open-model";
-import { useReauthOnUnauthorized } from "../../../open/_views/use-reauth";
+import { couldNotLoad, loadFailure } from "../../../_lib/object/load-failure";
+import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
 import { RunDrawer, type RunTarget } from "../../runs/_lib/run-drawer";
 import { runRowSecondary } from "../../runs/_lib/run-board";
 import {
@@ -129,7 +129,7 @@ export default function TemplatePage() {
     ) : list.length === 0 ? (
       <ResourceRowEmpty message="This template hasn’t run yet." />
     ) : (
-      <div className="-mx-2">
+      <div className="-mx-2 divide-y divide-foreground/[0.05]">
         {list.map((run) => (
           <ResourceRow
             key={run.id}

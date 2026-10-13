@@ -83,14 +83,3 @@ export function kindIcon(
 export function kindLabel(kind: string): string {
   return resolveObjectNoun(kind);
 }
-
-/**
- * "a cell package" / "an automation package" — the vocabulary-resolved label,
- * lowercased and given its indefinite article, for the one call site that
- * needs the kind inside a sentence rather than on a chip.
- */
-export function kindPackagePhrase(kind: string): string {
-  const label = kindLabel(kind).toLowerCase();
-  const article = /^[aeiou]/i.test(label) ? "an" : "a";
-  return `${article} ${label} package`;
-}

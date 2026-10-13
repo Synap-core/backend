@@ -11,7 +11,12 @@
  */
 
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { formatRelative, shortId } from "../../../../lib/format";
+import {
+  formatRelative,
+  isUuid,
+  oneLine,
+  shortId,
+} from "../../../../lib/format";
 
 export const RUN_FILTERS = [
   { key: "all", label: "All" },
@@ -131,20 +136,13 @@ export interface RunFacts {
 
 const ONE_LINE = 140;
 
-function oneLine(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > ONE_LINE
-    ? `${flat.slice(0, ONE_LINE).trimEnd()}…`
-    : flat;
-}
-
 /** A run as a line: when it started, then why it failed (or what it did). */
 export function runRowSecondary(run: RunFacts): string {
   const when = `Started ${formatRelative(run.startedAt, { empty: "at an unknown time" })}`;
   const error = run.error?.trim();
-  if (error) return `${when} · ${oneLine(error)}`;
+  if (error) return `${when} · ${oneLine(error, ONE_LINE)}`;
   const summary = run.summary?.trim();
-  if (summary) return `${when} · ${oneLine(summary)}`;
+  if (summary) return `${when} · ${oneLine(summary, ONE_LINE)}`;
   return run.completedAt
     ? `${when} · finished ${formatRelative(run.completedAt)}`
     : when;
@@ -164,8 +162,6 @@ export function runActions(run: {
   };
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Who started a run. Ledgers store a user id, an agent id or a word
  * (`system`, `cron`); an id is not a name, so a stranger's id reads as "a
@@ -178,6 +174,6 @@ export function triggeredByLabel(
   const v = value?.trim();
   if (!v) return null;
   if (viewerId && v === viewerId) return "You";
-  if (UUID.test(v)) return `A person or agent (${shortId(v)})`;
+  if (isUuid(v)) return `A person or agent (${shortId(v)})`;
   return humanizeToken(v);
 }
