@@ -2,10 +2,6 @@
  * Field type detection — reads a value with NO schema (a payload key, an
  * undeclared property) as the kind of thing it holds, for dynamic rendering.
  * With a schema, `classifyPropertyKind` is the door instead.
- *
- * HOME: here (`@synap-core/types/property-render`), moved down from app-bases
- * `@synap-core/headless/property-renderer/utils/fieldTypeDetector.ts`.
- * Follow-up: re-point that copy's importers here and delete it.
  */
 
 export type FieldType =

@@ -4,10 +4,6 @@
  * 3–6 primary facts, the overflow, the body prose, machine bookkeeping, and
  * the empty ones. Every renderer draws the same plan, so a field cannot be a
  * headline fact on one surface and buried on another.
- *
- * HOME: here (`@synap-core/types/property-render`), moved down from app-bases
- * `@synap-core/hooks/profile-renderer/entity-field-plan.ts`. Follow-up:
- * re-point that copy's importers here and delete it (see `./index.ts`).
  */
 
 import { classifyPropertyKind } from "./classify-property.js";

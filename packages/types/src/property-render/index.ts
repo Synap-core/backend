@@ -11,7 +11,10 @@
  * no drizzle; runtime imports reach only sibling `@synap-core/types` modules
  * (`vocabulary`, `units`). `property-render.leaf.test.ts` walks the graph.
  *
- * ── Moved down from app-bases (follow-up: re-point, then delete there) ──────
+ * Moved down from app-bases. Each copy there still has importers: re-point
+ * them here, then delete the copy. For `statusSemantics.ts` only the pure half
+ * moved; its web-token wrappers (`ENUM_TONE_TOKEN`, `getEnumColor`, the web
+ * `STATUS_PILL_MAP`) stay in app-bases.
  *   hooks/src/profile-renderer/classify-property.ts      → ./classify-property
  *   hooks/src/profile-renderer/entity-field-plan.ts      → ./entity-field-plan
  *   hooks/src/profile-renderer/classify/index.ts         → this entry point

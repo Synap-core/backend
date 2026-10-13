@@ -15,10 +15,6 @@
  *   5. valueType            — final fallback (string/number/boolean/date/entity_id/...)
  *
  * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
- *
- * HOME: here (`@synap-core/types/property-render`), moved down from app-bases
- * `@synap-core/hooks/profile-renderer/classify-property.ts`. Follow-up:
- * re-point that copy's importers here and delete it (see `./index.ts`).
  */
 
 import type { EffectivePropertyDef, PropertyRenderKind } from "./types.js";

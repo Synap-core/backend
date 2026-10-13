@@ -1,7 +1,7 @@
 /**
  * Deciding a pending issuer clears its "needs approval" notifications — every
- * deciding door of `TrustedIssuerService`, in the decision's own transaction
- * (console plan bug 1: they stayed unread in browser/relay forever).
+ * deciding door of `TrustedIssuerService`, in the decision's own transaction,
+ * so a decided issuer never stays "needs approval" in browser or relay.
  *
  * ENGINE: PGlite, the two tables built from their drizzle definitions.
  */

@@ -24,9 +24,8 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /**
  * A decided issuer's "needs approval" notifications leave every admin's bell
  * IN THE SAME TRANSACTION as the decision — whichever door decided it (the
- * console, the first-link flow, a revoke of a still-pending row). Until
- * 2026-10-12 nothing cleared them, so a decided issuer stayed "needs
- * approval" in browser and relay forever (console plan, bug 1).
+ * console, the first-link flow, a revoke of a still-pending row), so a
+ * decided issuer never stays "needs approval" in browser or relay.
  */
 async function actionPendingNotifications(tx: Tx, issuerId: string) {
   await tx
