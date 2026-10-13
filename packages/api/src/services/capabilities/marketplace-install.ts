@@ -106,16 +106,46 @@ export interface CatalogCacheRowFull {
   definition: Record<string, unknown> | null;
 }
 
-/** Look up ONE cache row by (kind, slug) — the exact target an install needs. */
+/**
+ * Look up ONE cache row by (source, kind, slug) — the exact target an install
+ * needs. The cache is unique on all three; a slug is only unique WITHIN a
+ * source, so `(kind, slug)` alone names one row only while a single source
+ * holds that slug.
+ *
+ * `source` omitted: the one matching row, or a CONFLICT when several sources
+ * carry the same (kind, slug). Picking one would install whichever row the
+ * database happened to return first — `acme/crm` silently standing in for
+ * `synap/crm` — so the caller is told to name the source instead.
+ */
 export async function lookupCatalogEntry(
   kind: CatalogKind,
-  slug: string
+  slug: string,
+  source?: string | null
 ): Promise<CatalogCacheRowFull | null> {
-  const [row] = await db
+  const conditions = [
+    eq(cpCatalogCache.kind, kind),
+    eq(cpCatalogCache.slug, slug),
+  ];
+  if (source) conditions.push(eq(cpCatalogCache.source, source));
+  // Two rows are enough to know the target is ambiguous.
+  const rows = await db
     .select()
     .from(cpCatalogCache)
-    .where(and(eq(cpCatalogCache.kind, kind), eq(cpCatalogCache.slug, slug)))
-    .limit(1);
+    .where(and(...conditions))
+    .limit(2);
+  if (rows.length > 1) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `"${slug}" (${kind}) is offered by more than one catalog source (${rows
+        .map((r) => r.source)
+        .join(", ")}) — name the source to install from.`,
+      cause: {
+        code: "CATALOG_ENTRY_AMBIGUOUS",
+        sources: rows.map((r) => r.source),
+      },
+    });
+  }
+  const [row] = rows;
   // A tombstone is never an install target (the CP answers 410 for it too).
   if (row?.retiredAt) {
     throw new TRPCError({
@@ -366,6 +396,43 @@ async function resolveCellDefinitionByKey(slug: string): Promise<{
   };
 }
 
+/**
+ * The install payload for one catalog target, resolved EXACTLY as
+ * `applyMarketInstall` resolves it: the cache row's inline definition, else a
+ * by-slug fetch from the row's own source; with no row, the per-kind by-key
+ * re-resolve from the configured Control Plane. ONE resolution path, so a
+ * preview (`marketplace.get` / `marketplace.preflight`) describes the very
+ * definition the install will apply.
+ *
+ * Null only where the install would also stop: a capability the CP does not
+ * know, or a cached cell row that carries no renderer source.
+ */
+export async function resolveCatalogDefinition(
+  kind: CatalogKind,
+  slug: string,
+  entry: CatalogCacheRowFull | null,
+  version?: string | null
+): Promise<Record<string, unknown> | null> {
+  if (kind === "cell") {
+    // A cell's source is inline-only — the by-slug packages endpoint never
+    // serves it — so a cached row is read as-is, never re-fetched.
+    return entry
+      ? entry.definition
+      : ((await resolveCellDefinitionByKey(slug)).def as Record<
+          string,
+          unknown
+        >);
+  }
+  if (entry) return resolveDefinition(entry, version);
+  if (kind === "capability") {
+    return (await fetchCPCapabilityTemplate(slug)) as unknown as Record<
+      string,
+      unknown
+    > | null;
+  }
+  return resolveDefinitionByKey(slug, version);
+}
+
 /** Shared install-time params schema — the ONE zod shape every capability-apply
  *  door declares for `{{param}}` substitution (tRPC `capabilities.install`,
  *  Hub `POST /capabilities/apply`, and the `market.install` verb). */
@@ -400,6 +467,12 @@ export async function applyCapabilityDefinition(
 export interface ApplyMarketInstallInput {
   kind: CatalogKind;
   slug: string;
+  /**
+   * The catalog source (provider base URL) the target is listed under. Omit
+   * when only one source offers this slug; required once several do (see
+   * `lookupCatalogEntry`).
+   */
+  source?: string | null;
   version?: string | null;
   params?: Record<string, unknown>;
   userId: string;
@@ -436,7 +509,7 @@ export async function applyMarketInstall(
   const supplied = input.definition ?? null;
   const entry = supplied
     ? null
-    : await lookupCatalogEntry(input.kind, input.slug);
+    : await lookupCatalogEntry(input.kind, input.slug, input.source);
 
   // A CAPABILITY is resolvable WITHOUT a cache row. Opt-in capabilities
   // (syncByDefault:false, e.g. unipile-linkedin, arch-backend) never enter
@@ -449,13 +522,13 @@ export async function applyMarketInstall(
   // Capability is handled BEFORE the cache-row requirement because it resolves
   // by key, cache-row or not.
   if (input.kind === "capability") {
-    const definition = (supplied
-      ? supplied
-      : entry
-        ? await resolveDefinition(entry, input.version)
-        : await fetchCPCapabilityTemplate(
-            input.slug
-          )) as unknown as CapabilityDefinition | null;
+    const definition = (supplied ??
+      (await resolveCatalogDefinition(
+        "capability",
+        input.slug,
+        entry,
+        input.version
+      ))) as unknown as CapabilityDefinition | null;
     if (!definition) {
       throw new TRPCError({
         code: "NOT_FOUND",
@@ -553,14 +626,13 @@ export async function applyMarketInstall(
       // Supplied payload (RC4) → use directly; else cache row present → resolve
       // inline/by-slug; row MISSING → by-key re-resolve from the CP (opt-in /
       // just-authored template).
-      const definition = (supplied
-        ? supplied
-        : entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(
-              input.slug,
-              input.version
-            )) as unknown as WorkspaceDefinitionInput & {
+      const definition = (supplied ??
+        (await resolveCatalogDefinition(
+          "template",
+          input.slug,
+          entry,
+          input.version
+        ))) as unknown as WorkspaceDefinitionInput & {
         workspaceName?: string;
       };
       // Idempotency: packageSlug/proposalId both set to the catalog slug, so a
@@ -850,9 +922,12 @@ export async function applyMarketInstall(
       // inline/by-slug; row MISSING → by-key re-resolve from the CP (opt-in /
       // just-authored automation package).
       const definition = (supplied ??
-        (entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version))) as {
+        (await resolveCatalogDefinition(
+          "automation",
+          input.slug,
+          entry,
+          input.version
+        ))) as {
         automations?: Array<{
           name: string;
           description?: string;
@@ -983,9 +1058,12 @@ export async function applyMarketInstall(
       // carries no `skill` slot at all) behaves exactly as it did before.
       const resolved =
         supplied ??
-        (entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version));
+        (await resolveCatalogDefinition(
+          "skill",
+          input.slug,
+          entry,
+          input.version
+        ));
       const definition = ((resolved as { skill?: Record<string, unknown> })
         .skill ?? resolved) as {
         /** The skill's own `load_skill` ref — see `skillFields.slug` below. */
@@ -1080,9 +1158,12 @@ export async function applyMarketInstall(
       // → use directly; else cache row present → resolve inline/by-slug; row
       // MISSING → by-key re-resolve from the CP.
       const definition = (supplied ??
-        (entry
-          ? await resolveDefinition(entry, input.version)
-          : await resolveDefinitionByKey(input.slug, input.version))) as {
+        (await resolveCatalogDefinition(
+          "view",
+          input.slug,
+          entry,
+          input.version
+        ))) as {
         name?: string;
         displayName?: string;
         views?: Array<{
@@ -1287,6 +1368,12 @@ export async function applyMarketInstall(
 export interface RunMarketInstallInput {
   slug: string;
   kind: CatalogKind;
+  /**
+   * The catalog source (provider base URL) the target is listed under. Omit
+   * when only one source offers this slug; required once several do (see
+   * `lookupCatalogEntry`).
+   */
+  source?: string | null;
   version?: string | null;
   params?: Record<string, unknown>;
   /**
@@ -1318,7 +1405,7 @@ export type MarketInstallOutcome =
 export async function runMarketInstall(
   input: RunMarketInstallInput
 ): Promise<MarketInstallOutcome> {
-  const entry = await lookupCatalogEntry(input.kind, input.slug);
+  const entry = await lookupCatalogEntry(input.kind, input.slug, input.source);
   // Capability resolves by key even without a cache row — opt-in caps
   // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them by
   // key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). The same
@@ -1366,6 +1453,7 @@ export async function runMarketInstall(
   const result = await applyMarketInstall({
     kind: input.kind,
     slug: input.slug,
+    source: entry?.source ?? input.source,
     version: input.version,
     params: input.params,
     definition: input.definition,

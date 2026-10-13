@@ -517,6 +517,9 @@ export function registerCapabilityExecutors(): void {
       const installResult = await applyMarketInstall({
         kind,
         slug,
+        // The source the proposal was filed against — the approval installs
+        // that row, not whichever source happens to share the slug.
+        source: typeof data.source === "string" ? data.source : undefined,
         version: data.version as string | null | undefined,
         params: (data.params ?? {}) as Record<string, unknown>,
         userId,
