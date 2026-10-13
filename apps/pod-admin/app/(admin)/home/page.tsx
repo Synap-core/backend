@@ -46,6 +46,7 @@ import {
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
+  resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
 import Link from "next/link";
 import { useState } from "react";
@@ -460,7 +461,7 @@ function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
 
   // The row carries only `workspaceId`; `proposals.list` resolves author and
   // target names but no workspace name. The name lookup is admin-only, so a
-  // member's peek reads "Workspace" instead.
+  // member's peek reads "Space" instead.
   const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
     enabled: isAdmin,
@@ -505,7 +506,8 @@ function ApprovalQueueCard({ isAdmin }: { isAdmin: boolean }) {
             const workspaceLabel =
               proposal.workspaceId == null
                 ? "Pod-wide"
-                : (workspaceNames.get(proposal.workspaceId) ?? "Workspace");
+                : (workspaceNames.get(proposal.workspaceId) ??
+                  resolveObjectNoun("workspace"));
             return (
               // Each row opens the same change inside Review — one queue,
               // with its drawer and batch rules, rather than a second one.
@@ -733,7 +735,17 @@ function ContentsRow() {
     <ResourceRow
       Icon={Database}
       primary={`${totalRecords.toLocaleString()} records`}
-      secondary={`${data.entityCount.toLocaleString()} entities · ${data.documentCount.toLocaleString()} documents · ${data.workspaceCount.toLocaleString()} workspaces · ${data.userCount.toLocaleString()} users`}
+      secondary={[
+        { n: data.entityCount, kind: "entity" },
+        { n: data.documentCount, kind: "document" },
+        { n: data.workspaceCount, kind: "workspace" },
+        { n: data.userCount, kind: "user" },
+      ]
+        .map(
+          ({ n, kind }) =>
+            `${n.toLocaleString()} ${resolveObjectNounPlural(kind).toLowerCase()}`
+        )
+        .join(" · ")}
     />
   );
 }
