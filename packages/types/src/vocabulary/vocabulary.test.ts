@@ -985,6 +985,13 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural("some_batch")).toBe("Some batches");
     expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
   });
+
+  it('a Greek -sis / -xis noun takes -ses / -xes (homes: "Hypothesises")', () => {
+    expect(resolveObjectNounPlural("hypothesis")).toBe("Hypotheses");
+    expect(resolveObjectNounPlural("some_analysis")).toBe("Some analyses");
+    expect(resolveObjectNounPlural("some_axis")).toBe("Some axes");
+    expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
+  });
 });
 
 describe("withdraw — the mood trap", () => {

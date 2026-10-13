@@ -727,11 +727,14 @@ const UNCOUNTABLE_NOUNS = new Set([
  * which takes "ies" — `property` (an alias target with no registry entry)
  * rendered "Propertys" through the bare-`s` rule — a sibilant ending
  * (s / x / z / ch / sh), which takes "es", and an uncountable noun, which
- * stays as it is.
+ * stays as it is. A Greek -sis / -xis ending takes -ses / -xes.
  */
 function pluralizeFallback(noun: string): string {
   const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
   if (UNCOUNTABLE_NOUNS.has(last)) return noun;
+  // Greek -sis / -xis: hypothesis → hypotheses, analysis → analyses, axis →
+  // axes ("Hypothesises" reached the homes read through the sibilant rule).
+  if (/(sis|xis)$/i.test(noun)) return `${noun.slice(0, -2)}es`;
   if (/[^aeiou]y$/i.test(noun)) return `${noun.slice(0, -1)}ies`;
   if (/(s|x|z|ch|sh)$/i.test(noun)) return `${noun}es`;
   return `${noun}s`;
