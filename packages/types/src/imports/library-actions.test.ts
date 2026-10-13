@@ -197,6 +197,19 @@ describe("ids, merge and AI normalisation", () => {
     expect(carryRunLibraryActions([run], [])).toEqual([run]);
   });
 
+  it("a chip being run (claimed) keeps its claim across a re-read", () => {
+    const [first] = detectLibraryActions({
+      text: "TODO: call the bank",
+      now: NOW,
+    });
+    const inFlight = { ...first!, claimedAt: "2026-10-13T09:00:00.000Z" };
+    const again = carryRunLibraryActions(
+      [inFlight],
+      detectLibraryActions({ text: "TODO: call the bank", now: NOW })
+    );
+    expect(again).toEqual([inFlight]);
+  });
+
   it("labels come from the value", () => {
     expect(libraryActionLabel("contact", { phone: "+33 6 12 34 56 78" })).toBe(
       "Save contact · +33 6 12 34 56 78"

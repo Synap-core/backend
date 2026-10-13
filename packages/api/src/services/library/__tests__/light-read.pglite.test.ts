@@ -460,6 +460,41 @@ describe("sweep", () => {
   });
 });
 
+describe("the sweep never starves", () => {
+  it("one person's pile of held items cannot fill the batch for everyone else", async () => {
+    const { LIGHT_READ_SWEEP_BATCH } = await import("../light-read-queue.js");
+    // OTHER's window is full (cap 1, one AI read today) and holds a pile of
+    // over-budget items, older than everything else.
+    await stageItem({
+      userId: OTHER,
+      item: { source: { kind: "text" } },
+      ageMinutes: 5000,
+      read: { status: "read", suggestedActions: [], aiAt: NOW.toISOString() },
+    });
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importRead,aiAt}', to_jsonb(now())) where metadata->'importRead'->>'aiAt' is not null`
+    );
+    await q(
+      `insert into documents (user_id, title, type, metadata, created_at)
+       select $1, 'held', 'text',
+         '{"importItem":{"version":1,"title":"held","source":{"kind":"text"},"contentStatus":"readable","stagedAt":"x"},"importRead":{"status":"over_budget","suggestedActions":[]}}'::jsonb,
+         now() - interval '3000 minutes' - (g || ' seconds')::interval
+       from generate_series(1, $2) g`,
+      [OTHER, LIGHT_READ_SWEEP_BATCH + 5]
+    );
+    // USER's item was never read, and is newer than the whole pile.
+    const mine = await stageItem({
+      item: { source: { kind: "text" } },
+      ageMinutes: 30,
+    });
+    const sent: string[] = [];
+    const send = async (_q: string, data: { itemId: string }) =>
+      void sent.push(data.itemId);
+    await sweepLibraryLightReads({ database: db as never, send, perDay: 1 });
+    expect(sent).toEqual([mine]);
+  });
+});
+
 describe("run a chip", () => {
   async function readTodo() {
     const id = await stageItem({

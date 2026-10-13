@@ -10,7 +10,14 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
+import {
+  documents,
+  drizzleSql,
+  and,
+  eq,
+  inArray,
+  isNull,
+} from "@synap/database";
 import type { db as DbType } from "@synap/database";
 import {
   LIBRARY_LIGHT_READ_QUEUE,
@@ -133,48 +140,64 @@ export async function runLibraryLightReadJob(
  */
 export async function sweepLibraryLightReads(
   opts: {
-    database?: Pick<typeof DbType, "select">;
+    database?: Pick<typeof DbType, "select" | "selectDistinct">;
     send?: Send;
     perDay?: number;
   } = {}
 ): Promise<{ enqueued: number }> {
   const database =
     opts.database ?? ((await import("@synap/database")).db as never);
-  const rows = await database
-    .select({
-      id: documents.id,
-      userId: documents.userId,
-      status: drizzleSql<
-        string | null
-      >`${documents.metadata} #>> '{importRead,status}'`,
-    })
+  const base = and(
+    isNull(documents.deletedAt),
+    drizzleSql`${documents.metadata} ? 'importItem'`,
+    drizzleSql`(${documents.metadata} #>> '{importCuration,archivedAt}') IS NULL`,
+    // Leave a fresh save to the enqueue that came with it.
+    drizzleSql`${documents.createdAt} < now() - interval '2 minutes'`
+  );
+  // 1. What no budget holds back: never read, or a needs_file item whose file
+  //    has since been attached.
+  const fresh = await database
+    .select({ id: documents.id, userId: documents.userId })
     .from(documents)
     .where(
       and(
-        isNull(documents.deletedAt),
-        drizzleSql`${documents.metadata} ? 'importItem'`,
-        drizzleSql`(coalesce(${documents.metadata} #>> '{importRead,status}', 'not_read') in ('not_read', 'over_budget') OR (${documents.metadata} #>> '{importRead,status}' = 'needs_file' AND ${documents.metadata} #>> '{importItem,source,documentId}' IS NOT NULL))`,
-        drizzleSql`(${documents.metadata} #>> '{importCuration,archivedAt}') IS NULL`,
-        // Leave a fresh save to the enqueue that came with it.
-        drizzleSql`${documents.createdAt} < now() - interval '2 minutes'`
+        base,
+        drizzleSql`(coalesce(${documents.metadata} #>> '{importRead,status}', 'not_read') = 'not_read' OR (${documents.metadata} #>> '{importRead,status}' = 'needs_file' AND ${documents.metadata} #>> '{importItem,source,documentId}' IS NOT NULL))`
       )
     )
     .orderBy(documents.createdAt)
     .limit(LIGHT_READ_SWEEP_BATCH);
+  const due: Array<{ userId: string; itemId: string }> = fresh.map((r) => ({
+    userId: r.userId,
+    itemId: r.id,
+  }));
 
-  const perDay = opts.perDay ?? libraryReadAiPerDay();
-  const roomByUser = new Map<string, boolean>();
-  const due: Array<{ userId: string; itemId: string }> = [];
-  for (const r of rows) {
-    if (r.status === "over_budget") {
-      let room = roomByUser.get(r.userId);
-      if (room === undefined) {
-        room = (await libraryReadAiUsedToday(database, r.userId)) < perDay;
-        roomByUser.set(r.userId, room);
+  // 2. Held over budget — only for the people whose window has room, chosen
+  //    BEFORE the limit: one person's pile of held items can never fill the
+  //    batch and starve everyone else.
+  const room = LIGHT_READ_SWEEP_BATCH - due.length;
+  if (room > 0) {
+    const overBudget = drizzleSql`${documents.metadata} #>> '{importRead,status}' = 'over_budget'`;
+    const holders = await database
+      .selectDistinct({ userId: documents.userId })
+      .from(documents)
+      .where(and(base, overBudget));
+    const perDay = opts.perDay ?? libraryReadAiPerDay();
+    const withRoom: string[] = [];
+    for (const h of holders) {
+      if ((await libraryReadAiUsedToday(database, h.userId)) < perDay) {
+        withRoom.push(h.userId);
       }
-      if (!room) continue;
     }
-    due.push({ userId: r.userId, itemId: r.id });
+    if (withRoom.length > 0) {
+      const held = await database
+        .select({ id: documents.id, userId: documents.userId })
+        .from(documents)
+        .where(and(base, overBudget, inArray(documents.userId, withRoom)))
+        .orderBy(documents.createdAt)
+        .limit(room);
+      for (const r of held) due.push({ userId: r.userId, itemId: r.id });
+    }
   }
   return { enqueued: await enqueueLibraryLightRead(due, opts.send) };
 }

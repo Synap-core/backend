@@ -728,14 +728,18 @@ export function normalizeLibraryActions(raw: unknown): LibraryAction[] {
 
 /**
  * Keep what the person already did: a chip of a previous read that was RUN
- * (has a `proposalId`) survives a re-read with that id — re-running a read
- * never forgets a proposal, and never offers the same chip twice.
+ * (has a `proposalId`) — or is being run right now (the pod's in-flight claim,
+ * `claimedAt`) — survives a re-read as it was. A re-read never forgets a
+ * proposal, never offers the same chip twice, and never drops a claim, which
+ * would let a second tap file a second proposal.
  */
 export function carryRunLibraryActions(
   previous: ReadonlyArray<LibraryAction>,
   next: ReadonlyArray<LibraryAction>
 ): LibraryAction[] {
-  const run = previous.filter((a) => a.proposalId);
+  const run = previous.filter(
+    (a) => a.proposalId || (a as { claimedAt?: unknown }).claimedAt
+  );
   const byKey = new Map(run.map((a) => [libraryActionKey(a.kind, a.value), a]));
   const merged = next.map(
     (a) => byKey.get(libraryActionKey(a.kind, a.value)) ?? a
