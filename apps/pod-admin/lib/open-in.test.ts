@@ -6,6 +6,7 @@ import {
   ACCOUNT_PAGES,
   MOBILE_FALLBACK,
   PHONE_UNAVAILABLE_NOTE,
+  publisherExit,
 } from "./open-in";
 
 const ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -224,6 +225,30 @@ describe("placeExit — the device decides what a hand-off shows", () => {
       const placed = placeExit(openIn(target), true);
       expect(placed.href).toBeNull();
       expect(placed.fallback).toBeUndefined();
+    }
+  });
+});
+
+describe("publisherExit — a showcase listing's own page", () => {
+  it("opens an https page as a web exit (a new tab, never the desktop app)", () => {
+    expect(publisherExit("https://acme.test/install?x=1")).toEqual({
+      href: "https://acme.test/install?x=1",
+      isDesktopLink: false,
+    });
+  });
+
+  it("is no link at all for anything but plain https", () => {
+    for (const bad of [
+      "http://acme.test",
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "https://user:pw@acme.test",
+      "not a url",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(publisherExit(bad)).toBeNull();
     }
   });
 });

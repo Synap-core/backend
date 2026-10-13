@@ -6,7 +6,9 @@
  * The catalog is the POD's: `marketplace.list` reads the catalog the pod keeps
  * in sync with its sources (every 10 minutes), so browsing never waits on a
  * source and a source being down shows the last synced copy, not an error —
- * and never a sign-in page. A pod with no source says so plainly.
+ * and never a sign-in page. A pod with no source says so plainly. When more
+ * than one source lists packages, a chip row filters by source and every card
+ * names where it comes from — and how far this pod trusts that (Sources tab).
  *
  * Deliberately absent, and not an oversight:
  *   • No "Verified" badge. `isVerified` is set by domain registration on the
@@ -31,21 +33,27 @@ import {
 } from "../../components/resource-row";
 import { FilterChips } from "../../components/filter-chips";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { navHref } from "../../../../lib/console-nav";
 import {
   catalogDetailHref,
   catalogFreshness,
   catalogKindLabel,
 } from "./catalog-model";
+import { catalogSourceChips } from "./sources-model";
+import { TrustChip } from "./sources-tab";
 import type { CatalogEntry } from "./types";
 
 const PAGE_SIZE = 60;
 /** The chip that clears the kind filter (not a catalog kind). */
 const ALL = "all";
+/** The chip that clears the source filter — never a source id (ids are [a-z0-9-]). */
+const ALL_SOURCES = "*";
 
 export function CatalogTab() {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [kind, setKind] = useState<CatalogEntry["kind"] | null>(null);
+  const [source, setSource] = useState<string | null>(null);
 
   // Debounce the search box — each keystroke otherwise re-ranks the catalog.
   useEffect(() => {
@@ -57,6 +65,7 @@ export function CatalogTab() {
     {
       query: debounced || undefined,
       kind: kind ?? undefined,
+      source: source ?? undefined,
       limit: PAGE_SIZE,
     },
     {
@@ -84,8 +93,12 @@ export function CatalogTab() {
   }, [entries]);
   const pageIsWholeCatalog = !!page && page.total <= entries.length;
 
-  const noSource = !!page && page.sources.length === 0;
+  // "No source" = nothing can list right now (all off, or blocked) — Synap
+  // is always in `sources`, switched on or not.
+  const noSource =
+    !!page && page.sources.every((s) => !s.enabled || !!s.blocked);
   const freshness = page ? catalogFreshness(page.sources) : null;
+  const sourceChips = page ? catalogSourceChips(page.sources) : [];
 
   return (
     <div>
@@ -100,6 +113,18 @@ export function CatalogTab() {
         startContent={<Search size={14} className="text-foreground/40" />}
         className="mb-3 max-w-md"
       />
+
+      {sourceChips.length > 1 && (
+        <FilterChips
+          ariaLabel="Source"
+          active={source ?? ALL_SOURCES}
+          chips={[{ key: ALL_SOURCES, label: "All sources" }, ...sourceChips]}
+          // Pressing the active source again clears it.
+          onSelect={(k) =>
+            setSource(k === ALL_SOURCES || k === source ? null : k)
+          }
+        />
+      )}
 
       {page && (
         <FilterChips
@@ -135,13 +160,25 @@ export function CatalogTab() {
       )}
 
       {noSource && (
-        <ResourceRowEmpty message="This pod has no catalog source, so there is nothing to browse. A pod connected to Synap lists the Synap catalog here." />
+        <ResourceRowEmpty
+          message={
+            <>
+              No catalog source is on, so there is nothing to browse.{" "}
+              <Link
+                href={navHref("marketplace", { tab: "sources" })}
+                className="text-primary hover:underline"
+              >
+                See the sources
+              </Link>
+            </>
+          }
+        />
       )}
 
       {page && !noSource && entries.length === 0 && (
         <ResourceRowEmpty
           message={
-            debounced || kind
+            debounced || kind || source
               ? "Nothing in the catalog matches this filter."
               : (freshness ?? "The catalog is empty.")
           }
@@ -155,7 +192,7 @@ export function CatalogTab() {
               <EntryCard
                 key={`${entry.source}|${entry.kind}|${entry.slug}`}
                 entry={entry}
-                showSource={(page?.sources.length ?? 0) > 1}
+                showSource={sourceChips.length > 1}
               />
             ))}
           </div>
@@ -223,8 +260,15 @@ function EntryCard({
       </p>
 
       <div className="mt-auto flex min-w-0 items-center gap-1.5 pt-1 text-[11px] text-foreground/65">
-        <span className="truncate font-mono">{entry.slug}</span>
-        {showSource && <span className="shrink-0">· {entry.sourceName}</span>}
+        <span className="truncate font-mono">{entry.id}</span>
+        {showSource && (
+          <span className="shrink-0">· from {entry.sourceName}</span>
+        )}
+        {entry.trust !== "official" && (
+          <span className="ml-auto shrink-0">
+            <TrustChip trust={entry.trust} />
+          </span>
+        )}
       </div>
     </Link>
   );

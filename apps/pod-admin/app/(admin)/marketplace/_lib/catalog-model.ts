@@ -53,8 +53,13 @@ export function catalogDetailHref(entry: {
  * One line on where the catalog comes from and how fresh it is — null when the
  * pod has no source at all (the empty state says that instead).
  */
-export function catalogFreshness(sources: CatalogSource[]): string | null {
-  const live = sources.filter((s) => s.configured);
+export function catalogFreshness(
+  sources: Pick<
+    CatalogSource,
+    "name" | "enabled" | "lastSyncAt" | "unreachable"
+  >[]
+): string | null {
+  const live = sources.filter((s) => s.enabled);
   if (live.length === 0) return null;
   return live
     .map((s) => {

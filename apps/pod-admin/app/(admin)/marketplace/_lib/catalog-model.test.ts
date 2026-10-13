@@ -46,14 +46,14 @@ describe("catalogFreshness", () => {
   const source = {
     source: "https://cp.synap.live",
     name: "Synap",
-    configured: true,
+    enabled: true,
     lastSyncAt: "2026-10-13T11:55:00.000Z",
     unreachable: false,
   };
 
-  it("is null with no configured source (the empty state speaks instead)", () => {
+  it("is null with no enabled source (the empty state speaks instead)", () => {
     expect(catalogFreshness([])).toBeNull();
-    expect(catalogFreshness([{ ...source, configured: false }])).toBeNull();
+    expect(catalogFreshness([{ ...source, enabled: false }])).toBeNull();
   });
 
   it("says where the catalog is from and when it was refreshed", () => {

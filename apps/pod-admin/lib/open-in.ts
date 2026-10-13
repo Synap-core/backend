@@ -311,6 +311,26 @@ export function openIn(target: ExitTarget): Exit {
 }
 
 /**
+ * A marketplace publisher's own page — where a showcase-only listing installs
+ * from (Pod Console D11). The one exit to a third-party origin, so it is its
+ * own door: only an https address resolves (the pod already refuses any other
+ * scheme in a source's index; this is the second check, at the link), and
+ * anything else is `null` — no link at all rather than a `javascript:` one.
+ */
+export function publisherExit(url: string | null | undefined): Exit | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+      return null;
+    }
+    return web(parsed.toString());
+  } catch {
+    return null;
+  }
+}
+
+/**
  * An exit as THIS device can follow it.
  *
  * `href: null` means there is nothing to click here: the reader is on a phone,

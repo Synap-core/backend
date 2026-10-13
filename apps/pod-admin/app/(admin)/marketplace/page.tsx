@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Marketplace — what the Synap catalog offers, what this pod has installed,
- * and which installed verbs are turned on. One page, three views on `?tab=`
- * (UrlTabs): `catalog` (default), `installed`, `tools`. Home's capabilities
+ * Marketplace — what the catalog offers, what this pod has installed,
+ * which installed verbs are turned on, and where the catalog comes from. One
+ * page, four views on `?tab=`
+ * (UrlTabs): `catalog` (default), `installed`, `tools`, `sources`. Home's capabilities
  * row and the Installed tab's "Turn on" land on `?tab=tools`.
  */
 
@@ -14,10 +15,11 @@ import { ResourceRowSkeleton } from "../components/resource-row";
 import { CatalogTab } from "./_lib/catalog-tab";
 import { InstalledTab } from "./_lib/installed-tab";
 import { ToolsTab } from "./_lib/tools-tab";
+import { SourcesTab } from "./_lib/sources-tab";
 
 const TITLE = "Marketplace";
 const DESCRIPTION =
-  "Install from the Synap catalog, see what this pod has installed, and choose which of its tools are turned on.";
+  "Install from the catalog, see what this pod has installed, choose which of its tools are turned on, and decide where packages come from.";
 
 export default function MarketplacePage() {
   return (
@@ -32,6 +34,7 @@ export default function MarketplacePage() {
             { key: "catalog", label: "Catalog", content: <CatalogTab /> },
             { key: "installed", label: "Installed", content: <InstalledTab /> },
             { key: "tools", label: "Tools", content: <ToolsTab /> },
+            { key: "sources", label: "Sources", content: <SourcesTab /> },
           ]}
         />
       </Suspense>
