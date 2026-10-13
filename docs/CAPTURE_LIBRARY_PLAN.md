@@ -18,29 +18,28 @@
 | --------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | What            | What you **type or dictate**                                      | Everything you **bring in**: shared, saved, dropped, forwarded                                                                                                      |
 | When it is read | Now. AI files it.                                                 | **Light read on save** (text / OCR / transcript, short summary, embedding). **Build** (structure, Tools, Templates, Rules, Lists) runs only when you ask, per group |
-| Where           | Composer, dictation (relay FAB, home bar, ⌘N text, widgets, Siri) | Share sheet, Save page/link, drop, import, extension, agent forwards                                                                                                |
+| Where           | Composer, dictation (relay FAB, home bar, ⌘N text, widgets, Siri) | Share sheet, Save page/link, drop, import, extension                                                                                                                |
 | Life            | One capture → filed                                               | **One permanent Library per pod**, lensed by space/project. Groups persist and grow; Build re-runs on new items and proposes **updates**, never twins               |
 
 **One search:** Search and Ask span both.
 
-**Six guardrails** (each is a requirement, not an option):
+**Five guardrails** (each is a requirement, not an option):
 
 1. Cheap processing on save, so the Library is searchable even before any Build.
 2. Action chips on actionable items (receipt, date, contact, task): a one-tap **Read now** / **Add to calendar**. AI proposes, never executes.
 3. A note typed while sharing **is a Capture**, linked to the item.
 4. Stable structure: groups persist, a built thing shows "N new since built", rebuilds propose updates, nothing re-clusters on each arrival.
 5. Keep it alive: a weekly "build one group" proposal, resurfacing tied to current work, quiet auto-archive (still searchable), no inbox-zero pressure.
-6. Agents follow the same rule (below).
 
-**THE routing rule.** One pure function `routeIntake()` in `@synap-core/types/intake-route`, used by every door and guarded by a tripwire:
+**The AI's capture door is out of scope and unchanged (founder, 2026-10-13).** MCP `synap_capture` (and the Hub capture an agent calls) stays exactly as it is: an agent may keep sending its words, links or files there, and they are processed as today. It is **not** routed to the Library, **not** deprecated, and its description is **not** rewritten. `routeIntake()` decides only for the person's own doors. Library tools for agents are optional, later and additive (read/search), never a replacement for `synap_capture`.
+
+**THE routing rule** (the person's doors only). One pure function `routeIntake()` in `@synap-core/types/intake-route`, used by every door and guarded by a tripwire:
 
 | Input                                                                                                                                      | Route                                  |
 | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | Text the person typed / dictated (even if it contains a URL)                                                                               | `capture`                              |
 | Anything shared / saved / dropped / selected-and-saved / forwarded (link, page, file, photo, screenshot, post, video, folder, shared text) | `library`                              |
 | A note typed **at share time**                                                                                                             | `capture` (linked to the Library item) |
-| Text an agent **writes** (its own words)                                                                                                   | `capture`                              |
-| Material an agent **forwards** (url, file, page it did not write)                                                                          | `library`                              |
 
 ---
 
@@ -60,24 +59,24 @@
    - content is read cheaply and searchable;
    - urgent items get a Read-now chip;
    - structure is built deliberately, steered by your notes, with undo.
-4. **Two parallel ways to bring a link in is product debt.** It confuses users ("where did I put it?") and agents (which tool?).
+4. **Two parallel ways to bring a link in is product debt.** It confuses people ("where did I put it?").
 
 **Existing data:** old file/link captures **stay where they are**. They are readable, searchable, and still openable from history. **No migration.** They are never re-routed silently.
 
 **Lifecycle:**
 
-| Stage                     | What happens                                                                                                                                                                                     | Gate to enter                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| **1. Marked** (wave L1)   | Each deprecated path carries a registry row + `@deprecated` JSDoc pointing here. The MCP `synap_capture` description says "for your words; forward links/files with `synap_library_add`"         | this plan merged                                                                          |
-| **2. Redirected** (L2–L4) | Every client door routes non-typed content to the Library. The pod still ACCEPTS url/file on capture (old CLI, Raycast, offline queue) but logs a `deprecated_intake_path` event with the caller | Library save + light read + Read now live on relay **and** browser                        |
-| **3. Refused** (L6)       | Capture answers url/file/html with a typed error that names the Library door (`USE_LIBRARY`). Old clients see a clear message, never a silent drop                                               | **Removal criteria** met (below)                                                          |
-| **4. Removed** (L6)       | Code deleted (≈450–650 backend + 700–900 frontend lines, list in report 10 §2) and the registry row moved to `REMOVED_INTAKE_PATHS` with the commit                                              | Stage 3 live ≥ 14 days with zero `deprecated_intake_path` events from first-party clients |
+| Stage                     | What happens                                                                                                                                                                                      | Gate to enter                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **1. Marked** (wave L1)   | Each deprecated path carries a registry row + `@deprecated` JSDoc pointing here.                                                                                                                  | this plan merged                                                                          |
+| **2. Redirected** (L2–L4) | Every client door routes non-typed content to the Library. The pod still ACCEPTS url/file on capture (old CLI, Raycast, offline queue) but logs a `deprecated_intake_path` event with the caller  | Library save + light read + Read now live on relay **and** browser                        |
+| **3. Refused** (L6)       | Capture answers url/file/html from a person's door (never from an agent key) with a typed error that names the Library door (`USE_LIBRARY`). Old clients see a clear message, never a silent drop | **Removal criteria** met (below)                                                          |
+| **4. Removed** (L6)       | Code deleted (≈450–650 backend + 700–900 frontend lines, list in report 10 §2) and the registry row moved to `REMOVED_INTAKE_PATHS` with the commit                                               | Stage 3 live ≥ 14 days with zero `deprecated_intake_path` events from first-party clients |
 
 **Removal criteria** (all must be true; checked in a session, evidence quoted):
 
 - Library save + light read + Read now dogfooded **≥ 14 days** on relay and browser by the founder.
 - No Read-now regression vs today's single-photo/link capture: OCR text, receipt to entity, and calendar chip all verified on real items.
-- CLI, Raycast, extension and MCP each have a Library door (`/library/add`, `synap_library_add`) and are released.
+- CLI, Raycast and the extension each have a Library door (`/library/add`) and are released. (MCP `synap_capture` is the AI's door and is not part of this.)
 - `deprecated_intake_path` events from first-party clients = 0 for 7 consecutive days.
 - The founder confirms in the session ("remove").
 
@@ -98,9 +97,9 @@ Rows:
 | relay     | `relay.note.attachments`, `relay.captureUrlHint`                                                             |
 | browser   | `browser.saveLink.capture`, `browser.smartCapture`, `browser.quickCapture.file`                              |
 | extension | `extension.savePage.capture`, `extension.tabScan`                                                            |
-| CLI / MCP | `cli.capture.url`, `mcp.capture.loneUrl`                                                                     |
+| CLI       | `cli.capture.url`                                                                                            |
 
-A tripwire fails if a NEW call site sends url/file/html to capture outside the registry.
+A tripwire fails if a NEW person-facing call site sends url/file/html to capture outside the registry. The agent path (MCP `synap_capture`, Hub capture) is allowlisted by name as **kept**, not deprecated, and stays open at stage 3 and 4: "Refused" and "Removed" apply to the person's doors only.
 
 ---
 
@@ -119,7 +118,7 @@ Every wave:
 ### L1: The rule + the deprecation record (small, no behaviour change)
 
 - `@synap-core/types/intake-route`: `routeIntake(input)` + `DEPRECATED_INTAKE_PATHS` + tests.
-- `@deprecated` JSDoc at each registry path. Rewrite the `synap_capture` MCP description.
+- `@deprecated` JSDoc at each registry path.
 - Rewrite the docs that state the old model:
   - PRODUCT.md "never organize anything" → "never lose anything; organize when you choose";
   - CAPTURE-IMPORT-UNIFICATION, CAPTURE-UI-CONSOLIDATION, INTAKE-CONSOLIDATION ("single file/URL → capture");
@@ -150,7 +149,7 @@ Every wave:
   - `library.add` (= `import.stage` without a batch, appending to a run per device/day);
   - `library.list` / `get` / `search` (one search with captures);
   - `library.readNow(itemId)` (single item: structure now, the old capture behaviour, explicitly chosen);
-  - Hub REST `/library/*` + MCP `synap_library_add`, `synap_library_search`, `synap_library_build` (with per-agent caps as capture has).
+  - Hub REST `/library/*` for first-party clients. Optional later: read-only MCP `synap_library_search` for agents. No agent "add" door: agents keep `synap_capture`.
 - **Fix found in the audit:** after Build, new items can join a built group, and the group can be rebuilt in **update mode**.
 
 ### L3: Build that updates (pod)
@@ -198,9 +197,8 @@ Stage 3 then stage 4 of §2, only when the removal criteria hold. Delete code, m
 ## 4. Side effects to carry
 
 - **Agents:**
-  - `synap_capture` stays the door for an agent's own words;
-  - forwarding goes through `synap_library_add`;
-  - per-agent caps on both;
+  - `synap_capture` is unchanged: an agent's words, links and files go there exactly as today;
+  - nothing an agent sends lands in the Library;
   - governance unchanged (Build bundles are proposals).
 - **Spend:** the light read costs ~1 cheap call per item (budgeted, bulk lane, skipped over budget with a visible "not read yet" mark, never a silent drop).
 - **Search:**
