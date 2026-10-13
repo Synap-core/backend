@@ -187,7 +187,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
         (oldest !== null ? ` · oldest ${formatAgeHours(oldest)}` : ""),
       secondary:
         outside > 0
-          ? `${outside} more of yours sit outside your workspaces`
+          ? `${outside} more of yours sit outside your spaces`
           : undefined,
       action: { kind: "link", label: "Review", exit: REVIEW_QUEUE },
       items: [],

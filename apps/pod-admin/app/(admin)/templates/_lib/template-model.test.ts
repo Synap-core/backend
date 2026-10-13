@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { flowHealthPill } from "../../runs/_lib/run-board";
 import {
   errorLine,
   executorLabel,
@@ -6,45 +7,11 @@ import {
   groupFactsFromRuns,
   runsThisWeek,
   stageNames,
-  templateHealthPill,
   templateSummary,
-  type TemplateGroupFacts,
 } from "./template-model";
 
 const NOW = new Date("2026-10-13T12:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
-
-function group(over: Partial<TemplateGroupFacts> = {}): TemplateGroupFacts {
-  return {
-    runCount: 12,
-    recentFailedCount: 0,
-    runningCount: 0,
-    latestStatus: "completed",
-    ...over,
-  };
-}
-
-describe("templateHealthPill", () => {
-  it("puts the template's own status first", () => {
-    expect(
-      templateHealthPill("draft", group({ recentFailedCount: 3 }))
-    ).toEqual({ kind: "unknown", label: "Draft" });
-    expect(templateHealthPill("paused", group()).label).toBe("Paused");
-  });
-  it("reads health from this week", () => {
-    expect(templateHealthPill("active", undefined).label).toBe("Never ran");
-    expect(
-      templateHealthPill("active", group({ recentFailedCount: 10 }))
-    ).toEqual({ kind: "down", label: "Failing" });
-    expect(templateHealthPill("active", group({ runningCount: 1 })).label).toBe(
-      "Running"
-    );
-    expect(
-      templateHealthPill("active", group({ latestStatus: "failed" }))
-    ).toEqual({ kind: "stale", label: "Failed last run" });
-    expect(templateHealthPill("active", group()).label).toBe("Working");
-  });
-});
 
 describe("templateSummary", () => {
   it("prefers the description's first sentence", () => {
@@ -85,6 +52,19 @@ describe("runsThisWeek", () => {
       atLeast: false,
     });
   });
+  it("measures a run where the pod does: when it ended, else when it began", () => {
+    const long = {
+      id: "l",
+      status: "failed",
+      startedAt: new Date(NOW.getTime() - 24 * 9 * HOUR),
+      completedAt: new Date(NOW.getTime() - 24 * 2 * HOUR),
+    };
+    expect(runsThisWeek([long], NOW, 100)).toEqual({
+      total: 1,
+      failed: 1,
+      atLeast: false,
+    });
+  });
   it("says at least when the read limit, not the week, ended the count", () => {
     expect(runsThisWeek([run("a", 1), run("b", 2)], NOW, 2).atLeast).toBe(true);
   });
@@ -112,6 +92,10 @@ describe("groupFactsFromRuns / stageNames", () => {
       latestStatus: "running",
     });
     expect(groupFactsFromRuns([], NOW)).toBeUndefined();
+    expect(flowHealthPill("active", groupFactsFromRuns(runs, NOW))).toEqual({
+      kind: "stale",
+      label: "1 failure",
+    });
   });
   it("reads stage names, falling back to keys", () => {
     expect(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   failingBoardComplete,
+  flowHealthPill,
   flowHealthSentence,
   flowHref,
   flowIsFailing,
@@ -8,6 +9,7 @@ import {
   runActions,
   runFilterOf,
   runListInput,
+  runInWindow,
   runRowSecondary,
   triggeredByLabel,
   type FlowGroupFacts,
@@ -127,5 +129,53 @@ describe("run rows", () => {
     expect(triggeredByLabel(id, null)).toBe("A person or agent (0b9c2a…6666)");
     expect(triggeredByLabel("cron", null)).toBe("Cron");
     expect(triggeredByLabel(null, null)).toBeNull();
+  });
+});
+
+describe("flowHealthPill", () => {
+  it("puts the flow's own status first", () => {
+    expect(flowHealthPill("draft", group({ latestStatus: "failed" }))).toEqual({
+      kind: "unknown",
+      label: "Draft",
+    });
+    expect(flowHealthPill("paused", group()).label).toBe("Paused");
+    expect(flowHealthPill("error", undefined)).toEqual({
+      kind: "down",
+      label: "Stopped on error",
+    });
+  });
+  it("reads the last run before the window's failures", () => {
+    expect(flowHealthPill("active", undefined).label).toBe("Never ran");
+    expect(
+      flowHealthPill(
+        "active",
+        group({ latestStatus: "failed", recentFailedCount: 3 })
+      )
+    ).toEqual({ kind: "down", label: "Failed last run" });
+    expect(flowHealthPill("active", group({ recentFailedCount: 2 }))).toEqual({
+      kind: "stale",
+      label: "2 failures",
+    });
+    expect(flowHealthPill(null, group({ runningCount: 1 }))).toEqual({
+      kind: "healthy",
+      label: "Running",
+    });
+    expect(flowHealthPill(null, group())).toEqual({
+      kind: "healthy",
+      label: "Working",
+    });
+  });
+});
+
+describe("runInWindow", () => {
+  it("measures at completedAt, falling back to startedAt", () => {
+    const old = new Date(NOW.getTime() - 9 * DAY);
+    const recent = new Date(NOW.getTime() - 2 * DAY);
+    expect(runInWindow({ startedAt: old, completedAt: recent }, NOW)).toBe(
+      true
+    );
+    expect(runInWindow({ startedAt: recent }, NOW)).toBe(true);
+    expect(runInWindow({ startedAt: old, completedAt: old }, NOW)).toBe(false);
+    expect(runInWindow({ startedAt: null }, NOW)).toBe(false);
   });
 });

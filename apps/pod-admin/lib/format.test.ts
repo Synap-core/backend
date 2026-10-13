@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { formatRelative, isUuid, oneLine, readableError } from "./format";
+import {
+  formatDate,
+  formatRelative,
+  isUuid,
+  oneLine,
+  readableError,
+} from "./format";
 
 const NOW = new Date("2026-06-15T12:00:00Z");
 const at = (ms: number) => new Date(NOW.getTime() + ms);
@@ -71,5 +77,14 @@ describe("readableError", () => {
     expect(readableError("")).toBeUndefined();
     expect(readableError(undefined)).toBeUndefined();
     expect(readableError("x ".repeat(100))).toBeUndefined();
+  });
+});
+
+describe("formatDate", () => {
+  it("reads a day, and a dash for nothing or garbage", () => {
+    expect(formatDate("2026-08-03T12:00:00Z")).toMatch(/2026/);
+    expect(formatDate("2026-08-03T12:00:00Z")).not.toMatch(/:/);
+    expect(formatDate(null)).toBe("—");
+    expect(formatDate("not a date")).toBe("—");
   });
 });

@@ -23,6 +23,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
+import { useDrainPages } from "../../../lib/use-drain-pages";
 import { kindIcon } from "../../_lib/object/kind-icon";
 import { statusPillFor } from "../components/status-tone";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
@@ -37,6 +38,7 @@ import { useFocusRow } from "../components/use-focus-row";
 import { FilterChips } from "../components/filter-chips";
 import {
   failingBoardComplete,
+  flowHealthPill,
   flowHealthSentence,
   flowHref,
   flowIsFailing,
@@ -51,6 +53,8 @@ import { RunDrawer, type RunTarget } from "./_lib/run-drawer";
 const TITLE = "Runs";
 const DESCRIPTION = "Every flow that ran, whether it worked, and why not.";
 const PAGE_SIZE = 50;
+/** The Failing board stops following the cursor here and says so. */
+const MAX_FAILING_PAGES = 20;
 /** Runs shown when a flow is expanded. */
 const FLOW_RUNS = 10;
 
@@ -124,17 +128,20 @@ function FlowBoard({
   );
   // Failing is a filter over a cursor read: keep paging until no failing flow
   // can be further down (`failingBoardComplete`), so the board never shows a
-  // partial answer as the whole one.
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = groups;
-  useEffect(() => {
-    if (failingOnly && !complete && hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage();
-    }
-  }, [failingOnly, complete, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  // partial answer as the whole one — bounded, and never past an error.
+  const drain = useDrainPages(
+    {
+      data: groups.data,
+      hasNextPage: failingOnly && !complete && groups.hasNextPage,
+      isFetchingNextPage: groups.isFetchingNextPage,
+      isError: groups.isError,
+      fetchNextPage: groups.fetchNextPage,
+    },
+    MAX_FAILING_PAGES
+  );
 
   const rows = failingOnly ? loaded.filter(flowIsFailing) : loaded;
-  const loading =
-    groups.isLoading || isAuthRedirecting || (failingOnly && !complete);
+  const loading = groups.isLoading || isAuthRedirecting || drain.draining;
   useFocusRow({ ready: !loading });
 
   return (
@@ -167,6 +174,12 @@ function FlowBoard({
             />
           ))}
         </div>
+      )}
+      {failingOnly && drain.capped && (
+        <p className="px-1 pt-3 text-[12px] text-foreground/65">
+          Showing failing flows among the {loaded.length} most recently run —
+          there may be more further back.
+        </p>
       )}
       {!failingOnly && groups.hasNextPage && (
         <div className="px-1 pt-3">
@@ -205,14 +218,14 @@ function FlowRow({
 }) {
   const [open, setOpen] = useState(false);
   const noun = flowNoun(group.flowType);
-  const pill = statusPillFor(group.latestStatus);
+  const pill = flowHealthPill(null, group);
   return (
     <div data-row-id={group.flowId} className="rounded-md transition-shadow">
       <ResourceRow
         Icon={kindIcon(group.flowType)}
         primary={group.flowName}
         secondary={`${noun} · ${flowHealthSentence(group)} · last ran ${formatRelative(group.latestStartedAt)}`}
-        status={pill ?? undefined}
+        status={pill}
         onSelect={() => setOpen((v) => !v)}
         wrap
         actions={

@@ -22,7 +22,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { navHref, navLabel } from "../../../../lib/console-nav";
 import { trpc } from "../../../../lib/trpc";
-import { formatRelative } from "../../../../lib/format";
+import { formatDate, formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import { ExitLink } from "../../../../lib/exit-link";
 import {
@@ -36,14 +36,13 @@ import { consoleFrame } from "../../../_lib/object/views/object-frame";
 import { couldNotLoad, loadFailure } from "../../../_lib/object/load-failure";
 import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
 import { RunDrawer, type RunTarget } from "../../runs/_lib/run-drawer";
-import { runRowSecondary } from "../../runs/_lib/run-board";
+import { flowHealthPill, runRowSecondary } from "../../runs/_lib/run-board";
 import {
   executorLabel,
   failureExplanation,
   groupFactsFromRuns,
   runsThisWeek,
   stageNames,
-  templateHealthPill,
   templateSummary,
 } from "../_lib/template-model";
 
@@ -107,11 +106,7 @@ export default function TemplatePage() {
       "A space")
     : "All spaces";
   const creator = (members.data ?? []).find((m) => m.id === playbook.createdBy);
-  const createdOn = new Date(playbook.createdAt).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  const runsLoaded = runs.isLoading ? null : allRuns.length;
   const openRun = (runId: string, flowName: string) =>
     setTarget({ flowType: "playbook", id: runId, flowName });
   // Named, not inlined: `exit-door.test.ts` reads "Pending: x." as a dead
@@ -164,7 +159,7 @@ export default function TemplatePage() {
           kind: "playbook",
           title: playbook.name,
           summary: templateSummary(playbook.description, playbook.goalTemplate),
-          status: templateHealthPill(playbook.status, health),
+          status: flowHealthPill(playbook.status, health),
           breadcrumb: FRAME.breadcrumb?.(playbook.name),
           primaryAction: (
             <ExitLink
@@ -177,22 +172,26 @@ export default function TemplatePage() {
           { label: "Space", value: spaceName },
           {
             label: "Last run",
-            value: latest
-              ? `${formatRelative(latest.startedAt)} — ${statusPillFor(latest.status)?.label.toLowerCase() ?? latest.status}`
-              : runs.isLoading
-                ? "…"
-                : "Never",
+            value: runs.isLoading ? (
+              <FactSkeleton />
+            ) : latest ? (
+              `${formatRelative(latest.startedAt)} — ${statusPillFor(latest.status)?.label.toLowerCase() ?? latest.status}`
+            ) : (
+              "Never"
+            ),
           },
           {
             label: "Runs this week",
-            value: runs.isLoading
-              ? "…"
-              : `${week.total}${week.atLeast ? "+" : ""}${week.failed > 0 ? ` · ${week.failed} failed` : ""}`,
+            value: runs.isLoading ? (
+              <FactSkeleton />
+            ) : (
+              `${week.total}${week.atLeast ? "+" : ""}${week.failed > 0 ? ` · ${week.failed} failed` : ""}`
+            ),
           },
           { label: "Executor", value: executorLabel(playbook.executor) },
           {
             label: "Created by",
-            value: `${creator?.name ?? creator?.email ?? "Someone"} · ${createdOn}`,
+            value: `${creator?.name ?? creator?.email ?? "Someone"} · ${formatDate(playbook.createdAt)}`,
           },
         ],
         factColumns: 3,
@@ -255,7 +254,10 @@ export default function TemplatePage() {
           },
           {
             key: "runs",
-            label: "Runs",
+            label:
+              runsLoaded === null
+                ? "Runs"
+                : `Runs (${runsLoaded}${runs.hasNextPage ? "+" : ""})`,
             content: runsBody(allRuns, runs.hasNextPage ?? false),
           },
         ],
@@ -302,7 +304,10 @@ export default function TemplatePage() {
                         title: "Template archived",
                         color: "default",
                       });
-                      await utils.playbooks.listAllPage.invalidate();
+                      await Promise.all([
+                        utils.playbooks.listAllPage.invalidate(),
+                        utils.runs.groups.invalidate(),
+                      ]);
                       router.push(navHref("templates"));
                     } catch (err) {
                       addToast({
@@ -319,5 +324,15 @@ export default function TemplatePage() {
       })}
       <RunDrawer target={target} onClose={() => setTarget(null)} />
     </>
+  );
+}
+
+/** A fact whose value is still being read. */
+function FactSkeleton() {
+  return (
+    <span
+      aria-label="Loading"
+      className="inline-block h-3 w-20 rounded bg-foreground/10 shimmer-pulse"
+    />
   );
 }

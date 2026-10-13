@@ -5,8 +5,8 @@
  * The pages only fetch and draw.
  */
 
-import type { StatusKind } from "../../components/status-pill";
 import { oneLine } from "../../../../lib/format";
+import { runInWindow } from "../../runs/_lib/run-board";
 
 /** The `runs.groups` columns template health reads. */
 export interface TemplateGroupFacts {
@@ -14,34 +14,6 @@ export interface TemplateGroupFacts {
   recentFailedCount: number;
   runningCount: number;
   latestStatus: string;
-}
-
-/**
- * The template's pill. Its own status first (a draft or paused template is
- * not "working" however its old runs went), then this week's failures — the
- * W2-calm number, never the lifetime count.
- */
-export function templateHealthPill(
-  status: string,
-  group: TemplateGroupFacts | undefined
-): { kind: StatusKind; label: string } {
-  switch (status) {
-    case "archived":
-      return { kind: "unknown", label: "Archived" };
-    case "draft":
-      return { kind: "unknown", label: "Draft" };
-    case "paused":
-      return { kind: "unknown", label: "Paused" };
-  }
-  if (!group || group.runCount === 0) {
-    return { kind: "unknown", label: "Never ran" };
-  }
-  if (group.recentFailedCount > 0) return { kind: "down", label: "Failing" };
-  if (group.runningCount > 0) return { kind: "healthy", label: "Running" };
-  if (group.latestStatus === "failed") {
-    return { kind: "stale", label: "Failed last run" };
-  }
-  return { kind: "healthy", label: "Working" };
 }
 
 const SUMMARY_MAX = 200;
@@ -85,13 +57,12 @@ export function executorLabel(executor: string | null | undefined): string {
   }
 }
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
 /** The `UnifiedRun` columns the week count and explanation read. */
 export interface TemplateRunFacts {
   id: string;
   status: string;
   startedAt: Date | string | null;
+  completedAt?: Date | string | null;
   error?: string | null;
 }
 
@@ -105,10 +76,7 @@ export function runsThisWeek(
   now: Date,
   readLimit: number
 ): { total: number; failed: number; atLeast: boolean } {
-  const since = now.getTime() - WEEK_MS;
-  const inWeek = runs.filter(
-    (r) => r.startedAt && new Date(r.startedAt).getTime() >= since
-  );
+  const inWeek = runs.filter((r) => runInWindow(r, now));
   return {
     total: inWeek.length,
     failed: inWeek.filter((r) => r.status === "failed").length,
@@ -127,14 +95,10 @@ export function groupFactsFromRuns(
 ): TemplateGroupFacts | undefined {
   const latest = runs[0];
   if (!latest) return undefined;
-  const since = now.getTime() - WEEK_MS;
   return {
     runCount: runs.length,
     recentFailedCount: runs.filter(
-      (r) =>
-        r.status === "failed" &&
-        r.startedAt !== null &&
-        new Date(r.startedAt).getTime() >= since
+      (r) => r.status === "failed" && runInWindow(r, now)
     ).length,
     runningCount: runs.filter((r) => r.status === "running").length,
     latestStatus: latest.status,

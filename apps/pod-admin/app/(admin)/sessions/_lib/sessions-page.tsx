@@ -192,6 +192,7 @@ export function SessionsPage() {
   const refresh = () => {
     void utils.focusSessions.browse.invalidate();
     void utils.focusSessions.owed.invalidate();
+    void utils.signals.invalidate();
   };
   const refused = (err: {
     message: string;

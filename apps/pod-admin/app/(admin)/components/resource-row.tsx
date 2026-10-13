@@ -155,7 +155,7 @@ export function ResourceRowSkeleton({ count = 3 }: { count?: number }) {
 export function ResourceRowEmpty({
   message = "Nothing here yet.",
 }: {
-  message?: string;
+  message?: ReactNode;
 }) {
   return (
     <p className="px-3 py-8 text-center text-[12.5px] text-foreground/55">

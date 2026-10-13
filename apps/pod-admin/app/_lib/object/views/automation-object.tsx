@@ -35,9 +35,10 @@ import {
   automationSummary,
   runLine,
   shortDescription,
-} from "../../../open/open-model";
+} from "../object-summaries";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
+import { FactsGrid } from "../facts-grid";
 import type { ObjectFrame } from "./object-frame";
 
 /** Runs the Runs tab lists — the same window the console's run drawer reads. */
@@ -46,9 +47,12 @@ const RUNS_SHOWN = 25;
 export function AutomationObject({
   id,
   frame,
+  onOpenRun,
 }: {
   id: string;
   frame: ObjectFrame;
+  /** Where a frame can show one run (the console's run drawer); else rows are inert. */
+  onOpenRun?: (run: { id: string; flowName: string }) => void;
 }) {
   const utils = trpc.useUtils();
   const query = trpc.automations.get.useQuery({ id }, { retry: false });
@@ -66,7 +70,11 @@ export function AutomationObject({
   const pause = trpc.automations.pause.useMutation({
     onSuccess: async () => {
       setConfirmPause(false);
-      await utils.automations.get.invalidate({ id });
+      // The rule, the Rules list and the Runs board all read its status.
+      await Promise.all([
+        utils.automations.invalidate(),
+        utils.runs.groups.invalidate(),
+      ]);
     },
   });
   useReauthOnUnauthorized(query.error, runs.error, pause.error);
@@ -107,7 +115,6 @@ export function AutomationObject({
             <Button
               size="sm"
               radius="md"
-              color="warning"
               variant="flat"
               onPress={() => setConfirmPause(true)}
             >
@@ -166,22 +173,20 @@ export function AutomationObject({
                     {description}
                   </p>
                 )}
-                <dl className="flex flex-col gap-2 text-[13px]">
-                  <div className="flex flex-col gap-0.5">
-                    <dt className="text-[12px] text-foreground/65">When</dt>
-                    <dd className="text-foreground">{when.text}</dd>
-                  </div>
-                  {when.onlyIf.length > 0 && (
-                    <div className="flex flex-col gap-0.5">
-                      <dt className="text-[12px] text-foreground/65">
-                        Only if
-                      </dt>
-                      <dd className="text-foreground">
-                        {when.onlyIf.join(" and ")}
-                      </dd>
-                    </div>
-                  )}
-                </dl>
+                {when.onlyIf.length > 0 && (
+                  <FactsGrid
+                    columns={2}
+                    facts={[
+                      { label: "Only if", value: when.onlyIf.join(" and ") },
+                    ]}
+                  />
+                )}
+                {!description && when.onlyIf.length === 0 && (
+                  <p className="text-[12.5px] text-foreground/65">
+                    No description and no conditions: it runs whenever its
+                    trigger happens.
+                  </p>
+                )}
               </div>
             ),
           },
@@ -208,6 +213,11 @@ export function AutomationObject({
                       primary={line.primary}
                       secondary={line.secondary}
                       status={statusPillFor(run.status) ?? undefined}
+                      onSelect={
+                        onOpenRun
+                          ? () => onOpenRun({ id: run.id, flowName: rule.name })
+                          : undefined
+                      }
                       wrap
                     />
                   );

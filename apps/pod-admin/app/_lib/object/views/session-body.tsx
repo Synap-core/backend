@@ -34,7 +34,7 @@ import {
   sessionCanRevert,
   sessionSummary,
   shortDescription,
-} from "../../../open/open-model";
+} from "../object-summaries";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -44,7 +44,15 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
   const router = useRouter();
   const utils = trpc.useUtils();
   const query = trpc.focusSessions.get.useQuery({ id }, { retry: false });
-  const invalidate = () => utils.focusSessions.get.invalidate({ id });
+  // A cancel or revert changes the session, the lists it sits in and what
+  // the pod says needs attention.
+  const invalidate = () =>
+    Promise.all([
+      utils.focusSessions.get.invalidate({ id }),
+      utils.focusSessions.browse.invalidate(),
+      utils.focusSessions.owed.invalidate(),
+      utils.signals.invalidate(),
+    ]);
 
   const [confirmCancel, setConfirmCancel] = useState(false);
   const cancel = trpc.focusSessions.cancel.useMutation({

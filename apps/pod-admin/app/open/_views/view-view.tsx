@@ -9,7 +9,7 @@
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
-import { shortDescription } from "../open-model";
+import { shortDescription } from "../../_lib/object/object-summaries";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";

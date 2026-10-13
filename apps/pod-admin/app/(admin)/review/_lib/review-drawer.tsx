@@ -1,7 +1,9 @@
 "use client";
 
 /**
- * The Review drawer — one decision, read before it is made.
+ * Review's detail — one decision, read before it is made. Docked beside the
+ * list from `lg` up (`ReviewDock`, non-modal: the list stays usable), a
+ * drawer below it (`ReviewDrawer`); both draw the same `ReviewDetail`.
  *
  * Every kind opens on the same five TRUST SIGNALS (who is asking, what it
  * will be able to do, where, who approves, when and from where) and the
@@ -16,12 +18,15 @@
  *                    `/connection-requests/[id]` — without its return-to-app
  *                    redirect: here a decision only closes the drawer.
  *
- * Ids and raw requests sit under "Advanced", collapsed, last.
+ * The approve / reject buttons this file owns stay pinned to the bottom of
+ * the scrolling detail (`DecisionBar`). Ids and raw requests sit under
+ * "Advanced", collapsed, last.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Button, Spinner, Textarea, addToast } from "@heroui/react";
 import { Check, Info, X } from "lucide-react";
+import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
 import { formatRelative, formatTimestamp } from "../../../../lib/format";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -58,16 +63,19 @@ export interface ReviewViewer {
 
 type DrawerDetail = Exclude<ReviewDetail, { kind: "open" }>;
 
-export function ReviewDrawer({
-  open,
-  viewer,
-  onClose,
-}: {
-  open: { detail: DrawerDetail; title: string } | null;
+export interface OpenReview {
+  detail: DrawerDetail;
+  title: string;
+}
+
+interface ReviewFrameProps {
+  open: OpenReview | null;
   viewer: ReviewViewer;
   onClose: () => void;
-}) {
-  const detail = open?.detail;
+}
+
+/** Below `lg`: the decision in a modal drawer over the list. */
+export function ReviewDrawer({ open, viewer, onClose }: ReviewFrameProps) {
   return (
     <DetailDrawer
       isOpen={open !== null}
@@ -75,7 +83,60 @@ export function ReviewDrawer({
       title={open?.title ?? "Review"}
       size="lg"
     >
-      {detail?.kind === "proposal" && (
+      {open && (
+        <ReviewDetail detail={open.detail} viewer={viewer} onClose={onClose} />
+      )}
+    </DetailDrawer>
+  );
+}
+
+/**
+ * From `lg` up: the decision docked beside the list, sticky while the page
+ * scrolls. Its body scrolls on its own, padded like the drawer's so the
+ * pinned decision bar sits the same in both.
+ */
+export function ReviewDock({ open, viewer, onClose }: ReviewFrameProps) {
+  if (!open) return null;
+  return (
+    <aside
+      aria-label="Request details"
+      className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-lg bg-content1 ring-1 ring-inset ring-foreground/10"
+    >
+      <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-6 py-4">
+        <h2 className="min-w-0 flex-1 truncate text-[15px] font-medium text-foreground">
+          {open.title}
+        </h2>
+        <Button
+          isIconOnly
+          size="sm"
+          variant="light"
+          radius="full"
+          onPress={onClose}
+          aria-label="Close details"
+          className="shrink-0 text-foreground/65 hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <ReviewDetail detail={open.detail} viewer={viewer} onClose={onClose} />
+      </div>
+    </aside>
+  );
+}
+
+function ReviewDetail({
+  detail,
+  viewer,
+  onClose,
+}: {
+  detail: DrawerDetail;
+  viewer: ReviewViewer;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      {detail.kind === "proposal" && (
         <ProposalBody
           key={detail.proposalId}
           proposalId={detail.proposalId}
@@ -83,7 +144,7 @@ export function ReviewDrawer({
           onClose={onClose}
         />
       )}
-      {detail?.kind === "issuer" && (
+      {detail.kind === "issuer" && (
         <IssuerBody
           key={detail.issuerId}
           issuerId={detail.issuerId}
@@ -91,7 +152,7 @@ export function ReviewDrawer({
           onClose={onClose}
         />
       )}
-      {detail?.kind === "app-request" && (
+      {detail.kind === "app-request" && (
         <AppRequestBody
           key={detail.requestId}
           requestId={detail.requestId}
@@ -99,7 +160,7 @@ export function ReviewDrawer({
           onClose={onClose}
         />
       )}
-    </DetailDrawer>
+    </>
   );
 }
 
@@ -183,16 +244,17 @@ function WhyApproval({ children }: { children: ReactNode }) {
   );
 }
 
-function Advanced({ children }: { children: ReactNode }) {
+/**
+ * The decision, pinned to the bottom of the scrolling detail. `-bottom-4`
+ * and `-mx-6` undo the scroll container's `py-4 px-6` (the drawer body and
+ * the dock body share them): a sticky box stops at the padding edge, which
+ * would leave a strip of scrolling content showing under it.
+ */
+function DecisionBar({ children }: { children: ReactNode }) {
   return (
-    <details className="rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-      <summary className="cursor-pointer select-none text-[12px] font-medium text-foreground/65">
-        Advanced · ids, raw request
-      </summary>
-      <div className="mt-2 flex flex-col gap-1 break-all font-mono text-[11.5px] text-foreground/75">
-        {children}
-      </div>
-    </details>
+    <div className="sticky -bottom-4 z-10 -mx-6 border-t border-foreground/[0.06] bg-content1 px-6 py-3">
+      {children}
+    </div>
   );
 }
 
@@ -237,69 +299,77 @@ function DecideButtons({
   const busy = approving || rejecting;
   if (open) {
     return (
-      <div className="flex flex-col gap-2">
-        <Textarea
-          value={reason}
-          onValueChange={setReason}
-          label="Reason"
-          description="The requester sees this, so say what would change your mind."
-          minRows={2}
-          isDisabled={busy}
-        />
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            color="danger"
-            className="min-h-10"
-            isLoading={rejecting}
-            isDisabled={busy || reason.trim().length < minReason}
-            onPress={() => onReject(reason.trim())}
-          >
-            Confirm reject
-          </Button>
-          <Button
-            variant="light"
-            className="min-h-10"
+      <DecisionBar>
+        <div className="flex flex-col gap-2">
+          <Textarea
+            value={reason}
+            onValueChange={setReason}
+            label="Reason"
+            description="The requester sees this, so say what would change your mind."
+            minRows={2}
             isDisabled={busy}
-            onPress={() => setOpen(false)}
-          >
-            Cancel
-          </Button>
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              color="danger"
+              className="min-h-10"
+              isLoading={rejecting}
+              isDisabled={busy || reason.trim().length < minReason}
+              onPress={() => onReject(reason.trim())}
+            >
+              Confirm reject
+            </Button>
+            <Button
+              variant="light"
+              className="min-h-10"
+              isDisabled={busy}
+              onPress={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
-      </div>
+      </DecisionBar>
     );
   }
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button
-        color="success"
-        className="min-h-10"
-        startContent={<Check size={16} />}
-        isLoading={approving}
-        isDisabled={busy || !canApprove}
-        onPress={onApprove}
-      >
-        {approveLabel}
-      </Button>
-      <Button
-        color="danger"
-        variant="flat"
-        className="min-h-10"
-        startContent={<X size={16} />}
-        isDisabled={busy}
-        onPress={() => setOpen(true)}
-      >
-        Reject with reason…
-      </Button>
-    </div>
+    <DecisionBar>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          color="success"
+          className="min-h-10"
+          startContent={<Check size={16} />}
+          isLoading={approving}
+          isDisabled={busy || !canApprove}
+          onPress={onApprove}
+        >
+          {approveLabel}
+        </Button>
+        <Button
+          color="danger"
+          variant="flat"
+          className="min-h-10"
+          startContent={<X size={16} />}
+          isDisabled={busy}
+          onPress={() => setOpen(true)}
+        >
+          Reject with reason…
+        </Button>
+      </div>
+    </DecisionBar>
   );
 }
 
-/** Refresh every read a decision changes: the rows, the badge, the proposal. */
+/**
+ * Refresh every read a decision changes: the rows, the badges, the proposal,
+ * and Home's needs-you (`diagnose.global` counts what waits on a person).
+ */
 function useAfterDecision() {
   const utils = trpc.useUtils();
   return () => {
     void utils.signals.invalidate();
     void utils.proposals.invalidate();
+    void utils.diagnose.global.invalidate();
   };
 }
 
@@ -341,7 +411,7 @@ function ProposalBody({
       <Unreadable message="This proposal couldn't be loaded — it may have been withdrawn, or you may not have access to it." />
     );
 
-  const appName = (p as { appName?: string }).appName;
+  const appName = p.appName;
   // Only names the pod resolved — never an id, never a guess.
   const requester = appName
     ? `${appName}${p.authorName ? `, for ${p.authorName}` : ""}`
@@ -396,12 +466,13 @@ function ProposalBody({
           void query.refetch();
         }}
       />
-      <Advanced>
-        <span>proposal {p.id}</span>
-        <span>
-          {p.targetType} · {p.proposalType}
-        </span>
-      </Advanced>
+      <AdvancedPanel
+        ids={[
+          { label: "Proposal id", value: p.id },
+          { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
+        ]}
+        raw={p.request}
+      />
     </div>
   );
 }
@@ -462,10 +533,12 @@ function AgentConnectBody({
         </Alert>
       )}
       <AgentConnectDecision agent={agent} agentType={facts.agentType} />
-      <Advanced>
-        <span>proposal {proposalId}</span>
-        <span>key {facts.keyId}</span>
-      </Advanced>
+      <AdvancedPanel
+        ids={[
+          { label: "Proposal id", value: proposalId },
+          { label: "Key id", value: facts.keyId },
+        ]}
+      />
     </div>
   );
 }
@@ -575,10 +648,13 @@ function IssuerBody({
           />
         </>
       )}
-      <Advanced>
-        <span>issuer {issuer.id}</span>
-        <span>{issuer.issuerUrl}</span>
-      </Advanced>
+      <AdvancedPanel
+        ids={[
+          { label: "Issuer id", value: issuer.id },
+          { label: "Issuer URL", value: issuer.issuerUrl },
+        ]}
+        raw={issuer.initialRequestData ?? undefined}
+      />
     </div>
   );
 }
@@ -596,13 +672,16 @@ function AppRequestBody({
 }) {
   // No return-to-app redirect here: the requester's browser is elsewhere,
   // and the receiver page is what sends it back. A decision closes the drawer.
+  const afterDecision = useAfterDecision();
   const review = useConnectionRequest(requestId, {
     onApproved: () => {
       addToast({ title: "Origin allowed", color: "success" });
+      afterDecision();
       onClose();
     },
     onRejected: () => {
       addToast({ title: "Request declined", color: "default" });
+      afterDecision();
       onClose();
     },
   });
@@ -671,10 +750,12 @@ function AppRequestBody({
           minReason={3}
         />
       ) : null}
-      <Advanced>
-        <span>request {data.id}</span>
-        <span>app {data.clientId}</span>
-      </Advanced>
+      <AdvancedPanel
+        ids={[
+          { label: "Request id", value: data.id },
+          { label: "App id", value: data.clientId },
+        ]}
+      />
     </div>
   );
 }

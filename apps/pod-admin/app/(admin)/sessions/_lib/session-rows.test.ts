@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLOSED_STATUSES,
+  IDLE_STATUSES,
+  OPEN_RUN_STATUSES,
   STUCK_AFTER_HOURS,
   isStuck,
   segmentOf,
@@ -252,5 +255,21 @@ describe("rows", () => {
     // An owed slot outlives its session; a closed one offers no act.
     expect(rows[1]!.title).toBe("Untitled session");
     expect(rows[1]!.acts.primary).toBeNull();
+  });
+});
+
+describe("segment status sets", () => {
+  it("read every stored status exactly once, scheduled aside", () => {
+    expect([...OPEN_RUN_STATUSES].sort()).toEqual([
+      "active",
+      "forming",
+      "paused",
+    ]);
+    expect([...IDLE_STATUSES]).toEqual(["stale"]);
+    expect([...CLOSED_STATUSES].sort()).toEqual([
+      "cancelled",
+      "closed",
+      "failed",
+    ]);
   });
 });

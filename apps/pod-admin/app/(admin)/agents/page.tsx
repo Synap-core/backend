@@ -20,6 +20,7 @@ import { Button } from "@heroui/react";
 import { ArrowRight, Bot } from "lucide-react";
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { navHref } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
@@ -34,6 +35,7 @@ import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
 import { AgentDrawer } from "./_lib/agent-drawer";
 import {
+  agentReviewHref,
   buildAgentRoster,
   standingLine,
   type AgentRowView,
@@ -43,8 +45,8 @@ const TITLE = "Agents";
 const DESCRIPTION =
   "Every agent that can reach this pod, how it is doing, and who answers for it.";
 
-/** Where pending agent keys and connect requests are decided. */
-const AGENT_REVIEW_HREF = "/review?type=agent";
+/** Where every waiting access request is decided. */
+const ACCESS_REVIEW_HREF = navHref("review", { type: "access" });
 
 export default function AgentsPage() {
   return (
@@ -111,7 +113,7 @@ function AgentsInner() {
       <div className="flex flex-col gap-4">
         {waiting > 0 && (
           <Link
-            href={AGENT_REVIEW_HREF}
+            href={ACCESS_REVIEW_HREF}
             className="flex min-h-10 items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
           >
             <span>
@@ -144,7 +146,15 @@ function AgentsInner() {
               onRetry={() => void list.refetch()}
             />
           ) : connected.length === 0 ? (
-            <ResourceRowEmpty message="No agent has been connected yet. Run `npx @synap-core/cli init` on a computer to connect one." />
+            <ResourceRowEmpty
+              message={
+                <>
+                  No agent has been connected yet. Run{" "}
+                  <code className="font-mono">npx @synap-core/cli init</code> on
+                  a computer to connect one.
+                </>
+              }
+            />
           ) : (
             <AgentRows views={connected} onSelect={setSelectedId} />
           )}
@@ -200,7 +210,7 @@ function AgentRows({
                 v.needsReview ? (
                   <Button
                     as={Link}
-                    href={AGENT_REVIEW_HREF}
+                    href={agentReviewHref(v.row)}
                     size="sm"
                     variant="flat"
                     radius="md"

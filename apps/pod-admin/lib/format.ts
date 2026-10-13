@@ -50,6 +50,18 @@ export function formatTimestamp(
   });
 }
 
+/** A calendar day ("3 Aug 2026") — for when something was made, not when it ran. */
+export function formatDate(date: Date | string | null | undefined): string {
+  if (!date) return "—";
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export function shortId(id: string | null | undefined, head = 6, tail = 4) {
   if (!id) return "—";
   if (id.length <= head + tail + 1) return id;
