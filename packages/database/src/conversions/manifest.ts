@@ -2035,6 +2035,30 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       targetKey: "storyStatus",
       valueMap: { backlog: "backlog" },
     },
+    // Homes X2 (live 10-13: 15 decisions carry `status: "accepted"` and no
+    // `decisionStatus`). decision's ONE lifecycle is `decisionStatus`
+    // (proposed · accepted · superseded · rejected); the stray `status` key is
+    // the retired TASK-enum fossil (RETIRED_PROFILE_PROPERTIES). Fold the
+    // values that ARE decision states onto the lifecycle; a decisionStatus
+    // already set wins (the stray key is then stripped). The TASK values
+    // (todo / in-progress / shipped-uncommitted / active) say nothing about a
+    // decision, so they are left unmapped (kept) — a founder data task, never
+    // a guess. Operator-run.
+    {
+      op: "remapPropertyValues",
+      opKey: "x2.decision.status-into-lifecycle",
+      deferAtBoot: true,
+      slug: "decision",
+      sourceKey: "status",
+      targetKey: "decisionStatus",
+      valueMap: {
+        proposed: "proposed",
+        accepted: "accepted",
+        superseded: "superseded",
+        rejected: "rejected",
+      },
+      preferTargetValues: ["proposed", "accepted", "superseded", "rejected"],
+    },
   ],
 };
 

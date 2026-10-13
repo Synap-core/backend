@@ -279,6 +279,37 @@ describe("h0 legacy dev-lifecycle VALUES → the declared keys (homes A5)", () =
   });
 });
 
+describe("x2 decision `status` → decisionStatus (homes X2)", () => {
+  it("folds decision states; a set decisionStatus wins; TASK values and other kinds kept", async () => {
+    const decision = await profile("decision", "kind", "pod");
+    const task = await profile("task", "kind", "system");
+    const d1 = await entity(decision, "decision", {
+      status: "accepted",
+      title: "x",
+    });
+    const d2 = await entity(decision, "decision", {
+      status: "proposed",
+      decisionStatus: "rejected",
+    });
+    const d3 = await entity(decision, "decision", { status: "todo" });
+    const d4 = await entity(decision, "decision", {});
+    const t1 = await entity(task, "task", { status: "accepted" });
+
+    const s = await run(["x2.decision.status-into-lifecycle"]);
+    expect(errorsOf(s), errorsOf(s).join("\n")).toEqual([]);
+
+    expect(await propsOf(d1)).toEqual({
+      decisionStatus: "accepted",
+      title: "x",
+    });
+    expect(await propsOf(d2)).toEqual({ decisionStatus: "rejected" });
+    expect(await propsOf(d3)).toEqual({ status: "todo" });
+    // No status at all stays no status — never folded into a guess.
+    expect(await propsOf(d4)).toEqual({});
+    expect(await propsOf(t1)).toEqual({ status: "accepted" });
+  });
+});
+
 describe("h0 stray `status` → the dev lifecycles", () => {
   it("folds the stray key; a lifecycle value already set wins; unmapped is kept", async () => {
     const feature = await profile("devplane_feature", "kind", "workspace");
