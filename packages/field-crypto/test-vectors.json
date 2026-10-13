@@ -1,0 +1,57 @@
+{
+  "description": "Conformance vectors for the senc:1 envelope (AES-256-GCM, 12-byte IV, AAD). TEST KEYS ONLY. Every consumer must decrypt each `vectors` entry to its plaintext, and refuse each `mustFail` entry.",
+  "keyring": "tv2026b:hApBfz0lxmlF4D3fOccLedFIb4oqgmLWV4ofQGGRs9M=,tv2026a:dBVah1OkErLPRrR/7qexELYGkRDKGrif/UN1g/alGJ8=",
+  "vectors": [
+    {
+      "kid": "tv2026b",
+      "aad": "synap/cp/data_pods.intelligence_api_key/6f1c2a7e-0000-4000-8000-000000000001",
+      "plaintext": "test-secret-hub-key-0001",
+      "envelope": "senc:1:tv2026b:E-v7BEGo1hU3nrdL:BsFmFpuQbGB4bIAwSzirgKGOzxrQOxrn:6iazTClP-az51JU1X6LrQA"
+    },
+    {
+      "kid": "tv2026a",
+      "aad": "synap/cp/pod_mcp_grants.encrypted_hub_key/grant_abc123",
+      "plaintext": "test-secret-older-key",
+      "envelope": "senc:1:tv2026a:59-O-ckOnJzNstMv:h-WjNydX8nbyo_XFx7t5p6dhqeHL:0ccEAwe7F2f8rLGn2-Oo4A"
+    },
+    {
+      "kid": "tv2026b",
+      "aad": "synap/pod/service_keys.value",
+      "plaintext": "",
+      "envelope": "senc:1:tv2026b:meN4RlGMICeEuAzv::rGdSwEch6m1ldWJoRT28kg"
+    },
+    {
+      "kid": "tv2026b",
+      "aad": "synap/is/customer_refs.hub_protocol_api_key/42",
+      "plaintext": "unicode ✓ — é 日本",
+      "envelope": "senc:1:tv2026b:8vYvOeyxJZaaXJF3:QIWPf9YMbAGV2Te84egdUSVEnPFYTfLSPw:mu_dmUV40X5A-NBNUdHC5w"
+    }
+  ],
+  "mustFail": [
+    {
+      "reason": "wrong AAD (row swap)",
+      "envelope": "senc:1:tv2026b:E-v7BEGo1hU3nrdL:BsFmFpuQbGB4bIAwSzirgKGOzxrQOxrn:6iazTClP-az51JU1X6LrQA",
+      "aad": "synap/cp/data_pods.intelligence_api_key/6f1c2a7e-0000-4000-8000-000000000002"
+    },
+    {
+      "reason": "wrong AAD (column swap)",
+      "envelope": "senc:1:tv2026a:59-O-ckOnJzNstMv:h-WjNydX8nbyo_XFx7t5p6dhqeHL:0ccEAwe7F2f8rLGn2-Oo4A",
+      "aad": "synap/cp/data_pods.intelligence_api_key/grant_abc123"
+    },
+    {
+      "reason": "tampered tag",
+      "envelope": "senc:1:tv2026b:E-v7BEGo1hU3nrdL:BsFmFpuQbGB4bIAwSzirgKGOzxrQOxrn:AAAAAAAAAAAAAAAAAAAAAA",
+      "aad": "synap/cp/data_pods.intelligence_api_key/6f1c2a7e-0000-4000-8000-000000000001"
+    },
+    {
+      "reason": "unknown kid",
+      "envelope": "senc:1:tv1999z:E-v7BEGo1hU3nrdL:BsFmFpuQbGB4bIAwSzirgKGOzxrQOxrn:6iazTClP-az51JU1X6LrQA",
+      "aad": "synap/cp/data_pods.intelligence_api_key/6f1c2a7e-0000-4000-8000-000000000001"
+    },
+    {
+      "reason": "unsupported version",
+      "envelope": "senc:2:tv2026b:E-v7BEGo1hU3nrdL:BsFmFpuQbGB4bIAwSzirgKGOzxrQOxrn:6iazTClP-az51JU1X6LrQA",
+      "aad": "synap/cp/data_pods.intelligence_api_key/6f1c2a7e-0000-4000-8000-000000000001"
+    }
+  ]
+}
