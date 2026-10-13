@@ -554,8 +554,8 @@ describe("validateManifest", () => {
     expect(() => validateManifest(m)).toThrow(/non-empty valueMap/);
   });
 
-  it("rejects remapPropertyValues whose sourceKey equals targetKey", () => {
-    const m: ConversionManifest = {
+  it("accepts an IN-PLACE remapPropertyValues only when a re-run is a no-op", () => {
+    const inPlace = (over: Record<string, unknown>): ConversionManifest => ({
       version: 1,
       ops: [
         {
@@ -565,10 +565,18 @@ describe("validateManifest", () => {
           sourceKey: "stage",
           targetKey: "stage",
           valueMap: { a: "b" },
-        },
+          ...over,
+        } as never,
       ],
-    };
-    expect(() => validateManifest(m)).toThrow(/must differ/);
+    });
+    expect(() => validateManifest(inPlace({}))).not.toThrow();
+    // A chain moves `b` again on every run.
+    expect(() =>
+      validateManifest(inPlace({ valueMap: { a: "b", b: "c" } }))
+    ).toThrow(/must be idempotent/);
+    expect(() =>
+      validateManifest(inPlace({ preferTargetValues: ["b"] }))
+    ).toThrow(/must be idempotent/);
   });
 
   const renameOp = (over: Record<string, unknown> = {}) =>

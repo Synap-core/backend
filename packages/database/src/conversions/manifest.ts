@@ -377,7 +377,11 @@ export interface RemapPropertyValuesOp extends BaseOp {
   op: "remapPropertyValues";
   /** Profile slug whose entities are remapped. */
   slug: string;
-  /** Legacy entity-property key the value is read from and then stripped. */
+  /**
+   * Legacy entity-property key the value is read from and then stripped. The
+   * SAME key as `targetKey` = an in-place remap (one transaction; the
+   * validator then requires it to be idempotent).
+   */
   sourceKey: string;
   /** Entity-property key the mapped value is written into. */
   targetKey: string;
@@ -1993,15 +1997,17 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     //                                       not Review, nothing awaits approval;
     //                                       not Dropped, that is a person's call)
     //   story   planned     → backlog      (Draft)
-    // Same two-step pattern as the in-review fold above (sourceKey ≠ targetKey;
-    // each step touches ONLY the rows whose value it maps).
+    // ONE in-place op per property (sourceKey === targetKey), so each fold is
+    // ONE transaction: there is no step boundary a halted or `--only` run can
+    // stop at, leaving rows parked on an aside key with no status (final
+    // review #18). Touches ONLY the rows whose value it maps.
     {
       op: "remapPropertyValues",
-      opKey: "h0.devplane-feature.legacy-values-aside",
+      opKey: "h0.devplane-feature.legacy-values",
       deferAtBoot: true,
       slug: "devplane_feature",
       sourceKey: "featureStatus",
-      targetKey: "featureStatus-h0-legacy",
+      targetKey: "featureStatus",
       valueMap: {
         planned: "backlog",
         "in-progress": "in_progress",
@@ -2010,30 +2016,12 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     },
     {
       op: "remapPropertyValues",
-      opKey: "h0.devplane-feature.legacy-values-into-lifecycle",
-      deferAtBoot: true,
-      slug: "devplane_feature",
-      sourceKey: "featureStatus-h0-legacy",
-      targetKey: "featureStatus",
-      valueMap: { backlog: "backlog", in_progress: "in_progress" },
-    },
-    {
-      op: "remapPropertyValues",
-      opKey: "h0.devplane-story.planned-aside",
+      opKey: "h0.devplane-story.planned",
       deferAtBoot: true,
       slug: "devplane_story",
       sourceKey: "storyStatus",
-      targetKey: "storyStatus-h0-planned",
-      valueMap: { planned: "backlog" },
-    },
-    {
-      op: "remapPropertyValues",
-      opKey: "h0.devplane-story.planned-into-lifecycle",
-      deferAtBoot: true,
-      slug: "devplane_story",
-      sourceKey: "storyStatus-h0-planned",
       targetKey: "storyStatus",
-      valueMap: { backlog: "backlog" },
+      valueMap: { planned: "backlog" },
     },
     // Homes X2 (live 10-13: 15 decisions carry `status: "accepted"` and no
     // `decisionStatus`). decision's ONE lifecycle is `decisionStatus`
@@ -2275,9 +2263,18 @@ export function validateManifest(manifest: ConversionManifest): void {
         requireSlug(op.opKey, op.sourceKey, "sourceKey");
         requireSlug(op.opKey, op.targetKey, "targetKey");
         if (op.sourceKey === op.targetKey) {
-          throw new Error(
-            `Conversion manifest: remapPropertyValues '${op.opKey}' sourceKey and targetKey must differ (both '${op.sourceKey}')`
+          // In place: one UPDATE rewrites the key's own value. Safe only when a
+          // re-run is a no-op — no mapped value is itself a source value (a
+          // chain a→b, b→c would move b again on every run) — and nothing can
+          // be "preferred" (source and target are the same value).
+          const chained = Object.values(op.valueMap ?? {}).filter(
+            (v) => v in (op.valueMap ?? {})
           );
+          if (chained.length > 0 || (op.preferTargetValues ?? []).length > 0) {
+            throw new Error(
+              `Conversion manifest: remapPropertyValues '${op.opKey}' in place (sourceKey = targetKey '${op.sourceKey}') must be idempotent: no mapped value may be a source value (${chained.join(", ") || "none"}) and preferTargetValues must be empty`
+            );
+          }
         }
         if (
           !op.valueMap ||

@@ -216,11 +216,11 @@ describe("h0 story in-review → In feature (in-progress)", () => {
   });
 });
 
+// One in-place op each: a run that stops after either can never leave a row
+// without its status (final review #18).
 const LEGACY_VALUES = [
-  "h0.devplane-feature.legacy-values-aside",
-  "h0.devplane-feature.legacy-values-into-lifecycle",
-  "h0.devplane-story.planned-aside",
-  "h0.devplane-story.planned-into-lifecycle",
+  "h0.devplane-feature.legacy-values",
+  "h0.devplane-story.planned",
 ];
 
 describe("h0 legacy dev-lifecycle VALUES → the declared keys (homes A5)", () => {
