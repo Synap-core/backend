@@ -56,7 +56,6 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import type { ExpectedOutput } from "@synap/playbooks";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { projectLensWhere } from "../../utils/project-scope.js";
 import { resolveActorNames } from "../../utils/resolve-actor-names.js";
@@ -68,8 +67,11 @@ import {
   roleVisibilityConditions,
   type StatusGroup,
 } from "./status-groups.js";
-import { countNeedsYouByScope } from "../../routers/signals.js";
-import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
+import {
+  countNeedsYouByScope,
+  type SignalsCtx,
+} from "../../routers/signals.js";
+import { asksYouSessionIds } from "../signals/needs-you-owed.js";
 import { resolveBoardLens } from "./board-lens.js";
 import { loadOpenWork, type OpenWorkRow } from "./worked-by.js";
 
@@ -146,16 +148,16 @@ export interface MovingItem {
   }>;
 }
 
-/** What the trpc ctx carries that these reads use. */
-export interface HomesCtx {
-  userId: string;
-  workspaceId?: string | null;
-  agentUserId?: string | null;
-}
+/**
+ * The caller context — the signals read's own (`countNeedsYouByScope` takes
+ * it as is), so a ctx-shape change fails the build instead of hiding behind a
+ * cast.
+ */
+export type HomesCtx = SignalsCtx & { userId: string };
 
 const readerOf = (ctx: HomesCtx) => ({
   userId: ctx.userId,
-  roster: rosterReadFor(ctx as never),
+  roster: rosterReadFor(ctx),
 });
 
 // ─── Spaces + intents ────────────────────────────────────────────────────────
@@ -386,12 +388,6 @@ async function profileWords(
 
 // ─── Work on things ──────────────────────────────────────────────────────────
 
-const asksYouOf = (w: OpenWorkRow): boolean =>
-  Array.isArray(w.expectedOutputs) &&
-  (w.expectedOutputs as ExpectedOutput[]).some(
-    (slot) => !!slot && typeof slot === "object" && isOwedSlot(slot)
-  );
-
 const workKindOf = (w: OpenWorkRow): WorkKind =>
   w.automationId
     ? "worker"
@@ -410,6 +406,8 @@ async function readProducedKind(
     words: { label: string; plural: string } | undefined;
     /** Open work per thing; null = that read failed. */
     openWork: Map<string, OpenWorkRow[]> | null;
+    /** The open sessions that ASK YOU (`asksYouSessionIds`); null = unknown. */
+    asksYou: ReadonlySet<string> | null;
     needsYou: number | null;
   }
 ): Promise<ProducedKind | null> {
@@ -537,9 +535,15 @@ async function readProducedKind(
     reason: HeadlineReason
   ): ProducedKind["headline"] =>
     c ? { entityId: c.id, title: c.name, status: c.status, reason } : null;
+  const asksYou = input.asksYou;
   const headline =
+    // An unknown asks-you set skips the reason it could not read.
     pick(
-      workedItems.find((c) => workOn(c.id).some(asksYouOf)),
+      asksYou
+        ? workedItems.find((c) =>
+            workOn(c.id).some((w) => asksYou.has(w.sessionId))
+          )
+        : undefined,
       "needs_you"
     ) ??
     pick(
@@ -616,12 +620,22 @@ export async function readHome(
     }
   };
 
-  const [words, openWork, needs] = await Promise.all([
+  const openWorkAndAsks = async () => {
+    const work = await loadOpenWork(readerOf(ctx), null);
+    const asks = await settle("asks you", () =>
+      asksYouSessionIds(
+        ctx.userId,
+        [...work.values()].flatMap((rows) => rows.map((w) => w.sessionId))
+      )
+    );
+    return { work, asks };
+  };
+  const [words, open, needs] = await Promise.all([
     profileWords([...new Set(intents.flatMap((i) => i.produces))]),
-    settle("open work", () => loadOpenWork(readerOf(ctx), null)),
+    settle("open work", openWorkAndAsks),
     // ONE attention read for every scope on the page (null per failed scope).
     settle("needs-you", () =>
-      countNeedsYouByScope(ctx as never, {
+      countNeedsYouByScope(ctx, {
         ...(input.projectId ? { projectId: input.projectId } : {}),
         spaces: intents.map((i) => ({
           workspaceId: i.space.id,
@@ -649,7 +663,8 @@ export async function readHome(
               profileSlug,
               projectId: input.projectId,
               words: words.get(profileSlug),
-              openWork,
+              openWork: open?.work ?? null,
+              asksYou: open?.asks ?? null,
               needsYou: byKind[idx]!.get(profileSlug) ?? null,
             })
           )
@@ -879,12 +894,17 @@ export async function readMoving(
     );
   if (things.length === 0) return { items: [] };
 
-  const [identities, names] = await Promise.all([
+  const [identities, names, asksYou] = await Promise.all([
     resolveMovingIdentities(ctx.userId, things, input.workspaceId),
     resolveActorNames(
       things.flatMap((t) =>
         (work.get(t.id) ?? []).map((w) => w.agentIds[0] ?? "")
       )
+    ),
+    // THE needs-you owed predicate (owner floor, drafts out), never a slot scan.
+    asksYouSessionIds(
+      ctx.userId,
+      things.flatMap((t) => (work.get(t.id) ?? []).map((w) => w.sessionId))
     ),
   ]);
   const inScope = things.filter(
@@ -904,7 +924,7 @@ export async function readMoving(
           label: resolveSessionTitle({ title: w.title, goal: w.goal }),
           ...(actor ? { actor } : {}),
           live: w.live,
-          asksYou: asksYouOf(w),
+          asksYou: asksYou.has(w.sessionId),
           since: w.startedAt.toISOString(),
         };
       });

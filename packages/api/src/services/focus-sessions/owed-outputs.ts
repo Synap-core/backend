@@ -56,6 +56,7 @@ import {
   focusSessions,
   and,
   eq,
+  inArray,
   drizzleSql,
   OWED_SLOT_CLAUSES,
   owedSlotPredicateSql,
@@ -239,6 +240,8 @@ export interface ListOwedSlotsParams {
    */
   sessionId?: string;
   trackId?: string;
+  /** Only these sessions' slots (the homes' "asks you" over open work). */
+  sessionIds?: readonly string[];
   /**
    * Only slots of sessions ON these things (`sessionSubjectWhere`) — an intent
    * surface's needs-you. In SQL, for the same reason as the container lenses.
@@ -333,6 +336,8 @@ export async function listOwedSlots(
     owedSlotWhere(),
   ];
   if (params.sessionId) conditions.push(eq(focusSessions.id, params.sessionId));
+  if (params.sessionIds)
+    conditions.push(inArray(focusSessions.id, [...params.sessionIds]));
   if (params.trackId)
     conditions.push(eq(focusSessions.trackId, params.trackId));
   if (params.subject) conditions.push(sessionSubjectWhere(params.subject));

@@ -101,10 +101,13 @@ describe("every resolveScope-backed half of the union speaks the same lens", () 
   }
 
   it("the owed and draft reads both take that ONE scope object", () => {
-    expect(src.match(/listOwedSlots\(\{\s*\.\.\.owedScope/g)).toHaveLength(1);
+    // The owed half goes through THE needs-you owed predicate
+    // (`services/signals/needs-you-owed.ts`, shared with the homes' "asks you").
+    expect(src.match(/listNeedsYouOwed\(owedScope\)/g)).toHaveLength(1);
     expect(src.match(/listDraftAskSlots\(owedScope\)/g)).toHaveLength(1);
     // Nowhere else may the owed read be called with a scope of its own.
-    expect(src.match(/listOwedSlots\(/g)).toHaveLength(1);
+    expect(src.match(/listNeedsYouOwed\(/g)).toHaveLength(1);
+    expect(src.match(/listOwedSlots\(/g)).toBeNull();
   });
 
   it("list and count read through ONE reader, so they answer over one population", () => {
@@ -115,6 +118,21 @@ describe("every resolveScope-backed half of the union speaks the same lens", () 
     expect(body.match(/readAttention\(/g)?.length ?? 0).toBeGreaterThanOrEqual(
       1
     );
-    expect(src.match(/createCaller\(ctx\)\.groups\(/g)).toHaveLength(1);
+    // The pending-proposal half is read ONCE, inside `readAttention`. The one
+    // other call is `countNeedsYouByScope`'s per-kind cluster read (f3ae223cf),
+    // which re-reads the SAME door narrowed by the floor's `...lens` — never a
+    // second assembly of the union.
+    const attention = src.slice(
+      src.indexOf("async function readAttention("),
+      src.indexOf("function blockingSignals(")
+    );
+    const byScope = src.slice(
+      src.indexOf("export async function countNeedsYouByScope(")
+    );
+    expect(attention.match(/createCaller\(ctx\)\.groups\(/g)).toHaveLength(1);
+    expect(
+      byScope.match(/createCaller\(ctx\)\.groups\(\{\s*\.\.\.lens,/g)
+    ).toHaveLength(1);
+    expect(src.match(/createCaller\(ctx\)\.groups\(/g)).toHaveLength(2);
   });
 });

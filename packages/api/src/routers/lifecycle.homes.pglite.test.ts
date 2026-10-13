@@ -267,6 +267,8 @@ async function session(o: {
   owes?: boolean;
   title?: string;
   agent?: string;
+  /** `agent` = an undecided agent DRAFT (triage pending). */
+  origin?: string;
   mins: number;
 }): Promise<string> {
   const id = randomUUID();
@@ -296,7 +298,7 @@ async function session(o: {
       USER,
       o.title ?? null,
       o.status ?? "active",
-      o.worker ? "playbook" : "human",
+      o.origin ?? (o.worker ? "playbook" : "human"),
       o.subject ?? null,
       room,
       JSON.stringify(slots),
@@ -634,6 +636,44 @@ describe("lifecycle.moving", () => {
     expect(inMisc.items.map((i) => i.entityId)).toEqual([T.misc]);
     const one = await caller().moving({ limit: 1 });
     expect(one.items).toHaveLength(1);
+  });
+
+  it("asks you = THE needs-you owed predicate: a draft's owed slot never asks you (Q-S3)", async () => {
+    await q(`update focus_sessions set status = 'closed'`);
+    const draft = await session({
+      subject: T.fresh,
+      owes: true,
+      origin: "agent",
+      mins: 3,
+      title: "Draft asks",
+    });
+    const mine = await session({
+      subject: T.neg,
+      owes: true,
+      mins: 4,
+      title: "Mine asks",
+    });
+    try {
+      const { items } = await caller().moving();
+      const work = new Map(
+        items.flatMap((i) => i.work).map((w) => [w.sessionId, w])
+      );
+      expect(work.get(mine)?.asksYou).toBe(true);
+      // The count never counts a draft (`excludeDrafts`), so neither does this.
+      expect(work.get(draft)?.asksYou).toBe(false);
+
+      // The home headline: the draft's thing is not "needs you".
+      const home = await caller().home();
+      const dealKind = home.spaces
+        .find((s) => s.workspaceId === DEV)!
+        .produces.find((p) => p.profileSlug === "deal")!;
+      expect(dealKind.headline).toMatchObject({
+        entityId: T.neg,
+        reason: "needs_you",
+      });
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
   });
 });
 

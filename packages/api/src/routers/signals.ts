@@ -125,7 +125,7 @@ import {
 } from "../services/signals/lens-containers.js";
 import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
-import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
+import { listNeedsYouOwed } from "../services/signals/needs-you-owed.js";
 import { resolveScope } from "../utils/scope-filter.js";
 import { readClusterSessions } from "../services/signals/cluster-sessions.js";
 import { rosterReadFor } from "../access/session-visibility.js";
@@ -229,7 +229,7 @@ const SignalScope = {
 type SignalScopeInput = z.infer<z.ZodObject<typeof SignalScope>>;
 
 /** The object form of the caller context (never the lazy factory). */
-type SignalsCtx = Extract<
+export type SignalsCtx = Extract<
   Parameters<typeof proposalsRouter.createCaller>[0],
   { userId?: unknown }
 >;
@@ -320,6 +320,17 @@ function throwIfFailed(
   if (failures[0]) throw failures[0].error;
 }
 
+/**
+ * The attention halves' rows as READ here: the union's DB-free inputs plus
+ * the space each row lives in — the column `narrowAttention` filters by. A
+ * projection that stopped carrying it fails the build, never narrows a scope
+ * to 0 behind a cast.
+ */
+type AttentionNotification = NotificationSignalInput & {
+  workspaceId: string | null;
+};
+type AttentionOwed = OwedSlotSignalInput & { workspaceId: string | null };
+
 // ── Blocking + Proposed + status: one read ──────────────────────────────────
 
 /**
@@ -380,7 +391,7 @@ async function readAttention(
       notifsFollow
         ? settle(
             "notifications",
-            [] as NotificationSignalInput[],
+            [] as AttentionNotification[],
             async () =>
               (
                 await notifCenterRouter.createCaller(ctx).list({
@@ -389,11 +400,11 @@ async function readAttention(
                   limit: NOTIFICATION_SCAN_LIMIT,
                   ...(container ? { container } : {}),
                 })
-              ).notifications as NotificationSignalInput[]
+              ).notifications satisfies AttentionNotification[]
           )
         : settle(
             "notifications",
-            [] as NotificationSignalInput[],
+            [] as AttentionNotification[],
             async () => []
           ),
       // System HEALTH is the pod's, never a container's: under a container lens
@@ -404,7 +415,7 @@ async function readAttention(
       container || (follows && !notifsFollow)
         ? settle(
             "notifications",
-            [] as NotificationSignalInput[],
+            [] as AttentionNotification[],
             async () =>
               (
                 await notifCenterRouter.createCaller(ctx).list({
@@ -413,7 +424,7 @@ async function readAttention(
                   category: "system",
                   limit: NOTIFICATION_SCAN_LIMIT,
                 })
-              ).notifications as NotificationSignalInput[]
+              ).notifications satisfies AttentionNotification[]
           )
         : null,
       // The owed read under the SAME lens and owner floor `focusSessions.owed`
@@ -422,14 +433,11 @@ async function readAttention(
       follows
         ? settle(
             "owed",
-            [] as OwedSlotSignalInput[],
-            async () =>
-              (await listOwedSlots({
-                ...owedScope,
-                excludeDrafts: true,
-              })) as OwedSlotSignalInput[]
+            [] as AttentionOwed[],
+            async (): Promise<AttentionOwed[]> =>
+              await listNeedsYouOwed(owedScope)
           )
-        : settle("owed", [] as OwedSlotSignalInput[], async () => []),
+        : settle("owed", [] as AttentionOwed[], async () => []),
       // The DRAFT half — owed slots on undecided agent drafts, folded into one
       // `draft-asks` row per draft. PROPOSED, never needs-you.
       settle(
@@ -1275,15 +1283,9 @@ function narrowAttention(
     },
     notifications: scope.kindClusters
       ? []
-      : a.notifications.filter((r) =>
-          inSpace((r as { workspaceId?: string | null }).workspaceId)
-        ),
+      : a.notifications.filter((r) => inSpace(r.workspaceId)),
     notificationsTruncated: false,
-    owed: a.owed.filter(
-      (o) =>
-        inSpace((o as { workspaceId?: string | null }).workspaceId) &&
-        onKind(o.sessionId)
-    ),
+    owed: a.owed.filter((o) => inSpace(o.workspaceId) && onKind(o.sessionId)),
     owedTruncated: false,
     review: {
       sessions: a.review.sessions.filter(
