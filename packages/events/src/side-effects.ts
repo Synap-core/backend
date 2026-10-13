@@ -195,11 +195,19 @@ const crossThreadNotifyReactor: Reactor = {
 // 5. Automation trigger matching — THE trigger hop (load-bearing, byte-identical)
 const automationTriggerMatchReactor: Reactor = {
   id: "automation-trigger-match",
-  // Fire on workspace-scoped events (unchanged) AND on pod-wide inbound messages
-  // (external_message with a null workspace — a pod-wide Discord turn). The worker
-  // matches a null-workspace event across the user's accessible workspaces (F1).
+  // Fire on workspace-scoped events (unchanged), on pod-wide inbound messages
+  // (external_message with a null workspace — a pod-wide Discord turn) and on a
+  // pod-wide ROLE attach. The worker matches a null-workspace event across the
+  // user's accessible workspaces (F1) and runs each match in the automation's
+  // own space. A role is pod-wide whenever its entity was captured outside a
+  // space — the default for an agent's capture — and a role's `created`
+  // activator ("Qualify a lead", CRM) fires on exactly this event; dropped
+  // here, a lead captured by an agent never started its process (founder pod
+  // 2026-10-13).
   match: (payload) =>
-    Boolean(payload.workspaceId) || payload.subjectType === "external_message",
+    Boolean(payload.workspaceId) ||
+    payload.subjectType === "external_message" ||
+    (payload.subjectType === "entity_facet" && payload.action === "attach"),
   async handler(payload, { boss }) {
     await boss.send("automation-trigger-match", {
       eventType: `${payload.subjectType}.${payload.action}.completed`,
