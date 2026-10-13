@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner } from "@heroui/react";
 import {
+  ArrowRight,
   ChevronDown,
   ExternalLink,
   ShieldCheck,
@@ -188,32 +189,21 @@ export default function ApplicationConnectionsPage() {
         )}
       </section>
 
-      {/* 2 — What needs YOU now: pending requests to review & approve. */}
+      {/* 2 — What needs YOU now is decided in Review, with every other
+          access request; this page only points there. */}
       {needsReview.length > 0 ? (
-        <section className="mt-9 space-y-3" aria-labelledby="needs-review">
-          <div className="flex items-center justify-between">
-            <h2
-              id="needs-review"
-              className="text-sm font-medium text-foreground"
-            >
-              Needs your review
-            </h2>
-            <span className="text-xs text-foreground/50">
-              {needsReview.length}
-            </span>
-          </div>
-          <p className="max-w-2xl text-xs leading-5 text-foreground/55">
-            An app is waiting for you to allow its website. Review the request,
-            then approve or decline.
-          </p>
-          {needsReview.map((request) => (
-            <RequestRow
-              key={request.id}
-              request={request}
-              actionLabel="Review &amp; approve"
-            />
-          ))}
-        </section>
+        <Link
+          href="/review?type=access"
+          className="mt-9 flex items-center justify-between gap-3 rounded-lg bg-foreground/[0.04] px-4 py-3 text-sm text-foreground ring-1 ring-inset ring-foreground/10 transition-colors hover:bg-foreground/[0.06]"
+        >
+          <span>
+            {needsReview.length} app request
+            {needsReview.length === 1 ? "" : "s"} waiting
+          </span>
+          <span className="inline-flex items-center gap-1 font-medium">
+            Review <ArrowRight size={14} aria-hidden />
+          </span>
+        </Link>
       ) : null}
 
       {/* 3 — Mid-flight: app started but hasn't finished. Not owner-actionable. */}
@@ -232,8 +222,8 @@ export default function ApplicationConnectionsPage() {
           </div>
           <p className="max-w-2xl text-xs leading-5 text-foreground/55">
             These apps started connecting but haven’t finished. There’s nothing
-            to approve yet — finish from the app, and it’ll move up to “Needs
-            your review” once it’s waiting on you.
+            to approve yet — finish from the app, and it’ll appear in Review
+            once it’s waiting on you.
           </p>
           {inProgress.map((request) => (
             <RequestRow

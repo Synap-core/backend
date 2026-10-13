@@ -3162,7 +3162,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "human" | "automation" | "playbook";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3177,7 +3177,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "human" | "automation" | "playbook";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3283,7 +3283,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3745,7 +3745,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4542,7 +4542,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4564,7 +4564,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "session" | "project";
+			data: "project" | "session";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4579,7 +4579,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "session" | "project";
+			$type: "project" | "session";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -8353,6 +8353,26 @@ export interface TrackKpi {
 	updatedAt?: string;
 	/** The user (or agent) id that stated `current`. */
 	updatedBy?: string;
+}
+/**
+ * WHO is asking for access, on an `access-request` row — a pod-level request
+ * that is not a proposal: an external service asking to be a TRUSTED ISSUER
+ * (it would sign identity tokens this pod accepts), or an APPLICATION asking
+ * that its browser origin may call this pod. Pod admins only; the pod reads
+ * them from their own tables (`trusted_issuers`, application connection
+ * requests), so they need no notification to exist.
+ *
+ * Carried on the row because they are two of the trust signals a reviewer
+ * decides on — the asker's name and where it asks from — and a tray must be
+ * able to say them without a second read.
+ */
+export interface NeedsYouAccessRequest {
+	/** What would be granted: issuer trust, or an application's browser origin. */
+	subject: "issuer" | "application";
+	/** The asker's display name (the issuer's host, the app's name). */
+	name: string;
+	/** Where it asks from: the issuer URL, or the app's requested origin. */
+	from: string;
 }
 /**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
@@ -16612,7 +16632,14 @@ export type SignalKind =
  * an OPEN question, or suggestions nobody filed or refused. The door opens
  * the capture thread (the session's `room` view); `captureStatus` says which.
  */
- | "capture";
+ | "capture"
+/**
+ * One pod-level ACCESS REQUEST that is not a proposal (pod admins only,
+ * `access-requests.ts`): a pending trusted issuer (`target.kind: "issuer"`)
+ * or an app's pending connection request (`target.kind:
+ * "connection-request"`). Who asks and from where ride in `access`.
+ */
+ | "access-request";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -16711,9 +16738,11 @@ export interface Signal {
 	ask?: SlotAsk;
 	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
-	 * cluster (which derives it through `proposalClassFields`, the one door).
-	 * Absent on every other kind — a notification, an event or an owed slot has
-	 * no class. In particular an owed slot does NOT get a sixth `ProposalClass`
+	 * cluster (which derives it through `proposalClassFields`, the one door) —
+	 * and `access` on an `access-request`, which is the same decision (who may
+	 * act) reached without a proposal, so a surface filing decisions by class
+	 * files both in one lane. Absent on every other kind — a notification, an
+	 * event or an owed slot has no class. In particular an owed slot does NOT get a sixth `ProposalClass`
 	 * invented for it: `class` is a PROPOSAL's decision class, consumed as an
 	 * ordering over proposals, and an obligation is not a decision. Its absent
 	 * `lifetimeHours` already carries the only thing a surface needs to know —
@@ -16780,6 +16809,19 @@ export interface Signal {
 	 * vocabulary (`deriveCaptureStatus`), so one word names it everywhere.
 	 */
 	captureStatus?: "needs_answer" | "suggested";
+	/**
+	 * `access-request` only: who asks for access and from where — two of the
+	 * trust signals a reviewer decides on, carried so a tray can say them
+	 * without a second read (`NeedsYouAccessRequest`).
+	 */
+	access?: NeedsYouAccessRequest;
+	/**
+	 * `proposal-cluster` only: the member proposal ids the cluster sampled
+	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
+	 * decision over the row acts on; a surface batches a cluster only when
+	 * `proposalIds.length === count`, never a sample standing for more.
+	 */
+	proposalIds?: string[];
 	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
@@ -16878,7 +16920,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "captures" | "liveness" | "outputs" | "activity" | "events";
+export type SignalSubRead = "proposals" | "notifications" | "owed" | "drafts" | "review" | "captures" | "issuers" | "app-requests" | "liveness" | "outputs" | "activity" | "events";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -19792,7 +19834,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20544,7 +20586,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20646,7 +20688,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20762,7 +20804,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -34806,7 +34848,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -42304,6 +42346,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					happened?: number | undefined;
 				} | undefined;
 				picks?: boolean | undefined;
+				kinds?: ("event" | "output" | "notification" | "capture" | "activity" | "rule-run" | "proposal-cluster" | "live-session" | "owed-slot" | "draft-asks" | "session-review" | "access-request")[] | undefined;
 				workspaceId?: string | null | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
@@ -42343,6 +42386,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				notifications: number;
 				review: number;
 				captures: number;
+				requests: number;
 				drafts: number;
 				draftsTruncated: boolean;
 				suggestions: number;
@@ -42365,6 +42409,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: number;
 					review: number;
 					captures: number;
+					requests: number;
 					drafts: number;
 					draftsTruncated: boolean;
 					suggestions: number;

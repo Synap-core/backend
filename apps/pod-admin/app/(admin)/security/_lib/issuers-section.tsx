@@ -19,7 +19,6 @@
 
 import {
   Button,
-  Checkbox,
   Chip,
   Modal,
   ModalBody,
@@ -47,87 +46,15 @@ import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative } from "../../../../lib/format";
 import { BROKER_TRUST_QUERY_KEY } from "./broker-trust";
 import { BrokerTrustPanel } from "./broker-trust-panel";
+import {
+  IssuerApproveModal,
+  knownIssuerScopes,
+  type TrustedIssuerScope,
+} from "../../review/_lib/issuer-review";
 
 type IssuerStatus = "pending" | "approved" | "rejected" | "revoked";
 
 type IssuerFilter = "approved" | "rejected" | "revoked" | "built-in";
-
-/** Derived from the generated tRPC contract so this UI cannot submit a scope
- * the Pod does not recognize. */
-type TrustedIssuerScope = Parameters<
-  ReturnType<typeof trpc.trustedIssuers.approve.useMutation>["mutateAsync"]
->[0]["allowedScopes"][number];
-
-const ISSUER_SCOPES = [
-  {
-    value: "auth:exchange-user",
-    label: "Sign in linked users",
-    description: "Exchange this issuer's identity assertion for a Pod session",
-  },
-  {
-    value: "identity:link-user",
-    label: "Link Pod identities",
-    description:
-      "Link an issuer identity after the user proves direct Pod access",
-  },
-  {
-    value: "membership:grant",
-    label: "Manage federated membership",
-    description:
-      "Create or update scoped Pod membership; grant only to a trusted operator",
-  },
-  {
-    value: "source-config:write",
-    label: "Configure data sources",
-    description:
-      "Create source configuration for an already-linked, locally authorized user",
-  },
-  {
-    value: "setup.agent",
-    label: "Setup: Agent",
-    description: "Provision agent users on this pod",
-  },
-  {
-    value: "hub-protocol.read",
-    label: "Hub: Read",
-    description: "Read data via Hub Protocol",
-  },
-  {
-    value: "hub-protocol.write",
-    label: "Hub: Write",
-    description: "Write data via Hub Protocol",
-  },
-  {
-    value: "data.read",
-    label: "Data: Read",
-    description: "Read entities & documents",
-  },
-  {
-    value: "data.write",
-    label: "Data: Write",
-    description: "Write entities & documents",
-  },
-  {
-    value: "provision",
-    label: "Provision",
-    description: "Full pod provisioning",
-  },
-  {
-    value: "tier_update",
-    label: "Tier update",
-    description: "Update pod tier",
-  },
-  { value: "sync", label: "Sync", description: "Pod-to-pod sync" },
-] as const satisfies readonly {
-  value: TrustedIssuerScope;
-  label: string;
-  description: string;
-}[];
-
-const DEFAULT_SCOPES: TrustedIssuerScope[] = [
-  "auth:exchange-user",
-  "identity:link-user",
-];
 
 interface IssuerLike {
   id: string;
@@ -281,11 +208,7 @@ export function IssuersSection() {
         onApprove={(issuerId, scopes) => {
           const issuer = issuers.find((i) => i.id === issuerId);
           if (!issuer) return;
-          setApproveScopes(
-            scopes.filter((s): s is TrustedIssuerScope =>
-              ISSUER_SCOPES.some((known) => known.value === s)
-            )
-          );
+          setApproveScopes(knownIssuerScopes(scopes));
           setApproveTarget(issuer);
         }}
       />
@@ -370,7 +293,7 @@ export function IssuersSection() {
 
       {/* Modals */}
       {approveTarget && (
-        <ApproveModal
+        <IssuerApproveModal
           issuer={approveTarget}
           initialScopes={approveScopes}
           isPending={approve.isPending}
@@ -476,113 +399,6 @@ function IssuerRow({
 }
 
 // ─── Modals ────────────────────────────────────────────────────────────────
-
-function ApproveModal({
-  issuer,
-  initialScopes,
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  issuer: IssuerLike;
-  /** Pre-selected scopes; `approve` REPLACES the issuer's scopes, so a fix
-   * that adds one scope passes the issuer's current scopes plus that one. */
-  initialScopes?: TrustedIssuerScope[];
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: (scopes: TrustedIssuerScope[]) => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-  const [selected, setSelected] = useState<TrustedIssuerScope[]>(
-    initialScopes ?? DEFAULT_SCOPES
-  );
-
-  function toggle(s: TrustedIssuerScope) {
-    setSelected((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-    );
-  }
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="lg">
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(52, 211, 153, 0.18)" }}
-          >
-            <ShieldCheck className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="font-medium">Approve {issuer.displayName}</span>
-        </ModalHeader>
-        <ModalBody className="gap-3 pb-2">
-          <p className="font-mono text-[11.5px] text-foreground/55">
-            {issuer.issuerUrl}
-          </p>
-          <div>
-            <p className="mb-1 text-[12.5px] font-medium text-foreground">
-              Allowed scopes
-            </p>
-            <p className="mb-2 text-[11.5px] text-foreground/55">
-              Pick what this issuer is allowed to do on this pod.
-            </p>
-            <div className="max-h-72 overflow-y-auto rounded-lg ring-1 ring-inset ring-foreground/10">
-              {ISSUER_SCOPES.map((s) => (
-                <label
-                  key={s.value}
-                  className="flex cursor-pointer items-start gap-2 border-b border-foreground/[0.05] px-3 py-2 last:border-0 hover:bg-content2/40"
-                >
-                  <Checkbox
-                    size="sm"
-                    isSelected={selected.includes(s.value)}
-                    onValueChange={() => toggle(s.value)}
-                  />
-                  <span className="flex flex-col">
-                    <span className="text-[12.5px] font-medium text-foreground">
-                      {s.label}
-                    </span>
-                    <span className="text-[11px] text-foreground/55">
-                      {s.description}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            {selected.length === 0 && (
-              <p className="mt-2 text-[11.5px] text-status-down">
-                Select at least one scope.
-              </p>
-            )}
-          </div>
-        </ModalBody>
-        <ModalFooter>
-          <Button
-            variant="light"
-            size="sm"
-            radius="md"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="success"
-            size="sm"
-            radius="md"
-            isDisabled={selected.length === 0 || isPending}
-            isLoading={isPending}
-            onPress={() => void onConfirm(selected)}
-          >
-            Approve
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
 
 function RevokeModal({
   issuer,

@@ -3,15 +3,8 @@
  */
 
 /**
- * `from` and `to` for the default date range shared by all three Audit
- * sub-tabs.
- *
- * 30 days, not 7. The window was sized when Proposals and the Approval queue
- * showed pod-wide rows only — a handful. Now that both show every proposal the
- * viewer may review, a week hides most of the governance backlog, and an
- * unreviewed proposal does not stop mattering on its eighth day. The Activity
- * log shares this seed and is only ever narrowed by it client-side, so a wider
- * default costs it nothing.
+ * `from` and `to` for the activity log's default date range: 30 days. The log
+ * is only ever narrowed by it client-side, so a wide default costs nothing.
  */
 export function defaultDateRange(): { fromDate: string; toDate: string } {
   const to = new Date();

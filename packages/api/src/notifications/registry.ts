@@ -865,6 +865,12 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{displayName}} ({{issuerUrl}}) requested pod access.",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
+    // News ABOUT an ask, not the ask: the pending issuer is read from
+    // `trusted_issuers` as an `access-request` row (signals), which has a door
+    // and leaves needs-you on the decision. Counting this row too drew the
+    // same ask twice — and this one, with no door, never cleared (bug 1,
+    // 2026-10-12). `TrustedIssuerService` actions it when the issuer is decided.
+    needsYou: "informational",
   },
   {
     type: "workspace.invite",

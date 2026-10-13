@@ -6,13 +6,40 @@
  * implicit trust with a database-backed approval workflow.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { trustedIssuers } from "../schema/trusted-issuers.js";
+import { notifications } from "../schema/notifications.js";
 import type {
   TrustedIssuer,
   TrustedIssuerInsert,
 } from "../schema/trusted-issuers.js";
+
+/** The notification `setup.ts` sends each pod admin about a new pending issuer. */
+export const ISSUER_PENDING_NOTIFICATION_TYPE =
+  "system.issuer_pending_approval";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * A decided issuer's "needs approval" notifications leave every admin's bell
+ * IN THE SAME TRANSACTION as the decision — whichever door decided it (the
+ * console, the first-link flow, a revoke of a still-pending row). Until
+ * 2026-10-12 nothing cleared them, so a decided issuer stayed "needs
+ * approval" in browser and relay forever (console plan, bug 1).
+ */
+async function actionPendingNotifications(tx: Tx, issuerId: string) {
+  await tx
+    .update(notifications)
+    .set({ status: "actioned", readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.type, ISSUER_PENDING_NOTIFICATION_TYPE),
+        eq(notifications.sourceId, issuerId),
+        inArray(notifications.status, ["unread", "snoozed"])
+      )
+    );
+}
 
 export class TrustedIssuerService {
   /**
@@ -78,17 +105,21 @@ export class TrustedIssuerService {
     reviewedBy: string,
     allowedScopes: string[]
   ): Promise<TrustedIssuer> {
-    const [updated] = await db
-      .update(trustedIssuers)
-      .set({
-        status: "approved",
-        allowedScopes,
-        reviewedBy,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(trustedIssuers.id, id))
-      .returning();
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(trustedIssuers)
+        .set({
+          status: "approved",
+          allowedScopes,
+          reviewedBy,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(trustedIssuers.id, id))
+        .returning();
+      if (row) await actionPendingNotifications(tx, id);
+      return row;
+    });
 
     if (!updated) {
       throw new Error(`TrustedIssuerService.approve: issuer ${id} not found`);
@@ -107,37 +138,44 @@ export class TrustedIssuerService {
     reviewedBy: string,
     allowedScopes: string[]
   ): Promise<TrustedIssuer | null> {
-    const [updated] = await db
-      .update(trustedIssuers)
-      .set({
-        status: "approved",
-        allowedScopes,
-        reviewedBy,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(trustedIssuers.id, id), eq(trustedIssuers.status, "pending"))
-      )
-      .returning();
-    return updated ?? null;
+    return db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(trustedIssuers)
+        .set({
+          status: "approved",
+          allowedScopes,
+          reviewedBy,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(trustedIssuers.id, id), eq(trustedIssuers.status, "pending"))
+        )
+        .returning();
+      if (updated) await actionPendingNotifications(tx, id);
+      return updated ?? null;
+    });
   }
 
   /**
    * Reject a pending issuer with a human-readable reason.
    */
   async reject(id: string, reviewedBy: string, reason: string): Promise<void> {
-    const result = await db
-      .update(trustedIssuers)
-      .set({
-        status: "rejected",
-        reviewedBy,
-        reviewedAt: new Date(),
-        rejectionReason: reason,
-        updatedAt: new Date(),
-      })
-      .where(eq(trustedIssuers.id, id))
-      .returning({ id: trustedIssuers.id });
+    const result = await db.transaction(async (tx) => {
+      const rows = await tx
+        .update(trustedIssuers)
+        .set({
+          status: "rejected",
+          reviewedBy,
+          reviewedAt: new Date(),
+          rejectionReason: reason,
+          updatedAt: new Date(),
+        })
+        .where(eq(trustedIssuers.id, id))
+        .returning({ id: trustedIssuers.id });
+      if (rows.length > 0) await actionPendingNotifications(tx, id);
+      return rows;
+    });
 
     if (result.length === 0) {
       throw new Error(`TrustedIssuerService.reject: issuer ${id} not found`);
@@ -149,16 +187,21 @@ export class TrustedIssuerService {
    * Sets status to "revoked"; the issuer will be refused on next auth attempt.
    */
   async revoke(id: string, reviewedBy: string): Promise<void> {
-    const result = await db
-      .update(trustedIssuers)
-      .set({
-        status: "revoked",
-        reviewedBy,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(trustedIssuers.id, id))
-      .returning({ id: trustedIssuers.id });
+    const result = await db.transaction(async (tx) => {
+      const rows = await tx
+        .update(trustedIssuers)
+        .set({
+          status: "revoked",
+          reviewedBy,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(trustedIssuers.id, id))
+        .returning({ id: trustedIssuers.id });
+      // Revoking a row still pending is a decision on it too.
+      if (rows.length > 0) await actionPendingNotifications(tx, id);
+      return rows;
+    });
 
     if (result.length === 0) {
       throw new Error(`TrustedIssuerService.revoke: issuer ${id} not found`);

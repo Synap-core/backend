@@ -70,6 +70,13 @@ vi.mock("./proposals.js", () => ({
   },
 }));
 
+// The access-request halves (pod admins): pinned by their own PGlite suite
+// (`access-requests.pglite.test.ts`); empty here, as for a member.
+vi.mock("../services/signals/access-requests.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  listPendingIssuers: async () => ({ rows: [], truncated: false }),
+  listPendingAppRequests: async () => ({ rows: [], truncated: false }),
+}));
 vi.mock("../services/projects/project-needs-you.js", () => ({
   countProjectSessionsAwaitingReview: async () => ({
     review: 0,

@@ -108,12 +108,20 @@ import {
   sessionGroupKey,
   sessionSource,
   ageBucketOf,
+  SIGNAL_KINDS,
   type NotificationContainer,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
+  type PendingAppRequestSignalInput,
+  type PendingIssuerSignalInput,
   type Signal,
   type StatusBanner,
 } from "../services/signals/needs-you-union.js";
+import {
+  listPendingAppRequests,
+  listPendingIssuers,
+  podAdminCheck,
+} from "../services/signals/access-requests.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import {
@@ -238,6 +246,8 @@ export type SignalSubRead =
   | "drafts"
   | "review"
   | "captures"
+  | "issuers"
+  | "app-requests"
   | "liveness"
   | "outputs"
   | "activity"
@@ -306,111 +316,141 @@ async function readAttention(
   // they are read on the full floor (Home) only, never under a lens.
   const readsCaptures =
     follows && !container && input.workspaceId === undefined;
-  const [groups, notifs, health, owed, drafts, review, captures] =
-    await Promise.all([
-      settle(
-        "proposals",
-        { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
-        () =>
-          proposalsRouter.createCaller(ctx).groups({
+  // Access requests (a pending issuer, an app's origin) are the POD's, decided
+  // by a pod admin, and live in no space or project: the same floor-only rule
+  // as captures. Not an admin ⇒ empty (not theirs to see), never unreadable.
+  const readsAccess = readsCaptures;
+  const isAdmin = podAdminCheck(userId);
+  const [
+    groups,
+    notifs,
+    health,
+    owed,
+    drafts,
+    review,
+    captures,
+    issuers,
+    appRequests,
+  ] = await Promise.all([
+    settle(
+      "proposals",
+      { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
+      () =>
+        proposalsRouter.createCaller(ctx).groups({
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          projectId: input.projectId,
+          trackId: input.trackId,
+          automationId: input.automationId,
+          status: "pending",
+          limit: clusterLimit,
+          excludeDraftSessions: true,
+          splitBySession: true,
+        })
+    ),
+    // Under a container lens the door narrows IN SQL, before its limit
+    // (`container`); the resolved containers below stay the authority.
+    follows
+      ? settle(
+          "notifications",
+          [] as NotificationSignalInput[],
+          async () =>
+            (
+              await notifCenterRouter.createCaller(ctx).list({
+                workspaceId: floorLens(input.workspaceId),
+                status: "unread",
+                limit: NOTIFICATION_SCAN_LIMIT,
+                ...(container ? { container } : {}),
+              })
+            ).notifications as NotificationSignalInput[]
+        )
+      : settle(
+          "notifications",
+          [] as NotificationSignalInput[],
+          async () => []
+        ),
+    // System HEALTH is the pod's, never a container's: under a container lens
+    // the banner reads its own rows (every status-role type is `system`,
+    // pinned in the tests); at the floor it reads the floor read above.
+    container
+      ? settle(
+          "notifications",
+          [] as NotificationSignalInput[],
+          async () =>
+            (
+              await notifCenterRouter.createCaller(ctx).list({
+                workspaceId: floorLens(input.workspaceId),
+                status: "unread",
+                category: "system",
+                limit: NOTIFICATION_SCAN_LIMIT,
+              })
+            ).notifications as NotificationSignalInput[]
+        )
+      : null,
+    // The owed read under the SAME lens and owner floor `focusSessions.owed`
+    // applies (`listOwedSlots`), plus the session/track lenses that door does
+    // not expose. Drafts never count (`excludeDrafts`).
+    follows
+      ? settle(
+          "owed",
+          [] as OwedSlotSignalInput[],
+          async () =>
+            (await listOwedSlots({
+              ...owedScope,
+              excludeDrafts: true,
+            })) as OwedSlotSignalInput[]
+        )
+      : settle("owed", [] as OwedSlotSignalInput[], async () => []),
+    // The DRAFT half — owed slots on undecided agent drafts, folded into one
+    // `draft-asks` row per draft. PROPOSED, never needs-you.
+    settle(
+      "drafts",
+      {
+        slots: [] as OwedSlotSignalInput[],
+        starterNames: new Map<string, string>(),
+      },
+      async () =>
+        follows
+          ? await listDraftAskSlots(owedScope)
+          : { slots: [], starterNames: new Map<string, string>() }
+    ),
+    // The REVIEW half — at every scope, the pod included.
+    settle("review", { sessions: [], truncated: false }, async () =>
+      follows
+        ? await listSessionsAwaitingReview({
+            userId,
             workspaceId: input.workspaceId,
-            sessionId: input.sessionId,
             projectId: input.projectId,
             trackId: input.trackId,
-            automationId: input.automationId,
-            status: "pending",
-            limit: clusterLimit,
-            excludeDraftSessions: true,
-            splitBySession: true,
+            sessionId: input.sessionId,
           })
-      ),
-      // Under a container lens the door narrows IN SQL, before its limit
-      // (`container`); the resolved containers below stay the authority.
-      follows
-        ? settle(
-            "notifications",
-            [] as NotificationSignalInput[],
-            async () =>
-              (
-                await notifCenterRouter.createCaller(ctx).list({
-                  workspaceId: floorLens(input.workspaceId),
-                  status: "unread",
-                  limit: NOTIFICATION_SCAN_LIMIT,
-                  ...(container ? { container } : {}),
-                })
-              ).notifications as NotificationSignalInput[]
-          )
-        : settle(
-            "notifications",
-            [] as NotificationSignalInput[],
-            async () => []
-          ),
-      // System HEALTH is the pod's, never a container's: under a container lens
-      // the banner reads its own rows (every status-role type is `system`,
-      // pinned in the tests); at the floor it reads the floor read above.
-      container
-        ? settle(
-            "notifications",
-            [] as NotificationSignalInput[],
-            async () =>
-              (
-                await notifCenterRouter.createCaller(ctx).list({
-                  workspaceId: floorLens(input.workspaceId),
-                  status: "unread",
-                  category: "system",
-                  limit: NOTIFICATION_SCAN_LIMIT,
-                })
-              ).notifications as NotificationSignalInput[]
-          )
-        : null,
-      // The owed read under the SAME lens and owner floor `focusSessions.owed`
-      // applies (`listOwedSlots`), plus the session/track lenses that door does
-      // not expose. Drafts never count (`excludeDrafts`).
-      follows
-        ? settle(
-            "owed",
-            [] as OwedSlotSignalInput[],
-            async () =>
-              (await listOwedSlots({
-                ...owedScope,
-                excludeDrafts: true,
-              })) as OwedSlotSignalInput[]
-          )
-        : settle("owed", [] as OwedSlotSignalInput[], async () => []),
-      // The DRAFT half — owed slots on undecided agent drafts, folded into one
-      // `draft-asks` row per draft. PROPOSED, never needs-you.
-      settle(
-        "drafts",
-        {
-          slots: [] as OwedSlotSignalInput[],
-          starterNames: new Map<string, string>(),
-        },
-        async () =>
-          follows
-            ? await listDraftAskSlots(owedScope)
-            : { slots: [], starterNames: new Map<string, string>() }
-      ),
-      // The REVIEW half — at every scope, the pod included.
-      settle("review", { sessions: [], truncated: false }, async () =>
-        follows
-          ? await listSessionsAwaitingReview({
-              userId,
-              workspaceId: input.workspaceId,
-              projectId: input.projectId,
-              trackId: input.trackId,
-              sessionId: input.sessionId,
-            })
-          : { sessions: [], truncated: false }
-      ),
-      settle(
-        "captures",
-        { captures: [] as UnfinishedCapture[], truncated: false },
-        async () =>
-          readsCaptures
-            ? await listUnfinishedCaptures({ userId })
-            : { captures: [], truncated: false }
-      ),
-    ]);
+        : { sessions: [], truncated: false }
+    ),
+    settle(
+      "captures",
+      { captures: [] as UnfinishedCapture[], truncated: false },
+      async () =>
+        readsCaptures
+          ? await listUnfinishedCaptures({ userId })
+          : { captures: [], truncated: false }
+    ),
+    settle(
+      "issuers",
+      { rows: [] as PendingIssuerSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listPendingIssuers({ isAdmin })
+          : { rows: [], truncated: false }
+    ),
+    settle(
+      "app-requests",
+      { rows: [] as PendingAppRequestSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listPendingAppRequests({ isAdmin })
+          : { rows: [], truncated: false }
+    ),
+  ]);
 
   const allNotifications = notifs.value;
   // Containers, cluster session names — through the session READ floor.
@@ -457,6 +497,12 @@ async function readAttention(
     draftAsksTruncated: draftAsks.slots.length >= OWED_SCAN_LIMIT,
     review: review.value,
     captures: captures.value,
+    accessRequests: {
+      issuers: issuers.value.rows,
+      applications: appRequests.value.rows,
+    },
+    accessRequestsTruncated:
+      issuers.value.truncated || appRequests.value.truncated,
     // An unmeasured open-question read stays `undefined` (= unmeasured).
     openQuestionSessionIds: openQuestions.failed
       ? undefined
@@ -470,6 +516,8 @@ async function readAttention(
         owed,
         review,
         captures,
+        issuers,
+        appRequests,
         containers,
         clusterSessions,
         openQuestions,
@@ -495,6 +543,7 @@ function blockingSignals(a: Attention): Signal[] {
     draftAsks: a.draftAsks,
     reviewSessions: a.review.sessions,
     unfinishedCaptures: a.captures.captures,
+    accessRequests: a.accessRequests,
   });
 }
 
@@ -525,6 +574,8 @@ function countOf(a: Attention) {
     unfinishedCaptures: a.captures.captures,
     reviewSessionIds: a.review.sessions.map((r) => r.id),
     capturesTruncated: a.captures.truncated,
+    accessRequests: a.accessRequests,
+    accessRequestsTruncated: a.accessRequestsTruncated,
   });
 }
 
@@ -1216,6 +1267,14 @@ export const signalsRouter = router({
          * ranked by THE ranking. Pod / workspace scope only (Home).
          */
         picks: z.boolean().optional(),
+        /**
+         * Single lenses only: keep just these signal kinds — e.g. a tray of
+         * `access-request` rows. Applied to the lens's ONE ordered population
+         * before `limit`, so a filtered page is a cut of the same order, never
+         * a second rule. (`history` reads `limit` rows first, so there the
+         * filter narrows that page.) Ignored by `page`.
+         */
+        kinds: z.array(z.enum(SIGNAL_KINDS)).min(1).optional(),
       })
     )
     .query(
@@ -1223,6 +1282,12 @@ export const signalsRouter = router({
         ctx,
         input,
       }): Promise<{ signals: Signal[]; page?: LensPageWire }> => {
+        const kinds = input.kinds ? new Set<string>(input.kinds) : null;
+        const pick = (signals: Signal[]) =>
+          (kinds ? signals.filter((s) => kinds.has(s.kind)) : signals).slice(
+            0,
+            input.limit
+          );
         if (input.lens === "page") {
           return {
             signals: [],
@@ -1236,20 +1301,10 @@ export const signalsRouter = router({
           };
         }
         if (input.lens === "happening") {
-          return {
-            signals: (await readHappening(ctx, input)).signals.slice(
-              0,
-              input.limit
-            ),
-          };
+          return { signals: pick((await readHappening(ctx, input)).signals) };
         }
         if (input.lens === "produced") {
-          return {
-            signals: (await readProduced(ctx, input)).signals.slice(
-              0,
-              input.limit
-            ),
-          };
+          return { signals: pick((await readProduced(ctx, input)).signals) };
         }
         if (input.lens === "history") {
           const happened = await readHappened(ctx, input, {
@@ -1258,29 +1313,34 @@ export const signalsRouter = router({
             since: input.since,
           });
           throwIfFailed(happened.failures);
-          return { signals: happened.signals };
+          return { signals: pick(happened.signals) };
         }
         // needs-you · proposed · suggestions — one reader.
         const attention = await readAttention(
           ctx,
           input,
-          input.lens === "needs-you" ? input.limit : CLUSTER_PAGE_LIMIT
+          // A kinds filter may drop clusters, so it reads the full cluster
+          // page: a filtered cut must not run short of its own rows.
+          input.lens === "needs-you" && !kinds
+            ? input.limit
+            : CLUSTER_PAGE_LIMIT
         );
         if (input.lens === "needs-you") {
           throwIfFailed(attention.failures.blocking);
           // A plain cut of the ONE order (`orderNeedsYou`).
-          return { signals: blockingSignals(attention).slice(0, input.limit) };
+          return { signals: pick(blockingSignals(attention)) };
         }
         throwIfFailed(attention.failures.proposed);
         return {
-          signals: (input.lens === "proposed"
-            ? proposedSignals(attention)
-            : unionSuggestions(
-                attention.notifications,
-                new Date(),
-                attention.containers
-              )
-          ).slice(0, input.limit),
+          signals: pick(
+            input.lens === "proposed"
+              ? proposedSignals(attention)
+              : unionSuggestions(
+                  attention.notifications,
+                  new Date(),
+                  attention.containers
+                )
+          ),
         };
       }
     ),
@@ -1319,9 +1379,10 @@ export const signalsRouter = router({
    * Takes the SAME scope as `list` and reads through the SAME function, so the
    * badge always equals the Blocking rows under it at that scope.
    *
-   * The number ships WITH its parts: `decisions`, `notifications`, `blocked`
-   * and `review`, with `needsYou === decisions + notifications + blocked +
-   * review`. A client reads the part it needs; it never derives one by
+   * The number ships WITH its parts: `decisions`, `notifications`, `blocked`,
+   * `review`, `captures` and `requests` (pending issuers + app connection
+   * requests, pod admins at the floor only), with `needsYou` their sum. A
+   * client reads the part it needs; it never derives one by
    * subtracting the others. `suggestions` and `drafts` (PROPOSED) ship in the
    * same result and are NOT parts: they are never added into `needsYou`.
    */
