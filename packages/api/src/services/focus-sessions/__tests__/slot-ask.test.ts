@@ -308,7 +308,14 @@ describe("the owed read and the needs-you signal carry ref + ask", () => {
   it("omits both when the slot declared neither", () => {
     const [owed] = projectOwedSlots({
       ...row,
-      expectedOutputs: [blockedSlot({ ref: undefined, ask: undefined })],
+      // Not `decision`: an ask-less decision reads as its derived confirm.
+      expectedOutputs: [
+        blockedSlot({
+          ref: undefined,
+          ask: undefined,
+          blockedReason: "credential",
+        }),
+      ],
     });
     expect(owed).not.toHaveProperty("ref");
     expect(owed).not.toHaveProperty("ask");

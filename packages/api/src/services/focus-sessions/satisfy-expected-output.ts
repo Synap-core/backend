@@ -64,7 +64,11 @@ import { db, focusSessions, eq, and } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
-import { askFingerprint, resolveAskResolution } from "@synap-core/types/ask";
+import {
+  askFingerprint,
+  effectiveSlotAsk,
+  resolveAskResolution,
+} from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
@@ -622,12 +626,17 @@ export function selectSlotToAttest(
   // A slot whose ask wants INPUT (confirm / choose / form / provide) is
   // answered, never attested: "I did this" on "Which region?" would close the
   // slot with the agent's question unanswered. `act` and an absent ask (the
-  // legacy verbs) attest as before.
+  // legacy verbs) attest as before — EXCEPT a decision: a person-owed
+  // `decision` slot with no ask reads as a derived confirm
+  // (`effectiveSlotAsk`), so it is answered Yes / No, never closed bare.
   // The ONE exception: a criterion slot discharged BY its grade — the
   // verdict is the answer its pass/fail ask wanted (see `criterionGraded`).
   const gradedCriterion =
     opts.criterionGraded === true && slot.kind === CRITERION_SLOT_KIND;
-  if (resolveAskResolution(slot.ask) === "answer" && !gradedCriterion) {
+  if (
+    resolveAskResolution(effectiveSlotAsk(slot)) === "answer" &&
+    !gradedCriterion
+  ) {
     return { refused: "answer_required" };
   }
   return { index };
@@ -809,45 +818,47 @@ export async function satisfyClaimsByEvidence(params: {
   );
 
   const now = params.now ?? new Date();
-  return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select({ expectedOutputs: focusSessions.expectedOutputs })
-      .from(focusSessions)
-      .where(
-        and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
-      )
-      .for("update");
-    const current: ExpectedOutput[] = Array.isArray(locked?.expectedOutputs)
-      ? (locked.expectedOutputs as ExpectedOutput[])
-      : [];
-    // Re-selected on the LOCKED array: a slot reworded, retired or closed
-    // since the read above is judged as it now stands. Evidence is by KEY,
-    // so a reorder cannot move it onto another slot.
-    const picks = selectClaimsWithEvidence(
-      current,
-      evidenceByKey,
-      criterionKeys
-    );
-    if (picks.length === 0) return { satisfied: [] };
-    const next = stampEvidenced(current, picks, now);
-    await tx
-      .update(focusSessions)
-      .set({ expectedOutputs: next, updatedAt: now })
-      .where(eq(focusSessions.id, sessionId));
-    const currentKeys = deriveSlotKeys(current);
-    return {
-      satisfied: picks.map((p) => ({
-        key: currentKeys[p.index]!,
-        label: current[p.index]!.label,
-        evidence: p.evidence,
-      })),
-      outputs: next,
-    };
-  }).then(async (r) => {
-    // After commit — the evidenced slots' declared output → subject edges.
-    if (r.satisfied.length > 0) {
-      await linkSatisfiedOutputsToSubject({ sessionId, now });
-    }
-    return r;
-  });
+  return db
+    .transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ expectedOutputs: focusSessions.expectedOutputs })
+        .from(focusSessions)
+        .where(
+          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+        )
+        .for("update");
+      const current: ExpectedOutput[] = Array.isArray(locked?.expectedOutputs)
+        ? (locked.expectedOutputs as ExpectedOutput[])
+        : [];
+      // Re-selected on the LOCKED array: a slot reworded, retired or closed
+      // since the read above is judged as it now stands. Evidence is by KEY,
+      // so a reorder cannot move it onto another slot.
+      const picks = selectClaimsWithEvidence(
+        current,
+        evidenceByKey,
+        criterionKeys
+      );
+      if (picks.length === 0) return { satisfied: [] };
+      const next = stampEvidenced(current, picks, now);
+      await tx
+        .update(focusSessions)
+        .set({ expectedOutputs: next, updatedAt: now })
+        .where(eq(focusSessions.id, sessionId));
+      const currentKeys = deriveSlotKeys(current);
+      return {
+        satisfied: picks.map((p) => ({
+          key: currentKeys[p.index]!,
+          label: current[p.index]!.label,
+          evidence: p.evidence,
+        })),
+        outputs: next,
+      };
+    })
+    .then(async (r) => {
+      // After commit — the evidenced slots' declared output → subject edges.
+      if (r.satisfied.length > 0) {
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
+      }
+      return r;
+    });
 }

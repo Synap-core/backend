@@ -244,7 +244,9 @@ async function seedAsk(
       kind: "document",
       label: LABEL,
       owner: "human",
-      blockedReason: "decision",
+      // An ask-less LEGACY slot takes a non-decision blocker: an ask-less
+      // decision answers its derived Yes / No and is never attested (#12).
+      blockedReason: ask ? "decision" : "credential",
       why: WHY,
       owedSince: "2026-09-25T09:00:00.000Z",
       ...(ask ? { ask } : {}),

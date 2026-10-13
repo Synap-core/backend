@@ -45,6 +45,7 @@ import {
   inArray,
 } from "@synap/database";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
+import { effectiveSlotAsk } from "@synap-core/types/ask";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
   projectSessionOutcomes,
@@ -442,7 +443,10 @@ export function joinSessionOutputs(
       );
     }
     if (!target) {
-      pendingExpected.push(e);
+      // A decision slot stored without an ask reads as its derived confirm,
+      // so every room card answers it Yes / No (`effectiveSlotAsk`).
+      const ask = effectiveSlotAsk(e);
+      pendingExpected.push(ask && !e.ask ? { ...e, ask } : e);
       continue;
     }
     claimed.add(target.id);

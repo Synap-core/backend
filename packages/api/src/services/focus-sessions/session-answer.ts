@@ -72,6 +72,7 @@ import type { ExpectedOutput, SlotAnswerValue } from "@synap/playbooks";
 import {
   AskAnswerValueSchema,
   askFingerprint,
+  effectiveSlotAsk,
   resolveAskResolution,
   summarizeAnswer,
   validateAnswerAgainstAsk,
@@ -484,6 +485,11 @@ async function readRoomReplyAsAnswer(p: {
     }
   }
 
+  // The STORED ask, not the derived decision confirm (`effectiveSlotAsk`): a
+  // decision filed without an ask was often an open question ("EU or US?"),
+  // and the person's words in the room ARE their choice — recorded as the
+  // answer, and filed as a decision by the answer door. Only a bare "I did
+  // this" is refused on it.
   const ask = slot.ask ?? null;
   if (resolveAskResolution(ask) === "legacy") {
     return { keepOwed: false, text: p.text };
@@ -713,7 +719,8 @@ export async function answerSessionSlot(p: {
   if ("refused" in chosen) return { status: chosen.refused };
   const slot = outputs[chosen.index]!;
   const label = slot.label;
-  const ask = slot.ask ?? null;
+  // A decision slot stored without an ask answers its derived confirm.
+  const ask = effectiveSlotAsk(slot);
   const seenAsk = askFingerprint(ask);
   if (p.askFingerprint !== undefined && p.askFingerprint !== seenAsk) {
     return { status: "ask_changed" };

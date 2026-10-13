@@ -64,6 +64,7 @@ import {
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
+import { effectiveSlotAsk } from "@synap-core/types/ask";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
@@ -276,6 +277,8 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
     // visible, and at the top where an anomaly belongs.
     const owedSince =
       typeof slot.owedSince === "string" ? slot.owedSince : MISSING_OWED_SINCE;
+    // A decision slot stored without an ask reads as its derived confirm.
+    const ask = effectiveSlotAsk(slot);
     owed.push({
       sessionId: row.id,
       sessionGoal: row.goal,
@@ -301,7 +304,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       // (the merge deletes it), and a legacy row that somehow does must read
       // as "no pointer", not leak the wire's CLEAR into a read model.
       ...(slot.ref ? { ref: slot.ref } : {}),
-      ...(slot.ask ? { ask: slot.ask } : {}),
+      ...(ask ? { ask } : {}),
     });
   }
   return owed;

@@ -40,6 +40,7 @@ import {
 } from "../vault/index.js";
 import { isHttpUrl } from "../navigation/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
+import { PARAM_SLOT_KIND } from "../focus-sessions/param-slot.js";
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
 
@@ -541,6 +542,54 @@ export function resolveAskResolution(
 ): AskResolution {
   if (!ask) return "legacy";
   return ask.mode === "act" ? "attest" : "answer";
+}
+
+/** The slot fields the decision-ask rule reads — structural, off `ExpectedOutput`. */
+export interface DecisionAskSlotLite<A = Ask> {
+  kind?: string | null;
+  label: string;
+  owner?: string | null;
+  blockedReason?: string | null;
+  why?: string | null;
+  ask?: A | null;
+}
+
+/**
+ * A DECISION is a choice, never a bare "done". A person-owed slot blocked on
+ * `decision` with no ask would resolve `legacy` and offer a one-tap "I did
+ * this", which closed a decision with nobody deciding anything. Such a slot
+ * gets a `confirm` (Yes / No) instead, its question the slot's `why`, else its
+ * label — the shape the external-agent approval slot already declares.
+ *
+ * A param slot (`PARAM_SLOT_KIND`) is exempt: its only ask-less form is a
+ * credential-named param whose value is set on the run, and a yes/no there
+ * would write a boolean into that param.
+ *
+ * `null` when the slot is not such a slot (or already carries an ask).
+ */
+export function deriveDecisionAsk(
+  slot: DecisionAskSlotLite<unknown>
+): Ask | null {
+  if (slot.ask) return null;
+  if (slot.owner !== "human" || slot.blockedReason !== "decision") return null;
+  if (slot.kind === PARAM_SLOT_KIND) return null;
+  const prompt = (slot.why?.trim() || slot.label.trim()).slice(
+    0,
+    ASK_LIMITS.promptMaxChars
+  );
+  return prompt ? { mode: "confirm", prompt } : { mode: "confirm" };
+}
+
+/**
+ * The ask a slot resolves through: its own, else the derived decision confirm
+ * ({@link deriveDecisionAsk}). The ONE reading for every door and read that
+ * hands a slot's ask to a person, so a decision slot stored before the rule
+ * (no ask) answers Yes / No everywhere and is never attested bare.
+ */
+export function effectiveSlotAsk<A>(
+  slot: DecisionAskSlotLite<A>
+): A | Ask | null {
+  return slot.ask ?? deriveDecisionAsk(slot);
 }
 
 export type AskAnswerRefusalCode =
