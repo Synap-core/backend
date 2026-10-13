@@ -23,7 +23,7 @@ import {
   formatTimestamp,
   humanizeBytes,
 } from "../../../lib/format";
-import { PageHeader } from "../components/page-header";
+import { PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -45,7 +45,7 @@ const relative = (d: Date | string) => formatRelative(d);
 
 export default function BackupsPage() {
   return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader
         title="Backups"
         description="Whether this pod's data is backed up, and in sync with the other pods it pairs with."
@@ -54,7 +54,7 @@ export default function BackupsPage() {
         <BackupsCard />
         <SyncCard />
       </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -172,7 +172,7 @@ function SyncCard() {
       ) : peers.length === 0 ? (
         <ResourceRowEmpty message="This pod is standalone — it syncs with no other pod." />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {peers.map((p) => (
             <PeerRow key={p.id} peer={p} />
           ))}
@@ -218,7 +218,7 @@ function PeerRow({ peer }: { peer: SyncPeerLike }) {
   const lastError = peer.syncState?.lastError;
 
   return (
-    <div className="border-b border-foreground/[0.05] last:border-b-0">
+    <div>
       <ResourceRow
         Icon={GitBranch}
         primary={peer.label || host}

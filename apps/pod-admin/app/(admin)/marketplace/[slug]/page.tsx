@@ -54,6 +54,7 @@ import type {
   InstallError,
   PreflightReport,
 } from "../_lib/types";
+import { PageShell } from "../../components/page-header";
 
 /**
  * Which definition keys become a "what it contains" line, in reading order.
@@ -205,21 +206,21 @@ export default function PackageDetailPage() {
 
   if (loadError) {
     return (
-      <div className="px-6 py-6 max-w-[900px]">
+      <PageShell>
         <BackLink />
         <ResourceRowError message={loadError} />
-      </div>
+      </PageShell>
     );
   }
 
   if (!pkg) {
     return (
-      <div className="px-6 py-6 max-w-[900px]">
+      <PageShell>
         <BackLink />
         <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/55">
           <Spinner size="sm" /> Loading package…
         </div>
-      </div>
+      </PageShell>
     );
   }
 
@@ -247,7 +248,7 @@ export default function PackageDetailPage() {
   }).filter((row) => row.count > 0);
 
   return (
-    <div className="px-6 py-6 max-w-[900px] flex flex-col gap-4">
+    <PageShell className="flex flex-col gap-4">
       <BackLink />
 
       {/* ── 1. What it is ─────────────────────────────────────────────── */}
@@ -346,7 +347,7 @@ export default function PackageDetailPage() {
         onApply={runApply}
         onReset={() => setStage({ kind: "idle" })}
       />
-    </div>
+    </PageShell>
   );
 }
 

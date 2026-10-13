@@ -24,8 +24,8 @@ import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
 import { kindIcon } from "../../_lib/object/kind-icon";
-import { statusPillFor } from "../../_lib/object/tone";
-import { PageHeader } from "../components/page-header";
+import { statusPillFor } from "../components/status-tone";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -34,7 +34,7 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { FilterChips } from "../rules/_lib/filter-chips";
+import { FilterChips } from "../components/filter-chips";
 import {
   failingBoardComplete,
   flowHealthSentence,
@@ -56,18 +56,9 @@ const FLOW_RUNS = 10;
 
 export default function RunsPage() {
   return (
-    <Suspense fallback={<RunsFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <RunsInner />
     </Suspense>
-  );
-}
-
-function RunsFallback() {
-  return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-40 w-full rounded-2xl bg-foreground/[0.04] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -78,7 +69,7 @@ function RunsInner() {
   const [target, setTarget] = useState<RunTarget | null>(null);
 
   return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
       <FilterChips
         param="filter"
@@ -97,7 +88,7 @@ function RunsInner() {
         <FlowBoard failingOnly={filter === "failing"} onOpen={setTarget} />
       )}
       <RunDrawer target={target} onClose={() => setTarget(null)} />
-    </div>
+    </PageShell>
   );
 }
 
@@ -167,7 +158,7 @@ function FlowBoard({
           }
         />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {rows.map((g) => (
             <FlowRow
               key={`${g.flowType}:${g.flowId}`}
@@ -262,7 +253,7 @@ function FlowRuns({
   const href = flowHref(group.flowType, group.flowId);
   const list = runs.data?.runs ?? [];
   return (
-    <div className="mb-2 ml-6 border-l border-foreground/[0.08] pl-2">
+    <div className="mb-2 ml-6 divide-y divide-foreground/[0.05] border-l border-foreground/[0.08] pl-2">
       {runs.isLoading ? (
         <ResourceRowSkeleton count={2} />
       ) : runs.isError ? (
@@ -350,7 +341,7 @@ function RunFeed({
           message={isChat ? "No failed AI turns." : "Nothing is running."}
         />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {runs.map((run) => (
             <ResourceRow
               key={`${run.flowType}:${run.id}`}

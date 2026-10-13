@@ -31,6 +31,7 @@ import { ProactiveDefaultsSection } from "./_lib/proactive-section";
 import { ProviderHealthSection } from "./_lib/provider-health-section";
 import { AIProvidersSection } from "./_lib/provider-registry-section";
 import { IntelligenceServicesSection } from "./_lib/services-section";
+import { PageShell } from "../components/page-header";
 
 const SECTIONS: UrlTab[] = [
   {
@@ -63,7 +64,7 @@ const SECTIONS: UrlTab[] = [
 
 export default function IntelligencePage() {
   return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+    <PageShell>
       <header className="mb-6 flex items-start gap-3">
         <span
           aria-hidden
@@ -103,6 +104,6 @@ export default function IntelligencePage() {
           tabs={SECTIONS}
         />
       </Suspense>
-    </div>
+    </PageShell>
   );
 }

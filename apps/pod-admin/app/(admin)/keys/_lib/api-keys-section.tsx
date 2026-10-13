@@ -302,7 +302,7 @@ export function ApiKeysSection() {
             message={tab === "active" ? "No active keys." : "No revoked keys."}
           />
         ) : (
-          <div className="-mx-2">
+          <div className="-mx-2 divide-y divide-foreground/[0.05]">
             {shown.map((k) => (
               <div
                 key={k.id}

@@ -271,7 +271,7 @@ export default function MyConnectionsPage() {
   }
   if (keys.isError) {
     return (
-      <div className="mx-auto max-w-[900px] px-6 py-6" role="alert">
+      <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-6" role="alert">
         <p className="text-sm text-danger">
           Couldn&apos;t load your connections. Try again.
         </p>
@@ -305,7 +305,7 @@ export default function MyConnectionsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-10">
+    <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-10">
       <PageHeader
         title="Connected"
         description="Every app you own and every key you've minted for this Pod, with exactly what each may touch. Revoking one here only affects you."

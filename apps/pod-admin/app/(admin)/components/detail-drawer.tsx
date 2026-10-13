@@ -11,13 +11,16 @@
  *
  *   placement = right
  *   size      = md
- *   backdrop  = blur
+ *   backdrop  = opaque (HeroUI default — every modal and drawer shares it)
  *   classNames.base = bg-content1     (same surface as section cards)
+ *
+ * Header and footer stay pinned; only the body scrolls, so the decision
+ * buttons in the footer never scroll out of reach on a long detail.
  *
  * Props slot in:
  *   • `title` + optional `subtitle` — header
  *   • `children`                    — body (with consistent padding)
- *   • `footer`                      — typically primary action + Close
+ *   • `footer`                      — the row's actions (the header ✕ closes)
  *
  * If a tab needs a glyph in the header (e.g. event-type badge or color
  * chip), use `headerAccessory` rather than overriding the title — keeps
@@ -48,7 +51,7 @@ export interface DetailDrawerProps {
   headerAccessory?: ReactNode;
   /** Optional right-side header content (status pill or extra metadata). */
   headerRight?: ReactNode;
-  /** Footer slot. Typical pattern: primary action + Close. */
+  /** Footer slot for actions. Closing is the header ✕ — no footer Close. */
   footer?: ReactNode;
   /**
    * Override the drawer width. Defaults to `md` — the brief mandates `md`
@@ -76,8 +79,12 @@ export function DetailDrawer({
       onClose={onClose}
       placement="right"
       size={size}
-      backdrop="blur"
-      classNames={{ base: "bg-content1" }}
+      // The custom ✕ in the header replaces HeroUI's floating one.
+      hideCloseButton
+      classNames={{
+        base: "bg-content1 overflow-hidden",
+        body: "min-h-0 overflow-y-auto",
+      }}
     >
       <DrawerContent>
         {(close) => (

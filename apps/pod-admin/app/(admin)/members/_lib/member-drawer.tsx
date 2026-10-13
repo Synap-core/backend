@@ -149,16 +149,6 @@ export function MemberDrawer({
           classNames={{ base: "shrink-0" }}
         />
       }
-      /* The footer used to carry a single "Open in Studio" button built from
-         `member.workspaces[0]` — an arbitrary pick that silently lied whenever
-         someone belonged to more than one workspace, and pointed at the
-         deprecated fluid app besides. Each membership row below now carries
-         its own exit, so the destination always matches the row you clicked. */
-      footer={
-        <Button variant="flat" radius="md" size="sm" onPress={onClose}>
-          Close
-        </Button>
-      }
     >
       {member ? (
         <div className="flex flex-col gap-5">

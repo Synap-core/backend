@@ -157,7 +157,7 @@ export default function MyVaultPage() {
   })).filter((s) => s.count > 0);
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-10">
+    <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-10">
       {/* The honest sentence. This tab's predecessor claimed vaults were
           client-encrypted and unreadable by the pod; they are not. What is
           true — and is the reason to keep secrets here at all — is that the
@@ -192,7 +192,7 @@ export default function MyVaultPage() {
               }
             />
           ) : (
-            <div className="-mx-2">
+            <div className="-mx-2 divide-y divide-foreground/[0.05]">
               {rows.map((secret) => (
                 <ResourceRow
                   key={secret.id}

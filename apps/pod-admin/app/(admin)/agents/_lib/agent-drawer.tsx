@@ -67,11 +67,6 @@ export function AgentDrawer({
           <StatusPill kind={view.status.kind} label={view.status.label} />
         ) : undefined
       }
-      footer={
-        <Button variant="flat" radius="md" size="sm" onPress={onClose}>
-          Close
-        </Button>
-      }
     >
       {view && row ? (
         <div className="flex flex-col gap-5">

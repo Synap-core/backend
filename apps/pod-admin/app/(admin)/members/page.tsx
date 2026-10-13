@@ -18,7 +18,7 @@ import { Plus } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { useFocusRow } from "../components/use-focus-row";
 import { AddPeopleModal } from "./_lib/add-people-modal";
 import type { PodMember } from "./_lib/helpers";
@@ -33,18 +33,9 @@ const DESCRIPTION =
 
 export default function MembersPage() {
   return (
-    <Suspense fallback={<MembersFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <MembersInner />
     </Suspense>
-  );
-}
-
-function MembersFallback() {
-  return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -78,7 +69,7 @@ function MembersInner() {
   }
 
   return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader
         title={TITLE}
         description={DESCRIPTION}
@@ -121,6 +112,6 @@ function MembersInner() {
         isOpen={inviteDisclosure.isOpen}
         onClose={inviteDisclosure.onClose}
       />
-    </div>
+    </PageShell>
   );
 }

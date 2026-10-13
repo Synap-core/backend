@@ -102,7 +102,7 @@ export function PodAdminsSection({
       ) : admins.length === 0 ? (
         <ResourceRowEmpty message="No pod admins yet — invite one above." />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {admins.map((admin) => {
             // Look up full workspace breakdown from the shared pod members query.
             const fullMember = podMembers?.find((m) => m.id === admin.id) ?? {

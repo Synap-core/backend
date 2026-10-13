@@ -19,7 +19,7 @@ import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -28,7 +28,7 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { useDrainPages } from "../rules/_lib/use-drain-pages";
+import { useDrainPages } from "../../../lib/use-drain-pages";
 import { flowHealthSentence } from "../runs/_lib/run-board";
 import { templateHealthPill } from "./_lib/template-model";
 
@@ -40,18 +40,9 @@ const MAX_GROUP_PAGES = 20;
 
 export default function TemplatesPage() {
   return (
-    <Suspense fallback={<TemplatesFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <TemplatesInner />
     </Suspense>
-  );
-}
-
-function TemplatesFallback() {
-  return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-40 w-full rounded-2xl bg-foreground/[0.04] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -107,7 +98,7 @@ function TemplatesInner() {
   useFocusRow({ ready: !loading });
 
   return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader
         title={TITLE}
         description={DESCRIPTION}
@@ -133,7 +124,7 @@ function TemplatesInner() {
         ) : rows.length === 0 ? (
           <ResourceRowEmpty message="No templates yet. Templates are made in the Synap app, or saved from a session that went well." />
         ) : (
-          <div className="-mx-2">
+          <div className="-mx-2 divide-y divide-foreground/[0.05]">
             {rows.map((p) => {
               const g = groupById.get(p.id);
               const secondary = [
@@ -182,6 +173,6 @@ function TemplatesInner() {
           </p>
         )}
       </SectionCard>
-    </div>
+    </PageShell>
   );
 }

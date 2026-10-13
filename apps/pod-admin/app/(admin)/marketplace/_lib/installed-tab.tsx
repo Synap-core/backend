@@ -59,7 +59,7 @@ export function InstalledTab() {
   );
 
   return (
-    <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+    <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
       {compositions.isLoading ? (
         <ResourceRowSkeleton count={4} />
       ) : compositions.isError ? (
@@ -91,10 +91,7 @@ function secondaryLine(row: InstalledRow): string {
 
 function InstalledRowView({ row }: { row: InstalledRow }) {
   return (
-    <div
-      data-row-id={row.id}
-      className="rounded-md border-b border-foreground/[0.05] last:border-b-0"
-    >
+    <div data-row-id={row.id} className="rounded-md">
       <ResourceRow
         Icon={CapabilityIcon}
         primary={row.name}

@@ -7,7 +7,7 @@
  */
 
 import { Suspense } from "react";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ApiKeysSection } from "./_lib/api-keys-section";
 import { ComputerKeyLifetime } from "./_lib/computer-key-lifetime";
 
@@ -17,22 +17,16 @@ const DESCRIPTION =
 
 export default function KeysPage() {
   return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      {/* `useFocusRow` inside the key list reads `useSearchParams`, which
-          Next 16 wants under a Suspense boundary. */}
-      <Suspense fallback={<KeysFallback />}>
+    // `useFocusRow` inside the key list reads `useSearchParams`, which Next 16
+    // wants under a Suspense boundary.
+    <Suspense fallback={<PageFallback />}>
+      <PageShell>
+        <PageHeader title={TITLE} description={DESCRIPTION} />
         <div className="flex flex-col gap-5">
           <ApiKeysSection />
           <ComputerKeyLifetime />
         </div>
-      </Suspense>
-    </div>
-  );
-}
-
-function KeysFallback() {
-  return (
-    <div className="h-40 w-full rounded-2xl bg-foreground/[0.04] shimmer-pulse" />
+      </PageShell>
+    </Suspense>
   );
 }

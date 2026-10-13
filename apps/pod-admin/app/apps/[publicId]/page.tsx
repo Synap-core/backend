@@ -144,7 +144,7 @@ export default function AppDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-10">
+    <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-10">
       <Button
         as={Link}
         href="/my-connections"

@@ -21,6 +21,7 @@ import { MembersTab } from "./_lib/members-tab";
 import { ApiKeysTab } from "./_lib/api-keys-tab";
 import { ConnectionsTab } from "./_lib/connections-tab";
 import { GovernanceTab } from "./_lib/governance-tab";
+import { PageFallback, PageShell } from "../../components/page-header";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -93,18 +94,9 @@ function colorForWorkspace(ws: Workspace): string {
 
 export default function WorkspaceDetailPage() {
   return (
-    <Suspense fallback={<DetailFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <WorkspaceDetailInner />
     </Suspense>
-  );
-}
-
-function DetailFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <div className="h-8 w-32 rounded-md bg-foreground/[0.05] shimmer-pulse mb-6" />
-      <div className="h-10 w-1/2 rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -123,7 +115,7 @@ function WorkspaceDetailInner() {
     loaded || (wsQuery.isLoading ? <TabSkeleton /> : null);
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <PageShell>
       {/* Back button */}
       <button
         type="button"
@@ -228,7 +220,7 @@ function WorkspaceDetailInner() {
           ]}
         />
       )}
-    </div>
+    </PageShell>
   );
 }
 

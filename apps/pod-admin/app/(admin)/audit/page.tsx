@@ -10,7 +10,7 @@
  */
 
 import { Suspense, useState } from "react";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ActivitySection } from "./_lib/activity-section";
 import {
   type ActorSummary,
@@ -59,7 +59,7 @@ function AuditInner() {
   }
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
 
       <FilterBar
@@ -77,23 +77,14 @@ function AuditInner() {
         onAvailableActors={setAvailableActors}
         onAvailableWorkspaces={setAvailableWorkspaces}
       />
-    </div>
+    </PageShell>
   );
 }
 
 export default function AuditPage() {
   return (
-    <Suspense fallback={<AuditFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <AuditInner />
     </Suspense>
-  );
-}
-
-function AuditFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }

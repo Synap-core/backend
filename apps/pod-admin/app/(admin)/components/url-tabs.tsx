@@ -1,8 +1,9 @@
 "use client";
 
 import { Tab, Tabs } from "@heroui/react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
+import { useReplaceParams } from "../../../lib/use-replace-params";
 
 export interface UrlTab {
   key: string;
@@ -27,20 +28,18 @@ export function UrlTabs({
   ariaLabel: string;
   tabs: UrlTab[];
 }) {
-  const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
+  const replaceParams = useReplaceParams();
   const defaultKey = tabs[0].key;
   const raw = searchParams.get(param);
   const active = tabs.find((t) => t.key === raw)?.key ?? defaultKey;
 
   function setActive(next: string | number) {
     const value = String(next);
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (value === defaultKey) params.delete(param);
-    else params.set(param, value);
-    const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    replaceParams((params) => {
+      if (value === defaultKey) params.delete(param);
+      else params.set(param, value);
+    });
   }
 
   return (

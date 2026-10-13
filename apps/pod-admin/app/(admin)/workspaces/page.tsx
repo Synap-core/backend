@@ -56,7 +56,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { useFocusRow } from "../components/use-focus-row";
 import {
   ResourceRow,
@@ -130,18 +130,9 @@ export default function WorkspacesPage() {
   // `useFocusRow` (in `WorkspacesInner`) reads useSearchParams, which needs a
   // Suspense boundary in the App Router.
   return (
-    <Suspense fallback={<WorkspacesFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <WorkspacesInner />
     </Suspense>
-  );
-}
-
-function WorkspacesFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <PageHeader title="Workspaces" />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -196,7 +187,7 @@ function WorkspacesInner() {
   );
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader
         title="Workspaces"
         description="All workspaces on this pod. Internals are managed in Studio."
@@ -252,7 +243,7 @@ function WorkspacesInner() {
         ) : workspaces.length === 0 ? (
           <ResourceRowEmpty message="No workspaces on this pod yet." />
         ) : (
-          <div className="-mx-2">
+          <div className="-mx-2 divide-y divide-foreground/[0.05]">
             {workspaces.map((ws) => (
               <div
                 key={ws.id}
@@ -273,7 +264,7 @@ function WorkspacesInner() {
         isOpen={createDisclosure.isOpen}
         onClose={createDisclosure.onClose}
       />
-    </div>
+    </PageShell>
   );
 }
 
@@ -642,7 +633,6 @@ function CreateWorkspaceModal({
       onClose={handleClose}
       placement="center"
       size="md"
-      backdrop="blur"
       isDismissable={!createMutation.isPending}
     >
       <ModalContent>

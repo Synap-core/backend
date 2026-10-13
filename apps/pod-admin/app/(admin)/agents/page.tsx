@@ -23,7 +23,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -48,18 +48,9 @@ const AGENT_REVIEW_HREF = "/review?type=agent";
 
 export default function AgentsPage() {
   return (
-    <Suspense fallback={<AgentsFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <AgentsInner />
     </Suspense>
-  );
-}
-
-function AgentsFallback() {
-  return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-40 w-full rounded-2xl bg-foreground/[0.04] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -114,7 +105,7 @@ function AgentsInner() {
   const isLoading = list.isLoading || isAuthRedirecting;
 
   return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
 
       <div className="flex flex-col gap-4">
@@ -177,7 +168,7 @@ function AgentsInner() {
         isOpen={selected !== null}
         onClose={() => setSelectedId(null)}
       />
-    </div>
+    </PageShell>
   );
 }
 
@@ -189,7 +180,7 @@ function AgentRows({
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="-mx-2">
+    <div className="-mx-2 divide-y divide-foreground/[0.05]">
       {views.map((v) => {
         const standing = standingLine(v.standing);
         return (

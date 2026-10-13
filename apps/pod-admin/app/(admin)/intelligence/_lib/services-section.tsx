@@ -62,7 +62,7 @@ export function IntelligenceServicesSection() {
       ) : rows.length === 0 ? (
         <ResourceRowEmpty message="No IS instances registered." />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {rows.map((row) => (
             <ResourceRow
               key={row.id}

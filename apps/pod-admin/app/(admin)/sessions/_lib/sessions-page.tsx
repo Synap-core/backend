@@ -21,14 +21,16 @@
 
 import { Button, addToast } from "@heroui/react";
 import { ArrowRight } from "lucide-react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { navHref } from "../../../../lib/console-nav";
+import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { ConfirmModal } from "../../components/confirm-modal";
-import { PageHeader } from "../../components/page-header";
+import { PageHeader, PageShell } from "../../components/page-header";
+import { FilterChips } from "../../components/filter-chips";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -73,8 +75,8 @@ const SessionIcon = kindIcon("session");
 
 export function SessionsPage() {
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
+  const replaceParams = useReplaceParams();
   const segment = segmentOf(searchParams.get(SEGMENT_PARAM));
   const utils = trpc.useUtils();
 
@@ -177,14 +179,13 @@ export function SessionsPage() {
     ...(owed.data ? { waiting: String(waiting.length) } : {}),
   };
 
-  function setSegment(next: SessionSegment) {
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (next === "running") params.delete(SEGMENT_PARAM);
-    else params.set(SEGMENT_PARAM, next);
-    params.delete("focus");
+  /** For the stuck banner; the chips write the same URL themselves. */
+  function showStuck() {
     setSettledLimit(PAGE_STEP);
-    const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    replaceParams((params) => {
+      params.set(SEGMENT_PARAM, "stuck");
+      params.delete("focus");
+    });
   }
 
   // ── Acts ───────────────────────────────────────────────────────────────────
@@ -237,46 +238,22 @@ export function SessionsPage() {
     (settled.data?.pagination.hasMore ?? false);
 
   return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader title={SESSIONS_TITLE} description={SESSIONS_DESCRIPTION} />
 
-      <div
-        role="group"
-        aria-label="Show"
-        className="mb-4 flex flex-wrap items-center gap-2"
-      >
-        {SESSION_SEGMENTS.map((s) => {
-          const active = segment === s.key;
-          const n = counts[s.key];
-          return (
-            <button
-              key={s.key}
-              type="button"
-              aria-pressed={active}
-              onClick={() => setSegment(s.key)}
-              className={[
-                "inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 py-1",
-                "text-[12.5px] font-medium tracking-tight transition-colors",
-                active
-                  ? "bg-foreground/[0.08] text-foreground ring-1 ring-inset ring-foreground/15"
-                  : "text-foreground/65 hover:bg-content2/50 hover:text-foreground",
-              ].join(" ")}
-            >
-              {s.label}
-              {n !== undefined && (
-                <span className="tabular text-[11px] text-foreground/65">
-                  {n}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      <FilterChips
+        param={SEGMENT_PARAM}
+        defaultKey="running"
+        active={segment}
+        ariaLabel="Show"
+        chips={SESSION_SEGMENTS.map((s) => ({ ...s, count: counts[s.key] }))}
+        onSelect={() => setSettledLimit(PAGE_STEP)}
+      />
 
       {segment === "running" && split.stuck.length > 0 && (
         <button
           type="button"
-          onClick={() => setSegment("stuck")}
+          onClick={showStuck}
           className="mb-4 flex min-h-10 w-full items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-left text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
         >
           <span>
@@ -292,7 +269,7 @@ export function SessionsPage() {
         </button>
       )}
 
-      <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+      <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
         {source.isLoading ? (
           <ResourceRowSkeleton count={5} />
         ) : source.isError ? (
@@ -304,11 +281,7 @@ export function SessionsPage() {
           <ResourceRowEmpty message={EMPTY[segment]} />
         ) : (
           rows.map((row) => (
-            <div
-              key={row.id}
-              data-row-id={row.id}
-              className="rounded-md border-b border-foreground/[0.05] last:border-b-0"
-            >
+            <div key={row.id} data-row-id={row.id} className="rounded-md">
               <ResourceRow
                 Icon={SessionIcon}
                 primary={row.title}
@@ -375,7 +348,7 @@ export function SessionsPage() {
         confirmColor="warning"
         isPending={close.isPending}
       />
-    </div>
+    </PageShell>
   );
 }
 

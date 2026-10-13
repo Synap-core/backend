@@ -9,8 +9,7 @@
 
 import { Suspense } from "react";
 import { headers } from "next/headers";
-import { PageHeader } from "../components/page-header";
-import { ResourceRowSkeleton } from "../components/resource-row";
+import { PageFallback } from "../components/page-header";
 import { ReviewPage } from "./_lib/review-page";
 
 export const dynamic = "force-dynamic";
@@ -24,20 +23,8 @@ export default async function Review() {
   };
   return (
     // `useSearchParams` (?type=, ?focus=) needs a Suspense boundary.
-    <Suspense fallback={<ReviewFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <ReviewPage viewer={viewer} />
     </Suspense>
-  );
-}
-
-function ReviewFallback() {
-  return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
-      <PageHeader
-        title="Review"
-        description="Everything waiting on your decision, in one place."
-      />
-      <ResourceRowSkeleton count={5} />
-    </div>
   );
 }

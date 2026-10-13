@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   Alert,
   Button,
@@ -33,10 +33,13 @@ import {
 import { Check, ExternalLink, Lock, X } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { formatRelative } from "../../../../lib/format";
+import { formatRelative, isUuid } from "../../../../lib/format";
+import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { ExitFallback, externalProps } from "../../../../lib/exit-link";
-import { PageHeader } from "../../components/page-header";
+import { PageHeader, PageShell } from "../../components/page-header";
+import { FilterChips } from "../../components/filter-chips";
+import { useNeedsYouCount } from "../../components/side-nav-badges";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -76,12 +79,9 @@ const CHIPS: Array<{ key: ReviewFilter; label: string }> = [
 
 type DrawerDetail = Exclude<ReviewDetail, { kind: "open" }>;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
-  const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
+  const replaceParams = useReplaceParams();
   const filter = reviewFilterOf(searchParams.get("type"));
   const focusId = searchParams.get("focus");
   const utils = trpc.useUtils();
@@ -90,10 +90,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     { lens: "needs-you", limit: PAGE_LIMIT },
     { staleTime: 15_000, refetchInterval: 60_000 }
   );
-  const count = trpc.signals.count.useQuery(
-    {},
-    { staleTime: 15_000, refetchInterval: 60_000 }
-  );
+  const count = useNeedsYouCount();
   const pending = trpc.proposals.list.useQuery(
     { status: "pending", limit: 100 },
     { staleTime: 15_000 }
@@ -146,7 +143,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     const row = focusedRow(rows, focusId);
     if (row?.detail && row.detail.kind !== "open") {
       setOpen({ detail: row.detail, title: row.title });
-    } else if (!row && UUID.test(focusId)) {
+    } else if (!row && isUuid(focusId)) {
       // Not waiting any more (or never on this page): a proposal id still
       // opens its decision, which says how it ended.
       setOpen({
@@ -156,23 +153,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     }
   }, [focusId, rows, signals.isLoading]);
 
-  function setFilter(next: ReviewFilter) {
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (next === "all") params.delete("type");
-    else params.set("type", next);
-    params.delete("focus");
-    const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }
-
   function closeDrawer() {
     setOpen(null);
-    if (focusId) {
-      const params = new URLSearchParams(Array.from(searchParams.entries()));
-      params.delete("focus");
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    }
+    if (focusId) replaceParams((params) => params.delete("focus"));
   }
 
   // ── Selection + batch (Changes rows the viewer may approve whole) ─────────
@@ -262,41 +245,19 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       : null;
 
   return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
 
-      <div
-        role="group"
-        aria-label="Filter"
-        className="mb-4 flex flex-wrap items-center gap-2"
-      >
-        {CHIPS.map((c) => {
-          const active = filter === c.key;
-          const n = c.key === "history" ? null : counts[c.key];
-          return (
-            <button
-              key={c.key}
-              type="button"
-              aria-pressed={active}
-              onClick={() => setFilter(c.key)}
-              className={[
-                "inline-flex min-h-8 items-center gap-1.5 rounded-md px-2.5 py-1",
-                "text-[12.5px] font-medium tracking-tight transition-colors",
-                active
-                  ? "bg-foreground/[0.08] text-foreground ring-1 ring-inset ring-foreground/15"
-                  : "text-foreground/65 hover:bg-content2/50 hover:text-foreground",
-              ].join(" ")}
-            >
-              {c.label}
-              {n !== null && signals.data && (
-                <span className="tabular text-[11px] text-foreground/65">
-                  {n}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      <FilterChips
+        param="type"
+        defaultKey="all"
+        active={filter}
+        chips={CHIPS.map((c) => ({
+          ...c,
+          count:
+            c.key === "history" || !signals.data ? undefined : counts[c.key],
+        }))}
+      />
 
       {batch.rows.length >= 2 && (
         <div
@@ -367,7 +328,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         </Alert>
       )}
 
-      <section className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+      <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
         {filter === "history" ? (
           <ReviewHistory
             onOpen={(proposalId, title) =>
@@ -429,7 +390,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           }}
         />
       )}
-    </div>
+    </PageShell>
   );
 }
 

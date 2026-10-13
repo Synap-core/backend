@@ -25,7 +25,7 @@ import { openIn } from "../../../../lib/open-in";
 import { DesktopFallbackLink, ExitLink } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { ConfirmModal } from "../../components/confirm-modal";
-import { PageHeader } from "../../components/page-header";
+import { PageHeader, PageShell } from "../../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -34,7 +34,7 @@ import {
 } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
 import { useFocusRow } from "../../components/use-focus-row";
-import { DIAGNOSE_QUERY_OPTIONS } from "../../home/_lib/needs-you";
+import { DIAGNOSE_QUERY_OPTIONS } from "../../../../lib/diagnose-query";
 import {
   KINDS_DESCRIPTION,
   KINDS_TITLE,
@@ -118,7 +118,7 @@ export function KindsPage() {
   });
 
   return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader
         title={KINDS_TITLE}
         description={KINDS_DESCRIPTION}
@@ -137,7 +137,7 @@ export function KindsPage() {
 
         <section
           aria-label="Every kind"
-          className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
+          className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
         >
           {profiles.isLoading ? (
             <ResourceRowSkeleton count={6} />
@@ -181,7 +181,7 @@ export function KindsPage() {
         confirmColor="warning"
         isPending={retire.isPending}
       />
-    </div>
+    </PageShell>
   );
 }
 
@@ -193,10 +193,7 @@ function KindRowView({ row }: { row: KindRow }) {
     profileKind: row.profile.profileKind,
   });
   return (
-    <div
-      data-row-id={row.id}
-      className="rounded-md border-b border-foreground/[0.05] last:border-b-0"
-    >
+    <div data-row-id={row.id} className="rounded-md">
       <ResourceRow
         Icon={Icon}
         primary={row.name}

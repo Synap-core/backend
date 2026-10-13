@@ -215,7 +215,7 @@ export function ActivitySection({
         ) : filtered.length === 0 ? (
           <ResourceRowEmpty message="No audit events match the current filters." />
         ) : (
-          <ol>
+          <ol className="divide-y divide-foreground/[0.05]">
             {filtered.map((ev) => (
               <ActivityRow
                 key={ev.id}
@@ -276,10 +276,7 @@ function ActivityRow({
   const { Icon, tone } = actionPresentation(event.action);
 
   return (
-    <li
-      data-row-id={event.id}
-      className="rounded-md border-b border-foreground/[0.05] last:border-b-0 transition-shadow"
-    >
+    <li data-row-id={event.id} className="rounded-md transition-shadow">
       <button
         type="button"
         onClick={onSelect}

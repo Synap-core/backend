@@ -5,18 +5,23 @@
  *
  *   56px tall (`wrap`: at least 56px, primary line up to two lines),
  *   padding-x 12, hover bg-content2/50
- *   [icon 16px, foreground/40] [primary] [secondary] [status pill] [⋯]
+ *   [icon 16px, foreground/40] [primary] [secondary] [status pill] [actions | ›]
  *
- * Click anywhere on the row except the actions popover triggers `onSelect`
- * (which a parent typically uses to open a side panel). The `actions`
- * popover handles its own click-stop so it doesn't bubble.
+ * Click anywhere on the row except the actions slot triggers `onSelect`
+ * (which a parent typically uses to open a side panel). The actions slot
+ * handles its own click-stop so it doesn't bubble. A clickable row without
+ * actions ends in a chevron — a cue, not a second control.
+ *
+ * Rows carry no border of their own: the list container draws the rules
+ * with `divide-y divide-foreground/[0.05]`, so a row never needs to know
+ * whether it is last.
  *
  * Skeleton, empty, and error states are sibling components so a list
  * surface can switch between them without bespoke layouts.
  */
 
 import type { LucideIcon } from "lucide-react";
-import { MoreHorizontal } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Button } from "@heroui/react";
 import type { ReactNode, MouseEvent } from "react";
 import type { StatusKind } from "./status-pill";
@@ -30,13 +35,14 @@ interface ResourceRowProps {
   status?: { kind: StatusKind; label: string };
   /** Optional click handler — called when the body (not actions) is clicked. */
   onSelect?: () => void;
-  /** Optional actions slot rendered as a `⋯` popover trigger. */
+  /** Optional actions slot (buttons or a popover trigger) at the row's end. */
   actions?: ReactNode;
   /**
    * Let a long primary line wrap to two lines instead of truncating, and the
    * row grow to fit. Off by default so every other list keeps its fixed 56px.
    * The status pill then shows from `sm` up only: below it the headline needs
-   * the width more than the pill does.
+   * the width more than the pill does, and the actions drop to their own line
+   * under the text so a phone row never squeezes the headline to a sliver.
    */
   wrap?: boolean;
 }
@@ -74,10 +80,9 @@ export function ResourceRow({
       }}
       className={[
         "group flex items-center gap-3 px-3",
-        wrap ? "min-h-14 py-2" : "h-14",
-        "border-b border-foreground/[0.05] last:border-b-0",
+        wrap ? "min-h-14 flex-wrap py-2" : "h-14",
         interactive
-          ? "cursor-pointer transition-colors hover:bg-content2/50"
+          ? "cursor-pointer transition-colors hover:bg-content2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
           : "",
       ].join(" ")}
     >
@@ -108,7 +113,9 @@ export function ResourceRow({
 
       {actions && (
         <div
-          className="shrink-0"
+          className={
+            wrap ? "shrink-0 basis-full pl-7 sm:basis-auto sm:pl-0" : "shrink-0"
+          }
           // Stop click propagation so the actions menu doesn't trigger
           // the row's onSelect.
           onClick={(e) => e.stopPropagation()}
@@ -117,17 +124,10 @@ export function ResourceRow({
         </div>
       )}
       {!actions && interactive && (
-        <Button
-          isIconOnly
-          variant="light"
-          size="sm"
-          radius="full"
-          aria-label="Row actions"
-          className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </Button>
+        <ChevronRight
+          className="h-4 w-4 shrink-0 text-foreground/30 transition-colors group-hover:text-foreground/55"
+          aria-hidden
+        />
       )}
     </div>
   );
@@ -137,12 +137,9 @@ export function ResourceRow({
 
 export function ResourceRowSkeleton({ count = 3 }: { count?: number }) {
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col divide-y divide-foreground/[0.05]">
       {Array.from({ length: count }).map((_, i) => (
-        <div
-          key={i}
-          className="flex h-14 items-center gap-3 px-3 border-b border-foreground/[0.05] last:border-b-0"
-        >
+        <div key={i} className="flex h-14 items-center gap-3 px-3">
           <div className="h-4 w-4 shrink-0 rounded bg-foreground/10 shimmer-pulse" />
           <div className="flex flex-1 flex-col gap-1.5">
             <div className="h-2.5 w-1/3 rounded bg-foreground/10 shimmer-pulse" />

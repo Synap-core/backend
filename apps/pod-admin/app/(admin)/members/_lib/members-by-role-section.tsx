@@ -62,7 +62,7 @@ export function MembersByRoleSection({
                 <div className="px-3 pb-1 pt-2 text-[10.5px] font-medium uppercase tracking-wider text-foreground/40">
                   {role}s · {bucket.length}
                 </div>
-                <div className="-mx-2">
+                <div className="-mx-2 divide-y divide-foreground/[0.05]">
                   {bucket.map((m) => (
                     <div
                       key={m.id}

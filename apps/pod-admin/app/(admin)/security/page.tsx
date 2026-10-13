@@ -14,7 +14,7 @@
  */
 
 import { Suspense } from "react";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { UrlTabs } from "../components/url-tabs";
 import { IssuersSection } from "./_lib/issuers-section";
 import { SecretsSection } from "./_lib/secrets-section";
@@ -25,7 +25,7 @@ const DESCRIPTION =
 
 function SecurityInner() {
   return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
 
       <UrlTabs
@@ -44,24 +44,15 @@ function SecurityInner() {
           },
         ]}
       />
-    </div>
+    </PageShell>
   );
 }
 
 export default function SecurityPage() {
   // Next 16's `useSearchParams` requires a Suspense boundary.
   return (
-    <Suspense fallback={<SecurityFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <SecurityInner />
     </Suspense>
-  );
-}
-
-function SecurityFallback() {
-  return (
-    <div className="px-4 py-6 sm:px-6 max-w-[1400px]">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }

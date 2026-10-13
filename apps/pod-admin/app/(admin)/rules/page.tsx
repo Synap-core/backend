@@ -26,7 +26,7 @@ import { formatRelative } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
 import { ConfirmModal } from "../components/confirm-modal";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -35,7 +35,7 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { FilterChips } from "./_lib/filter-chips";
+import { FilterChips } from "../components/filter-chips";
 import {
   neverRanCallout,
   RULE_FILTERS,
@@ -48,7 +48,7 @@ import {
   runsPhrase,
   type RuleHealth,
 } from "./_lib/rule-rows";
-import { useDrainPages } from "./_lib/use-drain-pages";
+import { useDrainPages } from "../../../lib/use-drain-pages";
 
 const TITLE = "Rules";
 const DESCRIPTION = "What runs on its own, and whether it worked.";
@@ -59,18 +59,9 @@ const FIRST_ROWS = 25;
 
 export default function RulesPage() {
   return (
-    <Suspense fallback={<RulesFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <RulesInner />
     </Suspense>
-  );
-}
-
-function RulesFallback() {
-  return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
-      <PageHeader title={TITLE} description={DESCRIPTION} />
-      <div className="h-40 w-full rounded-2xl bg-foreground/[0.04] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -187,7 +178,7 @@ function RulesInner() {
   const appExit = openIn({ kind: "app", appId: "rules" });
 
   return (
-    <div className="max-w-[1100px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader
         title={TITLE}
         description={DESCRIPTION}
@@ -242,7 +233,7 @@ function RulesInner() {
         ) : visible.length === 0 ? (
           <ResourceRowEmpty message={emptyMessage(filter, all.length)} />
         ) : (
-          <div className="-mx-2">
+          <div className="-mx-2 divide-y divide-foreground/[0.05]">
             {shown.map((rule) => {
               const health = healthOf(rule.id);
               const act = ruleRowAction(rule, health);
@@ -356,7 +347,7 @@ function RulesInner() {
           <p className="text-[12.5px] text-status-down">{actError}</p>
         )}
       </ConfirmModal>
-    </div>
+    </PageShell>
   );
 }
 

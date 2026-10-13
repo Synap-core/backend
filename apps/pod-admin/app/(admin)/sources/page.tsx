@@ -36,7 +36,7 @@ import { navLabel } from "../../../lib/console-nav";
 import { openIn } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { DetailDrawer } from "../components/detail-drawer";
 import { HandoffCard } from "../components/handoff-card";
 import {
@@ -56,24 +56,15 @@ export default function SourcesPage() {
   // Sources uses `useSearchParams` indirectly via `useFocusRow` — wrap
   // in Suspense per Next 16's App Router contract.
   return (
-    <Suspense fallback={<SourcesFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <SourcesInner />
     </Suspense>
   );
 }
 
-function SourcesFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <PageHeader title={navLabel("sources")} />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
-  );
-}
-
 function SourcesInner() {
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader
         title={navLabel("sources")}
         description="External services connected to this pod. Per-workspace configuration happens in the desktop app — the console shows the aggregate health."
@@ -84,7 +75,7 @@ function SourcesInner() {
         <PodLevelConnectorsSection />
         <PerWorkspaceGridSection />
       </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -358,7 +349,7 @@ function PodLevelConnectorsSection() {
       ) : rows.length === 0 ? (
         <ResourceRowEmpty message="No pod-level source configs yet." />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {rows.map((row) => (
             <ResourceRow
               key={row.id}

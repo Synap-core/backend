@@ -86,7 +86,7 @@ export function PendingInvitesSection() {
       ) : invitesQuery.isError ? (
         <ResourceRowError message="Couldn't load pending invites." />
       ) : (
-        <div className="-mx-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
           {pending.map((inv) => (
             <ResourceRow
               key={inv.id}

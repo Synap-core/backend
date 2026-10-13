@@ -18,7 +18,7 @@
  * "what is it, and what will it do to my pod" before anything is written.
  */
 
-import { Button, Chip, Input, Spinner } from "@heroui/react";
+import { Chip, Input, Spinner } from "@heroui/react";
 import { Search } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -32,9 +32,12 @@ import {
   ResourceRowEmpty,
   ResourceRowError,
 } from "../../components/resource-row";
+import { FilterChips } from "../../components/filter-chips";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 
 const PAGE_SIZE = 60;
+/** The chip that clears the kind filter (not a package kind). */
+const ALL = "all";
 
 export function CatalogTab() {
   const [search, setSearch] = useState("");
@@ -121,40 +124,35 @@ export function CatalogTab() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-col gap-3">
-        <Input
-          aria-label="Search the catalog"
-          placeholder="Search packages…"
-          value={search}
-          onValueChange={setSearch}
-          size="sm"
-          radius="sm"
-          variant="bordered"
-          startContent={<Search size={14} className="text-foreground/40" />}
-          className="max-w-md"
-        />
+      <Input
+        aria-label="Search the catalog"
+        placeholder="Search packages…"
+        value={search}
+        onValueChange={setSearch}
+        size="sm"
+        radius="sm"
+        variant="bordered"
+        startContent={<Search size={14} className="text-foreground/40" />}
+        className="mb-3 max-w-md"
+      />
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <FilterChip
-            label="All"
-            active={kind === null}
-            onPress={() => setKind(null)}
-          />
-          {PACKAGE_KINDS.map((k) => (
-            <FilterChip
-              key={k}
-              label={kindLabel(k)}
-              count={
-                kind === null && pageIsWholeCatalog
-                  ? countsInPage.get(k)
-                  : undefined
-              }
-              active={kind === k}
-              onPress={() => setKind(kind === k ? null : k)}
-            />
-          ))}
-        </div>
-      </div>
+      <FilterChips
+        ariaLabel="Kind"
+        active={kind ?? ALL}
+        chips={[
+          { key: ALL, label: "All" },
+          ...PACKAGE_KINDS.map((k) => ({
+            key: k,
+            label: kindLabel(k),
+            count:
+              kind === null && pageIsWholeCatalog
+                ? countsInPage.get(k)
+                : undefined,
+          })),
+        ]}
+        // Pressing the active kind again clears it, like the old toggle.
+        onSelect={(k) => setKind(k === ALL || k === kind ? null : k)}
+      />
 
       {loading && (
         <div className="flex items-center gap-2 py-10 text-[12.5px] text-foreground/55">
@@ -195,38 +193,6 @@ export function CatalogTab() {
         </>
       )}
     </div>
-  );
-}
-
-function FilterChip({
-  label,
-  count,
-  active,
-  onPress,
-}: {
-  label: string;
-  count?: number;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Button
-      size="sm"
-      radius="sm"
-      variant={active ? "flat" : "light"}
-      onPress={onPress}
-      className={[
-        "h-7 min-w-0 px-2.5 text-[12px] font-medium",
-        active
-          ? "bg-foreground/[0.09] text-foreground"
-          : "text-foreground/55 hover:text-foreground",
-      ].join(" ")}
-    >
-      {label}
-      {count !== undefined && (
-        <span className="ml-1 text-foreground/40 tabular-nums">{count}</span>
-      )}
-    </Button>
   );
 }
 

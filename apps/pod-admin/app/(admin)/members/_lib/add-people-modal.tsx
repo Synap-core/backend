@@ -154,7 +154,6 @@ export function AddPeopleModal({
       onClose={handleClose}
       placement="center"
       size="md"
-      backdrop="blur"
       isDismissable={!sending}
     >
       <ModalContent>

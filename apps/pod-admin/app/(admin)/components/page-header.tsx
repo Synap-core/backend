@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ResourceRowSkeleton } from "./resource-row";
 
 /**
  * The title block every console page opens with: name, one line on what the
@@ -31,5 +32,61 @@ export function PageHeader({
         </div>
       )}
     </header>
+  );
+}
+
+/**
+ * The column every console page sits in — one width and one gutter for all
+ * of them, so moving between pages never shifts the content edge.
+ */
+export function PageShell({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={[
+        "mx-auto max-w-[1100px] px-4 py-6 sm:px-6",
+        className ?? "",
+      ].join(" ")}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * A page's loading shape without its shell: a header placeholder over a list
+ * of row placeholders, so the content lands where the skeleton stood.
+ */
+export function PageSkeleton({
+  rows = 4,
+  label = "Loading…",
+}: {
+  rows?: number;
+  label?: string;
+}) {
+  return (
+    <div role="status" aria-busy="true" aria-label={label}>
+      <div className="mb-6 flex flex-col gap-2">
+        <div className="h-6 w-40 rounded bg-foreground/10 shimmer-pulse" />
+        <div className="h-3 w-full max-w-sm rounded bg-foreground/[0.07] shimmer-pulse" />
+      </div>
+      <div className="rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+        <ResourceRowSkeleton count={rows} />
+      </div>
+    </div>
+  );
+}
+
+/** The Suspense fallback of a console page. */
+export function PageFallback({ rows }: { rows?: number }) {
+  return (
+    <PageShell>
+      <PageSkeleton rows={rows} />
+    </PageShell>
   );
 }

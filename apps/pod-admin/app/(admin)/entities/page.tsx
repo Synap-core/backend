@@ -31,7 +31,7 @@ import {
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -40,7 +40,7 @@ import {
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatRelative } from "../../../lib/format";
+import { formatRelative, isUuid } from "../../../lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -57,25 +57,14 @@ type EntityRow = {
 
 /** `?focus=` must be a real entity id before we spend a query on it —
  * `entities.adminGet` rejects anything that is not a UUID. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ─── Page shell ───────────────────────────────────────────────────────
 
 export default function EntitiesPage() {
   return (
-    <Suspense fallback={<EntitiesFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <EntitiesInner />
     </Suspense>
-  );
-}
-
-function EntitiesFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <PageHeader title="Entities" />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -172,7 +161,7 @@ function EntitiesInner() {
     focusId != null &&
     !focusOnPage &&
     !entitiesQuery.isLoading &&
-    UUID_RE.test(focusId);
+    isUuid(focusId);
 
   const focusLookup = trpc.entities.adminGet.useQuery(
     { id: focusId ?? "" },
@@ -251,7 +240,7 @@ function EntitiesInner() {
   }
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
+    <PageShell>
       <PageHeader
         title="Entities"
         description="All entities on this pod. Deletions are permanent and cannot be undone."
@@ -488,7 +477,7 @@ function EntitiesInner() {
         confirmLabel={`Delete ${selectedIds.size} entities`}
         isPending={batchDeleteMutation.isPending}
       />
-    </div>
+    </PageShell>
   );
 }
 

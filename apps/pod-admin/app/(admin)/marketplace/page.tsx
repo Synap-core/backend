@@ -8,7 +8,7 @@
  */
 
 import { Suspense } from "react";
-import { PageHeader } from "../components/page-header";
+import { PageHeader, PageShell } from "../components/page-header";
 import { UrlTabs } from "../components/url-tabs";
 import { ResourceRowSkeleton } from "../components/resource-row";
 import { CatalogTab } from "./_lib/catalog-tab";
@@ -21,7 +21,7 @@ const DESCRIPTION =
 
 export default function MarketplacePage() {
   return (
-    <div className="max-w-[1400px] px-4 py-6 sm:px-6">
+    <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
       {/* `UrlTabs` and the tabs' `?focus=` receivers read the URL. */}
       <Suspense fallback={<ResourceRowSkeleton count={4} />}>
@@ -35,6 +35,6 @@ export default function MarketplacePage() {
           ]}
         />
       </Suspense>
-    </div>
+    </PageShell>
   );
 }

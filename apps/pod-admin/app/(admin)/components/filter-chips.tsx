@@ -1,47 +1,52 @@
 "use client";
 
 /**
- * The segmented filter of an Operate list (Rules, Runs): one pressed chip, an
- * optional count beside each label, the active one in the URL so a link can
- * land on it. Same chip look as Review's filter (`review-page.tsx`), which
- * predates it and still spells its own.
+ * The segmented filter of a console list (Review, Sessions, Rules, Runs, the
+ * Marketplace catalog): one pressed chip, an optional count beside each label.
+ *
+ * With `param`, the active chip lives in the URL so a link can land on it; the
+ * default chip is encoded by omitting the param, like `UrlTabs`, and a
+ * `?focus=` target is dropped because it belongs to the list it was sent to.
+ * Without `param` the parent owns the state through `onSelect`.
  */
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useReplaceParams } from "../../../lib/use-replace-params";
 
 export interface FilterChip<K extends string> {
   key: K;
   label: string;
   /** Omitted while the count is unknown. */
-  count?: number;
+  count?: number | string;
 }
+
+type Binding<K extends string> =
+  | { param: string; defaultKey: K }
+  | { param?: undefined; defaultKey?: undefined };
 
 export function FilterChips<K extends string>({
   param,
   chips,
   active,
   defaultKey,
+  onSelect,
   ariaLabel = "Filter",
-}: {
-  param: string;
+}: Binding<K> & {
   chips: readonly FilterChip<K>[];
   active: K;
-  /** Encoded by omitting the param, like `UrlTabs`. */
-  defaultKey: K;
+  /** Runs on every press, after the URL is written (when bound). */
+  onSelect?: (key: K) => void;
   ariaLabel?: string;
 }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const replaceParams = useReplaceParams();
 
   function select(key: K) {
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (key === defaultKey) params.delete(param);
-    else params.set(param, key);
-    // A focus target belongs to the list it was sent to.
-    params.delete("focus");
-    const qs = params.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    if (param !== undefined)
+      replaceParams((params) => {
+        if (key === defaultKey) params.delete(param);
+        else params.set(param, key);
+        params.delete("focus");
+      });
+    onSelect?.(key);
   }
 
   return (

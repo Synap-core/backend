@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Button, Card, CardBody, Chip, Spinner } from "@heroui/react";
+import { Button, Card, CardBody, Chip } from "@heroui/react";
 import {
   ArrowRight,
   ChevronDown,
@@ -11,7 +11,7 @@ import {
   ShieldOff,
 } from "lucide-react";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
-import { PageHeader } from "../components/page-header";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ConfirmModal } from "../components/confirm-modal";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -90,28 +90,26 @@ export default function ApplicationConnectionsPage() {
   const isAuthRedirecting = connections.error?.data?.code === "UNAUTHORIZED";
 
   if (connections.isLoading || isAuthRedirecting) {
-    return (
-      <div className="flex min-h-64 items-center justify-center">
-        <Spinner label="Loading application connections" />
-      </div>
-    );
+    return <PageFallback />;
   }
   if (connections.isError) {
     return (
-      <div className="px-6 py-6" role="alert">
-        <p className="text-sm text-danger">
-          Couldn&apos;t load application connections. Try again.
-        </p>
-        <Button
-          size="sm"
-          variant="flat"
-          className="mt-3 min-h-10"
-          isLoading={connections.isFetching}
-          onPress={() => void connections.refetch()}
-        >
-          Retry
-        </Button>
-      </div>
+      <PageShell>
+        <div role="alert">
+          <p className="text-sm text-danger">
+            Couldn&apos;t load application connections. Try again.
+          </p>
+          <Button
+            size="sm"
+            variant="flat"
+            className="mt-3 min-h-10"
+            isLoading={connections.isFetching}
+            onPress={() => void connections.refetch()}
+          >
+            Retry
+          </Button>
+        </div>
+      </PageShell>
     );
   }
 
@@ -143,7 +141,7 @@ export default function ApplicationConnectionsPage() {
   const archiveCount = archivedRequests.length + archivedConnections.length;
 
   return (
-    <div className="max-w-[1100px] px-6 py-6">
+    <PageShell>
       <PageHeader
         title="App origins"
         description="Allowlist which browser website addresses (origins) may call this Pod. By default no external site can reach the Pod API. Approving an origin is transport only — it does not grant data access or membership, and it is separate from Trusted issuers (who may sign identity tokens) under Trust & Keys."
@@ -319,7 +317,7 @@ export default function ApplicationConnectionsPage() {
           revoke.isPending && revoke.variables?.id === pendingRevoke?.id
         }
       />
-    </div>
+    </PageShell>
   );
 }
 
