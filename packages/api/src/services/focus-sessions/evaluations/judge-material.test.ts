@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   roomRows: [] as Array<{ authorType: string; content: string }>,
   roomCalls: [] as Array<Record<string, unknown>>,
   channelId: null as string | null,
+  evalRows: [] as Array<Record<string, unknown>>,
 }));
 
 const SESSION_BASE = {
@@ -109,7 +110,7 @@ vi.mock("./record.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./record.js")>();
   return {
     ...actual,
-    listSessionEvaluations: vi.fn(async () => []),
+    listSessionEvaluations: vi.fn(async () => h.evalRows),
     recordSessionEvaluation: vi.fn(async () => ({
       status: "recorded",
       escalated: false,
@@ -167,6 +168,7 @@ beforeEach(() => {
   h.roomRows = [];
   h.roomCalls = [];
   h.channelId = null;
+  h.evalRows = [];
   h.bodies = new Map([["k/audit.md", AUDIT_BODY]]);
   h.rowsByTable = new Map<unknown, Record<string, unknown>[]>([
     [
@@ -239,6 +241,47 @@ describe("judge rung — material is the work, not the labels", () => {
       key: "mapped",
       status: "skipped",
     });
+  });
+});
+
+describe("judge rung — never cites its own earlier verdict", () => {
+  const row = (criterionKey: string, rationale: string) => ({
+    id: `r-${criterionKey}`,
+    sessionId: "s-1",
+    criterionKey,
+    verdict: "fail",
+    evaluatorKind: criterionKey === "mapped" ? "judge" : "evidence",
+    evaluatorId: null,
+    evidence: {},
+    rationale,
+    createdAt: new Date("2026-10-13T10:00:00Z"),
+  });
+
+  it("the criterion's own earlier verdict is withheld from its retry; other criteria's stay, framed as NOT evidence", async () => {
+    h.evalRows = [
+      row("mapped", "OWN-PRIOR-VERDICT"),
+      row("other", "OTHER-CHECK"),
+    ];
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(1);
+    const { material } = h.judgeCalls[0]!;
+    expect(material).not.toContain("OWN-PRIOR-VERDICT");
+    expect(material).toContain("OTHER-CHECK");
+    expect(material).toContain("context, NOT evidence");
+  });
+
+  it("no section at all when only the judged criterion has earlier rows", () => {
+    const material = buildJudgeMaterial(
+      { goal: "g", expectedOutputs: [], verificationReport: null },
+      [{ criterionKey: "mapped", verdict: "fail", rationale: "OWN" }],
+      undefined,
+      [],
+      undefined,
+      MATERIAL_MAX,
+      new Set(["mapped"])
+    );
+    expect(material).not.toContain("OWN");
+    expect(material).not.toContain("PRIOR VERDICTS");
   });
 });
 
