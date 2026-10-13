@@ -467,14 +467,14 @@ function Actions({
           <>
             <p>
               This removes agents by who created them, not one at a time: every
-              agent {creator} created goes, its keys are revoked and its
-              workspace memberships dropped. It cannot be undone.
+              agent {creator} created goes, its keys are revoked and its space
+              memberships dropped. It cannot be undone.
             </p>
             <p className="mt-2">
               {siblings.length > 1 ? "Including: " : "That is: "}
               {siblings.map((s) => s.name ?? s.id).join(", ")}
               {". "}
-              Agents in workspaces you cannot see are removed too.
+              Agents in spaces you cannot see are removed too.
             </p>
             <p className="mt-2">
               Data these agents already wrote stays on the pod — this removes
