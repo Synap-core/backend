@@ -1,24 +1,17 @@
 "use client";
 
 /**
- * Workspaces tab — the index over every workspace on this pod.
+ * Spaces — the index over every space (workspace) on this pod.
  *
- * This is the entry point, not the whole story: clicking a row opens
- * `/workspaces/[id]`, which pod-admin serves itself and which DOES render
- * workspace internals — Overview, Members, API keys, Connections and
- * Governance. (An earlier version of this comment claimed pod-admin
- * "intentionally does NOT render workspace internals" and that Studio owned
- * them. Both halves are false: the detail page has owned them for a while,
- * and Studio — the fluid web app — is deprecated.)
+ * Clicking a row opens `/workspaces/[id]`, which pod-admin serves itself:
+ * Overview, Members, API keys, Connections and Governance. This page answers
+ * "what spaces live on this pod?" and "which one do I want to open?".
+ * Lifecycle verbs that only a pod admin has (create, archive/restore,
+ * delete) live in the row's action menu.
  *
- * So this page answers two questions: "what workspaces live on this pod?"
- * and "which one do I want to open?" Lifecycle verbs that only a pod admin
- * has (create, archive/restore, delete) live in the row's action menu.
- *
- * The one thing this page cannot do is show a workspace's *contents* —
- * the desktop app owns that. That exit is resolved by `openIn()`
- * (`lib/open-in.ts`) and, being a `synap://` link, always renders its
- * download fallback beside it.
+ * It cannot show a space's *contents* — the app owns that. The exit is
+ * resolved by `openIn()` (`lib/open-in.ts`) and, being a `synap://` link,
+ * always renders its download fallback beside it.
  *
  * Data source: `workspaces.adminListAll` (podAdmin only). Each row's
  * "Active / Idle / Archived" status is derived from `updatedAt` + a
@@ -46,7 +39,7 @@ import {
 import {
   ArchiveRestore,
   Building2,
-  ExternalLink,
+  ArrowUpRight,
   MoreHorizontal,
   Plus,
   Settings2,
@@ -57,6 +50,7 @@ import { useRouter } from "next/navigation";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
+import { navLabel } from "../../../lib/console-nav";
 import { useFocusRow } from "../components/use-focus-row";
 import {
   ResourceRow,
@@ -67,7 +61,7 @@ import {
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
-import { formatRelative } from "../../../lib/format";
+import { formatRelative, readableError } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
 import { ExitFallback } from "../../../lib/exit-link";
 
@@ -189,12 +183,12 @@ function WorkspacesInner() {
   return (
     <PageShell>
       <PageHeader
-        title="Workspaces"
-        description="All workspaces on this pod. Internals are managed in Studio."
+        title={navLabel("spaces")}
+        description="All spaces on this pod. What is inside them is edited in the app."
         actions={
           <>
             <div className="flex items-center gap-2 rounded-md bg-foreground/[0.04] px-3 py-1.5 ring-1 ring-inset ring-foreground/10">
-              <span className="text-[11.5px] tabular text-foreground/55">
+              <span className="text-[11.5px] tabular text-foreground/65">
                 <span className="font-medium text-foreground">
                   {stats.total}
                 </span>{" "}
@@ -213,23 +207,23 @@ function WorkspacesInner() {
               startContent={<Plus className="h-3.5 w-3.5" />}
               onPress={createDisclosure.onOpen}
             >
-              Create workspace
+              Create space
             </Button>
           </>
         }
       />
 
       <SectionCard
-        title="All workspaces"
+        title="All spaces"
         hint="Click a row to view details"
         actions={
           archivedCount > 0 ? (
-            <label className="flex items-center gap-2 text-[11.5px] text-foreground/55">
+            <label className="flex items-center gap-2 text-[11.5px] text-foreground/65">
               <Switch
                 size="sm"
                 isSelected={showArchived}
                 onValueChange={setShowArchived}
-                aria-label="Show archived workspaces"
+                aria-label="Show archived spaces"
               />
               Show archived ({archivedCount})
             </label>
@@ -239,9 +233,9 @@ function WorkspacesInner() {
         {query.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={4} />
         ) : query.isError ? (
-          <ResourceRowError message="Couldn't load workspaces." />
+          <ResourceRowError message="Couldn't load spaces." />
         ) : workspaces.length === 0 ? (
-          <ResourceRowEmpty message="No workspaces on this pod yet." />
+          <ResourceRowEmpty message="No spaces on this pod yet." />
         ) : (
           <div className="-mx-2 divide-y divide-foreground/[0.05]">
             {workspaces.map((ws) => (
@@ -339,7 +333,7 @@ function WorkspaceRowActions({
       void utils.workspaces.adminListAll.invalidate();
       const p = (data as { purged?: Record<string, number> }).purged;
       addToast({
-        title: "Workspace permanently deleted",
+        title: "Space permanently deleted",
         description: p
           ? `${ws.name}: removed ${p.entities} entities, ${p.relations} relations, ${p.proposals} proposals, ${p.documents} documents.`
           : `${ws.name} and its data were removed.`,
@@ -350,8 +344,8 @@ function WorkspaceRowActions({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Delete failed",
-        description: err.message,
+        title: "Couldn't delete the space",
+        description: readableError(err.message),
         color: "danger",
       });
     },
@@ -362,7 +356,7 @@ function WorkspaceRowActions({
       void utils.workspaces.list.invalidate();
       void utils.workspaces.adminListAll.invalidate();
       addToast({
-        title: variables.restore ? "Workspace restored" : "Workspace archived",
+        title: variables.restore ? "Space restored" : "Space archived",
         description: variables.restore
           ? `${ws.name} is back in the active list.`
           : `${ws.name} is now archived.`,
@@ -373,8 +367,10 @@ function WorkspaceRowActions({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: archived ? "Restore failed" : "Archive failed",
-        description: err.message,
+        title: archived
+          ? "Couldn't restore the space"
+          : "Couldn't archive the space",
+        description: readableError(err.message),
         color: "danger",
       });
     },
@@ -390,7 +386,7 @@ function WorkspaceRowActions({
             size="sm"
             radius="full"
             aria-label={`Actions for ${ws.name}`}
-            className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
+            className="text-foreground/65 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 data-[pressed=true]:opacity-100 [@media(hover:none)]:opacity-100"
           >
             <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>
@@ -408,9 +404,11 @@ function WorkspaceRowActions({
               size="sm"
               radius="sm"
               className="justify-start text-[12.5px]"
-              startContent={<ExternalLink className="h-3.5 w-3.5" />}
+              startContent={
+                <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+              }
             >
-              Open in the desktop app
+              Open in app
             </Button>
             <span className="px-3 pb-1">
               <ExitFallback exit={desktopExit} />
@@ -445,7 +443,7 @@ function WorkspaceRowActions({
                 Restore
               </Button>
             ) : isSystem ? (
-              <Tooltip content="System workspaces (e.g. pod-admin) can't be archived.">
+              <Tooltip content="System spaces (e.g. pod-admin) can't be archived.">
                 <span className="block">
                   <Button
                     variant="light"
@@ -492,13 +490,13 @@ function WorkspaceRowActions({
         title={`Archive ${ws.name}?`}
         consequence={
           <p>
-            Archived workspaces stay on the pod but are hidden from the default
+            Archived spaces stay on the pod but are hidden from the default
             list. Nothing inside is deleted, and you can restore from the "Show
             archived" toggle.
           </p>
         }
-        confirmLabel="Archive workspace"
-        /* Amber, not red: archive hides a workspace, it does not destroy one.
+        confirmLabel="Archive space"
+        /* Amber, not red: archive hides a space, it does not destroy one.
            Painting it destructive would say the opposite of the copy. */
         confirmColor="warning"
         isPending={archiveMutation.isPending}
@@ -557,10 +555,10 @@ function DeleteWorkspaceConfirm({
       consequence={
         <>
           <p>
-            This <strong>cannot be undone</strong>. It removes the workspace and
-            all of its workspace-scoped data — entities, relations, proposals,
-            and documents (including stored files and search index). Pod-wide
-            data shared with other workspaces is not affected.
+            This <strong>cannot be undone</strong>. It removes the space and all
+            of its space-scoped data — entities, relations, proposals, and
+            documents (including stored files and search index). Pod-wide data
+            shared with other spaces is not affected.
           </p>
           <p className="mt-2">
             Type{" "}
@@ -579,7 +577,7 @@ function DeleteWorkspaceConfirm({
         value={typed}
         onValueChange={setTyped}
         placeholder={workspaceName}
-        aria-label="Type the workspace name to confirm deletion"
+        aria-label="Type the space name to confirm deletion"
         isDisabled={isPending}
       />
     </ConfirmModal>
@@ -607,7 +605,10 @@ function CreateWorkspaceModal({
     },
     onError: (e) => {
       if (redirectToLoginIfUnauthorized(e)) return;
-      setError(e.message);
+      setError(
+        readableError(e.message) ??
+          "Couldn't create the space. Check the name and try again."
+      );
     },
   });
 
@@ -638,11 +639,11 @@ function CreateWorkspaceModal({
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
           <h2 className="text-[15px] font-medium text-foreground">
-            Create workspace
+            Create space
           </h2>
-          <p className="text-[12px] text-foreground/55">
-            You'll be added as the owner. Use Studio to configure profiles and
-            members.
+          <p className="text-[12px] text-foreground/65">
+            You'll be added as the owner. Profiles and members are set up in the
+            app.
           </p>
         </ModalHeader>
         <ModalBody className="gap-4 px-6 py-4">

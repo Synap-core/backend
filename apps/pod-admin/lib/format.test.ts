@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { formatRelative, isUuid, oneLine } from "./format";
+import { formatRelative, isUuid, oneLine, readableError } from "./format";
 
 const NOW = new Date("2026-06-15T12:00:00Z");
 const at = (ms: number) => new Date(NOW.getTime() + ms);
@@ -52,5 +52,24 @@ describe("isUuid", () => {
   it("rejects anything else", () => {
     expect(isUuid("not-a-uuid")).toBe(false);
     expect(isUuid("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/x")).toBe(false);
+  });
+});
+
+describe("readableError", () => {
+  it("keeps a short plain sentence", () => {
+    expect(readableError("That name is already taken.")).toBe(
+      "That name is already taken."
+    );
+  });
+
+  it("drops structured, code-like or empty messages", () => {
+    expect(
+      readableError('[{"code":"invalid_type","path":["name"]}]')
+    ).toBeUndefined();
+    expect(readableError("INTERNAL_SERVER_ERROR")).toBeUndefined();
+    expect(readableError("Error at /srv/app/index.js:12")).toBeUndefined();
+    expect(readableError("")).toBeUndefined();
+    expect(readableError(undefined)).toBeUndefined();
+    expect(readableError("x ".repeat(100))).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@
 import { useMemo } from "react";
 import { trpc } from "../../../../../lib/trpc";
 import { SectionCard } from "../../../components/section-card";
-import { formatRelative } from "../../../../../lib/format";
+import { formatRelative, formatTimestamp } from "../../../../../lib/format";
 
 interface Workspace {
   id: string;
@@ -26,7 +26,7 @@ interface Workspace {
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <span className="text-[11px] uppercase tracking-wider text-foreground/45">
+      <span className="text-[11px] uppercase tracking-wider text-foreground/65">
         {label}
       </span>
       <span className="truncate text-right text-[12.5px] text-foreground">
@@ -76,14 +76,8 @@ export function OverviewTab({ ws }: { ws: Workspace }) {
             label="Members"
             value={`${ws.memberCount} ${ws.memberCount === 1 ? "member" : "members"}`}
           />
-          <DetailRow
-            label="Created"
-            value={ws.createdAt ? new Date(ws.createdAt).toLocaleString() : "—"}
-          />
-          <DetailRow
-            label="Last update"
-            value={ws.updatedAt ? formatRelative(new Date(ws.updatedAt)) : "—"}
-          />
+          <DetailRow label="Created" value={formatTimestamp(ws.createdAt)} />
+          <DetailRow label="Last update" value={formatRelative(ws.updatedAt)} />
           <DetailRow
             label="Subscription"
             value={
