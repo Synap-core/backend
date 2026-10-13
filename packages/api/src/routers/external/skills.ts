@@ -9,15 +9,15 @@
  * POST /:id/invoke — invoke a skill by ID
  *
  * Auth: Bearer API key with scope "skills.invoke" (handled by externalApiKeyAuth).
- * Execution: delegates to the Intelligence Service via the same path as
- *   tRPC skills.execute — zero IS changes required.
+ * Execution: the ONE capability door `executeCapability` (gate → IS sandbox),
+ *   with the acting agent of an agent key threaded to the gate.
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
 import { db, eq, and, or } from "@synap/database";
 import { skills, workspaceMembers } from "@synap/database/schema";
-import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
+import { executeCapability } from "../../services/capabilities/execute-capability.js";
 import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
 
@@ -103,12 +103,11 @@ externalSkillsApp.get("/", externalApiKeyAuth("skills.invoke"), async (c) => {
 
 /**
  * POST /:id/invoke
- * Mirrors tRPC skills.execute exactly:
+ * Mirrors tRPC skills.execute:
  *   1. Look up skill, verify active + accessible.
- *   2. Resolve intelligence service (workspace pref → user pref → env).
- *   3. POST to IS /api/skills/execute.
- *   4. Update metadata.executionCount + metadata.lastTestedAt on success.
- *   5. Return IS result JSON directly.
+ *   2. executeCapability: gate (agent → grant/propose) → IS sandbox.
+ *   3. Update metadata.executionCount + metadata.lastTestedAt on a run.
+ *   4. Return { success, result } (202 + proposalId when governance proposes).
  *
  * Scope rules:
  *   pod       → any valid skills.invoke key
@@ -173,93 +172,96 @@ externalSkillsApp.post(
       }
     }
 
-    // Resolve the intelligence service (same logic as tRPC skills.execute)
-    let hubUrl: string;
-    let hubApiKey: string;
+    // Run through the ONE capability door (`executeCapability`, the same core
+    // behind Hub `POST /capabilities/execute` and MCP `run_capability`): it runs
+    // `gateCapabilityExecution` with the acting agent, so an AGENT key's run is
+    // governed (grant / propose) instead of executing as the linked human. This
+    // door used to POST to the IS itself with only `userId` and no gate at all.
+    let outcome: Awaited<ReturnType<typeof executeCapability>>;
     try {
-      const resolved = await resolveIntelligenceService({
+      outcome = await executeCapability({
+        skillId,
+        parameters: parsedBody.input ?? {},
+        workspaceId: skill.workspaceId ?? null,
         userId,
-        workspaceId: skill.workspaceId ?? undefined,
+        agentUserId: c.get("agentUserId") ?? null,
       });
-      hubUrl = resolved.endpoint;
-      hubApiKey = resolved.serviceApiKey;
     } catch (err) {
       logger.error(
         { skillId, err: err instanceof Error ? err.message : String(err) },
-        "Failed to resolve intelligence service"
+        "Skill execution failed"
       );
-      return c.json({ error: "Intelligence service unavailable" }, 502);
+      return c.json({ error: "Skill execution failed" }, 502);
     }
 
-    // Delegate execution to IS
-    let result: {
-      success: boolean;
-      result?: unknown;
-      error?: string;
-      executionTimeMs: number;
-    };
-
-    try {
-      const response = await fetch(`${hubUrl}/api/skills/execute`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": hubApiKey,
-        },
-        body: JSON.stringify({
-          skillId,
-          userId,
-          parameters: parsedBody.input ?? {},
-        }),
-      });
-
-      if (!response.ok) {
-        logger.warn(
-          { skillId, status: response.status },
-          "Intelligence service returned non-OK status"
-        );
+    switch (outcome.kind) {
+      case "not_found":
+        return c.json({ error: "Skill not found" }, 404);
+      case "deny":
         return c.json(
-          { error: `Skill execution failed: IS returned ${response.status}` },
-          502
+          {
+            error: `Skill refused by gate: ${outcome.reason}`,
+            ...(outcome.enable ? { enable: outcome.enable } : {}),
+            ...(outcome.enableProposal
+              ? { enableProposal: outcome.enableProposal }
+              : {}),
+          },
+          403
         );
-      }
+      case "proposed":
+        // Nothing ran: a reviewable proposal was filed (mirrors tRPC
+        // skills.execute's `proposed` shape).
+        return c.json(
+          {
+            success: false as const,
+            proposed: true as const,
+            proposalId: outcome.proposalId,
+            reviewUrl: outcome.reviewUrl,
+          },
+          202
+        );
+      case "dry-run":
+        return c.json({
+          success: true as const,
+          result: { dryRun: true, skillId: outcome.skillId },
+        });
+      case "error":
+        // The skill ran and failed — the IS envelope this door always returned.
+        return c.json({ success: false as const, error: outcome.message });
+      case "run":
+        break;
+    }
 
-      result = (await response.json()) as typeof result;
+    // Update execution metadata on a run (mirrors tRPC skills.execute)
+    try {
+      const currentMeta =
+        (skill.metadata as Record<string, unknown> | null) ?? {};
+      const execCount =
+        ((currentMeta.executionCount as number | undefined) ?? 0) + 1;
+      await db
+        .update(skills)
+        .set({
+          metadata: {
+            ...currentMeta,
+            executionCount: execCount,
+            lastTestedAt: new Date().toISOString(),
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(skills.id, skillId));
     } catch (err) {
-      logger.error(
+      // Metadata update failure is non-critical — don't fail the response
+      logger.warn(
         { skillId, err: err instanceof Error ? err.message : String(err) },
-        "Failed to reach intelligence service for skill execution"
+        "Failed to update skill execution metadata"
       );
-      return c.json({ error: "Intelligence service unreachable" }, 502);
     }
 
-    // Update execution metadata on success (mirrors tRPC skills.execute)
-    if (result.success) {
-      try {
-        const currentMeta =
-          (skill.metadata as Record<string, unknown> | null) ?? {};
-        const execCount =
-          ((currentMeta.executionCount as number | undefined) ?? 0) + 1;
-        await db
-          .update(skills)
-          .set({
-            metadata: {
-              ...currentMeta,
-              executionCount: execCount,
-              lastTestedAt: new Date().toISOString(),
-            },
-            updatedAt: new Date(),
-          })
-          .where(eq(skills.id, skillId));
-      } catch (err) {
-        // Metadata update failure is non-critical — don't fail the response
-        logger.warn(
-          { skillId, err: err instanceof Error ? err.message : String(err) },
-          "Failed to update skill execution metadata"
-        );
-      }
-    }
-
-    return c.json(result);
+    return c.json({
+      success: true as const,
+      result: outcome.result,
+      correlationId: outcome.correlationId,
+      ackState: outcome.ackState,
+    });
   }
 );
