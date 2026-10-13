@@ -51,8 +51,13 @@ export {
   type ParentSettleOutcome,
 } from "./utils/automation-parent-settle.js";
 
-// CP catalog sync — kind vocabulary (imported by @synap/api's catalog-cache-query.ts)
-export { type CatalogKind } from "./workers/cp-catalog-sync.js";
+// CP catalog sync — kind vocabulary + configured sources (read by @synap/api's
+// catalog-cache-query.ts and the `marketplace` router)
+export {
+  type CatalogKind,
+  CATALOG_KINDS,
+  catalogSources,
+} from "./workers/cp-catalog-sync.js";
 export {
   derivePackageSearchTokens,
   mergePackageSearchTags,
