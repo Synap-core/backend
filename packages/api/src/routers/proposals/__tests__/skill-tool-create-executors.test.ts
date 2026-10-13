@@ -89,16 +89,20 @@ function approvedAfterSkillCreateApproval(args: {
   kind: string;
   /** The proposal row's author — set iff an AGENT authored the proposal. */
   proposalAgentUserId: string | null;
+  /** A PERSON (not an agent path) clicked approve. */
+  approvedByPerson?: boolean;
 }): boolean {
   // insertSkillGoverned, re-run as the APPROVER (agentUserId is undefined).
   let approved = insertSkillGovernedApproved(args.kind, undefined);
-  // The executor's downgrade, restoring the intended verdict.
-  if (args.proposalAgentUserId && approved) approved = false;
+  // The executor's downgrade, restoring the intended verdict — a person's
+  // approval of the reviewed body IS the owner approval, so it is kept.
+  if (args.proposalAgentUserId && approved && !args.approvedByPerson)
+    approved = false;
   return approved;
 }
 
 describe("(A) skill/create approval — born-approved escalation is closed", () => {
-  it("an AGENT-proposed instruction skill persists approved === false", () => {
+  it("an AGENT-proposed instruction skill NOT approved by a person persists approved === false", () => {
     // The exploit: instruction body → agent system prompt with no owner review.
     expect(
       approvedAfterSkillCreateApproval({
@@ -106,6 +110,16 @@ describe("(A) skill/create approval — born-approved escalation is closed", () 
         proposalAgentUserId: "agent-user-id",
       })
     ).toBe(false);
+  });
+
+  it("an AGENT-proposed instruction skill a PERSON approved stays approved", () => {
+    expect(
+      approvedAfterSkillCreateApproval({
+        kind: "instruction",
+        proposalAgentUserId: "agent-user-id",
+        approvedByPerson: true,
+      })
+    ).toBe(true);
   });
 
   it("a HUMAN-proposed instruction skill is still born approved", () => {
@@ -144,6 +158,7 @@ describe("(A) skill/create approval — born-approved escalation is closed", () 
     // it — an update of `skills.approved` to false, guarded on the proposal's
     // agent author.
     expect(SKILL_CREATE_BLOCK).toMatch(/if\s*\(\s*proposal\.agentUserId/);
+    expect(SKILL_CREATE_BLOCK).toMatch(/!approvedByPerson/);
     expect(SKILL_CREATE_BLOCK).toMatch(/\.update\(skills\)/);
     expect(SKILL_CREATE_BLOCK).toMatch(/approved:\s*false/);
   });

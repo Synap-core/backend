@@ -258,6 +258,22 @@ beforeAll(async () => {
     scope: "user",
     body: "PRIVATE BODY",
   });
+  await seed({
+    name: "Awaiting radar",
+    slug: "routines/awaiting-radar",
+    userId: OTHER,
+    scope: "pod",
+    approved: false,
+    body: "UNAPPROVED POD BODY",
+  });
+  await seed({
+    name: "Other unapproved private",
+    slug: "other/unapproved-private",
+    userId: OTHER,
+    scope: "user",
+    approved: false,
+    body: "UNAPPROVED PRIVATE BODY",
+  });
 
   // ── Resolver ref handling (CAT_USER-owned so no other group's set moves) ──
   // Inserted in the order a missing ORDER BY would return them (heap order).
@@ -333,10 +349,10 @@ describe("S5 — the current space's OWN skills rank first", () => {
   // lift it to the top: that is the guarantee, and a weight would not do it.
   const LINKED_SLUG = "f/scoping-guide";
   const withLinkedBrief = (linked: unknown) =>
-    h.client!.query(`update workspaces set settings = $2::jsonb where id = $1`, [
-      WS_MEMBER,
-      JSON.stringify({ onboarding: { skills: linked } }),
-    ]);
+    h.client!.query(
+      `update workspaces set settings = $2::jsonb where id = $1`,
+      [WS_MEMBER, JSON.stringify({ onboarding: { skills: linked } })]
+    );
 
   beforeAll(async () => {
     await h.client!.query(
@@ -369,7 +385,9 @@ describe("S5 — the current space's OWN skills rank first", () => {
   });
 
   it("a brief pointing at a slug no row carries leaves the order untouched", async () => {
-    await withLinkedBrief([{ slug: "system/synap/does-not-exist", mode: "always" }]);
+    await withLinkedBrief([
+      { slug: "system/synap/does-not-exist", mode: "always" },
+    ]);
     const { rows } = await searchInstructionSkills({
       userId: RANK_USER,
       workspaceId: WS_MEMBER,
@@ -429,6 +447,27 @@ describe("SECURITY — synap_load_skill never hands over another user's private 
     expect(await resolveSkillContent("other/private-guide", OTHER)).toBe(
       "PRIVATE BODY"
     );
+  });
+});
+
+describe("resolveSkillContent — a VISIBLE unapproved skill says it awaits approval", () => {
+  it("names the approval wait (with a link) instead of 'No skill found', never handing over the body", async () => {
+    for (const ref of ["routines/awaiting-radar", "awaiting-radar"]) {
+      const out = await resolveSkillContent(ref, CAT_USER);
+      expect(out).toMatch(/exists but awaits the owner's approval/);
+      expect(out).toContain("/open/");
+      expect(out).not.toContain("UNAPPROVED POD BODY");
+    }
+  });
+
+  it("an unapproved skill the caller CANNOT see still reads as not found", async () => {
+    const out = await resolveSkillContent("other/unapproved-private", CAT_USER);
+    expect(out).toMatch(/^No skill found/);
+    expect(out).not.toContain("Other unapproved private");
+    // Anti-vacuity: the row is real — its owner gets the approval message.
+    expect(
+      await resolveSkillContent("other/unapproved-private", OTHER)
+    ).toMatch(/exists but awaits the owner's approval/);
   });
 });
 

@@ -77,3 +77,5 @@ Did a one-off just succeed and will recur?
 ```
 
 Blocked path: **never** invent silently; **never** stop at a dead-end error — climb L2→L3 and propose. Success path: one clear structural nudge, not a cascade of schema changes.
+
+Environment failure ≠ product bug: when Docker Hub rate-limits a pull (`429 Too Many Requests`), pull the same image from a mirror — `mirror.gcr.io/library/<image>` or `public.ecr.aws/docker/library/<image>` — and report it as an environment issue, not a Synap defect.

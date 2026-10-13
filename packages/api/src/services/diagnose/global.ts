@@ -673,7 +673,7 @@ export async function diagnoseGlobal(params: {
   //
   // `agentProposalCap` applies the trust multiplier (a proven agent —
   // >=100 recent proposals at >=95% approve rate — earns 3x). Hardcoding
-  // `AGENT_PROPOSALS_PER_USER_PER_DAY` here made this door announce
+  // `AGENT_PENDING_PROPOSAL_CAP` here made this door announce
   // "1 agent(s) hit the daily proposal cap" for an agent sitting at 13/30,
   // while `diagnose(agentId)` correctly reported `cap: 30, atOrOverCap: false`
   // from the same numbers. A health door raising a FALSE alarm is worse than

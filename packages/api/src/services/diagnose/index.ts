@@ -61,7 +61,7 @@ import {
   collapseProposalsToClusters,
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
-import { AGENT_PROPOSALS_PER_USER_PER_DAY } from "../../utils/permission-check.js";
+import { AGENT_PENDING_PROPOSAL_CAP } from "../../utils/permission-check.js";
 import {
   getObjectGraph,
   type GraphNeighbor,
@@ -1018,10 +1018,10 @@ async function diagnoseClass(
           cards.length === 0
             ? "No agents registered for this owner."
             : // Per-agent cap: each agent gets its OWN budget of simultaneously-
-              // PENDING proposals (default AGENT_PROPOSALS_PER_USER_PER_DAY,
+              // PENDING proposals (default AGENT_PENDING_PROPOSAL_CAP,
               // scaled up for a proven agent, or overridden by a governance
               // ceiling) — not a pool shared across the owner's roster.
-              `${cards.length} agent(s). Default cap: ${AGENT_PROPOSALS_PER_USER_PER_DAY} pending proposals per agent (trusted agents get more — see each agent's dailyCap).`,
+              `${cards.length} agent(s). Default cap: ${AGENT_PENDING_PROPOSAL_CAP} pending proposals per agent (trusted agents get more — see each agent's dailyCap).`,
         detail: { agents: cards },
       };
     }

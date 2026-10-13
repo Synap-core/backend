@@ -3452,7 +3452,7 @@ async function createPendingProposalRow(
  * is a DIFFERENT concept (per-user merge proposals filed per night) and is
  * deliberately not consolidated with this.
  */
-export const AGENT_PROPOSALS_PER_USER_PER_DAY = 10;
+export const AGENT_PENDING_PROPOSAL_CAP = 10;
 
 /** Multiplier applied to the base cap for a proven-trustworthy agent. */
 const TRUSTED_AGENT_CAP_MULTIPLIER = 3;
@@ -3583,9 +3583,9 @@ export async function agentProposalCap(agentUserId: string): Promise<number> {
     total >= TRUSTED_AGENT_MIN_TOTAL &&
     approveRate >= TRUSTED_AGENT_MIN_APPROVE_RATE
   ) {
-    return AGENT_PROPOSALS_PER_USER_PER_DAY * TRUSTED_AGENT_CAP_MULTIPLIER;
+    return AGENT_PENDING_PROPOSAL_CAP * TRUSTED_AGENT_CAP_MULTIPLIER;
   }
-  return AGENT_PROPOSALS_PER_USER_PER_DAY;
+  return AGENT_PENDING_PROPOSAL_CAP;
 }
 
 async function createProposal(args: {
