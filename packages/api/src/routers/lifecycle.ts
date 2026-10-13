@@ -139,6 +139,11 @@ const boardColumnWire = z.object({
    * rule (a surface omits the count; it is not zero).
    */
   stuck: z.number().nullable(),
+  /**
+   * The unclassified column only: how many of its things have NO status at
+   * all (never set), as opposed to a value no option declares (homes X2).
+   */
+  unset: z.number().optional(),
 });
 
 const boardWire = z.object({
@@ -197,6 +202,11 @@ const producedKindWire = z.object({
       label: z.string(),
       category: categorySchema.nullable(),
       count: z.number(),
+      /**
+       * The unclassified column only: how many of its things have NO status at
+       * all (never set), as opposed to a value no option declares (homes X2).
+       */
+      unset: z.number().optional(),
     })
   ),
   /** `signals.countByProfile` for this space + kind; null = that read failed. */
@@ -507,6 +517,9 @@ export const lifecycleRouter = router({
           key: UNCLASSIFIED_STATUS,
           category: null,
           count: stray.reduce((n, g) => n + g.count, 0),
+          unset: stray
+            .filter((g) => g.status === null)
+            .reduce((n, g) => n + g.count, 0),
           items: stray
             .flatMap((g) =>
               g.items.map((i) => ({ ...i, status: g.status, stuck: false }))

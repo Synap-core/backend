@@ -108,6 +108,8 @@ export interface ProducedKind {
     label: string;
     category: LifecycleCategory | null;
     count: number;
+    /** Unclassified column only: things with NO status at all (X2). */
+    unset?: number;
   }>;
   needsYou: number | null;
   beingWorked: number | null;
@@ -551,6 +553,9 @@ async function readProducedKind(
       label: resolveStatusLabel(UNCLASSIFIED_STATUS),
       category: null,
       count: stray.reduce((n, g) => n + g.count, 0),
+      unset: stray
+        .filter((g) => g.status === null)
+        .reduce((n, g) => n + g.count, 0),
     });
   }
   const live = columns

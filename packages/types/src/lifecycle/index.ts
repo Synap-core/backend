@@ -33,9 +33,12 @@ export interface LifecycleDeclaration {
 }
 
 /**
- * The board column (and status read) holding values no declared option names
- * — a thing written before the lifecycle was declared, or a value an option
- * rename left behind. Never dropped, never droppable onto. Words:
+ * The board column (and status read) holding things no declared option names:
+ * NO status at all (never set — the column's `unset` count), or a value no
+ * option declares (written before the lifecycle was declared, or left behind
+ * by an option rename). Both are "no declared status"; neither is called an
+ * undeclared VALUE when it is simply unset (homes X2). Never dropped, never
+ * droppable onto. Words:
  * `resolveStatusLabel(UNCLASSIFIED_STATUS)`; why it exists:
  * {@link UNCLASSIFIED_STATUS_HINT}.
  */
@@ -43,7 +46,7 @@ export const UNCLASSIFIED_STATUS = "__unclassified";
 
 /** The EXPLAIN line for the unclassified column (both surfaces). */
 export const UNCLASSIFIED_STATUS_HINT =
-  "Values outside this lifecycle's statuses. Open one to move it to a status.";
+  "No status yet, or a value outside this lifecycle's statuses. Open one to set its status.";
 
 export function isTerminalLifecycleCategory(
   category: LifecycleCategory | null | undefined

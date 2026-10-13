@@ -474,6 +474,42 @@ describe("lifecycle.home", () => {
     ]);
   });
 
+  it("the unclassified column says how many have NO status, apart from undeclared values (X2)", async () => {
+    // TWO unset vs ONE undeclared value ("weird"), so the counts disagree
+    // under a rule that mixed them up.
+    const unset = [
+      await deal(DEV, "No status yet", null, 1),
+      await deal(DEV, "No status either", null, 2),
+    ];
+    try {
+      const dealKind = (await caller().home()).spaces
+        .find((s) => s.workspaceId === DEV)!
+        .produces.find((p) => p.profileSlug === "deal")!;
+      // "weird" (an undeclared value) + two with no status at all.
+      expect(dealKind.columns.at(-1)).toMatchObject({
+        key: "__unclassified",
+        label: "No declared status",
+        count: 3,
+        unset: 2,
+      });
+      const board = await caller().board({
+        profileSlug: "deal",
+        workspaceId: DEV,
+      });
+      expect(
+        board.columns.find((c) => c.key === "__unclassified")
+      ).toMatchObject({
+        count: 3,
+        unset: 2,
+      });
+    } finally {
+      await q(
+        `update entities set deleted_at = now() where id = any($1::uuid[])`,
+        [unset]
+      );
+    }
+  });
+
   it("needs-you: ONE grouped read for the page; a failed scope is null, never 0", async () => {
     h.countCalls.length = 0;
     h.failSpaceCount = MISC;

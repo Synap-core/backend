@@ -1074,8 +1074,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // LIFECYCLE: the pipeline column holding values no declared option names
   // (`UNCLASSIFIED_STATUS`, `@synap-core/types/lifecycle`). One word on web
   // and relay — it was "Unclassified" on one and "Not a declared status" on
-  // the other.
-  __unclassified: "Not a declared status",
+  // the other. "No declared status" is true of BOTH things the column holds:
+  // a thing with no status at all, and a value no option declares (homes X2:
+  // "Not a declared status" called an unset status an undeclared value).
+  __unclassified: "No declared status",
   // ISSUE lifecycle (`issueStatus`, the system `issue` kind): humanized it
   // read "Wont fix" — no apostrophe. `open` / `investigating` / `fixed`
   // humanize correctly and need no row.

@@ -118,7 +118,7 @@ describe("thingStatusStrips", () => {
 describe("UNCLASSIFIED_STATUS", () => {
   it("has its own words in the vocabulary (never a humanized key)", () => {
     expect(resolveStatusLabel(UNCLASSIFIED_STATUS)).toBe(
-      "Not a declared status"
+      "No declared status"
     );
   });
 });
