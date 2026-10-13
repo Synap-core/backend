@@ -84,7 +84,10 @@ describe("every capture door keeps its raw through the one raw door", () => {
       "routers/webhooks-inbound.ts",
       "services/calcom/run-cal-backfill.ts",
       "services/capabilities/builtin-verbs.ts",
-      "services/import/structuring.ts",
+      // The import door (analyze / analyzeLarge). `services/import/structuring.ts`
+      // held the dead `proposeImportGraph` until it was deleted (2026-10-12).
+      "services/import-orchestrator.ts",
+      "services/imports/build.ts",
     ]) {
       expect(doors.map((d) => d.rel)).toContain(known);
     }

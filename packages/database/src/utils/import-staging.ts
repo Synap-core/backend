@@ -6,7 +6,8 @@
  *
  * The value mirrors `IMPORT_STAGED_MARKER` in `@synap-core/types/imports`
  * (this package does not depend on that one); a parity test in `@synap/api`
- * (`services/imports/__tests__/staged-marker-parity.test.ts`) keeps them equal.
+ * (`services/imports/__tests__/imports.pglite.test.ts`, "the staged marker")
+ * keeps them equal.
  */
 
 import { sql, type SQL } from "drizzle-orm";
