@@ -6,7 +6,8 @@
 #   • deploy/.env.example (active and commented-out assignments),
 #   • ${KEY} in deploy/docker-compose.yml,
 #   • the .env `synap install` generates (generate_and_create_env heredoc),
-#   • the .env install.sh (curl | bash) writes, and its _set_env_value keys,
+#   • (install.sh is only a bootstrapper since PODPROV W2: it must write NO
+#     .env key and must hand over to `synap install` — asserted below),
 #   • every key the synap CLI writes itself (envcfg_write_raw S / update_env_value),
 #   • @eve/dna POD_SECRET_FIELDS — when a hestia-cli checkout sits beside this
 #     repo (or ENV_SCHEMA_HESTIA points at one); CI checks out only this repo,
@@ -41,14 +42,16 @@ flags_of() { awk -v k="$1" '$1 == k {print $3}' "$SCHEMA"; }
 example_keys="$(sed -nE 's/^[[:space:]]*#?[[:space:]]*([A-Z][A-Z0-9_]*)=.*/\1/p' "$HERE/deploy/.env.example" | sort -u)"
 compose_keys="$(grep -oE '\$\{[A-Z_][A-Z0-9_]*' "$HERE/deploy/docker-compose.yml" | sed 's/^\${//' | sort -u)"
 install_keys="$(awk '/cat > \.env <<EOF/{p=1;next} p&&/^EOF/{exit} p' "$HERE/synap" | sed -nE 's/^([A-Z][A-Z0-9_]*)=.*/\1/p' | sort -u)"
-installsh_keys="$( (awk '/<< ENV_EOF/{p=1;next} p&&/^ENV_EOF/{exit} p' "$HERE/install.sh"; grep -oE '_set_env_value "[A-Z_][A-Z0-9_]*' "$HERE/install.sh" | cut -d'"' -f2) | sed -nE 's/^([A-Z][A-Z0-9_]*)(=.*)?$/\1/p' | sort -u)"
+installsh_writes="$(grep -nE '(>>?|tee|mv -f|cp )[^#]*\.env\b|_set_env_value|envcfg_write' "$HERE/install.sh" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
 cli_written="$( (grep -oE 'envcfg_write_raw S "?[A-Z_][A-Z0-9_]*' "$HERE/synap" | awk '{print $3}'; grep -oE 'update_env_value "?[A-Z_][A-Z0-9_]*' "$HERE/synap" | awk '{print $2}') | tr -d '"' | sort -u)"
 
 n() { echo "$1" | grep -c .; }
 [ "$(n "$example_keys")" -ge 40 ] && ok "scanned $(n "$example_keys") .env.example keys" || bad ".env.example keys: only $(n "$example_keys") (scan broken?)"
 [ "$(n "$compose_keys")" -ge 70 ] && ok "scanned $(n "$compose_keys") compose \${KEY}s" || bad "compose keys: only $(n "$compose_keys")"
 [ "$(n "$install_keys")" -ge 20 ] && ok "scanned $(n "$install_keys") keys synap install generates" || bad "install keys: only $(n "$install_keys") (heredoc moved?)"
-[ "$(n "$installsh_keys")" -ge 25 ] && ok "scanned $(n "$installsh_keys") keys install.sh writes" || bad "install.sh keys: only $(n "$installsh_keys") (heredoc moved?)"
+[ -z "$installsh_writes" ] && ok "install.sh (bootstrapper) writes no .env key" || bad "install.sh writes .env again — the one generator is \`synap install\`: $installsh_writes"
+grep -qE '^[^#]*exec bash "\$INSTALL_DIR/synap" install --non-interactive' "$HERE/install.sh" \
+  && ok "install.sh hands over to synap install --non-interactive" || bad "install.sh no longer execs synap install"
 [ "$(n "$cli_written")" -ge 10 ] && ok "scanned $(n "$cli_written") keys the CLI writes itself" || bad "CLI-written keys: only $(n "$cli_written")"
 # self-check of the matcher: it must see a literal sample of each source
 echo "$example_keys" | grep -qx BACKUP_REPOSITORY && echo "$example_keys" | grep -qx PG_BACKUP_KEEP && echo "$example_keys" | grep -qx CONTROL_PLANE_URL \
@@ -56,8 +59,8 @@ echo "$example_keys" | grep -qx BACKUP_REPOSITORY && echo "$example_keys" | grep
 echo "$compose_keys" | grep -qx POSTGRES_PASSWORD && echo "$cli_written" | grep -qx SYNAP_EDGE && echo "$install_keys" | grep -qx ORY_HYDRA_SECRETS_SYSTEM \
   && ok "self-check: compose / CLI-written / install matchers see known keys" || bad "self-check: a key matcher went blind"
 
-for src in example compose install install.sh cli; do
-  case "$src" in example) keys="$example_keys";; compose) keys="$compose_keys";; install) keys="$install_keys";; install.sh) keys="$installsh_keys";; cli) keys="$cli_written";; esac
+for src in example compose install cli; do
+  case "$src" in example) keys="$example_keys";; compose) keys="$compose_keys";; install) keys="$install_keys";; cli) keys="$cli_written";; esac
   missing=""
   for k in $keys; do in_schema "$k" || missing="$missing $k"; done
   [ -z "$missing" ] && ok "every $src key is in env.schema" || bad "$src keys missing from env.schema:$missing"

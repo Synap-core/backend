@@ -123,14 +123,15 @@ first_compose_line() {
 grep -qE '^[^#]*exec bash "\$SYNAP" update --release' "$DEPLOY_DIR/update-pod.sh" \
     && ok "deploy/update-pod.sh delegates to synap update (the guarded engine)" \
     || bad "deploy/update-pod.sh neither delegates to synap update nor is scanned as a door"
-for door in "$REPO_ROOT/install.sh"; do
-    name="${door#$REPO_ROOT/}"
-    first="$(first_compose_line "$door")"
-    guard="$(grep -nE '^[^#]*pgdata_guard' "$door" | head -1 | cut -d: -f1)"
-    if [ -z "$first" ]; then bad "$name: no compose up/run found (scan went blind)"; continue; fi
-    if [ -n "$guard" ] && [ "$guard" -lt "$first" ]; then ok "$name: pgdata_guard (line $guard) precedes first compose up/run (line $first)"
-    else bad "$name: pgdata_guard (line ${guard:-none}) does not precede first compose up/run (line $first)"; fi
-done
+# install.sh is a bootstrapper since PODPROV W2: it runs no compose itself and
+# execs `synap install` (the guarded engine, covered by the synap checks below).
+# A compose up/run coming back into it would be an unguarded door.
+if [ -z "$(first_compose_line "$REPO_ROOT/install.sh")" ] \
+    && grep -qE '^[^#]*exec bash "\$INSTALL_DIR/synap" install' "$REPO_ROOT/install.sh"; then
+    ok "install.sh runs no compose itself and execs synap install (the guarded engine)"
+else
+    bad "install.sh runs compose itself or no longer delegates to synap install"
+fi
 SYNAP_CLI="$REPO_ROOT/synap"
 if grep -qE '^docker\(\) \{' "$SYNAP_CLI" && grep -qE 'up\|run\|create\) _run_pgdata_guard' "$SYNAP_CLI"; then
     ok "synap: docker() intercepts compose up|run|create and runs the guard"

@@ -52,12 +52,10 @@ MESSAGE='(log\.|print[A-Z]|console\.|Error\(|warn\(|info\(|dim\(|line:|label:|de
 # ALLOWLIST — "<repo>|<path>|<expected count>|<exact trimmed line>". An entry
 # whose count no longer matches FAILS too, so the list cannot rot or widen.
 ALLOWLIST=(
-  # The install generators: a FRESH .env with generated secrets, written only
-  # when none exists (synap install / install.sh).
+  # The ONE install generator: a FRESH .env with generated secrets, written only
+  # when none exists (`synap install`). install.sh is a bootstrapper that hands
+  # over to it and writes no .env (still scanned below, so a write coming back fails).
   "backend|synap|1|cat > .env <<EOF"
-  "backend|install.sh|1|cat > \"\$INSTALL_DIR/.env\" << ENV_EOF"
-  # The release block (managed by the engine; same atomic tmp+mv shape).
-  "backend|install.sh|1|chmod 600 \"\$INSTALL_DIR/.env.tmp\" && mv -f \"\$INSTALL_DIR/.env.tmp\" \"\$INSTALL_DIR/.env\""
   # The update engine's rollback restores the .env it snapshotted itself.
   "backend|synap|1|cp -p state/update/env.before .env || status=rollback_failed"
   # `synap config edit`: replaces .env with the operator's draft only after it validated.
@@ -69,9 +67,6 @@ ALLOWLIST=(
   "backend|synap.sh|1|echo \"\" >> \"\$INTELLIGENCE_DIR/deploy/.env\""
   "backend|synap.sh|1|echo \"# ZeroClaw Bridge\" >> \"\$INTELLIGENCE_DIR/deploy/.env\""
   "backend|synap.sh|1|echo \"ZEROCLAW_API_KEY=\$zckey\" >> \"\$INTELLIGENCE_DIR/deploy/.env\""
-  # Legacy generator (scripts/setup-production.sh, a pre-`synap install`
-  # one-shot). Follow-up: retire it; it is not a pod-update door.
-  "backend|scripts/setup-production.sh|1|cat > \"\${DEPLOYMENT_ROOT}/.env\" <<EOF"
 )
 
 # ── self-check: the matchers still see what they hunt, and nothing benign ─────

@@ -1,0 +1,49 @@
+#cloud-config
+# Synap pod startup template (PODPROV-CONTRACT §5). Owned by the installer and
+# shipped in every release bundle; the Control Plane (managed pods) and the
+# Hetzner Cloud capability (BYO pods) render it by substituting the five
+# placeholders — and nothing else — so both produce identical bytes.
+#
+# Placeholders (written here without their braces so a render leaves this
+# comment alone): RELEASE = the release id (`v*` / `main-*`, or stable|fast);
+# REGISTER_TOKEN = the single-use spr_… code (short-lived, the only secret
+# here); NAME = the pod name (pod.<name>.synap.live, pod-admin.<name>.synap.live);
+# CONTROL_PLANE_URL = the Control Plane to register with; EDGE = caddy (direct
+# TLS) | tunnel.
+#
+# Progress and errors: /var/log/synap-install.log on the server.
+package_update: true
+packages:
+  - curl
+  - jq
+  - openssl
+  - ca-certificates
+write_files:
+  - path: /etc/synap/install.env
+    permissions: "0600"
+    owner: root:root
+    content: |
+      SYNAP_RELEASE='{{RELEASE}}'
+      SYNAP_REGISTER_TOKEN='{{REGISTER_TOKEN}}'
+      SYNAP_POD_NAME='{{NAME}}'
+      SYNAP_CONTROL_PLANE='{{CONTROL_PLANE_URL}}'
+      SYNAP_EDGE_CHOICE='{{EDGE}}'
+runcmd:
+  - - bash
+    - -c
+    - |
+      set -euo pipefail
+      . /etc/synap/install.env
+      case "$SYNAP_RELEASE" in stable|fast) asset_dir="channel-$SYNAP_RELEASE" ;; *) asset_dir="$SYNAP_RELEASE" ;; esac
+      curl -fsSL --retry 5 -o /root/synap-install.sh \
+        "https://github.com/synap-core/backend/releases/download/${asset_dir}/install.sh"
+      rc=0
+      bash /root/synap-install.sh \
+        --release "$SYNAP_RELEASE" \
+        --name "$SYNAP_POD_NAME" \
+        --edge "$SYNAP_EDGE_CHOICE" \
+        --control-plane "$SYNAP_CONTROL_PLANE" \
+        --register-token "$SYNAP_REGISTER_TOKEN" \
+        >> /var/log/synap-install.log 2>&1 || rc=$?
+      shred -u /etc/synap/install.env 2>/dev/null || rm -f /etc/synap/install.env
+      exit $rc

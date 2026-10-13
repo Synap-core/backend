@@ -161,9 +161,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    # Eve-managed pods add `eve-network` (+ aliases) in their own
+    # docker-compose.override.yml, which also declares the network. Keeping it
+    # out of THIS file is what lets a host without Eve start the backend.
     networks:
       - synap-net
-      - eve-network
 
   # ============================================================================
   # BACKEND CANARY (update validation — profile-gated, never in production)
@@ -716,6 +718,9 @@ services:
       #   ./Caddyfile.local    → Cloudflare Tunnel  — auto_https off, serves plain HTTP on port 80
       - ${CADDYFILE_PATH:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - ./openclaw_auth.snippet:/etc/caddy/openclaw_auth.snippet:ro
+      # Registration proof (served at /.well-known/synap-registration while
+      # `synap install --register-token` registers; empty otherwise).
+      - ./state/registration-nonce:/srv/synap-registration:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:
@@ -1034,5 +1039,3 @@ volumes:
 networks:
   synap-net:
     driver: bridge
-  eve-network:
-    external: true

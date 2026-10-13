@@ -4,6 +4,9 @@
 
 set -e
 
+# Absolute path of this script (installerVersion is derived from its bytes).
+SYNAP_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
 # Pin the docker compose project name deterministically. Compose otherwise
 # falls back to the cwd basename, which on a git checkout is "deploy" — and
 # silently switching project name spawns a parallel orphan stack: NEW empty
@@ -568,6 +571,13 @@ generate_and_create_env() {
     # PROVISIONING_TOKEN authorizes agent-key minting via POST /v1/agents/provision.
     # Backend reads it from compose env; .env.example documents it as required.
     local PROVISIONING_TOKEN=$(openssl rand -hex 32)
+    # Required by docker-compose.yml (VAULT_SERVER_KEY:?) — the secret-vault key;
+    # plus the Hub keys the backend reads. Ported from the retired install.sh
+    # generator so ONE generator writes every key a fresh pod needs.
+    local VAULT_SERVER_KEY HUB_PROTOCOL_API_KEY HUB_JWT_SECRET
+    VAULT_SERVER_KEY=$(openssl rand -hex 32)
+    HUB_PROTOCOL_API_KEY=$(openssl rand -hex 32)
+    HUB_JWT_SECRET=$(openssl rand -hex 32)
     
     # Placeholder until the image step pins the release block (SYNAP_IMAGE_*,
     # BACKEND_VERSION=<release id>) — never `latest`.
@@ -623,6 +633,13 @@ TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
 ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
 SYNAP_SERVICE_ENCRYPTION_KEY=${SYNAP_SERVICE_ENCRYPTION_KEY}
 PROVISIONING_TOKEN=${PROVISIONING_TOKEN}
+VAULT_SERVER_KEY=${VAULT_SERVER_KEY}
+HUB_PROTOCOL_API_KEY=${HUB_PROTOCOL_API_KEY}
+HUB_JWT_SECRET=${HUB_JWT_SECRET}
+
+# Realtime CORS + links (compose defaults are dev values: * and localhost)
+FRONTEND_URL=https://${domain}
+CORS_ORIGIN=https://${domain}
 
 # Allowed CORS origins (comma-separated frontend URLs)
 # Add your Electron app origin or web client URL here
@@ -637,6 +654,10 @@ EOF
 # The file is generated fresh on every install/update to ensure webhook secret and domain are correct
 generate_kratos_config() {
     local domain=$1
+    # $2 = "pod": the per-pod OIDC client is ALREADY in pod_settings (stored by
+    # `synap install --register-token` through the signed oidc-config door), so
+    # read it without asking the CP to push it again (PODPROV-CONTRACT §6.3).
+    local oidc_source="${2:-cp}"
     local kratos_dir="../kratos"
     local deploy_dir="deploy"
     
@@ -697,12 +718,16 @@ generate_kratos_config() {
             # 1. Trigger the CP to mint + push this pod's OIDC client over the Hub
             #    channel. Returns { delivered: true } once the pod has persisted it.
             #    No secret is returned here — it travels CP→pod (authenticated) only.
-            local _resp _delivered
-            _resp=$(curl -fsS --max-time 20 -X POST \
-                -H "Content-Type: application/json" \
-                -d "{\"podUrl\":\"${_pub_url}\"}" \
-                "${_cp_url%/}/pods/oidc/provision" 2>/dev/null || echo "")
-            _delivered=$(printf '%s' "$_resp" | grep -oE '"delivered"[[:space:]]*:[[:space:]]*true' | head -1)
+            local _resp="" _delivered=""
+            if [ "$oidc_source" = pod ]; then
+                _delivered=pod
+            else
+                _resp=$(curl -fsS --max-time 20 -X POST \
+                    -H "Content-Type: application/json" \
+                    -d "{\"podUrl\":\"${_pub_url}\"}" \
+                    "${_cp_url%/}/pods/oidc/provision" 2>/dev/null || echo "")
+                _delivered=$(printf '%s' "$_resp" | grep -oE '"delivered"[[:space:]]*:[[:space:]]*true' | head -1)
+            fi
             if [ -n "$_delivered" ]; then
                 # 2. Read the pushed client from the pod's OWN Postgres (pod-local,
                 #    plaintext read for the Kratos config — same trust as kratos.yml).
@@ -1450,6 +1475,237 @@ _swap_backend_canary() {
     return 2
 }
 
+# ============================================================================
+# POD REGISTRATION — `synap install --register-token` (PODPROV-CONTRACT §3, §4, §6)
+# ============================================================================
+# A single-use code minted by the Control Plane (`spr_…`) is exchanged, once the
+# stack is healthy, at POST {cp}/pods/register. Everything the pod needs comes
+# back in that ONE response and is applied HERE, locally, through the pod's own
+# doors (the CP pushes nothing to the pod during registration — §6.3):
+#
+#   1. owner      ownerAssertion → POST /api/federation/bootstrap
+#                 (X-Pod-Bootstrap-Token = this pod's PROVISIONING_TOKEN; that
+#                 secret never leaves the host). This also approves the CP issuer
+#                 the next two doors verify against, so it runs first.
+#   2. sign-in    oidc.assertion → POST /api/hub/federation/oidc-config, then
+#                 kratos.yml is re-rendered from pod_settings and kratos restarted.
+#   3. AI service intelligence {url, apiKey, provisionToken} →
+#                 POST /api/provision/register-intelligence (null = not entitled).
+#   4. trust      CONTROL_PLANE_URL written to deploy/.env (the explicit opt-in),
+#                 backend + realtime recreated to read it.
+#
+# Every local call runs INSIDE the backend container (`docker exec … node`):
+# the backend publishes no host port. Secrets travel as env names (`-e NAME`,
+# value inherited — never on a command line) and request bodies on stdin.
+#
+# Re-runs are safe: the response is kept (0600) in state/registration/ until
+# every step applied, so a failed step is retried from it without spending the
+# code again; state/registration.json (no secrets) marks a finished registration.
+SYNAP_CONTROL_PLANE_DEFAULT="https://api.synap.live"
+SYNAP_POD_ZONE="synap.live"
+# ACME contact for a registered pod installed without --email (cloud-init has no
+# email to pass). Let's Encrypt only needs a syntactically valid address on a
+# real domain; --email overrides it.
+SYNAP_ACME_EMAIL_DEFAULT="ops@synap.live"
+
+_reg_log()  { echo -e "${BLUE}[register] $*${NC}"; }
+_reg_ok()   { echo -e "${GREEN}[register] ✓ $*${NC}"; }
+_reg_warn() { echo -e "${YELLOW}[register] ⚠️  $*${NC}" >&2; }
+_reg_err()  { echo -e "${RED}[register] ❌ $*${NC}" >&2; }
+
+_reg_sha256_hex() { # <string>
+    if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | cut -d' ' -f1
+    else printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; fi
+}
+# §6.2 — the custom-domain proof. The CP computes the same from the raw code.
+_reg_nonce() { _reg_sha256_hex "synap-registration:$1"; }
+_reg_valid_name()  { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
+# The CP mints spr_ + lowercase base32 (≥160 bits); same pattern the CP validates.
+_reg_valid_token() { [[ "$1" =~ ^spr_[a-z2-7]{32,80}$ ]]; }
+# https only; plain http is accepted for a loopback CP (local dev / tests).
+_reg_valid_cp_url() {
+    [[ "$1" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || [[ "$1" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]]
+}
+_reg_installer_version() { echo "synap-cli@$(_ue_sha256 "$SYNAP_SELF" | cut -c1-12)"; }
+# Public IPv4 from the Hetzner metadata service; empty elsewhere (serverIp is optional).
+_reg_server_ip() {
+    local url="${SYNAP_METADATA_IP_URL-http://169.254.169.254/hetzner/v1/metadata/public-ipv4}"
+    [ -n "$url" ] || return 0
+    curl -fsS --max-time 3 "$url" 2>/dev/null | head -1 | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || true
+}
+
+# POST to THIS pod from inside the backend container.
+# <path> <header-name|""> — body on stdin, header value in $SYNAP_REG_AUTH_VALUE.
+# Prints "<http-status> <first 500 chars of the body>"; returns 0 only on 2xx.
+_REG_POST_JS='let b="";process.stdin.on("data",d=>b+=d).on("end",async()=>{const h={"content-type":"application/json"};if(process.env.SYNAP_REG_HEADER)h[process.env.SYNAP_REG_HEADER]=process.env.SYNAP_REG_AUTH_VALUE||"";try{const r=await fetch(process.env.SYNAP_REG_POD+process.env.SYNAP_REG_PATH,{method:"POST",headers:h,body:b});const t=await r.text();process.stdout.write(r.status+" "+t.replace(/\s+/g," ").slice(0,500));process.exit(r.ok?0:1)}catch(e){process.stdout.write("000 "+e.message);process.exit(1)}})'
+_reg_pod_post() {
+    local cid
+    cid="$(docker compose ps -q backend 2>/dev/null | head -1)"
+    [ -n "$cid" ] || { echo "000 no backend container"; return 1; }
+    SYNAP_REG_PATH="$1" SYNAP_REG_HEADER="$2" SYNAP_REG_POD="${SYNAP_LOCAL_POD_URL:-http://localhost:4000}" \
+        docker exec -i -e SYNAP_REG_PATH -e SYNAP_REG_HEADER -e SYNAP_REG_POD -e SYNAP_REG_AUTH_VALUE \
+        "$cid" node -e "$_REG_POST_JS"
+}
+
+# The response shape PODPROV-CONTRACT §4 + §6 promises. Prints nothing when valid.
+_reg_response_errors() { # <file>
+    jq -r '
+      def str: type == "string" and length > 0;
+      [ (if (.podId|str) then empty else "podId is missing" end),
+        (if (.controlPlaneUrl|str) then empty else "controlPlaneUrl is missing" end),
+        (if (.issuer|str) then empty else "issuer is missing" end),
+        (if (.ownerAssertion|str) then empty else "ownerAssertion is missing" end),
+        (if (.catalogUrl|str) then empty else "catalogUrl is missing" end),
+        (if has("oidc") | not then "oidc is missing (object or null)"
+         elif .oidc == null then empty
+         elif (.oidc|type) != "object" or ((.oidc.assertion|str)|not) then "oidc is present without an assertion"
+         else empty end),
+        (if has("intelligence") | not then "intelligence is missing (object or null)"
+         elif .intelligence == null then empty
+         elif (.intelligence|type) != "object" or ((.intelligence.url|str)|not) then "intelligence is present without a url"
+         elif ((.intelligence.apiKey|str)|not) or ((.intelligence.provisionToken|str)|not) then "intelligence.url is present but apiKey/provisionToken is missing"
+         else empty end)
+      ] | .[]' "$1" 2>&1
+}
+
+# <token> <cp-url> — POST {cp}/pods/register, retrying only what is retryable.
+# Leaves the 200 body in state/registration/response.json (0600).
+_reg_call_cp() {
+    local token="$1" cp="${2%/}" domain pod_url admin_url body resp code attempt tries wait
+    domain="$(_ue_env_get DOMAIN)"
+    pod_url="$(_ue_env_get PUBLIC_URL)"; pod_url="${pod_url:-https://${domain}}"
+    admin_url="$(_ue_env_get POD_ADMIN_URL)"; admin_url="${admin_url:-$(pod_admin_url_for_domain "$domain")}"
+    mkdir -p state/registration state/registration-nonce && chmod 700 state/registration
+    body="$(umask 077 && mktemp state/registration/request.XXXXXX)" || return 1
+    resp="$(umask 077 && mktemp state/registration/reply.XXXXXX)" || { rm -f "$body"; return 1; }
+    jq -n --arg token "$token" --arg name "$REG_NAME" --arg podUrl "$pod_url" --arg adminUrl "$admin_url" \
+        --arg serverIp "$(_reg_server_ip)" --arg installerVersion "$(_reg_installer_version)" \
+        --arg release "$(_ue_env_get SYNAP_RELEASE_ID)" \
+        '{token:$token, name:$name, podUrl:$podUrl, adminUrl:$adminUrl, serverIp:$serverIp,
+          installerVersion:$installerVersion, release:$release}
+         | if .serverIp == "" then del(.serverIp) else . end' > "$body"
+    # §3/§6.2: the proof the CP may fetch for a custom domain — present only for
+    # the duration of the call (Caddy serves state/registration-nonce/nonce.json).
+    printf '{"nonce":"%s"}\n' "$(_reg_nonce "$token")" > state/registration-nonce/nonce.json
+    chmod 644 state/registration-nonce/nonce.json
+    tries="${SYNAP_REGISTER_ATTEMPTS:-5}"; wait="${SYNAP_REGISTER_RETRY_SECONDS:-15}"
+    _reg_log "POST ${cp}/pods/register (pod ${pod_url})"
+    for attempt in $(seq 1 "$tries"); do
+        code="$(curl -sS --max-time 180 -o "$resp" -w '%{http_code}' -H 'Content-Type: application/json' \
+            --data-binary @"$body" "${cp}/pods/register" 2>/dev/null)" || code="${code:-000}"
+        case "$code" in
+            200) break ;;
+            000|502|503|504)
+                _reg_warn "attempt ${attempt}/${tries}: HTTP ${code} $(head -c 300 "$resp" 2>/dev/null)"
+                [ "$attempt" -lt "$tries" ] && sleep "$wait" ;;
+            *) break ;;
+        esac
+    done
+    rm -f "$body" state/registration-nonce/nonce.json
+    case "$code" in
+        200) mv -f "$resp" state/registration/response.json; return 0 ;;
+        401) _reg_err "the registration code was refused (bad, expired or already used): $(head -c 300 "$resp")" ;;
+        409) _reg_err "this pod's hostname is already held by another pod: $(head -c 300 "$resp")" ;;
+        422) _reg_err "the custom-domain proof failed (the CP could not read /.well-known/synap-registration on ${pod_url}): $(head -c 300 "$resp")" ;;
+        *)   _reg_err "the Control Plane answered HTTP ${code}: $(head -c 300 "$resp" 2>/dev/null)" ;;
+    esac
+    rm -f "$resp"
+    return 1
+}
+
+# A step that succeeded is recorded and never re-run on a resume: the owner
+# assertion is single-use on the pod (its jti is consumed), so replaying it
+# would fail a resume that only needed a later step.
+_reg_step_done() { grep -qx "$1" state/registration/steps 2>/dev/null; }
+_reg_step_mark() { echo "$1" >> state/registration/steps; }
+
+# Applies state/registration/response.json; each step is fail-loud.
+_reg_apply() {
+    local r=state/registration/response.json out
+    # 1. owner
+    if _reg_step_done owner; then
+        _reg_log "owner: already bootstrapped"
+    else
+        _reg_log "owner: federated bootstrap from the Control Plane assertion"
+        out="$(jq -c '{assertion: .ownerAssertion}' "$r" | SYNAP_REG_AUTH_VALUE="$(_ue_env_get PROVISIONING_TOKEN)" \
+            _reg_pod_post /api/federation/bootstrap X-Pod-Bootstrap-Token)" \
+            || { _reg_err "owner bootstrap failed: ${out}"; return 1; }
+        _reg_step_mark owner
+        _reg_ok "owner bootstrapped (${out%% *})"
+    fi
+    # 2. federated sign-in (OIDC client)
+    if _reg_step_done oidc; then
+        _reg_log "OIDC client: already stored"
+    elif [ "$(jq -r '.oidc == null' "$r")" = true ]; then
+        _reg_warn "the Control Plane returned no OIDC client — Synap sign-in stays off (email/password only)"
+    else
+        out="$(jq -c '{assertion: .oidc.assertion}' "$r" | SYNAP_REG_AUTH_VALUE="" \
+            _reg_pod_post /api/hub/federation/oidc-config "")" \
+            || { _reg_err "storing the OIDC client failed: ${out}"; return 1; }
+        _reg_step_mark oidc
+        _reg_ok "OIDC client stored"
+    fi
+    # 3. AI service (P6: a pod setting, written through the pod's own door)
+    if _reg_step_done intelligence; then
+        _reg_log "AI service: already registered"
+    elif [ "$(jq -r '.intelligence == null' "$r")" = true ]; then
+        _reg_log "AI service: not included with this pod's plan — configure one later in the pod's settings"
+    else
+        out="$(jq -c '{serviceApiKey: .intelligence.apiKey, serviceUrl: .intelligence.url}' "$r" \
+            | SYNAP_REG_AUTH_VALUE="Bearer $(jq -r .intelligence.provisionToken "$r")" \
+              _reg_pod_post /api/provision/register-intelligence Authorization)" \
+            || { _reg_err "registering the AI service failed: ${out}"; return 1; }
+        _reg_step_mark intelligence
+        _reg_ok "AI service set to $(jq -r .intelligence.url "$r")"
+    fi
+    # 4. trust: the explicit CONTROL_PLANE_URL opt-in, then the services that read it
+    SYNAP_ENV_FILE=.env envcfg_write_raw S CONTROL_PLANE_URL "$(jq -r .controlPlaneUrl "$r")" || return 1
+    if [ "$(jq -r '.oidc == null' "$r")" != true ]; then
+        generate_kratos_config "$(_ue_env_get DOMAIN)" pod
+    fi
+    docker compose up -d --no-deps --force-recreate backend realtime kratos \
+        || { _reg_err "could not recreate backend/realtime/kratos with CONTROL_PLANE_URL"; return 1; }
+    SYNAP_UPDATE_HEALTH_TRIES="${SYNAP_REGISTER_HEALTH_TRIES:-30}" _ue_backend_healthy \
+        || { _reg_err "the backend did not come back healthy after the trust update"; return 1; }
+    _reg_ok "trusting Control Plane $(jq -r .controlPlaneUrl "$r")"
+}
+
+# <token> <cp-url> — the whole registration; idempotent across re-runs.
+_reg_register_pod() {
+    local token="$1" cp="$2"
+    if [ -f state/registration.json ]; then
+        _reg_ok "already registered as pod $(jq -r .podId state/registration.json) — nothing to do (a code is single-use)"
+        return 0
+    fi
+    if [ -f state/registration/response.json ]; then
+        _reg_log "resuming: the Control Plane already accepted this pod; re-applying its response"
+    else
+        SYNAP_UPDATE_HEALTH_TRIES="${SYNAP_REGISTER_HEALTH_TRIES:-30}" _ue_backend_healthy || {
+            _reg_err "the backend is not healthy — not registering. The code is still unused: fix the pod, then re-run the same command."
+            return 1
+        }
+        _reg_call_cp "$token" "$cp" || return 1
+    fi
+    local errors
+    errors="$(_reg_response_errors state/registration/response.json)"
+    if [ -n "$errors" ]; then
+        _reg_err "the Control Plane's response does not match PODPROV-CONTRACT §4/§6:"
+        printf '   %s\n' "$errors" >&2
+        return 1
+    fi
+    _reg_apply || {
+        _reg_err "registration was accepted but not fully applied — re-run the same command to retry from state/registration/response.json"
+        return 1
+    }
+    jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg name "$REG_NAME" --arg domain "$(_ue_env_get DOMAIN)" \
+        '{podId, controlPlaneUrl, issuer, catalogUrl, intelligenceUrl: (.intelligence.url // null),
+          federatedSignIn: (.oidc != null), name: $name, domain: $domain, registeredAt: $at}' \
+        state/registration/response.json > state/registration.json
+    rm -f state/registration/response.json state/registration/steps
+    _reg_ok "registered as pod $(jq -r .podId state/registration.json)"
+}
+
 cmd_install() {
     local FROM_IMAGE=""
     local FROM_SOURCE=""
@@ -1473,6 +1729,14 @@ cmd_install() {
     local TUNNEL_PROVIDER=""
     local TUNNEL_TOKEN_ARG=""
     local TUNNEL_TOKEN_FILE=""
+    local REGISTER_TOKEN=""
+    local CONTROL_PLANE=""
+    local POD_NAME=""
+    local INSTALL_EDGE=""
+    local WITH_POD_AGENT=""
+    local POD_AGENT_ISSUER=""
+    local POD_AGENT_AUDIENCE_ARG=""
+    local SMTP_URI_ARG=""
 
     # Auto-detect if we're in a git repo
     local IN_GIT_REPO=false
@@ -1566,6 +1830,38 @@ cmd_install() {
                 TUNNEL_TOKEN_FILE="$2"
                 shift 2
                 ;;
+            --register-token)
+                REGISTER_TOKEN="${2:-}"
+                shift 2
+                ;;
+            --control-plane)
+                CONTROL_PLANE="${2:-}"
+                shift 2
+                ;;
+            --name)
+                POD_NAME="${2:-}"
+                shift 2
+                ;;
+            --edge)
+                INSTALL_EDGE="${2:-}"
+                shift 2
+                ;;
+            --with-pod-agent)
+                WITH_POD_AGENT=1
+                shift
+                ;;
+            --pod-agent-issuer-url)
+                POD_AGENT_ISSUER="${2:-}"
+                shift 2
+                ;;
+            --pod-agent-audience)
+                POD_AGENT_AUDIENCE_ARG="${2:-}"
+                shift 2
+                ;;
+            --smtp-uri)
+                SMTP_URI_ARG="${2:-}"
+                shift 2
+                ;;
             --help|-h)
                 cat << EOF
 ${BLUE}Synap Install${NC}
@@ -1598,6 +1894,23 @@ ${YELLOW}Options:${NC}
   ${GREEN}--tunnel <provider>${NC}    Enable tunnel after install (cloudflare | pangolin)
   ${GREEN}--tunnel-token <TOKEN>${NC}        Tunnel token (pairs with --tunnel)
   ${GREEN}--tunnel-token-file <PATH>${NC}   Read tunnel token from file (safer than --tunnel-token)
+  ${GREEN}--release <id|stable|fast>${NC}  Install this published release (images pulled by digest)
+  ${GREEN}--name <name>${NC}             Pod name: the pod is pod.<name>.${SYNAP_POD_ZONE}, its console pod-admin.<name>.${SYNAP_POD_ZONE}
+                                (--domain overrides it with your own domain)
+  ${GREEN}--edge caddy|tunnel|traefik${NC}  Edge: caddy = direct TLS (default); tunnel = caddy behind a
+                                Cloudflare tunnel (needs --tunnel-token[-file]); traefik = an external edge (Eve)
+  ${GREEN}--register-token <spr_…>${NC}   Single-use code from the Synap Control Plane: once healthy, the pod
+                                registers (owner, sign-in, AI service, trust). Implies token admin bootstrap.
+  ${GREEN}--control-plane <url>${NC}      Control Plane to register with (default ${SYNAP_CONTROL_PLANE_DEFAULT})
+  ${GREEN}--with-pod-agent${NC}           Start the pod-agent (needs --pod-agent-issuer-url + --pod-agent-audience)
+  ${GREEN}--pod-agent-issuer-url <url>${NC} / ${GREEN}--pod-agent-audience <url>${NC}  pod-agent trust (https)
+  ${GREEN}--smtp-uri <uri>${NC}           SMTP relay for auth emails (SMTP_CONNECTION_URI)
+
+${YELLOW}Non-interactive (--non-interactive):${NC}
+  Nothing is ever prompted. Defaults: domain = --domain, else pod.<--name>.${SYNAP_POD_ZONE}, else the
+  existing deploy/.env; admin bootstrap = token (preseed only with --admin-email + --admin-password);
+  an existing .env is kept; a failed migration aborts. With --register-token and no --email, the
+  ACME contact defaults to ${SYNAP_ACME_EMAIL_DEFAULT}.
 
 ${YELLOW}Examples:${NC}
   # In git repo: build from source (default)
@@ -1614,6 +1927,9 @@ ${YELLOW}Examples:${NC}
 
   # Enable RSS aggregation (RSSHub + browserless)
   synap install --domain localhost --with-rsshub
+
+  # A Synap-registered pod (what the cloud-init template runs)
+  synap install --non-interactive --release stable --name lab1 --register-token spr_…
 
   # Expose via Cloudflare Tunnel (bring your own token)
   synap install --domain example.com --tunnel cloudflare --tunnel-token <TOKEN>
@@ -1637,7 +1953,65 @@ EOF
                 ;;
         esac
     done
-    
+
+    # ── Unattended contract (PODPROV-CONTRACT §3): validate every flag BEFORE
+    # anything changes; in non-interactive mode no later step may prompt.
+    if [ "$INTERACTIVE" = false ]; then
+        export SYNAP_NON_INTERACTIVE=1
+    fi
+    if [ -n "$POD_NAME" ] && ! _reg_valid_name "$POD_NAME"; then
+        echo -e "${RED}Error: --name must be a DNS label (a-z, 0-9, -; 1-63 chars, no leading/trailing -): '${POD_NAME}'${NC}"
+        exit 1
+    fi
+    if [ -z "$DOMAIN" ] && [ -n "$POD_NAME" ]; then
+        DOMAIN="pod.${POD_NAME}.${SYNAP_POD_ZONE}"
+    fi
+    case "$INSTALL_EDGE" in
+        ""|caddy|traefik) ;;
+        tunnel)
+            # A tunnel still terminates on the bundled Caddy (cloudflared → caddy:80).
+            TUNNEL_PROVIDER="${TUNNEL_PROVIDER:-cloudflare}"
+            if [ -z "$TUNNEL_TOKEN_ARG" ] && [ -z "$TUNNEL_TOKEN_FILE" ]; then
+                echo -e "${RED}Error: --edge tunnel needs --tunnel-token <TOKEN> or --tunnel-token-file <PATH>${NC}"
+                exit 1
+            fi
+            ;;
+        *)
+            echo -e "${RED}Error: --edge must be caddy, tunnel or traefik (got '${INSTALL_EDGE}')${NC}"
+            exit 1
+            ;;
+    esac
+    if [ -n "$REGISTER_TOKEN" ]; then
+        if ! _reg_valid_token "$REGISTER_TOKEN"; then
+            echo -e "${RED}Error: --register-token must be a Control Plane registration code (spr_…)${NC}"
+            exit 1
+        fi
+        CONTROL_PLANE="${CONTROL_PLANE:-$SYNAP_CONTROL_PLANE_DEFAULT}"
+        if ! _reg_valid_cp_url "$CONTROL_PLANE"; then
+            echo -e "${RED}Error: --control-plane must be an https URL (got '${CONTROL_PLANE}')${NC}"
+            exit 1
+        fi
+        if [ -z "$POD_NAME" ]; then
+            echo -e "${RED}Error: --register-token needs --name <name> (the name the code was minted for)${NC}"
+            exit 1
+        fi
+        # Ownership comes from the code (the CP's owner assertion), never from a
+        # local admin: a pre-seeded admin would be a second human owner and the
+        # federated bootstrap would refuse it (409). U8: never open /registration.
+        if [ "$ADMIN_BOOTSTRAP_MODE" = preseed ] || [ -n "$ADMIN_PASSWORD" ]; then
+            echo -e "${RED}Error: --register-token and a pre-seeded admin are exclusive — the pod's owner is the person the code was minted for${NC}"
+            exit 1
+        fi
+        ADMIN_BOOTSTRAP_MODE=token
+    elif [ -n "$CONTROL_PLANE" ]; then
+        echo -e "${RED}Error: --control-plane only applies with --register-token${NC}"
+        exit 1
+    fi
+    if [ -n "$WITH_POD_AGENT" ] && { [ -z "$POD_AGENT_ISSUER" ] || [ -z "$POD_AGENT_AUDIENCE_ARG" ]; }; then
+        echo -e "${RED}Error: --with-pod-agent needs --pod-agent-issuer-url and --pod-agent-audience${NC}"
+        exit 1
+    fi
+
     # Determine if we need to clone (no .git and no existing deploy/ tree in cwd → clone under pwd/synap-backend)
     local NEEDS_CLONE=false
     if [ "$IN_GIT_REPO" = true ]; then
@@ -1859,12 +2233,28 @@ EOF
         echo "Configure AI routing through Intelligence Service now or later."
     fi
 
-    # Normalize bootstrap mode defaults in non-interactive runs
+    # Non-interactive: every value a prompt would have asked for gets an explicit
+    # default instead (an existing .env first, so a re-run converges).
+    if [ "$INTERACTIVE" = false ]; then
+        DOMAIN="${DOMAIN:-$DEFAULT_DOMAIN}"
+        EMAIL="${EMAIL:-$DEFAULT_EMAIL}"
+        if [ -z "$EMAIL" ] && [ -n "$REGISTER_TOKEN" ] && [ "$DOMAIN" != "localhost" ]; then
+            EMAIL="$SYNAP_ACME_EMAIL_DEFAULT"
+        fi
+    fi
+
+    # Normalize bootstrap mode defaults in non-interactive runs. Token mode is the
+    # unattended default: preseed needs a password, and an install that leaves
+    # /registration open to the first visitor is never a default (U8).
     if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
         if [ -n "$ADMIN_BOOTSTRAP_TOKEN" ]; then
             ADMIN_BOOTSTRAP_MODE="token"
+        elif [ -n "$DEFAULT_ADMIN_BOOTSTRAP_MODE" ]; then
+            ADMIN_BOOTSTRAP_MODE="$DEFAULT_ADMIN_BOOTSTRAP_MODE"
+        elif [ -n "$ADMIN_EMAIL" ] && [ -n "$ADMIN_PASSWORD" ]; then
+            ADMIN_BOOTSTRAP_MODE="preseed"
         else
-            ADMIN_BOOTSTRAP_MODE=${DEFAULT_ADMIN_BOOTSTRAP_MODE:-preseed}
+            ADMIN_BOOTSTRAP_MODE="token"
         fi
     fi
 
@@ -2007,6 +2397,7 @@ EOF
                 # Overwrite .env
                 echo -e "${BLUE}📝 Creating new configuration...${NC}"
                 generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "" "" "" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
+                backfill_federation_public_urls "$DOMAIN"
             fi
         else
             # Non-interactive: preserve existing
@@ -2028,11 +2419,33 @@ EOF
         # No .env file, create new
         echo -e "${BLUE}📝 Creating configuration...${NC}"
         generate_and_create_env "$DOMAIN" "$EMAIL" "$FROM_SOURCE" "" "" "" "$ADMIN_EMAIL" "$INTELLIGENCE_URL" "$INTELLIGENCE_KEY" "$ADMIN_BOOTSTRAP_MODE" "$ADMIN_BOOTSTRAP_TOKEN"
+        backfill_federation_public_urls "$DOMAIN"
     fi
     
     # Pin the compose project in .env (no-op when already pinned) so no later
     # door has to guess it.
     _pin_compose_project_name .env
+    # Self-heal: a preserved .env from before the vault lacks VAULT_SERVER_KEY,
+    # which docker-compose.yml requires. Never overwrite an existing one —
+    # rotating it would orphan every encrypted secret.
+    if [ -z "$(_ue_env_get VAULT_SERVER_KEY)" ]; then
+        update_env_value "VAULT_SERVER_KEY" "$(openssl rand -hex 32)"
+        echo -e "${BLUE}ℹ️  Backfilled VAULT_SERVER_KEY into .env${NC}"
+    fi
+
+    # Explicit choices from flags land in .env through the one writer, before
+    # anything reads them (_ue_edge, should_start_pod_agent, compose).
+    case "$INSTALL_EDGE" in
+        caddy|tunnel) update_env_value "SYNAP_EDGE" "caddy" ;;
+        traefik)      update_env_value "SYNAP_EDGE" "traefik" ;;
+    esac
+    if [ -n "$WITH_POD_AGENT" ]; then
+        update_env_value "SYNAP_WITH_POD_AGENT" "1"
+        update_env_value "POD_AGENT_ISSUER_URL" "$POD_AGENT_ISSUER"
+        update_env_value "POD_AGENT_AUDIENCE" "$POD_AGENT_AUDIENCE_ARG"
+    fi
+    update_env_value "SMTP_CONNECTION_URI" "$SMTP_URI_ARG"
+    update_env_value "SMTP_FROM_ADDRESS" "${SYNAP_SMTP_FROM_ADDRESS:-}"
 
     # Generate kratos.yml with actual domain values
     echo -e "${BLUE}📝 Generating Kratos configuration...${NC}"
@@ -2043,7 +2456,9 @@ EOF
     # uses (see RELEASE ENGINE). No pull-failure → build fallback: a release
     # that cannot be pulled is a failed install, never a silent host build.
     echo -e "${BLUE}🔨 Preparing images...${NC}"
-    mkdir -p state/update
+    # state/registration-nonce is bind-mounted into Caddy (the §3 proof route);
+    # create it now so Docker does not create it root-owned on first start.
+    mkdir -p state/update state/registration-nonce
     local install_manifest
     install_manifest="$(pwd)/state/update/manifest.json"
     command -v jq >/dev/null 2>&1 || { echo -e "${RED}❌ jq is required (apt install jq)${NC}"; exit 1; }
@@ -2252,6 +2667,13 @@ EOF
 
     jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg edge "$install_edge" '. + {appliedAt:$at, edge:$edge, installed:true}' \
         "$install_manifest" > state/current-release.json || true
+
+    # Registration (PODPROV-CONTRACT §3): only once the stack is up; a failure
+    # here fails the install loudly (the stack keeps running, re-run to retry).
+    if [ -n "$REGISTER_TOKEN" ]; then
+        REG_NAME="$POD_NAME"
+        _reg_register_pod "$REGISTER_TOKEN" "$CONTROL_PLANE" || exit 1
+    fi
     echo -e "${GREEN}✅ Installation complete!${NC}"
     echo ""
     echo "Management commands:"
@@ -2267,7 +2689,10 @@ EOF
     echo "    ./synap federation disable         # password-only sign-in"
     echo ""
     echo "First admin setup:"
-    if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
+    if [ -f state/registration.json ]; then
+        echo "  Done: the owner is the person the registration code was minted for."
+        echo "  Sign in at $(_ue_env_get POD_ADMIN_URL) with your Synap account."
+    elif [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
         local ui_base="https://${DOMAIN}"
         if [ "$DOMAIN" = "localhost" ]; then
             ui_base="http://localhost:4000"

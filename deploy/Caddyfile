@@ -87,6 +87,38 @@
         respond 404
     }
 
+    # The routes below mirror the TLS block (a tunnelled pod is served ONLY by
+    # this block). Every TLS `handle` path must reach the same upstream here —
+    # explicitly, or through the backend catch-all; caddy-routes.test.sh fails
+    # on drift.
+    handle /.ory/hydra/* {
+        reverse_proxy hydra:4444
+    }
+
+    handle /storage/* {
+        reverse_proxy minio:9001
+    }
+
+    # Presigned S3 path — same sandbox CSP as the TLS block (see there).
+    handle /synap-storage/* {
+        header Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        reverse_proxy minio:9000
+    }
+
+    handle /api/pod-agent/* {
+        reverse_proxy pod-agent:4002
+    }
+
+    # Registration proof (PODPROV-CONTRACT §3/§6.2): while `synap install
+    # --register-token` registers, deploy/state/registration-nonce/nonce.json
+    # holds {"nonce":"…"} and the Control Plane may read it here to prove a
+    # custom domain points at this server. Any other time: 404.
+    handle /.well-known/synap-registration {
+        root * /srv/synap-registration
+        rewrite * /nonce.json
+        file_server
+    }
+
     # Everything else goes to backend
     reverse_proxy backend:4000
 }
@@ -176,6 +208,16 @@
     # Pod Agent (CP-initiated commands: update, suspend, restore, configure)
     handle /api/pod-agent/* {
         reverse_proxy pod-agent:4002
+    }
+
+    # Registration proof (PODPROV-CONTRACT §3/§6.2): while `synap install
+    # --register-token` registers, deploy/state/registration-nonce/nonce.json
+    # holds {"nonce":"…"} and the Control Plane may read it here to prove a
+    # custom domain points at this server. Any other time: 404.
+    handle /.well-known/synap-registration {
+        root * /srv/synap-registration
+        rewrite * /nonce.json
+        file_server
     }
 
     # Health check
