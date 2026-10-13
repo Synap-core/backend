@@ -14,7 +14,7 @@ import {
   Spinner,
   Textarea,
 } from "@heroui/react";
-import { Check, ExternalLink, X } from "lucide-react";
+import { ArrowUpRight, Check, X } from "lucide-react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import {
@@ -334,7 +334,7 @@ export function ConnectionRequestReview({
           <Button
             color="primary"
             className="min-h-11"
-            endContent={<ExternalLink size={16} />}
+            endContent={<ArrowUpRight size={16} strokeWidth={1.75} />}
             onPress={() => window.location.assign(approvedReturnUrl)}
           >
             Open app in this browser

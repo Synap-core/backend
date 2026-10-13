@@ -4,11 +4,13 @@
  * `/templates/[id]` — one template (playbook) in the console: what it does,
  * how its runs are going, and why they fail.
  *
- * Reads: `playbooks.get` (user-floored) and the template's own runs
- * (`runs.list({flowType: "playbook", flowId})`, keyset-paged), which carry the
- * week's count, the failures and their errors. "Why is it failing?" is read
- * from those runs (`failureExplanation`): the pod exposes no tRPC door that
- * explains a template by id.
+ * Reads: `playbooks.get` (user-floored), the template's health group
+ * (`runs.groups({flowType: "playbook", flowId})` — the same exact counts the
+ * list pill reads) and its own runs (`runs.list({flowType: "playbook",
+ * flowId})`, keyset-paged), which carry the week's count, the failures and
+ * their errors. "Why is it failing?" is read from those runs
+ * (`failureExplanation`): the pod exposes no tRPC door that explains a
+ * template by id.
  *
  * No "Run now": `playbooks.run` refuses a template whose required inputs are
  * unanswered, and answering them is a form that lives in the app. Authoring
@@ -40,7 +42,6 @@ import { flowHealthPill, runRowSecondary } from "../../runs/_lib/run-board";
 import {
   executorLabel,
   failureExplanation,
-  groupFactsFromRuns,
   runsThisWeek,
   stageNames,
   templateSummary,
@@ -59,6 +60,10 @@ export default function TemplatePage() {
   const router = useRouter();
   const utils = trpc.useUtils();
   const query = trpc.playbooks.get.useQuery({ id }, { retry: false });
+  const groups = trpc.runs.groups.useQuery(
+    { flowType: "playbook", flowId: id, limit: 1 },
+    { enabled: query.isSuccess, retry: false }
+  );
   const runs = trpc.runs.list.useInfiniteQuery(
     { flowType: "playbook", flowId: id, limit: RUNS_PAGE },
     {
@@ -96,7 +101,7 @@ export default function TemplatePage() {
 
   const now = new Date();
   const recent = firstPage ?? [];
-  const health = groupFactsFromRuns(recent, now);
+  const group = groups.data?.groups[0];
   const week = runsThisWeek(recent, now, RUNS_PAGE);
   const why = failureExplanation(recent.slice(0, 10));
   const latest = recent[0];
@@ -106,7 +111,13 @@ export default function TemplatePage() {
       "A space")
     : "All spaces";
   const creator = (members.data ?? []).find((m) => m.id === playbook.createdBy);
-  const runsLoaded = runs.isLoading ? null : allRuns.length;
+  // The group's count is exact over the whole ledger; the loaded rows stand in
+  // until it arrives (and when the template has never run, there is no group).
+  const runCount = groups.isLoading
+    ? runs.isLoading
+      ? null
+      : allRuns.length
+    : (group?.runCount ?? 0);
   const openRun = (runId: string, flowName: string) =>
     setTarget({ flowType: "playbook", id: runId, flowName });
   // Named, not inlined: `exit-door.test.ts` reads "Pending: x." as a dead
@@ -159,7 +170,7 @@ export default function TemplatePage() {
           kind: "playbook",
           title: playbook.name,
           summary: templateSummary(playbook.description, playbook.goalTemplate),
-          status: flowHealthPill(playbook.status, health),
+          status: flowHealthPill(playbook.status, group),
           breadcrumb: FRAME.breadcrumb?.(playbook.name),
           primaryAction: (
             <ExitLink
@@ -254,10 +265,7 @@ export default function TemplatePage() {
           },
           {
             key: "runs",
-            label:
-              runsLoaded === null
-                ? "Runs"
-                : `Runs (${runsLoaded}${runs.hasNextPage ? "+" : ""})`,
+            label: runCount === null ? "Runs" : `Runs (${runCount})`,
             content: runsBody(allRuns, runs.hasNextPage ?? false),
           },
         ],

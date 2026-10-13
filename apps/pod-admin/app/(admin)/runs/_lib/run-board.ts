@@ -10,6 +10,7 @@
  * failed-AI-turns view need: those runs have no flow to group under.
  */
 
+import { isRecentFailure } from "@synap-core/types/run-activity";
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
 import {
@@ -147,27 +148,6 @@ export function flowHealthPill(
 }
 
 /**
- * Days `recentFailedCount` looks back — the pod's `RECENT_FAILURE_WINDOW_DAYS`.
- * The pod measures a run at `completedAt ?? startedAt`; so does `runInWindow`.
- */
-export const RECENT_FAILURE_WINDOW_DAYS = 7;
-const RECENT_WINDOW_MS = RECENT_FAILURE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-
-/** Inside the recent-failure window, measured where the pod measures it. */
-export function runInWindow(
-  run: {
-    startedAt: Date | string | null;
-    completedAt?: Date | string | null;
-  },
-  now: Date
-): boolean {
-  const at = run.completedAt ?? run.startedAt;
-  return (
-    at !== null && new Date(at).getTime() > now.getTime() - RECENT_WINDOW_MS
-  );
-}
-
-/**
  * Has the Failing board seen every failing flow?
  *
  * Groups arrive newest latest-run first, and a flow that failed this week ran
@@ -183,9 +163,7 @@ export function failingBoardComplete(
   if (!hasMore) return true;
   const last = loaded.at(-1);
   if (!last) return false;
-  return (
-    new Date(last.latestStartedAt).getTime() < now.getTime() - RECENT_WINDOW_MS
-  );
+  return !isRecentFailure({ startedAt: last.latestStartedAt }, now.getTime());
 }
 
 /** The `UnifiedRun` columns a run row reads. */

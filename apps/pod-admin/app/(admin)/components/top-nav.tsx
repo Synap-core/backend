@@ -27,6 +27,7 @@ import {
   PopoverTrigger,
 } from "@heroui/react";
 import {
+  ArrowUpRight,
   ExternalLink,
   LogOut,
   Menu,
@@ -254,7 +255,10 @@ export function TopNav({
                   className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   {label}
-                  <ExternalLink className="h-3 w-3 text-foreground/40" />
+                  <ArrowUpRight
+                    className="h-3 w-3 text-foreground/40"
+                    strokeWidth={1.75}
+                  />
                 </a>
               ))}
               <a

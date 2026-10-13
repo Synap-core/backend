@@ -6,7 +6,7 @@
  *
  * The segments, and the one read behind each:
  *   running  open (`active` · `forming` · `paused`) and not stuck
- *   stuck    open, not paused, started more than STUCK_AFTER_HOURS ago, and
+ *   stuck    open, not paused, started more than DEFAULT_STUCK_THRESHOLD_HOURS ago, and
  *            no agent working on it right now
  *   waiting  sessions with a slot owed by the viewer (`focusSessions.owed`)
  *   idle     `stale` — the reaper found it quiet for 30 days
@@ -32,6 +32,7 @@ import {
   isSessionWorkingNow,
   type SessionLiveFacts,
 } from "@synap-core/types/run-activity";
+import { DEFAULT_STUCK_THRESHOLD_HOURS } from "@synap-core/types/run-activity";
 import { formatRelative } from "../../../../lib/format";
 import { statusPillFor } from "../../components/status-tone";
 import type { StatusKind } from "../../components/status-pill";
@@ -62,13 +63,6 @@ export const SEGMENT_PARAM = "filter";
 export function segmentOf(raw: string | null | undefined): SessionSegment {
   return SESSION_SEGMENTS.find((s) => s.key === raw)?.key ?? "running";
 }
-
-/**
- * diagnose's `DEFAULT_STUCK_THRESHOLD_HOURS`
- * (packages/api/src/services/diagnose/types.ts). A console cannot import the
- * API package; the two must be changed together.
- */
-export const STUCK_AFTER_HOURS = 24;
 
 /**
  * The statuses the Running and Stuck segments are read from, in one query:
@@ -119,7 +113,7 @@ export function isStuck(s: SessionLike, now: number): boolean {
   if (s.status === "paused") return false;
   const started = timeOf(s.startedAt);
   if (started === null) return false;
-  if (now - started <= STUCK_AFTER_HOURS * 3_600_000) return false;
+  if (now - started <= DEFAULT_STUCK_THRESHOLD_HOURS * 3_600_000) return false;
   // A failed liveness read (`null`) proves nothing either way; age decides.
   return !isSessionWorkingNow(s.live, now);
 }

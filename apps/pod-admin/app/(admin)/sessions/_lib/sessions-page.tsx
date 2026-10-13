@@ -19,6 +19,7 @@
  * came. `?filter=` picks the segment; `?focus=<sessionId>` highlights a row.
  */
 
+import { DEFAULT_STUCK_THRESHOLD_HOURS } from "@synap-core/types/run-activity";
 import { Button, addToast } from "@heroui/react";
 import { ArrowRight } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -47,7 +48,6 @@ import {
   SESSIONS_DESCRIPTION,
   SESSIONS_TITLE,
   SESSION_SEGMENTS,
-  STUCK_AFTER_HOURS,
   segmentOf,
   sessionRow,
   splitOpen,
@@ -65,7 +65,7 @@ const OWED_LIMIT = 200;
 
 const EMPTY: Record<SessionSegment, string> = {
   running: "Nothing is running.",
-  stuck: `Nothing is stuck. A session counts as stuck when it is still open ${STUCK_AFTER_HOURS} hours after it started and no agent is working on it.`,
+  stuck: `Nothing is stuck. A session counts as stuck when it is still open ${DEFAULT_STUCK_THRESHOLD_HOURS} hours after it started and no agent is working on it.`,
   waiting: "No session is waiting on you.",
   idle: "No session has gone idle.",
   closed: "No closed sessions yet.",
@@ -260,7 +260,7 @@ export function SessionsPage() {
           <span>
             {split.stuck.length}{" "}
             {split.stuck.length === 1 ? "session looks" : "sessions look"} stuck
-            — still open after {STUCK_AFTER_HOURS}h with no agent on{" "}
+            — still open after {DEFAULT_STUCK_THRESHOLD_HOURS}h with no agent on{" "}
             {split.stuck.length === 1 ? "it" : "them"}.
           </span>
           <span className="inline-flex shrink-0 items-center gap-1 font-medium">

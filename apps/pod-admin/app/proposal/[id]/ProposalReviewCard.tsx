@@ -15,7 +15,7 @@
 
 import { useState, type ReactNode } from "react";
 import { Button, Textarea, addToast } from "@heroui/react";
-import { Check, ExternalLink, X } from "lucide-react";
+import { ArrowUpRight, Check, X } from "lucide-react";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
 import { ExitFallback, externalProps } from "../../../lib/exit-link";
@@ -277,7 +277,9 @@ export function ProposalDecision({
                   {target.label}
                   {/* Same promise the shared link makes: the icon means
                       "this leaves pod-admin". A desktop hand-off does. */}
-                  {exit.isDesktopLink && <ExternalLink size={14} aria-hidden />}
+                  {exit.isDesktopLink && (
+                    <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden />
+                  )}
                 </a>
               </li>
             ))}

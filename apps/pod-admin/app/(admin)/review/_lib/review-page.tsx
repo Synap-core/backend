@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
-import { Check, ExternalLink, Lock, X } from "lucide-react";
+import { ArrowUpRight, Check, Lock, X } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
@@ -509,7 +509,11 @@ function ReviewListRow({
           radius="md"
           endContent={
             exit.isDesktopLink ? (
-              <ExternalLink className="h-3 w-3" aria-hidden />
+              <ArrowUpRight
+                className="h-3 w-3"
+                strokeWidth={1.75}
+                aria-hidden
+              />
             ) : undefined
           }
         >

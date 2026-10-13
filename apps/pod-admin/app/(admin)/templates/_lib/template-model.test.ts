@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { flowHealthPill } from "../../runs/_lib/run-board";
 import {
   errorLine,
   executorLabel,
   failureExplanation,
-  groupFactsFromRuns,
   runsThisWeek,
   stageNames,
   templateSummary,
@@ -70,33 +68,7 @@ describe("runsThisWeek", () => {
   });
 });
 
-describe("groupFactsFromRuns / stageNames", () => {
-  it("derives health from the template's own runs", () => {
-    const runs = [
-      { id: "a", status: "running", startedAt: NOW },
-      {
-        id: "b",
-        status: "failed",
-        startedAt: new Date(NOW.getTime() - HOUR),
-      },
-      {
-        id: "c",
-        status: "failed",
-        startedAt: new Date(NOW.getTime() - 24 * 9 * HOUR),
-      },
-    ];
-    expect(groupFactsFromRuns(runs, NOW)).toEqual({
-      runCount: 3,
-      recentFailedCount: 1,
-      runningCount: 1,
-      latestStatus: "running",
-    });
-    expect(groupFactsFromRuns([], NOW)).toBeUndefined();
-    expect(flowHealthPill("active", groupFactsFromRuns(runs, NOW))).toEqual({
-      kind: "stale",
-      label: "1 failure",
-    });
-  });
+describe("stageNames", () => {
   it("reads stage names, falling back to keys", () => {
     expect(
       stageNames([{ key: "plan", name: "Plan" }, { key: "build" }, null, 3])

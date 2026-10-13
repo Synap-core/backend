@@ -72,6 +72,7 @@ import {
   type NavBadge,
 } from "./side-nav-badges";
 import { useConsoleRole } from "./side-nav-role";
+import { LG_UP, useMediaQuery } from "../../../lib/use-media-query";
 
 const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   House,
@@ -132,19 +133,6 @@ function useCollapsedPreference(): [boolean, (next: boolean) => void] {
   return [collapsed, update];
 }
 
-/** True at ≥lg — only used to switch the rail's tooltips on and off. */
-function useIsWide(): boolean {
-  const [wide, setWide] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setWide(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
-  }, []);
-  return wide;
-}
-
 // ─── Desktop sidebar / rail ─────────────────────────────────────────
 
 export function SideNav() {
@@ -153,7 +141,7 @@ export function SideNav() {
   const pathname = usePathname() ?? "";
   const active = activeNavId(pathname);
   const [collapsed, setCollapsed] = useCollapsedPreference();
-  const wide = useIsWide();
+  const wide = useMediaQuery(LG_UP);
   // The rail shows below lg always, and at lg when the owner collapsed it.
   const rail = collapsed || !wide;
 

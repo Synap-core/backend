@@ -9,7 +9,6 @@ import {
   runActions,
   runFilterOf,
   runListInput,
-  runInWindow,
   runRowSecondary,
   triggeredByLabel,
   type FlowGroupFacts,
@@ -164,18 +163,5 @@ describe("flowHealthPill", () => {
       kind: "healthy",
       label: "Working",
     });
-  });
-});
-
-describe("runInWindow", () => {
-  it("measures at completedAt, falling back to startedAt", () => {
-    const old = new Date(NOW.getTime() - 9 * DAY);
-    const recent = new Date(NOW.getTime() - 2 * DAY);
-    expect(runInWindow({ startedAt: old, completedAt: recent }, NOW)).toBe(
-      true
-    );
-    expect(runInWindow({ startedAt: recent }, NOW)).toBe(true);
-    expect(runInWindow({ startedAt: old, completedAt: old }, NOW)).toBe(false);
-    expect(runInWindow({ startedAt: null }, NOW)).toBe(false);
   });
 });

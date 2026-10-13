@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_STUCK_THRESHOLD_HOURS } from "@synap-core/types/run-activity";
 import {
   CLOSED_STATUSES,
   IDLE_STATUSES,
   OPEN_RUN_STATUSES,
-  STUCK_AFTER_HOURS,
   isStuck,
   segmentOf,
   sessionActs,
@@ -55,7 +55,7 @@ describe("segmentOf", () => {
 });
 
 describe("isStuck — diagnose's 24h boundary, minus the provably alive", () => {
-  const old = new Date(NOW - (STUCK_AFTER_HOURS + 1) * H);
+  const old = new Date(NOW - (DEFAULT_STUCK_THRESHOLD_HOURS + 1) * H);
 
   it("an open session past the boundary with no recent activity is stuck", () => {
     expect(isStuck(session({ startedAt: old }), NOW)).toBe(true);

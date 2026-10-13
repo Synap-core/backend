@@ -14,7 +14,7 @@
  */
 
 import { Button, addToast } from "@heroui/react";
-import { ExternalLink } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
@@ -299,7 +299,11 @@ function TidySection({
                     variant="flat"
                     radius="md"
                     endContent={
-                      <ExternalLink className="h-3 w-3" aria-hidden />
+                      <ArrowUpRight
+                        className="h-3 w-3"
+                        strokeWidth={1.75}
+                        aria-hidden
+                      />
                     }
                   >
                     Open in app

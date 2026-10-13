@@ -572,6 +572,19 @@ function IssuerBody({
     (title: string) =>
     (err: { message: string; data?: { code?: string | null } | null }) => {
       if (redirectToLoginIfUnauthorized(err)) return;
+      // CONFLICT = the issuer's status moved (someone decided first): not a
+      // failure, so say so calmly and refresh to what is true now.
+      if (err.data?.code === "CONFLICT") {
+        addToast({
+          title: "Already decided",
+          description: err.message,
+          color: "default",
+        });
+        void utils.trustedIssuers.list.invalidate();
+        afterDecision();
+        onClose();
+        return;
+      }
       addToast({ title, description: err.message, color: "danger" });
     };
   const approve = trpc.trustedIssuers.approve.useMutation({
