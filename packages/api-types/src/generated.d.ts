@@ -5814,6 +5814,18 @@ export interface ReconcileReport {
 			slug: string;
 		}>;
 		/**
+		 * The profile already links a POD-WIDE GLOBAL def (profile_id + workspace_id
+		 * NULL) with this slug, so the template's declaration was NOT applied: a
+		 * global def is shared by every kind that links it, and one template's
+		 * enum/constraints must never narrow it for all of them (the 2026-10-12
+		 * `source` incident). Rename the template's property to claim it. Optional
+		 * so older report fixtures stay valid.
+		 */
+		globalsKept?: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/**
 		 * Lifecycle declarations (0319, work model L1): `declared` = the profile's
 		 * lifecycle link was set (or already was — `unchanged` is not listed);
 		 * `refused` = the template's declaration could not be applied, with why.
@@ -41770,14 +41782,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: string | null;
 					category: string | null;
 					work: {
-						kind: "session" | "scheduled" | "worker";
 						sessionId: string;
 						label: string;
 						live: boolean;
 						asksYou: boolean;
 						since: string;
+						kind: "session" | "scheduled" | "worker";
 						actor?: string | undefined;
 					}[];
+				}[];
+				unattached: {
+					sessionId: string;
+					label: string;
+					live: boolean;
+					asksYou: boolean;
+					since: string;
+					actor?: string | undefined;
 				}[];
 			};
 			meta: object;
