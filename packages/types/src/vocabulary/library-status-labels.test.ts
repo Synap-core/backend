@@ -16,7 +16,7 @@ describe("Library marks — the one door", () => {
 
   it("says a not-yet-read item will be read, never that it failed", () => {
     expect(resolveLibraryStatusLabel("not_read")).toBe("Not read yet");
-    expect(resolveLibraryStatusLabel("over_budget")).toBe("Read later");
+    expect(resolveLibraryStatusLabel("over_budget")).toBe("Over budget");
     expect(resolveLibraryStatusLabel("unreadable")).toBe("Unreadable");
     expect(resolveLibraryStatusLabel("archived")).toBe("Archived");
     expect(resolveLibraryStatusLabel("kept")).toBe("Kept");

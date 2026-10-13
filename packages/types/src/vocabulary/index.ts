@@ -1178,14 +1178,15 @@ export function resolveImportStatusLabel(
  * word beside its mark (CAPTURE_LIBRARY_PLAN L2). Its OWN table: the light
  * read's statuses (`@synap-core/types/imports` LIBRARY_READ_STATUSES) plus the
  * keep / archive / built marks. `over_budget` and `not_read` are not failures
- * — the item will be read — so they say so ("Not read yet", "Read later");
+ * — the item will be read ("Not read yet", "Over budget": read once the
+ * budget has room);
  * `unreadable` is the one real failure. `needs_file` / `title_only` keep the
  * import table's words, so one item never reads two ways.
  */
 export const LIBRARY_STATUS_LABELS: Readonly<Record<string, string>> = {
   read: "Read",
   not_read: "Not read yet",
-  over_budget: "Read later",
+  over_budget: "Over budget",
   unreadable: "Unreadable",
   needs_file: "Needs the file",
   title_only: "Title only",
