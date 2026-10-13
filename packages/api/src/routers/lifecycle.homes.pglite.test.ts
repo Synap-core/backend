@@ -133,6 +133,7 @@ vi.mock("./signals.js", () => ({
           ),
         ])
       ),
+      podLevel: 4,
       attentionReads: 1,
     };
   },
@@ -516,6 +517,9 @@ describe("lifecycle.home", () => {
     try {
       const home = await caller().home();
       expect(home.needsYou.total).toBe(5);
+      // Pod-level needs-you reaches the wire (X3): a client tells "in no
+      // space" apart from "a space's count is missing".
+      expect(home.needsYou.podLevel).toBe(4);
       const by = new Map(
         home.needsYou.bySpace.map((b) => [b.workspaceId, b.count])
       );

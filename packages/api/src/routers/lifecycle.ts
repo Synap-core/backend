@@ -259,6 +259,13 @@ const homeWire = z.object({
     bySpace: z.array(
       z.object({ workspaceId: z.string(), count: z.number().nullable() })
     ),
+    /**
+     * Needs-you that lives in NO space: no-workspace rows plus unfinished
+     * captures. null = not measured, never 0. total ≠ Σ bySpace + podLevel:
+     * a cluster spanning two spaces counts in both, and a space the home does
+     * not list (a system or agent space) counts in neither.
+     */
+    podLevel: z.number().nullable(),
   }),
 });
 

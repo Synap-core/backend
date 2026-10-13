@@ -150,6 +150,8 @@ export interface HomeRead {
   needsYou: {
     total: number | null;
     bySpace: Array<{ workspaceId: string; count: number | null }>;
+    /** In no space (pod-level rows + unfinished captures); null = unmeasured. */
+    podLevel: number | null;
   };
 }
 
@@ -208,6 +210,8 @@ export type NeedsYouByScopeRead = (scopes: {
   total: number | null;
   bySpace: Map<string, number | null>;
   byKind: Map<string, Map<string, number | null>>;
+  /** Needs-you in NO space (+ captures); null = not measured. */
+  podLevel: number | null;
 }>;
 
 const readerOf = (ctx: HomesCtx) => ({
@@ -884,7 +888,11 @@ export async function readHome(
       liveOf(b) - liveOf(a) ||
       a.name.localeCompare(b.name)
   );
-  return { spaces: out, podWide, needsYou: { total, bySpace } };
+  return {
+    spaces: out,
+    podWide,
+    needsYou: { total, bySpace, podLevel: needs?.podLevel ?? null },
+  };
 }
 
 // ─── lifecycle.moving ────────────────────────────────────────────────────────

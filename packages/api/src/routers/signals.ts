@@ -1272,6 +1272,14 @@ export interface NeedsYouByScope {
   bySpace: Map<string, number | null>;
   /** workspaceId → profileSlug → count. */
   byKind: Map<string, Map<string, number | null>>;
+  /**
+   * Needs-you that lives in NO space (`narrowAttention` with
+   * `workspaceId: null`): no-workspace rows + unfinished captures. null =
+   * not measured (the per-scope fallback) — never 0. `total` is NOT
+   * Σ bySpace + podLevel: a cluster spanning two spaces counts in both, and
+   * rows in spaces the caller did not ask about count in neither.
+   */
+  podLevel: number | null;
   /** Attention reads made — 1 when grouped, more when it fell back. */
   attentionReads: number;
 }
@@ -1288,18 +1296,27 @@ export interface NeedsYouByScope {
 function narrowAttention(
   a: Attention,
   scope: {
-    workspaceId: string;
+    /**
+     * A space, or `null` = POD-LEVEL: the rows that live in NO space
+     * (no-workspace notifications / owed slots / review sessions, clusters
+     * spanning no workspace) plus unfinished captures, which never live in
+     * one (homes X3). Not a kind lens.
+     */
+    workspaceId: string | null;
     /** A kind lens: its clusters (`proposals.groups({ profileSlug })`). */
     kindClusters?: ProposalCluster[];
     /** A kind lens: the sessions ON its things (`sessionSubjectWhere`). */
     kindSessionIds?: ReadonlySet<string>;
   }
 ): Attention {
-  const inSpace = (ws: string | null | undefined) => ws === scope.workspaceId;
+  const inSpace = (ws: string | null | undefined) =>
+    scope.workspaceId === null ? ws == null : ws === scope.workspaceId;
   const onKind = (sessionId: string) =>
     !scope.kindSessionIds || scope.kindSessionIds.has(sessionId);
   const clusters = (scope.kindClusters ?? a.groups.groups).filter((c) =>
-    c.workspaceIds.includes(scope.workspaceId)
+    scope.workspaceId === null
+      ? c.workspaceIds.length === 0
+      : c.workspaceIds.includes(scope.workspaceId)
   );
   return {
     ...a,
@@ -1321,7 +1338,10 @@ function narrowAttention(
       ),
       truncated: false,
     },
-    captures: { captures: [], truncated: false },
+    captures:
+      scope.workspaceId === null && !scope.kindClusters
+        ? a.captures
+        : { captures: [], truncated: false },
   };
 }
 
@@ -1394,6 +1414,7 @@ export async function countNeedsYouByScope(
       total,
       bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
       byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+      podLevel: null,
       attentionReads,
     };
   };
@@ -1512,6 +1533,7 @@ export async function countNeedsYouByScope(
     total: countOf(floor).needsYou,
     bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
     byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+    podLevel: countOf(narrowAttention(floor, { workspaceId: null })).needsYou,
     attentionReads,
   };
 }

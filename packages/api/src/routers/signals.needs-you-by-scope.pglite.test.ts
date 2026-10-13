@@ -83,9 +83,13 @@ vi.mock("../services/projects/project-needs-you.js", async () => {
         .where(
           db.and(
             db.drizzleSql`${fs.metadata}->>'awaitingReview' = 'true'`,
+            // The real read's three-state lens (`sessionScopeConditions`):
+            // a space, null = pod-wide only, undefined = the floor.
             ...(typeof q.workspaceId === "string"
               ? [db.eq(fs.workspaceId, q.workspaceId)]
-              : []),
+              : q.workspaceId === null
+                ? [db.isNull(fs.workspaceId)]
+                : []),
             ...(q.subject ? [sessionSubjectWhere(q.subject)] : [])
           )
         );
@@ -319,5 +323,44 @@ describe("countNeedsYouByScope", () => {
     }
     // The counter measures what it claims (non-vacuity of the ratchet).
     expect(h.owedReads).toBe(1 + 3 + 3);
+  });
+  it("podLevel (homes X3): the needs-you in NO space — equals signals.count's pod-only lens", async () => {
+    // Pod-level rows: a proposal, an owed slot and a notification with no space.
+    await q(
+      `insert into proposals (id, created_by, workspace_id, proposal_type, target_type, target_id, data, status, created_at, updated_at)
+       values (gen_random_uuid(),$1,NULL,'update','entity',$2,'{}'::jsonb,'pending',now(),now())`,
+      [USER, randomUUID()]
+    );
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, status, origin, expected_outputs, metadata, created_at, started_at, updated_at)
+       values (gen_random_uuid(),$1,NULL,'g','active','human',$2::jsonb,'{}'::jsonb,now(),now(),now())`,
+      [
+        USER,
+        JSON.stringify([
+          {
+            kind: "document",
+            label: "Pod sign-off",
+            status: "pending",
+            owner: "human",
+            blockedReason: "needs_human",
+            owedSince: new Date().toISOString(),
+          },
+        ]),
+      ]
+    );
+    await q(
+      `insert into notifications (id, user_id, workspace_id, type, category, title, status, created_at) values (gen_random_uuid(),$1,NULL,'custom.note','inbox','Pod heads up','unread',now())`,
+      [USER]
+    );
+    const grouped = await countNeedsYouByScope(ctx, SCOPES);
+    // Unfinished captures live in no space; the fixture has none, so the
+    // pod-only lens is the whole of it here.
+    expect(grouped.podLevel).toBe(await perScopeCount({ workspaceId: null }));
+    expect(grouped.podLevel).toBeGreaterThanOrEqual(2); // non-vacuity
+    // Still the floor's total, and the spaces are untouched by pod rows.
+    expect(grouped.total).toBe(await perScopeCount({}));
+    expect(grouped.bySpace.get(W1)).toBe(
+      await perScopeCount({ workspaceId: W1 })
+    );
   });
 });
