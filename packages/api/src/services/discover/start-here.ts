@@ -275,6 +275,16 @@ async function readOpenFindings(
   }
 }
 
+/** The Library's health; a failed read is `unavailable`, never "0 waiting". */
+async function readLibrary(userId: string): Promise<StartHere["library"]> {
+  try {
+    const { libraryHealth } = await import("../library/search.js");
+    return await libraryHealth({ userId });
+  } catch {
+    return UNAVAILABLE;
+  }
+}
+
 export async function buildStartHere(p: {
   caller: HubProtocolCaller;
   userId: string;
@@ -293,16 +303,18 @@ export async function buildStartHere(p: {
     actions,
     openFindings,
     handedToYou,
+    library,
   ] = await Promise.all([
-      readOpenSessions(p.userId),
-      readSessionsOwingGrade(p.userId),
-      readTopKinds(p),
-      readActions(p),
-      readOpenFindings(p.userId),
-      p.agentUserId
-        ? readHandedToYou(p.userId, p.agentUserId)
-        : Promise.resolve(undefined),
-    ]);
+    readOpenSessions(p.userId),
+    readSessionsOwingGrade(p.userId),
+    readTopKinds(p),
+    readActions(p),
+    readOpenFindings(p.userId),
+    p.agentUserId
+      ? readHandedToYou(p.userId, p.agentUserId)
+      : Promise.resolve(undefined),
+    readLibrary(p.userId),
+  ]);
   const pendingReview: StartHere["pendingReview"] =
     p.pending.status === "unavailable"
       ? UNAVAILABLE
@@ -326,6 +338,7 @@ export async function buildStartHere(p: {
     sessionsOwingGrade,
     topKinds,
     actions,
+    library,
     learnMore: { skill: p.learnMoreSkill, writing: ORIENT_WRITING_SKILL },
     // ROUTING (founder, 2026-09-28): product problems go to the Synap TEAM via
     // the CP MCP `report_to_synap` tool (synap-control-plane-api

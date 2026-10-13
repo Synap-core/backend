@@ -26,6 +26,7 @@
  * what makes the subtraction safe rather than lossy.
  */
 
+import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import {
   db,
@@ -200,6 +201,12 @@ export interface StartHere {
         lens: string;
       }
     | StartHereUnavailable;
+  /**
+   * The person's Library (what they KEEP, CAPTURE_LIBRARY_PLAN L5): items not
+   * read yet, groups waiting to be built, the oldest wait. State, not a queue —
+   * there is no inbox counter to clear. `library.health` is the same read.
+   */
+  library: LibraryHealth | StartHereUnavailable;
   /** `skill` = concept depth; `writing` = title rules + knowledge routing. */
   learnMore: { skill: string; writing: string };
   /**
