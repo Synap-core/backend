@@ -1,0 +1,114 @@
+"use client";
+
+/**
+ * The frame every `/open` state draws in: `ReceiverShell`'s card around the
+ * shared object skin (`app/_lib/object`). Loading, a failure, a bounce and a
+ * hosted object all read as the same page, so a reader who lands on two of
+ * them recognises the second.
+ */
+
+import type { ReactNode } from "react";
+import { CardBody, Spinner } from "@heroui/react";
+import { openIn } from "../../lib/open-in";
+import { ExitLink } from "../../lib/exit-link";
+import { ReceiverShell } from "../_lib/receiver-shell";
+import { ObjectPage, type ObjectPageProps } from "../_lib/object/object-page";
+import type { LoadFailure } from "./open-model";
+import { labelForOpenType } from "./open-params";
+
+export function OpenCard({ children }: { children: ReactNode }) {
+  return (
+    <ReceiverShell>
+      <CardBody className="px-5 py-6 sm:px-7 sm:py-7">{children}</CardBody>
+    </ReceiverShell>
+  );
+}
+
+export function OpenLoading({ label = "Loading…" }: { label?: string }) {
+  return (
+    <ReceiverShell>
+      <CardBody className="items-center gap-3 px-7 py-16">
+        <Spinner label={label} />
+      </CardBody>
+    </ReceiverShell>
+  );
+}
+
+/** An object page in the receiver card. */
+export function OpenObject(props: ObjectPageProps) {
+  return (
+    <OpenCard>
+      <ObjectPage {...props} />
+    </OpenCard>
+  );
+}
+
+/**
+ * A page with nothing to render but a sentence: an invalid link, a failed
+ * load, nothing found. `chip` names the state; the exit, when given, is the
+ * way on (the app may still open what the web could not).
+ */
+export function OpenMessage({
+  kind,
+  title,
+  message,
+  chip,
+  appLink,
+}: {
+  kind: string;
+  title: string;
+  message: string;
+  chip: string;
+  appLink?: { type: string; id: string };
+}) {
+  return (
+    <OpenObject
+      header={{
+        kind,
+        noun: kind === "open" ? "Open" : labelForOpenType(kind),
+        title,
+        summary: message,
+        status: { kind: "unknown", label: chip },
+        secondaryActions: appLink ? (
+          <OpenInAppLink type={appLink.type} id={appLink.id} />
+        ) : undefined,
+      }}
+    />
+  );
+}
+
+export function OpenFailure({
+  kind,
+  failure,
+  id,
+}: {
+  kind: string;
+  failure: LoadFailure;
+  id: string;
+}) {
+  return (
+    <OpenMessage
+      kind={kind}
+      title={failure.title}
+      message={failure.message}
+      chip={failure.chip}
+      appLink={{ type: kind, id }}
+    />
+  );
+}
+
+/**
+ * The desktop form of the object. A bare `synap://` does NOTHING when the app
+ * is not installed, and these links arrive by email and CLI, so "not
+ * installed" is the common case — `ExitLink` carries the way out with it.
+ * `objectInApp` even for hosted kinds: this page IS the web host, so the
+ * sub-action must name the app.
+ */
+export function OpenInAppLink({ type, id }: { type: string; id: string }) {
+  return (
+    <ExitLink
+      exit={openIn({ kind: "objectInApp", objectKind: type, id })}
+      label="Open in app"
+    />
+  );
+}

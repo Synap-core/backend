@@ -9,17 +9,30 @@ describe("openIn — web-hosted objects", () => {
     expect(exit).toEqual({ href: `/proposal/${ID}`, isDesktopLink: false });
   });
 
-  it.each(["entity", "view"])("hosts %s on /open", (objectKind) => {
-    const exit = openIn({ kind: "object", objectKind, id: ID });
-    expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
-    expect(exit.isDesktopLink).toBe(false);
-  });
+  it.each(["entity", "view", "automation", "session"])(
+    "hosts %s on /open",
+    (objectKind) => {
+      const exit = openIn({ kind: "object", objectKind, id: ID });
+      expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
+      expect(exit.isDesktopLink).toBe(false);
+    }
+  );
+
+  it.each(["automation", "session"])(
+    "objectInApp still reaches the desktop app for hosted %s",
+    (objectKind) => {
+      const exit = openIn({ kind: "objectInApp", objectKind, id: ID });
+      expect(exit.href).toBe(`synap://open/${objectKind}/${ID}`);
+      expect(exit.isDesktopLink).toBe(true);
+      expect(exit.fallback).toBeDefined();
+    }
+  );
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
   it.each([
     "workspace",
-    "session",
+    "playbook",
     "channel",
     "document",
     "cell",
