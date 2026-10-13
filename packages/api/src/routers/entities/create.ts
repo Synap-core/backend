@@ -240,6 +240,15 @@ export const createProcs = {
        */
       const actingAgentUserId =
         input.agentUserId ?? ctx.agentUserId ?? undefined;
+      // ONE provenance stamp for everything this write creates — the entity
+      // row AND its body document — so an agent-written body is never
+      // recorded under the human's name (ticket 7b49aaae).
+      const writeProvenance = stampProvenance({
+        userId: ctx.userId,
+        agentUserId: actingAgentUserId,
+        sourceProposalId: ctx.governanceProposalId,
+        correlationId,
+      });
       const governanceWorkspaceId =
         input.targetWorkspaceId ?? ctx.workspaceId ?? null;
 
@@ -667,10 +676,7 @@ export const createProcs = {
                     userId: ctx.userId,
                     workspaceId: matchWorkspaceId,
                     title: input.title || undefined,
-                    provenance: {
-                      createdByKind: "human",
-                      createdByUserId: ctx.userId,
-                    },
+                    provenance: writeProvenance,
                     text: input.content,
                   });
                   if (body.documentId) {
@@ -1391,12 +1397,9 @@ export const createProcs = {
           userId: ctx.userId,
           workspaceId: entityWorkspaceId ?? null,
           title: input.title || undefined,
-          // Behavior-preserving: the prior materializeContentDocument path stamped
-          // the document with default `human` provenance (no agent/correlation).
-          provenance: {
-            createdByKind: "human",
-            createdByUserId: ctx.userId,
-          },
+          // The entity's own stamp: a body is authored by whoever authored
+          // the entity (an agent's body read as `human` before).
+          provenance: writeProvenance,
           text: input.content,
         });
         contentDocumentId = body.documentId;
@@ -1449,12 +1452,7 @@ export const createProcs = {
             // an agent's proposal was stamped `createdByKind: 'human'` with a
             // NULL agent and a NULL proposal — the agent's work recorded under
             // the human's name.
-            ...stampProvenance({
-              userId: ctx.userId,
-              agentUserId: actingAgentUserId,
-              sourceProposalId: ctx.governanceProposalId,
-              correlationId,
-            }),
+            ...writeProvenance,
             // A ROLE profile is attached as a facet by the repository's role
             // adapter, which announces the attach (`notifyFacetAttached`) —
             // this is what that announcement cannot know on its own.

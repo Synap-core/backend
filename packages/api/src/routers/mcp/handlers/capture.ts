@@ -905,6 +905,11 @@ const captureHandler: McpToolHandler = async (
     context: args.profileSlug
       ? `Hint: profile is ${args.profileSlug}`
       : undefined,
+    // Honoured by the degraded fallback: an outage files the caller's kind,
+    // not a note.
+    ...(typeof args.profileSlug === "string"
+      ? { profileSlug: args.profileSlug }
+      : {}),
     dedupMode: args.dedupMode as "title" | "semantic" | "both" | undefined,
   });
   // Step 2 — ACTUALLY WRITE. structure() only previews; without execute()
@@ -954,10 +959,19 @@ const captureHandler: McpToolHandler = async (
             : "unknown"
       )
     : null;
+  // The fallback files the caller's explicit kind when it resolved, else a note.
+  const degradedKind = (
+    captureProposals[0] as { profileSlug?: string } | undefined
+  )?.profileSlug;
+  const degradedAsNote = !degradedKind || degradedKind !== args.profileSlug;
   const degradedNotice = degradedFailure
-    ? `⚠️ AI structuring did not run. The text was saved as a RAW NOTE, unstructured and unclassified — ` +
-      `it is NOT a person/task/decision/whatever it describes. ${degradedFailure.message} ` +
-      `Tell the user their capture was saved as a plain note and was NOT structured` +
+    ? (degradedAsNote
+        ? `⚠️ AI structuring did not run. The text was saved as a RAW NOTE, unstructured and unclassified — ` +
+          `it is NOT a person/task/decision/whatever it describes. ${degradedFailure.message} ` +
+          `Tell the user their capture was saved as a plain note and was NOT structured`
+        : `⚠️ AI structuring did not run. The text was saved as a raw \`${degradedKind}\` (the kind you passed), unstructured — ` +
+          `no properties were extracted; the whole text is its content. ${degradedFailure.message} ` +
+          `Tell the user their capture was saved as a raw ${degradedKind} and was NOT structured`) +
       (degradedFailure.retryable
         ? " — and that re-capturing shortly may structure it properly."
         : ", and do not tell them to try again.")

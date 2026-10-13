@@ -657,18 +657,26 @@ export async function preflightCaptureGraphOperations(
     // `content` is folded in the way the materializer does (a long body becomes
     // a linked document, a short one inlines to properties.content) so a profile
     // that required `content` isn't falsely flagged when a body was provided.
+    // The body is not a key the caller invented: when the profile does not
+    // model `content`, it must not come back as `unmodeled` (it becomes the
+    // linked body document). A `content` the caller put in `properties` still
+    // reports — that one IS a property key.
+    const bodyFolded = !!op.content && !("content" in (op.properties ?? {}));
     if (op.content) propsToCheck.content = op.content;
-    const { valid, errors, unmodeled } =
-      await propertyValidation.validateEntityCreateForProposal(
-        propsToCheck,
-        profile.id,
-        workspaceId,
-        {
-          ...(op.title !== undefined ? { title: op.title } : {}),
-          profileDefaults:
-            (profile.defaultValues as Record<string, unknown>) ?? {},
-        }
-      );
+    const {
+      valid,
+      errors,
+      unmodeled: reported,
+    } = await propertyValidation.validateEntityCreateForProposal(
+      propsToCheck,
+      profile.id,
+      workspaceId,
+      {
+        ...(op.title !== undefined ? { title: op.title } : {}),
+        profileDefaults:
+          (profile.defaultValues as Record<string, unknown>) ?? {},
+      }
+    );
     if (!valid) {
       invalidEntities.push({
         label: op.title || op.ref || op.profileSlug,
@@ -676,6 +684,9 @@ export async function preflightCaptureGraphOperations(
         errors,
       });
     }
+    const unmodeled = bodyFolded
+      ? reported.filter((u) => u.key !== "content")
+      : reported;
     if (unmodeled.length > 0) {
       unmodeledProperties.push({
         label: op.title || op.ref || op.profileSlug,
