@@ -66,6 +66,12 @@ export function isSelfService(path: string): boolean {
     // reach — it only stops `pod_admin` being required to manage secrets that
     // are already yours.
     path === "/my-vault" ||
+    // Your OWN computers and the page of each (D9). `machines.list` is floored
+    // to the computers you approved, and `rename` / `setKeyTtl` / `revoke`
+    // re-load the computer and refuse anyone but its owner or a pod admin
+    // (`loadManageableMachine`), so this grants no reach.
+    path === "/my-computers" ||
+    path.startsWith("/my-computers/") ||
     // Your OWN sign-in methods and recovery codes. Every call behind it is
     // scoped to the caller's account; the one owner-only control (Synap Cloud
     // trust) is re-checked by the pod (`PUT /api/account-recovery/cloud-trust`).

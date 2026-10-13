@@ -68,6 +68,8 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/my-connections",
     "/apps/app_123",
     "/my-vault",
+    "/my-computers",
+    "/my-computers/c1",
     "/settings/security",
     "/oauth/consent",
     "/approve-agent",
@@ -94,6 +96,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/proposal",
     "/open",
     "/workspaces",
+    "/computers",
   ])("%s is not self-service", (path) => {
     expect(isSelfService(path)).toBe(false);
   });
