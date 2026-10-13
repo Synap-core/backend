@@ -34,4 +34,24 @@ describe("capture fallback contract", () => {
     ]);
     expect(result.degradedReason).toBe("is_invalid_response");
   });
+
+  it("names a degraded capture from its first line, never a 80-character cut", () => {
+    const text =
+      "Call the landlord about the broken heating before the weekend\nHe said Thursday works.";
+    const [proposal] = buildDegradedCaptureFallback(
+      text,
+      "is_invalid_response"
+    ).proposals;
+    expect(proposal!.title).toBe(
+      "Call the landlord about the broken heating before the weekend"
+    );
+    expect(proposal!.title).not.toMatch(/…$/);
+    // The full text survives where the title could not hold it.
+    expect(proposal!.description).toBe(text);
+    // A text that IS its own title carries no description.
+    expect(
+      buildDegradedCaptureFallback("Grants deny by default", "is_empty_result")
+        .proposals[0]!.description
+    ).toBeUndefined();
+  });
 });

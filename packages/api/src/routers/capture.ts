@@ -123,6 +123,7 @@ import {
   resolveRolePayload,
   pickUnderlyingKind,
   resolveWorkspacePlacement,
+  resolveGraphWorkspaceFromSlugs,
   resolveProjectPlacement,
   resolveKindWritePin,
   loadFacetSlugsBatch,
@@ -162,6 +163,7 @@ import {
 } from "../lib/workspace-decision.js";
 import type { CapturePlacement } from "@synap-core/types";
 import { deriveCaptureProjectOutcome } from "@synap-core/types";
+import { shortenTitle } from "@synap-core/types/titles";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
 import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
@@ -414,13 +416,14 @@ export function buildDegradedCaptureFallback(
   /** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
   kind: string = FALLBACK_CAPTURE_KIND
 ) {
+  const title = shortenTitle(inputText);
   return {
     proposals: [
       {
         tempId: "t1",
         profileSlug: kind,
-        title: inputText.slice(0, 80).trim(),
-        description: inputText.length > 80 ? inputText : undefined,
+        title,
+        description: title !== inputText.trim() ? inputText : undefined,
         properties: { content: inputText },
         confidence: 0.3,
       },
@@ -767,7 +770,7 @@ const captureBaseRouter = router({
 
       // Step 1: Classify via Intelligence Service
       let profileSlug = FALLBACK_CAPTURE_KIND;
-      let title = input.content.slice(0, 80).trim();
+      let title = shortenTitle(input.content);
       let properties: Record<string, unknown> = {};
       let mode: "ai" | "fallback" = "fallback";
 
@@ -2114,10 +2117,14 @@ const captureBaseRouter = router({
       if (routingSlugs.length > 0) {
         reportStructureStage("placing");
         try {
-          const placement = await resolveWorkspacePlacement(database, {
+          // PER ENTITY (D14), the graph lane's door: each entity resolves on
+          // its own kind and roles — never as a facet of the first one's kind.
+          const placement = await resolveGraphWorkspaceFromSlugs(database, {
             userId,
-            kindSlug: routingSlugs[0],
-            facetSlugs: routingSlugs.slice(1),
+            entities: structureResult.entities.map((e) => ({
+              kindSlug: e.profileSlug,
+              facetSlugs: e.facets?.map((f) => f.profileSlug) ?? [],
+            })),
             ambientWorkspaceId: workspaceId,
           });
           const nameFor = (id: string | null | undefined) =>

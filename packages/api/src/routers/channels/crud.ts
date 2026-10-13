@@ -57,6 +57,7 @@ import {
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
 import { EventNames } from "@synap-core/types/events";
+import { shortenTitle } from "@synap-core/types/titles";
 import { randomUUID } from "crypto";
 import { computeMessageHash } from "@synap/database";
 
@@ -362,7 +363,7 @@ export const crudProcedures = {
         workspaceId,
         channelType: ChannelType.AGENT_COLLAB,
         status: ChannelStatus.ACTIVE,
-        title: input.title ?? input.topic.slice(0, 80),
+        title: input.title ?? shortenTitle(input.topic),
         metadata: {
           topic: input.topic,
           visibility: input.visibility,

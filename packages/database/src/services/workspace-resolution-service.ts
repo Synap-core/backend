@@ -417,7 +417,10 @@ export function acceptEntityCreatePlacement(input: {
  * lens always wins and must not be overridden here. Errors propagate so
  * callers keep their own log context.
  *
- * Shared by `submitCaptureGraph` and `ImportOrchestrator.resolveGraphPlacement`.
+ * Shared by `submitCaptureGraph`, `ImportOrchestrator.resolveGraphPlacement`
+ * and the `capture.structure` text lane. The text lane passes its caller
+ * workspace as `ambientWorkspaceId`: it only lets the door's rung-4 feeds edge
+ * break an entity's own tie; a rung-6 default never votes.
  */
 export async function resolveGraphWorkspaceFromSlugs(
   db: Db,
@@ -427,6 +430,8 @@ export async function resolveGraphWorkspaceFromSlugs(
     entities: Array<{ kindSlug: string; facetSlugs?: string[] }>;
     /** Optional focus-session signal for rung 3. */
     sessionId?: string | null;
+    /** The caller's workspace, for the door's rung-4 feeds tie-break only. */
+    ambientWorkspaceId?: string | null;
   }
 ): Promise<WorkspacePlacement> {
   const scopes = new ProfileResolutionService(db);
@@ -462,7 +467,7 @@ export async function resolveGraphWorkspaceFromSlugs(
       ...(entityScope === "workspace" ? { kindSlug: g.kindSlug } : {}),
       facetSlugs: g.facetSlugs,
       entityScope,
-      ambientWorkspaceId: null,
+      ambientWorkspaceId: input.ambientWorkspaceId ?? null,
       ...(input.sessionId ? { context: { sessionId: input.sessionId } } : {}),
     });
     const placed = acceptDeterministicGraphWorkspace(placement);
