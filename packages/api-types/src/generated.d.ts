@@ -15488,6 +15488,10 @@ export interface FunnelStep {
 	category: PlaybookStageCategory;
 	count: number;
 }
+export interface RunsPage {
+	runs: UnifiedRun[];
+	nextCursor: string | null;
+}
 export interface RunGroupsPage {
 	groups: RunGroup[];
 	nextCursor: string | null;
@@ -40706,10 +40710,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				status?: "running" | "completed" | "failed" | "cancelled" | "skipped" | "proposed" | undefined;
 				limit?: number | undefined;
+				cursor?: string | undefined;
 			};
-			output: {
-				runs: UnifiedRun[];
-			};
+			output: RunsPage;
 			meta: object;
 		}>;
 		groups: import("@trpc/server").TRPCQueryProcedure<{

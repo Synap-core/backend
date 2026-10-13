@@ -15,7 +15,11 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { listRuns, getRun, listRunGroupsPage } from "../services/runs/index.js";
+import {
+  getRun,
+  listRunGroupsPage,
+  listRunsPage,
+} from "../services/runs/index.js";
 import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 
@@ -53,7 +57,9 @@ const runStatus = z.enum([
 export const runsRouter = router({
   /** Newest-first run feed across flows (or one flow via `flowType`/`flowId`).
    *  `scope` narrows to a workspace / project / entity lens at the DB (within the
-   *  user floor) — the Activity telescope's altitude filters. */
+   *  user floor) — the Activity telescope's altitude filters. Keyset-paginated:
+   *  pass the previous page's `nextCursor` as `cursor` (no cursor = the first
+   *  page, the feed callers read before paging existed). */
   list: protectedProcedure
     .input(
       z.object({
@@ -78,6 +84,7 @@ export const runsRouter = router({
         /** Filter to one lifecycle status, pushed down per ledger (server-side). */
         status: runStatus.optional(),
         limit: z.number().min(1).max(100).optional(),
+        cursor: z.string().min(1).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -95,12 +102,11 @@ export const runsRouter = router({
             "scope.sessionId and scope.projectId cannot be combined — a session already pins its project, and the pair would silently drop every direct capability run. Pass one or the other.",
         });
       }
-      const runs = await listRuns({
+      return listRunsPage({
         userId,
         ...input,
         roster: rosterReadFor(ctx),
       });
-      return { runs };
     }),
 
   /** Runs collapsed to ONE row per flow (automation / playbook), newest-active
