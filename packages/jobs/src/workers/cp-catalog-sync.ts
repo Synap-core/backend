@@ -152,14 +152,26 @@ export function mapRetired(retired: RetiredDto | null | undefined): {
   };
 }
 
-/** Every configured catalog-provider base URL. Today: always just the CP. */
+/**
+ * Synap's public catalog — read anonymously, so a pod that is not attached
+ * to a Control Plane still sees the official marketplace (the console used to
+ * fetch it itself with this same default).
+ */
+export const DEFAULT_CATALOG_SOURCE = "https://api.synap.live";
+
+/**
+ * Every configured catalog-provider base URL. Today: one — the pod's Control
+ * Plane when set, else Synap's public catalog. `SYNAP_CATALOG_SOURCE=off`
+ * turns the catalog off entirely (a pod that must make no outbound calls).
+ */
 export function catalogSources(): string[] {
+  if (process.env.SYNAP_CATALOG_SOURCE === "off") return [];
   const url = (
-    process.env.CONTROL_PLANE_URL ??
-    process.env.CP_URL ??
-    ""
+    process.env.CONTROL_PLANE_URL ||
+    process.env.CP_URL ||
+    DEFAULT_CATALOG_SOURCE
   ).replace(/\/$/, "");
-  return url ? [url] : [];
+  return [url];
 }
 
 /**

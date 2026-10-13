@@ -77,7 +77,11 @@ vi.mock("@synap-core/core", () => ({
 
 const fetchMock = vi.fn();
 
-import { handleCpCatalogSync } from "../cp-catalog-sync.js";
+import {
+  DEFAULT_CATALOG_SOURCE,
+  catalogSources,
+  handleCpCatalogSync,
+} from "../cp-catalog-sync.js";
 
 const CP = "https://cp.example.test";
 
@@ -723,5 +727,44 @@ describe("handleCpCatalogSync — an older CP refuses includeRetired", () => {
     ).toHaveLength(1);
     expect(templateStamps().map((c) => c[2])).toEqual(["misconfigured"]);
     expect(insertValuesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("catalogSources", () => {
+  const KEYS = ["CONTROL_PLANE_URL", "CP_URL", "SYNAP_CATALOG_SOURCE"] as const;
+  const withEnv = (env: Partial<Record<(typeof KEYS)[number], string>>) => {
+    const saved = KEYS.map((k) => [k, process.env[k]] as const);
+    KEYS.forEach((k) => delete process.env[k]);
+    Object.assign(process.env, env);
+    try {
+      return catalogSources();
+    } finally {
+      for (const [k, v] of saved) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+
+  it("uses the pod's Control Plane when one is set", () => {
+    expect(withEnv({ CONTROL_PLANE_URL: "https://cp.example.com/" })).toEqual([
+      "https://cp.example.com",
+    ]);
+  });
+
+  it("falls back to Synap's public catalog when none is set (or it is empty)", () => {
+    expect(withEnv({})).toEqual([DEFAULT_CATALOG_SOURCE]);
+    expect(withEnv({ CONTROL_PLANE_URL: "" })).toEqual([
+      DEFAULT_CATALOG_SOURCE,
+    ]);
+  });
+
+  it("is off entirely when the pod opts out", () => {
+    expect(
+      withEnv({
+        CONTROL_PLANE_URL: "https://cp.example.com",
+        SYNAP_CATALOG_SOURCE: "off",
+      })
+    ).toEqual([]);
   });
 });
