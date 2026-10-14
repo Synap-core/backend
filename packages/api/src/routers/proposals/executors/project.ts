@@ -23,6 +23,7 @@ import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { projectsRouter } from "../../projects.js";
 import { startTrack } from "../../../services/tracks/tracks-service.js";
 import type { Context } from "../../../context.js";
+import type { UsedWorkspaceOutcome } from "../../../services/projects/create-project.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
 
@@ -32,13 +33,7 @@ import { assertApplied, reportApproved } from "./shared.js";
  * review on its own. Named by the space's name when it can be read.
  */
 async function usedSpaceRefusals(
-  used:
-    | ReadonlyArray<
-        | { workspaceId: string; status: "linked" }
-        | { workspaceId: string; status: "proposed"; proposalId: string }
-        | { workspaceId: string; status: "failed"; error: string }
-      >
-    | undefined
+  used: ReadonlyArray<UsedWorkspaceOutcome> | undefined
 ): Promise<string[]> {
   const missed = (used ?? []).filter((u) => u.status !== "linked");
   if (missed.length === 0) return [];
