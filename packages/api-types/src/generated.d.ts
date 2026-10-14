@@ -5845,6 +5845,11 @@ export interface ReconcileReport {
 			existingEntityScope: string;
 			declaredEntityScope: "pod" | "workspace" | null;
 		}>;
+		/**
+		 * Profiles whose `uiHints.presentation` this run wrote (new or changed),
+		 * through `setProfilePresentation`. Absent when none moved.
+		 */
+		presentations?: string[];
 	};
 	properties: {
 		/** New overlay/base property-defs added. */
@@ -10225,6 +10230,81 @@ export interface ProposalSetup {
 	nextAction?: CapabilityNextAction;
 }
 /**
+ * `objectRefs` — every id a proposal payload names, resolved to the OBJECT it
+ * is: `{ id, kind, name }`, keyed by the id's payload path (`subjectId`,
+ * `parameters.automationId`, `spaceGrant.agentUserId`, `entityIds.3`).
+ *
+ * WHY. A proposal card draws the object approving creates, and every named
+ * thing on it is a door. The payload names its objects by raw uuid, nested
+ * anywhere (`parameters.*`, arrays of ids), and the read row only resolved a
+ * fixed handful of them (`playbookName`, `projectName`, …) — so the rest
+ * reached the card as raw ids, or as nothing.
+ *
+ * WHAT IS READ. A key ending in `Id` (a uuid string) or `Ids` (an array of
+ * uuids), at any depth up to {@link MAX_DEPTH}. The key's STEM picks the table
+ * (`automationId` → automations, `agentUserId` → users); a sibling `<x>Type`
+ * (`fromId` + `fromType`, the `/links` shape) overrides it; an unknown stem
+ * (`subjectId`) is read as an entity, the pod's generic object.
+ *
+ * VISIBILITY. Every batch is AND-ed with the viewer's canonical read predicate
+ * (the same floors `enrichProposalsForDisplay`'s name batches use), and an
+ * entity resolves only under the proposal's own lens (pod-wide, or its own
+ * workspace). An id the viewer may not read gets NO entry — absent means
+ * unknown, never a guess; an object with no name of its own gets `name: null`.
+ *
+ * Kinds are vocabulary object kinds (`entity`, `session`, `project`,
+ * `workspace`, `automation`, `playbook`, `agent`, `skill`, `tool`, `track`,
+ * `document`, `channel`), so a host opens each through its one route table.
+ */
+export interface ProposalObjectRef {
+	id: string;
+	/** A vocabulary object kind — the host's route-table key. */
+	kind: string;
+	/** The object's own name; `null` when it has none (an untitled entity). */
+	name: string | null;
+}
+export interface ProposalStatusOption {
+	key: string;
+	/** The option's authored label, else the vocabulary's. */
+	label: string;
+	/** Absent when the key is not an option of the lifecycle (a stale belief). */
+	category?: LifecycleCategory;
+}
+export interface ProposalStatusMove {
+	/** The lifecycle property's slug. */
+	property: string;
+	/**
+	 * The status the proposal believed it moved FROM. `null` = no status yet (an
+	 * initial status). Absent = unknown (a row filed before `expectedFrom`).
+	 */
+	from?: ProposalStatusOption | null;
+	to: ProposalStatusOption;
+	/** The role slug for a facet move, else the entity's kind (profile slug). */
+	subjectKind: string | null;
+	subjectName: string | null;
+}
+/**
+ * `before` — for a PENDING session update that rewrites the session's
+ * acceptance criteria or expected outputs, the session's CURRENT criteria and
+ * expected outputs, so the card can draw the checklist and the outputs strip
+ * before → after on the session itself.
+ *
+ * WHY. The payload carries only the new arrays. Without the current ones a
+ * reviewer sees a list and cannot tell what was added, dropped or reworded.
+ *
+ * ONLY PENDING. On a decided row the session already holds the `after`, so a
+ * read of the live row is not a "before"; such rows get no `before` (absent =
+ * unknown, never a fabricated snapshot).
+ *
+ * VISIBILITY. One batched read floored by the ONE session read rule
+ * (`sessionReadableWhere`, decision D1) — a session the viewer may not read
+ * gets no `before`.
+ */
+export interface ProposalSessionBefore {
+	criteria: unknown[];
+	expectedOutputs: unknown[];
+}
+/**
  * The three states of "is a human's identity behind this agent's act?", read
  * off `proposals.subjectUserId` (RFC 8693 delegation).
  *
@@ -14213,6 +14293,12 @@ export interface ReactionEvent {
 	/** the fan-out */
 	reactions: Reaction[];
 }
+export interface ISProviderProbe {
+	ok: boolean;
+	models: string[];
+	latencyMs: number;
+	error?: string;
+}
 export interface TriageProjection {
 	/** Waiting for a human to accept or discard it. */
 	pending: boolean;
@@ -15997,6 +16083,19 @@ export interface ProjectPathTrack {
 	pausedBy: TrackPausedBy;
 	stages: TrackStage[];
 }
+/** What became of one requested used space, after the project was created. */
+export type UsedWorkspaceOutcome = {
+	workspaceId: string;
+	status: "linked";
+} | {
+	workspaceId: string;
+	status: "proposed";
+	proposalId: string;
+} | {
+	workspaceId: string;
+	status: "failed";
+	error: string;
+};
 export type ProjectFilingApplied = {
 	status: "filed";
 	projectId: string;
@@ -16013,6 +16112,12 @@ export type FileEntitiesResult = ProjectFilingApplied | {
 	status: "proposed";
 	proposalId: string;
 	reviewUrl?: string;
+};
+export type SetProjectWorkspaceMembershipOutcome = {
+	status: "updated";
+} | {
+	status: "proposed";
+	proposalId: string;
 };
 export type StageDomainFallbackReason = 
 /** No live workspace installed from that template is visible to the caller. */
@@ -18684,6 +18789,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		countWithoutProject: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				total: number;
+				byProfile: {
+					profileSlug: string;
+					count: number;
+				}[];
+			};
+			meta: object;
+		}>;
 		groupByFacetStatus: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				roleSlug: string;
@@ -18904,6 +19020,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				projectId?: string | undefined;
 				projectWithinWorkspace?: boolean | undefined;
+				withoutProject?: boolean | undefined;
 				sourceProposalId?: string | undefined;
 				facetSlug?: string | undefined;
 				facetProfileId?: string | undefined;
@@ -21359,9 +21476,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionGoal?: string;
 					sessionPrivate?: true;
 					subjectName?: string;
+					subjectKind?: string;
+					subjects?: Array<{
+						id: string;
+						name: string | null;
+						kind: string | null;
+					}>;
 					playbookName?: string;
 					projectName?: string;
 					automationName?: string;
+					automationId?: string;
+					automationRunId?: string;
+					policyReason?: string;
+					objectRefs?: Record<string, ProposalObjectRef>;
+					statusMove?: ProposalStatusMove;
+					before?: ProposalSessionBefore;
 					capabilityCallLabel?: string;
 					workspaceName?: string;
 					channelName?: string;
@@ -21432,9 +21561,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionGoal?: string;
 					sessionPrivate?: true;
 					subjectName?: string;
+					subjectKind?: string;
+					subjects?: Array<{
+						id: string;
+						name: string | null;
+						kind: string | null;
+					}>;
 					playbookName?: string;
 					projectName?: string;
 					automationName?: string;
+					automationId?: string;
+					automationRunId?: string;
+					policyReason?: string;
+					objectRefs?: Record<string, ProposalObjectRef>;
+					statusMove?: ProposalStatusMove;
+					before?: ProposalSessionBefore;
 					capabilityCallLabel?: string;
 					workspaceName?: string;
 					channelName?: string;
@@ -21576,9 +21717,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionGoal?: string;
 				sessionPrivate?: true;
 				subjectName?: string;
+				subjectKind?: string;
+				subjects?: Array<{
+					id: string;
+					name: string | null;
+					kind: string | null;
+				}>;
 				playbookName?: string;
 				projectName?: string;
 				automationName?: string;
+				automationId?: string;
+				automationRunId?: string;
+				policyReason?: string;
+				objectRefs?: Record<string, ProposalObjectRef>;
+				statusMove?: ProposalStatusMove;
+				before?: ProposalSessionBefore;
 				capabilityCallLabel?: string;
 				workspaceName?: string;
 				channelName?: string;
@@ -25305,8 +25458,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					name: string;
 					slug: string;
-					capabilities: string[] | null;
 					icon: string | null;
+					capabilities: string[] | null;
 					ownerType: string;
 				}[];
 			};
@@ -27803,6 +27956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							property: string;
 							options: Record<string, unknown>[];
 						} | undefined;
+						presentation?: unknown;
 						properties?: {
 							slug: string;
 							valueType: string;
@@ -27817,6 +27971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							icon?: string | undefined;
 							color?: string | undefined;
 							description?: string | undefined;
+							presentation?: unknown;
 						} | undefined;
 						propertyDefs?: {
 							slug: string;
@@ -28390,6 +28545,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							property: string;
 							options: Record<string, unknown>[];
 						} | undefined;
+						presentation?: unknown;
 						properties?: {
 							slug: string;
 							valueType: string;
@@ -28404,6 +28560,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							icon?: string | undefined;
 							color?: string | undefined;
 							description?: string | undefined;
+							presentation?: unknown;
 						} | undefined;
 						propertyDefs?: {
 							slug: string;
@@ -28611,6 +28768,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						color?: string | undefined;
 						description?: string | undefined;
 						scope?: string | undefined;
+						presentation?: unknown;
 						properties?: {
 							slug: string;
 							valueType: string;
@@ -28625,6 +28783,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							icon?: string | undefined;
 							color?: string | undefined;
 							description?: string | undefined;
+							presentation?: unknown;
 						} | undefined;
 						propertyDefs?: {
 							slug: string;
@@ -33869,8 +34028,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata: unknown;
 				active: boolean | null;
 				slug: string;
-				capabilities: string[] | null;
 				icon: string | null;
+				capabilities: string[] | null;
 				ownerType: string;
 				intelligenceServiceId: string | null;
 			};
@@ -33896,8 +34055,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata: unknown;
 				active: boolean | null;
 				slug: string;
-				capabilities: string[] | null;
 				icon: string | null;
+				capabilities: string[] | null;
 				ownerType: string;
 				intelligenceServiceId: string | null;
 			};
@@ -33950,9 +34109,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				category: string | null;
 				source: string | null;
+				icon: string | null;
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
-				icon: string | null;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
 				bundleSource: string | null;
@@ -33987,9 +34146,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				category: string | null;
 				source: string | null;
+				icon: string | null;
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
-				icon: string | null;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
 				bundleSource: string | null;
@@ -34026,9 +34185,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				category: string | null;
 				source: string | null;
+				icon: string | null;
 				trustLevel: WidgetTrustLevel;
 				typeKey: string;
-				icon: string | null;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
 				bundleSource: string | null;
@@ -35638,7 +35797,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "membership:grant" | "source-config:write" | "provision" | "tier_update" | "membership:activate")[];
+				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "membership:grant" | "source-config:write" | "membership:activate" | "provision" | "tier_update")[];
 			};
 			output: {
 				description: string | null;
@@ -35676,7 +35835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				issuerUrl: string;
 				displayName: string;
-				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "membership:grant" | "source-config:write" | "provision" | "tier_update" | "membership:activate")[];
+				allowedScopes: ("sync" | "probe" | "auth:exchange-user" | "identity:link-user" | "write:entities" | "read:entities" | "ai:analyze" | "hub-protocol.read" | "hub-protocol.write" | "hub-protocol.admin" | "data.read" | "data.write" | "mcp.read" | "mcp.write" | "providers.write" | "setup.agent" | "skills.invoke" | "chat.stream" | "realtime:observe" | "membership:grant" | "source-config:write" | "membership:activate" | "provision" | "tier_update")[];
 			};
 			output: {
 				description: string | null;
@@ -37517,12 +37676,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				providerId: string;
 			};
-			output: {
-				ok: boolean;
-				models: string[];
-				latencyMs: number;
-				error?: string;
-			};
+			output: ISProviderProbe;
 			meta: object;
 		}>;
 		sync: import("@trpc/server").TRPCMutationProcedure<{
@@ -41227,6 +41381,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					phase: string | null;
 					targetDate: Date | null;
 					colorSlot: number | null;
+					icon: string | null;
 					settings: unknown;
 					metadata: unknown;
 					createdAt: Date;
@@ -41252,6 +41407,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					phase: string | null;
 					targetDate: Date | null;
 					colorSlot: number | null;
+					icon: string | null;
 					settings: unknown;
 					metadata: unknown;
 					createdAt: Date;
@@ -41279,6 +41435,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					phase: string | null;
 					targetDate: Date | null;
 					colorSlot: number | null;
+					icon: string | null;
 					settings: unknown;
 				};
 				subject: ProjectSubject | null;
@@ -41297,6 +41454,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 			};
 			output: ProjectOutputsResult;
+			meta: object;
+		}>;
+		forEntity: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				entityId: string;
+			};
+			output: {
+				projects: {
+					id: string;
+					name: string;
+					status: string;
+					colorSlot: number | null;
+					icon: string | null;
+				}[];
+			};
 			meta: object;
 		}>;
 		path: import("@trpc/server").TRPCQueryProcedure<{
@@ -41320,6 +41492,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectEntityId?: string | undefined;
 				settings?: Record<string, unknown> | undefined;
 				metadata?: Record<string, unknown> | undefined;
+				colorSlot?: number | null | undefined;
+				icon?: string | null | undefined;
+				homeWorkspaceId?: string | undefined;
+				usedWorkspaceIds?: string[] | undefined;
 				evidenceEntityIds?: string[] | undefined;
 				door?: "trpc" | "mcp" | "hub-rest" | undefined;
 			};
@@ -41334,8 +41510,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				dedupCandidates?: ProjectDedupCandidate[] | undefined;
 				subjectBound?: boolean | undefined;
+				usedWorkspaces?: UsedWorkspaceOutcome[] | undefined;
 				status: string;
 				projectId: string;
+				project: {
+					description: string | null;
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					status: "active" | "archived" | "completed";
+					createdAt: Date;
+					updatedAt: Date;
+					name: string;
+					metadata: unknown;
+					slug: string | null;
+					phase: string | null;
+					targetDate: Date | null;
+					colorSlot: number | null;
+					icon: string | null;
+					settings: unknown;
+				};
 				proposalId?: undefined;
 			};
 			meta: object;
@@ -41349,6 +41543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				phase?: string | null | undefined;
 				targetDate?: unknown;
 				colorSlot?: number | null | undefined;
+				icon?: string | null | undefined;
 				subjectEntityId?: string | null | undefined;
 				homeWorkspaceId?: string | undefined;
 				settings?: Record<string, unknown> | undefined;
@@ -41408,13 +41603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 				member: boolean;
 			};
-			output: {
-				status: "proposed";
-				proposalId: string;
-			} | {
-				status: "updated";
-				proposalId?: undefined;
-			};
+			output: SetProjectWorkspaceMembershipOutcome;
 			meta: object;
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
