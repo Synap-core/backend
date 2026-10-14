@@ -177,9 +177,8 @@ export const buildHandlers: McpHandlerMap = {
       subjectType: "cell",
       action: "define",
       source: "api",
-      // The agent's own WHY, verbatim. Without it the gate stores the
-      // placeholder "<action> <type> requires your approval", which the review
-      // UI suppresses — the reviewer then reads "No reason was given".
+      // The agent's own WHY, verbatim. Without it the gate stores no reasoning
+      // at all — the reviewer then reads "No reason was given".
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       data: {
         name: parsed.data.name,

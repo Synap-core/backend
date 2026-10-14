@@ -1,0 +1,1 @@
+{ "extends": "./tsconfig.json", "compilerOptions": { "noEmit": true, "composite": false, "incremental": false, "tsBuildInfoFile": null }, "include": [], "files": ["src/utils/permission-check.ts", "src/utils/permission-check.system-reasoning-not-stored.test.ts", "src/routers/mcp/handlers/build.ts"] }

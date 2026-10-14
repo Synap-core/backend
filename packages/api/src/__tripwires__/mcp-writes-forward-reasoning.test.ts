@@ -8,9 +8,9 @@ import { join, dirname, resolve } from "path";
  * The MCP door was the only agent transport that could not give a reason. The
  * Hub accepted `reasoning` at 18 call sites; the MCP tool schemas exposed one on
  * 3 of 35 write tools and NO MCP handler forwarded it. With `reasoning` unset,
- * `checkPermissionOrPropose` stores the placeholder
- * `"<action> <type> requires your approval"`, which the review UI correctly
- * suppresses — so the reviewer reads "No reason was given for this write."
+ * `checkPermissionOrPropose` stores no reasoning (it once stored the placeholder
+ * `"<action> <type> requires your approval"`, which the review UI suppresses)
+ * — so the reviewer reads "No reason was given for this write."
  * on a proposal whose whole body is otherwise empty.
  *
  * WHAT IS DERIVED, never hand-listed: the set of MCP tools that reach the
