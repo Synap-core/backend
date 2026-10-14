@@ -37,8 +37,7 @@
  * onto). A nested overlay is composed HERE, by this module, onto its own base.
  *
  * This is a pure composition layer: workspace materialization is delegated to
- * `createWorkspaceFromDefinitionIdempotent` (the canonical idempotent create
- * path) and overlay layering to `composeOntoBaseWorkspace` (the ONE compose
+ * `applyLayerOne` (the one template apply's lookup + plan + layer 1) and overlay layering to `composeOntoBaseWorkspace` (the ONE compose
  * door, shared with `materializeWorkspaceCore`) — neither is reimplemented here.
  * Presence resolution is access-gated by relation: a `compose` base only counts
  * if the acting user has an editor+ role on it (composing writes onto it, so it
@@ -72,7 +71,7 @@ import {
 } from "@synap/database";
 import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-template.js";
 import type { PackageDefinitionOutput } from "@synap-core/workspace-templates";
-import { createWorkspaceFromDefinitionIdempotent } from "./workspace-creation-service.js";
+import { applyLayerOne } from "./template-apply/layer-one.js";
 import { composeOntoBaseWorkspace } from "./compose-overlay.js";
 import { isPackDefinition, primaryPackDomain } from "./pack-definition.js";
 import {
@@ -929,7 +928,7 @@ async function ensureWorkspaceDependencyPresent(
   //     `internal-runbook.yaml` declares `operations-v1`, which `operations`
   //     itself derives, so keying on it would make installing internal-runbook
   //     idempotently return the OPERATIONS workspace.
-  const ws = await createWorkspaceFromDefinitionIdempotent({
+  const ws = await applyLayerOne({
     definition,
     userId,
     proposalId: slug,
@@ -937,24 +936,29 @@ async function ensureWorkspaceDependencyPresent(
     templateId: slug,
     createdBy: "provisioning",
   });
-  // Only for a NEWLY created dependency: the workspace-shaped definition (used
-  // just above) drops the capabilities/automations/playbooks/loops layers, so
-  // seed them via the shared door. A `found` (idempotent reuse) already went
-  // through this on its first creation — skip to avoid needless governed re-writes.
-  const seeded = ws.created
-    ? await seedDependencyLayers(
-        ws.workspaceId,
-        slug,
-        userId,
-        agentUserId,
-        resolvedTemplate.packageDefinition
-      )
-    : undefined;
+  // Layer 2, whenever layer one DID something: a new space (the workspace-
+  // shaped definition drops the capabilities/automations/playbooks/loops
+  // layers, so seed them via the shared door), or an existing one it
+  // re-synced (stale, unfinished, or failed in layer 2 — defect G: that
+  // re-hit used to run layer 1 only, with no record and no stamp). Seeded from
+  // the SAME source layer 1 ran against (the catalog's fresh copy on a
+  // re-sync). An `unchanged` re-hit is current — nothing to re-write.
+  const seeded =
+    ws.created || ws.outcome === "reconciled"
+      ? await seedDependencyLayers(
+          ws.workspaceId,
+          slug,
+          userId,
+          agentUserId,
+          (ws.packageDefinition as PackageDefinitionOutput | undefined) ??
+            resolvedTemplate.packageDefinition
+        )
+      : undefined;
   const seedOutcome = seeded?.outcome;
-  // The ONE finisher: the version the create handed back is stamped, and the
-  // new space marked "active", only when its seeded layer 2 landed. A seed
-  // that threw left the space "failed" (the applier's record) — nothing to
-  // finish. A re-hit (`found`) skipped seeding, so it has nothing to finish.
+  // The ONE finisher: the version layer one handed back is stamped (and a new
+  // space marked "active") only when its seeded layer 2 landed. A seed that
+  // threw left the space "failed" (the applier's record) — nothing to finish.
+  // An `unchanged` re-hit (`found`) has nothing to finish.
   if (seeded?.post) {
     const { finishTemplateApply } =
       await import("./template-apply-finisher.js");

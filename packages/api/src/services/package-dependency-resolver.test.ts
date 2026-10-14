@@ -76,8 +76,8 @@ vi.mock("./capabilities/resolve-workspace-template.js", () => ({
   resolveWorkspaceTemplate: mockResolveWorkspaceTemplate,
 }));
 
-vi.mock("./workspace-creation-service.js", () => ({
-  createWorkspaceFromDefinitionIdempotent: mockCreateWorkspace,
+vi.mock("./template-apply/layer-one.js", () => ({
+  applyLayerOne: mockCreateWorkspace,
 }));
 
 vi.mock("./compose-overlay.js", () => ({
@@ -108,6 +108,7 @@ vi.mock("../routers/hub-protocol/utils.js", () => ({
 }));
 
 import { resolvePackageDependencies } from "./package-dependency-resolver.js";
+import { finishTemplateApply } from "./template-apply-finisher.js";
 
 type MemberRow = {
   id: string;
@@ -773,7 +774,7 @@ describe("resolvePackageDependencies", () => {
     });
 
     it("B2. a workspace already installed under the Hub's key is REUSED, not duplicated", async () => {
-      // Models createWorkspaceFromDefinitionIdempotent's real behaviour: it
+      // Models layer one's real lookup: it
       // matches provisioning_proposal_id by EXACT equality. The pod already
       // carries the row `synap launch` wrote under key "builder-workspace".
       const podRows = new Map<string, string>([
@@ -813,6 +814,63 @@ describe("resolvePackageDependencies", () => {
         }),
       ]);
       expect(result.installed[0].workspaceId).not.toBe("ws-DUPLICATE");
+    });
+
+    it("B3. a dependency layer one RE-SYNCED gets layer 2 from the re-sync's source and is finished (defect G); an unchanged one is not touched", async () => {
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+      mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+      mockToPackageDefinition.mockReturnValue({
+        playbooks: [{ name: "Stale copy" }],
+      });
+      selectRows = [];
+      vi.mocked(finishTemplateApply).mockClear();
+      mockCreateWorkspace.mockResolvedValue({
+        workspaceId: "ws-crm",
+        created: false,
+        outcome: "reconciled",
+        packageDefinition: { playbooks: [{ name: "Fresh copy" }] },
+        pendingVersionStamp: "h-2",
+      });
+      const dep = {
+        definition: {
+          dependencies: [
+            {
+              slug: "crm",
+              kind: "workspace" as const,
+              relation: "require" as const,
+            },
+          ],
+        },
+        userId: USER,
+      };
+
+      await resolvePackageDependencies(dep);
+      expect(mockApplyPostWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "ws-crm",
+          body: expect.objectContaining({
+            playbooks: [{ name: "Fresh copy" }],
+          }),
+        })
+      );
+      expect(finishTemplateApply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "ws-crm",
+          built: false,
+          pendingVersionStamp: "h-2",
+        })
+      );
+
+      mockApplyPostWorkspace.mockClear();
+      vi.mocked(finishTemplateApply).mockClear();
+      mockCreateWorkspace.mockResolvedValue({
+        workspaceId: "ws-crm",
+        created: false,
+        outcome: "unchanged",
+      });
+      await resolvePackageDependencies(dep);
+      expect(mockApplyPostWorkspace).not.toHaveBeenCalled();
+      expect(finishTemplateApply).not.toHaveBeenCalled();
     });
   });
 
