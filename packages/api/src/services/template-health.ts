@@ -259,7 +259,7 @@ export function templateLifecycleWarning(
  * none, e.g. an overlay) so no caller can forget it: a space whose last apply
  * did not finish (`templateApplyUnfinished`) reads DRIFTED whatever its stamp
  * says, so `synap templates update` offers it and the apply door finishes it
- * (`resumeIfFailed` already bypasses the stamp compare on `"failed"`). Founder
+ * (the plan re-syncs an unfinished or failed space whatever its stamp). Founder
  * pod 2026-10-12: CRM carried `failed` AND the new stamp (layer 1 stamped
  * before layer 2 threw), so health read "current" and the update was skipped.
  */

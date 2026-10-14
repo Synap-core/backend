@@ -11,7 +11,7 @@
  *
  * Governed via `checkPermissionOrPropose` (subjectType:"workspace",
  * action:"adopt") — RBAC (`verifyPermission`) enforces the same editor+ floor
- * `ADOPT_WRITE_ROLES` (workspace-creation-service.ts) uses for the analogous
+ * `ADOPT_WRITE_ROLES` (template-apply/resolve-target.ts) uses for the analogous
  * legacy-identity adopt, then the agent-governance ladder decides
  * grant-vs-propose. Never widens a floor beyond what that existing path grants.
  */

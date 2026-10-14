@@ -2070,7 +2070,7 @@ export async function createWorkspaceFromDefinition(
   } else {
     // Resume idempotency: "entities" is pushed to completedSteps only AFTER the
     // whole loop finishes, so a mid-loop crash leaves it OUT — and a resume
-    // (via resumeIfFailed) re-runs this loop from the top. Blind create would
+    // (the apply plan's resume-layer1) re-runs this loop from the top. Blind create would
     // re-insert the seed entities that DID land last attempt. Seed entities are
     // keyed by (profileSlug=type, title) — the template's own entityRefMap key,
     // unique per seed set — so find-or-create on that key makes resume a no-op

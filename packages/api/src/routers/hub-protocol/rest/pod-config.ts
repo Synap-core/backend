@@ -12,7 +12,7 @@
  * `getUserAccessibleWorkspaceIds` uses (mirrors `discover()`'s "include
  * orphans" behavior: a workspace is listed regardless of whether it was ever
  * stamped with a packageSlug), and the same subtype-match predicate
- * `findLegacyWorkspaceMatch` (workspace-creation-service.ts) uses for its
+ * `findLegacyWorkspaceMatch` (template-apply/resolve-target.ts) uses for its
  * "does this workspace's subtype match a known template" check — mirrored
  * here in the opposite direction (template → orphan, not slug → workspace),
  * so an ad-hoc/orphan workspace can be told "this looks like the X template"

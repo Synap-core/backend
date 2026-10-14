@@ -688,18 +688,18 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           // Additive INDEX: projects that use this workspace. Not an ACL.
           usedByProjectIds: usedBy.get(workspace.id) ?? [],
           // ── INSTALL HEALTH (A1) ──────────────────────────────────────────
-          // `applyPackagePostWorkspace` stamps these three into
-          // `workspace.settings` before rethrowing, so after a swallowed
-          // layer-2 failure the pod DURABLY knows which workspace is partial
-          // and why. This projection dropped all three — which is the single
-          // line where "partially installed" became "installed" for every
-          // client of this door (CLI `market installed`, the browser install
-          // banner, pod-admin). Distinct from the TemplateHealth triad above:
-          // that answers "is it BEHIND its template", this answers "did it
-          // fully LAND". `null` = never stamped = the install completed.
+          // The template state (`settings.template`, written by the ONE
+          // writer; the finisher records a layer-2 failure there) projected
+          // as the three legacy fields, so the pod DURABLY tells every client
+          // of this door (CLI `market installed`, the browser install banner,
+          // pod-admin) which workspace is partial and why. Distinct from the
+          // TemplateHealth triad above: that answers "is it BEHIND its
+          // template", this answers "did it fully LAND". `null` = the last
+          // apply completed.
           //
           // Recoverable, not fatal: the workspace exists and is usable, and
-          // re-running the install resumes exactly this layer (`resumeIfFailed`).
+          // `synap templates update` re-syncs it and re-runs layer 2 (the
+          // plan's `failed-layer-2` re-sync).
           ...templateInstallWire(templateState),
           // The whole state object (additive): where the last apply stands,
           // its layer, the stamp and the packs — one shape for every client.

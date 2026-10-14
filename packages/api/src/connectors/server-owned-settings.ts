@@ -29,9 +29,9 @@ export const SERVER_OWNED_WORKSPACE_SETTINGS_KEYS = [
   // a refusal would fail every round-trip, a pass-through would let an editor
   // fork a template's intent the next reconcile then overwrites.
   "intent",
-  // Template install state — written ONLY by the template apply (layer 1 +
-  // layer 2 + the finisher, `template-apply-finisher.ts`) and the pack
-  // installer, through `mergeSettings`. Clients read some of it
+  // Template install state — written ONLY through the one template-state
+  // writer (`writeTemplateState`, @synap/database), by the template apply
+  // (layer one, the finisher) and the pack installer. Clients read some of it
   // (`packageSlug`, `packageVersion`, `installedPacks`, `actionPlacements`,
   // `proposalId`), so a save sends them back; the rest (`templateApply`,
   // `failedStep*`, `completedSteps`, `provisioning*`) never reaches a client,
@@ -41,8 +41,8 @@ export const SERVER_OWNED_WORKSPACE_SETTINGS_KEYS = [
   // `provisioningStatus` and `systemSlug` also drive promoted COLUMNS
   // (`WorkspaceRepository.update` writes them from this blob, `?? null`), so
   // carrying them over is what keeps those columns from being nulled by a
-  // save that merely omitted them. `template` is the coming one state object
-  // (APPLY-ONE-DOOR-PLAN §2).
+  // save that merely omitted them. `template` is the one state object
+  // (APPLY-ONE-DOOR-PLAN §2); the other keys are its legacy mirror.
   "template",
   "templateApply",
   "failedStep",
