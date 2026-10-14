@@ -121,6 +121,7 @@ import {
   projectProposalRowForViewer,
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
+import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
@@ -393,6 +394,13 @@ type DisplayEnrichedProposal = ProposalRow &
      * engine's sentence for `governanceReason`. Absent when none applies.
      */
     policyReason?: string;
+    /**
+     * Every `*Id` / `*Ids` the payload names, resolved to its object, keyed by
+     * payload path (`subjectId`, `parameters.automationId`, `entityIds.3`).
+     * Only ids the viewer may read (under this proposal's lens) get an entry —
+     * absent = unknown. See `object-refs.ts`.
+     */
+    objectRefs?: Record<string, ProposalObjectRef>;
     capabilityCallLabel?: string;
     workspaceName?: string;
     channelName?: string;
@@ -1371,6 +1379,22 @@ export async function enrichProposalsForDisplay(
     return toProposalTrack(runTracks.get(`${flow.flowType}:${flow.flowId}`));
   };
 
+  // OBJECT REFS — every id the payload names, as a door: one batched,
+  // viewer-floored read per table for the whole page (`object-refs.ts`).
+  const objectRefsByRow = await resolveObjectRefs(
+    rows.map((row, idx) => {
+      const data = requests[idx]!.data;
+      return {
+        workspaceId: row.workspaceId ?? null,
+        payload:
+          data && typeof data === "object" && !Array.isArray(data)
+            ? (data as Record<string, unknown>)
+            : undefined,
+      };
+    }),
+    { userId, roster: opts.roster ?? false }
+  );
+
   return rows.map((row, idx) => {
     // Legacy "Run entity.delete" rows re-derive to the action on the object,
     // named through the SAME floored + lens-scoped entity map as every title.
@@ -1746,6 +1770,7 @@ export async function enrichProposalsForDisplay(
         ? { automationRunId }
         : {}),
       ...(policyReason ? { policyReason } : {}),
+      ...(objectRefsByRow[idx] ? { objectRefs: objectRefsByRow[idx] } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
         ? {
             capabilityCallLabel: nameResolvers.resolveCapabilityCallLabel(
