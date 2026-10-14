@@ -49,7 +49,15 @@ export interface SafePublicFetchDeps {
   resolve?: AddressResolver;
   /** Which addresses may be connected to. Default: {@link isPublicAddress}. */
   isAllowedAddress?: (address: string) => boolean;
+  /**
+   * Which ports a hop may name. Default: the scheme's own (80, 443) — a
+   * content URL has no business reaching a public host's admin or database
+   * port. `"any"` lifts it (tests against an ephemeral local server).
+   */
+  allowedPorts?: ReadonlySet<number> | "any";
 }
+
+const WEB_PORTS: ReadonlySet<number> = new Set([80, 443]);
 
 const BLOCKED_V4 = new BlockList();
 for (const [net, prefix] of [
@@ -76,7 +84,10 @@ const BLOCKED_V6 = new BlockList();
 for (const [net, prefix] of [
   ["::", 128], // unspecified
   ["::1", 128], // loopback
+  ["::", 96], // IPv4-compatible (deprecated) — embeds any IPv4
+  ["64:ff9b:1::", 48], // local-use NAT64 (RFC 8215)
   ["100::", 64], // discard-only
+  ["2002::", 16], // 6to4 — embeds any IPv4, incl. private ones
   ["2001:db8::", 32], // documentation
   ["fc00::", 7], // unique local
   ["fe80::", 10], // link-local
@@ -117,7 +128,10 @@ export function isPublicAddress(address: string): boolean {
 
 const systemResolver: AddressResolver = async (hostname) => {
   const all = await dnsLookup(hostname, { all: true, verbatim: true });
-  return all.map((a) => ({ address: a.address, family: a.family === 6 ? 6 : 4 }));
+  return all.map((a) => ({
+    address: a.address,
+    family: a.family === 6 ? 6 : 4,
+  }));
 };
 
 function blocked(reason: string): Error {
@@ -128,13 +142,14 @@ function blocked(reason: string): Error {
 async function vetHost(
   hostname: string,
   resolve: AddressResolver,
-  allowed: (address: string) => boolean
+  allowed: (address: string) => boolean,
+  signal?: AbortSignal
 ): Promise<ResolvedAddress> {
   const bare = hostname.replace(/^\[|\]$/g, "");
   const literal = isIP(bare);
   const addresses: ResolvedAddress[] = literal
     ? [{ address: bare, family: literal === 6 ? 6 : 4 }]
-    : await resolve(bare);
+    : await abortable(resolve(bare), signal);
   if (addresses.length === 0) throw blocked(`'${bare}' did not resolve`);
   const refused = addresses.find((a) => !allowed(a.address));
   if (refused) {
@@ -143,6 +158,27 @@ async function vetHost(
     );
   }
   return addresses[0]!;
+}
+
+/** A resolution the caller's signal can cut short (DNS has no timeout of ours). */
+function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted)
+    return Promise.reject(signal.reason ?? new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      }
+    );
+  });
 }
 
 function pinnedLookup(pin: ResolvedAddress): LookupFunction {
@@ -206,12 +242,24 @@ export async function safePublicFetch(
 ): Promise<Response> {
   const resolve = deps.resolve ?? systemResolver;
   const allowed = deps.isAllowedAddress ?? isPublicAddress;
+  const ports = deps.allowedPorts ?? WEB_PORTS;
   const method = init.method ?? "GET";
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const check = validateExternalUrl(currentUrl);
     if (!check.valid) throw blocked(check.reason);
-    const pin = await vetHost(check.url.hostname, resolve, allowed);
+    const port = Number(
+      check.url.port || (check.url.protocol === "https:" ? 443 : 80)
+    );
+    if (ports !== "any" && !ports.has(port)) {
+      throw blocked(`port ${port} is not a web port`);
+    }
+    const pin = await vetHost(
+      check.url.hostname,
+      resolve,
+      allowed,
+      init.signal
+    );
     const res = await requestOnce(check.url, pin, init);
     const status = res.statusCode ?? 0;
     const location = res.headers.location;

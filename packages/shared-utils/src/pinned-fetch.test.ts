@@ -55,6 +55,8 @@ const table =
 
 /** Treat only the test server's loopback as "public" for the positive cases. */
 const loopbackIsTheInternet = (a: string) => a === "127.0.0.1";
+/** The test server listens on an ephemeral port, never 80/443. */
+const anyPort = { allowedPorts: "any" as const };
 
 describe("isPublicAddress", () => {
   it.each([
@@ -75,6 +77,9 @@ describe("isPublicAddress", () => {
     "::ffff:127.0.0.1",
     "::ffff:a9fe:a9fe",
     "64:ff9b::10.0.0.1",
+    "2002:a9fe:a9fe::1", // 6to4 of 169.254.169.254
+    "::a9fe:a9fe", // IPv4-compatible 169.254.169.254
+    "64:ff9b:1::a00:5", // local-use NAT64
   ])("refuses %s", (ip) => expect(isPublicAddress(ip)).toBe(false));
 
   it.each(["93.184.216.34", "8.8.8.8", "2606:2800:220:1:248:1893:25c8:1946"])(
@@ -82,7 +87,8 @@ describe("isPublicAddress", () => {
     (ip) => expect(isPublicAddress(ip)).toBe(true)
   );
 
-  it("refuses a non-address", () => expect(isPublicAddress("evil")).toBe(false));
+  it("refuses a non-address", () =>
+    expect(isPublicAddress("evil")).toBe(false));
 });
 
 describe("safePublicFetch — DNS rebinding", () => {
@@ -91,6 +97,7 @@ describe("safePublicFetch — DNS rebinding", () => {
     await expect(
       safePublicFetch(`http://rebind.test:${port}/x`, {}, 0, {
         resolve: table({ "rebind.test": ["127.0.0.1"] }),
+        ...anyPort,
       })
     ).rejects.toThrow(/^Blocked outbound request: .*private or reserved/);
     expect(seen.length).toBe(before); // never connected
@@ -100,6 +107,7 @@ describe("safePublicFetch — DNS rebinding", () => {
     await expect(
       safePublicFetch(`http://mixed.test:${port}/x`, {}, 0, {
         resolve: table({ "mixed.test": ["93.184.216.34", "10.0.0.5"] }),
+        ...anyPort,
       })
     ).rejects.toThrow(/Blocked outbound request/);
   });
@@ -108,6 +116,7 @@ describe("safePublicFetch — DNS rebinding", () => {
     const res = await safePublicFetch(`http://img.test:${port}/a.png`, {}, 0, {
       resolve: table({ "img.test": ["127.0.0.1"] }),
       isAllowedAddress: loopbackIsTheInternet,
+      ...anyPort,
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
@@ -124,15 +133,19 @@ describe("safePublicFetch — DNS rebinding", () => {
           "internal.test": ["10.0.0.5"],
         }),
         isAllowedAddress: loopbackIsTheInternet,
+        ...anyPort,
       })
     ).rejects.toThrow(/Blocked outbound request: .*10\.0\.0\.5/);
-    expect(seen.slice(before).map((s) => s.url)).toEqual(["/redirect-internal"]);
+    expect(seen.slice(before).map((s) => s.url)).toEqual([
+      "/redirect-internal",
+    ]);
   });
 
   it("follows an allowed redirect within the hop budget, and refuses past it", async () => {
     const deps = {
       resolve: table({ "img.test": ["127.0.0.1"] }),
       isAllowedAddress: loopbackIsTheInternet,
+      ...anyPort,
     };
     const res = await safePublicFetch(
       `http://img.test:${port}/redirect-ok`,
@@ -152,5 +165,34 @@ describe("safePublicFetch — DNS rebinding", () => {
         resolve: table({ localhost: ["93.184.216.34"] }),
       })
     ).rejects.toThrow(/Blocked outbound request/);
+  });
+});
+
+describe("safePublicFetch — ports and abort", () => {
+  it("refuses a non-web port by default, before resolving anything", async () => {
+    let resolved = false;
+    await expect(
+      safePublicFetch("http://img.test:6379/x", {}, 0, {
+        resolve: async () => {
+          resolved = true;
+          return [{ address: "93.184.216.34", family: 4 }];
+        },
+      })
+    ).rejects.toThrow(/Blocked outbound request: port 6379/);
+    expect(resolved).toBe(false);
+  });
+
+  it("an abort cuts a hanging DNS resolution short", async () => {
+    const ctl = new AbortController();
+    const pending = safePublicFetch(
+      "https://slow.test/x",
+      { signal: ctl.signal },
+      0,
+      {
+        resolve: () => new Promise(() => {}),
+      }
+    );
+    ctl.abort(new Error("timeout"));
+    await expect(pending).rejects.toThrow(/timeout/);
   });
 });
