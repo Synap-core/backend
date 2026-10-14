@@ -287,6 +287,67 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
   });
 
+  // ── GET /entities/without-project/counts ────────────────────────────────
+  // "Not in a project" — how many things are filed into no project, by kind.
+  // The counts half of `GET /entities?withoutProject=true` (same conditions).
+  const countWithoutProjectRoute = createRoute({
+    method: "get",
+    path: "/entities/without-project/counts",
+    tags: ["Entities"],
+    summary: "Count the things in no project, by kind",
+    description:
+      "Counts the caller's visible things filed into NO project, grouped by " +
+      "kind (largest first). `total` is the sum of `byProfile` and equals " +
+      "the total of GET /entities?withoutProject=true with no lens.",
+    responses: {
+      ...trpcErrorResponses,
+      200: {
+        description: "Counts by kind",
+        content: {
+          "application/json": {
+            schema: z.object({
+              total: z.number().int(),
+              byProfile: z.array(
+                z.object({ profileSlug: z.string(), count: z.number().int() })
+              ),
+            }),
+          },
+        },
+      },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Missing scope",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(countWithoutProjectRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string;
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    try {
+      const caller = await getCaller(c, { workspaceId: null, userId });
+      return c.json(await caller.entities.countWithoutProject({ userId }), 200);
+    } catch (err) {
+      logger.error(
+        { err, userId },
+        "GET /entities/without-project/counts failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      ) as never; // typed routes can't take a union status; every status it can return is declared via trpcErrorResponses
+    }
+  });
+
   // ── GET /entities ───────────────────────────────────────────────────────
   // Canonical list/search endpoint. Must be registered before GET /entities/:id
   // so Hono's first-match router does not capture `/entities` as an id.
@@ -310,6 +371,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
             "Project lens — narrows results to a single project's data " +
               "(the project entity + everything that belongs_to it). " +
               "Pure-narrowing; cannot widen access past the user floor."
+          ),
+        withoutProject: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = only the things filed into NO project (the " +
+              "'Not in a project' list). 400 with `projectId` or `q`. " +
+              "Counts by kind: GET /entities/without-project/counts."
           ),
         limit: z.string().optional(),
         offset: z
@@ -413,6 +482,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const profileSlug = query.profileSlug || undefined;
     const workspaceIdParam = query.workspaceId || null;
     const projectIdParam = query.projectId || undefined;
+    const withoutProject = query.withoutProject === "true";
     const limitRaw = query.limit;
     const limit = Math.min(
       Math.max(parseInt(limitRaw ?? "20", 10) || 20, 1),
@@ -449,6 +519,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     }
     const hasDateWindow = Boolean(createdAfter || createdBefore);
+    // Same refusal as the date window: the `q` branch applies no lens, so a
+    // "Not in a project" search would silently answer for every project.
+    if (withoutProject && q.length > 0) {
+      return c.json(
+        {
+          error:
+            "withoutProject cannot be combined with q — full-text search does not apply the project lens. List without q.",
+        },
+        400
+      );
+    }
 
     try {
       const effectiveWsIds = workspaceIdParam
@@ -559,6 +640,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               limit: pageDepth,
               includePodWide,
               ...(projectIdParam ? { projectId: projectIdParam } : {}),
+              ...(withoutProject ? { withoutProject } : {}),
               ...(facetSlug ? { facetSlug } : {}),
               ...(facetProfileId ? { facetProfileId } : {}),
               ...(createdAfter ? { createdAfter } : {}),
@@ -626,6 +708,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         offset,
         includePodWide,
         ...(projectIdParam ? { projectId: projectIdParam } : {}),
+        ...(withoutProject ? { withoutProject } : {}),
         ...(facetSlug ? { facetSlug } : {}),
         ...(facetProfileId ? { facetProfileId } : {}),
         ...(createdAfter ? { createdAfter } : {}),

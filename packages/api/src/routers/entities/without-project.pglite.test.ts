@@ -185,9 +185,9 @@ describe("entities.list — withoutProject (the 'Not in a project' list)", () =>
     expect(
       await listIds({ withoutProject: true, profileSlug: "note" })
     ).toEqual(new Set([E_WO_NOTE, E_POD_NOTE]));
-    expect(
-      await listIds({ withoutProject: true, workspaceId: WS })
-    ).toEqual(new Set([E_NONE, E_GONE]));
+    expect(await listIds({ withoutProject: true, workspaceId: WS })).toEqual(
+      new Set([E_NONE, E_GONE])
+    );
   });
 
   it("pages: limit + offset walk the same set, hasMore says when to stop", async () => {
@@ -204,9 +204,9 @@ describe("entities.list — withoutProject (the 'Not in a project' list)", () =>
     expect(first.total).toBe(UNFILED.size);
     expect(first.pagination.hasMore).toBe(true);
     expect(second.pagination.hasMore).toBe(false);
-    expect(
-      new Set([...first.items, ...second.items].map((e) => e.id))
-    ).toEqual(UNFILED);
+    expect(new Set([...first.items, ...second.items].map((e) => e.id))).toEqual(
+      UNFILED
+    );
   });
 
   it("with projectId is a contradiction ⇒ 400, never a silent pick", async () => {

@@ -49,6 +49,11 @@ export const entitiesRouter = router({
          */
         projectId: z.string().uuid().optional(),
         /**
+         * "Not in a project" — only the things filed into no live project.
+         * Forwarded to the regular `list` (400 together with `projectId`).
+         */
+        withoutProject: z.boolean().optional(),
+        /**
          * Scoped-by-default (PRODUCT DECISION): with a workspaceId set, only that
          * workspace's entities are returned. Pass true to also include pod-wide
          * (workspaceId IS NULL) globals — the legacy behavior. Forwarded to the
@@ -94,6 +99,7 @@ export const entitiesRouter = router({
         limit: input.limit || 50,
         offset: input.offset ?? 0,
         ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.withoutProject ? { withoutProject: true } : {}),
         ...(input.includePodWide !== undefined
           ? { includePodWide: input.includePodWide }
           : {}),
@@ -106,6 +112,25 @@ export const entitiesRouter = router({
       });
 
       return result.entities;
+    }),
+
+  /**
+   * "Not in a project" counts — forwards to the regular
+   * `countWithoutProject` as the real user (the read floor is theirs).
+   * Requires: hub-protocol.read scope
+   */
+  countWithoutProject: scopedProcedure(["hub-protocol.read"])
+    .input(z.object({ userId: z.string() }))
+    .query(async ({ input, ctx }) => {
+      assertMayActAs(ctx, input.userId);
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        null
+      );
+      return regularEntitiesRouter
+        .createCaller(callerContext)
+        .countWithoutProject();
     }),
 
   /**
