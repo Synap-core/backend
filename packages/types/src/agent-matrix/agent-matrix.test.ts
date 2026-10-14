@@ -63,6 +63,9 @@ describe("which answers a rule can widen", () => {
     // Above rung 2.8: no rule reaches it.
     expect(canWidenAnswer(ask("destructive-actions-hard-floor"), probe("entity.delete"))).toBe(false);
     expect(canWidenAnswer(ask("untrusted-origin"), probe("entity.create"))).toBe(false);
+    expect(canWidenAnswer(ask("human-gate"), probe("entity.create"))).toBe(false);
+    // 2.85 sits below the rules store: a rule naming the write may widen a close.
+    expect(canWidenAnswer(ask("lifecycle-terminal"), probe("entity.transition"))).toBe(true);
     // A propose RULE is revoked, never stacked on.
     expect(canWidenAnswer(ask("governance-rule"), probe("entity.create"))).toBe(false);
     // Nothing to widen when it already acts or is off.

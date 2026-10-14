@@ -1854,8 +1854,24 @@ export function splitGovernanceEventKey(
  * name that produced it — for the dry-run verdict's `rung` field only (a
  * human-readable "which one" companion; never consulted by real gates).
  */
-function reasonToRung(reason: string): string {
+/**
+ * The engine's propose reason → the rung token the dry-run names. EVERY
+ * `PROPOSE_REASON` has its own token (the matrix's "Decided by" words are keyed
+ * by them, `GOVERNANCE_RUNGS` in `@synap-core/types/agent-matrix`); `default`
+ * is only "no reason given" (rung 9). Pinned by
+ * `resolve-agent-governance-decision.rungs.test.ts`, which derives the reason
+ * set from `PROPOSE_REASON` itself.
+ */
+export function reasonToRung(reason: string): string {
   switch (reason) {
+    case PROPOSE_REASON.HUMAN_GATE:
+      return "human-gate";
+    case PROPOSE_REASON.ARBITRARY_EXECUTION:
+      return "arbitrary-execution";
+    case PROPOSE_REASON.HUMAN_ONLY_STATUS:
+      return "human-only-status";
+    case PROPOSE_REASON.LIFECYCLE_TERMINAL:
+      return "lifecycle-terminal";
     case PROPOSE_REASON.ADMIN:
       return "admin-actions";
     case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:

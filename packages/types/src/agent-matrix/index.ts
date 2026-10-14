@@ -104,13 +104,18 @@ export const GOVERNANCE_RUNGS = [
   "per-channel-capability-gate",
   "untrusted-origin",
   "daily-write-ceiling",
+  "human-gate",
+  "arbitrary-execution",
+  "human-only-status",
+  "lifecycle-terminal",
 ] as const;
 export type GovernanceRung = (typeof GOVERNANCE_RUNGS)[number];
 
 /**
  * The rungs a new `auto` rule can change: those decided BELOW the rules store
- * (rung 2.8 of `decideAgentPolicy` — 5 "writes require proposal", 9 the
- * ask-first default). Everything above it (the floors, an untrusted source,
+ * (rung 2.8 of `decideAgentPolicy` — 2.85 closing a thing, which a rule naming
+ * the exact write may widen; 5 "writes require proposal"; 9 the ask-first
+ * default). Everything above it (the floors, an untrusted source,
  * the daily limit, kind / tool / channel gates) no rule reaches, so the
  * why-drawer names the reason instead of offering Widen. A `propose` RULE is
  * not here either: the person revokes it, never stacks an `auto` rule on it.
@@ -118,6 +123,7 @@ export type GovernanceRung = (typeof GOVERNANCE_RUNGS)[number];
 export const RULE_WIDENABLE_RUNGS = [
   "default",
   "writes-require-proposal",
+  "lifecycle-terminal",
 ] as const satisfies ReadonlyArray<GovernanceRung>;
 
 /**

@@ -2007,6 +2007,10 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> = 
   "per-channel-capability-gate": "The channel's setting",
   "untrusted-origin": "An untrusted source",
   "daily-write-ceiling": "Its daily limit",
+  "human-gate": "A person's decision",
+  "arbitrary-execution": "Running code on the pod",
+  "human-only-status": "A status only a person sets",
+  "lifecycle-terminal": "Closing it (done or lost)",
 };
 
 /** A rung's words; an unknown rung humanizes rather than leaks. */
