@@ -57,10 +57,9 @@ import { queryAgentUsers } from "../../routers/agent-users.js";
 import { agentsOperatedBy, loadAgentPresence } from "../agent-presence.js";
 import {
   AgentBindingError,
-  ownedAgentIds,
   resolveAgentBinding,
-  resolveAgentReach,
 } from "../agent-dispatch/agent-binding.js";
+import { route } from "../agent-dispatch/route.js";
 import { findHandOffPlaybook } from "../agent-dispatch/hand-off-playbook.js";
 import { runPlaybook } from "../playbooks/run-playbook.js";
 import { resolveServiceName } from "@synap-core/types/service-marks";
@@ -199,25 +198,35 @@ export async function giveCaptureToAgent(p: {
     const roster = await queryAgentUsers({ userId: p.userId }, undefined);
     const found = roster.find((r) => r.id === p.agentUserId);
     if (!found) return { status: "agent_not_found" };
-    const direction = resolveAgentDirection({
-      origin: found.createdVia,
-      isPersonalAgent: found.isPersonalAgent,
-    });
-    if (direction === "house") {
-      return {
-        status: "agent_not_wakeable",
-        message: `${found.name ?? "This agent"} is the pod's own agent and never checks in to pick this up. Ask it in its chat instead.`,
-      };
+    const notWakeable = {
+      status: "agent_not_wakeable",
+      message: `${found.name ?? "This agent"} is the pod's own agent and never checks in to pick this up. Ask it in its chat instead.`,
+    } as const;
+    // The pod's own agent is a matter of IDENTITY (how it was made), said by
+    // name before any reach is read.
+    if (
+      resolveAgentDirection({
+        origin: found.createdVia,
+        isPersonalAgent: found.isPersonalAgent,
+      }) === "house"
+    ) {
+      return notWakeable;
     }
-    bound = (await resolveAgentReach(found.id)) === "dispatch";
-    // Visible is not enough. A bound agent must be one this person OWNS (the
-    // run executor's own floor — it never hands a teammate's agent the work);
-    // a pulling agent must act for THIS person, or it will never see the
-    // session (its orient reads its operator's sessions).
-    const mine = bound
-      ? (await ownedAgentIds(p.userId, [found.id])).has(found.id)
-      : (await agentsOperatedBy(p.userId, [found.id])).has(found.id);
-    if (!mine) return { status: "agent_not_found" };
+    // Visible is not enough — THE route decides (`agent-dispatch/route.ts`): a
+    // bound agent must be one this person OWNS, a pulling agent must act for
+    // THIS person (or it never sees the session), and an agent the pod runs
+    // itself (reach 'pod') is never handed work here.
+    const routed = await route({
+      ownerId: p.userId,
+      accept: ["dispatch", "pull"],
+      selector: { agentUserId: found.id },
+      pool: "owned",
+    });
+    if (routed.kind === "refused" && routed.reason === "wrong_reach") {
+      return notWakeable;
+    }
+    if (routed.kind !== "routed") return { status: "agent_not_found" };
+    bound = routed.reach === "dispatch";
     agent = { id: found.id, name: found.name };
   }
 

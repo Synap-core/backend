@@ -64,12 +64,10 @@ import { resolveServiceName } from "@synap-core/types/service-marks";
 import { externalAgentCallFailedReason } from "@synap-core/types/agents";
 import {
   AgentBindingError,
-  listDispatchableAgentIds,
-  ownedAgentIds,
   resolveAgentBinding,
-  resolveAgentReachMany,
   type AgentBinding,
 } from "../../agent-dispatch/agent-binding.js";
+import { route } from "../../agent-dispatch/route.js";
 import {
   asOptionalString,
   agentDisplayName,
@@ -102,50 +100,6 @@ interface SessionRow {
   userId: string;
   agentIds: string[];
   metadata: Record<string, unknown>;
-}
-
-export type RunAgentChoice =
-  | { kind: "agent"; agentUserId: string; via: "param" | "roster" | "single" }
-  | { kind: "invalid_param"; agentUserId: string }
-  | { kind: "choose"; candidates: string[] };
-
-/**
- * THE "which agent does this run use" rule (pure over its reads). Every step
- * is floored on the run OWNER's own agents (`ownedAgentIds` /
- * `listDispatchableAgentIds`, the `ownAgentUserFilter` lineage door): a param,
- * a roster entry or a pod-wide single naming a teammate's agent never hands
- * that agent the work.
- */
-export async function chooseRunAgent(p: {
-  ownerId: string;
-  paramAgentUserId: string | undefined;
-  rosterAgentIds: readonly string[];
-}): Promise<RunAgentChoice> {
-  if (p.paramAgentUserId) {
-    const [reach, owned] = await Promise.all([
-      resolveAgentReachMany([p.paramAgentUserId]),
-      ownedAgentIds(p.ownerId, [p.paramAgentUserId]),
-    ]);
-    return reach.get(p.paramAgentUserId) === "dispatch" &&
-      owned.has(p.paramAgentUserId)
-      ? { kind: "agent", agentUserId: p.paramAgentUserId, via: "param" }
-      : { kind: "invalid_param", agentUserId: p.paramAgentUserId };
-  }
-  if (p.rosterAgentIds.length > 0) {
-    const [reach, owned] = await Promise.all([
-      resolveAgentReachMany(p.rosterAgentIds),
-      ownedAgentIds(p.ownerId, p.rosterAgentIds),
-    ]);
-    const staffed = p.rosterAgentIds.find(
-      (id) => reach.get(id) === "dispatch" && owned.has(id)
-    );
-    if (staffed) return { kind: "agent", agentUserId: staffed, via: "roster" };
-  }
-  const candidates = await listDispatchableAgentIds(p.ownerId);
-  if (candidates.length === 1) {
-    return { kind: "agent", agentUserId: candidates[0]!, via: "single" };
-  }
-  return { kind: "choose", candidates };
 }
 
 async function loadSession(sessionId: string): Promise<SessionRow | null> {
@@ -357,13 +311,17 @@ export class ExternalAgentExecutor implements Executor {
       return { status: "failed", error };
     };
 
-    // 1. Which agent.
-    const choice = await chooseRunAgent({
+    // 1. Which agent — THE route (`agent-dispatch/route.ts`): the param, then
+    // the roster, then the single bound one, else the person chooses.
+    const named = paramAgent(input, session);
+    const choice = await route({
       ownerId,
-      paramAgentUserId: paramAgent(input, session),
-      rosterAgentIds: session.agentIds,
+      accept: ["dispatch"],
+      selector: named ? { agentUserId: named } : null,
+      roster: session.agentIds,
+      pool: "owned",
     });
-    if (choice.kind === "invalid_param") {
+    if (choice.kind === "refused") {
       return fail(
         `${await agentDisplayName(choice.agentUserId)} is not one of your agents bound for dispatch — bind it to its provider, or choose another agent`,
         "invalid-agent"
