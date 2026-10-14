@@ -345,7 +345,10 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
       // consentable data change is pending (TEMPLATE-LIFECYCLE Contract C:
       // a pending — or unmeasurable — data change holds the stamp; the person
       // consents at `synap templates update`). The channel also holds it
-      // while the space's last apply is unfinished.
+      // while the space's last apply is unfinished, and whenever the template
+      // declares a layer-2 kind this pass does not converge (capabilities,
+      // skills, cells…): the version is the WHOLE-template hash, and boot
+      // never runs the rest of layer 2 unattended.
       const pending = await pendingFor(templateKey, resolved);
       const dataHeld = !pending || holdsTemplateStamp(pending);
       if (dataHeld && resolved.version) {
@@ -373,11 +376,27 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         resolved.version &&
         resolved.version !== current?.version
       ) {
-        await finishBootConvergence({
+        const boot = await finishBootConvergence({
           workspaceId: ws.id,
           userId: ws.ownerId,
-          version: resolved.version,
+          template: {
+            version: resolved.version,
+            templatePackage: resolved.packageDefinition,
+            converged: ["playbooks", "rules"],
+          },
         });
+        if (boot.uncovered.length > 0) {
+          versionHeld++;
+          logger.info(
+            {
+              workspaceId: ws.id,
+              templateKey,
+              version: resolved.version,
+              uncovered: boot.uncovered,
+            },
+            "Template version stamp held: the template declares layer-2 kinds boot does not apply (synap templates update)"
+          );
+        }
       }
 
       const changed =

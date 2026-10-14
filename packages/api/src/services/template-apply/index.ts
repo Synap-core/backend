@@ -43,6 +43,7 @@ import {
 } from "../template-apply-finisher.js";
 import { templateApplyWarningFor } from "../template-health.js";
 import { applyLayerOne, type LayerOneResult } from "./layer-one.js";
+import { declaresLayerTwo } from "./layer-two-keys.js";
 import { planTemplateApply, type TemplateApplyAction } from "./plan.js";
 import { resolveTarget } from "./resolve-target.js";
 
@@ -52,26 +53,7 @@ export { applyLayerOne, type LayerOneResult } from "./layer-one.js";
 
 const logger = createLogger({ module: "template-apply" });
 
-/** The package keys that make up layer 2. */
-const LAYER_TWO_KEYS = [
-  "capabilities",
-  "automations",
-  "playbooks",
-  "loops",
-  "cells",
-  "actionPlacements",
-  "rules",
-  "skills",
-] as const;
-
-/** Does this body bring anything for layer 2 to apply? */
-export function declaresLayerTwo(body: Record<string, unknown>): boolean {
-  return (
-    LAYER_TWO_KEYS.some(
-      (k) => Array.isArray(body[k]) && (body[k] as unknown[]).length > 0
-    ) || !!body.projectId
-  );
-}
+export { declaresLayerTwo } from "./layer-two-keys.js";
 
 export interface ApplyTemplateInput {
   /** The layer-1 definition (also the overlay, on a compose). */

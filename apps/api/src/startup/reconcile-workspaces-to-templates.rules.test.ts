@@ -98,9 +98,11 @@ import { reconcileWorkspacesToTemplates } from "./reconcile-workspaces-to-templa
 const stamped = () =>
   (
     h.finishBootConvergence.mock.calls
-      .map((c) => c[0] as { workspaceId: string; version?: string })
+      .map(
+        (c) => c[0] as { workspaceId: string; template?: { version: string } }
+      )
       .find((a) => a.workspaceId === "ws-brand") ?? null
-  )?.version;
+  )?.template?.version;
 /** The domain pass is the call that carries `packageSlug`. */
 const domainPass = () =>
   h.reconcileWorkspaceFromDefinition.mock.calls
@@ -124,6 +126,7 @@ describe("reconcileWorkspacesToTemplates — template rules", () => {
     h.finishBootConvergence.mockReset().mockResolvedValue({
       versionStamped: true,
       packsRecorded: 0,
+      uncovered: [],
     });
     h.rulesConverged = true;
     h.rows = [

@@ -14,10 +14,12 @@
  *     pack's identity;
  *   - its playbooks through `reconcileWorkspacePlaybooksToTemplate` (source-
  *     linked 3-way merge; owner edits reported, never overwritten);
- *   - then — and ONLY when both converged — the ledger entry's `version`
- *     advances to the version just reconciled, through the one finisher's
- *     boot channel (`finishBootConvergence`; invariant 1: the stamp asserts
- *     only what was checked).
+ *   - then — and ONLY when both converged, and the pack declares no other
+ *     layer-2 kind (rules, skills, capabilities… which this pass does not
+ *     apply) — the ledger entry's `version` advances to the version just
+ *     reconciled, through the one finisher's boot channel
+ *     (`finishBootConvergence`; invariant 1: the stamp asserts only what was
+ *     checked).
  *
  * Non-fatal per pack. A pack whose template cannot be resolved (retired,
  * private, cache miss, a profile/view pack recorded by the browser) is skipped,
@@ -33,7 +35,10 @@ import {
   reconcileWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
-import { finishBootConvergence } from "./template-apply-finisher.js";
+import {
+  finishBootConvergence,
+  type BootConvergedTemplate,
+} from "./template-apply-finisher.js";
 import { overlayDefinitionForIdentifiedBase } from "./compose-overlay.js";
 import {
   playbookReportConverged,
@@ -84,8 +89,12 @@ export async function reconcileInstalledPacks(opts: {
   const now = opts.now ?? new Date().toISOString();
   const identity = state?.slug ?? null;
   const out: InstalledPackReconcileOutcome[] = [];
-  /** Packs whose version this pass earned (both layers converged). */
-  const advanced: Array<{ slug: string; version: string }> = [];
+  /**
+   * Packs whose layer 1 + playbooks converged at a new version — the finisher
+   * records the version only when that covers every layer-2 kind the pack
+   * declares (`finishBootConvergence`).
+   */
+  const advanced: Array<BootConvergedTemplate & { slug: string }> = [];
 
   for (const entry of ledger) {
     const slug = entry.slug;
@@ -127,7 +136,12 @@ export async function reconcileInstalledPacks(opts: {
         continue; // stamp withheld — failed, or only PROPOSED (not applied)
       }
       if (resolved.version && resolved.version !== entry.version) {
-        advanced.push({ slug, version: resolved.version });
+        advanced.push({
+          slug,
+          version: resolved.version,
+          templatePackage: resolved.packageDefinition,
+          converged: ["playbooks"],
+        });
       }
       out.push({
         slug,

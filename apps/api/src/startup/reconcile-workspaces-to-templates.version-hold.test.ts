@@ -102,14 +102,24 @@ const change = (opKey: string, destructive: boolean) => ({
   counts: {},
 });
 
-const stampedVersion = () =>
-  (h.finishBootConvergence.mock.calls[0]?.[0] as { version?: string })?.version;
+const bootCall = () =>
+  h.finishBootConvergence.mock.calls[0]?.[0] as
+    | {
+        template?: {
+          version: string;
+          templatePackage: Record<string, unknown>;
+          converged: string[];
+        };
+      }
+    | undefined;
+const stampedVersion = () => bootCall()?.template?.version;
 
 beforeEach(() => {
   h.pending.mockReset();
   h.finishBootConvergence.mockReset().mockResolvedValue({
     versionStamped: true,
     packsRecorded: 0,
+    uncovered: [],
   });
   h.playbooksConverged = true;
   h.rows = [
@@ -160,5 +170,15 @@ describe("boot pass — the version stamp waits for what it checked", () => {
     h.rows[0]!.settings = { packageSlug: "crm", packageVersion: "2.0.0" };
     await reconcileWorkspacesToTemplates();
     expect(h.finishBootConvergence).not.toHaveBeenCalled();
+  });
+
+  it("hands the channel the RESOLVED package and exactly what this pass converged (playbooks + rules) — the channel judges coverage from them (review F3)", async () => {
+    h.pending.mockResolvedValue([]);
+    await reconcileWorkspacesToTemplates();
+    expect(bootCall()?.template).toEqual({
+      version: "2.0.0",
+      templatePackage: { playbooks: [] },
+      converged: ["playbooks", "rules"],
+    });
   });
 });

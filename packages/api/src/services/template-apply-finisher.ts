@@ -33,6 +33,10 @@
 
 import type { WorkspaceSettings } from "@synap/database";
 import { postWorkspaceLayersConverged } from "./capabilities/install-layers.js";
+import {
+  declaredLayerTwoKinds,
+  type LayerTwoKey,
+} from "./template-apply/layer-two-keys.js";
 
 export type TemplateApplyRecord = NonNullable<
   WorkspaceSettings["templateApply"]
@@ -244,27 +248,66 @@ export async function reopenFailedLayerTwo(
 }
 
 /**
- * The BOOT channel of the one finisher (D19 / D20): the boot pass converges a
+ * What a boot pass CONVERGED for one template (a space's own, or an overlay
+ * pack): the version it resolved, the package it resolved (to read which
+ * layer-2 kinds the template declares) and the layer-2 kinds the pass itself
+ * converged. The stamp is earned only when the second set covers the first.
+ */
+export interface BootConvergedTemplate {
+  version: string;
+  /** The resolved package definition (any object shape — only its keys are read). */
+  templatePackage: object;
+  converged: readonly LayerTwoKey[];
+}
+
+/**
+ * The layer-2 kinds a template declares that a boot pass did NOT converge
+ * (empty = the pass covered the whole template, and may stamp it).
+ */
+export function bootUncoveredLayerTwo(t: BootConvergedTemplate): LayerTwoKey[] {
+  return declaredLayerTwoKinds(t.templatePackage).filter(
+    (k) => !t.converged.includes(k)
+  );
+}
+
+/**
+ * The BOOT channel of the one finisher (D19 / D20). A boot pass converges a
  * space's own template (layer 1 + playbooks + rules, every boot) and its
- * overlay packs, and hands here only what it CHECKED converged:
- *   - `version`: the space's template version. Written only when the last
- *     apply on the space is finished and no build is in flight — this pass did not run every layer 2
- *     kind (capabilities, automations, cells, skills…), so it cannot finish an
- *     apply that is awaiting approval, partial, never ran layer 2, or failed;
- *     the update door does, and its finisher stamps;
- *   - `packs`: overlay packs whose layer 1 + playbooks converged.
+ * overlay packs (layer 1 + playbooks), unattended — it never runs the rest of
+ * layer 2 (capabilities, automations, loops, cells, action placements,
+ * skills): that would widen what happens without a person (decision 4), and
+ * cost a Control Plane round-trip per space per boot. The version is the
+ * CP's WHOLE-template hash, so a boot pass may stamp it only when what it
+ * converged covers every layer-2 kind the template declares
+ * (`bootUncoveredLayerTwo` empty — backend-rules: a marker asserts only what
+ * its comparator checked). Otherwise the stamp waits: health keeps the space
+ * drifted, and `synap templates update` runs the full apply and stamps.
+ *
+ *   - `template`: the space's own template. Written also only when the last
+ *     apply on the space is finished and no build is in flight;
+ *   - `packs`: overlay packs, each under the same coverage rule.
  * The state is never changed here: a boot pass builds nothing and fails
  * nothing it would have to record.
  */
 export async function finishBootConvergence(input: {
   workspaceId: string;
   userId: string;
-  version?: string;
-  packs?: Array<{ slug: string; version: string }>;
-}): Promise<{ versionStamped: boolean; packsRecorded: number }> {
-  const { workspaceId, userId, version, packs = [] } = input;
+  template?: BootConvergedTemplate;
+  packs?: Array<BootConvergedTemplate & { slug: string }>;
+}): Promise<{
+  versionStamped: boolean;
+  packsRecorded: number;
+  /** The template's layer-2 kinds this pass did not converge (no stamp). */
+  uncovered: LayerTwoKey[];
+}> {
+  const { workspaceId, userId, template } = input;
+  const uncovered = template ? bootUncoveredLayerTwo(template) : [];
+  const version = uncovered.length === 0 ? template?.version : undefined;
+  const packs = (input.packs ?? [])
+    .filter((p) => bootUncoveredLayerTwo(p).length === 0)
+    .map((p) => ({ slug: p.slug, version: p.version }));
   if (!version && packs.length === 0)
-    return { versionStamped: false, packsRecorded: 0 };
+    return { versionStamped: false, packsRecorded: 0, uncovered };
   const { getDb, writeTemplateState, withPack, isTemplateApplyUnfinished } =
     await import("@synap/database");
   let versionStamped = false;
@@ -294,5 +337,5 @@ export async function finishBootConvergence(input: {
     },
     { userId }
   );
-  return { versionStamped, packsRecorded: packs.length };
+  return { versionStamped, packsRecorded: packs.length, uncovered };
 }

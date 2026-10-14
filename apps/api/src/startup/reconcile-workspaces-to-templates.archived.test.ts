@@ -86,6 +86,7 @@ vi.mock("@synap/api", () => ({
   finishBootConvergence: async () => ({
     versionStamped: true,
     packsRecorded: 0,
+    uncovered: [],
   }),
 }));
 
