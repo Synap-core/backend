@@ -15,6 +15,7 @@ import {
   PropertyValueType,
   ProfileScope,
 } from "../index.js";
+import { setProfilePresentation } from "../repositories/profile-repository.js";
 import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
 import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
 import { PROVENANCE_VALUES } from "./provenance.js";
@@ -24,6 +25,33 @@ import {
   ensureSystemLifecycles,
   type EnsureSystemLifecyclesResult,
 } from "./ensure-system-lifecycles.js";
+
+/**
+ * How the system kinds PRESENT themselves (`ProfilePresentation`,
+ * `@synap-core/types/presentation`; entity rendering plan ede89d4d, decision
+ * 8). Backfilled into `uiHints.presentation` by `ensureSystemProfiles` ONLY
+ * where the row has none — a template that refines a system kind keeps its
+ * refinement. Only the kinds whose family is obvious; every other system kind
+ * falls to the renderer's mime/generic fallback. Values must parse under
+ * `parseProfilePresentation` and name properties the kind links
+ * (`SYSTEM_PROFILE_PROPERTY_LINKS`) — pinned by
+ * `ensure-system-profiles.presentation.test.ts`.
+ */
+export const SYSTEM_PROFILE_PRESENTATIONS: Readonly<
+  Record<string, Record<string, unknown>>
+> = {
+  bookmark: { family: "link", media: { source: { property: "url" } } },
+  website: { family: "link", media: { source: { property: "url" } } },
+  article: { family: "link", media: { source: { property: "url" } } },
+  file: {
+    family: "media",
+    media: { source: { documentId: true }, kind: "auto" },
+  },
+  person: { family: "record" },
+  company: { family: "record" },
+  note: { family: "document" },
+  knowledge: { family: "document" },
+};
 
 /**
  * What Knowledge is — and, as importantly, what it is NOT (the routing rule
@@ -1897,6 +1925,16 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         });
         createdProfiles.set(profile.slug, created.id);
         profilesCreated++;
+      }
+      // Presentation backfill — new AND existing rows, only where absent.
+      const presentation = SYSTEM_PROFILE_PRESENTATIONS[profile.slug];
+      if (presentation) {
+        await setProfilePresentation(
+          db,
+          createdProfiles.get(profile.slug)!,
+          presentation,
+          { onlyIfAbsent: true }
+        );
       }
     }
 

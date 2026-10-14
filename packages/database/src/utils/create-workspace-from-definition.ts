@@ -15,7 +15,11 @@ import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
 import { WorkspaceMemberRepository } from "../repositories/workspace-member-repository.js";
 import { templateStateSettings, writeTemplateState } from "./template-state.js";
-import { ProfileRepository } from "../repositories/profile-repository.js";
+import {
+  ProfileRepository,
+  declaredProfilePresentation,
+  setProfilePresentation,
+} from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { SYSTEM_PROFILE_SLUGS } from "./ensure-system-profiles.js";
@@ -275,6 +279,14 @@ export interface WorkspaceDefinitionInput {
      * (`withLifecycleOptions`) and declared (`declareLifecycle`) on apply.
      */
     lifecycle?: LifecycleAuthoring;
+    /**
+     * How the kind PRESENTS itself (`ProfilePresentation`,
+     * `@synap-core/types/presentation`): family + media source + per-altitude
+     * fields. Stored as `uiHints.presentation` and converged on every apply
+     * through `setProfilePresentation` (create AND reconcile, new AND reused
+     * profiles). Parsed by the doors that accept it, not here.
+     */
+    presentation?: Record<string, unknown>;
     // Proposal format: flat property list
     properties?: Array<{
       slug: string;
@@ -295,6 +307,8 @@ export interface WorkspaceDefinitionInput {
       color?: string;
       description?: string;
       hideFromCreate?: boolean;
+      /** CP registry spelling of `presentation` (the top-level one wins). */
+      presentation?: Record<string, unknown>;
     };
     // CP registry format (alternative to `properties`)
     propertyDefs?: Array<{
@@ -1503,6 +1517,19 @@ export async function createWorkspaceFromDefinition(
         plural: created!.plural,
       };
       profileIds.push(created!.id);
+
+      // Presentation (entity rendering, decision 8): converge
+      // `uiHints.presentation` on the new OR reused row, BEFORE the property
+      // pass below (which `continue`s early for a reused profile). Merged into
+      // the live ui_hints — icon/color/description survive.
+      const presentation = declaredProfilePresentation(profile);
+      if (presentation) {
+        try {
+          await setProfilePresentation(dbConn, created!.id, presentation);
+        } catch (err) {
+          await handleStepError(`profiles[${profile.slug}].presentation`, err);
+        }
+      }
 
       // 4. Create property definitions.
       //

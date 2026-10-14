@@ -55,7 +55,11 @@ import {
 } from "../schema/intelligence-commands.js";
 import { EventRepository } from "../repositories/event-repository.js";
 import { WorkspaceRepository } from "../repositories/workspace-repository.js";
-import { ProfileRepository } from "../repositories/profile-repository.js";
+import {
+  ProfileRepository,
+  declaredProfilePresentation,
+  setProfilePresentation,
+} from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
@@ -252,6 +256,11 @@ export interface ReconcileReport {
       existingEntityScope: string;
       declaredEntityScope: "pod" | "workspace" | null;
     }>;
+    /**
+     * Profiles whose `uiHints.presentation` this run wrote (new or changed),
+     * through `setProfilePresentation`. Absent when none moved.
+     */
+    presentations?: string[];
   };
   properties: {
     /** New overlay/base property-defs added. */
@@ -853,6 +862,18 @@ export async function reconcileWorkspaceFromDefinition(
       }
     }
     profileMap[profile.slug] = resolved.id;
+
+    // Presentation (entity rendering, decision 8). `ui_hints` is create-only on
+    // this door, so an EXISTING profile only learns a presentation the catalog
+    // added later through here: merged into the live ui_hints (icon/color/
+    // description/retired survive), written only when it differs. No marker
+    // gates it — this pass runs every boot and the comparator is the stored
+    // value itself (IS DISTINCT FROM), so there is no stamp to outrun.
+    const presentation = declaredProfilePresentation(profile);
+    if (presentation && !dryRun) {
+      if (await setProfilePresentation(dbConn, resolved.id, presentation))
+        (report.profiles.presentations ??= []).push(profile.slug);
+    }
 
     // Property-defs. Reused pod-wide profile → add as WORKSPACE OVERLAY; freshly
     // created profile → base def (workspace_id null; profile row carries scope).

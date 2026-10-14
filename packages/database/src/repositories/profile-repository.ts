@@ -964,3 +964,72 @@ export async function markProfileRetired(
     })
     .where(eq(profiles.id, profileId));
 }
+
+/**
+ * THE ONE write of a profile's `ui_hints.presentation` (entity rendering plan
+ * ede89d4d, decision 8: a kind's presentation family + media source, declared
+ * on its catalog profile, stored as `uiHints.presentation` — no column).
+ *
+ * `ui_hints` is otherwise CREATE-ONLY on the template doors, so an existing
+ * pod's profile would never learn a presentation the catalog added later. This
+ * jsonb-MERGES the one key into the live row: icon, color, description, the
+ * retirement tombstone and every other key survive. Idempotent and race-free —
+ * the UPDATE only fires when the stored value IS DISTINCT FROM the declared one
+ * (jsonb equality, key-order blind), and returns whether it wrote.
+ *
+ * NOT a validator. `@synap/database` cannot import `@synap-core/types` (types
+ * dev-depends on this package), so the ONE parser, `parseProfilePresentation`
+ * (`@synap-core/types/presentation`), runs at the doors that accept a
+ * declaration — the catalog validator, the tRPC definition schemas, MCP
+ * `define_kind` — and again in every reader's normaliser.
+ */
+export async function setProfilePresentation(
+  db: Pick<PostgresJsDatabase<typeof schema>, "update">,
+  profileId: string,
+  presentation: Record<string, unknown>,
+  opts: {
+    /**
+     * Backfill only: write when the row has NO presentation yet. The system
+     * seeder uses it so a template that refines a system kind (life-os
+     * `person` adds its avatar) is never flipped back on the next boot.
+     */
+    onlyIfAbsent?: boolean;
+  } = {}
+): Promise<boolean> {
+  const json = JSON.stringify(presentation);
+  const rows = await db
+    .update(profiles)
+    .set({
+      uiHints: drizzleSql`coalesce(${profiles.uiHints}, '{}'::jsonb) || jsonb_build_object('presentation', ${json}::jsonb)`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(profiles.id, profileId),
+        opts.onlyIfAbsent
+          ? drizzleSql`(${profiles.uiHints} -> 'presentation') IS NULL`
+          : drizzleSql`${profiles.uiHints} -> 'presentation' IS DISTINCT FROM ${json}::jsonb`
+      )
+    )
+    .returning({ id: profiles.id });
+  return rows.length > 0;
+}
+
+/**
+ * A definition profile's declared presentation: the top-level authoring
+ * spelling (`presentation:` on a catalog YAML profile) wins over the CP
+ * registry spelling (`uiHints.presentation`). Shape floor only (a plain
+ * object) — see `setProfilePresentation` for where it is parsed.
+ */
+export function declaredProfilePresentation(profile: {
+  presentation?: unknown;
+  uiHints?: unknown;
+}): Record<string, unknown> | null {
+  const isRecord = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  if (isRecord(profile.presentation)) return profile.presentation;
+  const hinted = isRecord(profile.uiHints)
+    ? profile.uiHints.presentation
+    : undefined;
+  return isRecord(hinted) ? hinted : null;
+}

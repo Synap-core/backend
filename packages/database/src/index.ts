@@ -192,6 +192,7 @@ export {
   ensureTeamMemberRoleProfile,
   RETIRED_PROFILE_PROPERTIES,
   SYSTEM_PROFILE_PROPERTY_LINKS,
+  SYSTEM_PROFILE_PRESENTATIONS,
   planRetirementUnlink,
   reportEnsureSystemProfilesResult,
   type EnsureSystemProfilesResult,
@@ -308,7 +309,11 @@ export {
   type ProfileApplyResolution,
   type ProfileRetirement,
 } from "./utils/resolve-profile-for-apply.js";
-export { markProfileRetired } from "./repositories/profile-repository.js";
+export {
+  markProfileRetired,
+  setProfilePresentation,
+  declaredProfilePresentation,
+} from "./repositories/profile-repository.js";
 export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
 export {
   buildStoredConstraints,
