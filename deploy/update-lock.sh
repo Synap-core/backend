@@ -36,6 +36,17 @@ synap_update_lock() {
     _sul_file="$_sul_dir/state/update.lock"
     _sul_owner="$_sul_op pid=$$ since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+    # `synap update --from-source` re-execs itself after syncing the checkout:
+    # same pid, and it already holds the lock (the flock fd is inherited; the
+    # mkdir lock's owner is this pid). Re-arm the mkdir cleanup the exec dropped.
+    if [ -n "${SYNAP_LOCK_HELD_BY:-}" ] && [ "$SYNAP_LOCK_HELD_BY" = "$$" ]; then
+        if [ -d "$_sul_file.d" ]; then
+            _SYNAP_LOCK_DIR="$_sul_file.d"
+            trap 'rm -rf "$_SYNAP_LOCK_DIR"' EXIT
+        fi
+        return 0
+    fi
+
     if [ "${SYNAP_LOCK_IMPL:-}" != mkdir ] && command -v flock >/dev/null 2>&1; then
         exec 9>>"$_sul_file" || { echo "❌ cannot open $_sul_file" >&2; return 1; }
         if ! flock -n 9; then

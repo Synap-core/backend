@@ -6,6 +6,10 @@ set -e
 
 # Absolute path of this script (installerVersion is derived from its bytes).
 SYNAP_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# The bytes this process is running. `update --from-source` syncs the checkout
+# (which can replace this file on disk) and re-execs when they changed, so the
+# update runs the code it is installing — not the previous installer.
+SYNAP_SELF_CKSUM="$(cksum < "$SYNAP_SELF" 2>/dev/null || true)"
 
 # Pin the docker compose project name deterministically. Compose otherwise
 # falls back to the cwd basename, which on a git checkout is "deploy" — and
@@ -318,6 +322,8 @@ sync_git_before_build() {
 
     if [ "${SYNAP_SKIP_GIT_SYNC:-}" = "1" ]; then
         echo -e "${YELLOW}⚠️  SYNAP_SKIP_GIT_SYNC=1 — building from the checkout as-is (not synced to origin). Do not use this on a deploy pod.${NC}"
+    elif [ -n "${SYNAP_UPDATE_SYNCED:-}" ]; then
+        : # `synap update` already synced this run; build exactly the code it is running
     else
         (
             cd "$repo_root" || exit 1
@@ -4041,6 +4047,7 @@ cmd_update() {
     cd "$deploy_dir"
 
     local mode="release" ref="" force=0
+    local -a _update_argv=("$@")
     while [[ $# -gt 0 ]]; do
         case $1 in
             --release|-r)
@@ -4077,6 +4084,19 @@ USAGE
         esac
     done
     [ "$ref" = latest ] && ref=""
+    # --from-source: sync the checkout FIRST, then run the synced installer. A
+    # running bash keeps the functions it parsed, so without this re-exec every
+    # fix to the update path (e.g. the Kratos render) only took effect one
+    # update later — the failed run still used the old code (2026-10-14).
+    if [ "$mode" = source ] && [ "${SYNAP_SKIP_GIT_SYNC:-}" != 1 ] && [ -z "${SYNAP_UPDATE_SYNCED:-}" ]; then
+        sync_git_before_build || exit 1
+        if [ "$(cksum < "$SYNAP_SELF" 2>/dev/null)" != "$SYNAP_SELF_CKSUM" ]; then
+            echo -e "${BLUE}🔁 The installer changed with this checkout — continuing with the new one.${NC}"
+            # Same pid, so the update lock this process holds carries over.
+            exec env SYNAP_UPDATE_SYNCED=1 SYNAP_LOCK_HELD_BY="$$" "$SYNAP_SELF" update "${_update_argv[@]}"
+        fi
+        export SYNAP_UPDATE_SYNCED=1
+    fi
     if [ "$mode" = release ] && [ -z "$ref" ]; then
         ref="${SYNAP_UPDATE_CHANNEL:-$(_ue_env_get SYNAP_UPDATE_CHANNEL)}"
         ref="${ref:-stable}"
