@@ -1,36 +1,24 @@
 /**
- * TRIPWIRE — the two composite-op mirrors stay in lock-step (Rule Loop ops).
+ * TRIPWIRE — composite proposal ops are declared ONCE (the server package).
  *
- * `CompositeProposalOperation` is declared TWICE:
- *   - `synap-backend/packages/types/src/proposals/index.ts` (server, owns the
- *     ref-resolution helpers and is what the materializer consumes),
- *   - `synap-app/packages/headless/src/proposal-types/types.ts` (browser-safe, so
- *     frontend packages can narrow without a runtime dep on the server entry).
+ * `CompositeProposalOperation` used to be declared TWICE: the server
+ * (`synap-backend/packages/types/src/proposals/index.ts`) and a browser-safe
+ * mirror (`synap-app/packages/headless/src/proposal-types/types.ts`). A
+ * vocabulary declared in two places where only one gets updated is this repo's
+ * most repeated defect (the DeclarativeBlock seam-fork: same op name, different
+ * INTERNAL shape, blank render), so this test compared field signatures.
  *
- * A vocabulary declared in two places where only one gets updated is this
- * repo's most repeated defect, and it has already bitten on op payloads: the
- * DeclarativeBlock seam-fork shipped a backend `type`/`string[]`/`action`
- * against a browser `kind`/`{label,value}`/`actionId` — same outer name,
- * different INTERNAL shape, blank render, `as any` hiding it from tsc. So this
- * test compares FIELD SIGNATURES, not just op names.
+ * synap-app d9617239 (2026-10-12) removed the mirror: the browser file now
+ * re-exports every op type from `@synap-core/types/proposals`. A fork is
+ * impossible while that holds, so the guard now pins the stronger invariant:
+ * the browser file declares NO op interface of its own and takes the union
+ * from the server package. Re-declaring one there (the old mirror shape) fails.
  *
- * SCOPE — DERIVED, not hand-listed: every op the BROWSER mirror declares must
- * be declared by the server with identical fields, except the classified
- * {@link DELIBERATELY_ASYMMETRIC} ops. A new mirrored op (as `create_playbook`
- * was) joins the check by existing; an op mirrored on one side only fails.
- * `create_entity` / `create_relation` were already DELIBERATELY asymmetric
- * before this test existed (the server op carries `facets`,
- * `existingEntityId`, `targetWorkspaceId`, … that the browser mirror has no use
- * for). Pinning those would fail on day one and be silenced, which is worse
- * than not pinning them.
- *
- * NOT covered: a server op the browser does not mirror at all (today the plan
- * ops `create_session` / `create_document` / `create_project` / `create_link`)
- * — the browser cannot narrow to a payload it never declared, so there is no
- * seam to fork.
+ * NOT covered: an op type declared in some OTHER synap-app file; this reads the
+ * one file that held the mirror.
  *
  * Cross-repo, guarded like `cp-pod-package-schema-parity`: when `synap-app` is
- * not checked out beside `synap-backend`, the parity assertions are skipped
+ * not checked out beside `synap-backend`, the browser assertions are skipped
  * rather than reading an empty string and reporting green.
  */
 
@@ -50,12 +38,6 @@ const BROWSER_TYPES = join(
   "synap-app/packages/headless/src/proposal-types/types.ts"
 );
 
-/** Mirrored on both sides on purpose with DIFFERENT shapes (see the header). */
-const DELIBERATELY_ASYMMETRIC: ReadonlySet<string> = new Set([
-  "create_entity",
-  "create_relation",
-]);
-
 /** Strip comments so prose can never be read as a field signature. */
 function strip(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
@@ -67,7 +49,11 @@ function strip(src: string): string {
  * (prettier wrapping a long union) are not reported as drift.
  */
 function opFieldSignatures(file: string): Map<string, string[]> {
-  const src = strip(readFileSync(file, "utf8"));
+  return opFieldSignaturesOf(readFileSync(file, "utf8"));
+}
+
+function opFieldSignaturesOf(raw: string): Map<string, string[]> {
+  const src = strip(raw);
   const out = new Map<string, string[]>();
   for (const m of src.matchAll(/export interface (\w+) \{([\s\S]*?)\n\}/g)) {
     const body = m[2]!;
@@ -103,50 +89,31 @@ describe("tripwire: mirrored composite ops mirror each other exactly", () => {
     expect(server.get("create_relation")).toContain("sourceRef: string");
   });
 
+  it("SELF-GUARD: the parser sees an inline op declaration", () => {
+    const sample =
+      'export interface X {\n  op: "create_skill";\n  ref: string;\n}';
+    expect([...opFieldSignaturesOf(sample).keys()]).toEqual(["create_skill"]);
+  });
+
   it.runIf(bothCheckedOut)(
-    "SELF-GUARD: the derived set covers the mirrored ops, and every exemption is still mirrored",
+    "the browser file declares no composite op of its own (one declaration)",
     () => {
       const browser = opFieldSignatures(BROWSER_TYPES);
-      const checked = [...browser.keys()].filter(
-        (op) => !DELIBERATELY_ASYMMETRIC.has(op)
-      );
-      for (const op of [
-        "create_skill",
-        "create_automation",
-        "create_rule",
-        "create_playbook",
-      ]) {
-        expect(checked, `${op} is no longer in the checked set`).toContain(op);
-      }
-      // A stale exemption silently widens what this test lets through.
-      for (const op of DELIBERATELY_ASYMMETRIC)
-        expect(browser.has(op)).toBe(true);
+      expect(
+        [...browser.keys()],
+        "synap-app re-declares composite ops — re-export them from " +
+          "@synap-core/types/proposals instead (a second declaration forks)."
+      ).toEqual([]);
     }
   );
 
   it.runIf(bothCheckedOut)(
-    "every op the browser mirrors is declared by the server with identical fields",
+    "the browser file takes the op union from the server package",
     () => {
-      const server = opFieldSignatures(SERVER_TYPES);
-      const browser = opFieldSignatures(BROWSER_TYPES);
-      for (const op of browser.keys()) {
-        if (DELIBERATELY_ASYMMETRIC.has(op)) continue;
-        expect(
-          server.get(op),
-          `${op} missing from the server union`
-        ).toBeDefined();
-        expect(
-          browser.get(op),
-          `${op} missing from the browser mirror`
-        ).toBeDefined();
-        expect(
-          { op, fields: browser.get(op) },
-          `The two \`CompositeProposalOperation\` mirrors disagree on the ` +
-            `INTERNAL shape of \`${op}\`. Same op name, different payload = a ` +
-            `seam fork: the browser narrows to a field the server never sends ` +
-            `(or vice versa) and tsc stays green on both sides.`
-        ).toEqual({ op, fields: server.get(op) });
-      }
+      const src = strip(readFileSync(BROWSER_TYPES, "utf8"));
+      expect(src).toMatch(
+        /import type \{[^}]*\bCompositeProposalOperation\b[^}]*\} from "@synap-core\/types\/proposals"/
+      );
     }
   );
 });

@@ -593,3 +593,16 @@ export const CREATABLE_VIEW_DEFINITIONS = VIEW_DEFINITIONS.filter(
 export const STRUCTURED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
   (d) => d.category === "structured"
 ).map((d) => d.key);
+
+/**
+ * The view types a proposal's `create_view` composite op may ask for. A
+ * subset of the structured types (pinned by renderables.test.ts); re-exported
+ * from `@synap-core/types/proposals`.
+ */
+export const COMPOSITE_VIEW_TYPES = [
+  "list",
+  "table",
+  "kanban",
+  "gallery",
+] as const;
+export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];

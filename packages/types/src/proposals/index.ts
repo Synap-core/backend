@@ -916,14 +916,12 @@ export interface CompositeCreateViewOp {
   config?: Record<string, unknown>;
 }
 
-/** The view types a `create_view` op may ask for (all structured). */
-export const COMPOSITE_VIEW_TYPES = [
-  "list",
-  "table",
-  "kanban",
-  "gallery",
-] as const;
-export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
+// The view types a `create_view` op may ask for live in the renderables
+// catalog (the one source of view keys — tripwire renderable-lists-one-source).
+export {
+  COMPOSITE_VIEW_TYPES,
+  type CompositeViewType,
+} from "../renderables/views.js";
 
 /**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────

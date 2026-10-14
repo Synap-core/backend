@@ -223,3 +223,19 @@ describe("leaf subpath", () => {
     expect([...CONTENT_KINDS]).toContain("widget");
   });
 });
+
+describe("composite create_view types", () => {
+  it("every type a create_view op may ask for is a structured view", async () => {
+    const { COMPOSITE_VIEW_TYPES, STRUCTURED_VIEW_TYPES } =
+      await import("./views.js");
+    for (const t of COMPOSITE_VIEW_TYPES) {
+      expect(STRUCTURED_VIEW_TYPES, t).toContain(t);
+    }
+  });
+
+  it("is the same list @synap-core/types/proposals exports", async () => {
+    const views = await import("./views.js");
+    const proposals = await import("../proposals/index.js");
+    expect(proposals.COMPOSITE_VIEW_TYPES).toBe(views.COMPOSITE_VIEW_TYPES);
+  });
+});
