@@ -20,7 +20,7 @@
  *  - unmerge: reverse stamp + restore snapshots; deletedRelationIds irreversible
  */
 
-import { eq, and, or, isNull, ne, inArray } from "drizzle-orm";
+import { eq, and, or, isNull, ne, inArray, sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -760,15 +760,14 @@ export async function mergeEntities(
 
     // 8. Soft-delete loser + stamp mergedInto.
     // When document was moved, clear loser's documentId so only winner owns it.
-    const loserSystemData = {
-      ...((loser.systemData ?? {}) as Record<string, unknown>),
-      mergedInto: winnerId,
-    };
+    // Only the `mergedInto` key is written: `loser` was read before this
+    // transaction, and a whole-object write would drop whatever a concurrent
+    // writer (the media copy) recorded since.
     await tx
       .update(entities)
       .set({
         deletedAt: new Date(),
-        systemData: loserSystemData,
+        systemData: stampMergedInto(winnerId),
         updatedAt: new Date(),
         ...(documentMoved ? { documentId: null } : {}),
       })
@@ -1113,7 +1112,7 @@ export async function unmergeEntities(
           previousWinnerSnapshot.documentId !== undefined
             ? previousWinnerSnapshot.documentId
             : winner.documentId,
-        systemData: winnerSystemData,
+        systemData: restoreKeepingMedia(winnerSystemData),
         version: winner.version + 1,
         updatedAt: new Date(),
       })
@@ -1154,7 +1153,7 @@ export async function unmergeEntities(
         preview: loserPreview,
         properties: loserProperties,
         documentId: loserDocumentId,
-        systemData: loserBaseSystem,
+        systemData: restoreKeepingMedia(loserBaseSystem),
         version: loser.version + 1,
         updatedAt: new Date(),
       })
@@ -1165,6 +1164,22 @@ export async function unmergeEntities(
 }
 
 // ── Internals ────────────────────────────────────────────────────────────────
+
+/** The loser's `systemData.mergedInto`, written as that ONE key. */
+export function stampMergedInto(winnerId: string): SQL {
+  return sql`jsonb_set(COALESCE(${entities.systemData}, '{}'::jsonb), '{mergedInto}', to_jsonb(${winnerId}::text), true)`;
+}
+
+/**
+ * An unmerge restores a systemData SNAPSHOT taken at merge time — but the
+ * pod's media copy keeps writing `media` / `mediaCopyFailures` on the row
+ * after that. Restore the snapshot, then lay the row's CURRENT values of those
+ * two keys over it (when it has them), so an unmerge never forgets a copy
+ * whose blob still exists.
+ */
+export function restoreKeepingMedia(snapshot: Record<string, unknown>): SQL {
+  return sql`${JSON.stringify(snapshot)}::jsonb || jsonb_strip_nulls(jsonb_build_object('media', ${entities.systemData} -> 'media', 'mediaCopyFailures', ${entities.systemData} -> 'mediaCopyFailures'))`;
+}
 
 const UNIQUE_VIOLATION = "23505";
 
