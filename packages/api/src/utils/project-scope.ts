@@ -50,6 +50,7 @@ import { db, podSharedEntityIdsFor } from "@synap/database";
 import { sessionDocumentReadableWhere } from "../access/session-visibility.js";
 import {
   projectMembers,
+  projects,
   relations,
   entities,
   entityFacets,
@@ -472,6 +473,32 @@ export function projectLensWhere(
   projectLens: string | string[]
 ): SQL {
   return exposureLensWhere(entityIdColumn, projectLens, [BELONGS_TO_PROJECT]);
+}
+
+/**
+ * NARROWING LENS — "Not in a project": the entity is filed into NO project,
+ * i.e. it carries no `belongs_to_project` edge to a project that still exists.
+ * The other half of `projectLensWhere`, and like it PURE narrowing — the caller
+ * ANDs it with the access floor; on its own it never grants a row.
+ *
+ * Only an edge to a LIVE `projects` row counts. Projects are hard-deleted and
+ * their edges are left behind (`ProjectRepository.delete`), so a bare
+ * "has any edge" test would hide a thing whose only project was deleted from
+ * BOTH places at once — in no project, and not in the inbox either. An
+ * archived project still holds its things.
+ */
+export function notInAnyProjectWhere(entityIdColumn: AnyPgColumn): SQL {
+  const filed = db
+    .select({ id: relations.sourceEntityId })
+    .from(relations)
+    .innerJoin(projects, eq(projects.id, relations.targetEntityId))
+    .where(
+      and(
+        eq(relations.type, BELONGS_TO_PROJECT),
+        isNotNull(relations.sourceEntityId)
+      )
+    );
+  return not(inArray(entityIdColumn, filed));
 }
 
 /**

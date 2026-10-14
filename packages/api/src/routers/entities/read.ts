@@ -23,7 +23,6 @@ import {
   gte,
   lt,
   inArray,
-  notInArray,
   getDb,
   ProfileResolutionService,
   eventRepository,
@@ -33,7 +32,7 @@ import {
   drizzleSql,
   notProbeEntityWhere,
 } from "@synap/database";
-import { entities, relations } from "@synap/database/schema";
+import { entities } from "@synap/database/schema";
 import { EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
@@ -42,7 +41,7 @@ import {
   buildPaginatedResponse,
 } from "../../utils/pagination.js";
 import {
-  BELONGS_TO_PROJECT,
+  notInAnyProjectWhere,
   projectLensWhere,
   facetInWorkspaceLensWhere,
 } from "../../utils/project-scope.js";
@@ -103,6 +102,51 @@ export const readProcs = {
         workspaceId: input?.workspaceId ?? null,
       });
       return { counts };
+    }),
+
+  /**
+   * "Not in a project" — how many things are filed into no project, by kind.
+   * The counts half of `list({ withoutProject: true })`: the SAME conditions
+   * as that list with no lens (the user read floor, live, not a probe, not in
+   * a live project), so `total` equals the list's `total` and a count of N
+   * opens a list of N.
+   *
+   * By KIND (`entities.type`) only — a role is a hat the thing wears, not a
+   * second thing, so `total` is the sum of `byProfile`. Sorted largest first.
+   */
+  countWithoutProject: protectedProcedure
+    .output(
+      z.object({
+        total: z.number().int(),
+        byProfile: z.array(
+          z.object({ profileSlug: z.string(), count: z.number().int() })
+        ),
+      })
+    )
+    .query(async ({ ctx }) => {
+      const rows = await db
+        .select({
+          profileSlug: entities.type,
+          count: drizzleSql<number>`count(*)::int`,
+        })
+        .from(entities)
+        .where(
+          and(
+            isNull(entities.deletedAt),
+            notProbeEntityWhere(),
+            entityReadVisibleWhere(ctx.userId),
+            notInAnyProjectWhere(entities.id)
+          )
+        )
+        .groupBy(entities.type);
+      const byProfile = rows.sort(
+        (a, b) =>
+          b.count - a.count || a.profileSlug.localeCompare(b.profileSlug)
+      );
+      return {
+        total: byProfile.reduce((sum, r) => sum + r.count, 0),
+        byProfile,
+      };
     }),
 
   /**
@@ -261,6 +305,13 @@ export const readProcs = {
          * Ignored without `projectId` or without a workspace lens.
          */
         projectWithinWorkspace: z.boolean().optional(),
+        /**
+         * "Not in a project" — only the things filed into NO live project
+         * (`notInAnyProjectWhere`), the other half of `projectId`. A narrow on
+         * whatever lens is set (no lens = the user floor). Giving it with
+         * `projectId` is a contradiction and a 400.
+         */
+        withoutProject: z.boolean().optional(),
         /** Filter to entities materialized from a specific proposal (provenance). */
         sourceProposalId: z.string().uuid().optional(),
         /**
@@ -474,6 +525,16 @@ export const readProcs = {
       if (input.projectId) {
         conditions.push(projectLensWhere(entities.id, input.projectId));
       }
+      if (input.withoutProject) {
+        if (input.projectId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "withoutProject and projectId contradict each other — ask for one project or for the things in none",
+          });
+        }
+        conditions.push(notInAnyProjectWhere(entities.id));
+      }
 
       // Facet filter (Kind + Facets): narrow to entities carrying a live
       // facet of the given role-profile, visible under the same lens as the
@@ -683,15 +744,7 @@ export const readProcs = {
           ...(input.projectId
             ? { narrow: projectLensWhere(entities.id, input.projectId) }
             : input.withoutProject
-              ? {
-                  narrow: notInArray(
-                    entities.id,
-                    db
-                      .select({ id: relations.sourceEntityId })
-                      .from(relations)
-                      .where(eq(relations.type, BELONGS_TO_PROJECT))
-                  ),
-                }
+              ? { narrow: notInAnyProjectWhere(entities.id) }
               : {}),
         }
       );
