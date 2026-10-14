@@ -96,8 +96,11 @@ describe("MCP synap_create_workspace is governed", () => {
     expect(block).toMatch(/subjectType:\s*["']workspace["']/);
     expect(block).toMatch(/action:\s*["']create["']/);
     expect(block).toContain('status: "proposed"');
-    // Granted path still uses the shared idempotent create door.
-    expect(block).toContain("createWorkspaceFromDefinitionIdempotent");
+    // Granted path runs the ONE template apply, and only AFTER the gate.
+    const gate = block.indexOf("checkPermissionOrPropose(");
+    const apply = block.indexOf("applyTemplate({");
+    expect(gate).toBeGreaterThan(-1);
+    expect(apply).toBeGreaterThan(gate);
     // Definition rides in gate data for approve materialization.
     expect(block).toMatch(/definition,/);
   });

@@ -12,6 +12,7 @@
  * "create / resume / re-sync / skip" with the same lookup and the same plan.
  */
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
+import { TRPCError } from "@trpc/server";
 import {
   createWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
@@ -20,8 +21,10 @@ import {
   drizzleSql,
   workspaces,
   eq,
+  readTemplateState,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
+  type WorkspaceSettings,
 } from "@synap/database";
 import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
@@ -61,6 +64,13 @@ export interface LayerOneInput {
   createdBy?: "user" | "provisioning" | "plugin";
   /** The create core's per-step progress (a door's realtime events). */
   onProgress?: (step: string, pct: number, label: string) => void;
+  /**
+   * ADOPT this existing space into `packageSlug` (Hub `/pod/adopt`, approve
+   * `workspace/adopt`): no lookup — the door names the space. A space that
+   * does not hold the identity yet takes it (slug + key, the one writer) and
+   * is re-synced, its own capabilities kept (merged, not replaced).
+   */
+  adoptWorkspaceId?: string;
 }
 
 export interface LayerOneResult {
@@ -174,6 +184,53 @@ function builtOf(result: {
   };
 }
 
+/**
+ * The space an adopt names. When it does not hold `packageSlug` yet, it takes
+ * the identity now (slug through the one writer — a slug another active space
+ * holds is the typed 409 — and the key, so the next apply finds it by key).
+ */
+async function adoptTarget(
+  workspaceId: string,
+  packageSlug: string | undefined,
+  userId: string
+): Promise<{
+  target: Extract<Awaited<ReturnType<typeof resolveTarget>>, { found: true }>;
+  adopting: boolean;
+}> {
+  if (!packageSlug)
+    throw new Error("template apply: an adopt needs the template slug");
+  const [row] = await db
+    .select({
+      settings: workspaces.settings,
+      packageSlug: workspaces.packageSlug,
+      provisioningStatus: workspaces.provisioningStatus,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (!row)
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Workspace not found: ${workspaceId}`,
+    });
+  const settings = (row.settings ?? null) as WorkspaceSettings | null;
+  const state = readTemplateState(settings, row);
+  const adopting = state?.slug !== packageSlug;
+  if (adopting) {
+    await writeTemplateState(
+      db,
+      workspaceId,
+      { slug: packageSlug },
+      { userId }
+    );
+    await stampKey(workspaceId, packageSlug);
+  }
+  return {
+    target: { found: true, workspaceId, via: "key", settings, state },
+    adopting,
+  };
+}
+
 export async function applyLayerOne(
   input: LayerOneInput
 ): Promise<LayerOneResult> {
@@ -190,17 +247,24 @@ export async function applyLayerOne(
     linkedAgentId,
     createdBy = "user",
     onProgress,
+    adoptWorkspaceId,
   } = input;
 
   return withWorkspaceProposalIdLock(userId, proposalId, async () => {
-    const target = await resolveTarget({
-      userId,
-      proposalId,
-      packageSlug,
-      workspaceName:
-        workspaceName ??
-        (definition as { workspaceName?: string }).workspaceName,
-    });
+    let adopting = false;
+    const target = adoptWorkspaceId
+      ? await adoptTarget(adoptWorkspaceId, packageSlug, userId).then((t) => {
+          adopting = t.adopting;
+          return t.target;
+        })
+      : await resolveTarget({
+          userId,
+          proposalId,
+          packageSlug,
+          workspaceName:
+            workspaceName ??
+            (definition as { workspaceName?: string }).workspaceName,
+        });
 
     // ── No space: build one ───────────────────────────────────────────────
     if (!target.found) {
@@ -255,6 +319,7 @@ export async function applyLayerOne(
     const action = planTemplateApply({
       target: { state: target.state },
       version,
+      adopting,
     });
     // A legacy match adopts the key so the next call hits the fast path.
     if (target.via === "legacy" && packageSlug)
@@ -317,6 +382,9 @@ export async function applyLayerOne(
         userId,
         definition: (resolved?.workspaceDefinition ??
           definition) as WorkspaceDefinitionInput,
+        // An adopted space keeps the capabilities it had before it was this
+        // template's; a later update converges them to the template.
+        ...(action.reason === "adopt" ? { mergeCapabilities: true } : {}),
       });
     } catch (err) {
       // The space exists: record the layer-1 failure honestly (the next apply

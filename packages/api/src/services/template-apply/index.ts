@@ -22,6 +22,7 @@ import { createLogger } from "@synap-core/core";
 import {
   materializeWorkspaceCore,
   materializeReportStatus,
+  type MaterializeCoreResult,
   type MaterializeReportStatus,
 } from "../workspace-materialization-service.js";
 import type { ComposeReport } from "../compose-overlay.js";
@@ -94,6 +95,13 @@ export interface ApplyTemplateInput {
   source: string;
   /** Install onto this existing space (compose), whatever the package declares. */
   targetWorkspaceId?: string;
+  /**
+   * ADOPT this existing space into the template `identity.packageSlug` (Hub
+   * `/pod/adopt`, approve `workspace/adopt`): it takes the identity, layer 1
+   * re-syncs it from the catalog, layer 2 runs, the stamp lands on
+   * convergence. No dependency or compose step — the space is the target.
+   */
+  adoptWorkspaceId?: string;
   /**
    * Run layer 2 even when the body declares nothing for it (agent enrollment,
    * the applier's own bookkeeping) — the `/packages/apply` family always did.
@@ -173,16 +181,19 @@ export async function applyTemplate(
   const { userId } = actor;
 
   // ── Dependencies + compose (layer 1 of an overlay / pack / --onto) ──────
-  const core = await materializeWorkspaceCore({
-    definition,
-    userId,
-    agentUserId: actor.agentUserId,
-    selfSlug: identity.packageSlug,
-    targetWorkspaceId: input.targetWorkspaceId,
-    packageSlug: identity.packageSlug,
-    packageVersion: identity.packageVersion,
-    deferCreate: true,
-  });
+  // An adopt names its space: nothing to resolve or compose.
+  const core: MaterializeCoreResult = input.adoptWorkspaceId
+    ? { status: "resolved", dependencies: [] }
+    : await materializeWorkspaceCore({
+        definition,
+        userId,
+        agentUserId: actor.agentUserId,
+        selfSlug: identity.packageSlug,
+        targetWorkspaceId: input.targetWorkspaceId,
+        packageSlug: identity.packageSlug,
+        packageVersion: identity.packageVersion,
+        deferCreate: true,
+      });
 
   let workspaceId: string;
   let outcome: TemplateApplyOutcome;
@@ -211,6 +222,7 @@ export async function applyTemplate(
       createdBy: identity.createdBy,
       linkedAgentId: identity.linkedAgentId,
       onProgress: input.onProgress,
+      adoptWorkspaceId: input.adoptWorkspaceId,
     });
     workspaceId = layerOne.workspaceId;
     outcome = layerOne.outcome;

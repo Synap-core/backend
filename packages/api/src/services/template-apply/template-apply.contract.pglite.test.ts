@@ -5,7 +5,9 @@
  * approve executors, `market.install` (template), and `applyTemplate` itself —
  * the tRPC `createFromDefinition` and `installFromCatalog` procedures (W3),
  * Hub `POST /workspaces/from-definition` and MCP `synap_create_workspace`
- * (W4: layer 2 runs on the direct create too, founder decision 1),
+ * (W4: layer 2 runs on the direct create too, founder decision 1), Hub
+ * `POST /pod/adopt` and approve `workspace/adopt` (W4: scenario (1) adopts an
+ * orphan space; the later scenarios re-run the adopt on it),
  * with the real lookup, plan, layer one, layer-2 applier (`playbooks.create`),
  * finisher and template-state writer. Faked (their own suites pin them): the
  * database package's create core and re-sync util (they read through the
@@ -215,6 +217,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { pgliteTableDdl } from "../../__tests__/pglite-ddl.js";
 import { registerPackagesRoutes } from "../../routers/hub-protocol/rest/packages.js";
 import { registerWorkspacesRoutes } from "../../routers/hub-protocol/rest/workspaces.js";
+import { registerPodAdoptRoutes } from "../../routers/hub-protocol/rest/pod-adopt.js";
 import { workspaceHandlers } from "../../routers/mcp/handlers/workspace.js";
 import type { McpToolContext } from "../../routers/mcp/handlers/shared.js";
 import type {
@@ -305,8 +308,42 @@ function hubWorkspacesApp(): HubHono {
   return app;
 }
 
+function podAdoptApp(): HubHono {
+  const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+  app.use("/*", async (c, next) => {
+    c.set("userId", OWNER);
+    c.set("scopes", ["hub-protocol.write", "hub-protocol.read"]);
+    await next();
+  });
+  registerPodAdoptRoutes(app);
+  return app;
+}
+
+/**
+ * The space an adopt door adopts: the one already holding the slug (a re-run
+ * through the door), else a fresh ORPHAN space (no template identity) — so
+ * scenario (1) is "an orphan adopted": one space, its playbook, stamped.
+ */
+async function adoptTargetFor(slug: string): Promise<string> {
+  const { rows } = await q<{ id: string }>(
+    `select id from workspaces where package_slug = $1`,
+    [slug]
+  );
+  if (rows[0]) return rows[0].id;
+  const id = randomUUID();
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,$2,$3,'{}'::jsonb)`,
+    [id, `Orphan ${slug}`, OWNER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+    [randomUUID(), id, OWNER]
+  );
+  return id;
+}
+
 async function approve(
-  key: "workspace/create" | "workspace/update",
+  key: "workspace/create" | "workspace/update" | "workspace/adopt",
   data: Record<string, unknown>,
   workspaceId: string | null
 ): Promise<unknown> {
@@ -506,6 +543,39 @@ const DOORS: Door[] = [
           (res.content?.[0] as { text: string }).text
         ) as Record<string, unknown>;
         return reply.error ? { threw: reply.error, reply } : { reply };
+      }),
+  },
+  {
+    name: "hub POST /pod/adopt",
+    file: "routers/hub-protocol/rest/pod-adopt.ts",
+    onto: false,
+    apply: (pkg) =>
+      caught(async () => {
+        publish(pkg);
+        const workspaceId = await adoptTargetFor(pkg.slug);
+        const res = await podAdoptApp().request("/pod/adopt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspaceId, templateSlug: pkg.slug }),
+        });
+        return { status: res.status, okStatus: 200, reply: await res.json() };
+      }),
+  },
+  {
+    name: "approve workspace/adopt",
+    file: "routers/proposals/executors/workspace.ts",
+    onto: false,
+    apply: (pkg) =>
+      caught(async () => {
+        publish(pkg);
+        const workspaceId = await adoptTargetFor(pkg.slug);
+        return {
+          reply: await approve(
+            "workspace/adopt",
+            { workspaceId, templateSlug: pkg.slug },
+            workspaceId
+          ),
+        };
       }),
   },
   {

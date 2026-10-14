@@ -1,4 +1,3 @@
-import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -106,10 +105,9 @@ async function executeTemplateApplyApproval({
   // never thrown: the space is in place.
   const applied = await approveTemplateApply(() =>
     applyTemplate({
+      // The stored definition is both layers (the module reads layer 2 off it).
       definition:
-        innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
-      layerTwoBody:
-        innerDefinition as unknown as ApplyTemplateInput["layerTwoBody"],
+        innerDefinition as import("@synap/database").WorkspaceDefinitionInput,
       // Approver authority covers ONLY what the server resolved from the
       // catalog; the agent's own body keeps the agent's governance (an
       // automation lands as a draft, a floored write proposes). The agent is
@@ -167,9 +165,6 @@ async function executeTemplateApplyApproval({
     ...(refusals.length > 0 ? { refusals } : {}),
   };
 }
-
-type ApplyTemplateInput =
-  import("../../../services/template-apply/index.js").ApplyTemplateInput;
 
 type TemplateApplyResult = Awaited<
   ReturnType<
@@ -963,7 +958,7 @@ export function registerWorkspaceExecutors(): void {
       const applied = await approveTemplateApply(() =>
         applyTemplate({
           definition:
-            definition as unknown as import("@synap/database").WorkspaceDefinitionInput,
+            definition as import("@synap/database").WorkspaceDefinitionInput,
           layerTwoBody: definition,
           actor: {
             userId,
@@ -1010,14 +1005,10 @@ export function registerWorkspaceExecutors(): void {
   // ── workspace / adopt ────────────────────────────────────────────────────────
   // Hub `POST /pod/adopt` (`hub-protocol/rest/pod-adopt.ts`) proposes via
   // `subjectType:"workspace", action:"adopt"` for agent callers under the same
-  // ADMIN_ACTIONS floor. Re-runs the SAME stamp-then-reconcile sequence the
-  // grant path performs inline: `WorkspaceRepository.mergeSettings` (lifts
-  // packageSlug/proposalId onto the workspace settings) then
-  // `reconcileWorkspaceFromDefinition({ mergeCapabilities: true })` — never
-  // destructive, never a second workspace. The template is re-resolved FRESH at
-  // approval time via `resolveWorkspaceTemplate` (mirrors the grant path, which
-  // also resolves at call time rather than trusting a stale snapshot) — only
-  // `templateSlug` needs to survive from propose to approve.
+  // ADMIN_ACTIONS floor. Approving runs the SAME apply the grant path runs
+  // (`applyTemplate`, adopt mode). The template is re-resolved FRESH at
+  // approval time — only `templateSlug` needs to survive from propose to
+  // approve.
   registerProposalExecutor({
     key: "workspace/adopt",
     async execute({ proposal, payload, userId, input, deps }) {
@@ -1057,63 +1048,47 @@ export function registerWorkspaceExecutors(): void {
         });
       }
 
-      const {
-        getDb,
-        eventRepository,
-        WorkspaceRepository,
-        reconcileWorkspaceFromDefinition,
-        writeTemplateState,
-      } = await import("@synap/database");
-
-      const dbConn = await getDb();
-      // Approver is the authority — same as workspace/create above. The
-      // identity is the template state's `slug` (the ONE writer).
-      await writeTemplateState(
-        dbConn,
-        workspaceId,
-        { slug: templateSlug },
-        { userId }
-      );
-      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
-      await workspaceRepo.mergeSettings(
-        workspaceId,
-        { proposalId: templateSlug },
-        userId
-      );
-
-      const report = await reconcileWorkspaceFromDefinition({
-        validateFlow: unfilteredAiFanoutError,
-        workspaceId,
-        userId,
-        definition: resolved.workspaceDefinition as unknown as Parameters<
-          typeof reconcileWorkspaceFromDefinition
-        >[0]["definition"],
-        mergeCapabilities: true,
+      // The ONE template apply in adopt mode, as the APPROVER — the same one
+      // Hub `/pod/adopt` runs on grant: the identity, layer 1 re-synced from
+      // the catalog, layer 2 (catalog layers under this approval, the agent
+      // only enrolled), the stamp on convergence. A layer-2 failure is
+      // recorded on the space and reported below, never thrown.
+      const { applyTemplate } =
+        await import("../../../services/template-apply/index.js");
+      const applied = await applyTemplate({
+        definition:
+          resolved.workspaceDefinition as import("@synap/database").WorkspaceDefinitionInput,
+        actor: {
+          userId,
+          agentUserId: proposal.agentUserId ?? undefined,
+          approved: true,
+          scopes: [],
+        },
+        source: "approve:workspace/adopt",
+        adoptWorkspaceId: workspaceId,
+        identity: {
+          packageSlug: templateSlug,
+          packageVersion: resolved.version ?? undefined,
+          proposalId: templateSlug,
+        },
       });
-      // Adopt binds the identity and reconciles layer 1 only: the version is
-      // NOT earned here. The finisher records "layer-2-not-run", health reads
-      // the space drifted, and `synap templates update` applies the rest and
-      // stamps it.
-      const { finishTemplateApply } =
-        await import("../../../services/template-apply-finisher.js");
-      await finishTemplateApply({
-        workspaceId,
-        userId,
-        built: false,
-        pendingVersionStamp: resolved.version ?? undefined,
-        post: null,
-      });
+      const report = applied.layerOne?.reconciled;
+      const refusals = layerTwoRefusals(applied, input.proposalId);
 
       const updatedData = {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
         materializedWorkspaceId: workspaceId,
-        reconcile: {
-          profilesAdded: report.profiles.added.length,
-          propertiesAdded: report.properties.added.length,
-          viewsAdded: report.views.added.length,
-          entityLinksAdded: report.entityLinks.added.length,
-        },
+        ...(report
+          ? {
+              reconcile: {
+                profilesAdded: report.profiles.added.length,
+                propertiesAdded: report.properties.added.length,
+                viewsAdded: report.views.added.length,
+                entityLinksAdded: report.entityLinks.added.length,
+              },
+            }
+          : {}),
       };
 
       await db
@@ -1136,7 +1111,11 @@ export function registerWorkspaceExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, primaryId: workspaceId };
+      return {
+        success: true,
+        primaryId: workspaceId,
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
   // ── workspace / delete ───────────────────────────────────────────────────

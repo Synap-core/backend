@@ -1,23 +1,13 @@
 /**
  * Hub Protocol REST — POST /pod/adopt
  *
- * Adopt an orphan/ad-hoc workspace into a known template: stamp its
- * marketplace identity (`packageSlug`/`packageVersion`/`provisioningProposalId`)
- * then run the SAME additive reconcile every other install/reconcile door
- * uses (`reconcileWorkspaceFromDefinition`) — never destructive, never a
- * second workspace.
- *
- * Reuses:
- *   - `resolveWorkspaceTemplate` (cache-first CP template resolution, frozen-
- *     bundle fallback) — the same resolver `createWorkspaceFromDefinitionIdempotent`
- *     / `reconcileWorkspaceIfStale` use, instead of a raw
- *     `toWorkspaceDefinition()` call that would freeze to the bundle only.
- *   - `WorkspaceRepository.mergeSettings` — the ONE atomic, non-clobbering
- *     settings-merge door (same one `workspace-edge-service.ts` uses), which
- *     also lifts `packageSlug`/`proposalId` into their promoted columns.
- *   - `reconcileWorkspaceFromDefinition({ mergeCapabilities: true })` — the
- *     ONE additive-sync door `composeOntoBaseWorkspace` / `reconcileWorkspaceIfStale`
- *     already drive.
+ * Adopt an orphan/ad-hoc workspace into a known template through the ONE
+ * template apply (`applyTemplate`, adopt mode): the space takes the template
+ * identity (slug + key, the one writer), layer 1 re-syncs it additively from
+ * the catalog (`resolveWorkspaceTemplate`, cache-first; its own capabilities
+ * merged, not replaced), layer 2 runs, and the version is stamped only on
+ * convergence — never destructive, never a second workspace. The approve
+ * executor `workspace/adopt` runs the same apply.
  *
  * Governed via `checkPermissionOrPropose` (subjectType:"workspace",
  * action:"adopt") — RBAC (`verifyPermission`) enforces the same editor+ floor
@@ -26,22 +16,18 @@
  * grant-vs-propose. Never widens a floor beyond what that existing path grants.
  */
 
-import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "@hono/zod-openapi";
 import {
   db,
   eq,
   workspaces,
-  getDb,
-  eventRepository,
-  WorkspaceRepository,
-  reconcileWorkspaceFromDefinition,
-  readTemplateState,
-  writeTemplateState,
-  type WorkspaceSettings,
-  type ReconcileReport,
+  type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { resolveWorkspaceTemplate } from "../../../services/capabilities/resolve-workspace-template.js";
+import {
+  applyTemplate,
+  type TemplateApplyResult,
+} from "../../../services/template-apply/index.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -57,6 +43,53 @@ const PodAdoptSchema = z.object({
   workspaceId: z.string().uuid(),
   templateSlug: z.string().min(1),
 });
+
+/**
+ * The adopt reply, from the one apply's result. `outcome` is "reconciled"
+ * (adopted / re-synced) or "unchanged" (already this template's at this
+ * version) — never "created": adopt only operates on an existing space.
+ */
+export function adoptReply(
+  applied: TemplateApplyResult,
+  templateSlug: string,
+  version: string | null | undefined
+): Record<string, unknown> {
+  const report = applied.layerOne?.reconciled;
+  return {
+    status: "adopted",
+    outcome: applied.outcome,
+    workspaceId: applied.workspaceId,
+    templateSlug,
+    packageVersion: version ?? null,
+    ...(applied.finished && applied.outcome !== "unchanged"
+      ? { versionStamped: applied.finished.versionStamped }
+      : {}),
+    ...(applied.finished?.templateApply
+      ? { templateApply: applied.finished.templateApply }
+      : {}),
+    ...(report
+      ? {
+          reconcile: {
+            profilesAdded: report.profiles.added.length,
+            propertiesAdded: report.properties.added.length,
+            viewsAdded: report.views.added.length,
+            entityLinksAdded: report.entityLinks.added.length,
+            propertyConflicts: report.properties.conflicts,
+          },
+        }
+      : {}),
+    ...(applied.layer2.status === "failed"
+      ? {
+          layer2: {
+            status: "failed",
+            message:
+              "The space is adopted, but applying its package layers failed. Run `synap templates update` to finish it.",
+          },
+        }
+      : {}),
+    ...(applied.warning ? { templateApplyWarning: applied.warning } : {}),
+  };
+}
 
 export function registerPodAdoptRoutes(app: HubHono): void {
   registerOpenApi(app, {
@@ -126,12 +159,11 @@ export function registerPodAdoptRoutes(app: HubHono): void {
       // ── The workspace must already exist — adopt never creates one ────────
       const ws = await db.query.workspaces.findFirst({
         where: eq(workspaces.id, workspaceId),
-        columns: { id: true, settings: true },
+        columns: { id: true },
       });
       if (!ws) {
         return c.json({ error: `Workspace not found: ${workspaceId}` }, 404);
       }
-      const currentSettings = (ws.settings ?? null) as WorkspaceSettings | null;
 
       // ── Governed write: RBAC floor (editor+) + agent-governance ladder ────
       // `workspaceId` is stored in `data` (not just relied on via
@@ -165,92 +197,28 @@ export function registerPodAdoptRoutes(app: HubHono): void {
         });
       }
 
-      // ── Already adopted at this exact version — no-op (mirrors
-      // `reconcileWorkspaceIfStale`'s "checked, in sync" short-circuit) ──────
-      const current = readTemplateState(currentSettings);
-      const alreadyCurrent =
-        current?.slug === templateSlug &&
-        (!resolved.version || current?.version === resolved.version);
-      if (alreadyCurrent) {
-        return c.json({
-          status: "adopted",
-          outcome: "unchanged" as const,
-          workspaceId,
-          templateSlug,
-          packageVersion: resolved.version ?? current?.version ?? null,
-        });
-      }
-
-      // ── Stamp identity (atomic JSONB merge — lifts packageSlug/proposalId
-      // into their promoted columns too), then additively reconcile. ────────
-      const actingUserId = agentUserId ?? userId;
-      // The identity is the template state's `slug` — the ONE writer
-      // (`writeTemplateState`) keeps it, the mirror and the column together.
-      const dbConn = await getDb();
-      await writeTemplateState(
-        dbConn,
-        workspaceId,
-        { slug: templateSlug },
-        { userId: actingUserId }
-      );
-      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
-      await workspaceRepo.mergeSettings(
-        workspaceId,
-        { proposalId: templateSlug },
-        actingUserId
-      );
-
-      const report: ReconcileReport = await reconcileWorkspaceFromDefinition({
-        validateFlow: unfilteredAiFanoutError,
-        workspaceId,
-        userId: actingUserId,
-        // Cross-package boundary cast — same one `resolve-workspace-template.ts`
-        // and every other `createWorkspaceFromDefinitionIdempotent` call site
-        // performs: `@synap-core/workspace-templates`' WorkspaceDefinitionInput
-        // is structurally the create/reconcile input, just a separately
-        // published type (its `workspaceVisibility` is `string` where
-        // `@synap/database`'s is a narrower union).
-        definition: resolved.workspaceDefinition as unknown as Parameters<
-          typeof reconcileWorkspaceFromDefinition
-        >[0]["definition"],
-        mergeCapabilities: true,
-      });
-      // Adopt binds the identity and reconciles layer 1 only: the version is
-      // NOT earned here. The finisher records "layer-2-not-run", health reads
-      // the space drifted, and `synap templates update` applies the rest and
-      // stamps it.
-      const { finishTemplateApply } =
-        await import("../../../services/template-apply-finisher.js");
-      const finished = await finishTemplateApply({
-        workspaceId,
-        userId: actingUserId,
-        built: false,
-        pendingVersionStamp: resolved.version ?? undefined,
-        post: null,
-      });
-
-      // Always "reconciled" here, never "created" — adopt only ever operates
-      // on a pre-existing workspace (the `outcome` field mirrors
-      // `CreateWorkspaceFromDefinitionResult.outcome`'s vocabulary for the
-      // CLI's benefit, but this door can't hit "created" by construction).
-      return c.json({
-        status: "adopted",
-        outcome: "reconciled" as const,
-        workspaceId,
-        templateSlug,
-        packageVersion: resolved.version ?? null,
-        versionStamped: finished.versionStamped,
-        ...(finished.templateApply
-          ? { templateApply: finished.templateApply }
-          : {}),
-        reconcile: {
-          profilesAdded: report.profiles.added.length,
-          propertiesAdded: report.properties.added.length,
-          viewsAdded: report.views.added.length,
-          entityLinksAdded: report.entityLinks.added.length,
-          propertyConflicts: report.properties.conflicts,
+      // ── The ONE template apply, in adopt mode: the space takes the
+      // identity, layer 1 re-syncs it from the catalog (its own capabilities
+      // kept), layer 2 runs (founder decision 1), and the version is stamped
+      // only on convergence. Already this template's at this version →
+      // "unchanged" (the plan's answer). A layer-2 failure is recorded on the
+      // space and reported, never a 500.
+      const applied = await applyTemplate({
+        definition: resolved.workspaceDefinition as WorkspaceDefinitionInput,
+        actor: {
+          userId,
+          agentUserId,
+          scopes: (c.get("scopes") as string[]) ?? [],
+        },
+        source: "hub.pod.adopt",
+        adoptWorkspaceId: workspaceId,
+        identity: {
+          packageSlug: templateSlug,
+          packageVersion: resolved.version ?? undefined,
+          proposalId: templateSlug,
         },
       });
+      return c.json(adoptReply(applied, templateSlug, resolved.version));
     } catch (err) {
       logger.error(
         { err, userId, workspaceId, templateSlug },

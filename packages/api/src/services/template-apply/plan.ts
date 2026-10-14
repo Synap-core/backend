@@ -8,6 +8,9 @@
  * re-synced by another and skipped by a third.
  *
  *   no space                                   → create
+ *   adopting (the space takes this identity
+ *     now: Hub `/pod/adopt`, approve adopt)    → resync (its layer 1 has never
+ *                                                been this template's)
  *   failed in layer 1, with a resume ledger    → resume-layer1 (the create core
  *                                                continues from its steps)
  *   failed in layer 1, NO ledger               → resync (the row exists: a
@@ -39,7 +42,12 @@ export type TemplateApplyAction =
   | { kind: "resume-layer1"; completedSteps: string[] }
   | {
       kind: "resync";
-      reason: "stale" | "failed-layer-2" | "failed-no-ledger" | "unfinished";
+      reason:
+        | "stale"
+        | "failed-layer-2"
+        | "failed-no-ledger"
+        | "unfinished"
+        | "adopt";
       /** Leave "failed" before layer 2 re-runs. */
       reopen: boolean;
     }
@@ -54,6 +62,11 @@ export interface PlanTemplateApplyInput {
   target: { state: TemplateState | null } | null;
   /** The version being applied (catalog-resolved, else the caller's). */
   version: string | undefined;
+  /**
+   * The space is being adopted into this template right now (it did not hold
+   * the identity before): re-sync it whatever its state or version says.
+   */
+  adopting?: boolean;
 }
 
 export function planTemplateApply(
@@ -62,6 +75,12 @@ export function planTemplateApply(
   const { target, version } = input;
   if (!target) return { kind: "create" };
   const state = target.state;
+  if (input.adopting)
+    return {
+      kind: "resync",
+      reason: "adopt",
+      reopen: state?.state === "failed",
+    };
   if (state?.state === "failed") {
     if (isFailedInLayerTwo(state))
       return { kind: "resync", reason: "failed-layer-2", reopen: true };

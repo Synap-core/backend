@@ -86,6 +86,35 @@ describe("planTemplateApply", () => {
       { kind: "unchanged", checked: false },
     ],
     [
+      "adopting a space whose stamp equals the version → re-sync (it was never this template's)",
+      {
+        target: { state: st({ slug: "orphan" }) },
+        version: "h-1",
+        adopting: true,
+      },
+      { kind: "resync", reason: "adopt", reopen: false },
+    ],
+    [
+      "adopting with no version signal → still re-sync (unchanged would skip layer 1)",
+      { target: { state: null }, version: undefined, adopting: true },
+      { kind: "resync", reason: "adopt", reopen: false },
+    ],
+    [
+      "adopting a space that failed (with a ledger) → re-sync + reopen, never a resume",
+      {
+        target: {
+          state: st({
+            state: "failed",
+            failedLayer: 1,
+            completedSteps: ["workspace"],
+          }),
+        },
+        version: "h-1",
+        adopting: true,
+      },
+      { kind: "resync", reason: "adopt", reopen: true },
+    ],
+    [
       "a plain space (no state) at a known version → stale re-sync",
       { target: { state: null }, version: "h-1" },
       { kind: "resync", reason: "stale", reopen: false },
