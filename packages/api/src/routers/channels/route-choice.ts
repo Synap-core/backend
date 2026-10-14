@@ -8,10 +8,13 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, and, eq, channels } from "@synap/database";
 import { protectedProcedure } from "../../trpc.js";
+import { aiRateLimitMiddleware } from "../../middleware/ai-rate-limit.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { answerRoomChoice } from "../../services/agent-dispatch/route-room.js";
 
 export const answerRouteChoiceProcedure = protectedProcedure
+  // A tap starts an AI turn: the same limit as sending a message.
+  .use(aiRateLimitMiddleware)
   .input(
     z.object({
       channelId: z.string().uuid(),

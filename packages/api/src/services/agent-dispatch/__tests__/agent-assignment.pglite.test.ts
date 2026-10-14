@@ -75,6 +75,8 @@ const STRANGER = randomUUID();
 const A = randomUUID();
 const B = randomUUID();
 const PLAYBOOK = randomUUID();
+/** The stranger's own agent. */
+const THEIRS = randomUUID();
 
 beforeAll(async () => {
   for (const t of [users, links]) await h.client!.exec(ddlFor(t as PgTable));
@@ -88,6 +90,10 @@ beforeAll(async () => {
       [id, `${id}@x`, OWNER]
     );
   }
+  await q(
+    `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'agent', $3)`,
+    [THEIRS, `${THEIRS}@x`, STRANGER]
+  );
 }, 120_000);
 
 afterAll(async () => {
@@ -151,6 +157,19 @@ describe("setAgentAssignment", () => {
     } finally {
       h.visible = true;
     }
+  });
+});
+
+describe("setAgentAssignment — per owner", () => {
+  it("a teammate's assignment on a shared target stays", async () => {
+    const target = { type: "playbook" as const, id: PLAYBOOK };
+    await setAgentAssignment({ callerId: STRANGER, agentUserId: THEIRS, target, assigned: true });
+    await setAgentAssignment({ callerId: OWNER, agentUserId: A, target, assigned: true });
+    expect((await holders()).sort()).toEqual([A, THEIRS].sort());
+    // Re-assigning replaces only the owner's own agent.
+    await setAgentAssignment({ callerId: OWNER, agentUserId: B, target, assigned: true });
+    expect((await holders()).sort()).toEqual([B, THEIRS].sort());
+    await q(`delete from links`);
   });
 });
 

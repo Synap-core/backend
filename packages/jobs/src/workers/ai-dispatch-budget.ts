@@ -33,7 +33,10 @@ import {
   MAX_AI_DISPATCHES_PER_DAY_KEY,
   readMaxAiDispatchesPerDay,
 } from "@synap-core/types/automations";
-import { resolveCeiling } from "@synap/database/agent-governance";
+import {
+  limitWithOwnValue,
+  resolveCeiling,
+} from "@synap/database/agent-governance";
 import { PolicyBlockedError } from "../utils/automation-governance.js";
 import { logger } from "./automation-executor-logger.js";
 
@@ -136,17 +139,16 @@ export function openAiDispatchBudget(input: {
 
   const load = async (): Promise<void> => {
     if (loaded) return;
-    // The caps fold (W1c): both limits are `governance_ceilings` axes. A row
-    // for THIS automation (or a pod-wide one) wins; for the daily cap the
-    // automation's own triggerConfig value comes next; else the default.
+    // The caps fold (W1c): both limits are `governance_ceilings` axes. The
+    // daily cap also has the automation's OWN triggerConfig value; a stored
+    // row can only TIGHTEN that, never loosen it (the stricter wins).
     const subject = { type: "automation", id: input.automationId };
     const [runCap, dayCap] = await Promise.all([
       resolveCeiling({ db, axis: "automation_ai_dispatch_per_run", subject }),
       resolveCeiling({ db, axis: "automation_ai_dispatch_daily", subject }),
     ]);
     perRun = input.perRun ?? runCap.value;
-    perDay =
-      dayCap.source === "row" ? dayCap.value : (ownPerDay ?? dayCap.value);
+    perDay = limitWithOwnValue(ownPerDay, dayCap);
     const [own] = await db
       .select({ count: automationRuns.aiDispatchCount })
       .from(automationRuns)

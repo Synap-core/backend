@@ -83,6 +83,18 @@ export async function wakeMentionedAgents(p: {
         });
         continue;
       }
+      // Only the session OWNER speaks to its agents' live runs (the answer
+      // loop's own v1 rule): a teammate's words never reach a run acting with
+      // the owner's authority.
+      if (p.senderId !== session.userId) {
+        await postDispatchNotice({
+          channelId: p.channelId,
+          ownerId: session.userId,
+          content: `${name} takes instructions from this session's owner only, so your message was not passed on.`,
+          idempotencyKey: `mention-wake:${p.messageId}:${agent.agentUserId}`,
+        });
+        continue;
+      }
       if (agent.reach === "dispatch") {
         const sent = await wakeExternalAgent({
           sessionId: session.id,
@@ -102,14 +114,11 @@ export async function wakeMentionedAgents(p: {
         continue;
       }
       // pull: on the roster ⇒ its orient lists the session as handed to it.
-      // Only the session owner's mention puts it there (the roster is theirs).
-      if (p.senderId === session.userId) {
-        await attachSessionAgent({
-          sessionId: session.id,
-          agentId: agent.agentUserId,
-          userId: session.userId,
-        });
-      }
+      await attachSessionAgent({
+        sessionId: session.id,
+        agentId: agent.agentUserId,
+        userId: session.userId,
+      });
     } catch (err) {
       logger.error(
         { err, channelId: p.channelId, agentUserId: agent.agentUserId },

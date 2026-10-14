@@ -4,11 +4,13 @@
 -- playbook | profile | project | workspace. THE route (`route()`) reads it as
 -- the rung after the roster: the most specific target wins
 -- (playbook > profile > project > workspace — founder decision 2026-10-14).
--- One agent per target: a person re-assigning a target replaces its agent, so
--- the pick can never be ambiguous. Written only by a person
+-- One agent per target PER OWNER (`metadata.ownerId` = the agent's owner): in
+-- a shared space each person staffs their own work, and re-assigning replaces
+-- only that person's agent — never a teammate's. The route floors by owner, so
+-- the pick is never ambiguous. Written only by a person
 -- (`agentUsers.setAssignment`).
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_links_assigned_to_one_per_target"
-  ON "links" ("to_type", "to_id")
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_links_assigned_to_one_per_owner_target"
+  ON "links" ("to_type", "to_id", (COALESCE("metadata"->>'ownerId', '')))
   WHERE "link_type" = 'assigned_to';
 
 -- Pause: a paused agent is skipped by every rung of the route that picks for

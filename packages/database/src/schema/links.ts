@@ -222,7 +222,8 @@ export type LinkType =
    * workspace (0329). The agent that takes that target's work when nobody
    * named one: THE route (`services/agent-dispatch/route.ts`) reads it as the
    * rung after the roster, most specific target first (playbook > profile >
-   * project > workspace). ONE agent per target (unique index). HUMAN-WRITTEN
+   * project > workspace). ONE agent per target per OWNER (`metadata.ownerId`,
+   * unique index — a teammate's assignment in a shared space stays). HUMAN-WRITTEN
    * ONLY, through `agentUsers.setAssignment` — an agent that could write it
    * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
    */

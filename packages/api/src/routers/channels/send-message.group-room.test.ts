@@ -41,6 +41,7 @@ const m = vi.hoisted(() => ({
     agentType: string | null;
   }>,
   wake: vi.fn(async (_p: { wake: unknown[] }) => undefined),
+  ownerReply: { status: "no_session" } as Record<string, unknown>,
   offer: vi.fn(async (_p: { candidates: Array<{ agentUserId: string }> }) => undefined),
   chatEvents: [] as Array<{ event: string; data: Record<string, unknown> }>,
   reach: {} as Record<string, "pod" | "dispatch" | "pull">,
@@ -146,6 +147,14 @@ vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
     agentUserId: "service-agent",
   })),
 }));
+// The answer loop, at its door: what the owner's reply was (a "who should
+// answer?" is never asked about a message that answered an agent's question).
+vi.mock("../../services/focus-sessions/session-answer.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../services/focus-sessions/session-answer.js")
+  >()),
+  recordOwnerRoomReply: vi.fn(async () => m.ownerReply),
+}));
 vi.mock(
   "../../services/agent-dispatch/room-follow-through.js",
   () => ({ wakeMentionedAgents: m.wake, offerRoomChoice: m.offer })
@@ -219,6 +228,7 @@ beforeEach(() => {
     { agentUserId: RESEARCHER, name: "Researcher", agentType: "researcher" },
   ];
   m.reach = {};
+  m.ownerReply = { status: "no_session" };
   m.channel = {
     id: CHANNEL,
     userId: "user-1",
@@ -329,6 +339,16 @@ describe("chat.sendMessage — several house agents, nobody named", () => {
     expect(
       m.offer.mock.calls[0]![0].candidates.map((c) => c.agentUserId)
     ).toEqual([RESEARCHER, WRITER]);
+  });
+
+  it("a reply that answered an agent's open question is never asked about", async () => {
+    m.channel = { ...m.channel, aiReactionMode: AiReactionMode.WHEN_CONFIDENT };
+    m.ownerReply = { status: "answered", questionId: "q1", woke: true };
+
+    await send({ content: "use the March numbers" });
+
+    expect(answering()).toEqual([]);
+    expect(m.offer).not.toHaveBeenCalled();
   });
 
   it("only_mentioned: silence, and no question", async () => {

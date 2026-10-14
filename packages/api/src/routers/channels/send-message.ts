@@ -773,8 +773,10 @@ export const sendMessageProcedure = protectedProcedure
     // non-owner's reply does nothing here (v1 — open AI-principal decision).
     // Human door only; ephemeral messages vanish on reload, so they answer
     // nothing. Never throws.
+    let ownerReply: Awaited<ReturnType<typeof recordOwnerRoomReply>> | null =
+      null;
     if (!input.ephemeral && !ctx.agentUserId) {
-      await recordOwnerRoomReply({
+      ownerReply = await recordOwnerRoomReply({
         channelId,
         messageId: userMessageId,
         content,
@@ -793,7 +795,15 @@ export const sendMessageProcedure = protectedProcedure
         content,
         wake: roomWake,
       });
-      if (roomChoice) {
+      // Never ask "who should answer?" about a message something already
+      // answers: a reply to an agent's open question (the answer loop), an
+      // anchored comment's or a capture room's own turn.
+      if (
+        roomChoice &&
+        ownerReply?.status !== "answered" &&
+        !anchoredComment?.decision.trigger &&
+        !captureTurn
+      ) {
         await offerRoomChoice({
           channelId,
           senderId: userId,

@@ -4,8 +4,9 @@
  *
  *   assign  participant(agent) --assigned_to--> playbook | profile | project |
  *           workspace. The agent that takes that target's work when nobody
- *           named one. ONE agent per target (unique index, 0329): assigning a
- *           target replaces whoever held it, in one transaction.
+ *           named one. ONE agent per target PER OWNER (unique index, 0329):
+ *           assigning replaces only this owner's previous agent on it, in one
+ *           transaction — a teammate's assignment in a shared space stays.
  *   pause   `users.agent_paused_at`. The route skips a paused agent when it
  *           picks for a person and refuses it by name. Keys are untouched.
  *
@@ -15,7 +16,15 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, and, eq, inArray, links, users } from "@synap/database";
+import {
+  db,
+  and,
+  drizzleSql,
+  eq,
+  inArray,
+  links,
+  users,
+} from "@synap/database";
 import { isPodAdmin } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { createLink } from "../links/links-service.js";
@@ -38,7 +47,11 @@ async function loadManagedAgent(callerId: string, agentUserId: string) {
       message: "Only the agent's owner or a pod admin can change this",
     });
   }
-  return { id: agent.id, by: isOwner ? "owner" : "pod_admin" } as const;
+  return {
+    id: agent.id,
+    ownerId: agent.createdByUserId ?? "",
+    by: isOwner ? "owner" : "pod_admin",
+  } as const;
 }
 
 export async function setAgentAssignment(p: {
@@ -63,7 +76,8 @@ export async function setAgentAssignment(p: {
     });
   }
 
-  const replaced = await db.transaction(async (tx) => {
+  const replaced = await db
+    .transaction(async (tx) => {
     const dropped = await tx
       .delete(links)
       .where(
@@ -71,8 +85,11 @@ export async function setAgentAssignment(p: {
           eq(links.linkType, "assigned_to"),
           eq(links.toType, p.target.type),
           eq(links.toId, p.target.id),
-          // Removing: only THIS agent's edge. Assigning: whoever held it.
-          ...(p.assigned ? [] : [eq(links.fromId, agent.id)])
+          // Removing: only THIS agent's edge. Assigning: this owner's agent on
+          // the target — never a teammate's.
+          p.assigned
+            ? drizzleSql`COALESCE(${links.metadata}->>'ownerId', '') = ${agent.ownerId}`
+            : eq(links.fromId, agent.id)
         )
       )
       .returning({ fromId: links.fromId });
@@ -85,13 +102,24 @@ export async function setAgentAssignment(p: {
           toType: p.target.type,
           toId: p.target.id,
           linkType: "assigned_to",
-          metadata: { assignedBy: p.callerId },
+          metadata: { assignedBy: p.callerId, ownerId: agent.ownerId },
         },
         tx
       );
     }
     return dropped.map((d) => d.fromId).filter((id) => id !== agent.id);
-  });
+    })
+    .catch((err: unknown) => {
+      // Two concurrent assigns of one target: the unique index refuses the
+      // second — said as a conflict, never a 500.
+      if ((err as { code?: string })?.code === "23505") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Someone assigned this at the same time — try again",
+        });
+      }
+      throw err;
+    });
 
   await auditLog({
     subjectType: "link",

@@ -27,7 +27,10 @@ import {
   db,
   and,
   asc,
+  count,
+  drizzleSql,
   eq,
+  ne,
   channelMembers,
   messages,
   users,
@@ -117,6 +120,20 @@ export async function routeRoomMessage(p: {
   if (reactionMode !== AiReactionMode.WHEN_CONFIDENT) {
     return { kind: "silent", wake };
   }
+  // Restraint: with nobody named, an AI speaks up only when the sender is the
+  // only person in the room. Where people talk to each other, an un-named
+  // message is theirs — the AI waits to be mentioned.
+  const [others] = await db
+    .select({ n: count() })
+    .from(channelMembers)
+    .where(
+      and(
+        eq(channelMembers.channelId, p.channelId),
+        eq(channelMembers.memberKind, ChannelMemberKind.HUMAN),
+        ne(channelMembers.memberId, p.senderId)
+      )
+    );
+  if ((others?.n ?? 0) > 0) return { kind: "silent", wake };
   const r = await route({
     ownerId: p.senderId,
     accept: ["pod"],
@@ -153,7 +170,14 @@ export async function answerRoomChoice(p: {
 }): Promise<
   | { status: "started"; agentUserId: string }
   | { status: "not_found" }
-  | { status: "refused"; reason: "not_a_candidate" | "no_longer_eligible" | "not_started" }
+  | {
+      status: "refused";
+      reason:
+        | "not_a_candidate"
+        | "no_longer_eligible"
+        | "not_started"
+        | "already_answered";
+    }
 > {
   const [choiceRow] = await db
     .select({ metadata: messages.metadata })
@@ -164,6 +188,9 @@ export async function answerRoomChoice(p: {
     .limit(1);
   const choice = readRouteChoice(choiceRow?.metadata);
   if (!choice) return { status: "not_found" };
+  if (choice.answeredAgentUserId) {
+    return { status: "refused", reason: "already_answered" };
+  }
   if (!choice.candidates.some((c) => c.agentUserId === p.agentUserId)) {
     return { status: "refused", reason: "not_a_candidate" };
   }
@@ -197,6 +224,23 @@ export async function answerRoomChoice(p: {
   });
   if (r.kind !== "routed") return { status: "refused", reason: "no_longer_eligible" };
 
+  // ONE answer per choice: claimed atomically on the choice message, so a
+  // second tap, a reload or another person's tap cannot start a second turn.
+  const claimed = await db
+    .update(messages)
+    .set({
+      metadata: drizzleSql`jsonb_set(${messages.metadata}, '{routeChoice,answeredAgentUserId}', to_jsonb(${r.agentUserId}::text))`,
+    })
+    .where(
+      and(
+        eq(messages.id, p.choiceMessageId),
+        drizzleSql`${messages.metadata}->'routeChoice'->>'answeredAgentUserId' IS NULL`
+      )
+    )
+    .returning({ id: messages.id });
+  if (claimed.length === 0) {
+    return { status: "refused", reason: "already_answered" };
+  }
   const [agent] = await db
     .select({ agentType: users.agentType })
     .from(users)
@@ -209,7 +253,15 @@ export async function answerRoomChoice(p: {
     sourceUserId: p.callerId,
     agentType: agent?.agentType ?? null,
   });
-  return started
-    ? { status: "started", agentUserId: r.agentUserId }
-    : { status: "refused", reason: "not_started" };
+  if (!started) {
+    // Nothing answers: release the claim so the person can pick again.
+    await db
+      .update(messages)
+      .set({
+        metadata: drizzleSql`${messages.metadata} #- '{routeChoice,answeredAgentUserId}'`,
+      })
+      .where(eq(messages.id, p.choiceMessageId));
+    return { status: "refused", reason: "not_started" };
+  }
+  return { status: "started", agentUserId: r.agentUserId };
 }

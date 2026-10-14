@@ -21,6 +21,11 @@ export interface RouteChoiceMeta {
   /** The message the chosen agent will answer. */
   triggerMessageId: string;
   candidates: RouteChoiceCandidate[];
+  /**
+   * Set once a person picked: the agent that answers. A choice is answered
+   * ONCE — surfaces draw it settled (the picked chip marked, the rest off).
+   */
+  answeredAgentUserId?: string;
 }
 
 /**
@@ -31,7 +36,10 @@ export function readRouteChoice(metadata: unknown): RouteChoiceMeta | null {
   if (!metadata || typeof metadata !== "object") return null;
   const raw = (metadata as Record<string, unknown>)[ROUTE_CHOICE_META_KEY];
   if (!raw || typeof raw !== "object") return null;
-  const { triggerMessageId, candidates } = raw as Record<string, unknown>;
+  const { triggerMessageId, candidates, answeredAgentUserId } = raw as Record<
+    string,
+    unknown
+  >;
   if (typeof triggerMessageId !== "string" || !triggerMessageId) return null;
   if (!Array.isArray(candidates)) return null;
   const parsed: RouteChoiceCandidate[] = [];
@@ -44,5 +52,9 @@ export function readRouteChoice(metadata: unknown): RouteChoiceMeta | null {
       name: typeof name === "string" && name.trim() ? name : "Agent",
     });
   }
-  return parsed.length >= 2 ? { triggerMessageId, candidates: parsed } : null;
+  if (parsed.length < 2) return null;
+  return typeof answeredAgentUserId === "string" &&
+    parsed.some((c) => c.agentUserId === answeredAgentUserId)
+    ? { triggerMessageId, candidates: parsed, answeredAgentUserId }
+    : { triggerMessageId, candidates: parsed };
 }

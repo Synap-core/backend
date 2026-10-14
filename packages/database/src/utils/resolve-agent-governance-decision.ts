@@ -1311,6 +1311,20 @@ export async function resolveCeiling(
   };
 }
 
+/**
+ * A limit that has BOTH an owner-set value (an automation's `triggerConfig`, a
+ * worker enablement's `maxPendingApprovals`) and a ceiling axis: the owner's
+ * value stands, and a stored ceiling row can only TIGHTEN it — never loosen a
+ * stricter setting. With no own value, the resolved ceiling (row or default).
+ */
+export function limitWithOwnValue(
+  own: number | null | undefined,
+  ceiling: ResolvedCeiling
+): number {
+  if (own == null) return ceiling.value;
+  return ceiling.source === "row" ? Math.min(ceiling.value, own) : own;
+}
+
 export interface ResolvePendingProposalCapInput {
   db: DbHandle;
   agentUserId: string;

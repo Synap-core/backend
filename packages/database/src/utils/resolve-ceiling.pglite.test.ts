@@ -15,6 +15,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { CEILING_DEFAULTS } from "@synap/governance-policy";
 import {
+  limitWithOwnValue,
   resolveCeiling,
   resolveDailyWriteCeiling,
   resolvePendingProposalCap,
@@ -170,5 +171,23 @@ describe("resolveCeiling", () => {
     expect(await resolvePendingProposalCap({ db, agentUserId: AGENT })).toBeNull();
     await row({ axis: "pending_proposal_cap", limit: 4, agent: AGENT });
     expect(await resolvePendingProposalCap({ db, agentUserId: AGENT })).toBe(4);
+  });
+});
+
+describe("limitWithOwnValue — a stored row only tightens an owner-set limit", () => {
+  const row = (value: number) => ({ value, source: "row" as const, ceilingId: "c" });
+  const dflt = (value: number) => ({ value, source: "default" as const, ceilingId: null });
+  it("own 10, pod row 100 ⇒ 10 (never loosened)", () => {
+    expect(limitWithOwnValue(10, row(100))).toBe(10);
+  });
+  it("own 10, row 5 ⇒ 5 (tightened)", () => {
+    expect(limitWithOwnValue(10, row(5))).toBe(5);
+  });
+  it("own 10, no row ⇒ 10 (the default never overrides a person's value)", () => {
+    expect(limitWithOwnValue(10, dflt(50))).toBe(10);
+  });
+  it("no own value ⇒ the resolved ceiling", () => {
+    expect(limitWithOwnValue(null, row(7))).toBe(7);
+    expect(limitWithOwnValue(undefined, dflt(50))).toBe(50);
   });
 });

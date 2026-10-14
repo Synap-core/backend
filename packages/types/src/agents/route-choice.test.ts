@@ -33,4 +33,18 @@ describe("readRouteChoice", () => {
       readRouteChoice({ routeChoice: { triggerMessageId: "m1", candidates: [A] } })
     ).toBeNull();
   });
+
+  it("an answered choice names the agent that answers", () => {
+    expect(
+      readRouteChoice({
+        routeChoice: { triggerMessageId: "m1", candidates: [A, B], answeredAgentUserId: "b" },
+      })
+    ).toEqual({ triggerMessageId: "m1", candidates: [A, B], answeredAgentUserId: "b" });
+    // An answer naming no candidate is not trusted.
+    expect(
+      readRouteChoice({
+        routeChoice: { triggerMessageId: "m1", candidates: [A, B], answeredAgentUserId: "zzz" },
+      })
+    ).toEqual({ triggerMessageId: "m1", candidates: [A, B] });
+  });
 });
