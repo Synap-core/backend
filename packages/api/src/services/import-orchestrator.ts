@@ -1,12 +1,7 @@
 import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
-import { storage } from "@synap/storage";
 import {
   db,
-  messages,
-  MessageRole,
-  MessageAuthorType,
-  computeMessageHash,
   resolveGraphWorkspaceFromSlugs,
   proposals,
   ProposalStatus,
@@ -14,7 +9,6 @@ import {
   ProfileResolutionService,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { detectJsonChatShape } from "../import/import-parsers.js";
 import {
   adaptItems,
   parseCsvTable,
@@ -43,8 +37,6 @@ import { SharedGraphResolver } from "../import/shared-graph-resolver.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { searchService } from "@synap/search";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
-import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
-import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import {
   materializeCompositeGraph,
@@ -79,7 +71,6 @@ import {
 import {
   resolveProfileHints,
   buildCsvTablePlan,
-  proposeImportGraph,
   buildImportSummary,
   buildImportGraphProposalData,
   findPriorImportGraphProposal,
@@ -107,32 +98,6 @@ export type { OrchestratorContext };
 
 const logger = createLogger({ module: "import-orchestrator" });
 
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
-const MAX_BATCH_FILES = 50;
-const MAX_BATCH_BYTES = 20 * 1024 * 1024;
-const MIME_TRANSFORM = [
-  "application/json",
-  "text/markdown",
-  "text/csv",
-  "text/html",
-  "text/plain",
-] as const;
-const EXT_TRANSFORM: Record<string, string> = {
-  json: "application/json",
-  md: "text/markdown",
-  markdown: "text/markdown",
-  csv: "text/csv",
-  html: "text/html",
-  htm: "text/html",
-  txt: "text/plain",
-};
-
-export type SubmitBatchItem = {
-  path: string;
-  contentBase64: string;
-  mimeType?: string;
-};
-
 export type ImportRevealSource =
   "obsidian" | "markdown" | "csv" | "bookmark" | "json" | "connector_sync";
 
@@ -144,7 +109,19 @@ export type ImportAnalyzeInput = {
    */
   items: Array<{ path: string; content: string; sourceDocumentId?: string }>;
   relationType?: string;
+  /**
+   * Opt IN to the AI read of the content (deep structuring for prose, AI typing
+   * for shallow rows). ABSENT ⇒ deterministic: import reads nothing with a
+   * model unless the caller asks (D4, import-curate-build plan). Only an
+   * explicit `true` turns it on.
+   */
   aiStructure?: boolean;
+  /**
+   * The CSV column→kind table plan (one cheap IS call per CSV, not per row).
+   * Its own flag, ON unless explicitly `false`: without it a CSV of people
+   * lands as flat notes.
+   */
+  csvTablePlan?: boolean;
   /**
    * Pre-existing session to attach this import's proposals to. When omitted on a
    * workspace-scoped analyze, `analyze()` creates a fresh `Import …` session and
@@ -327,250 +304,6 @@ export async function resolveApplyOperations(
 export class ImportOrchestrator {
   constructor(private readonly ctx: OrchestratorContext) {}
 
-  async submitBatch(items: SubmitBatchItem[]) {
-    if (items.length < 1 || items.length > MAX_BATCH_FILES) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `items must contain 1-${MAX_BATCH_FILES} files`,
-      });
-    }
-
-    const { workspaceId, userId, trpcCtx } = this.ctx;
-    const batchId = randomUUID();
-    const stats = {
-      filesReceived: 0,
-      // Retained for caller compatibility. Import no longer DIRECT-WRITES
-      // entities — every parsed entity becomes a PENDING proposal instead, so
-      // this stays 0 and `proposalsCreated` reflects what was enqueued for review.
-      entitiesCreated: 0,
-      proposalsCreated: 0,
-      /**
-       * Files whose graph was IDENTICAL to a proposal the caller already has —
-       * resolved to the prior proposal instead of filing a clone. Counted apart
-       * from `proposalsCreated` so a re-import can't read as fresh work.
-       */
-      proposalsDeduplicated: 0,
-      documentsCreated: 0,
-      channelsCreated: 0,
-      messagesCreated: 0,
-      filesStoredOnly: 0,
-      errors: [] as Array<{ path: string; message: string }>,
-    };
-
-    // Bytes stay bytes: every file is stored exactly as received. Only a
-    // transformable (text) type is decoded to UTF-8, and only for the transform
-    // — decoding a PNG/PDF to a string and re-encoding it mangles the stored blob.
-    const decoded: Array<{ path: string; bytes: Buffer; mimeType: string }> =
-      [];
-    let totalBytes = 0;
-    for (const item of items) {
-      try {
-        const buf = Buffer.from(item.contentBase64, "base64");
-        if (buf.length > MAX_FILE_SIZE_BYTES) {
-          stats.errors.push({
-            path: item.path,
-            message: `File exceeds ${MAX_FILE_SIZE_BYTES / 1024 / 1024}MB limit`,
-          });
-          continue;
-        }
-        totalBytes += buf.length;
-        const path = sanitizeImportPath(item.path);
-        const mimeType =
-          item.mimeType || mimeFromPath(path) || "application/octet-stream";
-        decoded.push({ path, bytes: buf, mimeType });
-      } catch (e) {
-        stats.errors.push({
-          path: item.path,
-          message: e instanceof Error ? e.message : "Failed to decode file",
-        });
-      }
-    }
-
-    if (totalBytes > MAX_BATCH_BYTES) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `Batch total size exceeds ${MAX_BATCH_BYTES / 1024 / 1024}MB limit`,
-      });
-    }
-
-    const callerCtx = { ...trpcCtx, workspaceId, userId };
-    const chatCaller = channelsRouter.createCaller(callerCtx as never);
-
-    let _fileIndex = 0;
-    const _totalFiles = decoded.length;
-    for (const { path, bytes, mimeType } of decoded) {
-      const _idx = _fileIndex++;
-      stats.filesReceived++;
-      void emitImportFileProgress(
-        {
-          batchId,
-          path,
-          index: _idx,
-          total: _totalFiles,
-          status: "processing",
-        },
-        userId
-      ).catch(() => {});
-      const ext = path.split(".").pop()?.toLowerCase() ?? "";
-      const canTransform =
-        (MIME_TRANSFORM as readonly string[]).includes(mimeType) ||
-        EXT_TRANSFORM[ext];
-
-      let _fileFailed = false;
-      try {
-        const storageKey = `imports/${userId}/${batchId}/${path}`;
-        await storage.upload(storageKey, bytes, {
-          contentType: mimeType,
-          metadata: { batchId, workspaceId: workspaceId ?? "" },
-        });
-
-        if (!canTransform) {
-          stats.filesStoredOnly++;
-          continue;
-        }
-        const content = bytes.toString("utf-8");
-
-        if (mimeType === "application/json" || ext === "json") {
-          try {
-            const obj = JSON.parse(content) as unknown;
-            const chatShape = detectJsonChatShape(obj);
-            if (chatShape && chatShape.messages.length > 0) {
-              const title =
-                path.replace(/\.[^.]+$/, "").slice(0, 200) || "Imported chat";
-              const externalId = `import-${batchId}-${path.replace(/[^a-z0-9]/gi, "-")}`;
-              const { channelId, status } =
-                await chatCaller.createExternalChannel({
-                  externalSource: "import",
-                  externalChannelId: externalId,
-                  title,
-                  metadata: { batchId, path },
-                });
-              if (status === "created") {
-                stats.channelsCreated++;
-                let previousHash: string | null = null;
-                for (const msg of chatShape.messages) {
-                  const role =
-                    msg.role === "assistant"
-                      ? MessageRole.ASSISTANT
-                      : msg.role === "system"
-                        ? MessageRole.SYSTEM
-                        : MessageRole.USER;
-                  const authorType =
-                    role === MessageRole.ASSISTANT
-                      ? MessageAuthorType.AI_AGENT
-                      : MessageAuthorType.HUMAN;
-                  const ts = new Date();
-                  const id = randomUUID();
-                  // Canonical tamper-hash: computeMessageHash(id, content,
-                  // previousHash) — the ONE formula (see message-hash.ts). This
-                  // import path chains each message to the prior one.
-                  const hash = computeMessageHash(
-                    id,
-                    msg.content,
-                    previousHash ?? ""
-                  );
-                  await db.insert(messages).values({
-                    id,
-                    channelId,
-                    role,
-                    authorType,
-                    content: msg.content,
-                    userId,
-                    previousHash,
-                    hash,
-                    timestamp: ts,
-                  });
-                  previousHash = hash;
-                  stats.messagesCreated++;
-                }
-              }
-            } else {
-              stats.filesStoredOnly++;
-            }
-          } catch {
-            stats.filesStoredOnly++;
-          }
-          continue;
-        }
-
-        // Markdown / CSV / bookmark files route through the canonical import
-        // ENGINE: each file becomes ONE governed `import.graph` composite
-        // proposal (N entities + M relations, AI-structured + workspace-scoped
-        // on approve) instead of N per-row pending proposals. JSON-chat and
-        // LinkedIn are handled separately (they are channels/messages + a queue,
-        // not entity imports).
-        const engineSource: ImportAdapterSource | null =
-          mimeType === "text/markdown" || ext === "md" || ext === "markdown"
-            ? "markdown"
-            : mimeType === "text/csv" || ext === "csv"
-              ? "csv"
-              : mimeType === "text/html" || ext === "html" || ext === "htm"
-                ? "bookmark"
-                : null;
-
-        if (engineSource) {
-          try {
-            // Resolve the workspace's profile hints once (memoized across all
-            // file branches) and pass them into the structuring helper.
-            const profileHints = await this.resolveProfileHints();
-            const { proposalId, deduplicated } = await proposeImportGraph(
-              this.ctx,
-              profileHints,
-              engineSource,
-              [{ path, content }],
-              { sourceId: batchId, contentRef: { storageKey, mimeType } }
-            );
-            if (proposalId) {
-              // ONE composite graph proposal per file (was N per-row proposals).
-              // entitiesCreated stays 0 — nothing materializes until approval.
-              if (deduplicated) stats.proposalsDeduplicated++;
-              else stats.proposalsCreated++;
-            } else {
-              stats.filesStoredOnly++;
-            }
-          } catch (e) {
-            stats.errors.push({
-              path,
-              message:
-                e instanceof Error ? e.message : "Proposal create failed",
-            });
-          }
-          continue;
-        }
-
-        stats.filesStoredOnly++;
-      } catch (e) {
-        _fileFailed = true;
-        const message = e instanceof Error ? e.message : "Import failed";
-        stats.errors.push({ path, message });
-        void emitImportFileProgress(
-          {
-            batchId,
-            path,
-            index: _idx,
-            total: _totalFiles,
-            status: "error",
-            error: message,
-          },
-          userId
-        ).catch(() => {});
-      } finally {
-        if (!_fileFailed) {
-          void emitImportFileProgress(
-            { batchId, path, index: _idx, total: _totalFiles, status: "done" },
-            userId
-          ).catch(() => {});
-        }
-      }
-    }
-
-    logger.info(
-      { batchId, workspaceId, userId, ...stats },
-      "Import batch completed"
-    );
-    return { batchId, ...stats };
-  }
-
   /**
    * Resolve the target workspace's REAL profiles → typed hints for the
    * structuring model + the allow-list of slugs assignable as a type. Same
@@ -667,7 +400,7 @@ export class ImportOrchestrator {
     let items: ImportItem[];
     if (
       input.source === "csv" &&
-      input.aiStructure !== false &&
+      input.csvTablePlan !== false &&
       input.items[0]
     ) {
       tablePlan = await buildCsvTablePlan(
@@ -745,7 +478,7 @@ export class ImportOrchestrator {
     });
     let deepStructureMeta: StructureRunMeta | null | undefined;
 
-    if (isProse && input.aiStructure !== false) {
+    if (isProse && input.aiStructure === true) {
       try {
         const { client } = await resolveIntelligenceService({
           userId,
@@ -805,7 +538,7 @@ export class ImportOrchestrator {
       // CSV with a table plan is ALREADY typed per-column (the plan is the
       // typing) — skip the per-row enrich that would re-call the IS and clobber
       // the table-wide profile. Other shallow sources still get per-item enrich.
-      if (input.aiStructure !== false && !tablePlan) {
+      if (input.aiStructure === true && !tablePlan) {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
@@ -984,7 +717,12 @@ export class ImportOrchestrator {
             run: {
               guidelines: importContext.guidelines,
               guidelineStatus: importContext.guidelineStatus,
-              ...importRunFacts(mode, input.aiStructure, deepStructureMeta),
+              ...importRunFacts(
+                mode,
+                // A CSV table plan is a model call too: the run is not "deterministic".
+                input.aiStructure === true || tablePlan !== null,
+                deepStructureMeta
+              ),
             },
           })
         : null;
@@ -1418,6 +1156,13 @@ export class ImportOrchestrator {
    * keep using `analyze()` where 1 row = 1 entity is already correct.
    */
   async analyzeLarge(input: ImportAnalyzeInput, opts?: LargeImportOpts) {
+    // Deterministic unless the caller opted in (D4). The chunked deep path
+    // below exists to keep cross-chunk dedup ACROSS model calls; with no model
+    // call there is nothing to chunk, so the deterministic run is `analyze()`'s
+    // own (same session, staging, idempotency and proposal contract).
+    if (input.aiStructure !== true) {
+      return this.analyze({ ...input, aiStructure: false });
+    }
     let { workspaceId } = this.ctx;
     const { userId } = this.ctx;
     // Optional workspaceId for IS routing + the live-search resolver — a pod-wide

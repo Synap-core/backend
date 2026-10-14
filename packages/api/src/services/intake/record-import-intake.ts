@@ -27,7 +27,8 @@ import {
  *  - deep structuring → the IS facts of its structure calls (`unknown` when no
  *    call carried `meta`, i.e. an older IS — never guessed);
  *  - shallow with AI enrichment → `unknown` (the enrich call sends no facts);
- *  - shallow with AI switched off → `deterministic`, nothing answered.
+ *  - shallow with AI off (the default — only `aiStructure: true` turns it on)
+ *    → `deterministic`, nothing answered.
  */
 export function importRunFacts(
   mode: "deep" | "shallow",
@@ -35,7 +36,8 @@ export function importRunFacts(
   deepMeta: StructureRunMeta | null | undefined
 ): Pick<SessionRunManifest, "engine" | "model" | "provider" | "promptVersion"> {
   if (mode === "deep") return runFactsFromStructureMeta(deepMeta ?? undefined);
-  if (aiStructure === false) {
+  // Absent means deterministic (D4): only an explicit opt-in reads with a model.
+  if (aiStructure !== true) {
     return {
       engine: "deterministic",
       model: null,

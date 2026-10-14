@@ -176,6 +176,21 @@ export const SERVICE_MARKS = {
     hex: "#4A154B",
     path: null,
   },
+  // Import sources (Import → Curate → Build): named on every staged item's
+  // source line. Marks not vendored yet — the neutral glyph in brand colour.
+  youtube: {
+    webUrl: "https://www.youtube.com",
+    name: "YouTube",
+    hex: "#FF0000",
+    path: null,
+  },
+  tiktok: {
+    webUrl: "https://www.tiktok.com",
+    name: "TikTok",
+    hex: "#000000",
+    inkMark: true,
+    path: null,
+  },
   linkedin: {
     webUrl: "https://www.linkedin.com",
     name: "LinkedIn",

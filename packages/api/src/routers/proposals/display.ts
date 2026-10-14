@@ -85,12 +85,14 @@ import {
   buildFallbackTitle,
   isLikelyUUID,
   isPlanBatch,
+  isUpdateOperation,
   opRef,
   PRIMARY_REF,
   isPlaybookSessionStartProposal,
   readRunSubjectIds,
   isSystemReasoning,
   GOVERNANCE_POLICY_SENTENCES,
+  updateOperationTargetId,
 } from "@synap-core/types/proposals";
 import {
   buildRunSessionStartTitle,
@@ -103,6 +105,7 @@ import type {
   CompositeProposalData,
   CompositeCreateEntityOp,
   CompositeCreateRelationOp,
+  CompositeUpdateOperation,
 } from "@synap-core/types/proposals";
 import type { FlowDefinition } from "@synap/database";
 import { proposals } from "@synap/database";
@@ -2126,6 +2129,17 @@ export function buildProposalGraph(
     });
   });
 
+  // A rebuild's REUSED container (`update_entity`) is not a new node, but a
+  // relation hung off it must still read as the group, not as its ref.
+  data.operations.forEach((op) => {
+    if (op.op !== "update_entity") return;
+    const title = op.patch?.title ?? resolveEntityTitle?.(op.entityId);
+    if (title) {
+      refToTitle.set(op.ref, title);
+      refToTitle.set(op.entityId, title);
+    }
+  });
+
   const labelForRef = (ref: string): string => {
     const known = refToTitle.get(ref);
     if (known) return known;
@@ -2225,8 +2239,31 @@ function buildConfigReviewItems(
   const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
   const rules: NonNullable<ProposalReviewGraph["rules"]> = [];
   const playbooks: NonNullable<ProposalReviewGraph["playbooks"]> = [];
+  const views: NonNullable<ProposalReviewGraph["views"]> = [];
+  const updates: NonNullable<ProposalReviewGraph["updates"]> = [];
 
   data.operations.forEach((op, index) => {
+    if (isUpdateOperation(op)) {
+      renderedOpIndexes.add(index);
+      updates.push({
+        ref: op.ref,
+        op: op.op,
+        kind: UPDATE_REVIEW_KIND[op.op],
+        targetId: updateOperationTargetId(op),
+        fields: Object.entries((op.patch ?? {}) as Record<string, unknown>)
+          .filter(([, value]) => value !== undefined)
+          .map(([key, value]) => {
+            const text =
+              typeof value === "string" ? value : JSON.stringify(value);
+            return {
+              key,
+              value: text.slice(0, SKILL_BODY_EXCERPT_CHARS),
+              truncated: text.length > SKILL_BODY_EXCERPT_CHARS,
+            };
+          }),
+      });
+      return;
+    }
     switch (op.op) {
       case "create_skill": {
         renderedOpIndexes.add(index);
@@ -2277,6 +2314,19 @@ function buildConfigReviewItems(
           bornStatus: "draft",
         });
         return;
+      case "create_view":
+        renderedOpIndexes.add(index);
+        views.push({
+          ref: op.ref,
+          name: op.name,
+          viewType: op.viewType,
+          ...(op.scopeProfileSlugs?.length
+            ? { scopeProfileSlugs: op.scopeProfileSlugs }
+            : {}),
+          memberCount: op.entityRefs?.length ?? 0,
+          ...(op.containerRef ? { containerRef: op.containerRef } : {}),
+        });
+        return;
       default:
         return;
     }
@@ -2287,8 +2337,22 @@ function buildConfigReviewItems(
     ...(automations.length ? { automations } : {}),
     ...(rules.length ? { rules } : {}),
     ...(playbooks.length ? { playbooks } : {}),
+    ...(views.length ? { views } : {}),
+    ...(updates.length ? { updates } : {}),
   };
 }
+
+const UPDATE_REVIEW_KIND = {
+  update_skill: "skill",
+  update_automation: "automation",
+  update_rule: "rule",
+  update_playbook: "playbook",
+  update_view: "view",
+  update_entity: "entity",
+} as const satisfies Record<
+  CompositeUpdateOperation["op"],
+  NonNullable<ProposalReviewGraph["updates"]>[number]["kind"]
+>;
 
 /**
  * The CONNECTED-PLAN half of the review graph: typed project / session /

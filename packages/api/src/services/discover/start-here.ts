@@ -5,6 +5,7 @@
  * an empty list or a zero.
  */
 
+import { createLogger } from "@synap-core/core";
 import type { HubProtocolCaller } from "../../routers/hub-protocol/rest/_shared.js";
 import { openLink } from "../../utils/deep-links.js";
 import {
@@ -32,6 +33,8 @@ export const HANDED_TO_YOU_READ_CAP = 5;
 export type PendingReviewState =
   | { status: "ok"; count: number; oldestDays: number; oldestId?: string }
   | { status: "unavailable" };
+
+const logger = createLogger({ module: "discover/start-here" });
 
 const UNAVAILABLE = { status: "unavailable" } as const;
 
@@ -275,6 +278,20 @@ async function readOpenFindings(
   }
 }
 
+/** The Library's health; a failed read is `unavailable`, never "0 waiting". */
+async function readLibrary(userId: string): Promise<StartHere["library"]> {
+  try {
+    const { libraryHealth } = await import("../library/search.js");
+    return await libraryHealth({ userId });
+  } catch (err) {
+    logger.warn(
+      { err },
+      "orient: Library health NOT read — reported unavailable"
+    );
+    return UNAVAILABLE;
+  }
+}
+
 export async function buildStartHere(p: {
   caller: HubProtocolCaller;
   userId: string;
@@ -293,6 +310,7 @@ export async function buildStartHere(p: {
     actions,
     openFindings,
     handedToYou,
+    library,
   ] = await Promise.all([
     readOpenSessions(p.userId),
     readSessionsOwingGrade(p.userId),
@@ -302,6 +320,7 @@ export async function buildStartHere(p: {
     p.agentUserId
       ? readHandedToYou(p.userId, p.agentUserId)
       : Promise.resolve(undefined),
+    readLibrary(p.userId),
   ]);
   const pendingReview: StartHere["pendingReview"] =
     p.pending.status === "unavailable"
@@ -326,6 +345,7 @@ export async function buildStartHere(p: {
     sessionsOwingGrade,
     topKinds,
     actions,
+    library,
     learnMore: { skill: p.learnMoreSkill, writing: ORIENT_WRITING_SKILL },
     // ROUTING (founder, 2026-09-28): product problems go to the Synap TEAM via
     // the CP MCP `report_to_synap` tool (synap-control-plane-api

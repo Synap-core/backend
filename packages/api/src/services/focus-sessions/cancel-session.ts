@@ -39,6 +39,7 @@
  * would replace it).
  */
 
+import { rowsOf } from "../../utils/execute-rows.js";
 import {
   db,
   and,
@@ -112,13 +113,6 @@ async function defaultDeps(): Promise<StopSessionWorkDeps> {
     requestTurnCancel: requestChatTurnCancellation,
     abortTurn: abortActiveChatTurn,
   };
-}
-
-/** postgres-js returns the rows; pglite / node-postgres wrap them in `rows`. */
-function rowsOf<T>(result: unknown): T[] {
-  if (Array.isArray(result)) return result as T[];
-  const rows = (result as { rows?: unknown } | null)?.rows;
-  return Array.isArray(rows) ? (rows as T[]) : [];
 }
 
 function message(err: unknown): string {

@@ -244,6 +244,12 @@ export const CaptureStructureRequestSchema = z
      * MIRRORS the tRPC capture.structure `file` input (and the IS client's
      * `structure` arg) — `content` is base64/utf8 per `encoding`. Field names
      * must match exactly or the tRPC zod layer strips them on passthrough.
+     *
+     * @deprecated intake path `capture.file` (person's use: CLI, Raycast,
+     *   extension) — a file a person brings belongs to the Library. See
+     *   `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+     *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+     *   capture with an agent key) is kept — founder 2026-10-13.
      */
     file: z
       .object({
@@ -253,7 +259,21 @@ export const CaptureStructureRequestSchema = z
         encoding: z.enum(["base64", "utf8"]).optional(),
       })
       .optional(),
+    /**
+     * @deprecated intake path `capture.url` (person's use: CLI, Raycast, extension) —
+     *   a link a person brings belongs to the Library. See `DEPRECATED_INTAKE_PATHS`
+     *   (`@synap-core/types/intake-route`) and docs/CAPTURE_LIBRARY_PLAN.md §2.
+     *   The agent path (MCP synap_capture / Hub capture with an agent key) is
+     *   kept — founder 2026-10-13.
+     */
     url: z.string().url().optional(),
+    /**
+     * @deprecated intake path `capture.html` (person's use: CLI, Raycast, extension) —
+     *   a saved page a person brings belongs to the Library. See `DEPRECATED_INTAKE_PATHS`
+     *   (`@synap-core/types/intake-route`) and docs/CAPTURE_LIBRARY_PLAN.md §2.
+     *   The agent path (MCP synap_capture / Hub capture with an agent key) is
+     *   kept — founder 2026-10-13.
+     */
     html: z.string().max(50_000).optional(),
     context: z.string().optional(),
     // Optional extraction bias (e.g. lead-capture channel intake hint). Passed
@@ -554,9 +574,10 @@ export const ImportRequestSchema = z
     /** Relation type for cross-references (default "references"). */
     relationType: z.string().min(1).max(64).optional(),
     /**
-     * Route items through AI structuring (deep for prose). Default on.
+     * Route items through AI structuring (deep for prose). Default OFF:
+     * import is deterministic unless the caller opts in.
      */
-    aiStructure: z.boolean().optional().default(true),
+    aiStructure: z.boolean().optional().default(false),
     items: z
       .array(
         z.object({

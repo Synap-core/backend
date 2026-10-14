@@ -2018,6 +2018,7 @@ describe("deriveGatePairFromOperations", () => {
       "create_automation",
       "create_rule",
       "create_playbook",
+      "create_view",
     ] as const;
     const rank = (p: { subjectType: string; action: string }) => {
       const key = `${p.subjectType}.${p.action}`;

@@ -75,6 +75,13 @@ describe("create_playbook — the op", () => {
     expect(problems.map((p) => p.opIndex)).toEqual([0, 1]);
   });
 
+  it("refuses a draft filed without a space AT PROPOSE TIME (not a materialize throw)", () => {
+    const problems = validatePlanOperations([op], { workspaceId: null });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]!.message).toMatch(/needs a space/);
+    expect(validatePlanOperations([op], { workspaceId: "ws-1" })).toEqual([]);
+  });
+
   it("draft builder: minimal goal, the kind and its lifecycle property", () => {
     expect(draft).toMatchObject({
       ref: "draft_process",

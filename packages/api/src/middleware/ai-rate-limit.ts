@@ -86,6 +86,22 @@ function checkRateLimit(key: string): {
  * });
  * ```
  */
+/**
+ * The same AI rate limit, for a door that spends AI only on SOME inputs
+ * (e.g. `library.add` with Read now): throws TOO_MANY_REQUESTS like the
+ * middleware. Shares the middleware's counter.
+ */
+export function assertAiRateLimit(userId: string): void {
+  const result = checkRateLimit(`ai:user:${userId}`);
+  if (!result.allowed) {
+    const resetIn = Math.ceil((result.resetAt - Date.now()) / 1000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `AI endpoint rate limit exceeded. Please wait ${resetIn} seconds before making more requests.`,
+    });
+  }
+}
+
 export const aiRateLimitMiddleware = t.middleware(async (opts) => {
   const { ctx } = opts;
 

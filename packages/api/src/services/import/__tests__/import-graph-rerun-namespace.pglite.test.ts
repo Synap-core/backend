@@ -11,8 +11,7 @@
  * Wiring (source scan, derived): every `findPriorImportGraphProposal(` and
  * `buildImportGraphProposalData(` call in `import-orchestrator.ts` forwards
  * `idempotencyNamespace`, and the rerun replayer passes it. Granularity is the
- * call site in that one file; `structuring.ts`'s own `proposeImportGraph`
- * writer takes no namespace (not a rerun path) and is NOT scanned.
+ * call site in that one file.
  *
  * NOT covered: `ImportOrchestrator.analyze` end to end (IS + profiles) —
  * NEEDS-DOGFOOD.

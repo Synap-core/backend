@@ -70,6 +70,7 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { projectLensWhere, accessScopeWhere } from "../utils/project-scope.js";
+import { membersOfWhere, readMembersOf } from "../utils/members-of-scope.js";
 import {
   viewReadableWhere,
   exposedViewMemberWhere,
@@ -438,6 +439,9 @@ export const viewsRouter = router({
             limit: z.number().optional(),
             offset: z.number().optional(),
             groupBy: z.string().optional(),
+            // A FIXED-SET view (an import group's List): `execute` narrows to
+            // exactly these rows, ANDed with the caller's visibility floor.
+            entityIds: z.array(z.string().uuid()).max(5000).optional(),
           })
           .optional(),
         // NEW: Render config (overrides only)
@@ -1338,6 +1342,30 @@ export const viewsRouter = router({
             )
       );
 
+      // LIVE SET — a List built from a Library group names its container
+      // (`config.membersOf`): it shows the container's CURRENT members (a
+      // `parent_of` edge each), so a rebuild that attaches a new member grows
+      // the List without editing it. It SUPERSEDES the fixed set below (the
+      // members the List was born with), which would otherwise freeze it.
+      // ANDed with the floor above — it only narrows.
+      const membersOf = readMembersOf(view.config);
+      if (membersOf) {
+        conditions.push(membersOfWhere(entities.id, membersOf));
+      }
+
+      // FIXED SET — a view created over named things (`query.entityIds`, e.g.
+      // an import group's List) shows exactly those, never more. ANDed with
+      // the floor above, so a stored id the caller cannot see stays hidden.
+      // An explicit empty set shows nothing (it is not "no constraint").
+      if (!membersOf && Array.isArray(query.entityIds)) {
+        const fixedIds = query.entityIds.filter(
+          (id): id is string => typeof id === "string" && id.length > 0
+        );
+        conditions.push(
+          fixedIds.length > 0 ? inArray(entities.id, fixedIds) : sql`false`
+        );
+      }
+
       // Project lens — the view's pin and/or the input's; each only narrows
       // (the `belongs_to_project` predicate, ANDed with the floor above).
       for (const projectId of new Set(
@@ -1753,7 +1781,22 @@ export const viewsRouter = router({
           description: input.description,
           scopeProfileIds: input.scopeProfileIds,
           scopeMode: input.scopeMode,
-          query: input.query as Record<string, unknown> | undefined,
+          // The update door does not take `entityIds`: a fixed-set view keeps
+          // its members across a filter/sort edit instead of silently
+          // widening to the whole kind.
+          query: input.query
+            ? ({
+                ...(Array.isArray(
+                  (view.query as { entityIds?: unknown } | null)?.entityIds
+                )
+                  ? {
+                      entityIds: (view.query as { entityIds: unknown[] })
+                        .entityIds,
+                    }
+                  : {}),
+                ...input.query,
+              } as Record<string, unknown>)
+            : undefined,
           config: input.config as Record<string, unknown> | undefined,
           embeddedViewIds: input.embeddedViewIds,
           schemaSnapshot: input.schemaSnapshot as

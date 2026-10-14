@@ -193,4 +193,50 @@ export const proactiveRouter = router({
       }
       return { defaults: input };
     }),
+
+  /**
+   * The Library keep-alive setting (pod-wide, default ON but quiet): the
+   * weekly "Build one group" suggestion + resurfacing (`enabled`) and the
+   * quiet auto-archive of items unseen for `archiveAfterDays` (0 = never).
+   * Read by the daily `library-keep-alive` pass. Pod admins only.
+   */
+  getLibraryKeepAlive: podAdminProcedure.query(async () => {
+    const { loadLibraryKeepAlive } =
+      await import("../services/library/keep-alive.js");
+    return { settings: await loadLibraryKeepAlive() };
+  }),
+
+  setLibraryKeepAlive: podAdminProcedure
+    .input(
+      z.object({
+        enabled: z.boolean().optional(),
+        archiveAfterDays: z.number().int().min(0).max(3650).optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const { loadLibraryKeepAlive, LIBRARY_KEEP_ALIVE_SETTING } =
+        await import("../services/library/keep-alive.js");
+      const next = { ...(await loadLibraryKeepAlive()), ...input };
+      const [existing] = await db
+        .select({ id: podSettings.id })
+        .from(podSettings)
+        .orderBy(podSettings.createdAt)
+        .limit(1);
+      if (existing) {
+        await db
+          .update(podSettings)
+          .set({
+            settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
+              { [LIBRARY_KEEP_ALIVE_SETTING]: next }
+            )}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(eq(podSettings.id, existing.id));
+      } else {
+        await db.insert(podSettings).values({
+          settings: { [LIBRARY_KEEP_ALIVE_SETTING]: next },
+        });
+      }
+      return { settings: next };
+    }),
 });

@@ -92,6 +92,11 @@ export const t = initTRPC.context<Context>().create({
           ? { captureQuestionStatus }
           : {}),
         ...(typeof reasonCode === "string" ? { reasonCode } : {}),
+        // A Library rebuild refused while the group's last bundle waits for
+        // review names that bundle, so "Open the review" opens it.
+        ...(typeof cause?.pendingProposalId === "string"
+          ? { pendingProposalId: cause.pendingProposalId }
+          : {}),
         ...(weakDedup
           ? {
               reasonCode: weakDedup.reasonCode,

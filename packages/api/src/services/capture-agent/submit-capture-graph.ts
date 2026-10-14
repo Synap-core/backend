@@ -61,6 +61,8 @@ import {
   type CompositeCreateProjectOp,
   type CompositeCreateRuleOp,
   type CompositeCreatePlaybookOp,
+  type CompositeCreateViewOp,
+  type CompositeUpdateOperation,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
   type PlanProjectEvidence,
@@ -215,6 +217,19 @@ export interface CapturePlanInput {
    * `draft`; materialized through `playbooks.create`.
    */
   playbooks?: Array<Omit<CompositeCreatePlaybookOp, "op">>;
+  /**
+   * Lists over this bundle's things (import Build). `entityRefs` /
+   * `containerRef` share the entity ref namespace; materialized through
+   * `views.create`.
+   */
+  views?: Array<Omit<CompositeCreateViewOp, "op">>;
+  /**
+   * Changes to rows an earlier bundle made (a Library rebuild): a Tool's
+   * body, a Template's goal, a List's name, the group container's note.
+   * Carried WITH their discriminant — each names its own door. Never a twin:
+   * a rebuild that finds its earlier row updates it.
+   */
+  updates?: CompositeUpdateOperation[];
 }
 
 /** One plan step on a submit receipt — self-describing for the reviewer/agent. */
@@ -240,7 +255,9 @@ export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
       (plan?.skills?.length ?? 0) +
       (plan?.automations?.length ?? 0) +
       (plan?.rules?.length ?? 0) +
-      (plan?.playbooks?.length ?? 0) >
+      (plan?.playbooks?.length ?? 0) +
+      (plan?.views?.length ?? 0) +
+      (plan?.updates?.length ?? 0) >
     0
   );
 }
@@ -265,6 +282,15 @@ function rewritePlanEntityRefs(
     documents: plan.documents?.map((d) => ({
       ...d,
       ...(d.entityRef ? { entityRef: r(d.entityRef) } : {}),
+    })),
+    views: plan.views?.map((v) => ({
+      ...v,
+      ...(v.entityRefs
+        ? {
+            entityRefs: [...new Set(v.entityRefs.map((x) => r(x) as string))],
+          }
+        : {}),
+      ...(v.containerRef ? { containerRef: r(v.containerRef) } : {}),
     })),
     projects: plan.projects?.map((p) => ({
       ...p,
@@ -594,6 +620,8 @@ export async function buildCaptureGraphOperations(
       op: "create_playbook" as const,
       ...p,
     })),
+    ...(plan?.views ?? []).map((v) => ({ op: "create_view" as const, ...v })),
+    ...(plan?.updates ?? []),
   ];
 
   // Scope-aware homes (shared with import): stamp process kinds into the graph
@@ -720,7 +748,9 @@ export async function preflightCaptureGraphOperations(
   // session/entity/project, and the project evidence verdict — the SAME check
   // on submit, on the dry run, and on every revision of a pending plan.
   if (hasComposedSteps(operations)) {
-    const plan = await preflightPlanOperations(database, operations, userId);
+    const plan = await preflightPlanOperations(database, operations, userId, {
+      workspaceId,
+    });
     return {
       invalidEntities,
       unmodeledProperties,
@@ -1675,6 +1705,12 @@ export async function submitCaptureGraph(
                       ),
                       ...materialized.documents.map(
                         (d) => [d.opIndex, d.documentId] as [number, string]
+                      ),
+                      ...materialized.playbooks.map(
+                        (p) => [p.opIndex, p.playbookId] as [number, string]
+                      ),
+                      ...materialized.views.map(
+                        (v) => [v.opIndex, v.viewId] as [number, string]
                       ),
                     ])
                   ),

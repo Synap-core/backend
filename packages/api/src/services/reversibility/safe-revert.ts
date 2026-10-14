@@ -57,9 +57,11 @@ import {
   playbookRuns,
   projects,
   links,
+  views,
   ProfileResolutionService,
   columnsForValue,
 } from "@synap/database";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   entityFieldApiName,
   type EntityDiffField,
@@ -74,6 +76,8 @@ export type RevertTarget =
   /** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
   | { kind: "rule"; id: string }
   | { kind: "playbook"; id: string }
+  /** A saved List (`views` row). No soft delete exists: retired by delete. */
+  | { kind: "view"; id: string }
   | {
       kind: "project";
       id: string;
@@ -100,6 +104,18 @@ export type RevertTarget =
     }
   /** A body document a merge linked onto an entity that had none. */
   | { kind: "entity_body"; entityId: string; documentId: string }
+  /**
+   * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
+   * did NOT create. Restored to `before` only while EVERY column still holds
+   * `after` — a column somebody edited since is theirs, and the row is kept.
+   */
+  | {
+      kind: "row_patch";
+      table: RowPatchTable;
+      id: string;
+      before: Record<string, unknown>;
+      after: Record<string, unknown>;
+    }
   /** One entity column (title / preview) an update changed. */
   | {
       kind: "entity_field";
@@ -109,6 +125,63 @@ export type RevertTarget =
       after: string | null;
       before: string | null;
     };
+
+/**
+ * The config tables a `row_patch` may restore, and the ONLY columns it may
+ * write on each — the fields the `update_*` ops patch. A stored record naming
+ * any other column is refused (`not_owned`), never written: the record is
+ * data, and data does not get to pick which columns an undo touches.
+ */
+export type RowPatchTable =
+  "skill" | "rule" | "automation" | "playbook" | "view";
+
+const ROW_PATCH_COLUMNS: Record<
+  RowPatchTable,
+  {
+    table: typeof skills | typeof automations | typeof playbooks | typeof views;
+    columns: readonly string[];
+  }
+> = {
+  skill: { table: skills, columns: ["name", "description", "body"] },
+  rule: {
+    table: skills,
+    columns: ["name", "description", "body", "metadata"],
+  },
+  automation: { table: automations, columns: ["name", "description"] },
+  playbook: {
+    table: playbooks,
+    columns: ["name", "description", "goalTemplate"],
+  },
+  view: { table: views, columns: ["name", "description", "config"] },
+};
+
+/** Key-order-independent JSON (jsonb does not keep key order). */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map(
+        (k) =>
+          `${JSON.stringify(k)}:${stableJson((value as Record<string, unknown>)[k])}`
+      );
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+function rowPatchColumns(
+  target: Extract<RevertTarget, { kind: "row_patch" }>
+): string[] | null {
+  const spec = ROW_PATCH_COLUMNS[target.table];
+  if (!spec) return null;
+  const allowed = spec.columns;
+  const named = Object.keys(target.after);
+  return named.every((c) => allowed.includes(c)) &&
+    Object.keys(target.before).every((c) => allowed.includes(c))
+    ? named
+    : null;
+}
 
 export type RevertSkipReason =
   /** Changed after the work that created it. */
@@ -469,6 +542,36 @@ async function inspectPlaybook(
   return null;
 }
 
+/** A list someone has since edited (renamed, re-filtered, re-scoped) is theirs now. */
+async function inspectView(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "view" }>,
+  ctx: InspectContext
+): Promise<RevertSkip | null> {
+  const [row] = await reader
+    .select({
+      id: views.id,
+      updatedAt: views.updatedAt,
+      documentId: views.documentId,
+    })
+    .from(views)
+    .where(eq(views.id, target.id))
+    .for("update");
+  if (!row) return skip(target, "already_reverted", "the list is already gone");
+  // A canvas view owns a document + blobs, which only the view door removes.
+  if (row.documentId) {
+    return skip(target, "in_use", "the list has a canvas document of its own");
+  }
+  if (changedAfter(row.updatedAt, ctx.since)) {
+    return skip(
+      target,
+      "edited_since",
+      "the list was changed after it was created"
+    );
+  }
+  return null;
+}
+
 /**
  * A project is in use the moment anything ELSE points at it: another session
  * scoped to it, or any link that is not its own lineage edge.
@@ -585,6 +688,41 @@ async function inspectProperty(
     : skip(target, "edited_since", `"${target.key}" was edited since`);
 }
 
+async function inspectRowPatch(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "row_patch" }>
+): Promise<RevertSkip | null> {
+  const columns = rowPatchColumns(target);
+  if (!columns) {
+    return skip(
+      target,
+      "not_owned",
+      `the record names a ${target.table} field an update never writes`
+    );
+  }
+  const { table } = ROW_PATCH_COLUMNS[target.table];
+  const tableColumns = table as unknown as Record<string, AnyPgColumn>;
+  const [row] = await reader
+    .select(Object.fromEntries(columns.map((c) => [c, tableColumns[c]!])))
+    .from(table)
+    .where(eq((table as typeof skills).id, target.id))
+    .for("update");
+  if (!row) {
+    return skip(target, "not_found", `the ${target.table} no longer exists`);
+  }
+  const current = row as Record<string, unknown>;
+  const changed = columns.filter(
+    (c) => stableJson(current[c]) !== stableJson(target.after[c])
+  );
+  return changed.length === 0
+    ? null
+    : skip(
+        target,
+        "edited_since",
+        `the ${target.table}'s ${changed.join(", ")} was edited since`
+      );
+}
+
 async function inspectEntityField(
   reader: Reader,
   target: Extract<RevertTarget, { kind: "entity_field" }>
@@ -629,6 +767,8 @@ async function inspect(
       return inspectSkillRow(reader, target, ctx);
     case "playbook":
       return inspectPlaybook(reader, target);
+    case "view":
+      return inspectView(reader, target, ctx);
     case "project":
       return inspectProject(reader, target, ctx);
     case "link":
@@ -638,6 +778,8 @@ async function inspect(
       return inspectProperty(reader, target);
     case "entity_field":
       return inspectEntityField(reader, target);
+    case "row_patch":
+      return inspectRowPatch(reader, target);
   }
 }
 
@@ -648,12 +790,14 @@ const APPLY_ORDER: Record<RevertTarget["kind"], number> = {
   facet: 1,
   property: 2,
   entity_field: 2,
+  row_patch: 2,
   entity_body: 3,
   entity: 4,
   rule: 5,
   automation: 6,
   skill: 7,
   playbook: 8,
+  view: 8,
   project: 9,
 };
 
@@ -773,6 +917,9 @@ async function apply(
         .set({ status: "archived", updatedAt: now })
         .where(eq(playbooks.id, target.id));
       return;
+    case "view":
+      await tx.delete(views).where(eq(views.id, target.id));
+      return;
     case "project":
       await tx
         .update(projects)
@@ -782,6 +929,20 @@ async function apply(
     case "link":
       await tx.delete(links).where(eq(links.id, target.id));
       return;
+    case "row_patch": {
+      // `inspectRowPatch` already refused a record naming a column outside
+      // the allowlist, so every key written here is one an update writes.
+      const columns = rowPatchColumns(target) ?? [];
+      const { table } = ROW_PATCH_COLUMNS[target.table];
+      await tx
+        .update(table)
+        .set({
+          ...Object.fromEntries(columns.map((c) => [c, target.before[c]])),
+          updatedAt: now,
+        } as never)
+        .where(eq((table as typeof skills).id, target.id));
+      return;
+    }
   }
 }
 

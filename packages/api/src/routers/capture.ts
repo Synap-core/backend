@@ -7,6 +7,10 @@
  * - execute:    Batch entity + relation creation (AI pipeline step 2)
  */
 
+import {
+  deprecatedCapturePaths,
+  recordDeprecatedIntakePaths,
+} from "../services/intake/deprecated-intake-path.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { deriveGatePairFromOperations } from "@synap/governance-policy";
@@ -754,6 +758,12 @@ const captureBaseRouter = router({
     .input(
       z.object({
         content: z.string().min(1).describe("Raw thought content"),
+        /**
+         * @deprecated intake path `capture.thought.url` (person's use) — a link a person brings belongs to the Library.
+         *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+         *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+         *   capture with an agent key) is kept — founder 2026-10-13.
+         */
         url: z.string().url().optional().describe("Optional source URL"),
         context: z
           .record(z.string(), z.unknown())
@@ -763,6 +773,11 @@ const captureBaseRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      // A person's link sent to Capture is a deprecated intake path: measured.
+      await recordDeprecatedIntakePaths(
+        { userId, agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+        deprecatedCapturePaths("thought", input)
+      );
       // Pod-wide allowed (twin of capture.structure): no workspace is required.
       // Pin flags use resolveKindWritePin — pod kinds stay unpinned; process
       // kinds pin to ambient when present. Never blanket workspaceScoped.
@@ -1143,7 +1158,15 @@ const captureBaseRouter = router({
         // Optional now: a binary input (PDF/photo/docx/audio) can arrive via
         // `file` and be normalized to text by IS's extractor before structuring.
         text: z.string().max(8000).optional(),
-        /** Binary/text source normalized to text by IS before structuring. */
+        /**
+         * Binary/text source normalized to text by IS before structuring.
+         *
+         * @deprecated intake path `capture.file` (person's use) — a file or photo
+         *   a person brings belongs to the Library. See `DEPRECATED_INTAKE_PATHS`
+         *   (`@synap-core/types/intake-route`) and docs/CAPTURE_LIBRARY_PLAN.md §2.
+         *   The agent path (MCP synap_capture / Hub capture with an agent key) is
+         *   kept — founder 2026-10-13.
+         */
         file: z
           .object({
             content: z.string(),
@@ -1152,7 +1175,19 @@ const captureBaseRouter = router({
             encoding: z.enum(["base64", "utf8"]).optional(),
           })
           .optional(),
+        /**
+         * @deprecated intake path `capture.url` (person's use) — a link a person brings belongs to the Library.
+         *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+         *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+         *   capture with an agent key) is kept — founder 2026-10-13.
+         */
         url: z.string().url().optional(),
+        /**
+         * @deprecated intake path `capture.html` (person's use) — a saved page a person brings belongs to the Library.
+         *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+         *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+         *   capture with an agent key) is kept — founder 2026-10-13.
+         */
         html: z.string().max(50_000).optional(),
         context: z.string().optional(),
         /**
@@ -1256,6 +1291,12 @@ const captureBaseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
+      // A person's link / file / page sent to Capture is a deprecated intake
+      // path (the agent door is not): measured for the L6 removal criterion.
+      await recordDeprecatedIntakePaths(
+        { userId, agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+        deprecatedCapturePaths("structure", input)
+      );
 
       // Text is optional now (a `file` may carry the payload instead); guard
       // every `input.text` use. The item-fallback below needs SOME text, so use
@@ -1266,6 +1307,13 @@ const captureBaseRouter = router({
 
       // Additive. A lone URL is read in-process when a reader verb is installed,
       // or named as one install invite when none is. Never fails the capture.
+      /**
+       * @deprecated intake path `capture.linkReader` (person's use) — a link a person brings is read by the Library on save
+       *   (same `readPublicUrl`).
+       *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+       *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+       *   capture with an agent key) is kept — founder 2026-10-13.
+       */
       const publicUrlReader = readInstalledPublicUrl({
         text: inputText,
         userId,
@@ -1819,6 +1867,13 @@ const captureBaseRouter = router({
         );
       }
       // The pod's vision model is a PREFERENCE the IS honours when it serves it.
+      /**
+       * @deprecated intake path `capture.vision` (person's use) — photos a person brings move to the Library's light read
+       *   and Build, which take over this lane and preference (wave L2).
+       *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
+       *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+       *   capture with an agent key) is kept — founder 2026-10-13.
+       */
       const visionModelId = input.file
         ? await readPodVisionModelPreference(database)
         : undefined;

@@ -46,6 +46,8 @@ const EXEMPT: Record<string, string> = {
     "replays a raw that is ALREADY staged, and forwards its id (`sourceDocumentIds: [source.sourceDocumentId]`)",
   "services/capture-agent/draft-process.ts":
     "drafts a template from a KIND (profile slug + its lifecycle property): there is no raw text to keep — the capture that prompted it already staged its own",
+  "services/imports/build.ts":
+    "builds from import items ALREADY staged by the Collect step (services/imports/stage.ts → stageIntakeSource), and forwards their ids (`sourceDocumentIds: builtIds`)",
   "services/connector-import-bridge.ts":
     "connection sync — wave 2 (founder: keep a COPY of each provider record); out of wave 1 scope",
 };
@@ -82,7 +84,10 @@ describe("every capture door keeps its raw through the one raw door", () => {
       "routers/webhooks-inbound.ts",
       "services/calcom/run-cal-backfill.ts",
       "services/capabilities/builtin-verbs.ts",
-      "services/import/structuring.ts",
+      // The import door (analyze / analyzeLarge). `services/import/structuring.ts`
+      // held the dead `proposeImportGraph` until it was deleted (2026-10-12).
+      "services/import-orchestrator.ts",
+      "services/imports/build.ts",
     ]) {
       expect(doors.map((d) => d.rel)).toContain(known);
     }

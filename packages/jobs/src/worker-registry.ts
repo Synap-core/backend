@@ -270,6 +270,27 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "shared",
   },
   {
+    id: "library-light-read",
+    name: "Library Light Read",
+    description:
+      "On save of a Library item: reads its text cheaply (public page, typed text, file extract / OCR / transcript under a daily per-person AI budget), writes a short summary and action chips (date, receipt, contact, task) to documents.metadata.importRead, and indexes it for search. Never structures or files anything. Over budget = an 'over budget' mark, read later by the hourly sweep.",
+    triggers: ["queue:library-light-read", "cron:17 * * * *"],
+    outputs: ["documents.metadata.importRead", "search-index"],
+    category: "ai",
+  },
+  {
+    id: "library-keep-alive",
+    name: "Library Keep-Alive",
+    description:
+      "Daily at 04:23 UTC: archives Library items unseen for N days (default 90; ungrouped, never built — still searchable), offers the person's longest-waiting group as a weekly 'Build one group' suggestion, and resurfaces kept items that name a project worked on this week. Suggestions only (never pending proposals); a pod setting turns it off.",
+    triggers: ["cron:23 4 * * *"],
+    outputs: [
+      "documents.metadata.importCuration.archivedAt",
+      "notification.suggestion",
+    ],
+    category: "shared",
+  },
+  {
     id: "webhook-broker",
     name: "Webhook Broker",
     description: "Delivers events to external webhook subscribers",

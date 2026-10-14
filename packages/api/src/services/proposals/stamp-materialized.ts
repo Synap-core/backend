@@ -62,6 +62,10 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   automationIds?: string[];
   /** Rules are `skills` rows (`kind: "rule"`). */
   ruleIds?: string[];
+  /** DRAFT playbooks created by `create_playbook` ops (revert archives them). */
+  playbookIds?: string[];
+  /** Lists created by `create_view` ops (revert deletes them while untouched). */
+  viewIds?: string[];
   /**
    * Body documents created WITH an entity. They ride the entity's soft delete
    * (a restored entity keeps its body), so revert never deletes them on their
@@ -76,6 +80,12 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   linkIds?: string[];
   /** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
   projectSubjectIds?: Record<string, string>;
+  /**
+   * Config rows an `update_*` op CHANGED (a Library rebuild): the patched
+   * columns as they were right before the write and right after. Revert
+   * restores `before` only while every column still holds `after`.
+   */
+  rowPatches?: RowPatchRecord[];
   /** ISO time the record was last stamped. */
   stampedAt?: string;
   /**
@@ -88,6 +98,39 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   byOp?: Record<string, MaterializedOpRecord>;
 }
 
+/** The config tables an `update_*` op may change (entities use `propertyDiffs`). */
+export const ROW_PATCH_KINDS = [
+  "skill",
+  "rule",
+  "automation",
+  "playbook",
+  "view",
+] as const;
+export type RowPatchKind = (typeof ROW_PATCH_KINDS)[number];
+
+/** One config row an update changed, with the columns it rewrote. */
+export interface RowPatchRecord {
+  kind: RowPatchKind;
+  id: string;
+  /** Column → value right before the write (only the patched columns). */
+  before: Record<string, unknown>;
+  /** Column → value right after the write. */
+  after: Record<string, unknown>;
+}
+
+const UPDATE_OP_ROW_KIND: Record<
+  Exclude<UpdateOpName, "update_entity">,
+  RowPatchKind
+> = {
+  update_skill: "skill",
+  update_rule: "rule",
+  update_automation: "automation",
+  update_playbook: "playbook",
+  update_view: "view",
+};
+
+type UpdateOpName = MaterializeResult["updates"][number]["op"];
+
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
   op:
@@ -97,10 +140,12 @@ export interface MaterializedOpRecord {
     | "create_automation"
     | "create_rule"
     | "create_playbook"
+    | "create_view"
     | "create_session"
     | "create_document"
     | "create_project"
-    | "create_link";
+    | "create_link"
+    | UpdateOpName;
   entityId?: string;
   linked?: boolean;
   relationId?: string;
@@ -111,10 +156,19 @@ export interface MaterializedOpRecord {
   ruleId?: string;
   /** `create_playbook`: the DRAFT playbook it created. */
   playbookId?: string;
+  /** `create_view`: the List it created. */
+  viewId?: string;
   sessionId?: string;
   projectId?: string;
   documentId?: string;
   linkId?: string;
+  /**
+   * `update_*`: the row it changed and the fields' values before and after
+   * (`{before, patch}` — `after` is the patch as it landed). An
+   * `update_entity` names its row in `entityId` and keeps its diff in the
+   * record's `propertyDiffs`; a config update carries it here.
+   */
+  update?: RowPatchRecord;
   /** Set when THIS op was reverted on its own (`proposals.revert` with `opKey`). */
   revertedAt?: string;
   revertedBy?: string;
@@ -153,6 +207,8 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "automations"
       | "rules"
       | "playbooks"
+      | "views"
+      | "updates"
       | "projects"
       | "sessions"
       | "links"
@@ -207,8 +263,10 @@ export function buildMaterializedRecord(
       ...result.entities.flatMap((e) =>
         e.linked && e.propertyDiff ? [e.propertyDiff] : []
       ),
+      ...entityUpdateDiffs(result),
       ...(extra?.propertyDiffs ?? []),
     ],
+    ...rowPatchFields(result),
     ...planRecordFields(result),
     byOp: buildByOp(result),
   };
@@ -223,11 +281,64 @@ export function buildMaterializedRecord(
   return record;
 }
 
+/** `update_entity` results as the ONE entity diff shape revert already reads. */
+function entityUpdateDiffs(result: RecordSource): EntityPropertyDiff[] {
+  return (result.updates ?? []).flatMap((u) => {
+    if (u.op !== "update_entity") return [];
+    const diff = computeEntityUpdateDiff(
+      u.targetId,
+      u.before as unknown as EntityUndoSnapshot,
+      u.after as unknown as EntityUndoSnapshot
+    );
+    return diff ? [diff] : [];
+  });
+}
+
+function rowPatchOf(
+  u: MaterializeResult["updates"][number]
+): RowPatchRecord | null {
+  if (u.op === "update_entity") return null;
+  // A write that changed nothing leaves nothing to undo.
+  if (JSON.stringify(u.before) === JSON.stringify(u.after)) return null;
+  return {
+    kind: UPDATE_OP_ROW_KIND[u.op],
+    id: u.targetId,
+    before: u.before,
+    after: u.after,
+  };
+}
+
+/** Config rows `update_*` ops changed. Present only when there are some. */
+function rowPatchFields(
+  result: RecordSource
+): Partial<CompleteMaterializedRecord> {
+  const rowPatches = (result.updates ?? []).flatMap((u) => {
+    const patch = rowPatchOf(u);
+    return patch ? [patch] : [];
+  });
+  return rowPatches.length > 0 ? { rowPatches } : {};
+}
+
 /**
  * A connected plan's rows. Present ONLY when the run carried plan results, so
  * an entity/relation graph's record keeps exactly the shape it always had.
  */
 function planRecordFields(
+  result: RecordSource
+): Partial<CompleteMaterializedRecord> {
+  // Draft playbooks and lists are resilient config ops, not plan ops — but
+  // they are rows this run CREATED, so the record names them or a revert
+  // leaves them behind. Present only when the run made some.
+  const playbookIds = unique((result.playbooks ?? []).map((p) => p.playbookId));
+  const viewIds = unique((result.views ?? []).map((v) => v.viewId));
+  const configRows: Partial<CompleteMaterializedRecord> = {
+    ...(playbookIds.length > 0 ? { playbookIds } : {}),
+    ...(viewIds.length > 0 ? { viewIds } : {}),
+  };
+  return { ...configRows, ...planOnlyRecordFields(result) };
+}
+
+function planOnlyRecordFields(
   result: RecordSource
 ): Partial<CompleteMaterializedRecord> {
   const sessions = result.sessions ?? [];
@@ -311,6 +422,23 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   for (const p of result.playbooks ?? []) {
     byOp[p.ref] = { op: "create_playbook", playbookId: p.playbookId };
   }
+  for (const v of result.views ?? []) {
+    byOp[v.ref] = { op: "create_view", viewId: v.viewId };
+  }
+  for (const u of result.updates ?? []) {
+    byOp[u.ref] =
+      u.op === "update_entity"
+        ? { op: u.op, entityId: u.targetId }
+        : {
+            op: u.op,
+            update: {
+              kind: UPDATE_OP_ROW_KIND[u.op],
+              id: u.targetId,
+              before: u.before,
+              after: u.after,
+            },
+          };
+  }
   for (const p of result.projects ?? []) {
     byOp[p.ref] = {
       op: "create_project",
@@ -357,11 +485,20 @@ function mergeOpRecord(
     ...(older.facetIds ?? []),
     ...(newer.facetIds ?? []),
   ]);
+  // A re-applied update keeps the FIRST write's `before` (the value to restore).
+  const update =
+    older.update && newer.update
+      ? {
+          ...newer.update,
+          before: { ...newer.update.before, ...older.update.before },
+        }
+      : (newer.update ?? older.update);
   return {
     ...older,
     ...newer,
     ...(older.linked === false ? { linked: false } : {}),
     ...(facetIds.length > 0 ? { facetIds } : {}),
+    ...(update ? { update } : {}),
   };
 }
 
@@ -427,6 +564,8 @@ const ID_FIELDS = [
   "skillIds",
   "automationIds",
   "ruleIds",
+  "playbookIds",
+  "viewIds",
   "entityDocumentIds",
   "sessionIds",
   "projectIds",
@@ -452,6 +591,29 @@ export function mergeMaterializedRecords(
     diffs.set(diff.entityId, prior ? mergeDiff(prior, diff) : diff);
   }
   merged.propertyDiffs = [...diffs.values()];
+  if (older?.rowPatches || newer.rowPatches) {
+    // One entry per row: the OLDER `before` wins (the value to restore), the
+    // NEWER `after` wins (what the row holds now).
+    const patches = new Map<string, RowPatchRecord>();
+    for (const patch of [
+      ...(older?.rowPatches ?? []),
+      ...(newer.rowPatches ?? []),
+    ]) {
+      const key = `${patch.kind}:${patch.id}`;
+      const prior = patches.get(key);
+      patches.set(
+        key,
+        prior
+          ? {
+              ...patch,
+              before: { ...patch.before, ...prior.before },
+              after: { ...prior.after, ...patch.after },
+            }
+          : patch
+      );
+    }
+    merged.rowPatches = [...patches.values()];
+  }
   if (older?.byOp || newer.byOp) {
     const byOp = { ...(older?.byOp ?? {}) };
     for (const [key, entry] of Object.entries(newer.byOp ?? {})) {
@@ -477,6 +639,14 @@ export function subtractFromRecord(
     if (!record[field]) continue;
     const drop = new Set(undone[field] ?? []);
     remaining[field] = record[field]!.filter((id) => !drop.has(id));
+  }
+  if (record.rowPatches) {
+    const gone = new Set(
+      (undone.rowPatches ?? []).map((p) => `${p.kind}:${p.id}`)
+    );
+    remaining.rowPatches = record.rowPatches.filter(
+      (p) => !gone.has(`${p.kind}:${p.id}`)
+    );
   }
   const undoneDiffs = new Map(
     (undone.propertyDiffs ?? []).map((d) => [d.entityId, d])

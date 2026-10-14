@@ -570,6 +570,34 @@ export interface ProposalReviewGraph {
     statusProperty?: string;
     bornStatus: "draft";
   }>;
+  /**
+   * `create_view` — a List over this bundle's things (import Build). Counts,
+   * not ids: the members are refs into `entities[]` or existing ids.
+   */
+  views?: Array<{
+    ref: string;
+    name: string;
+    viewType: "list" | "table" | "kanban" | "gallery";
+    /** Kinds the list shows, when the op named them. */
+    scopeProfileSlugs?: string[];
+    /** How many things the list holds (in-batch refs + existing ids). */
+    memberCount: number;
+    /** The group container the list is about, when there is one. */
+    containerRef?: string;
+  }>;
+  /**
+   * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
+   * "Updates", beside the "New" things above). Each names the row it rewrites
+   * and the fields it sets, with their NEW values (excerpted). What they held
+   * before is read at apply time and stamped, so the change can be undone.
+   */
+  updates?: Array<{
+    ref: string;
+    op: CompositeUpdateOperation["op"];
+    kind: "skill" | "automation" | "rule" | "playbook" | "view" | "entity";
+    targetId: string;
+    fields: Array<{ key: string; value: string; truncated: boolean }>;
+  }>;
 }
 
 export interface ProposalReviewModel {
@@ -853,6 +881,51 @@ export interface CompositeCreatePlaybookOp {
 }
 
 /**
+ * ── List op (import Build, 2026-10-12) ──────────────────────────────────────
+ *
+ * A saved LIST (a `views` row) filed in the SAME governed bundle as the things
+ * it lists, so an import group lands as "the items + their list" in one review
+ * and one undo. Materialized through the EXISTING `views.create` door — never a
+ * raw insert — with the approver's authority.
+ *
+ * Scoping: `entityRefs` (in-batch `create_entity` refs or real entity ids)
+ * become the view's FIXED set (`query.entityIds`). `containerRef` (the group's
+ * container entity) is recorded on the view config as `membersOf`, so a later
+ * "members of X" filter can make the list live without a migration.
+ * `scopeProfileSlugs` names the kinds the list shows; absent, the materializer
+ * derives them from the listed entities.
+ *
+ * Per-op RESILIENT (like the Rule Loop config ops): a list that fails never
+ * discards the things captured beside it.
+ */
+export interface CompositeCreateViewOp {
+  op: "create_view";
+  /** Stable handle for this view within the proposal (e.g. "list1"). */
+  ref: string;
+  name: string;
+  viewType: "list" | "table" | "kanban" | "gallery";
+  /** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
+  workspaceId?: string;
+  /** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
+  scopeProfileSlugs?: string[];
+  /** The listed things: in-batch `create_entity` refs or existing entity ids. */
+  entityRefs?: string[];
+  /** The group's container (a `create_entity` ref or an existing id). */
+  containerRef?: string;
+  /** Render config overrides, validated by the views door. */
+  config?: Record<string, unknown>;
+}
+
+/** The view types a `create_view` op may ask for (all structured). */
+export const COMPOSITE_VIEW_TYPES = [
+  "list",
+  "table",
+  "kanban",
+  "gallery",
+] as const;
+export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
+
+/**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────
  *
  * A plan is the composite graph extended with the objects that are NOT
@@ -963,6 +1036,114 @@ export interface CompositeCreateLinkOp {
   toSessionId?: string;
 }
 
+/**
+ * ── UPDATE ops (Library rebuild, 2026-10-13) ────────────────────────────────
+ *
+ * A rebuild of a Library group proposes CHANGES to the Tools / Templates /
+ * Rules / Lists it made before — never twins. Each op names ONE existing row
+ * by id and a `patch` of the few fields a rebuild may rewrite. At apply time
+ * the materializer reads the row's `before` for exactly the patched fields,
+ * writes through the object's EXISTING update door, reads `after`, and stamps
+ * `{ before, after }` so revert restores `before` — and refuses (skips, named)
+ * a field somebody changed since, exactly like an undo of a creation.
+ *
+ * `ref` is required: it is the op's `byOp` key on the stamped record, which is
+ * how the NEXT rebuild finds the row again (`materialized.byOp[ref]`). An
+ * `update_entity` ref is also registered in the entity ref map, so relation
+ * ops in the same batch may target it (`parent_of` from a reused container).
+ *
+ * Per-op RESILIENT, like the config creates: a failed update never discards
+ * the new things filed beside it.
+ */
+export interface CompositeUpdateSkillOp {
+  op: "update_skill";
+  ref: string;
+  skillId: string;
+  patch: { name?: string; description?: string; body?: string };
+}
+
+export interface CompositeUpdateAutomationOp {
+  op: "update_automation";
+  ref: string;
+  automationId: string;
+  patch: { name?: string; description?: string };
+}
+
+export interface CompositeUpdateRuleOp {
+  op: "update_rule";
+  ref: string;
+  ruleId: string;
+  /** The rule in the person's words. Rewrites the rule row's text only. */
+  patch: { intent: string };
+}
+
+export interface CompositeUpdatePlaybookOp {
+  op: "update_playbook";
+  ref: string;
+  playbookId: string;
+  patch: { name?: string; description?: string; goalTemplate?: string };
+}
+
+export interface CompositeUpdateViewOp {
+  op: "update_view";
+  ref: string;
+  viewId: string;
+  /** `config` keys are MERGED over the stored config (a `membersOf` survives). */
+  patch: {
+    name?: string;
+    description?: string;
+    config?: Record<string, unknown>;
+  };
+}
+
+export interface CompositeUpdateEntityOp {
+  op: "update_entity";
+  ref: string;
+  entityId: string;
+  /** `properties` keys are merged by the entity door (absent keys untouched). */
+  patch: {
+    title?: string;
+    description?: string;
+    properties?: Record<string, unknown>;
+  };
+}
+
+/** The op kinds that CHANGE an existing row (never create one). */
+export const UPDATE_OPERATION_KINDS = [
+  "update_skill",
+  "update_automation",
+  "update_rule",
+  "update_playbook",
+  "update_view",
+  "update_entity",
+] as const;
+
+export type CompositeUpdateOperation =
+  | CompositeUpdateSkillOp
+  | CompositeUpdateAutomationOp
+  | CompositeUpdateRuleOp
+  | CompositeUpdatePlaybookOp
+  | CompositeUpdateViewOp
+  | CompositeUpdateEntityOp;
+
+/** The id an update op names, whatever its kind. */
+export function updateOperationTargetId(op: CompositeUpdateOperation): string {
+  switch (op.op) {
+    case "update_skill":
+      return op.skillId;
+    case "update_automation":
+      return op.automationId;
+    case "update_rule":
+      return op.ruleId;
+    case "update_playbook":
+      return op.playbookId;
+    case "update_view":
+      return op.viewId;
+    case "update_entity":
+      return op.entityId;
+  }
+}
+
 export type CompositeProposalOperation =
   | CompositeCreateEntityOp
   | CompositeCreateRelationOp
@@ -970,10 +1151,25 @@ export type CompositeProposalOperation =
   | CompositeCreateAutomationOp
   | CompositeCreateRuleOp
   | CompositeCreatePlaybookOp
+  | CompositeCreateViewOp
   | CompositeCreateSessionOp
   | CompositeCreateDocumentOp
   | CompositeCreateProjectOp
-  | CompositeCreateLinkOp;
+  | CompositeCreateLinkOp
+  // The update arms are listed one by one (not as `CompositeUpdateOperation`):
+  // the gate-coverage tripwire reads each arm's `interface … { op: "…" }`.
+  | CompositeUpdateSkillOp
+  | CompositeUpdateAutomationOp
+  | CompositeUpdateRuleOp
+  | CompositeUpdatePlaybookOp
+  | CompositeUpdateViewOp
+  | CompositeUpdateEntityOp;
+
+export function isUpdateOperation(
+  op: CompositeProposalOperation
+): op is CompositeUpdateOperation {
+  return (UPDATE_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
 
 /** The op kinds that make a composite a PLAN (all-or-none on apply). */
 export const PLAN_OPERATION_KINDS = [
@@ -1033,6 +1229,11 @@ const RESILIENT_OPERATION_KINDS = [
   "create_rule",
   // A draft process: a failed draft must not discard the capture beside it.
   "create_playbook",
+  // A list over the bundle's things: a failed list must not discard them.
+  "create_view",
+  // A rebuild's changes to what it made before: a failed change must not
+  // discard the new things filed beside it.
+  ...UPDATE_OPERATION_KINDS,
 ] as const satisfies ReadonlyArray<CompositeProposalOperation["op"]>;
 
 type _EveryOpKindClassified =
@@ -1351,7 +1552,9 @@ export function isCompositeProposalData(
         o.op === "create_automation" ||
         o.op === "create_rule" ||
         o.op === "create_playbook" ||
-        isPlanOperation(o))
+        o.op === "create_view" ||
+        isPlanOperation(o) ||
+        isUpdateOperation(o))
   );
 }
 
