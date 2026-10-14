@@ -1771,6 +1771,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "color_slot",
     addedBy: "0271_projects_color_slot.sql",
   },
+  // The project's icon (0328) — same baseline exemption.
+  {
+    table: "projects",
+    column: "icon",
+    addedBy: "0328_projects_icon.sql",
+  },
   // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
   // in the baseline (it references `projects`, which 0151 creates), so this is
   // the table's ONLY startup guard. `focus_sessions.track_id` is selected by

@@ -85,6 +85,14 @@ export const projects = pgTable(
      */
     colorSlot: smallint("color_slot"),
 
+    /**
+     * The project's mark on its colour plate (0328): ONE emoji, or
+     * `glyph:<lucide-name>`. Written only through `isProjectIcon`
+     * (`@synap-core/types/projects`). NULL = none chosen; surfaces draw the
+     * initials instead.
+     */
+    icon: text("icon"),
+
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),
     metadata: jsonb("metadata"),

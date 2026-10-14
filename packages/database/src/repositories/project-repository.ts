@@ -37,6 +37,10 @@ export interface CreateProjectInput {
    * at create time — an undated project is not late, it has no deadline.
    */
   targetDate?: Date | null;
+  /** Identity-palette slot 1–12 (0271). Omitted/null = not chosen. */
+  colorSlot?: number | null;
+  /** One emoji or `glyph:<lucide-name>` (0328). Omitted/null = none. */
+  icon?: string | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   userId: string;
@@ -70,6 +74,8 @@ export interface UpdateProjectInput {
   targetDate?: Date | null;
   /** Identity-palette slot 1–12 (0271). `null` clears the person's choice. */
   colorSlot?: number | null;
+  /** One emoji or `glyph:<lucide-name>` (0328). `null` clears it. */
+  icon?: string | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   /**
@@ -159,6 +165,8 @@ export class ProjectRepository extends BaseRepository<
           status: data.status || "active",
           phase: data.phase ?? null,
           targetDate: data.targetDate ?? null,
+          colorSlot: data.colorSlot ?? null,
+          icon: data.icon ?? null,
           settings: data.settings || {},
           metadata,
           userId,
@@ -219,6 +227,8 @@ export class ProjectRepository extends BaseRepository<
         targetDate: data.targetDate,
         // Same two-state contract: `undefined` untouched, `null` clears.
         colorSlot: data.colorSlot,
+        // Same two-state contract: `undefined` untouched, `null` clears.
+        icon: data.icon,
         // D6 home change — `undefined` is skipped by Drizzle (untouched).
         workspaceId: data.workspaceId,
         settings: data.settings,
