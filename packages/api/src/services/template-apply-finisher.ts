@@ -221,8 +221,9 @@ export async function finishTemplateApply(
 }
 
 /**
- * Re-open a space whose LAYER 2 failed (`isFailedInLayerTwo`) for a re-run of
- * layer 2. Layer 1 is built, so the space is what an unfinished apply is:
+ * Re-open a space whose last apply did not end — LAYER 2 failed
+ * (`isFailedInLayerTwo`), a re-sync failed, or a build was left "building" —
+ * for a re-sync and a re-run of layer 2. Layer 1 exists, so the space is what an unfinished apply is:
  * "layer-2-not-run" — a crash before the finisher runs still reads drifted,
  * never "failed" forever and never current. Leaving "failed" clears the
  * failure fields (the finisher refuses to overwrite "failed"); if layer 2

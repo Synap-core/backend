@@ -9,6 +9,12 @@ import { getDb, projects, and, eq } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { createProjectGoverned } from "./projects/create-project.js";
 
+/**
+ * The engagement project could not be resolved (not visible, or an agent
+ * naming a project it may not mint). The message is written for the caller.
+ */
+export class ProjectResolveError extends Error {}
+
 export type ResolveProjectForPackInstallResult =
   { projectId: string; created: boolean; reused: boolean } | { error: string };
 

@@ -1204,3 +1204,107 @@ describe("a layer-2 failure whose failure record cannot be written", () => {
     });
   });
 });
+
+// ── "building" is never terminal (review F5) ────────────────────────────────
+//
+// Decision 3 covers a door's pre-layer-2 step: once layer 1 exists, its error
+// is recorded and reported (with the space's id), never thrown. And a space
+// left "building" (a build that died before its finisher) is moved on by the
+// next apply — never "in flight" forever while a stamp lands on it.
+
+describe("a space left 'building' is moved on, never terminal", () => {
+  it("a pre-layer-2 step that throws after the create: no throw, the space named, recorded failed (not 'building'); the next apply finishes it", async () => {
+    const slug = "hook-throws";
+    const pkg: Pkg = { slug, version: "k-1", playbooks: ["Qualify"] };
+    const args = (beforeLayerTwo?: () => Promise<void>) => ({
+      definition: body(pkg) as never,
+      actor: { userId: OWNER },
+      source: "contract",
+      identity: {
+        packageSlug: slug,
+        packageVersion: pkg.version,
+        proposalId: slug,
+        workspaceName: body(pkg).workspaceName as string,
+      },
+      ...(beforeLayerTwo ? { beforeLayerTwo } : {}),
+    });
+    const reply = await applyTemplate(
+      args(async () => {
+        throw new Error("project not visible");
+      })
+    );
+    const { id, state } = await theSpace(slug);
+    expect(reply.workspaceId).toBe(id);
+    expect(reply.layer2.status).toBe("failed");
+    expect(reply.warning).toBeTruthy();
+    expect(state).toMatchObject({ state: "failed", failedLayer: 2 });
+    expect(state?.version).toBeNull();
+    await applyTemplate(args());
+    const after = await theSpace(slug);
+    expect(after.id).toBe(id);
+    expect(after.state).toMatchObject({ state: "active", version: "k-1" });
+    expect(await playbooksIn(id)).toEqual(["Qualify"]);
+  });
+
+  it("Hub /packages/apply with an engagement project it cannot resolve answers with the space it built (201, workspaceId, the project's refusal) — never a 400 hiding a half-recorded space", async () => {
+    const slug = "hub-project-refused";
+    const res = await hubApp().request("/packages/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...body({ slug, version: "j-1", playbooks: ["Qualify"] }),
+        projectId: randomUUID(),
+      }),
+    });
+    const reply = (await res.json()) as Record<string, any>;
+    expect(res.status, JSON.stringify(reply)).toBe(201);
+    const { id, state } = await theSpace(slug);
+    expect(reply.workspace?.workspaceId).toBe(id);
+    expect(reply.projectError).toMatch(/not found or not visible/);
+    expect(state?.state).not.toBe("building");
+    expect(state).toMatchObject({ state: "failed", failedLayer: 2 });
+  });
+
+  it("a space left 'building' with its build's ledger is resumed and finished: active, stamped, the same space", async () => {
+    const slug = "left-building";
+    const id = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, provisioning_proposal_id, settings) values ($1,$2,$3,$4,'pending',$4,$5::jsonb)`,
+      [
+        id,
+        `Space ${slug}`,
+        OWNER,
+        slug,
+        JSON.stringify({
+          template: {
+            slug,
+            version: null,
+            state: "building",
+            completedSteps: h.coreSteps,
+            at: "t0",
+          },
+        }),
+      ]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+      [randomUUID(), id, OWNER]
+    );
+    const pkg: Pkg = { slug, version: "l-1", playbooks: ["Qualify"] };
+    await applyTemplate({
+      definition: body(pkg) as never,
+      actor: { userId: OWNER },
+      source: "contract",
+      identity: {
+        packageSlug: slug,
+        packageVersion: pkg.version,
+        proposalId: slug,
+        workspaceName: body(pkg).workspaceName as string,
+      },
+    });
+    const after = await theSpace(slug);
+    expect(after.id).toBe(id);
+    expect(after.state).toMatchObject({ state: "active", version: "l-1" });
+    expect(await playbooksIn(id)).toEqual(["Qualify"]);
+  });
+});

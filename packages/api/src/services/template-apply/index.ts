@@ -123,7 +123,10 @@ export interface ApplyTemplateInput {
   /**
    * Runs once the space exists, before layer 2 (the doors' engagement-project
    * step, the tRPC doors' seed bodies). May return the project the layers
-   * should stamp. Its errors are the door's: they propagate.
+   * should stamp. Its errors never propagate (decision 3: the space exists):
+   * they come back as `layer2: {status: "failed", error}` — the door maps
+   * its own error types from there — and, unless the space was unchanged,
+   * the space is recorded failed in layer 2.
    */
   beforeLayerTwo?: (
     workspaceId: string,
@@ -363,9 +366,22 @@ export async function applyTemplate(
     materializeStatus = layerOne.created ? "created" : "reused";
   }
 
-  const hook = input.beforeLayerTwo
-    ? await input.beforeLayerTwo(workspaceId, { outcome, layerOne })
-    : undefined;
+  // Decision 3 covers the door's pre-layer-2 step too: the space exists, so
+  // its error is recorded (layer 2 did not run) and reported — never thrown
+  // past a space the caller could then not even name.
+  let hook: { projectId?: string } | void = undefined;
+  let beforeLayerTwoError: { error: unknown } | undefined;
+  try {
+    hook = input.beforeLayerTwo
+      ? await input.beforeLayerTwo(workspaceId, { outcome, layerOne })
+      : undefined;
+  } catch (error) {
+    beforeLayerTwoError = { error };
+    logger.warn(
+      { err: error, workspaceId, source: input.source },
+      "template apply: the step before layer 2 failed — layer 2 not run, recorded"
+    );
+  }
   const projectId = hook?.projectId;
 
   // ── Layer 2 ──────────────────────────────────────────────────────────────
@@ -406,7 +422,17 @@ export async function applyTemplate(
   // An APPROVED apply runs what the person approved, even on an unchanged
   // space (the agent's own additions to a same-version body — they keep the
   // agent's governance below). Only an unapproved re-hit takes the cheap path.
-  if (outcome === "unchanged" && !actor.approved) {
+  if (beforeLayerTwoError) {
+    layer2 = { status: "failed", error: beforeLayerTwoError.error };
+    // An unchanged space owed nothing to this apply: reported, its state
+    // untouched. Otherwise layer 2 was owed and did not run: recorded.
+    if (outcome !== "unchanged" || actor.approved)
+      finished = await finish({
+        built: outcome === "created",
+        pendingVersionStamp,
+        pendingPack,
+      });
+  } else if (outcome === "unchanged" && !actor.approved) {
     // "unchanged" says the STAMP matches — not that every playbook the
     // template declares exists (a stamp written by a pass that did not create
     // a later-added playbook). The playbook layer alone is database-only (no

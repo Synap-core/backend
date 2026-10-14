@@ -619,7 +619,7 @@ export async function applyMarketInstall(
         // before layer 2, so uses-edges and seed filing stamp onto it.
         beforeLayerTwo: async (homeWorkspaceId) => {
           if (!input.projectId && !input.projectName) return;
-          const { resolveProjectForPackInstall } =
+          const { resolveProjectForPackInstall, ProjectResolveError } =
             await import("../resolve-project-for-pack-install.js");
           const resolved = await resolveProjectForPackInstall({
             userId: input.userId,
@@ -629,12 +629,8 @@ export async function applyMarketInstall(
             packageSlug: input.slug,
             homeWorkspaceId,
           });
-          if ("error" in resolved) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: resolved.error,
-            });
-          }
+          if ("error" in resolved)
+            throw new ProjectResolveError(resolved.error);
           if (
             postBody.projectSurface &&
             typeof postBody.projectSurface === "object"
@@ -677,13 +673,22 @@ export async function applyMarketInstall(
         applied.layer2.status === "applied" ? applied.layer2.post : undefined;
       // The raw cause is logged by `applyTemplate` (operator log only — it
       // can carry DB/connector internals); the caller gets a fixed sentence.
+      // The engagement project's own refusal (the step before layer 2) is
+      // written for the caller, so it leads the sentence.
+      const projectRefusal =
+        applied.layer2.status === "failed" &&
+        applied.layer2.error instanceof
+          (await import("../resolve-project-for-pack-install.js"))
+            .ProjectResolveError
+          ? `${(applied.layer2.error as Error).message} `
+          : "";
       const layers =
         applied.layer2.status === "failed"
           ? [
               {
                 layer: "post-workspace" as const,
                 status: "failed" as const,
-                message: `The space is in place, but applying its package layers failed. Run \`synap templates update ${input.slug}\` to finish it.`,
+                message: `${projectRefusal}The space is in place, but applying its package layers failed. Run \`synap templates update ${input.slug}\` to finish it.`,
               },
             ]
           : summarizePostWorkspaceLayers(postWorkspace);

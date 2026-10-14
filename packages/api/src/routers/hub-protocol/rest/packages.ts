@@ -29,7 +29,10 @@ import { summarizePackageContents } from "../../../services/package-contents-sum
 import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
-import { resolveProjectForPackInstall } from "../../../services/resolve-project-for-pack-install.js";
+import {
+  ProjectResolveError,
+  resolveProjectForPackInstall,
+} from "../../../services/resolve-project-for-pack-install.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
 import {
   getDb,
@@ -542,7 +545,6 @@ export function nonWorkspacePackageKind(
 }
 
 /** The engagement project could not be resolved: the door answers 400. */
-class ProjectResolveError extends Error {}
 
 // ─── Route registration ──────────────────────────────────────────────────────
 
@@ -969,9 +971,6 @@ export function registerPackagesRoutes(app: HubHono): void {
         },
       });
     } catch (e) {
-      if (e instanceof ProjectResolveError) {
-        return c.json({ error: e.message }, 400);
-      }
       if (e instanceof ComposeBaseUnavailableError) {
         // A compose was requested but its base could not be resolved (e.g. a
         // private CP-only base with no built-in template). Do NOT fall back to
@@ -1090,12 +1089,14 @@ export function registerPackagesRoutes(app: HubHono): void {
       const error = applied.layer2.error;
       // A placement naming a playbook/automation that exists nowhere: the
       // template is INCOMPLETE — a typed 422 the CLI can print.
+      // The space exists either way (decision 3): every refusal names it.
       if (error instanceof TemplateIncompleteError) {
         return c.json(
           {
             error: `This template is incomplete: ${error.message}.`,
             reasonCode: error.reasonCode,
             missing: error.missing,
+            workspaceId,
           },
           422
         );
@@ -1104,6 +1105,10 @@ export function registerPackagesRoutes(app: HubHono): void {
         status: "failed",
         error: error instanceof Error ? error.message : String(error),
       };
+      // The engagement project could not be resolved (the step before
+      // layer 2): its message is written for the caller.
+      if (error instanceof ProjectResolveError)
+        result.projectError = error.message;
     }
     if (applied.finished) {
       if (applied.outcome !== "unchanged")

@@ -55,6 +55,31 @@ describe("planTemplateApply", () => {
       { kind: "resync", reason: "failed-resync", reopen: true },
     ],
     [
+      "left 'building' (a build that died before its finisher), WITH its ledger → resume from it",
+      {
+        target: {
+          state: st({
+            state: "building",
+            version: null,
+            completedSteps: ["workspace", "member", "profiles"],
+          }),
+        },
+        version: "h-1",
+      },
+      {
+        kind: "resume-layer1",
+        completedSteps: ["workspace", "member", "profiles"],
+      },
+    ],
+    [
+      "left 'building' with NO ledger (legacy pending) at the SAME version → re-sync + reopen, never 'unchanged' forever",
+      {
+        target: { state: st({ state: "building", version: "h-1" }) },
+        version: "h-1",
+      },
+      { kind: "resync", reason: "abandoned-build", reopen: true },
+    ],
+    [
       "failed in layer 1 with NO ledger → re-sync the existing row, never re-create",
       {
         target: { state: st({ state: "failed", failedLayer: 1 }) },

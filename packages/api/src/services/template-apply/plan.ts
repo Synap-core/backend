@@ -22,6 +22,15 @@
  *                                                mint a second space / 409)
  *   failed in layer 2                          → resync (layer 1 is built; its
  *                                                stamp is not trusted)
+ *   left "building", with a resume ledger      → resume-layer1 (a build that
+ *                                                died before its finisher: the
+ *                                                ledger is that build's own —
+ *                                                the finisher clears it once a
+ *                                                space converges)
+ *   left "building", NO ledger                 → resync + reopen (legacy
+ *                                                "pending"; reopening leaves
+ *                                                "building", so the finisher
+ *                                                can mark it active)
  *   unfinished (awaiting-approval · partial ·
  *     layer-2-not-run)                         → resync (the last apply did not
  *                                                earn its stamp)
@@ -54,6 +63,7 @@ export type TemplateApplyAction =
         | "failed-layer-2"
         | "failed-no-ledger"
         | "failed-resync"
+        | "abandoned-build"
         | "unfinished"
         | "adopt";
       /** Leave "failed" before layer 2 re-runs. */
@@ -98,6 +108,16 @@ export function planTemplateApply(
     if (steps.includes(WORKSPACE_ROW_STEP))
       return { kind: "resume-layer1", completedSteps: steps };
     return { kind: "resync", reason: "failed-no-ledger", reopen: true };
+  }
+  if (state?.state === "building") {
+    // Either abandoned (a crash, a pre-step that threw before decision 3
+    // covered it) or another apply still in its layer 2 (the per-key lock
+    // spans layer 1 only). Resuming / re-syncing is additive either way, and
+    // a "building" nothing can move on would read "in flight" forever.
+    const steps = state.completedSteps ?? [];
+    if (steps.includes(WORKSPACE_ROW_STEP))
+      return { kind: "resume-layer1", completedSteps: steps };
+    return { kind: "resync", reason: "abandoned-build", reopen: true };
   }
   if (isTemplateApplyUnfinished(state))
     return { kind: "resync", reason: "unfinished", reopen: false };
