@@ -40,6 +40,11 @@ jobs:
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_repository.full_name == github.repository)
+    # D16: a production build (main via CI, or a v* tag) waits for the
+    # `production` environment's required reviewer; develop builds do not use
+    # an environment at all (empty name = none). publish-release and
+    # notify-control-plane `needs` these jobs, so one approval gates the release.
+    environment: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '' }}
     permissions:
       contents: read
       packages: write
@@ -209,6 +214,11 @@ jobs:
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_repository.full_name == github.repository)
+    # D16: a production build (main via CI, or a v* tag) waits for the
+    # `production` environment's required reviewer; develop builds do not use
+    # an environment at all (empty name = none). publish-release and
+    # notify-control-plane `needs` these jobs, so one approval gates the release.
+    environment: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '' }}
     permissions:
       contents: read
       packages: write
@@ -303,6 +313,11 @@ jobs:
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_repository.full_name == github.repository)
+    # D16: a production build (main via CI, or a v* tag) waits for the
+    # `production` environment's required reviewer; develop builds do not use
+    # an environment at all (empty name = none). publish-release and
+    # notify-control-plane `needs` these jobs, so one approval gates the release.
+    environment: ${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') || (github.event_name != 'workflow_run' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))) && 'production' || '' }}
     permissions:
       contents: read
       packages: write
@@ -405,6 +420,8 @@ jobs:
     permissions:
       contents: write
       packages: read
+      # D12: keyless cosign — the OIDC token is the signing identity.
+      id-token: write
     outputs:
       release_id: ${{ steps.id.outputs.id }}
     steps:
@@ -454,6 +471,25 @@ jobs:
             docker buildx imagetools inspect "$ref" >/dev/null || { echo "::error::$ref does not resolve"; exit 1; }
           done
 
+      # D12: sign the manifest — it is the root of trust (images by digest and
+      # the bundle sha256 live inside it). Keyless: Fulcio certifies this
+      # workflow's identity (…/docker-publish.yml@refs/heads/main for a fast
+      # release — workflow_run always runs the default-branch file — or
+      # @refs/tags/vX.Y.Z for a stable one) and Rekor logs it. `synap update`
+      # verifies with the same identity + issuer (_ue_verify_manifest_sig).
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: "v2.5.3"
+
+      - name: Sign release.json (keyless)
+        run: |
+          cosign sign-blob --yes \
+            --bundle release.json.sigstore.json \
+            --output-signature release.json.sig \
+            --output-certificate release.json.pem \
+            release.json
+
       - name: Publish the release, then move the channel pointer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -465,7 +501,9 @@ jobs:
           # channel pointer: the CP fetches <base>/<channel-stable|id>/pod-user-data.yaml.tmpl
           # and the template fetches <dir>/install.sh.
           INSTALLER_ASSETS=(install.sh deploy/cloud-init/pod-user-data.yaml.tmpl)
-          ASSETS=(release.json "synap-deploy-${ID}.tar.gz" "${INSTALLER_ASSETS[@]}")
+          # The signature rides next to release.json, on the release AND the pointer.
+          SIG_ASSETS=(release.json.sigstore.json release.json.sig release.json.pem)
+          ASSETS=(release.json "${SIG_ASSETS[@]}" "synap-deploy-${ID}.tar.gz" "${INSTALLER_ASSETS[@]}")
           if gh release view "$ID" >/dev/null 2>&1; then
             gh release upload "$ID" "${ASSETS[@]}" --clobber
           elif [ "$CHANNEL" = stable ]; then
@@ -477,7 +515,7 @@ jobs:
           POINTER="channel-${CHANNEL}"
           gh release view "$POINTER" >/dev/null 2>&1 || gh release create "$POINTER" --target "$SHA" --prerelease --latest=false \
             --title "$POINTER" --notes "Channel pointer: release.json here is the latest $CHANNEL release. Apply: synap update --release $CHANNEL"
-          gh release upload "$POINTER" release.json "${INSTALLER_ASSETS[@]}" --clobber
+          gh release upload "$POINTER" release.json "${SIG_ASSETS[@]}" "${INSTALLER_ASSETS[@]}" --clobber
 
   notify-control-plane:
     runs-on: ubuntu-latest

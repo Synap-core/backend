@@ -2573,6 +2573,7 @@ EOF
             echo -e "${RED}❌ Could not fetch the release manifest for '${install_ref}'. Use --from-source to build this checkout.${NC}"
             exit 1
         }
+        _ue_verify_manifest_sig "$install_ref" "$install_manifest" || exit 1
     fi
     local install_errors
     install_errors="$(_ue_manifest_errors "$install_manifest" docker-compose.yml)"
@@ -3202,6 +3203,45 @@ _ue_fetch() { # <url> <out>
     curl -fsSL --retry 2 --max-time 300 "${auth[@]}" -o "$2" "$1"
 }
 
+# D12 — CI signs every release.json keyless (docker-publish.yml publish-release:
+# `cosign sign-blob --bundle release.json.sigstore.json`), next to it on the
+# release AND on the channel pointer. Verified against the signing workflow
+# (main via workflow_run, which always runs the default-branch file, or a v* tag)
+# and GitHub's OIDC issuer, so a release written by a token or a fork build fails.
+# SYNAP_RELEASE_VERIFY (env or deploy/.env): warn (default) — a missing cosign,
+# missing bundle or failed check WARNS and the update goes on; enforce — any of
+# them refuses the manifest; off — skip (a private mirror with no signatures).
+SYNAP_RELEASE_SIGNER_RE='^https://github\.com/(?i:synap-core/backend)/\.github/workflows/docker-publish\.yml@refs/(heads/main|tags/v[0-9][0-9A-Za-z.+-]*)$'
+SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+
+_ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero only under enforce
+    local mode="${SYNAP_RELEASE_VERIFY:-$(_ue_env_get SYNAP_RELEASE_VERIFY)}" bundle="$2.sigstore.json" why="" out
+    case "${mode:=warn}" in
+        warn|enforce) ;;
+        off) return 0 ;;
+        *) _ue_warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using warn"; mode=warn ;;
+    esac
+    rm -f "$bundle"
+    if ! command -v cosign >/dev/null 2>&1; then
+        why="cosign is not installed"
+    elif ! _ue_fetch "$(_ue_manifest_url "$1" release.json.sigstore.json)" "$bundle" 2>/dev/null; then
+        why="no signature (release.json.sigstore.json) is published for '$1'"
+    elif ! out="$(cosign verify-blob --bundle "$bundle" \
+            --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE" \
+            --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER" "$2" 2>&1)"; then
+        why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
+    else
+        _ue_ok "release manifest signature verified (Synap CI, keyless)"
+        return 0
+    fi
+    if [ "$mode" = enforce ]; then
+        _ue_err "release manifest for '$1' refused: ${why} (SYNAP_RELEASE_VERIFY=enforce)"
+        return 1
+    fi
+    _ue_warn "release manifest for '$1' is NOT signature-verified: ${why} — continuing (SYNAP_RELEASE_VERIFY=warn)"
+    return 0
+}
+
 # <manifest> <compose-file> — prints one line per violation; empty = valid.
 # A registry release must pin EVERY image by digest and cover every
 # SYNAP_IMAGE_* the compose file uses. A from-source release (source:true,
@@ -3660,6 +3700,10 @@ synap_update_engine() {
             _ue_err "could not fetch the release manifest for '${ref}' ($(_ue_manifest_url "$ref")). Nothing was changed."
             _ue_err "To build this checkout instead: synap update --from-source"
             _ue_record aborted "$UE_FROM" "$ref" "manifest fetch failed" false
+            exit 1
+        fi
+        if ! _ue_verify_manifest_sig "$ref" "$m"; then
+            _ue_record aborted "$UE_FROM" "$ref" "manifest signature refused" false
             exit 1
         fi
     fi
