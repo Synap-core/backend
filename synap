@@ -243,8 +243,12 @@ _preflight_compose_check() {
     if [ -n "$postgres_container" ]; then
         echo -e "${BLUE}  Postgres container: ${postgres_container}${NC}"
 
-        local volume
-        volume="$(docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/var/lib/postgresql/data" }}{{ .Name }}{{ end }}{{ end }}' "$postgres_container" 2>/dev/null)"
+        # The data mount point has ONE source: deploy/pgdata-safety.sh
+        # (timescaledb-ha keeps its cluster under /home/postgres/pgdata, not the
+        # stock /var/lib/postgresql/data this used to assume). A bind mount has
+        # no Name, so fall back to its host path.
+        local volume pg_target="${PGDATA_MOUNT_TARGET:-/home/postgres/pgdata}"
+        volume="$(docker inspect --format "{{ range .Mounts }}{{ if eq .Destination \"${pg_target}\" }}{{ if .Name }}{{ .Name }}{{ else }}{{ .Source }}{{ end }}{{ end }}{{ end }}" "$postgres_container" 2>/dev/null)"
         if [ -n "$volume" ]; then
             echo -e "${BLUE}  Mounted postgres_data volume: ${volume}${NC}"
         else
