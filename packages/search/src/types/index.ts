@@ -20,6 +20,11 @@ export interface SearchResult {
   document: any;
   highlights?: any;
   textMatch: number;
+  /**
+   * A `documents` hit that is a Library item: clients open it in the Library
+   * (in its first group when it has one), never the document editor.
+   */
+  libraryItem?: { groupId?: string };
 }
 
 // Manually defined Typesense types to avoid deep import issues

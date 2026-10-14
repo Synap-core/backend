@@ -31,6 +31,8 @@ const h = vi.hoisted(() => ({
   objects: new Map<string, Buffer>(),
   /** Spaces the person can no longer write (the write floor's contract). */
   deniedSpaces: new Set<string>(),
+  /** search-index jobs the Library queued (`@synap/jobs` stubbed below). */
+  searchJobs: [] as Array<{ operation: string; documentId: string }>,
 }));
 
 vi.mock("../../../utils/workspace-write-access.js", async () => {
@@ -47,6 +49,23 @@ vi.mock("../../../utils/workspace-write-access.js", async () => {
     },
   };
 });
+
+vi.mock("@synap/jobs", () => ({
+  getBoss: () => ({
+    send: async (
+      queue: string,
+      data: { operation?: string; documentId?: string }
+    ) => {
+      if (queue === "search-index") {
+        h.searchJobs.push({
+          operation: data.operation!,
+          documentId: data.documentId!,
+        });
+      }
+      return "job";
+    },
+  }),
+}));
 
 vi.mock("@synap/storage", () => ({
   storage: {
@@ -1307,5 +1326,30 @@ describe("a Library run is not a batch to discard", () => {
     expect(
       (await listLibraryItems({ userId: USER, input: {} })).items
     ).toHaveLength(2);
+  });
+});
+
+describe("search rows follow the Library", () => {
+  it("regrouping re-indexes the item (its row names its first group); delete removes it; restore brings it back", async () => {
+    const r = await keep(["https://example.com/search-row"]);
+    const id = r.staged[0]!.itemId;
+    h.searchJobs.length = 0;
+    await newGroup("Search", [id]);
+    expect(h.searchJobs).toContainEqual({
+      operation: "upsert",
+      documentId: id,
+    });
+    h.searchJobs.length = 0;
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "item.delete", itemIds: [id] }],
+    });
+    expect(h.searchJobs).toEqual([{ operation: "delete", documentId: id }]);
+    h.searchJobs.length = 0;
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "item.restore", itemIds: [id] }],
+    });
+    expect(h.searchJobs).toEqual([{ operation: "upsert", documentId: id }]);
   });
 });

@@ -26,6 +26,20 @@ export interface UnifiedSearchOptions {
   facetBy?: string[];
 }
 
+/** The typed Library marker of a hit (see `SearchResult.libraryItem`). */
+export function libraryHitOf(
+  collection: string | undefined,
+  document: { libraryItem?: unknown; libraryGroupId?: unknown } | undefined
+): Pick<SearchResult, "libraryItem"> {
+  if (collection !== "documents" || document?.libraryItem !== true) return {};
+  return {
+    libraryItem:
+      typeof document.libraryGroupId === "string"
+        ? { groupId: document.libraryGroupId }
+        : {},
+  };
+}
+
 export interface SearchResponse {
   results: SearchResult[];
   found: number;
@@ -155,6 +169,7 @@ export class SearchService {
             document: hit.document,
             highlights: hit.highlights,
             textMatch: hit.text_match || 0,
+            ...libraryHitOf(collections[index], hit.document),
           });
         });
       }
@@ -261,6 +276,7 @@ export class SearchService {
       document: hit.document,
       highlights: hit.highlights,
       textMatch: hit.text_match || 0,
+      ...libraryHitOf(collection, hit.document),
     }));
 
     // Extract facet counts

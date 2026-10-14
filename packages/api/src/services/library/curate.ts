@@ -565,7 +565,16 @@ export async function curateLibrary(args: {
   // A deleted item leaves search now (its stored text and page are purged
   // after the undo window by the keep-alive pass); a restored one comes back.
   await enqueueLibrarySearch("delete", written.deletedItemIds);
-  await enqueueLibrarySearch("upsert", written.restoredItemIds);
+  // A restored item comes back; a regrouped one's search row names its new
+  // first group (`libraryGroupId`, the Library route of a search hit).
+  await enqueueLibrarySearch("upsert", [
+    ...new Set([
+      ...written.restoredItemIds,
+      ...written.changedItemIds.filter(
+        (id) => !written.deletedItemIds.includes(id)
+      ),
+    ]),
+  ]);
   // Opening an item is when an item kept before the Library shipped gets its
   // light read (the sweep never bulk-reads that backlog). Idempotent: a final
   // read is kept.
