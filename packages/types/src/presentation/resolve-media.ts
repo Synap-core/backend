@@ -50,7 +50,11 @@ const HTTP_URL = /^https?:\/\/\S+$/i;
  *      document); `{entityRef}` (another entity whose media is used);
  *   c. no declaration: the entity's own linked document when its `mimeType`
  *      property says image/ or video/;
- *   d. none.
+ *   d. any pod-held copy (`systemData.media`) — a copy exists only because a
+ *      producer handed the pod that media on purpose (Apify carousel slides on
+ *      a post, a page's og:image), so a kind that declares no media source
+ *      (post = work family) still shows it;
+ *   e. none.
  * A declared source that yields nothing falls through to (c).
  */
 export function resolveEntityMedia(
@@ -100,6 +104,9 @@ function resolvePrimary(
   const documentId = str(entity.documentId);
   if (documentId && mime && /^(image|video)\//i.test(mime))
     return stored({ documentId, mime });
+
+  // (d) the pod holds a copy a producer handed it on purpose.
+  if (copies[0]) return copyRef(copies[0]);
 
   return { via: "none" };
 }

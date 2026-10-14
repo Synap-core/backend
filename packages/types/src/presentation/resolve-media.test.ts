@@ -197,16 +197,23 @@ describe("resolveEntityMedia", () => {
     });
   });
 
-  it("(d) nothing → none; copies without a declaration are listed in `all` only", () => {
-    const r = resolveEntityMedia({
-      id: "e",
-      properties: { url: URL_A },
-      systemData: { media: [copy(DOC, URL_A)] },
-    });
+  it("(d) no media declaration (post = work): a pod-held copy is the primary, listed once", () => {
+    const r = resolveEntityMedia(
+      {
+        id: "e",
+        properties: { url: URL_A },
+        systemData: { media: [copy(DOC, URL_A)] },
+      },
+      { family: "work" }
+    );
+    expect(r.primary).toEqual({ via: "stored", documentId: DOC, mime: "image/jpeg" });
+    expect(r.all).toEqual([r.primary]);
+  });
+
+  it("(e) nothing at all → none", () => {
+    const r = resolveEntityMedia({ id: "e", properties: { url: URL_A } });
     expect(r.primary).toEqual({ via: "none" });
-    expect(r.all).toEqual([
-      { via: "stored", documentId: DOC, mime: "image/jpeg" },
-    ]);
+    expect(r.all).toEqual([]);
   });
 
   it("never returns a URL for a stored ref and never decides renderability", () => {
