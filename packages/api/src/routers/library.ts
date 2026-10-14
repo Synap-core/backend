@@ -23,7 +23,11 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
-import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
+import {
+  aiRateLimitMiddleware,
+  assertAiRateLimit,
+} from "../middleware/ai-rate-limit.js";
+import type { Context } from "../types/context.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import {
   IMPORT_GROUP_OUTPUTS,
@@ -42,9 +46,9 @@ import {
   type LibraryRunActionResult,
   type LibrarySearchResult,
 } from "@synap-core/types/imports";
-import { ImportStageItemSchema } from "./import-curate.js";
+import { ImportStageItemSchema, personProcedure } from "./library-shared.js";
 import { defaultImportBuildDeps } from "../services/imports/build.js";
-import { addToLibrary, startKeptItemReads } from "../services/library/add.js";
+import { addToLibrary } from "../services/library/add.js";
 import { listLibraryItems } from "../services/library/read-model.js";
 import {
   adoptImportGroups,
@@ -53,7 +57,6 @@ import {
   readLibraryGroups,
 } from "../services/library/groups.js";
 import { curateLibrary } from "../services/library/curate.js";
-import { refuseAgent } from "../services/library/agent-door.js";
 import {
   LibraryActionError,
   runLibraryAction,
@@ -128,17 +131,29 @@ export const LibraryCurateOpSchema: z.ZodType<LibraryCurateOp> =
     }),
     z.object({ op: z.literal("item.archive"), itemIds: ids }),
     z.object({ op: z.literal("item.unarchive"), itemIds: ids }),
+    z.object({ op: z.literal("item.delete"), itemIds: ids }),
+    z.object({ op: z.literal("item.restore"), itemIds: ids }),
+    z.object({ op: z.literal("item.seen"), itemIds: ids }),
+    z.object({ op: z.literal("group.unarchive"), groupId: uuid }),
   ]);
 
-export const LibraryAddInputSchema = z.object({
-  items: z.array(ImportStageItemSchema).min(1).max(LIBRARY_LIMITS.addBatchMax),
-  note: z.string().max(LIBRARY_LIMITS.shareNoteMax).optional(),
-  readNow: z.boolean().optional(),
-  workspaceId: uuid.optional(),
-  projectId: uuid.optional(),
-  device: z.string().max(40).optional(),
-  captureNoteId: uuid.optional(),
-});
+export const LibraryAddInputSchema = z
+  .object({
+    items: z
+      .array(ImportStageItemSchema)
+      .min(1)
+      .max(LIBRARY_LIMITS.addBatchMax),
+    note: z.string().max(LIBRARY_LIMITS.shareNoteMax).optional(),
+    readNow: z.boolean().optional(),
+    workspaceId: uuid.optional(),
+    projectId: uuid.optional(),
+    device: z.string().max(40).optional(),
+    captureNoteId: uuid.optional(),
+  })
+  .refine((v) => !v.readNow || v.items.length === 1, {
+    message: "Read now applies to one item at a time.",
+    path: ["readNow"],
+  });
 
 export const LibraryListInputSchema = z.object({
   cursor: z.string().max(500).optional(),
@@ -158,13 +173,22 @@ export const LibrarySearchInputSchema = z.object({
 
 // ─── Build deps ─────────────────────────────────────────────────────────────
 
-function depsFor(ctx: unknown, userId: string) {
+function depsFor(ctx: Context, userId: string) {
   return (run: { workspaceId: string | null }) =>
     defaultImportBuildDeps({
       userId,
       workspaceId: run.workspaceId,
-      trpcCtx: ctx as Record<string, unknown>,
+      trpcCtx: { ...ctx },
     });
+}
+
+/** THE Read now door, shared by `readNow` and `add({ readNow })`. */
+async function readNowDoor(
+  ctx: Context,
+  userId: string,
+  itemId: string
+): Promise<ImportBuildResult> {
+  return readNowLibraryItem({ userId, itemId, depsFor: depsFor(ctx, userId) });
 }
 
 /** One chip → one governed proposal (`services/library/run-action.ts`). */
@@ -186,15 +210,6 @@ async function runLibraryActionDoor(args: {
   }
 }
 
-/**
- * Every Library WRITE refuses an agent (the same rule as the Hub door,
- * `services/library/agent-door.ts`). Reads stay open.
- */
-const personProcedure = podProcedure.use(async ({ ctx, next }) => {
-  refuseAgent(ctx as { agentUserId?: string | null; keyType?: string | null });
-  return next();
-});
-
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const libraryRouter = router({
@@ -209,12 +224,10 @@ export const libraryRouter = router({
         workspaceId: ctx.workspaceId ?? null,
         ...(input.readNow
           ? {
-              // Through the `readNow` door itself, so the AI rate limiter
-              // counts it like any other Read now.
+              // Counted by the same AI rate limit as the `readNow` door.
               readNow: async (itemId: string) => {
-                const r = await libraryRouter
-                  .createCaller(ctx as never)
-                  .readNow({ itemId });
+                assertAiRateLimit(userId);
+                const r = await readNowDoor(ctx, userId, itemId);
                 return r.status === "refused"
                   ? { refused: r.reason ?? "refused" }
                   : r.proposalId
@@ -224,9 +237,6 @@ export const libraryRouter = router({
             }
           : {}),
       });
-      // The light read, for what is new to the Library. A failed enqueue is
-      // left to the hourly sweep (the item reads "Not read yet", never lost).
-      await startKeptItemReads(userId, result);
       return result;
     }),
 
@@ -307,11 +317,7 @@ export const libraryRouter = router({
     .input(z.object({ itemId: uuid }))
     .mutation(async ({ ctx, input }): Promise<ImportBuildResult> => {
       const userId = requireUserId(ctx.userId);
-      return readNowLibraryItem({
-        userId,
-        itemId: input.itemId,
-        depsFor: depsFor(ctx, userId),
-      });
+      return readNowDoor(ctx, userId, input.itemId);
     }),
 
   /** Run one suggested chip as ONE governed proposal. */

@@ -69,7 +69,7 @@ vi.mock("../services/library/groups.js", () => ({
   },
 }));
 
-import { libraryRouter } from "./library.js";
+import { LibraryAddInputSchema, libraryRouter } from "./library.js";
 import type { Context } from "../types/context.js";
 
 const ID = "00000000-0000-4000-8000-000000000001";
@@ -141,5 +141,26 @@ describe("library.build while the last bundle waits", () => {
         pendingProposalId: "11111111-1111-4111-8111-111111111111",
       },
     });
+  });
+});
+
+describe("library.add input (both doors share the schema)", () => {
+  it("Read now is one item at a time — refused before anything is staged", async () => {
+    const two = {
+      items: [
+        { kind: "url", url: "https://example.com/1" },
+        { kind: "url", url: "https://example.com/2" },
+      ],
+      readNow: true,
+    };
+    expect(LibraryAddInputSchema.safeParse(two).success).toBe(false);
+    expect(
+      LibraryAddInputSchema.safeParse({ ...two, items: two.items.slice(0, 1) })
+        .success
+    ).toBe(true);
+    await expect(caller().add(two as never)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(h.ran).toEqual([]);
   });
 });

@@ -27,10 +27,7 @@ import {
   LibraryAddInputSchema,
   LibrarySearchInputSchema,
 } from "../../library.js";
-import {
-  addToLibrary,
-  startKeptItemReads,
-} from "../../../services/library/add.js";
+import { addToLibrary } from "../../../services/library/add.js";
 import { adoptImportGroups } from "../../../services/library/groups.js";
 import { listLibraryItems } from "../../../services/library/read-model.js";
 import { searchLibrary } from "../../../services/library/search.js";
@@ -106,7 +103,6 @@ export function registerLibraryRoutes(app: HubHono): void {
         userId,
         request: { ...parsed.data, readNow: false },
       });
-      await startKeptItemReads(userId, result);
       return c.json(result, 200);
     } catch (err) {
       return failure(c, err);
