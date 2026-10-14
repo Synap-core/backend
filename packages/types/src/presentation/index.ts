@@ -56,6 +56,14 @@ export interface ProfilePresentation {
   family: PresentationFamily;
   media?: {
     source: PresentationMediaSource;
+    /**
+     * Other homes of the SAME media, tried in order when `source` yields
+     * nothing (empty, or neither an id nor an http URL). For a kind whose
+     * media legitimately lives in more than one place — brand-asset: an
+     * upload (`asset-document-id`) or an external URL (`asset-url`). Never
+     * the same source twice.
+     */
+    fallbacks?: PresentationMediaSource[];
     /** `auto` (default) = decide from the mime type */
     kind?: PresentationMediaKind;
   };
@@ -128,31 +136,40 @@ export function parseProfilePresentation(
     if (!isRecord(media) || !isRecord(media.source)) {
       issues.push({ path: "presentation.media.source", message: "must be an object" });
     } else {
-      const src = media.source;
-      const keys = ["property", "documentId", "entityRef"].filter((k) => src[k] !== undefined);
-      let source: PresentationMediaSource | undefined;
-      if (keys.length !== 1) {
-        issues.push({
-          path: "presentation.media.source",
-          message: "must have exactly one of property, documentId, entityRef",
-        });
-      } else if (keys[0] === "property" && nonEmpty(src.property)) {
-        source = { property: src.property };
-      } else if (keys[0] === "documentId" && src.documentId === true) {
-        source = { documentId: true };
-      } else if (keys[0] === "entityRef" && nonEmpty(src.entityRef)) {
-        source = { entityRef: src.entityRef };
-      } else {
-        issues.push({
-          path: `presentation.media.source.${keys[0]}`,
-          message: keys[0] === "documentId" ? "must be true" : "must be a non-empty property slug",
-        });
+      const source = parseMediaSource(media.source, "presentation.media.source", issues);
+      let fallbacks: PresentationMediaSource[] | undefined;
+      if (media.fallbacks !== undefined) {
+        if (!Array.isArray(media.fallbacks) || media.fallbacks.length === 0) {
+          issues.push({ path: "presentation.media.fallbacks", message: "must be a non-empty list of sources" });
+        } else if (media.fallbacks.length > MAX_MEDIA_FALLBACKS) {
+          issues.push({ path: "presentation.media.fallbacks", message: `at most ${MAX_MEDIA_FALLBACKS} fallbacks` });
+        } else {
+          fallbacks = [];
+          const seen = new Set(source ? [mediaSourceKey(source)] : []);
+          media.fallbacks.forEach((f, i) => {
+            const path = `presentation.media.fallbacks.${i}`;
+            const parsed = isRecord(f) ? parseMediaSource(f, path, issues) : undefined;
+            if (!isRecord(f)) issues.push({ path, message: "must be an object" });
+            if (!parsed) return;
+            if (seen.has(mediaSourceKey(parsed))) {
+              issues.push({ path, message: "repeats a source already declared" });
+              return;
+            }
+            seen.add(mediaSourceKey(parsed));
+            fallbacks!.push(parsed);
+          });
+        }
       }
       const kind = media.kind ?? "auto";
       if (kind !== "image" && kind !== "video" && kind !== "auto") {
         issues.push({ path: "presentation.media.kind", message: "must be image, video or auto" });
       }
-      if (source) out.media = { source, kind: kind as PresentationMediaKind };
+      if (source)
+        out.media = {
+          source,
+          ...(fallbacks?.length ? { fallbacks } : {}),
+          kind: kind as PresentationMediaKind,
+        };
     }
   }
 
@@ -197,6 +214,48 @@ export function presentationFromUiHints(
   if (!isRecord(uiHints) || uiHints.presentation === undefined) return null;
   const parsed = parseProfilePresentation(uiHints.presentation);
   return parsed.ok ? parsed.value : null;
+}
+
+/** Most fallbacks a declaration may carry — a media's homes, not a search list. */
+export const MAX_MEDIA_FALLBACKS = 3;
+
+/**
+ * Every media source a presentation declares, in resolution order: `source`,
+ * then its `fallbacks`. The ONE answer to "which properties hold this kind's
+ * media" (the resolver, the card model's fact exclusion, the catalog
+ * validator all read it).
+ */
+export function declaredMediaSources(
+  presentation: ProfilePresentation | null | undefined,
+): PresentationMediaSource[] {
+  const media = presentation?.media;
+  return media ? [media.source, ...(media.fallbacks ?? [])] : [];
+}
+
+function parseMediaSource(
+  src: Record<string, unknown>,
+  path: string,
+  issues: PresentationIssue[],
+): PresentationMediaSource | undefined {
+  const keys = ["property", "documentId", "entityRef"].filter((k) => src[k] !== undefined);
+  if (keys.length !== 1) {
+    issues.push({ path, message: "must have exactly one of property, documentId, entityRef" });
+    return undefined;
+  }
+  if (keys[0] === "property" && nonEmpty(src.property)) return { property: src.property };
+  if (keys[0] === "documentId" && src.documentId === true) return { documentId: true };
+  if (keys[0] === "entityRef" && nonEmpty(src.entityRef)) return { entityRef: src.entityRef };
+  issues.push({
+    path: `${path}.${keys[0]}`,
+    message: keys[0] === "documentId" ? "must be true" : "must be a non-empty property slug",
+  });
+  return undefined;
+}
+
+function mediaSourceKey(source: PresentationMediaSource): string {
+  if ("property" in source) return `property:${source.property}`;
+  if ("entityRef" in source) return `entityRef:${source.entityRef}`;
+  return "documentId";
 }
 
 /** Read `systemData.media` defensively (written by the pod, but stored as jsonb). */

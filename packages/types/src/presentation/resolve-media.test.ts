@@ -188,6 +188,71 @@ describe("resolveEntityMedia", () => {
     ).toEqual({ via: "none" });
   });
 
+  describe("fallbacks — brand-asset: an upload or an external URL", () => {
+    // The catalog's declaration, verbatim (brand-library.yaml).
+    const BRAND: ProfilePresentation = {
+      family: "media",
+      media: {
+        source: { property: "asset-document-id" },
+        fallbacks: [{ property: "asset-url" }],
+      },
+    };
+
+    it("an upload: the declared source wins over every fallback", () => {
+      const r = resolveEntityMedia(
+        {
+          id: "e",
+          properties: { "asset-document-id": DOC, "asset-url": URL_A },
+        },
+        BRAND
+      );
+      expect(r.primary).toEqual({ via: "stored", documentId: DOC });
+    });
+
+    it("any source kind can be a fallback, in order (entityRef before a property)", () => {
+      const r = resolveEntityMedia(
+        { id: "e", properties: { cover: ENT, image: URL_A } },
+        {
+          family: "work",
+          media: { source: { property: "photo" }, fallbacks: [{ entityRef: "cover" }, { property: "image" }] },
+        }
+      );
+      expect(r.primary).toEqual({ via: "stored", entityId: ENT });
+    });
+
+    it("a URL-backed asset: the external URL fallback — a link, never a hot-linked image", () => {
+      const r = resolveEntityMedia(
+        { id: "e", properties: { "asset-url": URL_A } },
+        BRAND
+      );
+      expect(r.primary).toEqual({ via: "external", url: URL_A, kind: "auto" });
+    });
+
+    it("a URL-backed asset the pod copied: the copy of THAT url", () => {
+      const r = resolveEntityMedia(
+        {
+          id: "e",
+          properties: { "asset-url": URL_B },
+          systemData: { media: [copy(DOC, URL_A), copy(DOC2, URL_B)] },
+        },
+        BRAND
+      );
+      expect(r.primary).toEqual({ via: "stored", documentId: DOC2, mime: "image/jpeg" });
+    });
+
+    it("a value that is no reference (a storage path in asset-url) skips to the next home, then (c)", () => {
+      const r = resolveEntityMedia(
+        {
+          id: "e",
+          documentId: DOC,
+          properties: { "asset-url": "marketing-assets/hero/", mimeType: "image/png" },
+        },
+        BRAND
+      );
+      expect(r.primary).toEqual({ via: "stored", documentId: DOC, mime: "image/png" });
+    });
+  });
+
   it("(c) no declaration: the linked document when its mime is an image or a video", () => {
     expect(
       resolveEntityMedia({

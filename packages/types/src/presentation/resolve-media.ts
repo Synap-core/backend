@@ -14,11 +14,13 @@
  */
 
 import {
+  declaredMediaSources,
   readEntityMediaCopies,
   type EntityMediaCopy,
   type MediaRef,
   type PresentationFamily,
   type PresentationMediaKind,
+  type PresentationMediaSource,
   type ProfilePresentation,
 } from "./index.js";
 
@@ -50,6 +52,8 @@ const HTTP_URL = /^https?:\/\/\S+$/i;
  *   b. the DECLARED source: `{property}` holding a document id (stored) or an
  *      http(s) URL (external); `{documentId: true}` (the entity's own linked
  *      document); `{entityRef}` (another entity whose media is used);
+ *      (a)+(b) run for `source`, then for each declared `fallbacks` entry in
+ *      order — the first source that yields a reference wins;
  *   c. no declaration: the entity's own linked document when its `mimeType`
  *      property says image/ or video/;
  *   d. any pod-held copy (`systemData.media`) — a copy exists only because a
@@ -57,7 +61,7 @@ const HTTP_URL = /^https?:\/\/\S+$/i;
  *      a post, a page's og:image), so a kind that declares no media source
  *      (post = work family) still shows it;
  *   e. none.
- * A declared source that yields nothing falls through to (c).
+ * Declared sources that all yield nothing fall through to (c).
  */
 export function resolveEntityMedia(
   entity: MediaEntityInput,
@@ -81,7 +85,6 @@ function resolvePrimary(
 ): MediaRef {
   const props = entity.properties ?? {};
   const mime = str(props.mimeType);
-  const source = presentation?.media?.source;
   const kind: PresentationMediaKind = presentation?.media?.kind ?? "auto";
 
   // Only a LINK's declared URL is a page whose image the pod copies under a
@@ -92,23 +95,32 @@ function resolvePrimary(
   const derivedCopy = (): EntityMediaCopy | undefined =>
     presentation?.family === "link" ? copies[0] : undefined;
 
-  if (source && "property" in source) {
-    const value = firstString(props[source.property]);
-    if (value && HTTP_URL.test(value)) {
-      // (a) the pod holds a copy of it: never hot-link (an <img> on a third-party
-      // URL leaks the viewer's IP/referrer and dies with the source).
-      const copy = copies.find((c) => c.sourceUrl === value) ?? derivedCopy();
-      if (copy) return copyRef(copy);
-      // (b) not copied (yet): an external reference, drawn as a link, never an <img>.
-      return { via: "external", url: value, kind };
+  const fromSource = (source: PresentationMediaSource): MediaRef | null => {
+    if ("property" in source) {
+      const value = firstString(props[source.property]);
+      if (value && HTTP_URL.test(value)) {
+        // (a) the pod holds a copy of it: never hot-link (an <img> on a third-party
+        // URL leaks the viewer's IP/referrer and dies with the source).
+        const copy = copies.find((c) => c.sourceUrl === value) ?? derivedCopy();
+        if (copy) return copyRef(copy);
+        // (b) not copied (yet): an external reference, drawn as a link, never an <img>.
+        return { via: "external", url: value, kind };
+      }
+      if (value && UUID.test(value)) return stored({ documentId: value, mime });
+    } else if ("documentId" in source) {
+      const documentId = str(entity.documentId);
+      if (documentId) return stored({ documentId, mime });
+    } else {
+      const entityId = firstString(props[source.entityRef]);
+      if (entityId && UUID.test(entityId)) return { via: "stored", entityId };
     }
-    if (value && UUID.test(value)) return stored({ documentId: value, mime });
-  } else if (source && "documentId" in source) {
-    const documentId = str(entity.documentId);
-    if (documentId) return stored({ documentId, mime });
-  } else if (source && "entityRef" in source) {
-    const entityId = firstString(props[source.entityRef]);
-    if (entityId && UUID.test(entityId)) return { via: "stored", entityId };
+    return null;
+  };
+
+  // (a)/(b) for `source`, then each fallback in declared order: first hit wins.
+  for (const source of declaredMediaSources(presentation)) {
+    const hit = fromSource(source);
+    if (hit) return hit;
   }
 
   // (c) undeclared: the entity's own file, when it is an image or a video.

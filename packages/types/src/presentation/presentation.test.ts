@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  declaredMediaSources,
   parseProfilePresentation,
   presentationFromUiHints,
   readEntityMediaCopies,
@@ -42,6 +43,45 @@ describe("parseProfilePresentation", () => {
         "presentation.fields.row",
       ]);
     }
+  });
+
+  it("keeps ordered fallbacks; declaredMediaSources lists source then fallbacks", () => {
+    const r = parseProfilePresentation({
+      family: "media",
+      media: {
+        source: { property: "asset-document-id" },
+        fallbacks: [{ entityRef: "cover" }, { property: "asset-url" }],
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.media?.fallbacks).toEqual([{ entityRef: "cover" }, { property: "asset-url" }]);
+    expect(declaredMediaSources(r.value)).toEqual([
+      { property: "asset-document-id" },
+      { entityRef: "cover" },
+      { property: "asset-url" },
+    ]);
+    expect(declaredMediaSources(null)).toEqual([]);
+    expect(declaredMediaSources({ family: "record" })).toEqual([]);
+  });
+
+  it("rejects a malformed, repeated, empty or over-long fallback list", () => {
+    const paths = (fallbacks: unknown) => {
+      const r = parseProfilePresentation({
+        family: "media",
+        media: { source: { property: "a" }, fallbacks },
+      });
+      return r.ok ? [] : r.issues.map((i) => i.path);
+    };
+    expect(paths([{ property: "a" }])).toEqual(["presentation.media.fallbacks.0"]);
+    expect(paths([{ property: "b" }, { property: "b" }])).toEqual(["presentation.media.fallbacks.1"]);
+    expect(paths([{ property: "b", entityRef: "c" }])).toEqual(["presentation.media.fallbacks.0"]);
+    expect(paths(["b"])).toEqual(["presentation.media.fallbacks.0"]);
+    expect(paths([])).toEqual(["presentation.media.fallbacks"]);
+    expect(paths({ property: "b" })).toEqual(["presentation.media.fallbacks"]);
+    expect(
+      paths([{ property: "b" }, { property: "c" }, { property: "d" }, { property: "e" }]),
+    ).toEqual(["presentation.media.fallbacks"]);
   });
 
   it("rejects documentId other than true", () => {
