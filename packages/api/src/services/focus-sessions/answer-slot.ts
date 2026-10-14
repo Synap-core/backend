@@ -48,7 +48,11 @@ import type {
   SlotAnswer,
   SlotAnswerValue,
 } from "@synap/playbooks";
-import { askFingerprint, buildAskSnapshot } from "@synap-core/types/ask";
+import {
+  askFingerprint,
+  buildAskSnapshot,
+  effectiveSlotAsk,
+} from "@synap-core/types/ask";
 import { archivedAnswerHistory } from "./answer-history.js";
 import {
   fileAnswerDecision,
@@ -227,7 +231,15 @@ export async function answerExpectedOutput(
         : [];
       const chosen = selectSlotToAnswer(current, params.expectedLabel);
       if ("refused" in chosen) return { status: chosen.refused };
-      const before = current[chosen.index]!;
+      // The slot as the person ANSWERED it: a typed answer to a decision slot
+      // stored without an ask answered its derived confirm (`effectiveSlotAsk`),
+      // so the fingerprint, the snapshot and the decision filed below all see
+      // that confirm. Words from the room (no value) stay a legacy answer.
+      const stored = current[chosen.index]!;
+      const shownAsk = params.value ? effectiveSlotAsk(stored) : stored.ask;
+      const before: ExpectedOutput = shownAsk
+        ? { ...stored, ask: shownAsk }
+        : stored;
       if (
         params.askFingerprint !== undefined &&
         askFingerprint(before.ask ?? null) !== params.askFingerprint

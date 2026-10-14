@@ -371,7 +371,8 @@ export function registerInstalledRoutes(app: HubHono): void {
           const health = templateHealthFor(
             slug,
             installedVersion,
-            templateCatalog
+            templateCatalog,
+            s
           );
           rows.push({
             kind: "workspace",

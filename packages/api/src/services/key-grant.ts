@@ -28,17 +28,17 @@ import {
 } from "@synap/database";
 import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
-import { MAX_GRANT_PERMISSIONS } from "@synap-core/types/grants";
+import {
+  MAX_GRANT_PERMISSIONS,
+  meetScope,
+  pinningWithin,
+} from "@synap-core/types/grants";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   assertPermissions,
   InvalidPermissionError,
 } from "@synap/governance-policy/grants";
-import {
-  permissionCovers,
-  requestsFromGrantScopes,
-  requestsWithin,
-} from "./agent-connect.js";
+import { requestsFromGrantScopes, requestsWithin } from "./agent-connect.js";
 
 export const GrantInputSchema = z.object({
   /** `<subject>[.<kind>].<action>` patterns, e.g. `entity.knowledge.read`. */
@@ -221,22 +221,13 @@ type ScopeShape = {
   entityIds?: readonly string[] | null;
 };
 
-/** Both pinnings at once (null = unpinned); `undefined` = they share nothing. */
-function bothPinnings(
-  a: readonly string[] | null | undefined,
-  b: readonly string[] | null | undefined
-): string[] | null | undefined {
-  if (!a?.length) return b?.length ? [...b] : null;
-  if (!b?.length) return [...a];
-  const shared = a.filter((x) => b.includes(x));
-  return shared.length > 0 ? shared : undefined;
-}
-
 /**
  * `wanted`, cut down to what the holder's live grants reach — one grant per
  * (wanted × live) overlap, never wider than either, each ending no later than
- * its live grant nor `keyEndsAt`. A permission only partly inside a live one
- * is narrowed to the live one's (`permissionCovers`, the `agent/connect` rule).
+ * its live grant nor `keyEndsAt`. Each overlap is the exact meet of the two
+ * (`meetScope`, @synap-core/types/grants algebra): a permission only partly
+ * inside a live one is cut to the part they share — `entity.note` against
+ * `entity.read` keeps `entity.note.read`, it is no longer dropped.
  * `[{ permissions: ['*'] }]` = copy the live grants. Empty = no overlap.
  */
 export function scopesWithinLive(
@@ -247,27 +238,13 @@ export function scopesWithinLive(
   const out: Array<GrantInput & { expiresAt: Date | null }> = [];
   for (const w of wanted)
     for (const l of live) {
-      const workspaceIds = bothPinnings(w.workspaceIds, l.workspaceIds);
-      const projectIds = bothPinnings(w.projectIds, l.projectIds);
-      const entityIds = bothPinnings(w.entityIds, l.entityIds);
-      if (
-        workspaceIds === undefined ||
-        projectIds === undefined ||
-        entityIds === undefined
-      )
-        continue;
-      const permissions = new Set<string>();
-      for (const p of w.permissions)
-        for (const q of l.permissions) {
-          if (permissionCovers(q, p)) permissions.add(p);
-          else if (permissionCovers(p, q)) permissions.add(q);
-        }
-      if (permissions.size === 0) continue;
+      const met = meetScope(w, l);
+      if (!met) continue;
       out.push({
-        permissions: [...permissions],
-        ...(workspaceIds ? { workspaceIds } : {}),
-        ...(projectIds ? { projectIds } : {}),
-        ...(entityIds ? { entityIds } : {}),
+        permissions: met.permissions,
+        ...(met.workspaceIds ? { workspaceIds: met.workspaceIds } : {}),
+        ...(met.projectIds ? { projectIds: met.projectIds } : {}),
+        ...(met.entityIds ? { entityIds: met.entityIds } : {}),
         expiresAt: earlierEnd(l.expiresAt, keyEndsAt),
       });
     }
@@ -284,19 +261,13 @@ export function grantWithinLive(
   grant: ScopeShape,
   live: readonly LiveGrantScope[]
 ): { endsAt: Date | null } | null {
-  const keeps = (
-    outer: readonly string[] | null,
-    inner: readonly string[] | null | undefined
-  ) =>
-    !outer?.length ||
-    (!!inner?.length && inner.every((x) => outer.includes(x)));
   let endsAt: Date | null = null;
   let first = true;
   for (const request of requestsFromGrantScopes([grant])) {
     const covering = live.filter(
       (l) =>
-        keeps(l.projectIds, grant.projectIds) &&
-        keeps(l.entityIds, grant.entityIds) &&
+        pinningWithin(grant.projectIds, l.projectIds) &&
+        pinningWithin(grant.entityIds, l.entityIds) &&
         requestsWithin([request], requestsFromGrantScopes([l]))
     );
     if (covering.length === 0) return null;

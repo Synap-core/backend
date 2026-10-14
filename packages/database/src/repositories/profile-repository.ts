@@ -428,7 +428,8 @@ export class ProfileRepository {
     if (rows.length === 0) return null;
     // ONE precedence rule (`utils/profile-slug-precedence.ts`), pod lens: the
     // caller's own user row, then — for a KIND — the pod-wide row over any
-    // workspace twin (no lens ⇒ a workspace pick is arbitrary).
+    // workspace twin (no lens ⇒ a workspace pick is arbitrary), and among
+    // workspace kinds the one built to hold pod-wide rows (entityScope pod).
     rows.sort(compareForSlug("pod"));
     return rows[0];
   }

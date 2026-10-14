@@ -188,6 +188,8 @@ export {
 export {
   ensureSystemProfiles,
   ensureDevplaneProfiles,
+  DEVPLANE_FEATURE_STATUS_KEYS,
+  type DevplaneFeatureStatusKey,
   ensureTeamMemberRoleProfile,
   RETIRED_PROFILE_PROPERTIES,
   SYSTEM_PROFILE_PROPERTY_LINKS,
@@ -205,6 +207,8 @@ export {
   ensureMachineWrittenPropertiesReadOnly,
   type MachineWrittenPropertySlug,
 } from "./utils/machine-written-properties.js";
+// provenance / provider — the `source` split (decision 2026-09-14)
+export { PROVENANCE_VALUES, type Provenance } from "./utils/provenance.js";
 
 // DEPRECATED: ensureDefaultViews is no longer auto-called. The frontend
 // renders views ephemerally from profile data and persists them only when
@@ -245,6 +249,16 @@ export {
   SYSTEM_RELATION_TYPES,
   type DefaultRelationDef,
 } from "./utils/default-relation-defs.js";
+
+// The ONE "did the last template apply finish?" predicate (health + reconcile).
+export { templateApplyUnfinished } from "./utils/template-apply-state.js";
+
+// A template's `meta.intent` → `settings.intent` (object-first homes).
+export {
+  projectTemplateIntent,
+  workspaceIntentDefinitionSchema,
+  type WorkspaceIntentDefinition,
+} from "./utils/workspace-intent.js";
 
 // Export createWorkspaceFromDefinition utility
 export {
@@ -290,6 +304,8 @@ export {
   LIFECYCLE_CATEGORIES,
   TERMINAL_LIFECYCLE_CATEGORIES,
   isLifecycleCategory,
+  isStuckAfterDays,
+  STUCK_AFTER_DAYS_MAX,
   parseLifecycleOptions,
   findLifecycleOption,
   classifyLifecycleMove,

@@ -323,7 +323,7 @@ const DEFAULT_SAMPLE_CAP = 20;
 
 /**
  * The target label for a cluster: proposed name, else the proposal's own
- * SUMMARY, else `<type> · <shortId>`.
+ * SUMMARY, else none (`""` — the title's head already names the kind).
  *
  * The last arm is a machine token beside eight hex characters of a UUID — and
  * for a payload with no id at all, that UUID is one `createProposal` MINTED
@@ -347,9 +347,11 @@ function resolveTargetLabel(row: ProposalFingerprintInput): string {
   if (name) return decodeHtmlEntities(name);
   const summary = extractProposalSummary(row.data);
   if (summary) return decodeHtmlEntities(summary);
-  const type = row.targetType || "entity";
-  const id = row.targetId ? row.targetId.slice(0, 8) : "";
-  return id ? `${type} · ${id}` : type;
+  // No name and no summary: NO label. The row title already names the kind
+  // (`buildObjectActionTitle` → "Run Template"); a `<type> · <shortId>` label
+  // put a random id in quotes as if it were a name — `Run Template "playbook
+  // · 368aae92"` (dogfood-2 #10). An empty label omits the quotes.
+  return "";
 }
 
 interface ClusterAccumulator {

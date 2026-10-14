@@ -31,6 +31,7 @@
 import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
 import {
   humanizeToken,
+  nounInSentence,
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "./index.js";
@@ -296,13 +297,6 @@ function singularKind(object: string): string | null {
   return null;
 }
 
-/** Lower-case a noun for mid-sentence use, keeping acronyms ("MCP server"). */
-function midSentence(noun: string): string {
-  return /^[A-Z][a-z]/.test(noun)
-    ? noun.charAt(0).toLowerCase() + noun.slice(1)
-    : noun;
-}
-
 function compose(toolName: string): ToolLabelMoods | null {
   const cut = toolName.indexOf("_");
   if (cut <= 0) return null;
@@ -311,7 +305,7 @@ function compose(toolName: string): ToolLabelMoods | null {
   if (!verb || !object) return null;
   const kind = singularKind(object);
   const tail = kind
-    ? midSentence(
+    ? nounInSentence(
         toolName.startsWith("list_")
           ? resolveObjectNounPlural(kind)
           : resolveObjectNoun(kind)
@@ -325,10 +319,10 @@ function compose(toolName: string): ToolLabelMoods | null {
           .filter(Boolean)
           .map((word) => {
             const k = singularKind(word);
-            return k ? midSentence(resolveObjectNoun(k)) : word;
+            return k ? nounInSentence(resolveObjectNoun(k)) : word;
           })
           .join(" ")
-      : midSentence(resolveObjectNoun(object));
+      : nounInSentence(resolveObjectNoun(object));
   return {
     progressive: `${verb.progressive} ${tail}`,
     past: `${verb.past} ${tail}`,

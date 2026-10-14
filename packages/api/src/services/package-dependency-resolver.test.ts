@@ -45,6 +45,16 @@ const {
   mockCreateHubCtx: vi.fn(),
 }));
 
+// The ONE finisher (stamp + "active" on convergence) reads and writes the
+// workspace row; its behaviour is pinned on PGlite by
+// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
+vi.mock("./template-apply-finisher.js", () => ({
+  finishTemplateApply: vi.fn(async () => ({
+    state: "converged",
+    versionStamped: false,
+  })),
+}));
+
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
@@ -1119,7 +1129,11 @@ describe("resolvePackageDependencies", () => {
 
       expect(
         result.installed.find((d) => d.slug === "creative-director")
-      ).toMatchObject({ kind: "skill", relation: "require", action: "installed" });
+      ).toMatchObject({
+        kind: "skill",
+        relation: "require",
+        action: "installed",
+      });
       expect(mockApplyMarketInstall).toHaveBeenCalledWith(
         expect.objectContaining({
           kind: "skill",
@@ -1148,7 +1162,9 @@ describe("resolvePackageDependencies", () => {
 
     it("a FAILING skill install degrades to required-absent, never throws", async () => {
       chainWith([]);
-      mockApplyMarketInstall.mockRejectedValue(new Error("catalog unreachable"));
+      mockApplyMarketInstall.mockRejectedValue(
+        new Error("catalog unreachable")
+      );
 
       const result = await resolvePackageDependencies(
         skillDef() as Parameters<typeof resolvePackageDependencies>[0]

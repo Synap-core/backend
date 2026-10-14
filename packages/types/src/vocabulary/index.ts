@@ -92,6 +92,30 @@ export function sentenceCaseLabel(label: string): string {
 }
 
 /**
+ * A noun as it reads MID-SENTENCE ("Makes features, user stories and UI
+ * designs"): plain words lower-case, words carrying deliberate casing stay
+ * (acronyms "UI", "MCP", mixed "iPhone") — the same per-word rule as
+ * {@link sentenceCaseLabel}, with no capital on the first word. The one door
+ * for lower-casing a kind's noun or plural: never `.toLowerCase()` it at a
+ * call site ("UI designs" would read "ui designs").
+ *
+ *   "User stories" → "user stories"
+ *   "UI designs"   → "UI designs"
+ *   "MCP server"   → "MCP server"
+ */
+export function nounInSentence(noun: string): string {
+  return noun
+    .trim()
+    .split(/\s+/)
+    .map((word) =>
+      /^[A-Z]?[a-z]*$/.test(word.replace(/[^A-Za-z]/g, ""))
+        ? word.toLowerCase()
+        : word
+    )
+    .join(" ");
+}
+
+/**
  * An action's two MOODS. Both are correct; they are not interchangeable:
  *   - `imperative` — what approving it WILL do. Buttons, pending proposals.
  *   - `past`       — what already happened. History, event feeds, receipts.
@@ -287,6 +311,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   move: { imperative: "Move", past: "Moved" },
   rename: { imperative: "Rename", past: "Renamed" },
   grant_access: { imperative: "Share", past: "Shared" },
+  // `profile.change_scope` (D13): a kind's scope / grants / entity placement
+  // changed. One word so "<verb> <noun>" reads "Rescope kind"; humanize had no
+  // past tense ("Change scope" on a receipt).
+  change_scope: { imperative: "Rescope", past: "Rescoped" },
   // Filing EXISTING records into a project (`project/file_entities`) and
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".
@@ -665,22 +693,51 @@ export function resolveObjectNounPlural(
   if (!kind) return "";
   const key = kind.toLowerCase();
   const backendOnly = OBJECT_NOUNS[key];
-  if (backendOnly) return `${backendOnly}s`;
+  if (backendOnly) return pluralizeFallback(backendOnly);
   const canonical = OBJECT_KIND_ALIASES[key] ?? key;
   const entry = OBJECT_KINDS[canonical];
   if (entry?.labelPlural) return entry.labelPlural;
   const canonicalNoun = OBJECT_NOUNS[canonical];
-  if (canonicalNoun) return `${canonicalNoun}s`;
+  if (canonicalNoun) return pluralizeFallback(canonicalNoun);
   return pluralizeFallback(humanizeToken(canonical));
 }
 
 /**
+ * Nouns that do not take a plural — "14 Research", never "Researchs"
+ * (dogfood-2 #10, a project's pipeline door). Matched on the LAST word.
+ */
+const UNCOUNTABLE_NOUNS = new Set([
+  "research",
+  "feedback",
+  "content",
+  "information",
+  "knowledge",
+  "data",
+  "media",
+  "software",
+  "equipment",
+  "evidence",
+  "news",
+  "advice",
+  "analytics",
+]);
+
+/**
  * The uncurated fallback: singular + "s", except a consonant + "y" ending,
  * which takes "ies" — `property` (an alias target with no registry entry)
- * rendered "Propertys" through the bare-`s` rule.
+ * rendered "Propertys" through the bare-`s` rule — a sibilant ending
+ * (s / x / z / ch / sh), which takes "es", and an uncountable noun, which
+ * stays as it is. A Greek -sis / -xis ending takes -ses / -xes.
  */
 function pluralizeFallback(noun: string): string {
-  return /[^aeiou]y$/i.test(noun) ? `${noun.slice(0, -1)}ies` : `${noun}s`;
+  const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
+  if (UNCOUNTABLE_NOUNS.has(last)) return noun;
+  // Greek -sis / -xis: hypothesis → hypotheses, analysis → analyses, axis →
+  // axes ("Hypothesises" reached the homes read through the sibilant rule).
+  if (/(sis|xis)$/i.test(noun)) return `${noun.slice(0, -2)}es`;
+  if (/[^aeiou]y$/i.test(noun)) return `${noun.slice(0, -1)}ies`;
+  if (/(s|x|z|ch|sh)$/i.test(noun)) return `${noun}es`;
+  return `${noun}s`;
 }
 
 /**
@@ -1019,6 +1076,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // and relay — it was "Unclassified" on one and "Not a declared status" on
   // the other.
   __unclassified: "Not a declared status",
+  // ISSUE lifecycle (`issueStatus`, the system `issue` kind): humanized it
+  // read "Wont fix" — no apostrophe. `open` / `investigating` / `fixed`
+  // humanize correctly and need no row.
+  wont_fix: "Won't fix",
 };
 
 /**

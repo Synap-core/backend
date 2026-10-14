@@ -260,6 +260,21 @@ describe("the WHEN half compiles to patterns the runtime accepts", () => {
     ].map((m) => m[1]!);
     expect(eventActions.length).toBeGreaterThan(0);
 
+    // The bridge feeds ONLY the entity pattern, so the runtime also accepts the
+    // entity's own non-CRUD actions — read from the same `SUBJECT_EXTRA_ACTIONS`
+    // table `validateEventPattern` consults (`entity.transition`, the status
+    // door's event). Derived, never pinned: a word the validator would refuse
+    // for `entity` is still red here.
+    const extrasAt = unified.indexOf("SUBJECT_EXTRA_ACTIONS");
+    expect(extrasAt, "SUBJECT_EXTRA_ACTIONS not found").toBeGreaterThan(-1);
+    const extras = unified.slice(extrasAt, unified.indexOf("};", extrasAt));
+    const entityExtras = [
+      ...(/\bentity:\s*\[([^\]]*)\]/.exec(extras)?.[1] ?? "").matchAll(
+        /"([a-z_]+)"/g
+      ),
+    ].map((m) => m[1]!);
+    const entityActions = [...eventActions, ...entityExtras];
+
     const bridgeAt = sentence.indexOf("VERB_TO_EVENT_ACTION");
     expect(
       bridgeAt,
@@ -272,9 +287,10 @@ describe("the WHEN half compiles to patterns the runtime accepts", () => {
     const mapped = [...bridge.matchAll(/:\s*"([a-z_]+)"/g)].map((m) => m[1]!);
     expect(mapped.length).toBeGreaterThan(0);
 
-    // Everything the bridge produces must be a real EventAction — otherwise it
-    // has merely moved the invalid pattern behind an indirection.
-    for (const action of mapped) expect(eventActions).toContain(action);
+    // Everything the bridge produces must be an action the runtime accepts on
+    // an entity pattern — otherwise it has merely moved the invalid pattern
+    // behind an indirection.
+    for (const action of mapped) expect(entityActions).toContain(action);
 
     // And the entity pattern must be built THROUGH the bridge, not from the raw
     // verb: `entity.${actionVerb}` is the exact shape that was broken.

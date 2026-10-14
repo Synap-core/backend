@@ -14,6 +14,7 @@ import {
   mergeEntities,
   PropertyIndexService,
   type MergeMaterializedStamp,
+  type PropertyDecisionMap,
   type LinkEndpointType,
   type LinkType,
   resolveMaterializedEntityWorkspaceId,
@@ -25,6 +26,7 @@ import {
   isEntityMergeProposalData,
   type ProposalMaterializedRecord,
 } from "@synap-core/types";
+import { readUpdatePackItems } from "@synap-core/types/proposals/item-pack";
 import { createLogger } from "@synap-core/core";
 import {
   entitiesRouter as regularEntitiesRouter,
@@ -44,6 +46,12 @@ import {
 } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
 import {
+  applyItemPack,
+  itemPackAlreadyApproved,
+  markItemPackApproved,
+} from "../../../services/proposals/item-pack.js";
+import { assertUpdatePackItemCurrent } from "../../../services/entities/update-entities.js";
+import {
   applyIdentityResolution,
   entityIdentityPorts,
   type IdentityReceipt,
@@ -55,6 +63,153 @@ import {
 } from "../../../utils/store-entity-source-blob.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-entity" });
+
+type EntityApproverCaller = ReturnType<
+  typeof regularEntitiesRouter.createCaller
+>;
+
+/**
+ * The APPROVER's `entities` caller for an entity write approval
+ * (`entity/update`, `entity/update_pack`).
+ *
+ * Workspace-scoped: verify the approver's membership + role. Pod-wide
+ * (`workspaceId === null`) runs at pod scope — the SAME branch `entity/create`'s
+ * pod-wide home and `entity/delete` already take.
+ *
+ * The `proposal.workspaceId!` this replaced was not a type nicety: for a
+ * pod-wide entity (`entities.workspaceId` NULL = global, the documented
+ * doctrine) it made `eq(workspace_members.workspace_id, NULL)` — a predicate
+ * that can never match — so EVERY pod-wide entity/update approval threw
+ * FORBIDDEN "No workspace access" and the proposal was stuck pending forever.
+ * Approve-authority is NOT weakened by dropping it: `computeCanReviewApproval`
+ * has already gated this call upstream (pod-wide ⇒ proposal owner /
+ * agent-owner / pod-admin ONLY), and the `entities.update` podProcedure
+ * re-applies its own floor (`entityWriteVisibleWhere(userId)`), which is what
+ * actually authorizes the write. The membership row was a THIRD, redundant
+ * gate that only ever spoke workspace.
+ */
+async function entityApproverCaller(
+  userId: string,
+  workspaceId: string | null
+): Promise<EntityApproverCaller> {
+  let workspaceRole = "owner";
+  if (workspaceId) {
+    const membership = await getWorkspaceMembership(db, workspaceId, userId);
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No workspace access",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+  return regularEntitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId,
+    workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+}
+
+/**
+ * THE approval body of an entity field patch — one approved update replayed
+ * through `entities.update` as the approver. Shared by `entity/update` (one
+ * record) and `entity/update_pack` (each item the reviewer kept), so the two
+ * can never apply a patch differently. Returns the undo snapshot pair; the
+ * caller decides how the proposal row is stamped.
+ */
+export async function applyApprovedEntityPatch(args: {
+  caller: EntityApproverCaller;
+  userId: string;
+  proposalId: string;
+  proposalWorkspaceId: string | null;
+  entityId: string;
+  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / sourceFile. */
+  patch: Record<string, unknown>;
+  propertyDecisions?: PropertyDecisionMap;
+}) {
+  const { caller: entityCaller, userId, entityId, patch: innerData } = args;
+  // Property reconciliation (approve-side) — same contract as entity/create:
+  // resolve the entity's kind, then match/remap/promote each proposed property
+  // key against that kind's def slugs (honoring `propertyDecisions`). Best-effort;
+  // verbatim fallback on def-create failure. See entity/create for the rationale.
+  let reconciledUpdateProps = innerData.properties as
+    Record<string, unknown> | undefined;
+  if (reconciledUpdateProps && Object.keys(reconciledUpdateProps).length > 0) {
+    const targetEntity = await db.query.entities.findFirst({
+      where: eq(entities.id, entityId),
+      columns: { profileId: true, workspaceId: true },
+    });
+    if (targetEntity?.profileId) {
+      const reconciled = await reconcileApprovedProperties({
+        properties: reconciledUpdateProps,
+        profileId: targetEntity.profileId,
+        workspaceId:
+          args.proposalWorkspaceId ?? targetEntity.workspaceId ?? null,
+        userId,
+        decisions: args.propertyDecisions,
+      });
+      reconciledUpdateProps = reconciled.properties;
+    }
+  }
+
+  // APPLY-time before-state for undo: read right before the write, with
+  // the after-state taken from the write's own result (below), so the
+  // stamp records what this approval actually changed — not the
+  // propose-time `previousData`, which can be stale, and not a peer's edit
+  // landing between the write and a second read.
+  const undoBefore = await readEntityUndoSnapshot(db, entityId);
+
+  const updateResult = await entityCaller.update({
+    id: entityId,
+    title: innerData.title as string | undefined,
+    description: innerData.description as string | undefined,
+    properties: reconciledUpdateProps,
+    deleteProperties: innerData.deleteProperties as string[] | undefined,
+    // A kind change rides the same proposal (c-kind-convert). Dropping it
+    // here approved the proposal and changed nothing.
+    ...(typeof innerData.profileSlug === "string"
+      ? { profileSlug: innerData.profileSlug }
+      : {}),
+    // The status the proposer saw (an update pack item). A single
+    // `entity/update` proposal never stores one, so its replay is unchanged.
+    ...(innerData.expectedStatus !== undefined
+      ? { expectedStatus: innerData.expectedStatus as string | null }
+      : {}),
+    source: "system",
+  });
+
+  const undoAfter = "written" in updateResult ? updateResult.written : null;
+
+  // A governed source-file attach: the bytes were STAGED before this
+  // proposal was filed (`stageSourceBlob`) and only the small reference
+  // rides in `data.sourceFile`. The property patch above already replayed
+  // the `sourceFile*` provenance keys; `attachSourceBlob` is still required
+  // because it ALSO takes the `entities.document_id` link (under its
+  // `IS NULL` no-clobber guard) — the column the embedding worker, the
+  // retrieval join and Typesense enrichment all key off. Without this the
+  // approval wrote five properties and the file stayed invisible.
+  // Best-effort: the entity update is already committed.
+  const stagedFile = stagedSourceBlobFrom(innerData);
+  if (stagedFile) {
+    try {
+      await attachSourceBlob({
+        database: db,
+        userId,
+        entityId,
+        staged: stagedFile,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, proposalId: args.proposalId, entityId },
+        "entity/update: source blob attach failed (update kept)"
+      );
+    }
+  }
+
+  return { undoBefore, undoAfter, status: updateResult.status };
+}
 
 /** Register the entity/* + facet/* approve executors. */
 export function registerEntityExecutors(): void {
@@ -459,43 +614,10 @@ export function registerEntityExecutors(): void {
         unknown
       >;
       const entityId = (innerData.id as string) || proposal.targetId;
-      // Workspace-scoped: verify the approver's membership + role. Pod-wide
-      // (`proposal.workspaceId === null`) runs at pod scope — the SAME branch
-      // `entity/create`'s pod-wide home and `entity/delete` already take.
-      //
-      // The `proposal.workspaceId!` this replaces was not a type nicety: for a
-      // pod-wide entity (`entities.workspaceId` NULL = global, the documented
-      // doctrine) it made `eq(workspace_members.workspace_id, NULL)` — a
-      // predicate that can never match — so EVERY pod-wide entity/update
-      // approval threw FORBIDDEN "No workspace access" and the proposal was
-      // stuck pending forever. Approve-authority is NOT weakened by dropping
-      // it: `computeCanReviewApproval` has already gated this call upstream
-      // (pod-wide ⇒ proposal owner / agent-owner / pod-admin ONLY), and the
-      // `entities.update` podProcedure below re-applies its own floor
-      // (`entityWriteVisibleWhere(userId)`), which is what actually authorizes
-      // the write. The membership row was a THIRD, redundant gate that only
-      // ever spoke workspace.
-      const wsId = proposal.workspaceId ?? null;
-      let workspaceRole = "owner";
-      if (wsId) {
-        const membership = await getWorkspaceMembership(db, wsId, userId);
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
-        workspaceRole = membership.role;
-      }
-      const entityCallerCtx = {
-        db,
-        authenticated: true as const,
+      // Membership + pod-wide rules: see `entityApproverCaller`.
+      const entityCaller = await entityApproverCaller(
         userId,
-        workspaceId: wsId,
-        workspaceRole,
-      };
-      const entityCaller = regularEntitiesRouter.createCaller(
-        entityCallerCtx as unknown as Context
+        proposal.workspaceId ?? null
       );
 
       // A governed MOVE (`entities.moveToWorkspace`) files under this same
@@ -539,76 +661,15 @@ export function registerEntityExecutors(): void {
         return { success: true, primaryId: entityId };
       }
 
-      // Property reconciliation (approve-side) — same contract as entity/create:
-      // resolve the entity's kind, then match/remap/promote each proposed property
-      // key against that kind's def slugs (honoring `propertyDecisions`). Best-effort;
-      // verbatim fallback on def-create failure. See entity/create for the rationale.
-      let reconciledUpdateProps = innerData.properties as
-        Record<string, unknown> | undefined;
-      if (
-        reconciledUpdateProps &&
-        Object.keys(reconciledUpdateProps).length > 0
-      ) {
-        const targetEntity = await db.query.entities.findFirst({
-          where: eq(entities.id, entityId),
-          columns: { profileId: true, workspaceId: true },
-        });
-        if (targetEntity?.profileId) {
-          const reconciled = await reconcileApprovedProperties({
-            properties: reconciledUpdateProps,
-            profileId: targetEntity.profileId,
-            workspaceId:
-              proposal.workspaceId ?? targetEntity.workspaceId ?? null,
-            userId,
-            decisions: input.propertyDecisions,
-          });
-          reconciledUpdateProps = reconciled.properties;
-        }
-      }
-
-      // APPLY-time before-state for undo: read right before the write, with
-      // the after-state taken from the write's own result (below), so the
-      // stamp records what this approval actually changed — not the
-      // propose-time `previousData`, which can be stale, and not a peer's edit
-      // landing between the write and a second read.
-      const undoBefore = await readEntityUndoSnapshot(db, entityId);
-
-      const updateResult = await entityCaller.update({
-        id: entityId,
-        title: innerData.title as string | undefined,
-        description: innerData.description as string | undefined,
-        properties: reconciledUpdateProps,
-        deleteProperties: innerData.deleteProperties as string[] | undefined,
-        source: "system",
+      const { undoBefore, undoAfter } = await applyApprovedEntityPatch({
+        caller: entityCaller,
+        userId,
+        proposalId: input.proposalId,
+        proposalWorkspaceId: proposal.workspaceId ?? null,
+        entityId,
+        patch: innerData,
+        propertyDecisions: input.propertyDecisions,
       });
-
-      const undoAfter = "written" in updateResult ? updateResult.written : null;
-
-      // A governed source-file attach: the bytes were STAGED before this
-      // proposal was filed (`stageSourceBlob`) and only the small reference
-      // rides in `data.sourceFile`. The property patch above already replayed
-      // the `sourceFile*` provenance keys; `attachSourceBlob` is still required
-      // because it ALSO takes the `entities.document_id` link (under its
-      // `IS NULL` no-clobber guard) — the column the embedding worker, the
-      // retrieval join and Typesense enrichment all key off. Without this the
-      // approval wrote five properties and the file stayed invisible.
-      // Best-effort: the entity update is already committed.
-      const stagedFile = stagedSourceBlobFrom(innerData);
-      if (stagedFile) {
-        try {
-          await attachSourceBlob({
-            database: db,
-            userId,
-            entityId,
-            staged: stagedFile,
-          });
-        } catch (err) {
-          logger.warn(
-            { err, proposalId: input.proposalId, entityId },
-            "entity/update: source blob attach failed (update kept)"
-          );
-        }
-      }
 
       const approvedSet = {
         status: ProposalStatus.APPROVED,
@@ -645,6 +706,89 @@ export function registerEntityExecutors(): void {
         userId
       );
       return { success: true };
+    },
+  });
+
+  // ── entity / update_pack ─────────────────────────────────────────────────
+  // R1 batch writes: the items of ONE `updateEntities` call that needed review.
+  // Each item the reviewer kept (`proposals.rejectItem` drops one) is applied
+  // through the SAME body as `entity/update`, independently — never
+  // all-or-none. An item whose touched fields changed since filing (a stale
+  // `before`) is refused, not overwritten. `data.outcomes[ref]` records each.
+  registerProposalExecutor({
+    key: "entity/update_pack",
+    async execute({ proposal, userId, input, deps }) {
+      if (await itemPackAlreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const pack = readUpdatePackItems(proposal.data);
+      if (!pack.batchId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Update pack proposal has no items",
+        });
+      }
+      const proposalWorkspaceId = proposal.workspaceId ?? null;
+      const caller = await entityApproverCaller(userId, proposalWorkspaceId);
+      const results = await applyItemPack({
+        packId: input.proposalId,
+        data: proposal.data,
+        items: pack.items,
+        apply: async (item) => {
+          await assertUpdatePackItemCurrent(item);
+          const applied = await applyApprovedEntityPatch({
+            caller,
+            userId,
+            proposalId: input.proposalId,
+            proposalWorkspaceId,
+            entityId: item.id,
+            patch: { ...item.patch },
+          });
+          // A replay that re-proposed applied nothing: refuse THIS item.
+          assertApplied(applied);
+        },
+      });
+
+      await markItemPackApproved(input.proposalId, userId);
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+
+      const appliedIds = results
+        .filter((r) => r.outcome.outcome === "applied")
+        .map((r) => r.item.id);
+      const refusals = results
+        .filter((r) => r.outcome.outcome === "refused")
+        .map((r) => `${r.item.subject.name ?? r.item.id}: ${r.outcome.reason}`);
+      if (pack.unreadable > 0) {
+        refusals.push(
+          `${pack.unreadable} item(s) in this pack could not be read and were not applied.`
+        );
+      }
+      return {
+        success: true,
+        created: 0,
+        effect:
+          appliedIds.length > 0
+            ? {
+                applied: "verified" as const,
+                rows: appliedIds.length,
+                ids: appliedIds,
+                subject: "entities",
+              }
+            : {
+                applied: "none" as const,
+                reason:
+                  refusals.length > 0
+                    ? "No item could be applied — see refusals."
+                    : "Every item was rejected by the reviewer.",
+              },
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 

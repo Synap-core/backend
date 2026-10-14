@@ -119,6 +119,7 @@ describe("deep import — schema preflight", () => {
     const errors: string[] = [];
     if (!properties?.knowledgeForm)
       errors.push("Property 'knowledgeForm' is required");
+    if (!properties?.ek_claim) errors.push("Property 'ek_claim' is required");
     return { valid: errors.length === 0, errors };
   };
 
@@ -192,10 +193,41 @@ describe("deep import — schema preflight", () => {
     expect(ops[0].profileSlug).toBe("knowledge");
     expect(ops[0].properties).toMatchObject({
       ek_type: "decision",
-      knowledgeForm: "insight",
+      knowledgeForm: "fact",
     });
     expect(res.stats.degradedToNote).toBe(0);
     expect(res.stats.degradedByProfile).toEqual({});
+  });
+
+  it("derives the required claim from the title instead of degrading to a note", async () => {
+    const res = await deepStructureImportItems(
+      [item()],
+      clientReturning([
+        {
+          tempId: "t1",
+          profileSlug: "knowledge",
+          title: "Grants deny by default on every pod",
+          properties: { knowledgeForm: "fact" },
+          confidence: 0.9,
+        },
+      ]),
+      {
+        validSlugs: new Set(["knowledge", "note"]),
+        includeProvenance: false,
+        validateEntity: knowledgeValidator,
+      },
+      deps
+    );
+
+    const ops = createOps(
+      res.operations as unknown as Array<Record<string, unknown>>
+    );
+    expect(ops[0].profileSlug).toBe("knowledge");
+    expect(ops[0].properties).toEqual({
+      knowledgeForm: "fact",
+      ek_claim: "Grants deny by default on every pod",
+    });
+    expect(res.stats.degradedToNote).toBe(0);
   });
 
   it("without a validator, behaviour is unchanged (hollow op still emitted)", async () => {

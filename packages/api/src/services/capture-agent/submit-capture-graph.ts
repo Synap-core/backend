@@ -45,9 +45,11 @@ import {
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
+  type WorkspacePlacement,
   deriveProposalProjectId,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
+import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -431,6 +433,25 @@ export interface SubmitCaptureGraphResult {
   /** True when this call returned a PRIOR proposal instead of filing one. */
   deduped?: true;
   /**
+   * How the graph was placed when the caller gave no workspace (D14): each
+   * entity resolves on its OWN kind and roles; unanimous → placed, split →
+   * abstain (`workspaceId` null) with every workspace the entities named in
+   * `candidates`, most entities first. Omitted when the caller pinned a
+   * workspace (rung 1), on a re-submit (the prior row's `scope` is what
+   * landed), and when the resolver failed (logged; the graph stays pod-wide).
+   */
+  placement?: Pick<
+    WorkspacePlacement,
+    "workspaceId" | "rung" | "reason" | "candidates"
+  >;
+  /**
+   * The graph abstained between workspaces: nothing was moved, it stays
+   * pod-wide. The SAME shape the text lane returns — to place it, re-file with
+   * `workspaceId` set to `suggestedWorkspaceId` (the workspace most entities
+   * named). Omitted when the graph was placed or no workspace was named.
+   */
+  pendingWorkspaceSwitch?: PendingWorkspaceSwitch;
+  /**
    * ADVISORY: entities whose properties carry keys their profile does not
    * model (stored verbatim, not queryable), with a `didYouMean` when a real
    * property is close. Omitted when every key is modelled.
@@ -685,18 +706,26 @@ export async function preflightCaptureGraphOperations(
     // `content` is folded in the way the materializer does (a long body becomes
     // a linked document, a short one inlines to properties.content) so a profile
     // that required `content` isn't falsely flagged when a body was provided.
+    // The body is not a key the caller invented: when the profile does not
+    // model `content`, it must not come back as `unmodeled` (it becomes the
+    // linked body document). A `content` the caller put in `properties` still
+    // reports — that one IS a property key.
+    const bodyFolded = !!op.content && !("content" in (op.properties ?? {}));
     if (op.content) propsToCheck.content = op.content;
-    const { valid, errors, unmodeled } =
-      await propertyValidation.validateEntityCreateForProposal(
-        propsToCheck,
-        profile.id,
-        workspaceId,
-        {
-          ...(op.title !== undefined ? { title: op.title } : {}),
-          profileDefaults:
-            (profile.defaultValues as Record<string, unknown>) ?? {},
-        }
-      );
+    const {
+      valid,
+      errors,
+      unmodeled: reported,
+    } = await propertyValidation.validateEntityCreateForProposal(
+      propsToCheck,
+      profile.id,
+      workspaceId,
+      {
+        ...(op.title !== undefined ? { title: op.title } : {}),
+        profileDefaults:
+          (profile.defaultValues as Record<string, unknown>) ?? {},
+      }
+    );
     if (!valid) {
       invalidEntities.push({
         label: op.title || op.ref || op.profileSlug,
@@ -704,6 +733,9 @@ export async function preflightCaptureGraphOperations(
         errors,
       });
     }
+    const unmodeled = bodyFolded
+      ? reported.filter((u) => u.key !== "content")
+      : reported;
     if (unmodeled.length > 0) {
       unmodeledProperties.push({
         label: op.title || op.ref || op.profileSlug,
@@ -1016,30 +1048,42 @@ export async function submitCaptureGraph(
     ? rewritePlanEntityRefs(input.plan, collapsed.refRewrites)
     : undefined;
 
-  // WORKSPACE PLACEMENT (routing fix): `workspaceId` null here means the caller
+  // WORKSPACE PLACEMENT (D14): `workspaceId` null here means the caller
   // supplied no explicit lens/focus (see `input.workspaceId ?? ctx.workspaceId ??
-  // null` upstream) — collect every entity + facet profileSlug in the graph and
-  // run the shared graph-placement helper (ONE door + deterministic accept
-  // policy). A deterministic ontology hit (rung ≤4, single candidate) re-lenses
-  // the WHOLE graph into that workspace; ambiguous / no-signal ABSTAINS —
-  // staying pod-wide (null) is the honest default over an arbitrary guess.
+  // null` upstream) — run the shared graph-placement helper (ONE door), which
+  // resolves EACH entity on its own kind + roles. Unanimous → the WHOLE graph
+  // is re-lensed into that workspace; split / no signal ABSTAINS — staying
+  // pod-wide (null) is the honest default over an arbitrary guess, and the
+  // receipt says why (`placement`) and offers the switch (same contract as the
+  // text lane's `pendingWorkspaceSwitch`).
+  let placement: SubmitCaptureGraphResult["placement"];
+  let pendingWorkspaceSwitch: PendingWorkspaceSwitch | undefined;
   if (workspaceId === null) {
-    const routingSlugs = Array.from(
-      new Set(
-        graphEntities
-          .flatMap((e) => [
-            e.profileSlug,
-            ...(e.facets?.map((f) => f.profileSlug) ?? []),
-          ])
-          .filter((s): s is string => typeof s === "string" && s.length > 0)
-      )
-    );
     try {
-      workspaceId = await resolveGraphWorkspaceFromSlugs(db, {
+      const resolved = await resolveGraphWorkspaceFromSlugs(db, {
         userId,
-        routingSlugs,
+        entities: graphEntities.map((e) => ({
+          kindSlug: e.profileSlug,
+          facetSlugs: e.facets?.map((f) => f.profileSlug) ?? [],
+        })),
         sessionId: input.sessionId,
       });
+      workspaceId = resolved.workspaceId;
+      placement = {
+        workspaceId: resolved.workspaceId,
+        rung: resolved.rung,
+        reason: resolved.reason,
+        candidates: resolved.candidates,
+      };
+      const suggested = resolved.candidates[0];
+      if (resolved.workspaceId === null && suggested) {
+        pendingWorkspaceSwitch = {
+          suggestedWorkspaceId: suggested.id,
+          suggestedWorkspaceName: suggested.name || null,
+          reason: resolved.reason,
+          confidence: null,
+        };
+      }
     } catch (err) {
       logger.warn(
         { err, userId },
@@ -1047,6 +1091,10 @@ export async function submitCaptureGraph(
       );
     }
   }
+  const placementReceipt = {
+    ...(placement ? { placement } : {}),
+    ...(pendingWorkspaceSwitch ? { pendingWorkspaceSwitch } : {}),
+  };
 
   const bindingNote = bindings.length
     ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
@@ -1683,6 +1731,7 @@ export async function submitCaptureGraph(
           ...(materialized.relationsFailed.length
             ? { relationsFailed: materialized.relationsFailed }
             : {}),
+          ...placementReceipt,
           writeReceipt: {
             // The entities landed; if any submitted edge did NOT, this graph is
             // `partial`, not `applied`. Derived from the SAME array the response
@@ -1784,6 +1833,7 @@ export async function submitCaptureGraph(
       : {}),
     ...(projectCandidate ? { projectCandidate } : {}),
     ...(projectOutcome ? { project: projectOutcome } : {}),
+    ...placementReceipt,
     writeReceipt: {
       state: "pending",
       ...(proposalId ? { proposalId } : {}),

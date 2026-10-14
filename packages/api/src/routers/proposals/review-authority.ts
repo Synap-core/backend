@@ -130,7 +130,7 @@ export function reviewAuthorityRequirement(
  * `users.userType === 'agent'` is the canonical is-agent signal in this codebase
  * (see `access/key-identity.ts:7`); reused here rather than re-derived.
  */
-async function isAgentPrincipal(userId: string): Promise<boolean> {
+export async function isAgentPrincipal(userId: string): Promise<boolean> {
   const [row] = await db
     .select({ userType: users.userType })
     .from(users)

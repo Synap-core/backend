@@ -1,5 +1,5 @@
 /**
- * Library GROUPS — the person's persistent groups (`library_groups`, 0326).
+ * Library GROUPS — the person's persistent groups (`library_groups`, 0328).
  *
  * A group outlives any import run: its note, outputs, the collection entity
  * Build minted (`containerEntityId`: a rebuild updates it, never twins it) and

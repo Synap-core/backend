@@ -100,6 +100,7 @@ import {
   registerKeysRoutes,
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
+  registerIntentSurfacesRoutes,
   registerGuidelinesRoutes,
   registerBrandRoutes,
   registerAgentSkillsRoutes,
@@ -350,6 +351,7 @@ registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC fede
 registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
+registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/{needs-you,count}
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
 registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
 registerAgentSkillsRoutes(app); // /agent-skills*

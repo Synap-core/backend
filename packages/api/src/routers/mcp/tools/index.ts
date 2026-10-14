@@ -1058,11 +1058,16 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
+          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `profileSlug` converts it to another kind, keeping its id and links (always reviewed).",
         inputSchema: {
           type: "object",
           properties: {
             entityId: { type: "string" },
+            profileSlug: {
+              type: "string",
+              description:
+                "CONVERT the entity to another kind (e.g. a misfiled knowledge entry → decision, issue or note). It keeps its id, links, document and history; always a proposal. Send the new kind's required properties in `properties` in the same call. An unknown kind is refused — list kinds with synap_list_profiles.",
+            },
             title: { type: "string" },
             description: { type: "string" },
             properties: {
@@ -1091,8 +1096,89 @@ export const tools = {
               description:
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
           },
           required: ["entityId"],
+        },
+      },
+      {
+        name: "synap_update_entities",
+        annotations: {
+          title: "Update many entities",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Change up to 500 existing entities in ONE call — retitles, property fixes, status moves. Use it for any change set; never script many single updates or Hub REST calls. Each item is {id, patch, expected?}; patch fields: title, description, properties, deleteProperties, expectedStatus (no kind change, no body — use synap_update_entity / synap_update_document for those). Governance is per item: each is written now (when it would auto-approve), or collected into ONE review for the person, or denied, or skipped (not found, changed since you read it, nothing to change). The answer lists applied, proposed {proposalId, count, reviewUrl}, denied, skipped, plus items[] with each verdict — a partial result is normal. 'proposed' is success: do not resend those items; a skipped item with `deferred: true` was kept on a space-join request and is replayed for you. Pass validate:true first to see the verdicts without writing. Pass an idempotencyKey so a retried call returns the first answer instead of acting twice.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              minItems: 1,
+              maxItems: 500,
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", description: "The entity id." },
+                  patch: {
+                    type: "object",
+                    properties: {
+                      title: { type: "string" },
+                      description: { type: "string" },
+                      properties: {
+                        type: "object",
+                        description:
+                          "Partial properties to merge into the entity.",
+                      },
+                      deleteProperties: {
+                        type: "array",
+                        items: { type: "string" },
+                      },
+                      expectedStatus: {
+                        type: ["string", "null"],
+                        description:
+                          "When the patch moves the status: the status you SAW. If it moved meanwhile the item is skipped.",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  expected: {
+                    type: "object",
+                    properties: {
+                      title: {
+                        type: ["string", "null"],
+                        description:
+                          "The title you read. If it changed meanwhile the item is skipped, not overwritten.",
+                      },
+                    },
+                  },
+                },
+                required: ["id", "patch"],
+              },
+            },
+            validate: {
+              type: "boolean",
+              description:
+                "Dry run: return each item's verdict, write nothing.",
+            },
+            idempotencyKey: {
+              type: "string",
+              description:
+                "8–256 chars. The same key with the same items returns the first call's answer.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "WHY these changes — shown to the person who reviews them. One line.",
+            },
+          },
+          required: ["items"],
         },
       },
       {
@@ -1104,7 +1190,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store a real binary from disk, that's the CLI `synap upload` / the multipart upload door — an agent can't do it here. Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1244,6 +1330,42 @@ export const tools = {
         },
       },
       {
+        name: "synap_request_upload",
+        annotations: {
+          title: "Request upload",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Get a URL to upload a file too large for `synap_store_file` inline (over 10MB, up to 500MB for video). Returns `{uploadUrl, headers, uploadToken, expiresAt, maxBytes}`: PUT the exact bytes to `uploadUrl` with exactly `headers` before `expiresAt`, then call `synap_store_file({uploadToken})` within the hour to save it. `size` must be the exact byte count.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            filename: {
+              type: "string",
+              description: "The file name (e.g. 'launch.mp4', 'deck.html').",
+            },
+            mimeType: {
+              type: "string",
+              description:
+                "The content type (e.g. 'video/mp4', 'application/pdf'). Must be an allowed type.",
+            },
+            size: {
+              type: "integer",
+              description: "Exact size of the file in bytes.",
+            },
+            workspaceId: { type: "string" },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override, same rules as on `synap_store_file`. The upload's `synap_store_file` call defaults to this session.",
+            },
+          },
+          required: ["filename", "mimeType", "size"],
+        },
+      },
+      {
         name: "synap_store_file",
         annotations: {
           title: "Store file",
@@ -1252,7 +1374,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a large file sitting on a local disk, that's the CLI `synap upload` (an agent can't stream bytes it doesn't hold). For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB via this inline path.",
+          "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB inline; for a bigger file call `synap_request_upload`, PUT the bytes, then call this with `uploadToken`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1275,6 +1397,11 @@ export const tools = {
               description:
                 "Base64-encoded BINARY content. Mutually exclusive with `content`.",
             },
+            uploadToken: {
+              type: "string",
+              description:
+                "The `uploadToken` from `synap_request_upload`, after you PUT the bytes. Replaces `content`/`contentBase64`/`filename`/`mimeType`.",
+            },
             title: {
               type: "string",
               description:
@@ -1286,13 +1413,17 @@ export const tools = {
               description:
                 "Optional UUID of an EXISTING entity — attach the stored blob to it as provenance instead of creating a new `file` entity.",
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
             expectedLabel: {
               type: "string",
               description:
                 "The declared output slot this fulfils, exactly as declared on the session.",
             },
           },
-          required: ["filename", "mimeType"],
         },
       },
       {
@@ -1350,7 +1481,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at', 'belongs_to_project'. The default slugs resolve pod-wide, so no `workspaceId` is needed for them; a workspace may add or override slugs. A slug that names no relation def is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
+          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at'. To file an entity into a project use synap_file_into_project — `belongs_to_project` is refused here. The default slugs resolve pod-wide, so no `workspaceId` is needed for them; a workspace may add or override slugs. A slug that names no relation def is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1370,7 +1501,7 @@ export const tools = {
               // agent following this schema got a 400. These are real defaults
               // from `database/src/utils/default-relation-defs.ts`.
               description:
-                "Relation type — an existing relation-def slug (e.g. 'relates_to', 'references', 'mentions', 'parent_of', 'belongs_to_project', 'works_at')",
+                "Relation type — an existing relation-def slug (e.g. 'relates_to', 'references', 'mentions', 'parent_of', 'works_at')",
               default: "relates_to",
             },
             workspaceId: {
@@ -1922,7 +2053,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1970,6 +2101,11 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "FILE this session into a project (its UUID from synap_list_projects), or pass null to UNFILE it; omit to leave it alone. Always filed as a PROPOSAL the person approves — which project work belongs to is their call, so suggest it, never assume it. REFUSED if the project is not one you can see.",
+            },
+            moveToWorkspaceId: {
+              type: ["string", "null"],
+              description:
+                "Move this session (with its room and outputs list) into another Space, or null to make it personal. The records it produced stay where they are (use synap_move_entities). Always a proposal for an agent; refused when someone in the session room is not a member of that space.",
             },
             trackId: {
               type: ["string", "null"],
@@ -2762,6 +2898,11 @@ export const tools = {
                 "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
               items: { type: "object" },
             },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
           },
           required: ["name", "goalTemplate"],
         },
@@ -3157,7 +3298,7 @@ export const tools = {
             profileSlug: {
               type: "string",
               description:
-                "Optional profile hint to guide entity type extraction (work lane)",
+                "Optional kind hint for the work lane. It guides extraction, and if AI structuring is unavailable the text is still saved as this kind (marked degraded) when it is a kind in your lens; otherwise as a note.",
             },
             global: {
               type: "boolean",
@@ -3172,7 +3313,7 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`).",
+                "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`). An `entities[]` graph with no `workspaceId` is placed only when every entity's kind (and roles) points at the same space; otherwise it stays pod-wide and returns `placement` (reason + candidates) and, when there is a candidate, `pendingWorkspaceSwitch`.",
             },
             projectId: {
               type: "string",
@@ -3473,6 +3614,11 @@ export const tools = {
               type: "string",
               description:
                 "Why you are starting it, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
             },
           },
           required: ["projectId"],
@@ -3973,6 +4119,50 @@ export const tools = {
             },
           },
           required: ["profileId", "targetWorkspaceId"],
+        },
+      },
+      {
+        name: "synap_change_kind_scope",
+        annotations: {
+          title: "Change kind scope",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          'Change which Spaces see a kind (profile) and where its NEW records live. scope "shared" (+ allowedWorkspaceIds) makes the kind resolve in those spaces; "workspace" pins it to its home and revokes grants. entityScope "pod" makes NEW records pod-wide (existing records keep their space). Use it when another space needs a kind — never define a twin kind. Always a proposal for an agent; the kind\'s owner (or a pod admin for a system kind) approves. To add one space to an already-shared kind, use synap_grant_profile_access.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileId: { type: "string", description: "Profile UUID." },
+            scope: {
+              type: "string",
+              enum: ["shared", "workspace"],
+              description: "New kind scope.",
+            },
+            allowedWorkspaceIds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                'Space UUIDs granted access. Only with scope "shared".',
+            },
+            entityScope: {
+              type: "string",
+              enum: ["pod", "workspace"],
+              description:
+                "Whether NEW records of this kind are pod-wide or stay in one space.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Acting workspace UUID; omit to use the kind's home workspace.",
+            },
+            reasoning: {
+              type: "string",
+              description: "Why — shown to the reviewer. One line.",
+            },
+          },
+          required: ["profileId"],
         },
       },
       {
@@ -4852,6 +5042,41 @@ export const tools = {
             },
           },
           required: ["name"],
+        },
+      },
+      {
+        name: "synap_update_skill",
+        annotations: {
+          title: "Update skill",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name` — by `slug` (the ref synap_load_skill resolves) or `id`. Use it when a skill you authored goes stale; never create a second skill under a new slug as a twin. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body is UNAPPROVED until the owner approves it again — that prose lands in future agents' prompts — so do not report it as live.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            slug: {
+              type: "string",
+              description: "The skill's slug (e.g. 'biz/business-plan').",
+            },
+            id: {
+              type: "string",
+              description: "The skill's UUID — instead of `slug`.",
+            },
+            body: {
+              type: "string",
+              description:
+                "The full new Markdown body — it REPLACES the old one, so send the whole text, not a diff.",
+            },
+            description: {
+              type: "string",
+              description: "One line: what it does + when to use it.",
+            },
+            name: { type: "string", description: "New display name." },
+          },
+          required: [],
         },
       },
       {

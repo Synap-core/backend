@@ -837,6 +837,12 @@ export const viewsRouter = router({
         type: z.enum([...VIEW_TYPE_KEYS, "all"]).optional(),
         /** When true, exclude views that were auto-created by bento block picker */
         excludeAutoCreated: z.boolean().optional(),
+        /**
+         * Only views whose config names this kind/role (`config.profileSlug`
+         * — a pipeline view's board, an intent surface). Pair with
+         * `type: "pipeline"` to find a kind's saved surfaces in a lens.
+         */
+        profileSlug: z.string().min(1).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -872,6 +878,9 @@ export const viewsRouter = router({
             : undefined,
           input.excludeAutoCreated
             ? sql`(${views.metadata}->>'autoCreated') IS DISTINCT FROM 'true'`
+            : undefined,
+          input.profileSlug
+            ? sql`${views.config}->>'profileSlug' = ${input.profileSlug}`
             : undefined
         ),
         orderBy: [desc(views.updatedAt)],

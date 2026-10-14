@@ -2264,6 +2264,101 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
   });
 
+  // ── POST /entities/batch-update ─────────────────────────────────────────
+  // R1 batch writes: a THIN door over Hub `updateEntities` (the shared
+  // `updateEntities` service). Static path, registered before any
+  // `/entities/{entityId}` route. Full validation (the strict patch) happens
+  // in the hub procedure; this schema only shapes the OpenAPI document.
+  const batchUpdateEntitiesRoute = createRoute({
+    method: "post",
+    path: "/entities/batch-update",
+    tags: ["Entities"],
+    summary: "Update many entities in one governed call",
+    description:
+      "Up to 500 items `{id, patch, expected?}`. Each item is written now (when " +
+      "governance would auto-approve it), collected into ONE review proposal, " +
+      "denied, or skipped. `validate: true` returns the per-item verdict and " +
+      "writes nothing. `idempotencyKey` (or the `Idempotency-Key` header) " +
+      "replays the first call's receipt.",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              userId: z.string().optional(),
+              agentUserId: z.string().uuid().optional(),
+              workspaceId: z.string().uuid().optional(),
+              sessionId: z.string().uuid().optional(),
+              items: z
+                .array(
+                  z.object({
+                    id: z.string().uuid(),
+                    patch: z.record(z.string(), z.unknown()),
+                    expected: z
+                      .object({ title: z.string().nullable().optional() })
+                      .optional(),
+                  })
+                )
+                .min(1)
+                .max(500),
+              idempotencyKey: z.string().optional(),
+              validate: z.boolean().optional(),
+              reasoning: z.string().optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      ...trpcErrorResponses,
+      200: {
+        description:
+          "Per-item receipt: applied / proposed (one pack) / denied / skipped",
+        content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+    },
+  });
+
+  app.openapi(batchUpdateEntitiesRoute, async (c): Promise<any> => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const body = c.req.valid("json");
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    if (!mayActAsUser(c, body.userId)) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = body.userId ?? authUserId;
+    try {
+      const caller = await getCaller(c, {
+        workspaceId: getConfinedWorkspace(c, body.workspaceId ?? null) ?? null,
+        userId,
+        sessionId: body.sessionId ?? c.get("sessionId") ?? null,
+      });
+      const result = await caller.entities.updateEntities({
+        userId,
+        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        items: body.items as Parameters<
+          typeof caller.entities.updateEntities
+        >[0]["items"],
+        ...(body.idempotencyKey ? { idempotencyKey: body.idempotencyKey } : {}),
+        ...(body.validate !== undefined ? { validate: body.validate } : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err }, "POST /entities/batch-update failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
   // ── PATCH /entities/:entityId ───────────────────────────────────────────
   // Requires workspaceId in body for workspace-scoped update (same event chain).
   const updateEntityRoute = createRoute({

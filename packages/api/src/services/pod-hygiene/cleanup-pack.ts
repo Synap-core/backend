@@ -72,6 +72,7 @@ import {
   type CleanupPackAction,
   type CleanupPackItemV2,
 } from "@synap-core/types/pod-hygiene";
+import { shortenTitle } from "@synap-core/types/titles";
 import { emitSideEffects } from "@synap/events";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
@@ -393,7 +394,7 @@ export async function gatherCleanupCandidates(
         subject: {
           kind: CLEANUP_ACTION_SUBJECT_KIND.close_session,
           id: s.id,
-          name: s.title ?? s.goal.split("\n")[0]!.slice(0, 120),
+          name: s.title ?? shortenTitle(s.goal, 120),
         },
         evidence: {
           createdAt: iso(s.createdAt ?? s.updatedAt),

@@ -243,8 +243,13 @@ export const documentsRouter = router({
           reviewUrl: perm.reviewUrl,
           message: proposedMessageFor(
             perm.proposalType,
-            "Document creation proposed, awaiting approval"
+            "Document creation proposed, awaiting approval",
+            perm.deferred
           ),
+          // Join gate that KEPT the write: replayed once the join is approved.
+          ...(perm.deferred
+            ? { deferred: true as const, ref: perm.deferredRef }
+            : {}),
         };
       }
 

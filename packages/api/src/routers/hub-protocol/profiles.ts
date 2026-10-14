@@ -597,9 +597,14 @@ export const hubProfilesRouter = router({
    * `action: 'update'`. That key is deliberately ABSENT from
    * DEFAULT_AUTO_APPROVE (it was a dead key until this door — see the
    * META-MODEL note in packages/governance-policy), so an agent caller gets
-   * `status: 'proposed'`: narrowing a def's constraints or changing its
-   * valueType re-interprets EVERY existing row of every profile that links it,
-   * which is structural, not additive. On approval the `property_def/update`
+   * `status: 'proposed'` BY DEFAULT: narrowing a def's constraints or changing
+   * its valueType re-interprets EVERY existing row of every profile that links
+   * it, which is structural, not additive. NOT a floor: a `governance_rules`
+   * row the owner wrote for `property_def.update` (rung 2.8) widens it to
+   * `applied` — observed 2026-10-13, when a Claude-code rule auto-applied an
+   * edit to the GLOBAL `source` def. Only rung 2.07 (`podAdminSchemaChange`,
+   * create-with-required/default on a pod-admin kind by a non-admin) is
+   * unwidenable here. On approval the `property_def/update`
    * executor materializes through the SAME `updatePropertyDef` helper used
    * below, so proposal and direct-apply can never drift.
    *

@@ -7,6 +7,7 @@ import {
   STATUS_LABELS,
   humanizeToken,
   sentenceCaseLabel,
+  nounInSentence,
   resolveActionLabel,
   resolveActionProgressive,
   resolveActionPresent,
@@ -135,6 +136,18 @@ describe("sentenceCaseLabel", () => {
   });
 });
 
+describe("nounInSentence", () => {
+  it("lower-cases plain words and keeps acronyms (never a raw toLowerCase)", () => {
+    expect(nounInSentence("User stories")).toBe("user stories");
+    expect(nounInSentence("Features")).toBe("features");
+    expect(nounInSentence("UI designs")).toBe("UI designs");
+    expect(nounInSentence("MCP server")).toBe("MCP server");
+    expect(nounInSentence("Uses iPhone")).toBe("uses iPhone");
+    expect(nounInSentence(" Relation Type ")).toBe("relation type");
+    expect(nounInSentence("")).toBe("");
+  });
+});
+
 describe("resolveActionProgressive — the in-flight verb", () => {
   it("reads a curated progressive, on the whole token and its tail", () => {
     expect(resolveActionProgressive("reject")).toBe("Rejecting");
@@ -179,6 +192,8 @@ describe("resolveActionLabel — two moods", () => {
     // The stored proposalType reads as the act a person recognises.
     expect(resolveActionLabel("grant_access", "imperative")).toBe("Share");
     expect(resolveActionLabel("profile.grant_access", "past")).toBe("Shared");
+    expect(resolveActionLabel("change_scope", "imperative")).toBe("Rescope");
+    expect(resolveActionLabel("profile.change_scope", "past")).toBe("Rescoped");
   });
 
   it("names project filing in both moods (humanize would read 'File entities')", () => {
@@ -571,6 +586,13 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("denied")).toBe("Rejected");
   });
 
+  it("names the issue lifecycle (issue.issueStatus)", () => {
+    expect(resolveStatusLabel("wont_fix")).toBe("Won't fix");
+    expect(resolveStatusLabel("open")).toBe("Open");
+    expect(resolveStatusLabel("investigating")).toBe("Investigating");
+    expect(resolveStatusLabel("fixed")).toBe("Fixed");
+  });
+
   it("names the three tool-demand states (tool_request.tr_status)", () => {
     // `wanted` rides the humanize fallback; only `installable` needs a row.
     expect(resolveStatusLabel("wanted")).toBe("Wanted");
@@ -954,6 +976,21 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural("some_category")).toBe("Some categories");
     // A vowel + y keeps the plain s.
     expect(resolveObjectNounPlural("some_key_way")).toBe("Some key ways");
+  });
+
+  it('an uncountable noun stays; a sibilant ending takes -es (dogfood-2: "Researchs")', () => {
+    expect(resolveObjectNounPlural("research")).toBe("Research");
+    expect(resolveObjectNounPlural("market_research")).toBe("Market research");
+    expect(resolveObjectNounPlural("some_box")).toBe("Some boxes");
+    expect(resolveObjectNounPlural("some_batch")).toBe("Some batches");
+    expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
+  });
+
+  it('a Greek -sis / -xis noun takes -ses / -xes (homes: "Hypothesises")', () => {
+    expect(resolveObjectNounPlural("hypothesis")).toBe("Hypotheses");
+    expect(resolveObjectNounPlural("some_analysis")).toBe("Some analyses");
+    expect(resolveObjectNounPlural("some_axis")).toBe("Some axes");
+    expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
   });
 });
 

@@ -1898,6 +1898,143 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
         worksAt: "works_at",
       },
     },
+
+    // ─── Object-first homes H0 (founder 10-13): the dev lifecycles ────────────
+    //
+    // builder-workspace declares `featureStatus` / `storyStatus` as the
+    // feature's and story's ONE lifecycle, keeping the keys live pods already
+    // hold. Older features and stories were written with a stray, undeclared
+    // `status` key instead (todo / building / shipped / stable / …), so a home
+    // counting by lifecycle sees them as having no status. Fold it onto the
+    // lifecycle property; a lifecycle value already set wins (the stray key is
+    // then just stripped). Unmapped values keep their key. Operator-run.
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-feature.status-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_feature",
+      sourceKey: "status",
+      targetKey: "featureStatus",
+      valueMap: {
+        todo: "backlog",
+        exploring: "backlog",
+        building: "in_progress",
+        "in-progress": "in_progress",
+        shipped: "done",
+        stable: "done",
+        done: "done",
+      },
+      preferTargetValues: [
+        "backlog",
+        "spec",
+        "in_progress",
+        "in_review",
+        "done",
+        "cancelled",
+      ],
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.status-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "status",
+      targetKey: "storyStatus",
+      valueMap: {
+        "not-started": "backlog",
+        exploring: "backlog",
+        building: "in-progress",
+        shipped: "done",
+        done: "done",
+      },
+      preferTargetValues: [
+        "backlog",
+        "ready",
+        "in-progress",
+        "done",
+        "dropped",
+      ],
+    },
+    // Story `in-review` left the lifecycle (the feature carries the review):
+    // a story there is "In feature" (`in-progress`). remapPropertyValues needs
+    // sourceKey ≠ targetKey, so the in-place remap is two steps through an
+    // aside key — and each step touches ONLY rows whose value it maps, so no
+    // other story is moved aside (unlike a renamePropertyKey of the whole key).
+    // (1) in-review stories: storyStatus → aside, as in-progress.
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.in-review-aside",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "storyStatus",
+      targetKey: "storyStatus-h0-in-review",
+      valueMap: { "in-review": "in-progress" },
+    },
+    // (2) back onto storyStatus (only the rows step 1 wrote).
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.in-review-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "storyStatus-h0-in-review",
+      targetKey: "storyStatus",
+      valueMap: { "in-progress": "in-progress" },
+    },
+    // The legacy VALUES of the dev lifecycle properties (homes A5): the old
+    // `ensureDevplaneProfiles` declared featureStatus `planned | in-progress |
+    // done | error` (default `planned`) and seeded stories at `planned` — keys
+    // no declared lifecycle knows, so a board counts those rows "unclassified".
+    // Mapping, by meaning:
+    //   feature planned     → backlog      (Idea: not started)
+    //   feature in-progress → in_progress  (Building: the same state, the
+    //                                       declared spelling)
+    //   feature error       → in_progress  (Building: a build that broke is
+    //                                       unfinished work someone picks up —
+    //                                       not Review, nothing awaits approval;
+    //                                       not Dropped, that is a person's call)
+    //   story   planned     → backlog      (Draft)
+    // Same two-step pattern as the in-review fold above (sourceKey ≠ targetKey;
+    // each step touches ONLY the rows whose value it maps).
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-feature.legacy-values-aside",
+      deferAtBoot: true,
+      slug: "devplane_feature",
+      sourceKey: "featureStatus",
+      targetKey: "featureStatus-h0-legacy",
+      valueMap: {
+        planned: "backlog",
+        "in-progress": "in_progress",
+        error: "in_progress",
+      },
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-feature.legacy-values-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_feature",
+      sourceKey: "featureStatus-h0-legacy",
+      targetKey: "featureStatus",
+      valueMap: { backlog: "backlog", in_progress: "in_progress" },
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.planned-aside",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "storyStatus",
+      targetKey: "storyStatus-h0-planned",
+      valueMap: { planned: "backlog" },
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "h0.devplane-story.planned-into-lifecycle",
+      deferAtBoot: true,
+      slug: "devplane_story",
+      sourceKey: "storyStatus-h0-planned",
+      targetKey: "storyStatus",
+      valueMap: { backlog: "backlog" },
+    },
   ],
 };
 

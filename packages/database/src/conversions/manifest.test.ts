@@ -4,6 +4,9 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CONVERSION_MANIFEST,
   CONVERSION_OP_TYPES,
@@ -774,5 +777,55 @@ describe("w12 — the system deal `stage` folds onto commercialStage", () => {
     for (const v of legacy) expect(map[v], v).toBeDefined();
     for (const v of Object.values(map))
       expect(["draft", "proposed", "negotiating", "won", "lost"]).toContain(v);
+  });
+});
+
+describe("CONVERSION_MANIFEST — H0 dev lifecycles (stray `status` folds)", () => {
+  // The lifecycle keys builder-workspace declares (synap-app
+  // packages/workspace-templates/src/builder.yaml). Mirrored here; the
+  // local-only half below re-reads them from the catalog when it is a sibling
+  // checkout (CI checks out this repo alone, so it skips there).
+  const LIFECYCLE_KEYS: Record<string, { property: string; keys: string[] }> = {
+    devplane_feature: {
+      property: "featureStatus",
+      keys: ["backlog", "spec", "in_progress", "in_review", "done", "cancelled"],
+    },
+    devplane_story: {
+      property: "storyStatus",
+      keys: ["backlog", "ready", "in-progress", "done", "dropped"],
+    },
+  };
+  const ops = CONVERSION_MANIFEST.ops.filter((o) => /^h0\.devplane-[a-z]+\.status-into-lifecycle$/.test(o.opKey));
+
+  it("one deferred status fold per dev kind, landing only on lifecycle keys", () => {
+    expect(ops).toHaveLength(2); // non-vacuity: the opKey filter still sees them
+    expect(ops.map((o) => o.op === "remapPropertyValues" && o.slug).sort()).toEqual([
+      "devplane_feature",
+      "devplane_story",
+    ]);
+    for (const op of ops) {
+      if (op.op !== "remapPropertyValues") throw new Error(op.opKey);
+      const lc = LIFECYCLE_KEYS[op.slug]!;
+      expect(op.deferAtBoot, op.opKey).toBe(true);
+      expect(op.sourceKey).toBe("status");
+      expect(op.targetKey).toBe(lc.property);
+      for (const v of Object.values(op.valueMap)) expect(lc.keys, `${op.opKey} → ${v}`).toContain(v);
+      // Every lifecycle value already set wins over the stray key.
+      expect([...(op.preferTargetValues ?? [])].sort()).toEqual([...lc.keys].sort());
+    }
+  });
+
+  const builderYaml = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../../synap-app/packages/workspace-templates/src/builder.yaml"
+  );
+  it.skipIf(!existsSync(builderYaml))("LOCAL-ONLY: the mirrored keys are the catalog's lifecycle keys", () => {
+    const src = readFileSync(builderYaml, "utf8");
+    for (const { property, keys } of Object.values(LIFECYCLE_KEYS)) {
+      const block = new RegExp(`property: ${property}\\n\\s+options:\\n((?:\\s+- \\{ key: [^,]+,.*\\n)+)`).exec(src);
+      expect(block, property).not.toBeNull();
+      const found = [...block![1]!.matchAll(/key: ([^,]+),/g)].map((m) => m[1]);
+      expect(found, property).toEqual(keys);
+    }
   });
 });

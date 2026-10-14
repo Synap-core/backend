@@ -1002,17 +1002,17 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0321_device_auth_requests.sql",
   },
 
-  // library_groups — the Library's persistent groups (0326). Absence means
+  // library_groups — the Library's persistent groups (0328). Absence means
   // every Library read and every group edit would 42P01.
   {
     table: "library_groups",
     column: "container_entity_id",
-    addedBy: "0326_library_groups.sql",
+    addedBy: "0328_library_groups.sql",
   },
   {
     table: "library_groups",
     column: "build_proposal_ids",
-    addedBy: "0326_library_groups.sql",
+    addedBy: "0328_library_groups.sql",
   },
 
   // mcp_connect_codes — one-time CP-MCP consent codes (0206). Absence means a pod
@@ -2047,7 +2047,7 @@ const REQUIRED_INDEX_TABLES = [
   // name on a project"; `TrackRepository.createOrGet` relies on it to turn a
   // concurrent second start into `exists` instead of a twin.
   projectTracks,
-  // The Library (0326): the per-person key unique index IS "one group per
+  // The Library (0328): the per-person key unique index IS "one group per
   // key"; the documents read index (declared on `documents` above) pages it.
   libraryGroups,
 ] as const;

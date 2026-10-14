@@ -108,7 +108,8 @@ export const PROFILES_DIGEST_NOTE =
   `${PROFILE_DESCRIPTION_CAP} chars. relationTypes are slugs grouped by lens: workspaceId null = ` +
   "valid in every workspace; a workspace group lists only the slugs it adds. Pass " +
   "detail:'full' for complete profile rows and full relation-type rows (displayName, " +
-  "description, isDirectional, inverseLabel).";
+  "description, isDirectional, inverseLabel). Exposure edges are not listed: file an " +
+  "entity into a project with synap_file_into_project.";
 
 /** Top-level entity columns a lean row never carries (always `{}` / internal). */
 const ENTITY_WITHHELD_COLUMNS: ReadonlySet<string> = new Set(["systemData"]);

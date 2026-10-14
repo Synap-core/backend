@@ -129,20 +129,28 @@ export interface DependencySeedOutcome {
  * caller that already resolved this slug's template (step 3/4 below) pass the
  * SAME cache-first-resolved package definition through instead of resolving
  * it a second time.
+ *
+ * Returns the seed outcome AND the layer-2 result bag, which the caller hands
+ * to `finishTemplateApply`: `post` is `{}` when there was nothing to seed,
+ * `undefined` when the layer threw (the applier already marked the space failed).
  */
-async function seedDependencyPostWorkspace(
+async function seedDependencyLayers(
   workspaceId: string,
   slug: string,
   userId: string,
   agentUserId: string | undefined,
   preResolved?: PackageDefinitionOutput
-): Promise<DependencySeedOutcome> {
+): Promise<{
+  outcome: DependencySeedOutcome;
+  post?: Record<string, unknown>;
+}> {
   let pkg: PackageDefinitionOutput;
   if (preResolved) {
     pkg = preResolved;
   } else {
     const resolved = await resolveWorkspaceTemplate(slug);
-    if (!resolved) return { slug, status: "no-layers" }; // no package form — nothing to seed
+    // no package form — nothing to seed
+    if (!resolved) return { outcome: { slug, status: "no-layers" }, post: {} };
     pkg = resolved.packageDefinition;
   }
   // A package definition emits `capabilities` (from the template's
@@ -150,7 +158,7 @@ async function seedDependencyPostWorkspace(
   // authors. Both are dropped by the workspace-shaped definition; these are
   // what we seed.
   const hasLayers = !!pkg.capabilities?.length || !!pkg.playbooks?.length;
-  if (!hasLayers) return { slug, status: "no-layers" };
+  if (!hasLayers) return { outcome: { slug, status: "no-layers" }, post: {} };
 
   try {
     const result = await applyPackagePostWorkspace({
@@ -168,18 +176,45 @@ async function seedDependencyPostWorkspace(
       { slug, workspaceId, layers: Object.keys(result) },
       "dependency post-workspace layers seeded"
     );
-    return { slug, status: "seeded", layers: Object.keys(result) };
+    return {
+      outcome: { slug, status: "seeded", layers: Object.keys(result) },
+      post: result,
+    };
   } catch (err) {
     logger.warn(
       { err, slug, workspaceId },
       "dependency post-workspace layers failed (non-fatal — workspace already exists)"
     );
     return {
-      slug,
-      status: "failed",
-      error: err instanceof Error ? err.message : String(err),
+      outcome: {
+        slug,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      },
     };
   }
+}
+
+/**
+ * A dependency overlay composed onto its base: its `installedPacks` version is
+ * recorded only once its seeded layer 2 converged (the ONE finisher). A seed
+ * that threw left the base "failed" (the applier's record) — nothing to finish.
+ */
+async function finishComposedDependency(
+  workspaceId: string,
+  userId: string,
+  pendingPack: { slug: string; version: string } | undefined,
+  post: Record<string, unknown> | undefined
+): Promise<void> {
+  if (!pendingPack || !post) return;
+  const { finishTemplateApply } = await import("./template-apply-finisher.js");
+  await finishTemplateApply({
+    workspaceId,
+    userId,
+    built: false,
+    pendingPack,
+    post,
+  });
 }
 
 /** Editor+ roles that may host a compose overlay (write-gate floor). */
@@ -596,9 +631,8 @@ async function ensureSkillDependencyPresent(
       });
     }
 
-    const { applyMarketInstall } = await import(
-      "./capabilities/marketplace-install.js"
-    );
+    const { applyMarketInstall } =
+      await import("./capabilities/marketplace-install.js");
     await applyMarketInstall({
       kind: "skill",
       slug,
@@ -802,7 +836,7 @@ async function ensureWorkspaceDependencyPresent(
       });
     }
     // The ONE compose door — same primitive `materializeWorkspaceCore` drives.
-    await composeOntoBaseWorkspace({
+    const composed = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: ownComposeBase.workspaceId,
       userId,
       definition,
@@ -814,12 +848,19 @@ async function ensureWorkspaceDependencyPresent(
     // base workspace it composed onto (e.g. grants' 4 grant capabilities land on
     // Operations). composeOntoBaseWorkspace reconciles only the workspace shape,
     // so seed the post-workspace layers here — the same door a top-level apply runs.
-    const seedOutcome = await seedDependencyPostWorkspace(
+    const seeded = await seedDependencyLayers(
       ownComposeBase.workspaceId,
       slug,
       userId,
       agentUserId,
       resolvedTemplate.packageDefinition
+    );
+    const seedOutcome = seeded.outcome;
+    await finishComposedDependency(
+      ownComposeBase.workspaceId,
+      userId,
+      composed.pendingPack,
+      seeded.post
     );
     return record(
       {
@@ -844,18 +885,25 @@ async function ensureWorkspaceDependencyPresent(
         message: `Pack "${slug}" could not resolve any of the workspace templates it requires — install one of them first.`,
       });
     }
-    await composeOntoBaseWorkspace({
+    const composed = await composeOntoBaseWorkspace({
       composeTargetWorkspaceId: primary.workspaceId,
       userId,
       definition,
       overlay: { slug, version: resolvedTemplate.version },
     });
-    const seedOutcome = await seedDependencyPostWorkspace(
+    const seeded = await seedDependencyLayers(
       primary.workspaceId,
       slug,
       userId,
       agentUserId,
       resolvedTemplate.packageDefinition
+    );
+    const seedOutcome = seeded.outcome;
+    await finishComposedDependency(
+      primary.workspaceId,
+      userId,
+      composed.pendingPack,
+      seeded.post
     );
     return record(
       {
@@ -893,8 +941,8 @@ async function ensureWorkspaceDependencyPresent(
   // just above) drops the capabilities/automations/playbooks/loops layers, so
   // seed them via the shared door. A `found` (idempotent reuse) already went
   // through this on its first creation — skip to avoid needless governed re-writes.
-  const seedOutcome = ws.created
-    ? await seedDependencyPostWorkspace(
+  const seeded = ws.created
+    ? await seedDependencyLayers(
         ws.workspaceId,
         slug,
         userId,
@@ -902,6 +950,22 @@ async function ensureWorkspaceDependencyPresent(
         resolvedTemplate.packageDefinition
       )
     : undefined;
+  const seedOutcome = seeded?.outcome;
+  // The ONE finisher: the version the create handed back is stamped, and the
+  // new space marked "active", only when its seeded layer 2 landed. A seed
+  // that threw left the space "failed" (the applier's record) — nothing to
+  // finish. A re-hit (`found`) skipped seeding, so it has nothing to finish.
+  if (seeded?.post) {
+    const { finishTemplateApply } =
+      await import("./template-apply-finisher.js");
+    await finishTemplateApply({
+      workspaceId: ws.workspaceId,
+      userId,
+      built: ws.outcome === "created",
+      pendingVersionStamp: ws.pendingVersionStamp,
+      post: seeded.post,
+    });
+  }
   return record(
     {
       workspaceId: ws.workspaceId,
@@ -974,12 +1038,7 @@ export async function resolvePackageDependencies(
       // install runs BEFORE the linker by construction: this resolver is Step 0
       // of `materializeWorkspaceCore`, and the linker runs later, inside
       // `applyPackagePostWorkspace`.
-      await ensureSkillDependencyPresent(
-        dep.slug,
-        userId,
-        resolved,
-        installed
-      );
+      await ensureSkillDependencyPresent(dep.slug, userId, resolved, installed);
       continue;
     }
 

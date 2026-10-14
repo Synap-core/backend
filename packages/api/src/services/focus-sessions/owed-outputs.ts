@@ -56,6 +56,7 @@ import {
   focusSessions,
   and,
   eq,
+  inArray,
   drizzleSql,
   OWED_SLOT_CLAUSES,
   owedSlotPredicateSql,
@@ -64,9 +65,14 @@ import {
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
+import { effectiveSlotAsk } from "@synap-core/types/ask";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
+import {
+  sessionSubjectWhere,
+  type SessionSubject,
+} from "./session-subject-where.js";
 import { notTriagePendingWhere, triagePendingWhere } from "./triage.js";
 
 /**
@@ -234,6 +240,13 @@ export interface ListOwedSlotsParams {
    */
   sessionId?: string;
   trackId?: string;
+  /** Only these sessions' slots (the homes' "asks you" over open work). */
+  sessionIds?: readonly string[];
+  /**
+   * Only slots of sessions ON these things (`sessionSubjectWhere`) — an intent
+   * surface's needs-you. In SQL, for the same reason as the container lenses.
+   */
+  subject?: SessionSubject;
 }
 
 type OwedRow = {
@@ -267,6 +280,8 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
     // visible, and at the top where an anomaly belongs.
     const owedSince =
       typeof slot.owedSince === "string" ? slot.owedSince : MISSING_OWED_SINCE;
+    // A decision slot stored without an ask reads as its derived confirm.
+    const ask = effectiveSlotAsk(slot);
     owed.push({
       sessionId: row.id,
       sessionGoal: row.goal,
@@ -292,7 +307,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       // (the merge deletes it), and a legacy row that somehow does must read
       // as "no pointer", not leak the wire's CLEAR into a read model.
       ...(slot.ref ? { ref: slot.ref } : {}),
-      ...(slot.ask ? { ask: slot.ask } : {}),
+      ...(ask ? { ask } : {}),
     });
   }
   return owed;
@@ -321,8 +336,11 @@ export async function listOwedSlots(
     owedSlotWhere(),
   ];
   if (params.sessionId) conditions.push(eq(focusSessions.id, params.sessionId));
+  if (params.sessionIds)
+    conditions.push(inArray(focusSessions.id, [...params.sessionIds]));
   if (params.trackId)
     conditions.push(eq(focusSessions.trackId, params.trackId));
+  if (params.subject) conditions.push(sessionSubjectWhere(params.subject));
   if (params.excludeDrafts) conditions.push(notTriagePendingWhere());
   if (params.onlyDrafts) conditions.push(triagePendingWhere());
 

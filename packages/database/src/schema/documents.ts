@@ -95,7 +95,7 @@ export const documents = pgTable(
     uploadStorageKeyUnique: uniqueIndex("documents_upload_storage_key_unique")
       .on(table.storageKey)
       .where(sql`storage_key LIKE 'files/%/uploads/%'`),
-    // The Library read model (0326): every staged item, newest first,
+    // The Library read model (0328): every staged item, newest first,
     // keyset-paged on (created_at, id).
     libraryItemsIdx: index("documents_library_items_idx")
       .on(table.userId, table.createdAt.desc(), table.id)

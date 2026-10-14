@@ -1,4 +1,4 @@
--- 0326: the Library (CAPTURE_LIBRARY_PLAN L2).
+-- 0328: the Library (CAPTURE_LIBRARY_PLAN L2).
 --
 -- 1. `library_groups` — the person's persistent groups over their Library.
 --    A group outlives any one import run: note, outputs, the collection

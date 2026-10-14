@@ -555,7 +555,8 @@ describe("listThingsInStatus — the worker's set is the board's column", () => 
     });
     const caller = await lifecycleCaller();
     const board = await caller.board({ profileSlug: "deal" });
-    const { listThingsInStatus } = await import("./entities/status-groups.js");
+    const { listThingsInStatus } =
+      await import("../services/lifecycle/status-groups.js");
 
     const set = await listThingsInStatus({
       profileSlug: "deal",
@@ -614,7 +615,8 @@ describe("listThingsInStatus — the worker's set is the board's column", () => 
        values (gen_random_uuid(), $1, $2, $3, 'onboarding', $4)`,
       [a, CLIENT, USER, ago(3)]
     );
-    const { listThingsInStatus } = await import("./entities/status-groups.js");
+    const { listThingsInStatus } =
+      await import("../services/lifecycle/status-groups.js");
     const set = await listThingsInStatus({
       profileSlug: "client",
       status: "onboarding",

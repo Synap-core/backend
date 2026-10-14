@@ -158,7 +158,14 @@ describe("submitCaptureGraph — one project ladder for both terminals", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     focusProjectId = null;
-    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue({
+      workspaceId: null,
+      rung: 6,
+      reason: "no entity's kind or role implies a workspace → pod-wide",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    });
     vi.mocked(database.deriveProposalProjectId).mockImplementation(ladder);
     vi.spyOn(dedup, "findPriorCaptureGraphProposal").mockResolvedValue(null);
     vi.spyOn(

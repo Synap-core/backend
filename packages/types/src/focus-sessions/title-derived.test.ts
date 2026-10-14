@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildDerivedSessionTitle,
+  buildRunSessionStartTitle,
   sanitizeGeneratedTitle,
   readTitleSource,
   canAutoRetitle,
@@ -253,5 +254,42 @@ describe("derived names never read as cut (c-auto-titles, plan 9992207a)", () =>
       expect(n).not.toMatch(/…$/);
       expect(n.length).toBeLessThanOrEqual(GENERATED_TITLE_MAX);
     }
+  });
+});
+
+describe("buildRunSessionStartTitle — the name a run will carry, said before it exists", () => {
+  it("is the SAME name the run session gets (one derivation)", () => {
+    expect(
+      buildRunSessionStartTitle({ playbookName: "Qualify a lead", subjectNames: ["Acme Corp"] })
+    ).toBe(buildDerivedSessionTitle({ kind: "run", name: "Qualify a lead", subject: "Acme Corp" }));
+    expect(
+      buildRunSessionStartTitle({ playbookName: "Qualify a lead", subjectNames: ["Acme Corp"] })
+    ).toBe("Qualify a lead · Acme Corp");
+  });
+
+  it("names a subject-less run by its playbook alone — never a guessed date", () => {
+    expect(buildRunSessionStartTitle({ playbookName: "Weekly review" })).toBe("Weekly review");
+  });
+
+  it("names a batch by its first subject and how many more, else by the count", () => {
+    expect(
+      buildRunSessionStartTitle({
+        playbookName: "Qualify a lead",
+        subjectNames: ["Ada", "Grace"],
+        subjectCount: 4,
+      })
+    ).toBe("Qualify a lead · Ada + 3 more");
+    expect(
+      buildRunSessionStartTitle({ playbookName: "Qualify a lead", subjectCount: 4 })
+    ).toBe("Qualify a lead · 4 sessions");
+  });
+
+  it("drops an unresolved subject rather than printing an id", () => {
+    expect(
+      buildRunSessionStartTitle({
+        playbookName: "Qualify a lead",
+        subjectNames: [undefined, "42574b37-aecf-4ef4-9312-249a82e20213"],
+      })
+    ).toBe("Qualify a lead");
   });
 });

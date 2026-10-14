@@ -26,6 +26,7 @@ import {
   resolveIdentity,
   entities,
   KnowledgeFormConflictError,
+  completeKnowledgeClaim,
   normalizeKnowledgeProperties,
 } from "@synap/database";
 import type { RoutingMemory } from "../services/routing-memory.js";
@@ -635,6 +636,12 @@ export async function deepStructureImportItems(
         try {
           normalizedProperties =
             normalizeKnowledgeProperties(normalizedProperties);
+          // The required claim: the title is its short handle. Without this
+          // every extracted knowledge item lacking a claim degraded to a note.
+          normalizedProperties = completeKnowledgeClaim(normalizedProperties, [
+            title,
+            e.description,
+          ]);
         } catch (error) {
           if (error instanceof KnowledgeFormConflictError) {
             knowledgeFormConflict = error.message;

@@ -107,6 +107,7 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
+  reservedEntityKindReason,
   type EntityProvenance,
   PropertyValidationError,
   workspaces,
@@ -122,12 +123,12 @@ import {
   resolveRolePayload,
   pickUnderlyingKind,
   resolveWorkspacePlacement,
+  resolveGraphWorkspaceFromSlugs,
   resolveProjectPlacement,
   resolveKindWritePin,
   loadFacetSlugsBatch,
-  inferKnowledgeForm,
+  completeKnowledgeProperties,
   KnowledgeFormConflictError,
-  normalizeKnowledgeProperties,
   type ResolutionRung,
 } from "@synap/database";
 import {
@@ -162,6 +163,7 @@ import {
 } from "../lib/workspace-decision.js";
 import type { CapturePlacement } from "@synap-core/types";
 import { deriveCaptureProjectOutcome } from "@synap-core/types";
+import { shortenTitle } from "@synap-core/types/titles";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
 import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
@@ -286,15 +288,15 @@ export const FALLBACK_CAPTURE_KIND = "note";
 // ek_type values remain intact but are mapped by the shared database utility
 // at every capture door, so old payloads stay valid without pretending that a
 // decision/reference has already been converted into another graph entity.
+//
+// `claimFrom` feeds the required `ek_claim` when the structurer sent none
+// (title first — a knowledge title is the claim's short handle — then body).
 export function normalizeCapturedKnowledgeProperties(
   properties: Record<string, unknown>,
-  text: string
+  text: string,
+  claimFrom: ReadonlyArray<unknown> = [text]
 ): Record<string, unknown> {
-  const normalized = normalizeKnowledgeProperties(properties);
-  if (!("knowledgeForm" in normalized)) {
-    normalized.knowledgeForm = inferKnowledgeForm(text);
-  }
-  return normalized;
+  return completeKnowledgeProperties(properties, text, claimFrom);
 }
 
 // ── Dedup candidate scoring (honest title similarity) ───────────────────────
@@ -389,18 +391,39 @@ export function resolveEmptyResultDegradedReason(
   return trimmed.length > 0 ? trimmed : "is_empty_result";
 }
 
+/**
+ * The kind a degraded capture files as when the CALLER named one explicitly
+ * (`structure({ profileSlug })`, e.g. MCP `synap_capture` `profileSlug`):
+ * that kind, when it is a KIND (not a role, not reserved) among the profiles
+ * this capture may file into; otherwise `undefined` ⇒ the fallback note. The
+ * structurer is down, so the caller's own choice is the best classification
+ * there is — dropping it filed every degraded capture as a note.
+ */
+export function resolveDegradedFallbackKind(
+  hint: string | undefined,
+  profiles: ReadonlyArray<{ slug: string; profileKind?: string | null }>
+): string | undefined {
+  const slug = hint?.trim();
+  if (!slug || reservedEntityKindReason(slug)) return undefined;
+  const match = profiles.find((p) => p.slug === slug);
+  return match && match.profileKind !== "role" ? match.slug : undefined;
+}
+
 /** Build the generic-item fallback proposal returned when IS cannot structure input. */
 export function buildDegradedCaptureFallback(
   inputText: string,
-  degradedReason: DegradedCaptureReasonOrUnknown
+  degradedReason: DegradedCaptureReasonOrUnknown,
+  /** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
+  kind: string = FALLBACK_CAPTURE_KIND
 ) {
+  const title = shortenTitle(inputText);
   return {
     proposals: [
       {
         tempId: "t1",
-        profileSlug: FALLBACK_CAPTURE_KIND,
-        title: inputText.slice(0, 80).trim(),
-        description: inputText.length > 80 ? inputText : undefined,
+        profileSlug: kind,
+        title,
+        description: title !== inputText.trim() ? inputText : undefined,
         properties: { content: inputText },
         confidence: 0.3,
       },
@@ -753,7 +776,7 @@ const captureBaseRouter = router({
 
       // Step 1: Classify via Intelligence Service
       let profileSlug = FALLBACK_CAPTURE_KIND;
-      let title = input.content.slice(0, 80).trim();
+      let title = shortenTitle(input.content);
       let properties: Record<string, unknown> = {};
       let mode: "ai" | "fallback" = "fallback";
 
@@ -791,7 +814,8 @@ const captureBaseRouter = router({
           if (profileSlug === "knowledge") {
             properties = normalizeCapturedKnowledgeProperties(
               properties,
-              input.content.slice(0, 200)
+              input.content.slice(0, 200),
+              [title, input.content]
             );
           }
 
@@ -1152,6 +1176,14 @@ const captureBaseRouter = router({
          */
         html: z.string().max(50_000).optional(),
         context: z.string().optional(),
+        /**
+         * The caller's explicit kind (MCP `synap_capture` `profileSlug`). Read
+         * ONLY by the degraded fallback: when the structurer cannot run, the
+         * text files as this kind (still `degraded`, confidence 0.3) if it is a
+         * kind this capture may file into — else as a note. The structurer
+         * itself gets the hint through `context`.
+         */
+        profileSlug: z.string().optional(),
         previousEntities: z
           .array(
             z.object({
@@ -1778,7 +1810,18 @@ const captureBaseRouter = router({
       //                         timeout/network) — NOT a credentials problem
       const degradedFallback = (
         degradedReason: DegradedCaptureReasonOrUnknown
-      ) => buildDegradedCaptureFallback(inputText, degradedReason);
+      ) =>
+        buildDegradedCaptureFallback(
+          inputText,
+          degradedReason,
+          resolveDegradedFallbackKind(
+            input.profileSlug,
+            linkableProfiles as ReadonlyArray<{
+              slug: string;
+              profileKind?: string | null;
+            }>
+          )
+        );
 
       // The relation vocabulary for this lens, sent so the structurer emits only
       // slugs the write lanes will accept — the SAME read those lanes validate
@@ -2114,10 +2157,14 @@ const captureBaseRouter = router({
       if (routingSlugs.length > 0) {
         reportStructureStage("placing");
         try {
-          const placement = await resolveWorkspacePlacement(database, {
+          // PER ENTITY (D14), the graph lane's door: each entity resolves on
+          // its own kind and roles — never as a facet of the first one's kind.
+          const placement = await resolveGraphWorkspaceFromSlugs(database, {
             userId,
-            kindSlug: routingSlugs[0],
-            facetSlugs: routingSlugs.slice(1),
+            entities: structureResult.entities.map((e) => ({
+              kindSlug: e.profileSlug,
+              facetSlugs: e.facets?.map((f) => f.profileSlug) ?? [],
+            })),
             ambientWorkspaceId: workspaceId,
           });
           const nameFor = (id: string | null | undefined) =>

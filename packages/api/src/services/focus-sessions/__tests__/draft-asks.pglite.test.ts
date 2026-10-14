@@ -185,7 +185,9 @@ async function seedSession(opts: {
       kind: "document",
       label,
       owner: "human",
-      blockedReason: "decision",
+      // Not `decision`: these asks are answered in words and attested; an
+      // ask-less decision answers Yes / No only (#12).
+      blockedReason: "credential",
       why: `why ${label}`,
       owedSince: `2026-09-27T0${i + 1}:00:00.000Z`,
     })),

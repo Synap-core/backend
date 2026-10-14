@@ -240,6 +240,15 @@ export const createProcs = {
        */
       const actingAgentUserId =
         input.agentUserId ?? ctx.agentUserId ?? undefined;
+      // ONE provenance stamp for everything this write creates — the entity
+      // row AND its body document — so an agent-written body is never
+      // recorded under the human's name (ticket 7b49aaae).
+      const writeProvenance = stampProvenance({
+        userId: ctx.userId,
+        agentUserId: actingAgentUserId,
+        sourceProposalId: ctx.governanceProposalId,
+        correlationId,
+      });
       const governanceWorkspaceId =
         input.targetWorkspaceId ?? ctx.workspaceId ?? null;
 
@@ -667,10 +676,7 @@ export const createProcs = {
                     userId: ctx.userId,
                     workspaceId: matchWorkspaceId,
                     title: input.title || undefined,
-                    provenance: {
-                      createdByKind: "human",
-                      createdByUserId: ctx.userId,
-                    },
+                    provenance: writeProvenance,
                     text: input.content,
                   });
                   if (body.documentId) {
@@ -1226,12 +1232,18 @@ export const createProcs = {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Entity creation proposed for review"
+            "Entity creation proposed for review",
+            perm.deferred
           ),
           entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
+          // Join gate that KEPT the write: it is replayed once the join is
+          // approved — the caller must not resend it.
+          ...(perm.deferred
+            ? { deferred: true as const, ref: perm.deferredRef }
+            : {}),
           // Only real on the entity path: on a join gate no entity id was ever
           // allocated, and an unresolvable id is worse than an absent field.
           ...(joinGate ? {} : { proposedEntityId: entityId }),
@@ -1245,9 +1257,11 @@ export const createProcs = {
             // `status` deprecated (operation-outcome overload) — read `outcome`.
             status: "pending",
             outcome: "pending",
-            message: joinGate
-              ? "Not attached — no entity was proposed; approve the workspace-join request first."
-              : "Role will attach when this create proposal is approved",
+            message: !joinGate
+              ? "Role will attach when this create proposal is approved"
+              : perm.deferred
+                ? "Kept with the write — attaches when the write is replayed after the join is approved."
+                : "Not attached — no entity was proposed; approve the workspace-join request first.",
           })),
         };
       }
@@ -1391,12 +1405,9 @@ export const createProcs = {
           userId: ctx.userId,
           workspaceId: entityWorkspaceId ?? null,
           title: input.title || undefined,
-          // Behavior-preserving: the prior materializeContentDocument path stamped
-          // the document with default `human` provenance (no agent/correlation).
-          provenance: {
-            createdByKind: "human",
-            createdByUserId: ctx.userId,
-          },
+          // The entity's own stamp: a body is authored by whoever authored
+          // the entity (an agent's body read as `human` before).
+          provenance: writeProvenance,
           text: input.content,
         });
         contentDocumentId = body.documentId;
@@ -1449,12 +1460,7 @@ export const createProcs = {
             // an agent's proposal was stamped `createdByKind: 'human'` with a
             // NULL agent and a NULL proposal — the agent's work recorded under
             // the human's name.
-            ...stampProvenance({
-              userId: ctx.userId,
-              agentUserId: actingAgentUserId,
-              sourceProposalId: ctx.governanceProposalId,
-              correlationId,
-            }),
+            ...writeProvenance,
             // A ROLE profile is attached as a facet by the repository's role
             // adapter, which announces the attach (`notifyFacetAttached`) —
             // this is what that announcement cannot know on its own.
@@ -1507,6 +1513,26 @@ export const createProcs = {
           // can branch on the real failure type instead of the wrapped message.
           cause: createErr,
         });
+      }
+
+      // A short body inlined as `properties.content` is the entity's BODY, not
+      // a key the caller invented — so on a profile that does not model
+      // `content` it must not come back as `unmodeled` (here and on the
+      // approve-time replay, which runs this same door). Same rule as the
+      // capture preflight (`submit-capture-graph.ts`): only a body that came
+      // from `input.content` is dropped; a `content` the caller put in
+      // `properties` still reports. Done here, not in the repository: only
+      // this door knows where the key came from.
+      if (
+        inlineContent !== undefined &&
+        !("content" in effectiveProperties) &&
+        Array.isArray(createdEntity?.unmodeled)
+      ) {
+        const { unmodeled: reported, ...row } = createdEntity;
+        const unmodeled = (reported as Array<{ key: string }>).filter(
+          (u) => u.key !== "content"
+        );
+        createdEntity = unmodeled.length ? { ...row, unmodeled } : row;
       }
 
       // Register the external_id identity anchor on the freshly created row.

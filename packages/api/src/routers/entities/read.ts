@@ -50,7 +50,7 @@ import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js
 import {
   groupThingsByStatus,
   roleVisibilityConditions,
-} from "./status-groups.js";
+} from "../../services/lifecycle/status-groups.js";
 import {
   entityReadVisibleWhere,
   entityLensWhere,
@@ -185,7 +185,7 @@ export const readProcs = {
         });
       }
 
-      // THE ONE status grouping (`./status-groups.ts`), shared with the
+      // THE ONE status grouping (`services/lifecycle/status-groups.ts`), shared with the
       // pipeline board — same lens, same SQL, newest first here.
       const groups = await groupThingsByStatus({
         subject: {

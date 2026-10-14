@@ -9,6 +9,7 @@ import {
   ACTIVITY_HISTORY_CAP,
   capActivityGroups,
   deriveRunActivity,
+  plainStepLabel,
   STEP_PHASES,
   stepMark,
   type SessionActivityItem,
@@ -459,5 +460,46 @@ describe("summary + cap", () => {
     expect(hidden).toBe(3);
     expect(shown[0]?.id).toBe("g3");
     expect(shown[shown.length - 1]?.id).toBe(`g${ACTIVITY_HISTORY_CAP + 2}`);
+  });
+});
+
+describe("plainStepLabel — a producer title is ONE plain line (dogfood-2 #10)", () => {
+  it("strips inline marks, links and a leading marker; keeps intraword underscores", () => {
+    expect(plainStepLabel("**Code lane — all 8 items committed.** Nothing pushed.")).toBe(
+      "Code lane — all 8 items committed. Nothing pushed.",
+    );
+    expect(plainStepLabel("## Plan\nsecond line")).toBe("Plan");
+    expect(plainStepLabel("See [the doc](https://x.y) and `code`")).toBe("See the doc and code");
+    expect(plainStepLabel("Run capture_social_post")).toBe("Run capture_social_post");
+    expect(plainStepLabel("an *emphasis* and _this_")).toBe("an emphasis and this");
+    expect(plainStepLabel("unbalanced **bold")).toBe("unbalanced bold");
+  });
+
+  it("the now-line of a note with markdown reads plain", () => {
+    const view = deriveRunActivity({
+      sessionId: "s1",
+      items: [
+        {
+          id: "n1",
+          at: new Date("2026-10-04T10:00:00Z"),
+          kind: "note",
+          status: "done",
+          turnId: null,
+          action: null,
+          objectKind: null,
+          objectId: null,
+          objectTitle: null,
+          title: "**Code lane — all 8 items committed.**",
+          error: null,
+          proposalId: null,
+          actor: null,
+        },
+      ],
+      truncated: false,
+      terminal: false,
+      live: { turnInFlight: false, since: null, lastAt: null },
+      unreadable: [],
+    } as never);
+    expect(view.now?.text).toBe("Last: Code lane — all 8 items committed");
   });
 });

@@ -82,6 +82,16 @@ export const SYSTEM_LIFECYCLES: ReadonlyArray<{
       { key: "abandoned", category: "lost" },
     ],
   },
+  {
+    profileSlug: "issue",
+    propertySlug: "issueStatus",
+    options: [
+      { key: "open", category: "open" },
+      { key: "investigating", category: "active" },
+      { key: "fixed", category: "done" },
+      { key: "wont_fix", category: "lost" },
+    ],
+  },
 ];
 
 export interface EnsureSystemLifecyclesResult {

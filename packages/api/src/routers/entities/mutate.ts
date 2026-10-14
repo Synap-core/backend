@@ -55,6 +55,10 @@ import {
 } from "../../services/proposals/stamp-materialized.js";
 import { createLogger } from "@synap-core/core";
 import {
+  UpdateEntitiesInputSchema,
+  updateEntities,
+} from "../../services/entities/update-entities.js";
+import {
   entityWriteVisibleWhere,
   runSignalWrite,
   mergeSystemData,
@@ -153,6 +157,12 @@ export const mutateProcs = {
          * stale value gets CONFLICT and NOTHING in the call is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /**
+         * The `updateEntities` call this write belongs to. Stamped on the
+         * gate data, so the AUTO_APPROVED receipt carries it and a feed can
+         * fold one batch into one line. Never changes the verdict.
+         */
+        batchId: z.string().uuid().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
         /** Workspace used for permission, audit, overlays, and side effects. */
@@ -206,6 +216,25 @@ export const mutateProcs = {
       // proposal can never carry an unchecked document id either.
       if (input.documentId && input.documentId !== existing.documentId) {
         await assertDocumentAttachable(ctx.userId, existing, input.documentId);
+      }
+
+      // KIND CHANGE (c-kind-convert): the target kind must resolve NOW, the
+      // same way the repository will resolve it at write time. Unchecked, an
+      // unknown slug was filed as a proposal and, once approved, silently
+      // changed nothing — the entity kept its kind under an "applied" receipt.
+      if (
+        input.profileSlug !== undefined &&
+        input.profileSlug !== existing.type &&
+        !(await new ProfileResolutionService(db).resolveProfile(
+          input.profileSlug,
+          ctx.userId,
+          existing.workspaceId ?? ""
+        ))
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `No kind "${input.profileSlug}" resolves for this entity — list the kinds with synap_list_profiles.`,
+        });
       }
 
       if (input.targetWorkspaceId) {
@@ -316,7 +345,10 @@ export const mutateProcs = {
           if (statusMove.status === "proposed") {
             return {
               status: "proposed",
-              message: "Status change proposed for review",
+              message: proposedMessageFor(
+                statusMove.proposalType,
+                "Status change proposed for review"
+              ),
               proposalId: statusMove.proposalId,
               proposalType: statusMove.proposalType,
               reviewUrl: statusMove.reviewUrl,
@@ -393,6 +425,7 @@ export const mutateProcs = {
           deleteProperties: input.deleteProperties,
           documentId: input.documentId,
           profileSlug: input.profileSlug,
+          ...(input.batchId ? { batchId: input.batchId } : {}),
         },
       });
 
@@ -404,11 +437,16 @@ export const mutateProcs = {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Update proposed for review"
+            "Update proposed for review",
+            perm.deferred
           ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
+          // Join gate that KEPT the write: replayed once the join is approved.
+          ...(perm.deferred
+            ? { deferred: true as const, ref: perm.deferredRef }
+            : {}),
           ...(statusMove ? { statusMove } : {}),
         };
       }
@@ -669,6 +707,31 @@ export const mutateProcs = {
         },
       };
     }),
+  /**
+   * Update up to 500 records in ONE governed call (R1 batch writes). Each item
+   * is written through `update` above or collected into ONE review pack — see
+   * `services/entities/update-entities.ts`.
+   */
+  updateMany: podProcedure
+    .input(
+      UpdateEntitiesInputSchema.extend({
+        agentUserId: z.string().uuid().optional(),
+        source: z
+          .enum(["user", "ai", "intelligence", "system", "agent", "extension"])
+          .optional(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      updateEntities({
+        ctx,
+        items: input.items,
+        agentUserId: input.agentUserId,
+        source: input.source,
+        reasoning: input.reasoning,
+        idempotencyKey: input.idempotencyKey,
+        validate: input.validate,
+      })
+    ),
   delete: podProcedure
     .input(
       z.object({

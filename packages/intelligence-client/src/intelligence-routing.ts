@@ -17,6 +17,8 @@ import {
   intelligenceServices,
   users,
   workspaceMembers,
+  links,
+  apiKeys,
 } from "@synap/database/schema";
 import { IntelligenceHubClient } from "./intelligence-hub-client.js";
 import { resolveServiceKey } from "@synap/database";
@@ -392,6 +394,14 @@ export async function selectPodDefaultService(): Promise<IntelligenceServiceRow 
  * pick one, because mis-attributing a run (and its cost) to the wrong actor is
  * worse than not attributing it. That case is resolvable by passing a
  * workspaceId; a single-adjunct user — the common case — now resolves.
+ *
+ * Only a HOUSE agent (reach 'pod') is ever a candidate, in both branches: an
+ * external agent (Claude Code, Cursor, a devbox agent…) is also an agent user
+ * the human created, and is often a workspace member, but it must NEVER be
+ * credited with — or governed as — an IS turn. `houseAgentFilter` is the
+ * query form of `resolveAgentReach` (`@synap/api` agent-binding.ts), which
+ * this package cannot import; keep the two in step. The workspace branch
+ * refuses to guess exactly like the pod-wide one.
  */
 async function lookupAgentUser(
   userId: string | undefined,
@@ -400,7 +410,7 @@ async function lookupAgentUser(
   if (!userId) return undefined;
   try {
     if (workspaceId) {
-      const [row] = await db
+      const rows = await db
         .select({ id: users.id })
         .from(users)
         .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
@@ -408,11 +418,12 @@ async function lookupAgentUser(
           and(
             eq(users.userType, "agent"),
             eq(workspaceMembers.workspaceId, workspaceId),
-            eq(users.createdByUserId, userId)
+            eq(users.createdByUserId, userId),
+            houseAgentFilter()
           )
         )
-        .limit(1);
-      return row?.id;
+        .limit(2);
+      return rows.length === 1 ? rows[0]!.id : undefined;
     }
 
     // Pod-wide: ownership only. Take 2 so "exactly one" is decidable — a
@@ -421,7 +432,11 @@ async function lookupAgentUser(
       .select({ id: users.id })
       .from(users)
       .where(
-        and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
+        and(
+          eq(users.userType, "agent"),
+          eq(users.createdByUserId, userId),
+          houseAgentFilter()
+        )
       )
       .limit(2);
     return rows.length === 1 ? rows[0]!.id : undefined;
@@ -429,6 +444,18 @@ async function lookupAgentUser(
     // Agent user lookup is non-critical; degrade gracefully
     return undefined;
   }
+}
+
+/**
+ * `resolveAgentReach(id) === 'pod'`, as SQL on `users`: an agentType, no
+ * `dispatched_via` binding, and no non-internal key it owns (live or revoked).
+ */
+function houseAgentFilter() {
+  return and(
+    drizzleSql`NULLIF(TRIM(${users.agentType}), '') IS NOT NULL`,
+    drizzleSql`NOT EXISTS (SELECT 1 FROM ${links} WHERE ${links.fromType} = 'participant' AND ${links.fromId} = ${users.id}::text AND ${links.toType} = 'tool' AND ${links.linkType} = 'dispatched_via')`,
+    drizzleSql`NOT EXISTS (SELECT 1 FROM ${apiKeys} WHERE ${apiKeys.userId} = ${users.id} AND ${apiKeys.keyType} IS DISTINCT FROM 'is_internal')`
+  );
 }
 
 /** Timeout for service resolution DB queries — prevents hangs during chat triggers */

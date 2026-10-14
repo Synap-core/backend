@@ -31,7 +31,14 @@ describe("submitCaptureGraph — propose-time required-property preflight", () =
   beforeEach(() => {
     vi.restoreAllMocks();
     // Placement runs before preflight; default abstain so workspaceId stays null.
-    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue({
+      workspaceId: null,
+      rung: 6,
+      reason: "no entity's kind or role implies a workspace → pod-wide",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    });
   });
 
   it("REJECTS a graph whose entity is missing a required property (before any proposal is filed)", async () => {
@@ -106,7 +113,14 @@ describe("submitCaptureGraph — workspace placement routing", () => {
   });
 
   it("resolves a person/company/lead graph into the ontology-implied workspace (deterministic single candidate)", async () => {
-    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue("ws-crm");
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue({
+      workspaceId: "ws-crm",
+      rung: 2,
+      reason: "every placed entity agrees on workspace 'CRM'",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    });
     const spy = vi
       .spyOn(
         await import("../../utils/event-backed-proposal.js"),
@@ -145,7 +159,11 @@ describe("submitCaptureGraph — workspace placement routing", () => {
       expect.anything(),
       expect.objectContaining({
         userId: "user-1",
-        routingSlugs: expect.arrayContaining(["person", "company", "lead"]),
+        entities: [
+          { kindSlug: "person", facetSlugs: [] },
+          { kindSlug: "company", facetSlugs: [] },
+          { kindSlug: "lead", facetSlugs: [] },
+        ],
       })
     );
     expect(spy).toHaveBeenCalledWith(
@@ -165,7 +183,14 @@ describe("submitCaptureGraph — workspace placement routing", () => {
   });
 
   it("abstains (stays pod-wide null) when placement is ambiguous — never guesses", async () => {
-    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue(null);
+    vi.mocked(resolveGraphWorkspaceFromSlugs).mockResolvedValue({
+      workspaceId: null,
+      rung: 6,
+      reason: "no entity's kind or role implies a workspace → pod-wide",
+      confidence: 1,
+      candidates: [],
+      ask: false,
+    });
     const spy = vi
       .spyOn(
         await import("../../utils/event-backed-proposal.js"),

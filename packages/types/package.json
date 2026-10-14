@@ -80,6 +80,10 @@
       "types": "./dist/renderables/index.d.ts",
       "import": "./dist/renderables/index.js"
     },
+    "./presentation": {
+      "types": "./dist/presentation/index.d.ts",
+      "import": "./dist/presentation/index.js"
+    },
     "./agents": {
       "types": "./dist/agents/index.d.ts",
       "import": "./dist/agents/index.js"
@@ -168,6 +172,14 @@
     "./proposals/intent": {
       "types": "./dist/proposals/intent.d.ts",
       "import": "./dist/proposals/intent.js"
+    },
+    "./proposals/item-pack": {
+      "types": "./dist/proposals/item-pack.d.ts",
+      "import": "./dist/proposals/item-pack.js"
+    },
+    "./proposals/deferred-writes": {
+      "types": "./dist/proposals/deferred-writes.d.ts",
+      "import": "./dist/proposals/deferred-writes.js"
     },
     "./proposals/attention": {
       "types": "./dist/proposals/attention.d.ts",
@@ -272,6 +284,10 @@
     "./workers": {
       "types": "./dist/workers/index.d.ts",
       "import": "./dist/workers/index.js"
+    },
+    "./workers/words": {
+      "types": "./dist/workers/words.d.ts",
+      "import": "./dist/workers/words.js"
     },
     "./targets": {
       "types": "./dist/targets/index.d.ts",

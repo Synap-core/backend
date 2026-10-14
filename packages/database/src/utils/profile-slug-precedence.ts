@@ -22,6 +22,7 @@ import { ProfileScope } from "../schema/profiles.js";
 export interface SlugPrecedenceRow {
   scope: string;
   profileKind?: string | null;
+  entityScope?: string | null;
   createdAt: Date;
 }
 
@@ -50,6 +51,14 @@ export type SlugLens = "workspace" | "pod";
  *    pod-wide `knowledge` write onto a Pod Admin twin). The pod-wide row is the
  *    only non-arbitrary answer for a pod-wide write. (system vs shared is moot:
  *    `profiles_slug_system_shared_uniq` admits one of them per slug.)
+ *  - KIND, workspace rows only (no pod-wide row): the one whose `entityScope`
+ *    is `pod` beats one whose `entityScope` is `workspace`. With no lens the
+ *    write files pod-wide, and only a pod-entityScope kind is MEANT to hold
+ *    pod-wide rows. "Oldest twin" was arbitrary here too: the live pod has a
+ *    Research `finding` (2026-07, a validated fact, entityScope workspace) and
+ *    a Builder `finding` (2026-10, a product problem, entityScope pod), and
+ *    every pod-wide `finding` write landed on the Research kind — product gaps
+ *    filed as research facts, without a severity (ticket 5c3879d4).
  *  - ROLE: workspace > shared > system, unchanged. Per-workspace roles are a
  *    legitimate model (founder decision 3, SCHEMA-CONVERGENCE-PLAN.md), not
  *    twins, so this rule does not re-rank them.
@@ -65,7 +74,10 @@ export function slugPrecedenceRank(
   }
   if (row.scope === ProfileScope.USER) return 0;
   const isRole = row.profileKind === "role";
-  if (row.scope === ProfileScope.WORKSPACE) return isRole ? 1 : 3;
+  if (row.scope === ProfileScope.WORKSPACE) {
+    if (isRole) return 1;
+    return row.entityScope === "workspace" ? 4 : 3;
+  }
   if (row.scope === ProfileScope.SHARED) return 2;
   return isRole ? 3 : 2; // system
 }

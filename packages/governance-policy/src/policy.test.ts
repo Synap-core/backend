@@ -72,7 +72,8 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   setState: "write", // hub-protocol/rest/artifacts.ts
   execute: "write", // hub-protocol/rest/commands.ts, materializer.ts
   run: "write", // playbooks.ts run
-  grant_capability: "write", // focus-sessions.ts
+  grant_capability: "write",
+  assign_agent: "write", // agent-hand-off.ts (focus_session roster add)
   register: "write", // widget-definitions.ts
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)

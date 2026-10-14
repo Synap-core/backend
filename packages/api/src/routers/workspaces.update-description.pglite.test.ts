@@ -128,3 +128,37 @@ describe("workspaces.update — description persists", () => {
     expect((await descriptionOf())?.description).toBeNull();
   });
 });
+
+describe("workspaces.update — settings.intent has ONE writer (homes A10)", () => {
+  const intentOf = async () =>
+    (
+      await h.client!.query<{ settings: { intent?: unknown; theme?: string } }>(
+        `select settings from workspaces where id = $1`,
+        [WS]
+      )
+    ).rows[0]!.settings;
+
+  it("a settings save neither forks nor erases the template's intent", async () => {
+    const stored = {
+      label: "Sales",
+      produces: ["deal"],
+      source: "template",
+    };
+    await h.client!.query(
+      `update workspaces set settings = $2::jsonb where id = $1`,
+      [WS, JSON.stringify({ intent: stored })]
+    );
+    // A forked intent rides a settings save: stripped, the stored one kept.
+    await caller().update({
+      id: WS,
+      settings: {
+        theme: "dark",
+        intent: { label: "Mine", produces: ["post"], source: "template" },
+      },
+    });
+    expect(await intentOf()).toEqual({ theme: "dark", intent: stored });
+    // A save WITHOUT it (a client that never read it) does not erase it.
+    await caller().update({ id: WS, settings: { theme: "light" } });
+    expect(await intentOf()).toEqual({ theme: "light", intent: stored });
+  });
+});

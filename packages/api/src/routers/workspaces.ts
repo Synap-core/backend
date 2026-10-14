@@ -559,8 +559,12 @@ const coreProcedures = {
           id: input.id,
           name: input.name,
           description: input.description,
+          // What the review shows is what approval can write: never a
+          // server-owned key (the replay strips them through this door).
           settings: input.settings
-            ? projectWorkspaceSettings({ settings: input.settings }).settings
+            ? stripServerOwnedSettings(
+                projectWorkspaceSettings({ settings: input.settings }).settings
+              )
             : undefined,
         },
       });

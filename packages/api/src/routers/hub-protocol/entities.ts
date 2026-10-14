@@ -16,6 +16,10 @@ import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
+import {
+  UpdateEntitiesInputSchema,
+  updateEntities,
+} from "../../services/entities/update-entities.js";
 
 export const entitiesRouter = router({
   /**
@@ -341,6 +345,14 @@ export const entitiesRouter = router({
         // graphs. Only populated when the action was proposal-gated.
         proposedEntityId: (result as { proposedEntityId?: string })
           .proposedEntityId,
+        // Join gate that KEPT the write: replayed once the join is approved —
+        // the caller must not resend it.
+        ...((result as { deferred?: true }).deferred
+          ? {
+              deferred: true as const,
+              ref: (result as { ref?: string }).ref,
+            }
+          : {}),
         // Echo the ambient workspace lens for the caller. NOTE: this is the
         // GOVERNANCE context, not necessarily the entity's placement — a
         // pod-scope kind lands at workspaceId=null even though the ambient lens
@@ -353,6 +365,45 @@ export const entitiesRouter = router({
         // when there are none, so the common envelope is byte-identical.
         ...(unmodeled.length ? { unmodeled } : {}),
       };
+    }),
+
+  /**
+   * Update up to 500 entities in ONE governed call (R1 batch writes).
+   * Requires: hub-protocol.write scope
+   *
+   * A thin door over `updateEntities` (services/entities/update-entities.ts):
+   * each item is written through `entities.update` or collected into ONE
+   * review pack; the answer lists applied / proposed / denied / skipped.
+   */
+  updateEntities: scopedProcedure(["hub-protocol.write"])
+    .input(
+      UpdateEntitiesInputSchema.extend({
+        userId: z.string(),
+        // agentUserId: the per-human agent user acting on behalf of userId.
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      assertMayActAs(ctx, input.userId);
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined,
+        agentUserId
+      );
+      return updateEntities({
+        ctx: callerContext,
+        items: input.items,
+        agentUserId,
+        // "agent" is not a valid EventSource — agent identity is on agentUserId.
+        source: "intelligence",
+        reasoning: input.reasoning,
+        idempotencyKey: input.idempotencyKey,
+        validate: input.validate,
+      });
     }),
 
   /**
@@ -369,6 +420,12 @@ export const entitiesRouter = router({
         title: z.string().optional(),
         preview: z.string().optional(),
         metadata: z.record(z.string(), z.any()).optional(),
+        /**
+         * Convert the entity to another KIND, keeping its id, links, document
+         * and history (c-kind-convert). Always a proposal. Declared here
+         * because this forwarder is a whitelist: zod strips an undeclared key.
+         */
+        profileSlug: z.string().min(1).optional(),
         /** Keys to remove from the entity's properties object. Applied before `metadata` merge. */
         deleteProperties: z.array(z.string()).optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
@@ -405,6 +462,7 @@ export const entitiesRouter = router({
           description: input.preview,
           properties: input.metadata,
           deleteProperties: input.deleteProperties,
+          ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
           source: "intelligence",
@@ -429,6 +487,8 @@ export const entitiesRouter = router({
         } = await import("../../utils/permission-check.js");
         const proposalType = (result as { proposalType?: string }).proposalType;
         const joinGate = isJoinGate(proposalType);
+        // Join gate that KEPT the write (replayed once the join is approved).
+        const kept = result as { deferred?: true; ref?: string };
         const envelope = buildProposalResponseFields({
           proposalId: result.proposalId,
           subjectType: "entity",
@@ -441,17 +501,22 @@ export const entitiesRouter = router({
           // update was NOT proposed — a workspace-join request was filed
           // instead — so both the message and the SYNTHESIZED summary/reasoning
           // must not narrate an "Update entity …" that does not exist.
-          message: proposedMessageFor(proposalType, result.message),
+          message: proposedMessageFor(
+            proposalType,
+            result.message,
+            kept.deferred
+          ),
           proposalId: result.proposalId,
           // Same forwarding the sibling `createEntity` already does, so hub
           // callers (CLI, MCP, Discord bridge) can tell the two apart at all.
           proposalType,
           summary: joinGate ? JOIN_GATE_SUMMARY : envelope.summary,
           reasoning: joinGate
-            ? proposedMessageFor(proposalType, result.message)
+            ? proposedMessageFor(proposalType, result.message, kept.deferred)
             : envelope.reasoning,
           reviewPath: envelope.reviewPath,
           reviewUrl: envelope.reviewUrl,
+          ...(kept.deferred ? { deferred: true as const, ref: kept.ref } : {}),
         };
       }
 

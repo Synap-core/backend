@@ -35,7 +35,7 @@ import { authoredByUser } from "../agent-identity-service.js";
 import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
 import type { ClusterInputRow } from "../proposals/fingerprint.js";
 import {
-  AGENT_PROPOSALS_PER_USER_PER_DAY,
+  AGENT_PENDING_PROPOSAL_CAP,
   agentProposalCap,
   countPendingAgentProposals,
 } from "../../utils/permission-check.js";
@@ -96,7 +96,7 @@ export function computeAgentScorecard(
     cap?: number;
   }
 ): AgentScorecard {
-  const cap = opts.cap ?? AGENT_PROPOSALS_PER_USER_PER_DAY;
+  const cap = opts.cap ?? AGENT_PENDING_PROPOSAL_CAP;
   const total = rows.length;
 
   let pending = 0;

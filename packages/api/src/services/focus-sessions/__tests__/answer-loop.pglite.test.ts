@@ -173,7 +173,16 @@ const LABEL = "Stripe key";
 const WHY = "Which Stripe account — EU or US?";
 
 async function seed(
-  opts: { agentIds?: string[]; blocked?: boolean } = {}
+  opts: {
+    agentIds?: string[];
+    blocked?: boolean;
+    /**
+     * A free-text answer through the DIRECT door needs a blocker other than
+     * `decision`: an ask-less decision answers its derived Yes / No there
+     * (#12). Words in the ROOM still answer one (the default below).
+     */
+    blockedReason?: string;
+  } = {}
 ): Promise<{ sessionId: string; channelId: string }> {
   const channelId = randomUUID();
   await q(
@@ -192,7 +201,7 @@ async function seed(
           kind: "document",
           label: LABEL,
           owner: "human",
-          blockedReason: "decision",
+          blockedReason: opts.blockedReason ?? "decision",
           why: WHY,
           owedSince: "2026-09-25T09:00:00.000Z",
         },
@@ -674,7 +683,10 @@ describe("the answer loop", () => {
   });
 
   it("the direct door wakes a staffed DISPATCH agent through send; a failed send is said in the room", async () => {
-    const { sessionId, channelId } = await seed({ agentIds: [DISPATCH_AGENT] });
+    const { sessionId, channelId } = await seed({
+      agentIds: [DISPATCH_AGENT],
+      blockedReason: "credential",
+    });
     await dispatchedRun(sessionId);
     const ok = await send(
       app(),
@@ -690,7 +702,10 @@ describe("the answer loop", () => {
     expect(h.triggers).toHaveLength(0);
 
     h.sendResult = { kind: "error", message: "provider unreachable" };
-    const second = await seed({ agentIds: [DISPATCH_AGENT] });
+    const second = await seed({
+      agentIds: [DISPATCH_AGENT],
+      blockedReason: "credential",
+    });
     await dispatchedRun(second.sessionId);
     const res = await send(
       app(),
@@ -756,7 +771,9 @@ describe("the answer loop", () => {
   // ── the direct door ──────────────────────────────────────────────────────
 
   it("the direct door lands the SAME answer + ONE event + the wake, and posts the answer into the room", async () => {
-    const { sessionId, channelId } = await seed();
+    const { sessionId, channelId } = await seed({
+      blockedReason: "credential",
+    });
     const qid = await hubQuestion(channelId, IS_AGENT);
     const res = await send(
       app(),
@@ -810,7 +827,10 @@ describe("the answer loop", () => {
   });
 
   it("the direct door with NO pod-run agent staffed and no question wakes nobody", async () => {
-    const { sessionId } = await seed({ agentIds: [EXT_AGENT] });
+    const { sessionId } = await seed({
+      agentIds: [EXT_AGENT],
+      blockedReason: "credential",
+    });
     const res = await send(
       app(),
       "POST",

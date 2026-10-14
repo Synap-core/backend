@@ -132,6 +132,7 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 - **Per thing** when each item needs its own thinking: a post, a feature, a deal in negotiation.
 - **Per batch** when items are interchangeable: one session for "find 10 leads today" or "today's follow-ups".
 - A session's **step is its subject's status**: move the thing, the step follows.
+- **Set the subject.** A session about one thing names it: `subjectEntityId` on `start_session`, or on `update_session` the moment the thing exists (a batch names its things as targets). A session on no thing shows on the homes as "No thing yet · attach one", outside every pipeline.
 - Following a method does not turn your session into a run; it stays your work and still shows in the method's runs.
 - **Targets get a result each**: a worker session holds its things as targets. Your own move of a target marks it `done`; someone else's move marks it `skipped`; targets left at close are `skipped`. Put the outcome on each thing, not only in a summary.
 
@@ -142,6 +143,19 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 ### Tracks
 
 A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+
+### The homes: what each space makes, what is moving
+
+Home, a space and a project read the work through two reads (the same answer every app shows):
+
+- `lifecycle.home` (Hub `GET /api/hub/lifecycle/home?projectId=`): every space you see with its intent and, per kind it produces, the pipeline in one line, needs-you, being-worked and one headline thing.
+- `lifecycle.moving` (Hub `GET /api/hub/lifecycle/moving?workspaceId=&projectId=&limit=`): the things with open work on them, the work under each (asks you first), and `unattached`, the open sessions on no thing.
+
+Read them to answer "what is going on" before you list sessions one by one.
+
+### A kind's dashboard
+
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`.
 
 ### Rules of thumb
 
@@ -251,6 +265,8 @@ Did a one-off just succeed and will recur?
 ```
 
 Blocked path: **never** invent silently; **never** stop at a dead-end error — climb L2→L3 and propose. Success path: one clear structural nudge, not a cascade of schema changes.
+
+Environment failure ≠ product bug: when Docker Hub rate-limits a pull (`429 Too Many Requests`), pull the same image from a mirror — `mirror.gcr.io/library/<image>` or `public.ecr.aws/docker/library/<image>` — and report it as an environment issue, not a Synap defect.
 
 ---
 
@@ -694,7 +710,7 @@ synap create entity --profile=knowledge --name="Hono static route ordering" \
 
 synap create entity --profile=knowledge --name="Verify library APIs at runtime" \
   --workspace=<id> \
-  --props='{"knowledgeForm":"insight","ek_claim":"Code-read is not runtime-true for library APIs"}' \
+  --props='{"knowledgeForm":"fact","ek_claim":"Code-read is not runtime-true for library APIs"}' \
   --content=$'Validate the installed version before depending on an API.' --json
 
 # A Decision is its own lifecycle entity; link it to the supporting Knowledge.
@@ -710,7 +726,7 @@ synap capture --global "Always fix the canonical path, never a workaround" \
 synap ask "hono routing caution" --json
 ```
 
-`knowledge` has exactly one canonical `knowledgeForm`: `insight` or `caution`. It is workspace-scoped, so the active workspace supplies the domain. The optional `ek_claim` is a short summary; readable long form belongs in the entity's linked Markdown document. A formal **Decision** has its own rationale/lifecycle entity, and a **Reference** is source material linked as evidence — neither is a Knowledge form. The legacy `synap capture --type gotcha|lesson|decision|reference` command is still accepted for compatibility, but new automation must use the canonical entity properties above. Retrieve everything with `synap ask`.
+`knowledge` has exactly one canonical `knowledgeForm`: `fact`, `caution` or `convention` (a legacy `insight` is read as `fact`). It is workspace-scoped, so the active workspace supplies the domain. `ek_claim` (the "Claim") is required — the full sentence; the title is its short handle, never the claim cut off. Readable long form belongs in the entity's linked Markdown document. Status reports, decisions, open problems (`issue`) and ideas are not knowledge — see `writing-titles.md`. A formal **Decision** has its own rationale/lifecycle entity, and a **Reference** is source material linked as evidence — neither is a Knowledge form. The legacy `synap capture --type gotcha|lesson|decision|reference` command is still accepted for compatibility, but new automation must use the canonical entity properties above. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
 **Open (the one display door):**
@@ -1177,6 +1193,26 @@ PATCH /api/hub/entities/{entityId}
 
 **Properties are deep-merged — send only the keys you want to change.** An update with `{ "status": "done" }` leaves all other properties untouched. You never need to re-send the full properties object.
 
+**Many changes → ONE call: `synap_update_entities`** (up to 500 items
+`{id, patch, expected?}`; Hub: `POST /api/hub/entities/batch-update`). Never
+script a loop of single updates, and never apply a change set over Hub REST with
+a user key. Governance is per item: some apply now, the rest ride ONE review for
+the person; the answer lists `applied` / `proposed` / `denied` / `skipped` — a
+partial result is normal. Send `validate: true` first to see each verdict without
+writing, and an `idempotencyKey` so a retry never acts twice.
+
+**A write blocked on a space join is KEPT.** When you write into a space your
+agent has not joined (`synap_orient` marks it `joined: false`), the answer is
+`proposed` with `proposalType: "join"`, `deferred: true` and a `ref`: the write
+rides the join request and is replayed for you once it is approved. Do not
+resend it, and do not retry it into another space.
+
+**Moving, not recreating.** A session into another space:
+`synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is
+the connection's lens). A kind another space needs: `synap_change_kind_scope`
+(`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
+`synap_move_entities`. All three are reviewed.
+
 ### Authored text is content, not a `file`
 
 Something **you** author — a pitch deck, a strategic plan, a note body — is
@@ -1185,8 +1221,8 @@ kind (`note`, `knowledge`, or a fitting domain kind) with `content` set to the
 Markdown body; Synap **auto-materializes** that `content` into a real
 versioned document behind the scenes (`entities WHERE documentId = ?`) — no
 upload step needed. `file` is reserved for real uploaded bytes you actually
-have (the upload door / `synap upload`) — an agent has no filesystem, so it
-rarely touches `file` at all. Reach for `synap_create_document` /
+have (`synap_store_file`; over 10MB `synap_request_upload`) — authored text
+never becomes a `file`. Reach for `synap_create_document` /
 `POST /api/hub/documents` directly only for a standalone rich document that
 isn't itself a title-worthy entity (see below) — never as a substitute for an
 entity's `content`.
@@ -1200,7 +1236,7 @@ You CAN store content you **hold** — you send it inline. Pick by what you have
 | **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
 | Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
 | Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
-| A **large file on a local disk** you don't hold in context                                  | the CLI `synap upload <path>` (streams it) — an agent can't send bytes it doesn't have          | a `file` entity backed by stored bytes                               |
+| A **large file** (over 10MB, up to 500MB video)                                             | `synap_request_upload` → PUT the bytes to `uploadUrl` → `synap_store_file({ uploadToken })`     | a `file` entity backed by stored bytes                               |
 | Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
 **A typed thing with a file → the KIND first, the bytes on it.** When a kind
@@ -1208,7 +1244,7 @@ exists for the thing (a logo is a `brand-asset`, not a `file`; check the space
 brief or `synap_list_profiles`): (1) resolve-or-create that entity
 (`synap_ask`, then `synap_create_entity`); (2) `synap_store_file` with
 `attachToEntityId` = its id (`content` for SVG/text, `contentBase64` for
-binary, ≤10MB inline; larger local files: CLI `synap upload`); (3) link it /
+binary, ≤10MB inline; larger: `synap_request_upload`, then `uploadToken`); (3) link it /
 `synap_file_into_project` if asked. A `proposed` create has no live id yet —
 attach after approval. A bare `file` is only for bytes with no kind.
 
@@ -1352,7 +1388,7 @@ POST /api/hub/entities
 
 This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
 
-**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
+**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. A person-owned slot blocked on a decision is ANSWERED by them (Yes/No or a choice) — it is never closed by marking it done. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
 
 ### Post to the user's personal channel
 
@@ -1887,15 +1923,14 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 You are authoring this text yourself — it is not a file you have. Don't create
 a `file`/`document`-kind entity and stuff the Markdown into it.
 
-1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=knowledge&workspaceId=…` → none
+1. Search for an existing plan: `GET /entities?q=Q3 launch&profileSlug=note&workspaceId=…` → none
 2. Create a CONTENT-kind entity carrying the plan as `content` (the doc auto-materializes):
 
    ```json
    POST /api/hub/entities
    { "userId": "{userId}", "workspaceId": "{wsId}",
-     "profileSlug": "knowledge",
+     "profileSlug": "note",
      "title": "Q3 launch strategic plan",
-     "properties": { "knowledgeForm": "insight" },
      "content": "# Q3 Launch Plan\n\n## Goals\n…\n\n## Timeline\n…"
    }
    ```
@@ -2080,6 +2115,7 @@ On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps i
 
 **Keep the session true as you work — the person watches it, not your chat.**
 
+- **Set the subject.** When the work is about one thing (a post, a deal, a feature), name it: `subjectEntityId` on start, or on `synap_update_session` as soon as the thing exists. A session on no thing is listed apart, as "No thing yet · attach one", and its work moves no pipeline.
 - **Step = the subject's status.** With a subject (a post, a deal), move the thing through the door (`update_entity` + `expectedStatus`); the session's step follows it, and a stage's `subjectStatus` moves the thing when you set `currentStage`. Without a subject, a bound playbook seeds `stages`; set `currentStage` as the work moves on. A hand-set `progress` says less than either.
 - **Size it from the work.** One session per thing when each needs its own thinking (a post, a feature); one per batch when the items are interchangeable ("find 10 leads today"). Following a method (`followPlaybookId`) keeps the session your work; it also shows in the method's runs.
 - **Targets get a result each.** A worker session holds its things as targets: your own move of a target marks it `done`, someone else's marks it `skipped`, and targets left at close are `skipped`. Put each outcome on its thing, not only in a summary. Model: `work-model`.
@@ -2732,6 +2768,33 @@ SynapWidget.onInit(async ({ config, context }) => {
 ```
 
 All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, properties, createdAt, … }`.
+
+#### Intent reads (a kind's pipeline, goal, needs-you, sessions)
+
+The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one track.
+
+| Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy` | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }` |
+| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                            |
+| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                     | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                      |
+| `attention.count`      | `profileSlug`, `trackId`                                                                              | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                   |
+| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`      | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                |
+
+```js
+const board = await SynapWidget.query("lifecycle.board", {
+  profileSlug: "post",
+  firstN: 5,
+});
+if (board?.error) return showError(board.error); // 404 = unknown kind, 412 = no lifecycle
+const month = await SynapWidget.query("lifecycle.throughput", {
+  profileSlug: "post",
+  bucket: "month",
+  count: 1,
+});
+```
+
+A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.
 
 #### Mutations (governance-gated — return `{ status: "approved" | "proposed" | "denied" }`)
 

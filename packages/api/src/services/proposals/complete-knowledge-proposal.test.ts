@@ -9,7 +9,22 @@ describe("completeKnowledgeProposalProperties", () => {
         properties: undefined,
         title: "Avoid this production failure",
       })
-    ).toEqual({ knowledgeForm: "caution" });
+    ).toEqual({
+      knowledgeForm: "caution",
+      ek_claim: "Avoid this production failure",
+    });
+  });
+
+  it("derives the claim from the title first, then description and body", () => {
+    expect(
+      completeKnowledgeProposalProperties({
+        profileSlug: "knowledge",
+        properties: { knowledgeForm: "fact" },
+        title: undefined,
+        description: "Description sentence",
+        content: "Body",
+      })
+    ).toEqual({ knowledgeForm: "fact", ek_claim: "Description sentence" });
   });
 
   it("preserves legacy classification and leaves other kinds untouched", () => {
@@ -19,7 +34,11 @@ describe("completeKnowledgeProposalProperties", () => {
         properties: { ek_type: "lesson" },
         title: "Avoid this",
       })
-    ).toEqual({ ek_type: "lesson", knowledgeForm: "insight" });
+    ).toEqual({
+      ek_type: "lesson",
+      knowledgeForm: "fact",
+      ek_claim: "Avoid this",
+    });
     expect(
       completeKnowledgeProposalProperties({
         profileSlug: "task",

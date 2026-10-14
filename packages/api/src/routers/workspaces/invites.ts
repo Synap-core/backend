@@ -1362,6 +1362,16 @@ export const inviteProcedures = {
               },
               "Plugin workspace composed onto base (provisioning)"
             );
+            // No layer 2 here: an overlay pack's version is not earned.
+            const { finishTemplateApply } =
+              await import("../../services/template-apply-finisher.js");
+            await finishTemplateApply({
+              workspaceId: core.composeTargetWorkspaceId,
+              userId: systemUserId,
+              built: false,
+              pendingPack: core.pendingPack,
+              post: null,
+            });
             return {
               status: "created" as const,
               workspaceId: core.composeTargetWorkspaceId,
@@ -1376,6 +1386,16 @@ export const inviteProcedures = {
           userId: systemUserId,
           packageSlug: input.pluginId,
           createdBy: "provisioning",
+        });
+        // Layer 1 only (no version passed): the finisher marks it active.
+        const { finishTemplateApply } =
+          await import("../../services/template-apply-finisher.js");
+        await finishTemplateApply({
+          workspaceId: result.workspaceId,
+          userId: systemUserId,
+          built: true,
+          pendingVersionStamp: result.pendingVersionStamp,
+          post: null,
         });
 
         // Enqueue workspace-init (whiteboard + commands, skips default views)

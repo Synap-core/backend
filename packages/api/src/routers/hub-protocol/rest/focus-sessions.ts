@@ -62,6 +62,10 @@ import { type AskAnswerValue, type Ask } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import {
+  resolveSessionSubject,
+  type SessionSubject,
+} from "../../../services/focus-sessions/session-subject.js";
+import {
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
@@ -121,6 +125,7 @@ import {
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  errCode,
   hasScope,
   httpStatusForTrpcError,
   isUuid,
@@ -131,6 +136,11 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import {
+  gateAgentHandOff,
+  handedOffAgentIds,
+  type AgentHandOffDecision,
+} from "../../../services/focus-sessions/agent-hand-off.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -558,6 +568,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // `metadata.automationId`, NOT `automationRunId`.
         playbookId: z.string().uuid().optional(),
         automationId: z.string().uuid().optional(),
+        // SUBJECT filters (`services/focus-sessions/session-subject.ts`, the
+        // predicate tRPC `focusSessions.list({ subject })` reads): sessions
+        // whose subject is the thing, OR worker sessions targeting it. A
+        // profile slug names every thing of a kind / carrying a role (the
+        // pipeline board's rule). One of the two, not both.
+        subjectEntityId: z.string().uuid().optional(),
+        subjectProfileSlug: z.string().min(1).optional(),
         limit: z.coerce.number().int().min(1).max(50).optional(),
       }),
     },
@@ -970,17 +987,48 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const playbookId = c.req.query("playbookId");
     const automationId = c.req.query("automationId");
 
-    // Optional: narrow to sessions ABOUT a specific subject entity (the
-    // subject-spine anchor). Lets a caller fetch "the sessions linked to this
-    // client/person/deal" — the session half of an entity's neighborhood.
-    const subjectEntityId = c.req.query("subjectEntityId");
+    // Optional: narrow to sessions ON a thing — "the sessions on this
+    // client/person/deal" (the session half of an entity's neighborhood), or
+    // on every thing of a kind/role (an intent surface). ONE predicate with
+    // the tRPC door (`session-subject.ts`): the subject anchor OR a worker's
+    // target link.
+    const subjectEntityId = c.req.query("subjectEntityId") || undefined;
+    const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
+    if (subjectEntityId && subjectProfileSlug) {
+      return c.json(
+        { error: "Pass subjectEntityId or subjectProfileSlug, not both" },
+        400
+      );
+    }
+    if (subjectEntityId && !isUuid(subjectEntityId)) {
+      return c.json(
+        { error: `subjectEntityId is not a valid id: ${subjectEntityId}` },
+        400
+      );
+    }
+    let subject: SessionSubject | undefined;
+    try {
+      subject = subjectEntityId
+        ? await resolveSessionSubject({ entityIds: [subjectEntityId] })
+        : subjectProfileSlug
+          ? await resolveSessionSubject({ profileSlug: subjectProfileSlug })
+          : undefined;
+    } catch (err) {
+      // An unknown slug is "no such vocabulary", never an empty list.
+      if (errCode(err) === "NOT_FOUND") {
+        return c.json(
+          { error: err instanceof Error ? err.message : "Not found" },
+          404
+        );
+      }
+      throw err;
+    }
 
     try {
       // The SAME WHERE clause the tRPC door builds. This door used to hand-write
       // its own copy (status, triage, kind, flow), the twin that could drift.
       // What differs here is only what it passes: the agent-facing `"all"`
-      // defaults resolved above, and the one narrowing it owns alone,
-      // `subjectEntityId`. See `session-list-conditions.ts`.
+      // defaults resolved above. See `session-list-conditions.ts`.
       const conditions = sessionListConditions({
         userId: acting.userId,
         scope: {
@@ -991,10 +1039,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         lens,
         kind,
         flow: { playbookId, automationId },
+        subject,
       });
-      if (subjectEntityId) {
-        conditions.push(eq(focusSessions.subjectEntityId, subjectEntityId));
-      }
 
       const rows = await db
         .select()
@@ -1246,6 +1292,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           summary: result.summary,
           reviewPath: result.reviewPath,
           reviewUrl: result.reviewUrl,
+          // Join gate that KEPT the start: replayed once the join is approved.
+          ...(result.deferred ? { deferred: true, ref: result.ref } : {}),
           session: null,
         });
       }
@@ -1421,6 +1469,82 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const agentUserId =
         patch.agentUserId ??
         (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
+
+      // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster
+      // (`addAgentId`, or a NEW id inside a wholesale `agentIds`) is its own
+      // governed write, one decision per agent (`agent-hand-off.ts`). Decided
+      // BEFORE the update membrane, so an auto-approved update cannot carry it.
+      // A held (proposed) agent is dropped from this patch — approval attaches
+      // it; when nothing else was asked for, the proposal IS the answer.
+      const handOffs: AgentHandOffDecision[] = [];
+      if (agentUserId) {
+        const roster = Array.isArray(existing.agentIds)
+          ? existing.agentIds
+          : [];
+        const added = handedOffAgentIds(agentUserId, [
+          ...(patch.agentIds ?? []).filter((a) => !roster.includes(a.trim())),
+          ...(patch.addAgentId !== undefined ? [patch.addAgentId] : []),
+        ]);
+        for (const agentId of added) {
+          const decision = await gateAgentHandOff({
+            userId,
+            agentUserId,
+            workspaceId: existing.workspaceId,
+            sessionId: id,
+            goal: existing.goal,
+            agentId,
+            reasoning: patch.reasoning,
+          });
+          if (decision.status === "denied") {
+            return c.json({ error: decision.reason }, 403);
+          }
+          handOffs.push(decision);
+        }
+        const proposed = handOffs.filter(
+          (d): d is Extract<AgentHandOffDecision, { status: "proposed" }> =>
+            d.status === "proposed"
+        );
+        const held = proposed.map((d) => d.agentId);
+        if (held.length > 0) {
+          if (patch.agentIds !== undefined) {
+            patch.agentIds = patch.agentIds.filter(
+              (a) => !held.includes(a.trim())
+            );
+          }
+          if (
+            patch.addAgentId !== undefined &&
+            held.includes(patch.addAgentId.trim())
+          ) {
+            delete patch.addAgentId;
+          }
+          const sameRoster = (ids: readonly string[]) =>
+            ids.length === roster.length &&
+            ids.every((a) => roster.includes(a));
+          const asksForMore = Object.entries(patch).some(
+            ([key, value]) =>
+              value !== undefined &&
+              key !== "agentUserId" &&
+              key !== "reasoning" &&
+              !(key === "agentIds" && sameRoster(value as string[]))
+          );
+          if (!asksForMore) {
+            const first = proposed[0]!;
+            return jsonGoverned(c, {
+              status: "proposed",
+              message: proposedMessageFor(
+                first.proposalType,
+                "Handing this session to another agent was proposed for review"
+              ),
+              proposalId: first.proposalId,
+              summary: first.summary,
+              reviewPath: first.reviewPath,
+              reviewUrl: first.reviewUrl,
+              handOffs,
+              session: null,
+            });
+          }
+        }
+      }
 
       // Gate data: always include goal from the row (proposal summary label) plus
       // every field being patched so focus_session/update can materialize on approve.
@@ -1778,6 +1902,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({
         ...updated,
         ...(warnings.length > 0 ? { warnings } : {}),
+        // Which hand-offs to other agents this patch asked for, and which are
+        // waiting on a person (not on the roster yet).
+        ...(handOffs.length > 0 ? { handOffs } : {}),
         ...(blockGuidelines ? { blockGuidelines } : {}),
         ...(nudges ? { nudges } : {}),
         // What the follow DID — which playbook, which stage, how much

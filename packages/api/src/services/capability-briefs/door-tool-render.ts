@@ -51,6 +51,8 @@ export const IS_ONLY_TOOL_TOKENS: Record<string, string> = {
   list_commands: "in-app assistant only (the user's saved commands)",
   get_work_guidelines:
     "in-app assistant only (reads the work guideline for a blocked session)",
+  update_facet:
+    "in-app assistant only (moves a role's status); agent doors have no role-status tool yet",
 };
 
 /**
@@ -59,6 +61,8 @@ export const IS_ONLY_TOOL_TOKENS: Record<string, string> = {
  */
 export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
   synap_packages: "a database table (the marketplace catalog), not a tool",
+  market_publish:
+    "a tool of the Synap control-plane connector (the catalog), not a pod tool",
   market_search:
     "the builtin verb market.search, run through run_capability on every door",
   declare_source:

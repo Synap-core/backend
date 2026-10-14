@@ -877,6 +877,15 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.projectId === "string"
           ? { projectId: args.projectId }
           : {}),
+      // MOVE into another Space (D12). A DISTINCT arg on purpose: the MCP URL
+      // lens injects `workspaceId` into every call, so reusing that name would
+      // file a move on every update. `null` = personal; the floor (room
+      // members must belong) and the always-propose rule live in the service.
+      ...(typeof args.moveToWorkspaceId === "string"
+        ? { workspaceId: args.moveToWorkspaceId }
+        : args.moveToWorkspaceId === null
+          ? { workspaceId: null }
+          : {}),
       // ADOPT into a track step, NARROWED like `projectId`: `null` unfiles, a
       // string files, anything else leaves it. The rules (visible track, pinned
       // stage, same project) and the always-propose rule for an agent live in
@@ -977,6 +986,10 @@ export const sessionHandlers: McpHandlerMap = {
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings ? { warnings: result.warnings } : {}),
+          // Same reason as `completeOutput`: a hand-off to another agent that
+          // is WAITING on a person is not on the roster yet, and the session
+          // alone reads as if it were never asked for.
+          ...(result.handOff ? { handOff: result.handOff } : {}),
           ...(nudges ? { nudges } : {}),
         });
       }

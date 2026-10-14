@@ -165,18 +165,102 @@ export interface ActionPlacement {
 }
 
 /**
+ * A placement whose playbook/automation does not exist YET because its create
+ * is waiting on a proposal — filed by this apply, or already pending for the
+ * same name in this space. Reported, never written: the browser cannot launch
+ * a name, and the button appears on the next apply once the row exists.
+ */
+export interface DeferredActionPlacement {
+  profileSlug: string;
+  surface: string;
+  kind: "playbook" | "automation";
+  ref: string;
+  label: string;
+  proposalId: string;
+}
+
+/**
+ * The template declares an action placement whose playbook/automation exists
+ * nowhere — no row, no pending proposal. The template is incomplete; the apply
+ * door answers it as a typed 422 (`reasonCode`) instead of a bare 500.
+ */
+export class TemplateIncompleteError extends Error {
+  readonly reasonCode = "TEMPLATE_INCOMPLETE" as const;
+  constructor(
+    message: string,
+    readonly missing: { kind: "playbook" | "automation"; ref: string }
+  ) {
+    super(message);
+    this.name = "TemplateIncompleteError";
+  }
+}
+
+/**
+ * The proposal a missing placement ref is waiting on: an item of THIS apply's
+ * `playbooks` / `automations` bag reported `proposed` under that name, else a
+ * pending create proposal for that name in this space. `null` = nothing is
+ * coming, the ref is simply missing.
+ */
+async function findPendingRefProposal(
+  kind: "playbook" | "automation",
+  ref: string,
+  workspaceId: string,
+  applied: Record<string, unknown>
+): Promise<string | null> {
+  const bag = applied[kind === "playbook" ? "playbooks" : "automations"];
+  if (Array.isArray(bag)) {
+    for (const item of bag as Array<Record<string, unknown>>) {
+      if (
+        item?.status === "proposed" &&
+        typeof item.name === "string" &&
+        item.name.toLowerCase() === ref.toLowerCase() &&
+        typeof item.proposalId === "string" &&
+        item.proposalId
+      ) {
+        return item.proposalId;
+      }
+    }
+  }
+  const { db, and, eq, desc, drizzleSql, proposals } =
+    await import("@synap/database");
+  const { ProposalStatus } = await import("@synap/database/schema");
+  const [row] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.targetType, kind),
+        eq(proposals.workspaceId, workspaceId),
+        eq(proposals.status, ProposalStatus.PENDING),
+        drizzleSql`lower(${proposals.data}->>'name') = lower(${ref})`
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/**
  * Resolve each placement's `ref` for the browser: playbook/automation NAMES →
  * row ids (workspace-scoped, the same NAME-in-scope lookup the playbooks/
  * automations reuse-checks above use); capability refs (verb keys) pass through.
- * A declared playbook/automation ref must resolve. Otherwise the template is
- * incomplete and installation/reconciliation fails rather than caching a CRM
- * workspace whose primary action silently disappeared.
+ * A ref with no row whose create waits on a proposal is DEFERRED (reported,
+ * not written). A ref with no row and no proposal throws
+ * `TemplateIncompleteError`: the template is incomplete, and installation/
+ * reconciliation fails rather than caching a CRM workspace whose primary
+ * action silently disappeared.
  */
 async function resolveActionPlacementRefs(
   placements: ActionPlacement[],
-  workspaceId: string
-): Promise<ActionPlacement[]> {
-  if (placements.length === 0) return [];
+  workspaceId: string,
+  applied: Record<string, unknown>
+): Promise<{
+  resolved: ActionPlacement[];
+  deferred: DeferredActionPlacement[];
+}> {
+  const resolved: ActionPlacement[] = [];
+  const deferred: DeferredActionPlacement[] = [];
+  if (placements.length === 0) return { resolved, deferred };
   const {
     db,
     and,
@@ -187,15 +271,15 @@ async function resolveActionPlacementRefs(
     playbooks: playbooksTable,
     automations: automationsTable,
   } = await import("@synap/database");
-  const resolved: ActionPlacement[] = [];
   for (const p of placements) {
     if (p.kind === "capability") {
       // Verb key — stable, resolved by executeCapability at click time.
       resolved.push(p);
       continue;
     }
+    let row: { id: string } | undefined;
     if (p.kind === "playbook") {
-      const [row] = await db
+      [row] = await db
         .select({ id: playbooksTable.id })
         .from(playbooksTable)
         .where(
@@ -207,15 +291,8 @@ async function resolveActionPlacementRefs(
         )
         .orderBy(asc(playbooksTable.createdAt), asc(playbooksTable.id))
         .limit(1);
-      if (!row)
-        throw new Error(
-          `Action placement references missing playbook "${p.ref}"`
-        );
-      resolved.push({ ...p, ref: row.id });
-      continue;
-    }
-    if (p.kind === "automation") {
-      const [row] = await db
+    } else if (p.kind === "automation") {
+      [row] = await db
         .select({ id: automationsTable.id })
         .from(automationsTable)
         .where(
@@ -225,15 +302,36 @@ async function resolveActionPlacementRefs(
           )
         )
         .limit(1);
-      if (!row)
-        throw new Error(
-          `Action placement references missing automation "${p.ref}"`
-        );
+    } else {
+      continue;
+    }
+    if (row) {
       resolved.push({ ...p, ref: row.id });
       continue;
     }
+    const proposalId = await findPendingRefProposal(
+      p.kind,
+      p.ref,
+      workspaceId,
+      applied
+    );
+    if (proposalId) {
+      deferred.push({
+        profileSlug: p.profileSlug,
+        surface: p.surface,
+        kind: p.kind,
+        ref: p.ref,
+        label: p.label,
+        proposalId,
+      });
+      continue;
+    }
+    throw new TemplateIncompleteError(
+      `Action placement references missing ${p.kind} "${p.ref}"`,
+      { kind: p.kind, ref: p.ref }
+    );
   }
-  return resolved;
+  return { resolved, deferred };
 }
 
 /** Stable identity of a placement — the idempotency key for the settings merge. */
@@ -991,10 +1089,16 @@ async function applyPackagePostWorkspaceInner(
   // merge is the fix if this ever bites.
   if (body.actionPlacements?.length && workspaceId) {
     try {
-      const resolved = await resolveActionPlacementRefs(
+      const { resolved, deferred } = await resolveActionPlacementRefs(
         body.actionPlacements,
-        workspaceId
+        workspaceId,
+        result
       );
+      // A deferred placement reports `proposed` — the ONE rule that holds the
+      // version stamp (`postWorkspaceLayersConverged`), so the space stays
+      // drifted and the next apply places the action once its row exists.
+      const deferredReport =
+        deferred.length > 0 ? { status: "proposed" as const, deferred } : {};
       if (resolved.length > 0) {
         const { db, workspaces, eq } = await import("@synap/database");
         const [ws] = await db
@@ -1040,11 +1144,17 @@ async function applyPackagePostWorkspaceInner(
           status: "merged",
           count: resolved.length,
           total: merged.length,
+          ...deferredReport,
         };
       } else {
-        result.actionPlacements = { status: "skipped", count: 0 };
+        result.actionPlacements = {
+          status: "skipped",
+          count: 0,
+          ...deferredReport,
+        };
       }
     } catch (e) {
+      if (e instanceof TemplateIncompleteError) throw e;
       throw new Error(
         `Failed to apply action placements: ${(e as Error).message}`
       );

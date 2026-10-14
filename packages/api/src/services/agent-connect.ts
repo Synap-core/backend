@@ -42,7 +42,7 @@ import { agentDisplayName } from "@synap-core/types/agents";
 import { resolveServiceMark } from "@synap-core/types/service-marks";
 import { ProposalStatus, grants as grantRows } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
-import { parsePermission, patternMatches } from "@synap-core/types/grants";
+import { covers, permissionWithin } from "@synap-core/types/grants";
 import { createPendingProposal } from "../utils/permission-check.js";
 import { assertPodAdmin } from "../trpc.js";
 import {
@@ -127,41 +127,28 @@ export function readAgentConnectPayload(
   };
 }
 
-/** Every request a pattern matches, at the kind/verb it names. */
-function coveredRequests(pattern: string) {
-  const segs = parsePermission(pattern);
-  if (segs[0] === "*") return null; // everything
-  const qualified = segs[0] === "entity";
-  const qualifier = qualified ? (segs[1] ?? "*") : null;
-  const actionSeg = segs[qualified ? 2 : 1];
-  const actions =
-    !actionSeg || actionSeg === "*"
-      ? ["read", "create", "update", "delete"]
-      : [actionSeg];
-  return actions.map((action) => ({
-    subject: segs[0],
-    qualifier: qualifier === "*" ? null : qualifier,
-    action,
-  }));
-}
-
-/** Does `outer` cover everything `inner` covers? */
+/** Does `outer` cover everything `inner` covers? (the grant algebra's `covers`) */
 export function permissionCovers(outer: string, inner: string): boolean {
-  const reqs = coveredRequests(inner);
-  if (reqs === null) return parsePermission(outer)[0] === "*";
-  return reqs.every((r) => patternMatches(outer, r));
+  return covers(outer, inner);
 }
 
-/** approved ⊆ asked: each approved request is covered by an asked one in its place. */
+/**
+ * approved ⊆ asked: each approved request is permitted by the asked ones in
+ * its place — taken together, so `entity.note` is within its four verbs
+ * asked one by one (`permissionWithin`, exact against `permits`).
+ */
 export function requestsWithin(
   approved: readonly AgentConnectRequest[],
   asked: readonly AgentConnectRequest[]
 ): boolean {
   return approved.every((a) =>
-    asked.some(
-      (b) =>
-        (b.workspaceId === null || b.workspaceId === a.workspaceId) &&
-        permissionCovers(b.permission, a.permission)
+    permissionWithin(
+      a.permission,
+      asked
+        .filter(
+          (b) => b.workspaceId === null || b.workspaceId === a.workspaceId
+        )
+        .map((b) => b.permission)
     )
   );
 }

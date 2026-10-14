@@ -34,6 +34,8 @@ export interface RequestWriteContext {
   readonly derivedSessionId?: string;
   /** C1 — which CLIENT is calling (the key it authenticated with). */
   readonly clientKey?: string;
+  /** C1 — where the calling conversation runs (a local agent's cwd). */
+  readonly conversationCwd?: string;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
   readonly grant?: KeyGrant;
 }
@@ -268,10 +270,10 @@ export function normalizeConversationId(
  * Precedence:
  *   1. `is_internal` key ⇒ undefined (the IS groups by channel, see above).
  *   2. a conversation id ⇒ `key:<id>|conv:<conversationId>` — CONVERSATION
- *      scope. MCP: the Streamable-HTTP `Mcp-Session-Id` the pod mints at
- *      `initialize` and the client echoes on every request. (No Hub REST / CLI /
- *      Raycast header carries one today; the CLI names its session explicitly
- *      with `X-Session-Id` per Claude tab instead.)
+ *      scope. The client's OWN id when it names one (`X-Synap-Conversation`,
+ *      e.g. `claude-code:<uuid>` from the CLI and its stdio MCP bridge — see
+ *      `CONVERSATION_HEADER`), else on MCP the Streamable-HTTP `Mcp-Session-Id`
+ *      the pod mints at `initialize` and the client echoes on every request.
  *   3. otherwise ⇒ `key:<id>` — KEY scope (option A): a write joins a session
  *      only when it names one, else the key's own AUTO-OPENED session, never a
  *      session some conversation on the key STARTED; focus stays per-agent.
@@ -298,15 +300,79 @@ export function clientKeyScope(clientKey: string): "conversation" | "key" {
     : "key";
 }
 
-/** Run `fn` with the calling client recorded; `undefined` enters no scope. */
+/**
+ * The headers a LOCAL agent's client sends to name its own conversation — the
+ * one a person can reopen (`claude --resume <id>`), unlike the `Mcp-Session-Id`
+ * the pod mints. Value `<harness>:<id>`, e.g. `claude-code:<uuid>`; read by
+ * BOTH key-auth doors (MCP, Hub REST) as the conversation half of the client
+ * key, so every session that stamps `metadata.clientKey` carries it. Sent by
+ * the CLI and its stdio MCP bridge from `CLAUDE_CODE_SESSION_ID`. A hosted
+ * chat app (claude.ai, ChatGPT) sends neither: it never exposes its own id.
+ */
+export const CONVERSATION_HEADER = "x-synap-conversation";
+/** Where that conversation runs (its working directory). Display only. */
+export const CONVERSATION_CWD_HEADER = "x-synap-conversation-cwd";
+
+/**
+ * The conversation id for a request: the client's OWN id when it named one
+ * (`X-Synap-Conversation`), else the transport id (MCP `Mcp-Session-Id`).
+ */
+export function requestConversationId(
+  namedByClient: string | null | undefined,
+  transportId?: string | null
+): string | undefined {
+  return (
+    normalizeConversationId(namedByClient) ??
+    normalizeConversationId(transportId)
+  );
+}
+
+/** A client-supplied cwd, or undefined when unusable (display only, capped). */
+export function normalizeConversationCwd(
+  raw: string | null | undefined
+): string | undefined {
+  const v = raw?.trim();
+  // eslint-disable-next-line no-control-regex
+  return v && v.length <= 1024 && !/[\x00-\x1F\x7F]/.test(v) ? v : undefined;
+}
+
+/**
+ * Run `fn` with the calling client recorded; `undefined` enters no scope. The
+ * cwd rides only with a client key: it describes that client's conversation.
+ */
 export function runWithClientKey<T>(
   clientKey: string | undefined,
-  fn: () => T
+  fn: () => T,
+  conversationCwd?: string | null
 ): T {
-  return clientKey ? runWithPatch({ clientKey }, fn) : fn();
+  if (!clientKey) return fn();
+  const cwd = normalizeConversationCwd(conversationCwd);
+  return runWithPatch(
+    cwd ? { clientKey, conversationCwd: cwd } : { clientKey },
+    fn
+  );
 }
 
 /** The calling client's key for this request, if a key-auth door set one. */
 export function getRequestClientKey(): string | undefined {
   return storage.getStore()?.clientKey;
+}
+
+/** The calling conversation's cwd, when its client named one. */
+export function getRequestConversationCwd(): string | undefined {
+  return storage.getStore()?.conversationCwd;
+}
+
+/**
+ * `{ conversationCwd }` to stamp on a session bound to `clientKey` — only when
+ * that key IS this request's client (the cwd describes the caller's
+ * conversation, never a client key a caller passed in for someone else).
+ */
+export function conversationCwdPatch(clientKey: string | null | undefined): {
+  conversationCwd?: string;
+} {
+  const store = storage.getStore();
+  return clientKey && store?.clientKey === clientKey && store.conversationCwd
+    ? { conversationCwd: store.conversationCwd }
+    : {};
 }

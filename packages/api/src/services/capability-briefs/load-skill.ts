@@ -20,6 +20,7 @@
 import { and, asc, eq, inArray, or } from "drizzle-orm";
 import { db, drizzleSql, skills } from "@synap/database";
 import { escapeLike } from "../../utils/term-match.js";
+import { openLink } from "../../utils/deep-links.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export interface SkillLensOptions {
@@ -127,6 +128,30 @@ export async function resolveSkillContent(
     .limit(1);
 
   if (!row || !row.body) {
+    // A skill the caller CAN see but nobody has approved yet is not "missing":
+    // reading it as missing sent agents guessing ("private to its author").
+    // Same lens (`visibleSkillsWhere`), so a skill the caller cannot see still
+    // reads as not found — only the approval state of a visible one surfaces.
+    const [pending] = await db
+      .select({ id: skills.id, name: skills.name })
+      .from(skills)
+      .where(
+        and(
+          visibleSkillsWhere(userId, options?.workspaceId),
+          eq(skills.kind, "instruction"),
+          eq(skills.status, "active"),
+          eq(skills.approved, false),
+          or(
+            inArray(skills.slug, candidates),
+            drizzleSql`${skills.slug} LIKE ${suffix} ESCAPE '\\'`
+          )
+        )
+      )
+      .orderBy(asc(skills.slug), asc(skills.id))
+      .limit(1);
+    if (pending) {
+      return `Skill "${ref}" (${pending.name}) exists but awaits the owner's approval — it loads once they approve it: ${openLink(pending.id)}`;
+    }
     return `No skill found matching "${ref}". Call synap_load_skill("catalog") to see what's available.`;
   }
   return row.body;

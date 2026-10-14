@@ -206,7 +206,7 @@ beforeAll(async () => {
     ])
   );
   // The schema DDL helper emits columns only; the per-person key index is
-  // what the group insert's ON CONFLICT leans on (migration 0326).
+  // what the group insert's ON CONFLICT leans on (migration 0328).
   await h.client!.exec(
     `create unique index library_groups_user_key_unique on library_groups (user_id, key)`
   );

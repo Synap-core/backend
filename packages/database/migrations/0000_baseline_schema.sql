@@ -172,7 +172,7 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
 
--- library_groups — the Library's persistent groups (mirrors 0326,
+-- library_groups — the Library's persistent groups (mirrors 0328,
 -- CAPTURE_LIBRARY_PLAN L2). Owner-floored; item membership lives on the item.
 CREATE TABLE IF NOT EXISTS "library_groups" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -719,7 +719,7 @@ CREATE INDEX IF NOT EXISTS "documents_type_idx"    ON "documents" ("type");
 CREATE UNIQUE INDEX IF NOT EXISTS "documents_upload_storage_key_unique"
   ON "documents" ("storage_key")
   WHERE "storage_key" LIKE 'files/%/uploads/%';
--- The Library read index (mirrors 0326).
+-- The Library read index (mirrors 0328).
 CREATE INDEX IF NOT EXISTS "documents_library_items_idx"
   ON "documents" ("user_id", "created_at" DESC, "id")
   WHERE "deleted_at" IS NULL AND "metadata" ? 'importItem';

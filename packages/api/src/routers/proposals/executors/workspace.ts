@@ -2,11 +2,15 @@ import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  drizzleSql,
   proposals,
   eq,
   getWorkspaceMembership,
+  users,
+  workspaceMembers,
   workspaces,
 } from "@synap/database";
+import { readDeferredWrites } from "@synap-core/types/proposals/deferred-writes";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../../utils/audit-log.js";
@@ -104,11 +108,9 @@ async function executeTemplateApplyApproval({
   let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
   try {
     core = await materializeWorkspaceCore({
-      // Stamp only what was earned: an idempotent re-hit that reconciles
-      // layer 1 to a newer template hands its version back here instead
-      // of stamping it, and it is stamped below only once the
-      // post-workspace layers converged.
-      deferVersionStamp: true,
+      // The core never stamps: the version comes back as
+      // `pendingVersionStamp` and `finishTemplateApply` below stamps it only
+      // once the post-workspace layers converged.
       definition:
         innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
       userId,
@@ -191,7 +193,9 @@ async function executeTemplateApplyApproval({
   // syncs layer 2 from that same template, not the stored copy, which may
   // predate the version layer 1 just applied.
   const created = core.status === "created" ? core.created : undefined;
-  const pendingVersionStamp = created?.pendingVersionStamp;
+  const pendingVersionStamp =
+    created?.pendingVersionStamp ??
+    (core.status === "composed" ? core.pendingVersionStamp : undefined);
   const resolvedPackage = created?.packageDefinition as
     Record<string, unknown> | undefined;
   const definition: Record<string, unknown> = resolvedPackage
@@ -260,31 +264,33 @@ async function executeTemplateApplyApproval({
     }
   }
 
-  // The version stamp layer 1 deferred: written only when layer 2 actually
-  // landed (nothing errored, nothing still proposed). Otherwise the space
-  // keeps its previous stamp, so the next `market update` still sees the
-  // drift and re-applies — the stamp never claims a playbook that is not
-  // there. A throw above already left it unstamped (and the space marked
-  // `provisioningStatus:"failed"` for the resume path).
-  let versionStamped = false;
-  if (pendingVersionStamp) {
-    const { postWorkspaceLayersConverged } =
-      await import("../../../services/capabilities/install-layers.js");
-    if (!needsPost || postWorkspaceLayersConverged(post)) {
-      const { stampWorkspacePackageVersion } =
-        await import("../../../services/workspace-creation-service.js");
-      await stampWorkspacePackageVersion(workspaceId, pendingVersionStamp);
-      versionStamped = true;
-    } else {
-      logger.warn(
-        {
-          proposalId: input.proposalId,
-          workspaceId,
-          version: pendingVersionStamp,
-        },
-        "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
-      );
-    }
+  // The ONE finisher: the version layer 1 handed back is stamped, and a
+  // newly built space marked "active", only when layer 2 actually landed
+  // (nothing errored, nothing still proposed). Otherwise the space keeps its
+  // previous stamp and records why, so the next `market update` still sees
+  // the drift and re-applies. A throw above already left it unstamped (and
+  // the space marked `provisioningStatus:"failed"` for the resume path).
+  const { finishTemplateApply } =
+    await import("../../../services/template-apply-finisher.js");
+  const finished = await finishTemplateApply({
+    workspaceId,
+    userId,
+    built: created?.outcome === "created",
+    pendingVersionStamp,
+    pendingPack: core.status === "composed" ? core.pendingPack : undefined,
+    post: needsPost ? (post ?? {}) : {},
+  });
+  const versionStamped = finished.versionStamped;
+  if (pendingVersionStamp && !versionStamped) {
+    logger.warn(
+      {
+        proposalId: input.proposalId,
+        workspaceId,
+        version: pendingVersionStamp,
+        state: finished.state,
+      },
+      "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
+    );
   }
 
   // Report to IS telemetry (fire-and-forget — never blocks)
@@ -366,6 +372,38 @@ export function registerWorkspaceExecutors(): void {
         }
       }
 
+      const agentUserId =
+        proposal.agentUserId ??
+        (typeof joinData.agentUserId === "string"
+          ? joinData.agentUserId
+          : null);
+      const role =
+        joinData.role === "owner" ||
+        joinData.role === "editor" ||
+        joinData.role === "viewer"
+          ? joinData.role
+          : "editor";
+      // Defence-in-depth, the materializer's rule: a join only ever makes an
+      // AGENT user row a member.
+      const [agentRow] = agentUserId
+        ? await db
+            .select({ userType: users.userType })
+            .from(users)
+            .where(eq(users.id, agentUserId))
+        : [];
+      if (
+        !targetWorkspaceId ||
+        !agentUserId ||
+        agentRow?.userType !== "agent"
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This join request names no agent to add (or its requester is not " +
+            "an agent), so no membership can be granted — reject it.",
+        });
+      }
+
       const validatedEvent = await auditLog({
         subjectType: "workspace",
         action: "join",
@@ -390,21 +428,37 @@ export function registerWorkspaceExecutors(): void {
         source: "api",
       });
 
-      const joinUpdatedData = {
-        ...joinData,
-        ...(validatedEvent ? { validatedEventId: validatedEvent.id } : {}),
-      };
-
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          data: joinUpdatedData,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+      // MEMBERSHIP IS SYNCHRONOUS (#6): the row lands in the SAME transaction
+      // as the APPROVED flip, so the moment the join reads approved the agent
+      // IS a member — the deferred writes below replay against it. The
+      // materializer still receives `workspace.join.validated` and finds the
+      // row already there (its existing idempotent skip); it is the backstop
+      // for any other route into that insert, no longer the writer.
+      const { rows: inserted, approved } = await db.transaction(async (tx) => {
+        const rows = await tx
+          .insert(workspaceMembers)
+          .values({ workspaceId: targetWorkspaceId, userId: agentUserId, role })
+          .onConflictDoNothing()
+          .returning({ id: workspaceMembers.id });
+        const [approved] = await tx
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            // MERGED into the row, never the copy read above: a write kept
+            // (or an item the reviewer dropped) since then must survive.
+            ...(validatedEvent
+              ? {
+                  data: drizzleSql`coalesce(${proposals.data}, '{}'::jsonb) || jsonb_build_object('validatedEventId', ${validatedEvent.id}::text)`,
+                }
+              : {}),
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId))
+          .returning({ data: proposals.data });
+        return { rows, approved };
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -415,7 +469,32 @@ export function registerWorkspaceExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+
+      // Replay the writes the agent made while it waited, AS THE AGENT, each
+      // through its own door — the ladder decides each one again (access was
+      // approved here, content was not). Outcomes land on the join row.
+      // Read from the row as approved: a write kept after this executor read
+      // the proposal is in it too.
+      if (readDeferredWrites(approved?.data).writes.length > 0) {
+        const { replayDeferredWrites } =
+          await import("../../../services/governance/deferred-writes.js");
+        await replayDeferredWrites({
+          proposalId: input.proposalId,
+          workspaceId: targetWorkspaceId,
+        });
+      }
+
+      return {
+        success: true,
+        // The storage engine's own answer: 1 = the agent became a member now,
+        // 0 = it already was (the conflict was the row).
+        effect: {
+          applied: "verified",
+          rows: inserted.length,
+          ids: inserted.map((r) => r.id),
+          subject: "workspace_members",
+        },
+      };
     },
   });
 
@@ -1006,7 +1085,7 @@ export function registerWorkspaceExecutors(): void {
       try {
         const { applyPackagePostWorkspace } =
           await import("../../../services/package-apply-post-workspace.js");
-        await applyPackagePostWorkspace({
+        const post = await applyPackagePostWorkspace({
           workspaceId,
           body: definition as Parameters<
             typeof applyPackagePostWorkspace
@@ -1014,6 +1093,17 @@ export function registerWorkspaceExecutors(): void {
           userId,
           agentUserId: proposal.agentUserId ?? undefined,
           scopes: [],
+        });
+        // An `--onto` identity's version is stamped only once layer 2 landed.
+        const { finishTemplateApply } =
+          await import("../../../services/template-apply-finisher.js");
+        await finishTemplateApply({
+          workspaceId,
+          userId,
+          built: false,
+          pendingVersionStamp: core.pendingVersionStamp,
+          pendingPack: core.pendingPack,
+          post,
         });
       } catch (e) {
         // Scrub the raw cause to the operator log; the client gets a fixed
@@ -1103,7 +1193,6 @@ export function registerWorkspaceExecutors(): void {
       > = {
         packageSlug: templateSlug,
         proposalId: templateSlug,
-        ...(resolved.version ? { packageVersion: resolved.version } : {}),
       };
       const dbConn = await getDb();
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
@@ -1118,6 +1207,19 @@ export function registerWorkspaceExecutors(): void {
           typeof reconcileWorkspaceFromDefinition
         >[0]["definition"],
         mergeCapabilities: true,
+      });
+      // Adopt binds the identity and reconciles layer 1 only: the version is
+      // NOT earned here. The finisher records "layer-2-not-run", health reads
+      // the space drifted, and `synap templates update` applies the rest and
+      // stamps it.
+      const { finishTemplateApply } =
+        await import("../../../services/template-apply-finisher.js");
+      await finishTemplateApply({
+        workspaceId,
+        userId,
+        built: false,
+        pendingVersionStamp: resolved.version ?? undefined,
+        post: null,
       });
 
       const updatedData = {

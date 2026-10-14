@@ -36,6 +36,7 @@ import {
 import { notifyHumanMentions } from "../../services/messaging/notify-room-post.js";
 import { recordOwnerRoomReply } from "../../services/focus-sessions/session-answer.js";
 import { resolveSummonedAgentUserId } from "../../services/messaging/turn-principal.js";
+import { resolveAgentReachMany } from "../../services/agent-dispatch/agent-binding.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -721,6 +722,8 @@ export const sendMessageProcedure = protectedProcedure
     // the single-responder isAiChannel gate above unchanged).
 
     let routingDecision: RoutedTeammateContext | null = null;
+    // A mention named a roster member the pod does not run (reach ≠ 'pod').
+    let mentionedExternalAgent = false;
     const isMultiplayerRoom =
       channel.channelType === ChannelType.GROUP ||
       channel.channelType === ChannelType.AGENT_COLLAB;
@@ -756,9 +759,16 @@ export const sendMessageProcedure = protectedProcedure
               )
             )
             .orderBy(asc(channelMembers.createdAt));
+          // THE REACH RULE: an external agent (reach dispatch/pull) NEVER gets
+          // an IS turn under its name — only pod-reach members can answer here.
+          // Mentioning an external member is a message TO it, not a summons
+          // for the IS: no turn, and no router fallthrough to a house agent.
+          const reach = await resolveAgentReachMany(
+            roster.map((r) => r.memberId)
+          );
           const mentionedMember = resolveMentionedMember(
             mentionHandles,
-            roster
+            roster.filter((r) => reach.get(r.memberId) === "pod")
           );
 
           if (mentionedMember) {
@@ -766,6 +776,8 @@ export const sendMessageProcedure = protectedProcedure
               mentionedMember.memberId,
               "mention"
             );
+          } else if (resolveMentionedMember(mentionHandles, roster)) {
+            mentionedExternalAgent = true;
           }
           // If mention doesn't resolve to a channel member → silence (no fallthrough).
         }
@@ -773,11 +785,12 @@ export const sendMessageProcedure = protectedProcedure
         // 2. when_confident: ask the IS cheap router — only if no mention resolved.
         if (
           !routingDecision &&
+          !mentionedExternalAgent &&
           reactionMode === AiReactionMode.WHEN_CONFIDENT
         ) {
           try {
             // Fetch AI_AGENT members with their identity for the router payload.
-            const aiMembers = await db
+            const roomAiMembers = await db
               .select({
                 memberId: channelMembers.memberId,
                 name: users.name,
@@ -791,6 +804,14 @@ export const sendMessageProcedure = protectedProcedure
                   eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
                 )
               );
+            // Only pod-reach members are router candidates (the reach rule —
+            // an external agent never gets an IS turn under its name).
+            const memberReach = await resolveAgentReachMany(
+              roomAiMembers.map((r) => r.memberId)
+            );
+            const aiMembers = roomAiMembers.filter(
+              (r) => memberReach.get(r.memberId) === "pod"
+            );
 
             if (aiMembers.length > 0) {
               // Fetch recent context (last 6 messages — cheap, bounded) through

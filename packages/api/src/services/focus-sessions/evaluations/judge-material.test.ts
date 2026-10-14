@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   roomRows: [] as Array<{ authorType: string; content: string }>,
   roomCalls: [] as Array<Record<string, unknown>>,
   channelId: null as string | null,
+  evalRows: [] as Array<Record<string, unknown>>,
 }));
 
 const SESSION_BASE = {
@@ -109,7 +110,7 @@ vi.mock("./record.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./record.js")>();
   return {
     ...actual,
-    listSessionEvaluations: vi.fn(async () => []),
+    listSessionEvaluations: vi.fn(async () => h.evalRows),
     recordSessionEvaluation: vi.fn(async () => ({
       status: "recorded",
       escalated: false,
@@ -167,6 +168,7 @@ beforeEach(() => {
   h.roomRows = [];
   h.roomCalls = [];
   h.channelId = null;
+  h.evalRows = [];
   h.bodies = new Map([["k/audit.md", AUDIT_BODY]]);
   h.rowsByTable = new Map<unknown, Record<string, unknown>[]>([
     [
@@ -242,6 +244,47 @@ describe("judge rung — material is the work, not the labels", () => {
   });
 });
 
+describe("judge rung — never cites its own earlier verdict", () => {
+  const row = (criterionKey: string, rationale: string) => ({
+    id: `r-${criterionKey}`,
+    sessionId: "s-1",
+    criterionKey,
+    verdict: "fail",
+    evaluatorKind: criterionKey === "mapped" ? "judge" : "evidence",
+    evaluatorId: null,
+    evidence: {},
+    rationale,
+    createdAt: new Date("2026-10-13T10:00:00Z"),
+  });
+
+  it("the criterion's own earlier verdict is withheld from its retry; other criteria's stay, framed as NOT evidence", async () => {
+    h.evalRows = [
+      row("mapped", "OWN-PRIOR-VERDICT"),
+      row("other", "OTHER-CHECK"),
+    ];
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(1);
+    const { material } = h.judgeCalls[0]!;
+    expect(material).not.toContain("OWN-PRIOR-VERDICT");
+    expect(material).toContain("OTHER-CHECK");
+    expect(material).toContain("context, NOT evidence");
+  });
+
+  it("no section at all when only the judged criterion has earlier rows", () => {
+    const material = buildJudgeMaterial(
+      { goal: "g", expectedOutputs: [], verificationReport: null },
+      [{ criterionKey: "mapped", verdict: "fail", rationale: "OWN" }],
+      undefined,
+      [],
+      undefined,
+      MATERIAL_MAX,
+      new Set(["mapped"])
+    );
+    expect(material).not.toContain("OWN");
+    expect(material).not.toContain("PRIOR VERDICTS");
+  });
+});
+
 describe("judge rung — an IS still capped at 8000 (deploy order)", () => {
   const bigBody = `${"x".repeat(30_000)}\nEND-EVIDENCE`;
 
@@ -297,7 +340,7 @@ describe("buildJudgeMaterial — budget", () => {
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(material).toContain("### document: A");
     expect(material).toContain("### document: B");
-    expect(material).toContain("…[truncated]");
+    expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
   });
 });
 
@@ -366,7 +409,7 @@ describe("buildJudgeMaterial — fair budget", () => {
       },
     ]);
     expect(material).toContain("FRICTION: none observed");
-    expect(material).toContain("…[truncated]…");
+    expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
   });
 
   it("budget a short item leaves goes to the long one (not split evenly)", () => {
@@ -396,6 +439,63 @@ describe("buildJudgeMaterial — fair budget", () => {
     expect(material).toContain("msg-19 ");
     expect(material).not.toContain("msg-0 ");
     expect(material).toContain("EARLIER-ROW");
+  });
+
+  it("a cut names how much it dropped, and the material opens with the CLIPPED note", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [
+      { kind: "document", title: "Huge", text: "x".repeat(60_000) },
+      { kind: "document", title: "Small", text: "SMALL-DOC" },
+    ]);
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+    // The count is the truth: kept + omitted = the document's length.
+    const omitted = Number(
+      /\[clipped: (\d+) chars omitted\]/.exec(material)![1]
+    );
+    const kept = (material.match(/x/g) ?? []).length;
+    expect(kept + omitted).toBe(60_000);
+    expect(material).toContain("SMALL-DOC");
+  });
+
+  it("a material that fits whole carries no note and no mark", () => {
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [{ kind: "document", title: "D", text: "all of it" }],
+      { status: "ok", messages: [{ author: "agent", text: "done" }] }
+    );
+    expect(material).not.toContain("CLIPPED");
+    expect(material).not.toContain("[clipped:");
+  });
+
+  it("room messages cut on read count as a clipped section", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [], {
+      status: "ok",
+      messages: [
+        { author: "agent", text: "short…[clipped: 9 chars omitted]…" },
+      ],
+      clippedMessages: 1,
+    });
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+  });
+
+  it("an over-long goal cuts the WHOLE material, marked, within the cap", () => {
+    const material = buildJudgeMaterial(
+      { ...S, goal: "g".repeat(20_000) },
+      [],
+      undefined,
+      [{ kind: "document", title: "D", text: "y".repeat(5_000) }]
+    );
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 2 sections below were cut")
+    ).toBe(true);
+    expect(material).toMatch(/\[clipped: \d+ chars omitted\]…$/);
   });
 
   it("fairShares: short items keep everything, never over budget", () => {

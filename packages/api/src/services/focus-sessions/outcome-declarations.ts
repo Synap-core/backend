@@ -29,6 +29,7 @@
 
 import { z } from "zod";
 import { slotKeyBase } from "@synap-core/types/units";
+import { deriveDecisionAsk } from "@synap-core/types/ask";
 import { db, focusSessions, eq, and } from "@synap/database";
 import {
   BLOCKED_REASONS,
@@ -122,8 +123,31 @@ function slotOf(o: OutcomeDeclaration): ExpectedOutput {
   };
 }
 
+/**
+ * A person-owed DECISION declared without an ask gets its derived `confirm`
+ * (`deriveDecisionAsk`) stored on the slot, so the row itself says "answer
+ * Yes / No" and is never attested bare. Applied to the slot as it will be
+ * STORED (after an upsert's merge), so a stored ask is never overwritten.
+ */
+function withDecisionAsk(slot: ExpectedOutput): ExpectedOutput {
+  const ask = deriveDecisionAsk(slot);
+  return ask ? { ...slot, ask } : slot;
+}
+
 /** Outcomes → the two stores they live in. Pure. */
 export function splitOutcomes(outcomes: readonly OutcomeDeclaration[]): {
+  expectedOutputs: ExpectedOutput[];
+  criteria: SessionCriterion[];
+} {
+  const split = splitDeclared(outcomes);
+  return {
+    ...split,
+    expectedOutputs: split.expectedOutputs.map(withDecisionAsk),
+  };
+}
+
+/** {@link splitOutcomes} before the decision-ask default. */
+function splitDeclared(outcomes: readonly OutcomeDeclaration[]): {
   expectedOutputs: ExpectedOutput[];
   criteria: SessionCriterion[];
 } {
@@ -175,7 +199,7 @@ export function upsertOutcomes(
   current: { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] },
   outcomes: readonly OutcomeDeclaration[]
 ): { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] } {
-  const split = splitOutcomes(outcomes);
+  const split = splitDeclared(outcomes);
   const expectedOutputs = [...current.expectedOutputs];
   for (const slot of split.expectedOutputs) {
     const at = findSlotIndex(expectedOutputs, {
@@ -183,11 +207,14 @@ export function upsertOutcomes(
       label: slot.label,
     });
     if (at === -1) {
-      expectedOutputs.push(slot);
+      expectedOutputs.push(withDecisionAsk(slot));
       continue;
     }
     const { key: _declared, ...declared } = slot;
-    expectedOutputs[at] = { ...expectedOutputs[at]!, ...declared };
+    expectedOutputs[at] = withDecisionAsk({
+      ...expectedOutputs[at]!,
+      ...declared,
+    });
   }
   const criteria = [...current.criteria];
   for (const c of split.criteria) {

@@ -1,6 +1,6 @@
 /**
  * Library groups — the person's persistent groups over their Library
- * (CAPTURE_LIBRARY_PLAN L2, migration 0326).
+ * (CAPTURE_LIBRARY_PLAN L2, migration 0328).
  *
  * The Library is a lens over every staged item (`documents.metadata ? 'importItem'`)
  * across import runs. A group persists past any one run: it keeps its note,

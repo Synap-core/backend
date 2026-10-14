@@ -18,6 +18,8 @@ export * from "./governance-grant-options.js";
 export * from "./governance-policy-sentences.js";
 // A reviewer's note on a decided proposal (`proposals.comments`).
 export * from "./review-comment.js";
+// A run on a playbook starts a session — the one classification + subject reader.
+export * from "./session-start.js";
 
 // Re-export database types for proposals
 export type { Proposal, NewProposal } from "@synap/database";

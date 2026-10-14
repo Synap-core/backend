@@ -522,7 +522,7 @@ registerVisibility({
 registerVisibility({
   table: libraryGroups,
   query: () => db.query.libraryGroups,
-  // The Library's groups (0326) are the person's own: owner floor only. The
+  // The Library's groups (0328) are the person's own: owner floor only. The
   // nullable workspaceId is where Build files, not a read lens.
   rule: { kind: "user", userColumn: libraryGroups.userId },
 });

@@ -23,7 +23,9 @@
  * would make `insertSkillGoverned`'s `approved = kind === "instruction" &&
  * !agentUserId` rule read TRUE — landing an AGENT-authored instruction skill in
  * the agent's own system prompt with no owner approval (prompt-injection
- * vector). The executor restores `approved: false`; this asserts it.
+ * vector). The executor restores `approved: false` — unless a PERSON approved
+ * the proposal (their click on the reviewed body is the owner approval); every
+ * agent path (agent behind a human, agent key, agent principal) keeps it.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -35,6 +37,9 @@ const SKILLS = { id: "skills.id", __table: "skills" } as const;
 /** Rows the mocked `select().from(T)` should yield, per table. */
 let proposalRows: { status: string }[] = [];
 let toolRows: { id: string }[] = [];
+/** The request's acting agent (ALS) and the user ids that are agent principals. */
+let actingAgent: string | undefined;
+let agentPrincipals = new Set<string>();
 /** Every `update(T).set(v)` the executor issues, in order. */
 let updates: { table: unknown; values: Record<string, unknown> }[] = [];
 
@@ -60,6 +65,11 @@ vi.mock("@synap/database", () => ({
   tools: TOOLS,
   skills: SKILLS,
   eq: () => ({}),
+  getActingAgentUserId: () => actingAgent,
+}));
+
+vi.mock("../review-authority.js", () => ({
+  isAgentPrincipal: async (userId: string) => agentPrincipals.has(userId),
 }));
 
 vi.mock("@synap/database/schema", () => ({
@@ -122,6 +132,8 @@ const declarativeSkill = (over: Record<string, unknown> = {}) => ({
 const run = async (opts: {
   agentUserId?: string | null;
   skill?: Record<string, unknown>;
+  approver?: string;
+  ctx?: Record<string, unknown>;
 }) => {
   if (!executor) throw new Error("skill/create executor not registered");
   insertResult = {
@@ -143,9 +155,9 @@ const run = async (opts: {
       data: { data: { name: "fetch_invoice", kind: "declarative" } },
     },
     payload: null,
-    userId: APPROVER,
+    userId: opts.approver ?? APPROVER,
     input: { proposalId: "p1" },
-    ctx: {} as never,
+    ctx: (opts.ctx ?? {}) as never,
     deps: { db: {}, emitProposalReviewed: () => undefined } as never,
   });
 };
@@ -155,6 +167,8 @@ beforeEach(() => {
   proposalRows = [];
   toolRows = [{ id: "tool-1" }];
   updates = [];
+  actingAgent = undefined;
+  agentPrincipals = new Set();
 });
 
 describe("skill/create approval WIRES the verb (executable, not source-text)", () => {
@@ -201,14 +215,39 @@ describe("skill/create approval WIRES the verb (executable, not source-text)", (
 });
 
 describe("BORN-APPROVED DOWNGRADE stays intact (security)", () => {
-  it("forces approved:false for an AGENT-authored skill the door born approved", async () => {
+  const instruction = () =>
+    declarativeSkill({ kind: "instruction", approved: true });
+  const downgraded = () =>
+    updates.find((u) => u.table === SKILLS)?.values.approved === false;
+
+  it("KEEPS approved:true when a PERSON approved the agent's skill (no second toggle)", async () => {
+    await run({ agentUserId: AGENT, skill: instruction() });
+    expect(updates.find((u) => u.table === SKILLS)).toBeUndefined();
+  });
+
+  it("forces approved:false when an agent travels behind the human approver (ctx.agentUserId)", async () => {
     await run({
       agentUserId: AGENT,
-      skill: declarativeSkill({ kind: "instruction", approved: true }),
+      skill: instruction(),
+      ctx: { agentUserId: "agent-2" },
     });
-    const downgrade = updates.find((u) => u.table === SKILLS);
-    expect(downgrade).toBeDefined();
-    expect(downgrade?.values.approved).toBe(false);
+    expect(downgraded()).toBe(true);
+  });
+
+  it("forces approved:false when the request's acting agent is set (agent key)", async () => {
+    actingAgent = "agent-2";
+    await run({ agentUserId: AGENT, skill: instruction() });
+    expect(downgraded()).toBe(true);
+  });
+
+  it("forces approved:false when the approver is itself an agent principal", async () => {
+    agentPrincipals = new Set(["agent-approver"]);
+    await run({
+      agentUserId: AGENT,
+      skill: instruction(),
+      approver: "agent-approver",
+    });
+    expect(downgraded()).toBe(true);
   });
 
   it("does NOT downgrade a HUMAN-authored skill (no agentUserId on the proposal)", async () => {

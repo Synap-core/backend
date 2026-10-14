@@ -363,7 +363,10 @@ export async function buildStartHere(p: {
       "team — call `report_to_synap` on the Synap Control Plane connector " +
       "(no connector? tell the user what to report). (2) Something about THIS " +
       "user's data or setup — duplicates, missing grants or keys, their " +
-      "config: that is theirs — file a `finding` entity here. Either way " +
+      "config: that is theirs — tell the user, and file a `finding` entity " +
+      "here only if this pod's `finding` kind models a `severity` (a problem " +
+      "report; `list_profiles` shows it), never research-base's " +
+      "validated-fact `finding`. Either way " +
       "quote VERBATIM evidence (the exact error string, failing input, " +
       "receipt line): a summary is worthless in three weeks. Before filing a " +
       "`finding`, dedupe against ALL open findings — " +

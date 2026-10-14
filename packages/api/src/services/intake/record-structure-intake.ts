@@ -20,6 +20,7 @@
 import { createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
+import { shortenTitle } from "@synap-core/types/titles";
 import type { db as DbType } from "@synap/database";
 import {
   ensureIntakeSession,
@@ -230,7 +231,7 @@ function captureLabel(input: RecordStructureIntakeInput): string | null {
 }
 
 function captureGoal(input: RecordStructureIntakeInput): string {
-  return `Capture · ${(captureLabel(input) ?? "capture").slice(0, 80)}`;
+  return `Capture · ${shortenTitle(captureLabel(input)) || "capture"}`;
 }
 
 /** What {@link stageCaptureSources} stages — the staging half of a capture door. */

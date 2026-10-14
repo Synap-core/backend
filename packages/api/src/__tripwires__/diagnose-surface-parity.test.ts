@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
  * by a human dogfooding, not by a gate — which is why this file exists.
  *
  * ── FAILURE 1: a FALSE ALARM (the worse kind) ───────────────────────────────
- * `global.ts` hardcoded `cap: AGENT_PROPOSALS_PER_USER_PER_DAY` (the BASE 10)
+ * `global.ts` hardcoded `cap: AGENT_PENDING_PROPOSAL_CAP` (the BASE 10)
  * for every agent, while `agentProposalCap()` applies a 3x multiplier for
  * a proven agent (>=100 recent proposals at >=95% approve rate). Live, the
  * global door announced "1 agent(s) hit the daily proposal cap" for an agent
@@ -74,7 +74,7 @@ describe("tripwire: diagnose's two surfaces agree", () => {
     ).toContain("agentProposalCap(");
 
     expect(
-      /cap:\s*AGENT_PROPOSALS_PER_USER_PER_DAY/.test(globalSrc),
+      /cap:\s*AGENT_PENDING_PROPOSAL_CAP/.test(globalSrc),
       "global diagnose assigns the BASE constant as a per-agent cap. Use " +
         "agentProposalCap(agentId) so this door and diagnose(agentId) " +
         "cannot disagree about whether an agent is blocked."

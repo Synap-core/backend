@@ -59,6 +59,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import {
   db,
@@ -95,7 +96,7 @@ import {
 } from "@synap-core/types/lens";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import { requireUserId } from "../utils/user-scoped.js";
-import { proposalsRouter } from "./proposals.js";
+import { proposalsRouter, assertProposalWorkspaceRead } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
 import { eventsRouter } from "./events.js";
 import {
@@ -124,7 +125,7 @@ import {
 } from "../services/signals/lens-containers.js";
 import { needsYouRole } from "../notifications/registry.js";
 import { listDraftAskSlots } from "../services/focus-sessions/draft-asks.js";
-import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
+import { listNeedsYouOwed } from "../services/signals/needs-you-owed.js";
 import { resolveScope } from "../utils/scope-filter.js";
 import { readClusterSessions } from "../services/signals/cluster-sessions.js";
 import { rosterReadFor } from "../access/session-visibility.js";
@@ -136,6 +137,12 @@ import {
 } from "../services/outputs/landed-outputs.js";
 import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
+import {
+  resolveThingsLens,
+  type ThingsLens,
+} from "../services/focus-sessions/session-subject.js";
+import { sessionSubjectWhere } from "../services/focus-sessions/session-subject-where.js";
+import type { ProposalCluster } from "../services/proposals/fingerprint.js";
 import {
   listUnfinishedCaptures,
   type UnfinishedCapture,
@@ -203,12 +210,26 @@ const SignalScope = {
    * than returned unnarrowed.
    */
   automationId: z.string().uuid().optional(),
+  /**
+   * An INTENT lens: attention ON the things of this kind or role (an intent
+   * surface's "Needs you" / "Working now", and its rail badge). It narrows
+   * the halves that can follow a thing — decisions on one (or creating one,
+   * or filed in a session on one: `proposalOnThingsWhere`), owed slots and
+   * review of sessions on one, and those sessions working now
+   * (`sessionSubjectWhere`). Notifications resolve to containers, never to
+   * things, so their half is suppressed under it (never returned
+   * unnarrowed); rule runs carry no thing, likewise. Read by `needs-you`,
+   * `proposed`, `suggestions`, `happening` and `count`; the other lenses
+   * refuse it (BAD_REQUEST) rather than answer unnarrowed. An unknown slug
+   * is NOT_FOUND.
+   */
+  profileSlug: z.string().min(1).optional(),
 };
 
 type SignalScopeInput = z.infer<z.ZodObject<typeof SignalScope>>;
 
 /** The object form of the caller context (never the lazy factory). */
-type SignalsCtx = Extract<
+export type SignalsCtx = Extract<
   Parameters<typeof proposalsRouter.createCaller>[0],
   { userId?: unknown }
 >;
@@ -226,6 +247,30 @@ function containerLensOf(input: SignalScopeInput): ContainerLens | undefined {
 /** A half that can only follow an automation through the proposal ledger. */
 function followsScope(input: SignalScopeInput): boolean {
   return !input.automationId;
+}
+
+/** Notifications follow neither an automation nor a thing (they resolve to containers). */
+function notificationsFollow(input: SignalScopeInput): boolean {
+  return followsScope(input) && !input.profileSlug;
+}
+
+/** The intent lens resolved once per read, or undefined without one. */
+async function thingsLensOf(
+  input: SignalScopeInput
+): Promise<ThingsLens | undefined> {
+  return input.profileSlug
+    ? await resolveThingsLens(input.profileSlug)
+    : undefined;
+}
+
+/** Lenses that cannot follow a thing refuse the intent lens, never answer unnarrowed. */
+function assertNoThingsLens(input: SignalScopeInput, lens: string): void {
+  if (input.profileSlug) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `profileSlug narrows needs-you, proposed, suggestions, happening and count — not "${lens}".`,
+    });
+  }
 }
 
 // ── Settled sub-reads ───────────────────────────────────────────────────────
@@ -275,6 +320,17 @@ function throwIfFailed(
   if (failures[0]) throw failures[0].error;
 }
 
+/**
+ * The attention halves' rows as READ here: the union's DB-free inputs plus
+ * the space each row lives in — the column `narrowAttention` filters by. A
+ * projection that stopped carrying it fails the build, never narrows a scope
+ * to 0 behind a cast.
+ */
+type AttentionNotification = NotificationSignalInput & {
+  workspaceId: string | null;
+};
+type AttentionOwed = OwedSlotSignalInput & { workspaceId: string | null };
+
 // ── Blocking + Proposed + status: one read ──────────────────────────────────
 
 /**
@@ -290,7 +346,11 @@ async function readAttention(
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
   const follows = followsScope(input);
+  const notifsFollow = notificationsFollow(input);
   const container = containerLensOf(input);
+  // Resolved BEFORE the settled halves: an unknown slug is a vocabulary
+  // error for the whole read, never one quietly-empty half.
+  const things = await thingsLensOf(input);
   const owedScope = {
     userId,
     scope: resolveScope(ctx, {
@@ -300,12 +360,13 @@ async function readAttention(
     limit: OWED_SCAN_LIMIT,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(things ? { subject: things.subject } : {}),
   };
 
   // Unfinished captures are the person's own and live in no space or project:
   // they are read on the full floor (Home) only, never under a lens.
   const readsCaptures =
-    follows && !container && input.workspaceId === undefined;
+    follows && !container && !things && input.workspaceId === undefined;
   const [groups, notifs, health, owed, drafts, review, captures] =
     await Promise.all([
       settle(
@@ -318,6 +379,7 @@ async function readAttention(
             projectId: input.projectId,
             trackId: input.trackId,
             automationId: input.automationId,
+            profileSlug: input.profileSlug,
             status: "pending",
             limit: clusterLimit,
             excludeDraftSessions: true,
@@ -326,10 +388,10 @@ async function readAttention(
       ),
       // Under a container lens the door narrows IN SQL, before its limit
       // (`container`); the resolved containers below stay the authority.
-      follows
+      notifsFollow
         ? settle(
             "notifications",
-            [] as NotificationSignalInput[],
+            [] as AttentionNotification[],
             async () =>
               (
                 await notifCenterRouter.createCaller(ctx).list({
@@ -338,20 +400,22 @@ async function readAttention(
                   limit: NOTIFICATION_SCAN_LIMIT,
                   ...(container ? { container } : {}),
                 })
-              ).notifications as NotificationSignalInput[]
+              ).notifications satisfies AttentionNotification[]
           )
         : settle(
             "notifications",
-            [] as NotificationSignalInput[],
+            [] as AttentionNotification[],
             async () => []
           ),
       // System HEALTH is the pod's, never a container's: under a container lens
       // the banner reads its own rows (every status-role type is `system`,
       // pinned in the tests); at the floor it reads the floor read above.
-      container
+      // Under the intent lens the notification half is suppressed, so the
+      // banner reads its own rows too.
+      container || (follows && !notifsFollow)
         ? settle(
             "notifications",
-            [] as NotificationSignalInput[],
+            [] as AttentionNotification[],
             async () =>
               (
                 await notifCenterRouter.createCaller(ctx).list({
@@ -360,7 +424,7 @@ async function readAttention(
                   category: "system",
                   limit: NOTIFICATION_SCAN_LIMIT,
                 })
-              ).notifications as NotificationSignalInput[]
+              ).notifications satisfies AttentionNotification[]
           )
         : null,
       // The owed read under the SAME lens and owner floor `focusSessions.owed`
@@ -369,14 +433,11 @@ async function readAttention(
       follows
         ? settle(
             "owed",
-            [] as OwedSlotSignalInput[],
-            async () =>
-              (await listOwedSlots({
-                ...owedScope,
-                excludeDrafts: true,
-              })) as OwedSlotSignalInput[]
+            [] as AttentionOwed[],
+            async (): Promise<AttentionOwed[]> =>
+              await listNeedsYouOwed(owedScope)
           )
-        : settle("owed", [] as OwedSlotSignalInput[], async () => []),
+        : settle("owed", [] as AttentionOwed[], async () => []),
       // The DRAFT half — owed slots on undecided agent drafts, folded into one
       // `draft-asks` row per draft. PROPOSED, never needs-you.
       settle(
@@ -399,6 +460,7 @@ async function readAttention(
               projectId: input.projectId,
               trackId: input.trackId,
               sessionId: input.sessionId,
+              ...(things ? { subject: things.subject } : {}),
             })
           : { sessions: [], truncated: false }
       ),
@@ -573,6 +635,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
   if (!followsScope(input)) return { signals: [], truncated: false };
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
+  const things = await thingsLensOf(input);
   const conditions = sessionListConditions({
     userId,
     scope: { workspaceLens: input.workspaceId, projectLens: input.projectId },
@@ -581,6 +644,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     kind: "all",
     roster: reader.roster,
     ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(things ? { subject: things.subject } : {}),
   });
   conditions.push(or(sessionKindWhere("work"), sessionKindWhere("run"))!);
   if (input.sessionId) conditions.push(eq(focusSessions.id, input.sessionId));
@@ -674,7 +738,12 @@ async function readRuleRuns(
   input: SignalScopeInput,
   now: Date
 ): Promise<{ signals: Signal[]; truncated: boolean }> {
-  if (input.projectId || input.trackId || input.sessionId) {
+  if (
+    input.projectId ||
+    input.trackId ||
+    input.sessionId ||
+    input.profileSlug
+  ) {
     return { signals: [], truncated: false };
   }
   const since = new Date(now.getTime() - SESSION_WORKING_WINDOW_MS);
@@ -1163,6 +1232,262 @@ async function countSignals(ctx: SignalsCtx, input: SignalScopeInput) {
   return countOf(attention);
 }
 
+/** The scopes a grouped needs-you read answers: each space, and kinds in it. */
+export interface NeedsYouScopes {
+  projectId?: string;
+  spaces: ReadonlyArray<{ workspaceId: string; profileSlugs: string[] }>;
+}
+
+/** Per-scope needs-you numbers; null = that scope's read failed (never 0). */
+export interface NeedsYouByScope {
+  total: number | null;
+  bySpace: Map<string, number | null>;
+  /** workspaceId → profileSlug → count. */
+  byKind: Map<string, Map<string, number | null>>;
+  /** Attention reads made — 1 when grouped, more when it fell back. */
+  attentionReads: number;
+}
+
+/**
+ * The attention read narrowed to ONE scope, by filtering a WIDER read rather
+ * than reading again: the rows each half's lensed read would have returned.
+ * Every half's workspace lens is a row equality (`proposals.groups` →
+ * `workspace_id = W`, a cluster has a member there; notifications, owed
+ * slots and review sessions → their `workspaceId`), and a kind lens is a set
+ * the caller resolved with the halves' own predicates. Captures live in no
+ * space; notifications never follow a kind (`notificationsFollow`).
+ */
+function narrowAttention(
+  a: Attention,
+  scope: {
+    workspaceId: string;
+    /** A kind lens: its clusters (`proposals.groups({ profileSlug })`). */
+    kindClusters?: ProposalCluster[];
+    /** A kind lens: the sessions ON its things (`sessionSubjectWhere`). */
+    kindSessionIds?: ReadonlySet<string>;
+  }
+): Attention {
+  const inSpace = (ws: string | null | undefined) => ws === scope.workspaceId;
+  const onKind = (sessionId: string) =>
+    !scope.kindSessionIds || scope.kindSessionIds.has(sessionId);
+  const clusters = (scope.kindClusters ?? a.groups.groups).filter((c) =>
+    c.workspaceIds.includes(scope.workspaceId)
+  );
+  return {
+    ...a,
+    groups: {
+      ...a.groups,
+      groups: clusters,
+      distinct: clusters.length,
+      scanTruncated: false,
+    },
+    notifications: scope.kindClusters
+      ? []
+      : a.notifications.filter((r) => inSpace(r.workspaceId)),
+    notificationsTruncated: false,
+    owed: a.owed.filter((o) => inSpace(o.workspaceId) && onKind(o.sessionId)),
+    owedTruncated: false,
+    review: {
+      sessions: a.review.sessions.filter(
+        (r) => inSpace(r.workspaceId) && onKind(r.id)
+      ),
+      truncated: false,
+    },
+    captures: { captures: [], truncated: false },
+  };
+}
+
+/** A grouped read is exact only while no half of the wide read was capped. */
+function attentionIsComplete(a: Attention): boolean {
+  return (
+    !a.groups.scanTruncated &&
+    a.groups.distinct === a.groups.groups.length &&
+    !a.notificationsTruncated &&
+    !a.owedTruncated &&
+    !a.review.truncated &&
+    a.failures.blocking.length === 0 &&
+    a.failures.proposed.length === 0
+  );
+}
+
+/**
+ * NEEDS-YOU FOR MANY SCOPES IN ONE ATTENTION READ (the homes): the floor
+ * (narrowed to the project) read ONCE, then every space and (space, kind)
+ * count is that read narrowed (`narrowAttention`) and counted by THE count
+ * (`countOf`) — never a second rule. Per kind, one `proposals.groups` (the
+ * kind lens is a proposal predicate a cluster cannot be filtered by) and one
+ * session query (`sessionSubjectWhere`).
+ *
+ * The answer must equal `count` per scope. Where the narrowing cannot prove
+ * that — a half of the wide read hit its cap, or failed — the scope is read
+ * the old way (`countSignals` per scope), so a grouped number is never a
+ * floor passed off as a total. A space the caller cannot read proposals in
+ * fails as its own `count` would (`assertProposalWorkspaceRead`): null.
+ */
+export async function countNeedsYouByScope(
+  ctx: SignalsCtx,
+  input: NeedsYouScopes
+): Promise<NeedsYouByScope> {
+  const userId = requireUserId(ctx.userId);
+  const lens = input.projectId ? { projectId: input.projectId } : {};
+  let attentionReads = 0;
+  const countScope = async (scope: SignalScopeInput) => {
+    attentionReads += 1;
+    try {
+      return (await countSignals(ctx, { ...lens, ...scope })).needsYou;
+    } catch (err) {
+      logger.warn({ err, scope }, "needs-you scope read failed — null");
+      return null;
+    }
+  };
+  const perScope = async (): Promise<NeedsYouByScope> => {
+    const [total, spaces] = await Promise.all([
+      countScope({}),
+      Promise.all(
+        input.spaces.map(async (s) => ({
+          workspaceId: s.workspaceId,
+          count: await countScope({ workspaceId: s.workspaceId }),
+          kinds: await Promise.all(
+            s.profileSlugs.map(
+              async (slug) =>
+                [
+                  slug,
+                  await countScope({
+                    workspaceId: s.workspaceId,
+                    profileSlug: slug,
+                  }),
+                ] as const
+            )
+          ),
+        }))
+      ),
+    ]);
+    return {
+      total,
+      bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
+      byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+      attentionReads,
+    };
+  };
+
+  attentionReads += 1;
+  let floor: Attention;
+  try {
+    floor = await readAttention(ctx, lens, CLUSTER_PAGE_LIMIT);
+  } catch (err) {
+    logger.warn({ err }, "grouped needs-you read failed — per scope");
+    return perScope();
+  }
+  if (!attentionIsComplete(floor)) {
+    logger.info("grouped needs-you read capped — reading per scope");
+    return perScope();
+  }
+
+  // Per kind: its clusters + the sessions on its things, once for every space.
+  const sessionIds = [
+    ...new Set([
+      ...floor.owed.map((o) => o.sessionId),
+      ...floor.review.sessions.map((r) => r.id),
+    ]),
+  ];
+  const slugs = [...new Set(input.spaces.flatMap((s) => s.profileSlugs))];
+  const kinds = new Map(
+    await Promise.all(
+      slugs.map(async (slug) => {
+        try {
+          const things = await resolveThingsLens(slug);
+          const [groups, onThings] = await Promise.all([
+            proposalsRouter.createCaller(ctx).groups({
+              ...lens,
+              profileSlug: slug,
+              status: "pending",
+              limit: CLUSTER_PAGE_LIMIT,
+              excludeDraftSessions: true,
+              splitBySession: true,
+            }),
+            sessionIds.length
+              ? db
+                  .select({ id: focusSessions.id })
+                  .from(focusSessions)
+                  .where(
+                    and(
+                      inArray(focusSessions.id, sessionIds),
+                      sessionSubjectWhere(things.subject)
+                    )
+                  )
+              : Promise.resolve([] as Array<{ id: string }>),
+          ]);
+          const complete =
+            !groups.scanTruncated && groups.distinct === groups.groups.length;
+          return [
+            slug,
+            complete
+              ? {
+                  clusters: groups.groups,
+                  sessionIds: new Set(onThings.map((r) => r.id)),
+                }
+              : ("per-scope" as const),
+          ] as const;
+        } catch (err) {
+          logger.warn({ err, slug }, "needs-you kind lens failed — null");
+          return [slug, null] as const;
+        }
+      })
+    )
+  );
+
+  const spaces = await Promise.all(
+    input.spaces.map(async (s) => {
+      try {
+        await assertProposalWorkspaceRead(s.workspaceId, userId);
+      } catch {
+        // The space's own `count` throws here: null, never a number.
+        return {
+          workspaceId: s.workspaceId,
+          count: null,
+          kinds: s.profileSlugs.map((slug) => [slug, null] as const),
+        };
+      }
+      const kindCounts = await Promise.all(
+        s.profileSlugs.map(async (slug) => {
+          const kind = kinds.get(slug);
+          if (kind === null || kind === undefined) return [slug, null] as const;
+          if (kind === "per-scope")
+            return [
+              slug,
+              await countScope({
+                workspaceId: s.workspaceId,
+                profileSlug: slug,
+              }),
+            ] as const;
+          return [
+            slug,
+            countOf(
+              narrowAttention(floor, {
+                workspaceId: s.workspaceId,
+                kindClusters: kind.clusters,
+                kindSessionIds: kind.sessionIds,
+              })
+            ).needsYou,
+          ] as const;
+        })
+      );
+      return {
+        workspaceId: s.workspaceId,
+        count: countOf(narrowAttention(floor, { workspaceId: s.workspaceId }))
+          .needsYou,
+        kinds: kindCounts,
+      };
+    })
+  );
+  return {
+    total: countOf(floor).needsYou,
+    bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
+    byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+    attentionReads,
+  };
+}
+
 const LensCaps = z
   .object({
     blocking: z.number().int().min(1).max(100),
@@ -1224,6 +1549,7 @@ export const signalsRouter = router({
         input,
       }): Promise<{ signals: Signal[]; page?: LensPageWire }> => {
         if (input.lens === "page") {
+          assertNoThingsLens(input, input.lens);
           return {
             signals: [],
             page: await readLensPage(
@@ -1244,6 +1570,7 @@ export const signalsRouter = router({
           };
         }
         if (input.lens === "produced") {
+          assertNoThingsLens(input, input.lens);
           return {
             signals: (await readProduced(ctx, input)).signals.slice(
               0,
@@ -1252,6 +1579,7 @@ export const signalsRouter = router({
           };
         }
         if (input.lens === "history") {
+          assertNoThingsLens(input, input.lens);
           const happened = await readHappened(ctx, input, {
             limit: input.limit,
             until: input.cursor,
@@ -1355,6 +1683,43 @@ export const signalsRouter = router({
         return r.status === "fulfilled"
           ? { projectId, status: "ok" as const, count: r.value }
           : { projectId, status: "unavailable" as const };
+      });
+    }),
+
+  /**
+   * `count` for SEVERAL intents (kinds/roles) in one round-trip — the rail
+   * badges every pinned surface it shows at once, under ONE shared lens
+   * (workspace / project / track: the rail's).
+   *
+   * `countByProject`'s shape and reason: `count` itself, once per slug, so a
+   * pinned surface's badge equals the needs-you number that surface shows. A
+   * slug whose count FAILS (an unknown slug included) is reported as such,
+   * never as zero.
+   */
+  countByProfile: protectedProcedure
+    .input(
+      z.object({
+        profileSlugs: z.array(z.string().min(1)).max(50),
+        workspaceId: SignalScope.workspaceId,
+        projectId: SignalScope.projectId,
+        trackId: SignalScope.trackId,
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const slugs = [...new Set(input.profileSlugs)];
+      const lens = {
+        workspaceId: input.workspaceId,
+        projectId: input.projectId,
+        trackId: input.trackId,
+      };
+      const settled = await Promise.allSettled(
+        slugs.map((profileSlug) => countSignals(ctx, { ...lens, profileSlug }))
+      );
+      return slugs.map((profileSlug, i) => {
+        const r = settled[i]!;
+        return r.status === "fulfilled"
+          ? { profileSlug, status: "ok" as const, count: r.value }
+          : { profileSlug, status: "unavailable" as const };
       });
     }),
 });

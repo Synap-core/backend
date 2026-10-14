@@ -14,6 +14,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { fileChecksum } from "./checksum.js";
+import { attachmentDisposition } from "./utils.js";
 
 // ============================================================================
 // TYPES
@@ -236,6 +237,7 @@ export class R2Storage {
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
       Key: key,
+      ResponseContentDisposition: attachmentDisposition(key),
     });
 
     return await getSignedUrl(this.client, command, { expiresIn });

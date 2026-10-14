@@ -32,6 +32,7 @@ import {
   type WorkspaceDefinitionInput,
   type ReconcileReport,
   type InstallLayerReport,
+  workspaceIntentDefinitionSchema,
 } from "@synap/database";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -45,8 +46,13 @@ import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import {
   withWorkspaceProposalIdLock,
   reconcileWorkspaceIfStale,
-  stampWorkspacePackageVersion,
+  failedInLayerTwo,
+  withoutStamp,
 } from "../../services/workspace-creation-service.js";
+import {
+  finishTemplateApply,
+  reopenFailedLayerTwo,
+} from "../../services/template-apply-finisher.js";
 import { resolveWorkspaceExtends } from "../../services/workspace-composition.js";
 import type { ResolvedPackageDependency } from "../../services/package-dependency-resolver.js";
 import {
@@ -63,7 +69,6 @@ import {
 } from "../../services/definition-seeds.js";
 import {
   summarizePostWorkspaceLayers,
-  postWorkspaceLayersConverged,
   installedTrackTemplates,
   type InstalledTrackTemplate,
 } from "../../services/capabilities/install-layers.js";
@@ -714,6 +719,8 @@ export const definitionEngineProcedures = {
              * shared applier. Declared so the typed body carries them;
              * untrusted — `readTemplateRules` is the one parser.
              */
+            /** What the space produces → `settings.intent` (object-first homes). */
+            intent: workspaceIntentDefinitionSchema.optional(),
             rules: z.array(z.unknown()).optional(),
             /**
              * Declared skills (package `skills[]`) → `applyTemplateSkills`:
@@ -862,10 +869,8 @@ export const definitionEngineProcedures = {
           packageSlug: input.packageSlug,
           currentSettings,
           userId: ctx.userId,
-          // Stamp only what was earned: the new version is written below,
-          // once layer 2 converged (same rule as the approve path and the
-          // Hub `/packages/apply` door).
-          deferVersionStamp: true,
+          // Never stamps: the new version comes back as `pendingVersionStamp`
+          // and `finishTemplateApply` below stamps it once layer 2 converged.
         });
         let report: ReconcileReport | undefined;
         // Sync the post-workspace layers only when the template ACTUALLY drifted
@@ -960,18 +965,17 @@ export const definitionEngineProcedures = {
             });
             layers.push(...summarizePostWorkspaceLayers(post));
             trackTemplates = installedTrackTemplates(post);
-            // The version layer 1 deferred: stamped only when layer 2 landed
-            // (nothing errored, nothing still proposed); otherwise the next
-            // reinstall still sees the drift and re-applies.
-            if (
-              outcome.pendingVersionStamp &&
-              postWorkspaceLayersConverged(post)
-            ) {
-              await stampWorkspacePackageVersion(
-                workspaceId,
-                outcome.pendingVersionStamp
-              );
-            }
+            // The ONE finisher: the version layer 1 handed back is stamped
+            // only when layer 2 landed (nothing errored, nothing still
+            // proposed); otherwise it records why, health reads the space
+            // drifted, and the next reinstall re-applies.
+            await finishTemplateApply({
+              workspaceId,
+              userId: ctx.userId,
+              built: false,
+              pendingVersionStamp: outcome.pendingVersionStamp,
+              post,
+            });
           } catch (err) {
             // A1 — THE CHANNEL THAT WAS MISSING NOW EXISTS. Historical note kept
             // deliberately: this catch is still non-fatal (the workspace really
@@ -1040,7 +1044,7 @@ export const definitionEngineProcedures = {
               const wsSettings = ws.settings as WorkspaceSettings | null;
               const provStatus = wsSettings?.provisioningStatus;
 
-              if (provStatus === "failed") {
+              if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
                 logger.warn(
                   {
                     userId: ctx.userId,
@@ -1080,6 +1084,16 @@ export const definitionEngineProcedures = {
                     });
                   },
                 });
+                // This door resumes layer 1 only: the finisher marks the
+                // space active, and a template version it cannot earn here is
+                // recorded "layer-2-not-run" (health: drifted) — never stamped.
+                await finishTemplateApply({
+                  workspaceId: resumeResult.workspaceId,
+                  userId: ctx.userId,
+                  built: true,
+                  pendingVersionStamp: resumeResult.pendingVersionStamp,
+                  post: null,
+                });
                 return {
                   status: "created" as const,
                   outcome: "created" as const,
@@ -1117,9 +1131,18 @@ export const definitionEngineProcedures = {
               // Active workspace already exists → additively sync it to the
               // current template (add-only). Skipped for non-active (pending)
               // workspaces to avoid racing an in-flight provisioning build.
+              if (failedInLayerTwo(wsSettings))
+                await reopenFailedLayerTwo(ws.id, ctx.userId, undefined);
               const reconcileOutcome =
-                provStatus === "active"
-                  ? await reconcileExisting(ws.id, wsSettings)
+                provStatus === "active" || failedInLayerTwo(wsSettings)
+                  ? await reconcileExisting(
+                      ws.id,
+                      // A layer-2 failure re-syncs as stale (its stamp is
+                      // not trusted) so layer 2 re-runs — `failedInLayerTwo`.
+                      failedInLayerTwo(wsSettings)
+                        ? withoutStamp(wsSettings)
+                        : wsSettings
+                    )
                   : undefined;
               const reconciled = reconcileOutcome?.report;
               const layers = reconcileOutcome?.layers ?? [];
@@ -1172,7 +1195,7 @@ export const definitionEngineProcedures = {
               const wsSettings = ws.settings as WorkspaceSettings | null;
               const provStatus = wsSettings?.provisioningStatus;
 
-              if (provStatus === "failed") {
+              if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
                 // Automatically resume from where the previous attempt failed.
                 logger.warn(
                   {
@@ -1218,6 +1241,16 @@ export const definitionEngineProcedures = {
                     });
                   },
                 });
+                // This door resumes layer 1 only: the finisher marks the
+                // space active, and a template version it cannot earn here is
+                // recorded "layer-2-not-run" (health: drifted) — never stamped.
+                await finishTemplateApply({
+                  workspaceId: resumeResult.workspaceId,
+                  userId: ctx.userId,
+                  built: true,
+                  pendingVersionStamp: resumeResult.pendingVersionStamp,
+                  post: null,
+                });
                 return {
                   status: "created" as const,
                   outcome: "created" as const,
@@ -1239,15 +1272,24 @@ export const definitionEngineProcedures = {
               // Active workspace already exists → additively sync it to the
               // current template (add-only). Skipped for pending workspaces to
               // avoid racing an in-flight provisioning build.
+              if (failedInLayerTwo(wsSettings))
+                await reopenFailedLayerTwo(ws.id, ctx.userId, undefined);
               const reconcileOutcome =
-                provStatus === "active"
-                  ? await reconcileExisting(ws.id, wsSettings)
+                provStatus === "active" || failedInLayerTwo(wsSettings)
+                  ? await reconcileExisting(
+                      ws.id,
+                      // A layer-2 failure re-syncs as stale (its stamp is
+                      // not trusted) so layer 2 re-runs — `failedInLayerTwo`.
+                      failedInLayerTwo(wsSettings)
+                        ? withoutStamp(wsSettings)
+                        : wsSettings
+                    )
                   : undefined;
               const reconciled = reconcileOutcome?.report;
               const layers = reconcileOutcome?.layers ?? [];
               return {
                 status:
-                  provStatus === "active"
+                  provStatus === "active" || failedInLayerTwo(wsSettings)
                     ? ("created" as const)
                     : ("pending" as const),
                 workspaceId: ws.id,
@@ -1359,6 +1401,15 @@ export const definitionEngineProcedures = {
                   ...summarizePostWorkspaceLayers(composePost)
                 );
                 composeTrackTemplates = installedTrackTemplates(composePost);
+                // The overlay pack's version is recorded only once its layer
+                // 2 converged (`finishTemplateApply`) — never by compose.
+                await finishTemplateApply({
+                  workspaceId: core.composeTargetWorkspaceId,
+                  userId: ctx.userId,
+                  built: false,
+                  pendingPack: core.pendingPack,
+                  post: composePost,
+                });
               } catch (err) {
                 composeLayers.push({
                   layer: "post-workspace",
@@ -1651,6 +1702,7 @@ export const definitionEngineProcedures = {
           // undefined. Same shape, same derivation, now reported here too.
           const layers: InstallLayerReport[] = [];
           let trackTemplates: InstalledTrackTemplate[] = [];
+          let postBag: Record<string, unknown> = {};
           if (hasPostWork) {
             try {
               const post = await applyPackagePostWorkspace({
@@ -1660,6 +1712,7 @@ export const definitionEngineProcedures = {
                 agentUserId: (ctx as { agentUserId?: string }).agentUserId,
                 scopes: [],
               });
+              postBag = post;
               layers.push(...summarizePostWorkspaceLayers(post));
               trackTemplates = installedTrackTemplates(post);
               logger.info(
@@ -1678,6 +1731,16 @@ export const definitionEngineProcedures = {
               });
             }
           }
+          // The ONE finisher: stamps the version and marks the new space
+          // "active" only when its layer 2 landed (`{}` = the template has no
+          // living layers); otherwise records why — never an unearned stamp.
+          await finishTemplateApply({
+            workspaceId: result.workspaceId,
+            userId: ctx.userId,
+            built: true,
+            pendingVersionStamp: result.pendingVersionStamp,
+            post: hasPostWork ? postBag : {},
+          });
 
           // Enqueue workspace-init for default whiteboard/commands
           // (skips default views when packageSlug is set)
@@ -1933,6 +1996,11 @@ export const definitionEngineProcedures = {
            * Template rules — without this field zod STRIPS them (this object
            * is not passthrough), so a reconcile could never converge rules.
            */
+          /**
+           * What the space produces → `settings.intent` — stripped by zod
+           * without this (this object is not passthrough).
+           */
+          intent: workspaceIntentDefinitionSchema.optional(),
           rules: z.array(z.unknown()).optional(),
           /**
            * Declared skills — stripped by zod without this, exactly like rules.
@@ -2418,6 +2486,15 @@ export const definitionEngineProcedures = {
           composedTarget = core.composeTargetWorkspaceId;
           // The compose door already adopted/created the seeds (W4b).
           composeSeeds = core.reconcile.seeds;
+          // This door runs no layer 2: an overlay pack's version is not
+          // earned here (recorded "layer-2-not-run" by the finisher).
+          await finishTemplateApply({
+            workspaceId: composedTarget,
+            userId: ctx.userId,
+            built: false,
+            pendingPack: core.pendingPack,
+            post: null,
+          });
         }
       }
 
@@ -2438,6 +2515,14 @@ export const definitionEngineProcedures = {
           onProgress: () => {},
         });
         workspaceId = createResult.workspaceId;
+        // Layer 1 only (no template identity): the finisher marks it active.
+        await finishTemplateApply({
+          workspaceId,
+          userId: ctx.userId,
+          built: true,
+          pendingVersionStamp: createResult.pendingVersionStamp,
+          post: null,
+        });
       }
 
       // After workspace is created/composed, apply entities and relations

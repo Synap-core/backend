@@ -90,6 +90,7 @@ import {
   installedTrackTemplates,
 } from "./install-layers.js";
 import { createLogger } from "@synap-core/core";
+import { skillElementOf } from "./skill-package-element.js";
 
 const logger = createLogger({ module: "marketplace-install" });
 
@@ -788,6 +789,28 @@ export async function applyMarketInstall(
       // errored returned `postWorkspace` and looked resolved. `layers[]` is the
       // same `InstallLayerReport` type `createFromDefinition` emits — not a
       // second shape — so a consumer branches on one field for either door.
+      // The ONE finisher: the version the core handed back is stamped, and a
+      // newly built space marked "active", only when layer 2 landed
+      // (`{}` = the template has no living layers). An "unchanged" re-hit
+      // that skipped layer 2 ran nothing to finish.
+      if (!(needsPost && !postWorkspace)) {
+        const { finishTemplateApply } =
+          await import("../template-apply-finisher.js");
+        await finishTemplateApply({
+          workspaceId: result.workspaceId,
+          userId: input.userId,
+          built: result.outcome === "created",
+          pendingVersionStamp:
+            core.status === "created"
+              ? core.created.pendingVersionStamp
+              : core.status === "composed"
+                ? core.pendingVersionStamp
+                : undefined,
+          pendingPack:
+            core.status === "composed" ? core.pendingPack : undefined,
+          post: postWorkspace ?? {},
+        });
+      }
       const layers = summarizePostWorkspaceLayers(postWorkspace);
       return {
         kind: "template",
@@ -966,8 +989,9 @@ export async function applyMarketInstall(
         (entry
           ? await resolveDefinition(entry, input.version)
           : await resolveDefinitionByKey(input.slug, input.version));
-      const definition = ((resolved as { skill?: Record<string, unknown> })
-        .skill ?? resolved) as {
+      const definition = skillElementOf(
+        resolved as Record<string, unknown>
+      ) as {
         /** The skill's own `load_skill` ref — see `skillFields.slug` below. */
         slug?: string;
         name?: string;

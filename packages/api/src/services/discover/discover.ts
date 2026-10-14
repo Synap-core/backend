@@ -34,6 +34,7 @@ import {
   projects,
   proposals,
   workspaces,
+  workspaceMembers,
   eq,
   and,
   or,
@@ -352,6 +353,13 @@ interface DiscoverWorkspace {
    * Listed anyway: a type is a property, not a filter. Absent = accepts.
    */
   acceptsEntities?: false;
+  /**
+   * Present (and `false`) only when the calling agent is not a member: a write
+   * here files a workspace JOIN request (the write is kept and replayed once
+   * approved). A track-space grant does not count as joined. Absent = joined
+   * (or a person's own orient).
+   */
+  joined?: false;
   /**
    * The stored brief, read through THE reader (`readSpaceBrief`): light
    * carries `{ goal }` only; full, the whole normalized brief.
@@ -687,7 +695,7 @@ export async function discover(
 
   // Workspace rows + per-workspace live entity counts (same count semantics as
   // GET /workspaces, so orient reports the truth instead of "empty").
-  const [wsRaw, countRows] = await Promise.all([
+  const [wsRaw, countRows, agentMemberRows] = await Promise.all([
     (needWorkspaces || needProfiles) && lensWsIds.length
       ? db
           .select({
@@ -706,7 +714,23 @@ export async function discover(
     needWorkspaces && lensWsIds.length
       ? loadEntityUsage({ userId, workspaceIds: lensWsIds })
       : Promise.resolve([]),
+    // The calling AGENT's own memberships: a space it is not a member of is
+    // flagged `joined: false` (a write there files a JOIN request).
+    needWorkspaces && lensWsIds.length && params.agentUserId
+      ? db
+          .select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.userId, params.agentUserId),
+              inArray(workspaceMembers.workspaceId, lensWsIds)
+            )
+          )
+      : Promise.resolve(null),
   ]);
+  const agentJoined = agentMemberRows
+    ? new Set(agentMemberRows.map((r) => r.workspaceId))
+    : null;
   const entityCountByWs = new Map(
     [...usageByWorkspace(countRows)].map(([id, t]) => [id, t.count])
   );
@@ -808,6 +832,7 @@ export async function discover(
           ) {
             out.acceptsEntities = false;
           }
+          if (agentJoined && !agentJoined.has(w.id)) out.joined = false;
           // Light keeps `{ goal }` only where onboarding is PENDING (the
           // space is empty): elsewhere the goal already rides as the purpose
           // line below, or is subordinate to an authored one — not twice.

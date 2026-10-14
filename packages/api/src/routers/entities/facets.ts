@@ -538,7 +538,10 @@ export const facetProcs = {
           if (statusMove?.status === "proposed") {
             return {
               status: "proposed" as const,
-              message: "Status change proposed for review",
+              message: proposedMessageFor(
+                statusMove.proposalType,
+                "Status change proposed for review"
+              ),
               facet: null as Record<string, unknown> | null,
               proposalId: statusMove.proposalId,
               proposalType: statusMove.proposalType,

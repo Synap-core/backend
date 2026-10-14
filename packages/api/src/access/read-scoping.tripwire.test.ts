@@ -85,6 +85,12 @@ const SCOPING_HELPERS = [
   // call it by `views.podwide-access.test.ts`.
   "assertViewAccess",
   "workspaceLensWhere",
+  // THE pipeline lens conditions (`services/lifecycle/status-groups.ts`): a
+  // kind's = `entityLensWhere` / `entityReadVisibleWhere` (+ project narrow),
+  // a role's = `facetVisibilityConditions` AND the entity floor. Thin wrappers
+  // over the floors above, shared by the board, `lifecycle.list` and the homes.
+  "kindVisibilityConditions",
+  "roleVisibilityConditions",
   // The ONE focus-session read predicate (access/session-visibility.ts,
   // decision C): owner, OR a human seat on the session's own minted room,
   // floored on the session's workspace. It REPLACED the bare

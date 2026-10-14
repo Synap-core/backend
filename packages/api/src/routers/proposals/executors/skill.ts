@@ -1,5 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, skills, tools } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  skills,
+  tools,
+  getActingAgentUserId,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
@@ -7,6 +14,7 @@ import { createLogger } from "@synap-core/core";
 import type { InsertSkillGovernedInput } from "../../skills.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
+import { isAgentPrincipal } from "../review-authority.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import type { Context } from "../../../context.js";
 
@@ -28,7 +36,7 @@ export function registerSkillExecutors(): void {
   // proposal's pre-minted targetId — adoption is a follow-up (see wave report).
   registerProposalExecutor({
     key: "skill/create",
-    async execute({ proposal, userId, input, deps }) {
+    async execute({ proposal, userId, input, ctx, deps }) {
       const innerData = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
       const name = innerData.name as string | undefined;
@@ -98,8 +106,22 @@ export function registerSkillExecutors(): void {
       // AGENT-authored instruction skill would materialize `approved: true` and
       // land in the agent's system prompt with NO owner approval (the
       // prompt-injection vector the rule exists to close). The proposal row
-      // still carries the real author, so restore the intended verdict here.
-      if (proposal.agentUserId && materializedSkill.approved) {
+      // still carries the real author, so restore the intended verdict here —
+      // UNLESS a PERSON approved this proposal: their click on a review that
+      // shows the full body IS the owner approval the rule asks for, and a
+      // second toggle left owner-approved skills unloadable. Anything else (an
+      // agent travelling behind a human, an agent key, an agent principal)
+      // keeps the downgrade. A governance rule never reaches this executor:
+      // auto-approval runs the door with the agent id, born approved:false.
+      const approvedByPerson =
+        !ctx?.agentUserId &&
+        !getActingAgentUserId() &&
+        !(await isAgentPrincipal(userId));
+      if (
+        proposal.agentUserId &&
+        materializedSkill.approved &&
+        !approvedByPerson
+      ) {
         await db
           .update(skills)
           .set({ approved: false, updatedAt: new Date() })

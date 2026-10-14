@@ -40,6 +40,7 @@ import {
   type MergeMaterializedStamp,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { readItemPackRefs } from "@synap-core/types/proposals/item-pack";
 import { ProposalStatus } from "@synap/database/schema";
 import type {
   StoredProposalData,
@@ -63,6 +64,7 @@ import {
   findCreatingProposalId,
   proposalSubjectCondition,
 } from "../services/proposals/object-subject.js";
+import { resolveThingsLens } from "../services/focus-sessions/session-subject.js";
 import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -231,7 +233,7 @@ const LIST_TARGET_TYPES = [
  * unfiltered lens, whose floor is the visibility predicate applied downstream,
  * not workspace membership.
  */
-async function assertProposalWorkspaceRead(
+export async function assertProposalWorkspaceRead(
   workspaceId: string,
   userId: string
 ): Promise<void> {
@@ -287,8 +289,8 @@ async function returnRejectedSlot(
 /**
  * The per-item doors (`rejectItem` / `restoreItem`) act on a PENDING proposal
  * only — a disposition written after approval is a decision nobody reads. And
- * when the proposal carries an item list whose entries name a `ref` (the
- * cleanup-pack shape), the ref must be one of them: a typo would otherwise
+ * when the proposal carries an item list whose entries name a `ref` (an item
+ * pack: the cleanup pack, the update pack), the ref must be one of them: a typo would otherwise
  * persist a disposition that silently matches nothing. A composite graph has no
  * `items[].ref` and keeps its existing `$opN` / op-ref keys unchecked here.
  */
@@ -302,15 +304,7 @@ function assertItemDoorWritable(
       message: `Items can only be reviewed on a pending proposal (this one is ${proposal.status}).`,
     });
   }
-  const items = (proposal.data as { items?: unknown } | null)?.items;
-  if (!Array.isArray(items)) return;
-  const refs = items
-    .map((item) =>
-      item && typeof item === "object"
-        ? (item as { ref?: unknown }).ref
-        : undefined
-    )
-    .filter((ref): ref is string => typeof ref === "string");
+  const refs = readItemPackRefs(proposal.data);
   if (refs.length > 0 && !refs.includes(itemRef)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -407,6 +401,13 @@ export const proposalsRouter = router({
          * Adds no reach — every visibility predicate below still applies.
          */
         projectId: z.string().uuid().optional(),
+        /**
+         * Only proposals ON the things of this kind or role — targeting one,
+         * creating one / attaching the role, or filed in a session on one
+         * (`proposalOnThingsWhere`). An intent surface's "Needs you". An
+         * unknown slug is NOT_FOUND, never an empty queue.
+         */
+        profileSlug: z.string().min(1).optional(),
         /** Filter to proposals created by a specific agent */
         agentUserId: z.string().optional(),
         /** When true, only return proposals where agentUserId is not null */
@@ -450,7 +451,12 @@ export const proposalsRouter = router({
       // Shared with `groups` — see scope-conditions.ts. The two doors must
       // never disagree on which rows a given scope admits.
       const conditions = buildProposalScopeConditions(
-        input,
+        {
+          ...input,
+          onThings: input.profileSlug
+            ? await resolveThingsLens(input.profileSlug)
+            : undefined,
+        },
         requireUserId(ctx.userId)
       );
 
@@ -720,6 +726,13 @@ export const proposalsRouter = router({
         projectId: z.string().uuid().optional(),
         /** Only proposals filed in this track's sessions — see scope-conditions.ts. */
         trackId: z.string().uuid().optional(),
+        /**
+         * Only proposals ON the things of this kind or role — targeting one,
+         * creating one / attaching the role, or filed in a session on one
+         * (`proposalOnThingsWhere`). An intent surface's "Needs you". An
+         * unknown slug is NOT_FOUND, never an empty queue.
+         */
+        profileSlug: z.string().min(1).optional(),
         /** Same automationId → stepRunId walk as `list` — see scope-conditions.ts. */
         automationId: z.string().uuid().optional(),
         /** Which queue to cluster: the actionable pending queue (default), or
@@ -751,7 +764,15 @@ export const proposalsRouter = router({
 
       // Shared with `list` — see scope-conditions.ts. The two doors must never
       // disagree on which rows a given scope admits.
-      const conditions = buildProposalScopeConditions(input, userId);
+      const conditions = buildProposalScopeConditions(
+        {
+          ...input,
+          onThings: input.profileSlug
+            ? await resolveThingsLens(input.profileSlug)
+            : undefined,
+        },
+        userId
+      );
       if (input.automationId) {
         const stepRunIds = await resolveAutomationStepRunIds(
           input.automationId
@@ -1661,6 +1682,16 @@ export const proposalsRouter = router({
       // A rejected PUBLIC-FORM submission keeps no answers: the owner said no,
       // so the stranger's personal data has nothing left to be reviewed for.
       await scrubRejectedGuestPayloads([input.proposalId]);
+      // A rejected JOIN drops the writes it was keeping: each one is recorded
+      // as `rejected` so the agent reading the join sees why it never ran.
+      if (
+        proposal?.targetType === "workspace" &&
+        proposal.proposalType === "join"
+      ) {
+        const { recordRejectedDeferredWrites } =
+          await import("../services/governance/deferred-writes.js");
+        await recordRejectedDeferredWrites(input.proposalId);
+      }
 
       // A refused proposal that was holding a STAGED source blob must not leave
       // the bytes (and their `documents` row) behind: nothing else will ever
@@ -3305,6 +3336,16 @@ export const proposalsRouter = router({
             userId,
             proposalData: target.data,
           });
+          // Parity with the single `reject` door: a rejected JOIN records its
+          // kept writes as `rejected`.
+          if (
+            target.targetType === "workspace" &&
+            target.proposalType === "join"
+          ) {
+            const { recordRejectedDeferredWrites } =
+              await import("../services/governance/deferred-writes.js");
+            await recordRejectedDeferredWrites(proposalId);
+          }
 
           emitProposalReviewed(
             proposalId,

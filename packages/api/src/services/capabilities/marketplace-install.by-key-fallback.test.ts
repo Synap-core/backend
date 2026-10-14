@@ -27,6 +27,16 @@ const { createWorkspaceMock } = vi.hoisted(() => ({
     created: true,
   })),
 }));
+// The ONE finisher (stamp + "active" on convergence) reads and writes the
+// workspace row; its behaviour is pinned on PGlite by
+// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
+vi.mock("../template-apply-finisher.js", () => ({
+  finishTemplateApply: vi.fn(async () => ({
+    state: "converged",
+    versionStamped: false,
+  })),
+}));
+
 vi.mock("../workspace-creation-service.js", () => ({
   createWorkspaceFromDefinitionIdempotent: createWorkspaceMock,
 }));

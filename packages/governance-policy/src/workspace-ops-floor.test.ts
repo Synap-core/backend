@@ -51,6 +51,8 @@ const CASES: Array<[string, string, string]> = [
   ["workspaces", "restore", "ADMIN"],
   ["workspace", "restore", "ADMIN"],
   ["profile", "grant_access", "ADMIN"],
+  // D13 — a kind's scope / grants / entityScope.
+  ["profile", "change_scope", "ADMIN"],
 ];
 
 describe("workspace operations — floored for agents", () => {

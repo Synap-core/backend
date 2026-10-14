@@ -58,6 +58,21 @@ jobs:
       #
       # The repo is `control-plane-api`; the DIRECTORY must be named
       # `synap-control-plane-api`, which is the name the tripwire resolves.
+      #
+      # control-plane-api is PRIVATE, so this needs the CROSS_REPO_TOKEN repo
+      # secret (fine-grained PAT, Contents: read on Synap-core/control-plane-api).
+      # It was never set: every CI run since early August died here with
+      # "Input required and not supplied: token", so no quality step ran and no
+      # image was published. Say so plainly instead of that one-line error.
+      - name: Require CROSS_REPO_TOKEN
+        env:
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          if [ -z "$CROSS_REPO_TOKEN" ]; then
+            echo "::error::Repo secret CROSS_REPO_TOKEN is not set. Add a fine-grained PAT with Contents: read on Synap-core/control-plane-api (gh secret set CROSS_REPO_TOKEN -R Synap-core/backend). Without it the cross-repo parity tripwire cannot run, CI stays red and Publish Docker Images is skipped."
+            exit 1
+          fi
+
       - name: Checkout Control Plane API (cross-repo parity tripwire)
         uses: actions/checkout@v4
         with:

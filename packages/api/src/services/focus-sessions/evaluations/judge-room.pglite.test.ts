@@ -167,6 +167,25 @@ describe("loadRoomMaterial — read as the session owner, through the one door",
     });
   });
 
+  it("a message cut on read is counted, and the judge is told the material is clipped", async () => {
+    const mine = await room("owner");
+    await post(mine, "ai_agent", `LONG-EVIDENCE ${"z".repeat(2_000)}`, 1);
+
+    const out = await loadRoomMaterial({ channelId: mine, userId: "owner" });
+    expect(out).toMatchObject({ status: "ok", clippedMessages: 1 });
+    const material = buildJudgeMaterial(
+      { goal: "g", expectedOutputs: [], verificationReport: null },
+      [],
+      undefined,
+      [],
+      out
+    );
+    expect(material).toMatch(
+      /^NOTE: CLIPPED MATERIAL — 1 section below was cut/
+    );
+    expect(material).toMatch(/\[clipped: \d+ chars omitted\]/);
+  });
+
   it("no room is a true empty, not a refusal", async () => {
     expect(
       await loadRoomMaterial({ channelId: null, userId: "owner" })

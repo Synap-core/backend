@@ -665,11 +665,21 @@ export const profilesRouter = router({
       // door does: `input.agentUserId` and `source` are both caller-supplied,
       // so an agent could omit them and walk past this guard. The ALS value is
       // set server-side at every key-auth entry point and cannot be dropped.
+      //
+      // An approved AGENT proposal counts too: the approve executor re-enters
+      // this door as the human approver (no agentUserId, no ALS), so without
+      // the provenance signal the twin check was skipped on exactly the path
+      // that minted the live `finding` twin (ticket 5c3879d4: a replayed agent
+      // proposal, approved by a human, created Builder's `finding` beside
+      // Research's). The proposal carries `forceCreate` through, so an agent
+      // that judged the concept separate is not refused at approve.
       const isAiCaller =
         Boolean(getActingAgentUserId()) ||
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
-        input.source === "intelligence";
+        input.source === "intelligence" ||
+        (ctx as { profileProvenance?: { origin?: string } }).profileProvenance
+          ?.origin === "agent";
       if (isAiCaller && !input.forceCreate) {
         const elsewhere = await profileRepo.findActiveBySlugAnyScope(
           input.slug
@@ -775,6 +785,9 @@ export const profilesRouter = router({
           // role's category — dropping it here approves a role that
           // `entity.query { roleCategory }` can never match.
           roleCategory: input.roleCategory,
+          // Carried so the approve executor re-applies the caller's twin
+          // judgement (the cross-workspace twin check above re-runs there).
+          ...(input.forceCreate ? { forceCreate: true } : {}),
         },
       });
 
@@ -1211,9 +1224,19 @@ export const profilesRouter = router({
           : {}),
       });
 
-      // Invalidate entityScope cache when changed
-      if (input.entityScope !== undefined) {
+      // Invalidate entityScope cache when changed. A `scope` change (or new
+      // grants) changes WHICH row `getBySlugForWorkspace` resolves for a
+      // (slug, workspace) pair — and both 60s caches are keyed on exactly that
+      // pair — so it invalidates them too.
+      const resolutionChanged =
+        (input.scope !== undefined && input.scope !== existing.scope) ||
+        (input.scope === "shared" &&
+          (input.allowedWorkspaceIds?.length ?? 0) > 0);
+      if (input.entityScope !== undefined || resolutionChanged) {
         ProfileResolutionService.invalidateEntityScopeCache(existing.slug);
+      }
+      if (resolutionChanged) {
+        ProfileResolutionService.invalidateAiPostureCache(existing.slug);
       }
       if (input.aiPosture !== undefined) {
         ProfileResolutionService.invalidateAiPostureCache(existing.slug);
@@ -1482,6 +1505,10 @@ export const profilesRouter = router({
       }
 
       await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
+      // The grant changes which row the target workspace resolves for this
+      // slug — the key both resolution caches are stored under.
+      ProfileResolutionService.invalidateEntityScopeCache(profile.slug);
+      ProfileResolutionService.invalidateAiPostureCache(profile.slug);
 
       logger.info(
         {

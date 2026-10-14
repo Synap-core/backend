@@ -325,11 +325,11 @@ export class ImportOrchestrator {
    * `import.graph` pending proposal with whatever `this.ctx.workspaceId` was —
    * `null` when the caller supplied no explicit lens/focus (a hub write with no
    * lens deliberately lands pod-personal, `_shared.ts:303-309`), which stranded
-   * agent-generated leads pod-wide instead of the CRM workspace. Collect every
-   * `create_entity` op's profileSlug in the graph and run the shared
-   * `resolveGraphWorkspaceFromSlugs` helper (ONE door + deterministic accept
-   * policy). A deterministic ontology hit (rung ≤4, single candidate) re-lenses
-   * the whole graph; ambiguous / no-signal ABSTAINS — staying pod-wide is the
+   * agent-generated leads pod-wide instead of the CRM workspace. Hand every
+   * `create_entity` op's kind + roles to the shared
+   * `resolveGraphWorkspaceFromSlugs` helper (ONE door, per-entity placement).
+   * Unanimous deterministic hits re-lens the whole graph; split /
+   * ambiguous / no-signal ABSTAINS — staying pod-wide is the
    * honest default over an arbitrary guess. Only called when
    * `this.ctx.workspaceId` is null — an explicit lens/focus always wins.
    */
@@ -338,32 +338,28 @@ export class ImportOrchestrator {
     sessionId?: string | null
   ): Promise<string | null> {
     const { userId } = this.ctx;
-    const routingSlugs = Array.from(
-      new Set(
-        operations
-          .filter(
-            (
-              op
-            ): op is Extract<
-              CompositeProposalOperation,
-              { op: "create_entity" }
-            > => op.op === "create_entity"
-          )
-          .flatMap((op) => [
-            op.profileSlug,
-            ...(op.facets?.map((f) => f.profileSlug) ?? []),
-          ])
-          .filter((s): s is string => typeof s === "string" && s.length > 0)
+    const graphEntities = operations
+      .filter(
+        (
+          op
+        ): op is Extract<CompositeProposalOperation, { op: "create_entity" }> =>
+          op.op === "create_entity"
       )
-    );
+      .map((op) => ({
+        kindSlug: op.profileSlug,
+        facetSlugs: op.facets?.map((f) => f.profileSlug) ?? [],
+      }));
     try {
-      // Shared graph policy: deterministic hit only (rung ≤4, no candidates,
-      // workspaceId set); ambiguous / no-signal → null. Never invent membership[0].
-      return await resolveGraphWorkspaceFromSlugs(db, {
-        userId,
-        routingSlugs,
-        sessionId,
-      });
+      // Shared graph policy (D14): each entity resolves on its own kind;
+      // unanimous → that workspace, split / no-signal → null. Never invent
+      // membership[0].
+      return (
+        await resolveGraphWorkspaceFromSlugs(db, {
+          userId,
+          entities: graphEntities,
+          sessionId,
+        })
+      ).workspaceId;
     } catch (err) {
       logger.warn(
         { err, userId },

@@ -34,6 +34,10 @@ const CLEAN: Array<[string, string | undefined]> = [
   ["S3 uploads over 10 MB go direct to storage", "knowledge"],
   ["The CP refuses an official publish from any other door", "knowledge"],
   ["iOS share sheet drops the page title", "knowledge"],
+  // False positives the IS eval found (2026-10-12): a compound is a name, an
+  // arrow is a text symbol.
+  ["The deployed-agent key is minted per computer", "knowledge"],
+  ["Relay ↔ browser parity is a tripwire, not a rule", "knowledge"],
 ];
 
 /**
@@ -59,6 +63,7 @@ const DEFECTS: Array<[string, TitleLintCode, string | undefined]> = [
   ["Pod-experience campaign shipped", "status_word", "knowledge"],
   ["NEVER WRITE THE STATUS DIRECTLY", "shouting", "knowledge"],
   ["Capture room works 🎉", "emoji", "knowledge"],
+  ["Pin the release ⚠️ before Friday", "emoji", "knowledge"],
   ["Use `moveStatus` for lifecycle moves", "machinery", "knowledge"],
   ["**Important** grants deny by default", "machinery", "knowledge"],
   ["See [[document:abc]] for the plan", "machinery", "knowledge"],

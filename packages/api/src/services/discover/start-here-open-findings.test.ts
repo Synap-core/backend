@@ -243,6 +243,18 @@ describe("startHere.beforeYouFinish — the instruction lives in the pod", () =>
     expect(out.beforeYouFinish).toContain("openFindings");
   });
 
+  it("names an unambiguous door for each report (ticket 5c3879d4)", async () => {
+    const out = await build();
+    // A product problem goes to the Synap team, never into the pod.
+    expect(out.beforeYouFinish).toContain("report_to_synap");
+    // `finding` is two kinds on a pod with research-base installed: the
+    // instruction must name the problem-report one by what it models.
+    expect(
+      out.beforeYouFinish,
+      "a bare 'file a finding' lands on research-base's validated-fact kind"
+    ).toMatch(/`finding` kind models a `severity`/);
+  });
+
   it("briefing order puts blockers right after the review queue", async () => {
     const out = await build();
     expect(Object.keys(out).slice(0, 3)).toEqual([

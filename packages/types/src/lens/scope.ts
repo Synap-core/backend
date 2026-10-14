@@ -12,7 +12,11 @@
  * spell one scope two ways.
  */
 
-import { encodeActivityScope, parseActivityScope } from "../activity/heat.js";
+import {
+  encodeActivityScope,
+  parseActivityScope,
+  type ActivityScope,
+} from "../activity/heat.js";
 
 export const LENS_SCOPE_KINDS = [
   "pod",
@@ -20,6 +24,7 @@ export const LENS_SCOPE_KINDS = [
   "project",
   "track",
   "session",
+  "pipeline",
 ] as const;
 export type LensScopeKind = (typeof LENS_SCOPE_KINDS)[number];
 
@@ -50,6 +55,19 @@ export type LensScope =
       sessionId: string;
       trackId?: string | null;
       projectId?: string | null;
+    }
+  /**
+   * An INTENT surface — one kind's (or role's) things: "Posts", "Leads"
+   * (surfaces plan). The kind is the scope; a container (a space, a project,
+   * a track) narrows it, and it travels in the address with it (an intent
+   * surface's "All sessions →" stays the project's posts).
+   */
+  | {
+      kind: "pipeline";
+      profileSlug: string;
+      workspaceId?: string | null;
+      projectId?: string | null;
+      trackId?: string | null;
     };
 
 /** The scope's own object, or null for the whole pod. */
@@ -67,6 +85,8 @@ export function lensScopeObject(
       return { kind: "track", id: scope.trackId };
     case "session":
       return { kind: "session", id: scope.sessionId };
+    case "pipeline":
+      return { kind: "pipeline", id: scope.profileSlug };
   }
 }
 
@@ -79,9 +99,12 @@ function ancestorKeys(scope: LensScope): Set<string> {
   ) {
     keys.add(`project:${scope.projectId}`);
   }
-  if (scope.kind === "session") {
+  if (scope.kind === "session" || scope.kind === "pipeline") {
     if (scope.trackId) keys.add(`track:${scope.trackId}`);
     if (scope.projectId) keys.add(`project:${scope.projectId}`);
+  }
+  if (scope.kind === "pipeline" && scope.workspaceId) {
+    keys.add(`workspace:${scope.workspaceId}`);
   }
   return keys;
 }
@@ -129,6 +152,20 @@ export function visibleSource(
  * from the object.
  */
 export function encodeLensScope(scope: LensScope): string {
+  if (scope.kind === "pipeline") {
+    // `pipeline:<slug>`, `@<container token>` when a container narrows it —
+    // the narrowest one (track ⊂ project ⊂ space), spelled by the activity
+    // door like every other container.
+    const container: ActivityScope | null = scope.trackId
+      ? { kind: "track", trackId: scope.trackId }
+      : scope.projectId
+        ? { kind: "project", projectId: scope.projectId }
+        : scope.workspaceId
+          ? { kind: "workspace", workspaceId: scope.workspaceId }
+          : null;
+    const base = `${PIPELINE_TOKEN}${scope.profileSlug}`;
+    return container ? `${base}@${encodeActivityScope(container)}` : base;
+  }
   if (scope.kind === "track")
     return encodeActivityScope({ kind: "track", trackId: scope.trackId });
   if (scope.kind === "session") {
@@ -139,5 +176,61 @@ export function encodeLensScope(scope: LensScope): string {
 
 /** Read an address token back. Anything else ⇒ `undefined` (no override). */
 export function parseLensScope(token: unknown): LensScope | undefined {
+  if (typeof token === "string" && token.startsWith(PIPELINE_TOKEN)) {
+    const rest = token.slice(PIPELINE_TOKEN.length);
+    const at = rest.indexOf("@");
+    const profileSlug = at < 0 ? rest : rest.slice(0, at);
+    if (!profileSlug) return undefined;
+    if (at < 0) return { kind: "pipeline", profileSlug };
+    const container = parseActivityScope(rest.slice(at + 1));
+    if (!container) return undefined;
+    switch (container.kind) {
+      case "track":
+        return { kind: "pipeline", profileSlug, trackId: container.trackId };
+      case "project":
+        return {
+          kind: "pipeline",
+          profileSlug,
+          projectId: container.projectId,
+        };
+      case "workspace":
+        return {
+          kind: "pipeline",
+          profileSlug,
+          workspaceId: container.workspaceId,
+        };
+      default:
+        return undefined;
+    }
+  }
   return parseActivityScope(token);
+}
+
+const PIPELINE_TOKEN = "pipeline:";
+
+/**
+ * The scope as the ACTIVITY door reads it (heat, Data › Landed): a pipeline
+ * has no activity of its own kind — it reads its container's (the narrowest
+ * one), else the whole pod. Every other kind is already an activity scope.
+ */
+export function lensActivityScope(scope: LensScope): ActivityScope {
+  switch (scope.kind) {
+    case "pod":
+      return { kind: "pod" };
+    case "workspace":
+      return { kind: "workspace", workspaceId: scope.workspaceId };
+    case "project":
+      return { kind: "project", projectId: scope.projectId };
+    case "track":
+      return { kind: "track", trackId: scope.trackId };
+    case "session":
+      return { kind: "session", sessionId: scope.sessionId };
+    case "pipeline":
+      if (scope.trackId) return { kind: "track", trackId: scope.trackId };
+      if (scope.projectId)
+        return { kind: "project", projectId: scope.projectId };
+      if (scope.workspaceId)
+        return { kind: "workspace", workspaceId: scope.workspaceId };
+      return { kind: "pod" };
+  }
 }

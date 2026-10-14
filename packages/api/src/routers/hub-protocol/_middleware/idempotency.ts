@@ -165,6 +165,30 @@ async function cacheSet(key: string, value: CachedResponse): Promise<void> {
 }
 
 /**
+ * The SAME bounded store, for a door whose idempotency key rides in the
+ * request BODY rather than the header — an MCP or tRPC call has no
+ * `Idempotency-Key` header (`entities.updateMany`). The caller owns the key:
+ * it must partition it by principal and payload, as `cacheKey` does above.
+ */
+export async function recallIdempotentResult(
+  key: string
+): Promise<string | null> {
+  return (await cacheGet(key))?.bodyText ?? null;
+}
+
+/** Store a result for {@link recallIdempotentResult} (24h, LRU-bounded). */
+export async function rememberIdempotentResult(
+  key: string,
+  bodyText: string
+): Promise<void> {
+  await cacheSet(key, {
+    status: 200,
+    bodyText,
+    contentType: "application/json",
+  });
+}
+
+/**
  * Test-only view of the store size, so the bound can be asserted without
  * exporting the store itself.
  *

@@ -832,6 +832,28 @@ export function registerFocusSessionExecutors(): void {
           set.projectId = innerData.projectId;
         }
 
+        // SPACE MOVE. Carried by `updateFocusSession`'s gate payload; RE-FLOORED
+        // here on the approver, BEFORE any write of this patch, through the same
+        // check the direct write uses (the space or the room's roster may have
+        // changed since the proposal was filed). `null` = make it personal.
+        const moveWorkspaceId =
+          innerData.workspaceId === null ||
+          typeof innerData.workspaceId === "string"
+            ? innerData.workspaceId
+            : undefined;
+        if (moveWorkspaceId !== undefined) {
+          const { checkSessionWorkspaceMove } =
+            await import("../../../services/focus-sessions/move-session-workspace.js");
+          const move = await checkSessionWorkspaceMove({
+            session,
+            workspaceId: moveWorkspaceId,
+            userId,
+          });
+          if (!move.ok) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: move.reason });
+          }
+        }
+
         // TRACK FILING (adopt into a step). Carried by `updateFocusSession`'s
         // gate payload; RE-RESOLVED here through the same door the direct
         // write uses, so a track archived, unshared or re-pinned since the
@@ -918,6 +940,20 @@ export function registerFocusSessionExecutors(): void {
           });
         }
 
+        // SPACE MOVE — floored above, applied here: the session, its room and
+        // its artifacts move in ONE transaction.
+        if (moveWorkspaceId !== undefined) {
+          const { applySessionWorkspaceMove } =
+            await import("../../../services/focus-sessions/move-session-workspace.js");
+          await db.transaction((tx) =>
+            applySessionWorkspaceMove(tx, {
+              sessionId,
+              channelId: session.channelId,
+              workspaceId: moveWorkspaceId,
+            })
+          );
+        }
+
         let [updated] = await db
           .update(focusSessions)
           .set(set)
@@ -1001,6 +1037,71 @@ export function registerFocusSessionExecutors(): void {
         success: true,
         ...(outputRefusals.length > 0 ? { refusals: outputRefusals } : {}),
       };
+    },
+  });
+
+  // ── focus_session / assign_agent ────────────────────────────────────────────
+  // An agent handing a session to ANOTHER agent (`agent-hand-off.ts`) lands here
+  // once a person approves it: the named agent is appended through the ONE
+  // roster door, floored on the session's OWN owner (the approver may be a
+  // different human). Idempotent — the door is, and an already-approved
+  // proposal returns before it.
+  registerProposalExecutor({
+    key: "focus_session/assign_agent",
+    async execute({ proposal, userId, input, deps }) {
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const sessionId = proposal.targetId;
+      const agentId =
+        typeof innerData.addAgentId === "string" ? innerData.addAgentId : "";
+      if (agentId.trim() === "") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Hand-off proposal ${input.proposalId} names no agent`,
+        });
+      }
+
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+        columns: { userId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Focus session ${sessionId} not found`,
+        });
+      }
+
+      const { attachSessionAgent } =
+        await import("../../../services/focus-sessions/attach-session-agent.js");
+      const attached = await attachSessionAgent({
+        sessionId,
+        agentId,
+        userId: session.userId,
+      });
+      if (attached.status === "not_found") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Focus session ${sessionId} not found`,
+        });
+      }
+
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, agentIds: attached.agentIds };
     },
   });
 }

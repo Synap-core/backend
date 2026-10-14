@@ -370,13 +370,16 @@ export function makeEntitySchemaValidator(
         //
         // Infer from BODY, not title. A title is a much weaker discriminator than
         // body text — "pod setup" contains no caution keywords and would default to
-        // "insight" silently, which is a quiet wrong answer. The free-text lane uses
+        // "fact" silently, which is a quiet wrong answer. The free-text lane uses
         // input.content.slice(0, 200); match it. Fall back to title only when the
         // entity has no body (a structured entity that is title-only is genuinely
         // ambiguous, and title is the best evidence we have).
+        // The required claim comes from the TITLE first (a knowledge title is
+        // the claim's short handle), never from the 200-char inference slice.
         propsToCheck = completeKnowledgeProperties(
           propsToCheck,
-          (content ?? title ?? "").slice(0, 200)
+          (content ?? title ?? "").slice(0, 200),
+          [title, content]
         );
       } catch (error) {
         if (error instanceof KnowledgeFormConflictError) {

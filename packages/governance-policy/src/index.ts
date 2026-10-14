@@ -182,6 +182,9 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   // session in the capture channel without a proposal ("capture channel = no
   // proposals"). `focus_session.grant_capability` is DELIBERATELY excluded — it
   // widens a session's egress abilities, so it still routes to a proposal.
+  // `focus_session.assign_agent` is excluded for the same kind of reason: an
+  // agent putting ANOTHER agent on a roster starts that agent's work, which
+  // cannot be called back (see GATE_WRITE_DOORS).
   // delete/archive remain destructive → proposal.
   // ONE carve-out INSIDE `focus_session.update`: an AI update that CARRIES
   // `criteria` is floored to a proposal at rung 2.1 by
@@ -478,6 +481,11 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   // workspaces may see and use a kind — a SCOPE CHANGE like `relation.expose`,
   // so no rule / autoApproveFor entry may lift it to auto-execute.
   "profile.grant_access",
+  // A kind's scope change (D13). Real gate: `services/profiles/change-kind-scope.ts`
+  // passes `profile` + `change_scope`. Sharing a kind with other spaces, or
+  // making its records pod-wide, is the same SCOPE CHANGE as `grant_access`;
+  // approval replays `profiles.update`, so the owner / pod-admin gate re-runs.
+  "profile.change_scope",
   // Vault redeem grant. Real gate: `hub-protocol/rest/vault.ts`
   // POST /vault/secrets/:id/grant passes `vault` + `grant`. It hands a
   // principal the ability to read a secret's plaintext — a SCOPE CHANGE over a
@@ -613,6 +621,9 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // `governanceRules.create`, and keeps a rule inert if a pack ever routes
   // through the gate. Typed against the direct-door vocabulary.
   "pod_hygiene.cleanup_pack" satisfies DirectProposalEventKey,
+  // The update pack is the same shape (one review over N items) and is
+  // `forcePropose`d at its one door; flooring it keeps a rule inert here too.
+  "entity.update_pack" satisfies GateEventKey,
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
@@ -728,6 +739,7 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "workspace/archive": "other-floor", // 2.5 destructive
   "workspace/restore": "other-floor", // 2 admin
   "profile/grant_access": "other-floor", // 2 admin (scope change)
+  "profile/change_scope": "other-floor", // 2 admin (scope change)
   // Widenable on purpose.
   "automation/execute": "widenable", // runs an automation a person activated
   "cell/update": "widenable", // config patch of an existing placement
@@ -830,6 +842,8 @@ export type KnownGovernanceAction =
   | "execute"
   | "run"
   | "grant_capability"
+  // An agent handing a session to ANOTHER agent (roster add ≠ itself).
+  | "assign_agent"
   | "register"
   | "arrange"
   | "invite"
@@ -895,6 +909,7 @@ export function requiredPermissionFor(
     action === "execute" ||
     action === "run" ||
     action === "grant_capability" ||
+    action === "assign_agent" ||
     action === "register" ||
     action === "arrange" ||
     action === "invite" ||
@@ -1004,6 +1019,24 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
   focus_session: "session",
 };
 
+/**
+ * Gate doors whose GRANT is an existing action of their subject — a door that
+ * exists to be GOVERNED differently, not to be granted differently.
+ *
+ * `focus_session/assign_agent` (an agent handing a session to another agent)
+ * is a roster UPDATE of the session: any key that may update a session may
+ * ASK to hand it on, exactly as it could before the door existed. What the
+ * door changes is the governance verdict (propose unless a rule says auto),
+ * not who may ask — so a key or agent minted with the AI preset before the
+ * door existed is not suddenly refused.
+ */
+const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
+  "focus_session/assign_agent": "update",
+  // An update pack is N entity updates filed as one review: a key that may
+  // update entities may ask for it.
+  "entity/update_pack": "update",
+};
+
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
 const toGrammarToken = (token: string): string =>
   token
@@ -1025,7 +1058,9 @@ export function grantRequestKey(
 ): { subject: string; action: string } {
   return {
     subject: GRANT_SUBJECT_FOLDS[subjectType] ?? toGrammarToken(subjectType),
-    action: toGrammarToken(action),
+    action: toGrammarToken(
+      GRANT_ACTION_FOLDS[`${subjectType}/${action}`] ?? action
+    ),
   };
 }
 
@@ -1946,10 +1981,12 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "entity/delete": "disruptive", // destroy
   "entity/renderer.set": "reversible", // one record's view
   "entity/update": "reversible", // kind/scope change is forcePropose'd (2.1)
+  "entity/update_pack": "disruptive", // many records in one review; no pack undo
   "entity/transition": "reversible", // a status move is moved back; done/lost floored (2.85)
   "facet/attach": "reversible",
   "facet/detach": "reversible", // soft-delete; re-attach recovers it
   "facet/update": "reversible",
+  "focus_session/assign_agent": "disruptive", // effect: another agent starts work
   "focus_session/create": "reversible",
   "focus_session/grant_capability": "disruptive", // egress
   "focus_session/update": "reversible", // a criteria change is floored (2.1)
@@ -1964,6 +2001,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "proactive/recap": "disruptive", // effect: a message is read, not undone
   "profile/create": "disruptive", // schema (2.08)
   "profile/grant_access": "disruptive", // scope (ADMIN)
+  "profile/change_scope": "disruptive", // scope (ADMIN)
   "profile/renderer.set": "disruptive", // struct (2.09)
   "project/create": "disruptive", // struct: a new commitment (explicit choice)
   "project/delete": "disruptive", // destroy
@@ -2139,12 +2177,26 @@ export const GATE_WRITE_DOORS = {
   "entity/delete": "gate",
   "entity/renderer.set": "gate",
   "entity/update": "gate+automation",
+  // R1 batch writes: the items of one `updateEntities` call that need review,
+  // filed as ONE pack (`services/entities/update-entities.ts`). Always
+  // `forcePropose`d. Executor: `entity/update_pack`.
+  "entity/update_pack": "gate",
   // Work model L2: a lifecycle status move — the `moveStatus` door (api) and
   // the automation output path (jobs). Executor: `entity/transition`.
   "entity/transition": "gate+automation",
   "facet/attach": "gate",
   "facet/detach": "gate",
   "facet/update": "gate",
+  // An AGENT handing a session to ANOTHER agent (founder, 2026-10-12: "if not
+  // overridden, ask for approval for non-cancelable actions"). Putting a second
+  // agent on the roster starts that agent's work — a worker picks it up, an
+  // external one spends a provider run — and that cannot be called back. So it
+  // is its own door, deliberately NOT in DEFAULT_AUTO_APPROVE: it proposes by
+  // default (rung 9) and a `governance_rules` row naming it (rung 2.8) is the
+  // override. Classed `disruptive`, so the `@reversible` class row never widens
+  // it. A person staffing their own session, and an agent adding ITSELF, never
+  // reach this door (`services/focus-sessions/agent-hand-off.ts`).
+  "focus_session/assign_agent": "gate",
   "focus_session/create": "gate",
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",
@@ -2166,6 +2218,11 @@ export const GATE_WRITE_DOORS = {
   // ADMIN-floored (`profile.grant_access`): it widens visibility. Replayed on
   // approval by `routers/proposals/executors/profile.ts`.
   "profile/grant_access": "gate",
+  // Change a kind's `scope` / grants / `entityScope` (D13,
+  // `services/profiles/change-kind-scope.ts`). ADMIN-floored and
+  // `forcePropose`d for agents. Replayed on approval through `profiles.update`
+  // by `routers/proposals/executors/profile.ts`.
+  "profile/change_scope": "gate",
   "profile/renderer.set": "gate",
   "project/create": "gate",
   "project/delete": "gate",

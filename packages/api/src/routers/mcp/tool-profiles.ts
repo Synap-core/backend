@@ -66,8 +66,10 @@ export const TOOL_GROUPS = {
   data: [
     "synap_create_entity",
     "synap_update_entity",
+    "synap_update_entities",
     "synap_create_document",
     "synap_update_document",
+    "synap_request_upload",
     "synap_store_file",
     "synap_remember_fact",
     "synap_link_entities",
@@ -98,6 +100,7 @@ export const TOOL_GROUPS = {
     "synap_define_kind",
     "synap_define_role",
     "synap_grant_profile_access",
+    "synap_change_kind_scope",
     "synap_retire_field",
   ],
   /** Spaces, projects and focus. */
@@ -143,6 +146,7 @@ export const TOOL_GROUPS = {
     "synap_create_playbook",
     "synap_run_playbook",
     "synap_create_skill",
+    "synap_update_skill",
   ],
   /** Connected services, verbs and automations. */
   capabilities: [

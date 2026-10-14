@@ -17,7 +17,7 @@
  *   GET    /agent-skills/:id                — get a single skill by id
  *   GET    /agent-skills/by-slug/:slug      — get a skill by slug
  *   POST   /agent-skills                    — create a skill
- *   PATCH  /agent-skills/:slug              — update a skill by slug
+ *   PATCH  /agent-skills/:slug              — update a skill by slug (governed)
  *   DELETE /agent-skills/:id                — delete a skill by id (governed)
  */
 
@@ -43,6 +43,7 @@ import { jsonGoverned } from "../proposal-response.js";
 import { insertSkillGoverned, skillsRouter } from "../../skills.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
+import { updateSkillGoverned } from "../../../services/skills/update-skill-governed.js";
 import { searchInstructionSkills } from "../../../services/skills/search.js";
 import { reservedSkillSlugReason } from "../../../services/skills/reserved-slug.js";
 import { renderSkillForDoor } from "../../../services/capability-briefs/door-tool-render.js";
@@ -86,16 +87,16 @@ const CreateAgentSkillBodySchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
-const UpdateAgentSkillBodySchema = z.object({
-  name: z.string().min(1).max(200).optional(),
-  description: z.string().max(500).optional(),
-  topics: z.array(z.string()).optional(),
-  body: z.string().min(1).optional(),
-  source: z.string().optional(),
-  author: z.string().optional(),
-  version: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-});
+// Only the fields the ONE governed skill-update door (`skills.update`) carries.
+// `.strict()`: a field it cannot carry (topics/tags/source/author/version) is a
+// 400, never a silent drop reported as an update.
+const UpdateAgentSkillBodySchema = z
+  .object({
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(500).optional(),
+    body: z.string().min(1).optional(),
+  })
+  .strict();
 
 const AgentSkillsListSchema = z.object({
   skills: z.array(AgentSkillWireSchema),
@@ -623,7 +624,12 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
   });
 
   /**
-   * PATCH /agent-skills/:slug — update a skill by slug
+   * PATCH /agent-skills/:slug — update a skill by slug.
+   *
+   * A THIN DOOR over the governed `skills.update` (via `updateSkillGoverned`).
+   * It used to be a bare `db.update(skills).where(slug)` behind a scope check:
+   * any `hub-protocol.write` key could rewrite an APPROVED skill's body — text
+   * that lands in agents' prompts — and it stayed approved and live.
    */
   app.patch("/agent-skills/:slug", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -637,20 +643,48 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       return c.json({ error: parsed.error.message }, 400);
     }
 
-    try {
-      const [row] = await db
-        .update(skills)
-        .set({
-          ...parsed.data,
-          updatedAt: new Date(),
-        })
-        .where(eq(skills.slug, slug))
-        .returning();
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) {
+      return c.json({ error: "Unauthenticated" }, 401);
+    }
+    // Set only for an agent API key — forwarded so the governed door can tell
+    // an agent rewrite (re-earns approval) from an operator's own edit.
+    const agentUserId = c.get("agentUserId") as string | undefined;
 
+    try {
+      const callerCtx = await createHubProtocolCallerContext(
+        authUserId,
+        c.get("scopes") as string[],
+        null,
+        undefined,
+        undefined,
+        agentUserId ?? null
+      );
+      const result = await updateSkillGoverned({
+        callerCtx,
+        userId: authUserId,
+        agentUserId,
+        ref: { slug },
+        patch: parsed.data,
+      });
+      if (result.status === "not_found") {
+        return c.json({ error: "Skill not found" }, 404);
+      }
+      if (result.status === "proposed") {
+        return jsonGoverned(c, {
+          status: "proposed" as const,
+          proposalId: result.proposalId,
+        });
+      }
+
+      const [row] = await db
+        .select()
+        .from(skills)
+        .where(eq(skills.id, result.skillId))
+        .limit(1);
       if (!row) {
         return c.json({ error: "Skill not found" }, 404);
       }
-
       return c.json(wireSkill(row), 200);
     } catch (err) {
       logger.error({ err }, "update agent skill failed");

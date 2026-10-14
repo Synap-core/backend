@@ -478,9 +478,24 @@ jobs:
 
           SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$CP_SECRET" | awk '{print $2}')
 
-          curl -sf -X POST \
+          # The CP's ANSWER is config too: 404 = wrong CONTROL_PLANE_API_URL,
+          # 503 = CP has no GITHUB_WEBHOOK_SECRET, 401 = that secret differs
+          # from CP_WEBHOOK_SECRET here. Each means no image_releases row is
+          # written, so an HTTP error fails the job (curl exit 22). Only a
+          # transport failure (DNS, connect, timeout) stays a warning.
+          set +e
+          curl -sS --fail-with-body -X POST \
             "$CP_URL/webhooks/github" \
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: sha256=${SIGNATURE}" \
             -d "$PAYLOAD" \
-            --max-time 30 || echo "Warning: Control Plane notification failed (non-fatal)"
+            --max-time 30
+          RC=$?
+          set -e
+          echo
+          if [ "$RC" -eq 22 ]; then
+            echo "::error::Control Plane rejected the release notification (HTTP error above). No image_releases row was recorded."
+            exit 1
+          elif [ "$RC" -ne 0 ]; then
+            echo "::warning::Control Plane notification failed in transport (curl exit $RC, non-fatal). Register it by hand: POST /admin/updates/releases {\"tag\":\"${{ steps.tag.outputs.tag }}\"}"
+          fi

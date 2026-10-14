@@ -25,11 +25,13 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Least privilege. `contents: read` is required because this workflow pushes
-    # the version-bump commit back to main at the end. `id-token: write` is
-    # required for npm Trusted Publishing (OIDC) — see the auth note below.
+    # Least privilege. `contents: write` is required because this workflow pushes
+    # the version-bump commit back to main at the end (`contents: read` made that
+    # final `git push` 403 AFTER npm had already accepted the version, so the
+    # registry ran ahead of the repo). `id-token: write` is required for npm
+    # Trusted Publishing (OIDC) — see the auth note below.
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:

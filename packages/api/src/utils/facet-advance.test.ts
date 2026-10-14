@@ -6,7 +6,8 @@
 import { describe, it, expect, vi } from "vitest";
 
 const h = vi.hoisted(() => ({ lifecycle: null as unknown }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   ProfileResolutionService: class {
     async getEffectiveLifecycle() {

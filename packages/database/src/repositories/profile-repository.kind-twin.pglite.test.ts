@@ -24,6 +24,7 @@ import * as schema from "../schema/index.js";
 import { ProfileRepository } from "./profile-repository.js";
 import { isProfileKindTwinError } from "../utils/profile-slug-precedence.js";
 import { resolveProfileForApply } from "../utils/resolve-profile-for-apply.js";
+import { ProfileResolutionService } from "../services/profile-resolution-service.js";
 
 /** CREATE TABLE from the drizzle definition — columns, types and literal defaults. */
 function ddlFor(table: PgTable): string {
@@ -61,11 +62,12 @@ async function seedProfile(opts: {
   kind?: "kind" | "role";
   workspaceId?: string | null;
   isActive?: boolean;
+  entityScope?: "pod" | "workspace";
   createdAt: string;
 }): Promise<string> {
   const r = await pg.query<{ id: string }>(
     `insert into profiles (slug, display_name, scope, workspace_id, user_id, profile_kind, is_active, origin, lifecycle, version, entity_scope, created_at)
-     values ($1, $1, $2, $3, $4, $5, $6, 'core', 'active', 1, 'pod', $7) returning id`,
+     values ($1, $1, $2, $3, $4, $5, $6, 'core', 'active', 1, $8, $7) returning id`,
     [
       opts.slug,
       opts.scope,
@@ -74,6 +76,7 @@ async function seedProfile(opts: {
       opts.kind ?? "kind",
       opts.isActive ?? true,
       opts.createdAt,
+      opts.entityScope ?? "pod",
     ]
   );
   return r.rows[0]!.id;
@@ -193,6 +196,55 @@ describe("getBySlug with NO workspace lens — a kind resolves pod-wide", () => 
     });
     expect((await repo.getBySlug("recipe", undefined, USER))?.id).toBe(
       userRowId
+    );
+  });
+});
+
+describe("two WORKSPACE kinds share a slug — the live `finding` twin (ticket 5c3879d4)", () => {
+  // Research `finding` (2026-07, a validated fact, entityScope workspace) and
+  // Builder `finding` (2026-10, a product problem, entityScope pod). No
+  // pod-wide row exists, so the old pod-lens pick was "oldest" = Research, and
+  // every pod-wide `finding` write (capture, the approve materializer) landed
+  // product problems on the research kind.
+  async function seedFindingTwin() {
+    const researchId = await seedProfile({
+      slug: "finding",
+      scope: "workspace",
+      workspaceId: WS,
+      entityScope: "workspace",
+      createdAt: "2026-07-22T01:49:47Z",
+    });
+    const builderId = await seedProfile({
+      slug: "finding",
+      scope: "workspace",
+      workspaceId: WS2,
+      entityScope: "pod",
+      createdAt: "2026-10-04T13:15:50Z",
+    });
+    return { researchId, builderId };
+  }
+
+  it("with NO lens, the door every write resolves through picks the pod-entityScope kind, not the oldest", async () => {
+    const { builderId } = await seedFindingTwin();
+    // The real door: entities.create (proposal time) and the approve
+    // materializer both call resolveProfile(slug, userId, workspaceId|null).
+    const resolver = new ProfileResolutionService(repo["db"] as never);
+    expect((await resolver.resolveProfile("finding", USER, null))?.id).toBe(
+      builderId
+    );
+    expect((await repo.getBySlug("finding", undefined, USER))?.id).toBe(
+      builderId
+    );
+  });
+
+  it("each workspace lens resolves its OWN kind, never the other workspace's", async () => {
+    const { researchId, builderId } = await seedFindingTwin();
+    const resolver = new ProfileResolutionService(repo["db"] as never);
+    expect((await resolver.resolveProfile("finding", USER, WS2))?.id).toBe(
+      builderId
+    );
+    expect((await resolver.resolveProfile("finding", USER, WS))?.id).toBe(
+      researchId
     );
   });
 });

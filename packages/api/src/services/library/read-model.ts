@@ -8,7 +8,7 @@
  * (written by the `library-light-read` worker) on `metadata.importRead`.
  *
  * Paging is a SQL keyset on (created_at DESC, id DESC), served by the partial
- * index `documents_library_items_idx` (0326). The cursor carries the row's
+ * index `documents_library_items_idx` (0328). The cursor carries the row's
  * created_at as Postgres TEXT (microseconds), never a JS Date — a Date drops
  * the microseconds and would page rows staged in one millisecond out of order.
  *

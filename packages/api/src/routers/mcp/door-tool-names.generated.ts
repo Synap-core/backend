@@ -35,6 +35,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__capture",
     raycast: "capture",
   },
+  synap_change_kind_scope: {
+    "pod-mcp": "synap_change_kind_scope",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_complete_session: {
     "pod-mcp": "synap_complete_session",
     "cp-connector": "pod__complete_session",
@@ -310,6 +315,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__remember_fact",
     raycast: "remember-fact",
   },
+  synap_request_upload: {
+    "pod-mcp": "synap_request_upload",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_rerun_session: {
     "pod-mcp": "synap_rerun_session",
     "cp-connector": "pod__rerun_session",
@@ -327,7 +337,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_retire_workspace: {
     "pod-mcp": "synap_retire_workspace",
-    "cp-connector": null,
+    "cp-connector": "pod__retire_workspace",
     raycast: null,
   },
   synap_revert_session: {
@@ -405,6 +415,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__update_document",
     raycast: null,
   },
+  synap_update_entities: {
+    "pod-mcp": "synap_update_entities",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_update_entity: {
     "pod-mcp": "synap_update_entity",
     "cp-connector": "pod__update_entity",
@@ -419,6 +434,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_update_session",
     "cp-connector": "pod__update_session",
     raycast: "update-session",
+  },
+  synap_update_skill: {
+    "pod-mcp": "synap_update_skill",
+    "cp-connector": null,
+    raycast: null,
   },
   synap_update_space_brief: {
     "pod-mcp": "synap_update_space_brief",

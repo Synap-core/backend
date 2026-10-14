@@ -1323,8 +1323,7 @@ export async function gateWorkerRun(
  * The board's status read, loaded only by a worker run: it lives beside the
  * entity routers and pulls their module graph, which no other run needs.
  */
-const loadStatusGroups = () =>
-  import("../../routers/entities/status-groups.js");
+const loadStatusGroups = () => import("../lifecycle/status-groups.js");
 
 function workerMaxPending(declared: number | undefined): number {
   const n =

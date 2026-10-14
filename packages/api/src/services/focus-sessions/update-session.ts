@@ -64,6 +64,11 @@ import {
   type BlockedSlotRef,
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
+import {
+  gateAgentHandOff,
+  handedOffAgentIds,
+  type AgentHandOffDecision,
+} from "./agent-hand-off.js";
 import { archivedAnswerHistory } from "./answer-history.js";
 import { logSlotsAsked } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
@@ -139,6 +144,15 @@ export interface UpdateFocusSessionParams {
    * person's call — an agent may suggest one, never apply it silently.
    */
   projectId?: string | null;
+  /**
+   * MOVE the session into another space, or make it personal with an explicit
+   * `null`. Omitted (or equal to its space) leaves it alone. Mirrors
+   * `projectId`: the target is floored (`checkSessionWorkspaceMove` — the caller
+   * writes it, and everyone in the room is a member of it) before governance,
+   * and an AGENT's move is always a proposal. Moves the session, its room and
+   * its artifacts in one transaction; never the entities it produced.
+   */
+  workspaceId?: string | null;
   /**
    * ADOPT this session into a TRACK step, or UNFILE it from its track with an
    * explicit `null`. Resolved by `resolveSessionTrackFiling` (the track must be
@@ -246,6 +260,13 @@ export type UpdateFocusSessionResult =
        * Absent when there is nothing to say.
        */
       warnings?: string[];
+      /**
+       * An agent's `addAgentId` naming ANOTHER agent is a hand-off, decided by
+       * its own door (`agent-hand-off.ts`). Present only when the patch carried
+       * one: `proposed` ⇒ the roster add waits on a person (the rest of this
+       * patch landed); `granted` ⇒ it was attached with the rest.
+       */
+      handOff?: AgentHandOffDecision;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -1262,6 +1283,27 @@ export function criteriaDiffer(
   return !isDeepStrictEqual(byKey(stored), byKey(next));
 }
 
+/**
+ * Does the patch ask for anything beyond the identity fields? Every key other
+ * than `sessionId` / `userId` / `agentUserId` that carries a value counts —
+ * derived from the object, never a hand list of fields, so a new field is
+ * counted by existing. Criteria count only when they CHANGE (`criteriaChange`),
+ * the same rule the membrane applies.
+ */
+function patchAsksForMore(
+  params: UpdateFocusSessionParams,
+  criteriaChange: boolean
+): boolean {
+  return Object.entries(params).some(([key, value]) => {
+    if (value === undefined) return false;
+    if (key === "sessionId" || key === "userId" || key === "agentUserId") {
+      return false;
+    }
+    if (key === "criteria") return criteriaChange;
+    return true;
+  });
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -1290,6 +1332,13 @@ export async function updateFocusSession(
     params.projectId === existing.projectId
   ) {
     params = { ...params, projectId: undefined };
+  }
+  // The same for a space move: the session's own space is not a move.
+  if (
+    params.workspaceId !== undefined &&
+    params.workspaceId === (existing.workspaceId ?? null)
+  ) {
+    params = { ...params, workspaceId: undefined };
   }
   // The same for CRITERIA: carried to the membrane only when they DIFFER from
   // the stored list. An agent changing its own acceptance criteria is floored
@@ -1410,6 +1459,21 @@ export async function updateFocusSession(
     filingProjectName = project.name;
   }
 
+  // THE SAME FLOOR for a space move — refused here, never laundered into a
+  // proposal that explodes on the human at approval time.
+  let moveWorkspaceName: string | null | undefined;
+  if (params.workspaceId !== undefined) {
+    const { checkSessionWorkspaceMove } =
+      await import("./move-session-workspace.js");
+    const move = await checkSessionWorkspaceMove({
+      session: existing,
+      workspaceId: params.workspaceId,
+      userId,
+    });
+    if (!move.ok) return { status: "denied", reason: move.reason };
+    moveWorkspaceName = move.workspaceName;
+  }
+
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
   // same reason as the floors above: a track the caller cannot see, a stage it
   // did not pin or a cross-project filing is refused to the caller, never
@@ -1433,6 +1497,44 @@ export async function updateFocusSession(
     }
   }
 
+  // AGENT HAND-OFF — an agent putting ANOTHER agent on the roster is its own
+  // governed write (`focus_session/assign_agent`, propose unless a rule says
+  // auto), decided BEFORE the update membrane so an auto-approved update can
+  // never carry it through. A person, and an agent adding itself, skip this.
+  // Granted ⇒ it rides the patch below as before. Proposed ⇒ it is dropped
+  // from this patch (the proposal carries it; approval attaches it) and,
+  // when nothing else was asked for, the proposal IS the answer.
+  let handOff: AgentHandOffDecision | undefined;
+  if (params.addAgentId !== undefined) {
+    const [handedTo] = handedOffAgentIds(agentUserId, [params.addAgentId]);
+    if (handedTo && agentUserId) {
+      handOff = await gateAgentHandOff({
+        userId,
+        agentUserId,
+        workspaceId: existing.workspaceId,
+        sessionId,
+        goal: existing.goal,
+        agentId: handedTo,
+      });
+      if (handOff.status === "denied") {
+        return { status: "denied", reason: handOff.reason };
+      }
+      if (handOff.status === "proposed") {
+        params = { ...params, addAgentId: undefined };
+        if (!patchAsksForMore(params, criteriaChange)) {
+          return {
+            status: "proposed",
+            proposalId: handOff.proposalId,
+            proposalType: handOff.proposalType,
+            summary: handOff.summary,
+            reviewPath: handOff.reviewPath,
+            reviewUrl: handOff.reviewUrl,
+          };
+        }
+      }
+    }
+  }
+
   // Governance membrane — AI callers route through proposals (same gate the
   // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
   // goal (for proposal summary / targetName) plus every intended mutation so
@@ -1448,7 +1550,9 @@ export async function updateFocusSession(
     source: "intelligence",
     // Filing is always reviewed when an agent does it (honoured on the AI
     // paths only — a person filing their own session is never forced).
-    ...(params.projectId !== undefined || trackFiling
+    ...(params.projectId !== undefined ||
+    trackFiling ||
+    params.workspaceId !== undefined
       ? { forcePropose: true }
       : {}),
     data: {
@@ -1491,6 +1595,16 @@ export async function updateFocusSession(
       // Display only — the proposal title names WHICH project (the executor
       // applies `projectId` and ignores this).
       ...(filingProjectName ? { projectName: filingProjectName } : {}),
+      // SPACE MOVE — carried so approval applies it (the executor re-floors
+      // it); `null` (make personal) must survive. The name is display only.
+      // Governance above resolved on the CURRENT space's rules; once moved,
+      // the session follows the new space's.
+      ...(params.workspaceId !== undefined
+        ? {
+            workspaceId: params.workspaceId,
+            ...(moveWorkspaceName ? { workspaceName: moveWorkspaceName } : {}),
+          }
+        : {}),
       // TRACK FILING — carried so approval applies it (the executor
       // RE-resolves it). `null` (unfile) must survive. The names are display
       // only: the proposal title says WHICH track and step, and — when filing
@@ -1605,6 +1719,15 @@ export async function updateFocusSession(
   let outputsAfter: OutputItem[] = [];
 
   const [updated] = await db.transaction(async (tx) => {
+    if (params.workspaceId !== undefined) {
+      const { applySessionWorkspaceMove } =
+        await import("./move-session-workspace.js");
+      await applySessionWorkspaceMove(tx, {
+        sessionId,
+        channelId: existing.channelId,
+        workspaceId: params.workspaceId,
+      });
+    }
     if (mutatesOutputs) {
       const [locked] = await tx
         .select({ expectedOutputs: focusSessions.expectedOutputs })
@@ -1812,5 +1935,6 @@ export async function updateFocusSession(
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
+    ...(handOff ? { handOff } : {}),
   };
 }

@@ -18,6 +18,7 @@ import {
   drizzleSql,
   findClientSession,
   clientKeyScope,
+  conversationCwdPatch,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
   isProbeWriteContext,
@@ -75,6 +76,12 @@ import {
 import { paramOwedSlots } from "./param-slots.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { enqueueSessionRecall } from "./session-recall.js";
+import {
+  gateAgentHandOff,
+  handedOffAgentIds,
+  type AgentHandOffDecision,
+} from "./agent-hand-off.js";
+import { attachSessionAgent } from "./attach-session-agent.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -309,6 +316,12 @@ export type CreateFocusSessionResult =
        * (same rule as `updateSession`).
        */
       warnings?: string[];
+      /**
+       * Present iff an AGENT's start named OTHER agents: one decision per
+       * agent (`agent-hand-off.ts`). `proposed` ⇒ that agent is NOT on the
+       * roster until a person approves; `granted` ⇒ it is.
+       */
+      handOffs?: AgentHandOffDecision[];
     }
   | {
       /**
@@ -335,6 +348,13 @@ export type CreateFocusSessionResult =
       reasoning?: string;
       reviewPath?: string;
       reviewUrl?: string;
+      /**
+       * Join gate that KEPT the write (`perm.deferred`): it is replayed as the
+       * agent once the join is approved — the caller must not resend it.
+       */
+      deferred?: true;
+      /** The kept write's ref on the join (`data.deferredOutcomes[ref]`). */
+      ref?: string;
     };
 
 export async function createFocusSession(
@@ -368,6 +388,15 @@ export async function createFocusSession(
     agentUserId && !requestedAgentIds.includes(agentUserId)
       ? [agentUserId, ...requestedAgentIds]
       : requestedAgentIds;
+  // An AGENT naming OTHER agents is handing them the work — its own governed
+  // write (`agent-hand-off.ts`). They are NOT written on the row the direct
+  // path inserts; each is asked for once the session exists (below). The
+  // PROPOSED start still carries the full roster: the person approving the
+  // start approves who it is handed to.
+  const handedOff = handedOffAgentIds(agentUserId, requestedAgentIds);
+  const directAgentIds = agentIds.filter(
+    (id) => !handedOff.includes(id.trim())
+  );
 
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
@@ -668,12 +697,16 @@ export async function createFocusSession(
       proposalType: perm.proposalType,
       message: proposedMessageFor(
         perm.proposalType,
-        "Focus session creation proposed for review"
+        "Focus session creation proposed for review",
+        perm.deferred
       ),
       summary: perm.summary,
       reasoning: perm.reasoning,
       reviewPath: perm.reviewPath,
       reviewUrl: perm.reviewUrl,
+      ...(perm.deferred
+        ? { deferred: true as const, ref: perm.deferredRef }
+        : {}),
     };
   }
 
@@ -850,7 +883,7 @@ export async function createFocusSession(
           subjectEntityId: subjectEntityId ?? undefined,
           ...(playbook ? { origin: "playbook" as const } : {}),
           ...(channelId ? { channelId } : {}),
-          ...(agentIds.length > 0 ? { agentIds } : {}),
+          ...(directAgentIds.length > 0 ? { agentIds: directAgentIds } : {}),
           ...(correlationId ? { correlationId } : {}),
           metadata: drizzleSql`(coalesce(${focusSessions.metadata}, '{}'::jsonb) - 'kind' - 'autoOpened') || ${JSON.stringify(
             {
@@ -898,7 +931,9 @@ export async function createFocusSession(
           isProbeWriteContext()
             ? {
                 metadata: stampProbeMarker({
-                  ...(clientKey ? { clientKey } : {}),
+                  ...(clientKey
+                    ? { clientKey, ...conversationCwdPatch(clientKey) }
+                    : {}),
                   ...(title
                     ? titleSourcePatch(agentUserId ? "agent" : "human")
                     : derivedTitle
@@ -925,7 +960,7 @@ export async function createFocusSession(
           // means a person did ("human").
           origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
           channelId,
-          agentIds,
+          agentIds: directAgentIds,
           status: "active",
         })
         .returning();
@@ -1095,9 +1130,38 @@ export async function createFocusSession(
   // auto-opened receipt only now becomes a unit of work with a goal.
   void enqueueSessionRecall(sessionOut.id, "start");
 
+  // The hand-offs this start named, each through the ONE hand-off gate now
+  // that the session exists to be handed. Granted ⇒ attached through the
+  // roster door; proposed ⇒ approval attaches it; denied ⇒ said back.
+  const handOffs: AgentHandOffDecision[] = [];
+  if (agentUserId) {
+    for (const agentId of handedOff) {
+      const decision = await gateAgentHandOff({
+        userId,
+        agentUserId,
+        workspaceId: sessionOut.workspaceId,
+        sessionId: sessionOut.id,
+        goal: sessionOut.goal,
+        agentId,
+      });
+      if (decision.status === "granted") {
+        const attached = await attachSessionAgent({
+          sessionId: sessionOut.id,
+          agentId,
+          userId,
+        });
+        if (attached.status === "attached") {
+          sessionOut = { ...sessionOut, agentIds: attached.agentIds };
+        }
+      }
+      handOffs.push(decision);
+    }
+  }
+
   return {
     status: "created",
     session: sessionOut,
+    ...(handOffs.length > 0 ? { handOffs } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(parentLink ? { parentLink } : {}),

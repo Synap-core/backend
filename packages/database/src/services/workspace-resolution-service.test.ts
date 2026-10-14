@@ -50,6 +50,12 @@ interface Seed {
     workspaceId?: string | null;
   }[];
   grants?: { workspaceId: string }[];
+  /**
+   * Filter `profiles.findMany` by the slugs its drizzle `where` names (the
+   * graph per-entity tests need each entity's OWN kind to resolve alone).
+   * Off by default: the ladder suites above rely on the unfiltered seed.
+   */
+  profilesBySlug?: boolean;
   channelWorkspaceId?: string | null;
   sessionWorkspaceId?: string | null;
   entities?: { workspaceId: string | null }[];
@@ -60,6 +66,23 @@ interface Seed {
     toId: string;
     metadata?: { profileSlug?: string | null };
   }[];
+}
+
+/** Every string literal a drizzle `where` carries (its bound params). */
+function whereStrings(where: unknown): Set<string> {
+  const out = new Set<string>();
+  const walk = (n: unknown, depth: number): void => {
+    if (depth > 8 || n == null) return;
+    if (typeof n === "string") out.add(n);
+    else if (Array.isArray(n)) n.forEach((x) => walk(x, depth + 1));
+    else if (typeof n === "object") {
+      const o = n as { queryChunks?: unknown; value?: unknown };
+      if ("queryChunks" in o) walk(o.queryChunks, depth + 1);
+      else if ("value" in o) walk(o.value, depth + 1);
+    }
+  };
+  walk(where, 0);
+  return out;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,13 +112,18 @@ function makeDb(seed: Seed): any {
         },
       },
       profiles: {
-        findMany: async () =>
-          (seed.profiles ?? []).map((p) => ({
-            id: p.id,
-            slug: p.slug,
-            scope: p.scope,
-            workspaceId: p.workspaceId ?? null,
-          })),
+        findMany: async (args: { where?: unknown } | undefined) =>
+          (seed.profiles ?? [])
+            .filter(
+              (p) =>
+                !seed.profilesBySlug || whereStrings(args?.where).has(p.slug)
+            )
+            .map((p) => ({
+              id: p.id,
+              slug: p.slug,
+              scope: p.scope,
+              workspaceId: p.workspaceId ?? null,
+            })),
       },
       profileWorkspaceAccess: {
         findMany: async () => seed.grants ?? [],
@@ -894,18 +922,26 @@ describe("acceptDeterministicGraphWorkspace (graph batch policy)", () => {
   });
 });
 
-describe("resolveGraphWorkspaceFromSlugs", () => {
-  it("returns null immediately when routingSlugs is empty (no door call needed)", async () => {
-    // Empty seed — any accidental door call that hits the mock would throw or
-    // return null either way; the contract under test is the short-circuit.
+describe("resolveGraphWorkspaceFromSlugs (D14: per-entity placement)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  /** Kind → entityScope, the way the catalog declares it. */
+  const scopeOf = (map: Record<string, "pod" | "workspace">) =>
+    vi
+      .spyOn(ProfileResolutionService.prototype, "getEntityScope")
+      .mockImplementation(async (slug: string) => map[slug] ?? "pod");
+
+  it("no entities → rung 6, pod-wide, no candidates", async () => {
     const r = await resolveGraphWorkspaceFromSlugs(makeDb({}), {
       userId: USER,
-      routingSlugs: [],
+      entities: [],
     });
-    expect(r).toBeNull();
+    expect(r).toMatchObject({ workspaceId: null, rung: 6, candidates: [] });
   });
 
-  it("returns the ontology workspace on a deterministic single-candidate hit", async () => {
+  it("a pod kind wearing a role enabled in one lens → placed there (the role votes)", async () => {
+    scopeOf({ person: "pod" });
     const db = makeDb({
       members: [WS_A],
       workspaces: [{ id: WS_A, name: "CRM" }],
@@ -915,12 +951,16 @@ describe("resolveGraphWorkspaceFromSlugs", () => {
     });
     const r = await resolveGraphWorkspaceFromSlugs(db, {
       userId: USER,
-      routingSlugs: ["client"],
+      entities: [{ kindSlug: "person", facetSlugs: ["client"] }],
     });
-    expect(r).toBe(WS_A);
+    expect(r.workspaceId).toBe(WS_A);
+    expect(r.rung).toBe(2);
+    expect(r.candidates).toEqual([]);
+    expect(r.reason).toContain("'CRM'");
   });
 
-  it("abstains (null) when the role is enabled in >1 member workspace", async () => {
+  it("a role enabled in >1 member lens → abstains WITH those candidates", async () => {
+    scopeOf({ person: "pod" });
     const db = makeDb({
       members: [WS_A, WS_B],
       workspaces: [
@@ -934,10 +974,95 @@ describe("resolveGraphWorkspaceFromSlugs", () => {
     });
     const r = await resolveGraphWorkspaceFromSlugs(db, {
       userId: USER,
-      routingSlugs: ["client"],
+      entities: [{ kindSlug: "person", facetSlugs: ["client"] }],
     });
-    // Never invent membership[0] — multi-candidate → stay pod-wide.
-    expect(r).toBeNull();
+    // Never invent membership[0] — multi-candidate → stay pod-wide, say why.
+    expect(r.workspaceId).toBeNull();
+    expect(r.candidates.map((c) => c.id).sort()).toEqual([WS_A, WS_B]);
+  });
+
+  // The ticket (#8 24be983e): 6 decisions + 1 document used to route as
+  // "decision with a document facet" — the FIRST entity's kind decided.
+  const splitSeed: Seed = {
+    members: [WS_A, WS_B],
+    workspaces: [
+      { id: WS_A, name: "Builder" },
+      { id: WS_B, name: "Brand" },
+    ],
+    profilesBySlug: true,
+    profiles: [
+      { id: "pd", slug: "decision", scope: "workspace", workspaceId: WS_A },
+      { id: "pc", slug: "document", scope: "workspace", workspaceId: WS_B },
+    ],
+  };
+  const sixDecisionsOneDocument = [
+    ...Array.from({ length: 6 }, () => ({ kindSlug: "decision" })),
+    { kindSlug: "document" },
+  ];
+
+  it("6 decisions + 1 document whose kinds live in different lenses → abstain, both candidates, most entities first", async () => {
+    scopeOf({ decision: "workspace", document: "workspace" });
+    const r = await resolveGraphWorkspaceFromSlugs(makeDb(splitSeed), {
+      userId: USER,
+      entities: sixDecisionsOneDocument,
+    });
+    expect(r.workspaceId).toBeNull();
+    expect(r.candidates).toEqual([
+      { id: WS_A, name: "Builder" },
+      { id: WS_B, name: "Brand" },
+    ]);
+    expect(r.reason).toContain("'Builder' (6: decision)");
+    expect(r.reason).toContain("'Brand' (1: document)");
+  });
+
+  it("order does not decide: the document listed FIRST still abstains", async () => {
+    scopeOf({ decision: "workspace", document: "workspace" });
+    const r = await resolveGraphWorkspaceFromSlugs(makeDb(splitSeed), {
+      userId: USER,
+      entities: [...sixDecisionsOneDocument].reverse(),
+    });
+    expect(r.workspaceId).toBeNull();
+    expect(r.candidates[0]).toEqual({ id: WS_A, name: "Builder" });
+  });
+
+  it("the wrong-space bug: a session in the MINORITY lens can no longer tie-break the whole graph into it", async () => {
+    // Before D14 the graph's slugs were ONE ontology query (first kind + the
+    // rest as facets) → candidates {Builder, Brand} → rung 3 tie-broke on the
+    // session → all 7 entities landed in Brand, the lens of ONE document.
+    scopeOf({ decision: "workspace", document: "workspace" });
+    const r = await resolveGraphWorkspaceFromSlugs(
+      makeDb({ ...splitSeed, sessionWorkspaceId: WS_B }),
+      { userId: USER, entities: sixDecisionsOneDocument, sessionId: "s-1" }
+    );
+    expect(r.workspaceId).toBeNull();
+    expect(r.candidates.map((c) => c.id)).toEqual([WS_A, WS_B]);
+  });
+
+  it("unanimous: every workspace-scoped kind lives in one lens → placed, with the reason", async () => {
+    scopeOf({ decision: "workspace", document: "workspace" });
+    const r = await resolveGraphWorkspaceFromSlugs(
+      makeDb({
+        ...splitSeed,
+        profiles: [
+          { id: "pd", slug: "decision", scope: "workspace", workspaceId: WS_A },
+          { id: "pc", slug: "document", scope: "workspace", workspaceId: WS_A },
+        ],
+      }),
+      { userId: USER, entities: sixDecisionsOneDocument }
+    );
+    expect(r).toMatchObject({ workspaceId: WS_A, rung: 2, candidates: [] });
+    expect(r.reason).toContain(
+      "every placed entity agrees on workspace 'Builder'"
+    );
+  });
+
+  it("a pod kind with no role does not vote against the lens", async () => {
+    scopeOf({ decision: "workspace", document: "pod" });
+    const r = await resolveGraphWorkspaceFromSlugs(makeDb(splitSeed), {
+      userId: USER,
+      entities: sixDecisionsOneDocument,
+    });
+    expect(r).toMatchObject({ workspaceId: WS_A, rung: 2, candidates: [] });
   });
 });
 
@@ -1058,16 +1183,17 @@ describe("resolveWorkspacePlacement — rung 3 (context) vs entityScope (W2b)", 
       );
     const allPod = await resolveGraphWorkspaceFromSlugs(makeDb(seed), {
       userId: USER,
-      routingSlugs: ["person", "company"],
+      entities: [{ kindSlug: "person" }, { kindSlug: "company" }],
       sessionId: "s-1",
     });
-    expect(allPod).toBeNull();
+    expect(allPod.workspaceId).toBeNull();
     const mixed = await resolveGraphWorkspaceFromSlugs(makeDb(seed), {
       userId: USER,
-      routingSlugs: ["person", "task"],
+      entities: [{ kindSlug: "person" }, { kindSlug: "task" }],
       sessionId: "s-1",
     });
-    expect(mixed).toBe(WS_A);
+    expect(mixed.workspaceId).toBe(WS_A);
+    expect(mixed.rung).toBe(3);
     expect(spy).toHaveBeenCalled();
   });
 });

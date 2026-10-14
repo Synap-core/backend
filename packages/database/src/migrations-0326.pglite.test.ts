@@ -1,99 +1,80 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0326 — the Library.
- * The migration and the baseline create `library_groups` with EVERY column and
- * index the drizzle schema declares, the documents read index the schema
- * declares (schema-coherence checks both by name), and re-running is a no-op.
- * The partial index is USED by the read model's query shape.
+ * REAL-POSTGRES (PGlite) test for migration 0326 — stored Knowledge
+ * `knowledgeForm = 'insight'` becomes `'fact'` (plan 9992207a §5):
+ *   - only Knowledge rows holding `insight` change; every other key on the row
+ *     (notably the legacy `ek_type`) is kept as stored;
+ *   - caution / convention rows and a non-knowledge row that happens to carry
+ *     the same key are untouched;
+ *   - a second run changes nothing (idempotent).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
-import { getTableConfig } from "drizzle-orm/pg-core";
-import { libraryGroups } from "./schema/library-groups.js";
-import { documents } from "./schema/documents.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0326 = readFileSync(
-  resolve(HERE, "../migrations/0326_library_groups.sql"),
+  resolve(HERE, "../migrations/0326_knowledge_form_insight_to_fact.sql"),
   "utf8"
 );
-const BASELINE = readFileSync(
-  resolve(HERE, "../migrations/0000_baseline_schema.sql"),
-  "utf8"
-);
-const groupCfg = getTableConfig(libraryGroups);
-const declaredColumns = groupCfg.columns.map((c) => c.name);
-const declaredGroupIndexes = groupCfg.indexes.map((i) => i.config.name!);
-const declaredDocIndex = getTableConfig(documents)
-  .indexes.map((i) => i.config.name!)
-  .find((n) => n === "documents_library_items_idx");
 
-const DOCUMENTS_STUB = `CREATE TABLE documents (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz, metadata jsonb)`;
+let pg: PGlite;
 
-async function indexesOf(pg: PGlite, table: string): Promise<string[]> {
-  const r = await pg.query<{ indexname: string }>(
-    `SELECT indexname FROM pg_indexes WHERE tablename = $1`,
-    [table]
+async function rows() {
+  const r = await pg.query<{ id: string; properties: Record<string, unknown> }>(
+    "SELECT id, properties FROM entities ORDER BY id"
   );
-  return r.rows.map((x) => x.indexname);
+  return Object.fromEntries(r.rows.map((x) => [x.id, x.properties]));
 }
 
-describe("migration 0326 — library_groups + the Library read index", () => {
-  it("creates every declared column and index, idempotently", async () => {
-    const pg = new PGlite();
-    await pg.exec(DOCUMENTS_STUB);
-    await pg.exec(M0326);
-    await pg.exec(M0326);
-    const cols = await pg.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns WHERE table_name = 'library_groups'`
+beforeAll(async () => {
+  pg = new PGlite();
+  await pg.exec(`
+    CREATE TABLE entities (
+      id text PRIMARY KEY, type text NOT NULL,
+      properties jsonb NOT NULL DEFAULT '{}'::jsonb,
+      updated_at timestamptz NOT NULL DEFAULT '2026-01-01'
     );
-    expect(declaredColumns.length).toBe(15);
-    expect(cols.rows.map((r) => r.column_name).sort()).toEqual(
-      [...declaredColumns].sort()
-    );
-    expect(declaredGroupIndexes.length).toBe(2);
-    const groupIdx = await indexesOf(pg, "library_groups");
-    for (const name of declaredGroupIndexes) expect(groupIdx).toContain(name);
-    expect(declaredDocIndex).toBe("documents_library_items_idx");
-    expect(await indexesOf(pg, "documents")).toContain(declaredDocIndex);
-    await pg.close();
-  }, 60_000);
+    INSERT INTO entities (id, type, properties) VALUES
+      ('k1', 'knowledge', '{"knowledgeForm":"insight","ek_type":"lesson","ek_claim":"A"}'),
+      ('k2', 'knowledge', '{"knowledgeForm":"insight"}'),
+      ('k3', 'knowledge', '{"knowledgeForm":"caution","ek_type":"gotcha"}'),
+      ('k4', 'knowledge', '{"knowledgeForm":"convention"}'),
+      ('k5', 'knowledge', '{"ek_type":"reference"}'),
+      ('n1', 'note',      '{"knowledgeForm":"insight"}');
+  `);
+}, 120_000);
+afterAll(async () => pg?.close());
 
-  it("refuses a second group with the same key for one person, allows it for another", async () => {
-    const pg = new PGlite();
-    await pg.exec(DOCUMENTS_STUB);
+describe("migration 0326 — knowledgeForm insight → fact", () => {
+  it("rewrites only Knowledge insight rows and keeps every other key", async () => {
     await pg.exec(M0326);
-    await pg.query(
-      `INSERT INTO library_groups (user_id, key, name) VALUES ('u1','films','Films')`
+    const r = await rows();
+    expect(r.k1).toEqual({
+      knowledgeForm: "fact",
+      ek_type: "lesson",
+      ek_claim: "A",
+    });
+    expect(r.k2).toEqual({ knowledgeForm: "fact" });
+    expect(r.k3).toEqual({ knowledgeForm: "caution", ek_type: "gotcha" });
+    expect(r.k4).toEqual({ knowledgeForm: "convention" });
+    expect(r.k5).toEqual({ ek_type: "reference" });
+    expect(r.n1).toEqual({ knowledgeForm: "insight" });
+    const touched = await pg.query<{ id: string }>(
+      "SELECT id FROM entities WHERE updated_at > '2026-01-01' ORDER BY id"
     );
-    await pg.query(
-      `INSERT INTO library_groups (user_id, key, name) VALUES ('u2','films','Films')`
-    );
-    await expect(
-      pg.query(
-        `INSERT INTO library_groups (user_id, key, name) VALUES ('u1','films','Films 2')`
-      )
-    ).rejects.toThrow(/library_groups_user_key_unique/);
-    await expect(
-      pg.query(
-        `INSERT INTO library_groups (user_id, key, name, origin) VALUES ('u1','x','X','agent')`
-      )
-    ).rejects.toThrow(/library_groups_origin_check/);
-    await pg.close();
-  }, 60_000);
+    expect(touched.rows.map((x) => x.id)).toEqual(["k1", "k2"]);
+  });
 
-  it("the baseline carries the same table and the documents read index", () => {
-    const create = M0326.slice(
-      M0326.indexOf('CREATE TABLE IF NOT EXISTS "library_groups"'),
-      M0326.indexOf(");", M0326.indexOf("CREATE TABLE")) + 2
+  it("is idempotent: a re-run finds nothing to change", async () => {
+    const before = await rows();
+    const res = await pg.query(
+      M0326.replace(/--[^\n]*\n/g, "")
+        .trim()
+        .replace(/;$/, "")
     );
-    expect(create.length).toBeGreaterThan(200);
-    expect(BASELINE).toContain(create.trim());
-    expect(BASELINE).toContain('"documents_library_items_idx"');
-    expect(BASELINE).toContain('"library_groups_user_key_unique"');
+    expect(res.affectedRows).toBe(0);
+    expect(await rows()).toEqual(before);
   });
 });

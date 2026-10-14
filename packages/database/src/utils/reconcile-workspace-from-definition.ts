@@ -69,7 +69,10 @@ import {
   declareLifecycle,
   withLifecycleOptions,
 } from "../services/lifecycle/declare-lifecycle.js";
-import type { PropertyValueType } from "../schema/property-defs.js";
+import type {
+  PropertyDef,
+  PropertyValueType,
+} from "../schema/property-defs.js";
 import { asPropertyInputType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
@@ -97,6 +100,8 @@ import {
   type PropertyTargetResolutionReport,
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
+import { templateApplyUnfinished } from "./template-apply-state.js";
+import { projectTemplateIntent } from "./workspace-intent.js";
 import {
   holdsTemplateStamp,
   pendingTemplateDataChanges,
@@ -251,6 +256,15 @@ export interface ReconcileReport {
     skipped: Array<{ profile: string; slug: string }>;
     /** Existing property whose enum options were synced to the template (values added). */
     enumsUpdated: Array<{ profile: string; slug: string }>;
+    /**
+     * The profile already links a POD-WIDE GLOBAL def (profile_id + workspace_id
+     * NULL) with this slug, so the template's declaration was NOT applied: a
+     * global def is shared by every kind that links it, and one template's
+     * enum/constraints must never narrow it for all of them (the 2026-10-12
+     * `source` incident). Rename the template's property to claim it. Optional
+     * so older report fixtures stay valid.
+     */
+    globalsKept?: Array<{ profile: string; slug: string }>;
     /**
      * Lifecycle declarations (0319, work model L1): `declared` = the profile's
      * lifecycle link was set (or already was — `unchanged` is not listed);
@@ -526,6 +540,37 @@ export async function reconcileWorkspaceFromDefinition(
       settingsPatch.workspaceCapabilities = definition.workspaceCapabilities;
     }
   }
+  // What the space produces (`settings.intent`). Converges to the template on
+  // every pass the definition CARRIES one — written, never gated on a marker.
+  //
+  // An ABSENT intent proves nothing, so it never clears one (homes A-M1). The
+  // field crosses transports that did not always carry it: a control plane
+  // older than b3243b4d stripped `intent` at publish, so every definition it
+  // serves arrives without one, and an overlay / the base-defaults pass carry
+  // none by design. "Absent ⇒ retire" read those as "the template dropped its
+  // intent" and wiped live intents on the next reconcile — a claim no
+  // comparator checked. The ONE clear: an IDENTITY CHANGE — another template
+  // now owns the space (`opts.packageSlug` ≠ the stored `settings.packageSlug`)
+  // and declares none, so the old template's intent is no longer anyone's
+  // (null → the read infers again).
+  //
+  // Classified per the convergence rules: a template that stops declaring an
+  // intent under the SAME identity keeps the last one it declared — HONEST
+  // UNDER-CONVERGENCE (the stored intent is still that template's, stamped
+  // `source: "template"`), never a durable lie; the version stamp below is
+  // unchanged by this field.
+  const intent = projectTemplateIntent(definition.intent);
+  const stored = ws.settings as WorkspaceSettings | null;
+  if (intent) {
+    settingsPatch.intent = intent;
+  } else if (
+    stored?.intent?.source === "template" &&
+    opts.packageSlug &&
+    typeof stored.packageSlug === "string" &&
+    stored.packageSlug !== opts.packageSlug
+  ) {
+    settingsPatch.intent = null;
+  }
   // Package provenance stamp — additive, mirrors the create path. Only written
   // when provided (install-onto-existing), so a re-attach with the same version
   // is a no-op and a natural compose never clobbers the base's own stamp.
@@ -564,6 +609,19 @@ export async function reconcileWorkspaceFromDefinition(
           error: report.dataChanges.error,
         },
         "reconcile: template version stamp HELD — data changes await consent (synap templates update)"
+      );
+    } else if (templateApplyUnfinished(ws.settings)) {
+      // The last apply on this space did not finish (a layer-2 failure, or a
+      // layer 2 still waiting on approval / never run): this pass did not run
+      // that layer either, so it cannot earn the stamp. The update door
+      // finishes the apply and its finisher stamps (`finishTemplateApply`).
+      logger.warn(
+        {
+          workspaceId,
+          packageSlug: opts.packageSlug,
+          packageVersion: opts.packageVersion,
+        },
+        "reconcile: template version stamp HELD — the last template apply did not finish (synap templates update)"
       );
     } else {
       settingsPatch.packageVersion = opts.packageVersion;
@@ -773,18 +831,54 @@ export async function reconcileWorkspaceFromDefinition(
     // Property-defs. Reused pod-wide profile → add as WORKSPACE OVERLAY; freshly
     // created profile → base def (workspace_id null; profile row carries scope).
     const overlayWorkspaceId = profileIsReused ? workspaceId : null;
+    // `getBySlug` FALLS BACK to a pod-wide GLOBAL def (`profile_id IS NULL`)
+    // when the profile-scoped lookup misses. Accepting that hit as "the live
+    // def" made the enum sync below UNION this template's enum INTO the global
+    // def — narrowing the slug for every kind on the pod that links it. That is
+    // how CRM's lead-source list became the enum of the global `source` def on
+    // 2026-10-12 and every connector writing `source: '<provider>'` was refused
+    // at approval. Only the profile's OWN defs count as live (the same guard
+    // `resolve-property-target-profiles.ts` applies for targets).
+    const ownDef = (def: PropertyDef | null): PropertyDef | null =>
+      def && def.profileId === resolved.id ? def : null;
+    // Global defs this profile already LINKS, by slug — read once, lazily. The
+    // create door skips a slug the profile already links; so does this one.
+    let linkedGlobalSlugs: Set<string> | null = null;
+    const linksGlobal = async (slug: string): Promise<boolean> => {
+      if (!linkedGlobalSlugs) {
+        const links = await profilePropRepo.getByProfile(resolved.id);
+        const defs = await propDefRepo.getManyByIds(
+          links.map((l) => l.propertyDefId)
+        );
+        linkedGlobalSlugs = new Set(
+          [...defs.values()]
+            .filter((d) => d.profileId === null && d.workspaceId === null)
+            .map((d) => d.slug)
+        );
+      }
+      return linkedGlobalSlugs.has(slug);
+    };
     for (let i = 0; i < (resolvedProperties ?? []).length; i++) {
       const prop = resolvedProperties![i];
       // Is this slug already present in THIS workspace's lens (base or overlay)?
-      const liveBase = await propDefRepo.getBySlug(
-        prop.slug,
-        resolved.id,
-        null
+      const liveBase = ownDef(
+        await propDefRepo.getBySlug(prop.slug, resolved.id, null)
       );
       const liveOverlay = profileIsReused
-        ? await propDefRepo.getBySlug(prop.slug, resolved.id, workspaceId)
+        ? ownDef(
+            await propDefRepo.getBySlug(prop.slug, resolved.id, workspaceId)
+          )
         : null;
       const live = liveOverlay ?? liveBase;
+      if (!live && (await linksGlobal(prop.slug))) {
+        // The field already exists on this profile through the shared global
+        // def. Never write the global; never add a same-slug twin beside it.
+        (report.properties.globalsKept ??= []).push({
+          profile: profile.slug,
+          slug: prop.slug,
+        });
+        continue;
+      }
       if (live) {
         if (live.valueType !== prop.valueType) {
           // NEVER mutate a type in place (read-lossy). Report + leave it.

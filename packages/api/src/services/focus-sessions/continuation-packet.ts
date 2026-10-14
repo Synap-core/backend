@@ -809,6 +809,8 @@ async function readPriorStages(
  * The stage-less degrade of {@link readPriorStages} (W1): what the track's
  * recent CLOSED sessions produced — newest first, this session excluded,
  * under the same session floor and the same batched outputs join.
+ *
+ * SESSION-KIND-LENS-EXEMPT: projects each closed track session to a packet line (id, title, status, outputs) — never a session row, so no kind/triage lens applies.
  */
 async function readRecentTrackSessions(
   database: typeof db,
