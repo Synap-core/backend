@@ -5659,100 +5659,6 @@ export interface PropertyTargetResolutionReport {
 		reason: PropertyTargetUnresolvedReason;
 	}>;
 }
-/** Per-op tally. Every field optional — an op reports only what it touched. */
-export interface OpCounts {
-	profilesCreated?: number;
-	profilesUpdated?: number;
-	profilesDeactivated?: number;
-	entitiesConverted?: number;
-	entitiesRepointed?: number;
-	facetsCreated?: number;
-	facetsRepointed?: number;
-	/** convertToKind: facet rows soft-deleted as their props folded back to the entity. */
-	facetsDeactivated?: number;
-	/** convertToKind: multi-hat entities left as-is (wear >1 family facet). */
-	entitiesParked?: number;
-	entitiesRescoped?: number;
-	/** reconcileFacetScope: shared/system-role facets whose lens was re-nulled (pod-wide). */
-	facetsRescoped?: number;
-	/** reconcileFacetScope: lensed shared-role facets left as-is (a pod-wide twin exists) — merge by hand. */
-	facetsParked?: number;
-	viewsRewritten?: number;
-	propertyDefsRepointed?: number;
-	profilePropertiesRepointed?: number;
-	/** remapPropertyValues: entities whose source value was folded onto the target key. */
-	entitiesRemapped?: number;
-	/** moveBasePropertyToFacet: facets that received the moved base value. */
-	facetPropertiesMoved?: number;
-	/** moveBasePropertyToFacet: base entities whose moved key was stripped. */
-	entitiesBasePropertyStripped?: number;
-	/** moveBasePropertyToFacet: entities with the source value but NO live target facet — left untouched, counted for follow-up. */
-	entitiesSkippedNoFacet?: number;
-	/** remapFacetPropertyValues: facet instances whose value was remapped. */
-	facetsRemapped?: number;
-	/** foldRoleIntoStatus: entities whose existing target-role facet(s) received the status. */
-	facetsFolded?: number;
-	/** foldBookingDealIntoLead: untouched booking deals turned into a lead. */
-	dealsConverted?: number;
-	/** foldBookingDealIntoLead: booking deals someone edited — kept for a person to decide. */
-	dealsKeptEdited?: number;
-	/** foldBookingDealIntoLead: untouched booking deals with no linked person — kept. */
-	dealsKeptNoPerson?: number;
-	/** foldBookingDealIntoLead: existing leads moved forward to the booking status. */
-	leadsAdvanced?: number;
-	/** foldBookingDealIntoLead: existing leads whose lifecycle is not declared — left as they are. */
-	leadsUnjudged?: number;
-	/** foldBookingDealIntoLead: attended_by / works_at edges created. */
-	relationsCreated?: number;
-	/** foldBookingDealIntoLead (destructive tail): converted deals soft-deleted. */
-	entitiesArchived?: number;
-	/** projectLifecycleColumns: rows whose lifecycle columns were filled from the projection. */
-	lifecycleColumnsProjected?: number;
-	/** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
-	lifecycleUncategorized?: number;
-	/** renameProfile: entities whose `type` was rewritten to the new slug. */
-	entitiesRetyped?: number;
-	/** renamePropertyKey: entities whose sourceKey was renamed/stripped. */
-	entitiesKeyRenamed?: number;
-	/** renamePropertyKey: of those, entities that carried BOTH keys — the losing value was discarded per onConflict. */
-	entitiesKeyConflicts?: number;
-	/** dedupeRelationDefs: redundant workspace copies drained onto the pod-wide row. */
-	relationDefsCollapsed?: number;
-	/** dedupeRelationDefs: workspace copies left alone — they carry their own meaning. */
-	relationDefsKept?: number;
-	/** dedupeRelationDefs: profile_relations edges moved onto the pod-wide row. */
-	profileRelationsRepointed?: number;
-	/** dedupeRelationDefs (tail): edges that duplicated a pod-wide edge, folded + deleted. */
-	profileRelationsMerged?: number;
-	/** dedupeRelationDefs: property_defs.relation_def_id moved onto the pod-wide row. */
-	propertyDefRelationsRepointed?: number;
-	/** dedupeRelationDefs (tail): drained copies deleted. */
-	relationDefsDeleted?: number;
-}
-/** One pending data change, as `synap templates update` shows it. */
-export interface TemplateDataChange {
-	/** The manifest op key — what `acceptDataChanges` names. */
-	opKey: string;
-	/** One plain sentence. */
-	description: string;
-	/**
-	 * How many things the op would change, pod-wide (`affectedFromCounts` of the
-	 * engine's own dry run). `null` when the dry run FAILED — unmeasured, never
-	 * folded into 0; `error` then says why.
-	 */
-	affected: number | null;
-	/**
-	 * The op has a destructive tail (it retires profile rows). The engine refuses
-	 * to run such an op without that tail, so it is NEVER run by the update
-	 * door: it is an operator step (`operatorCommand`).
-	 */
-	destructive: boolean;
-	/** The dry run's raw counts (empty when it failed). */
-	counts: OpCounts;
-	error?: string;
-	/** Destructive only: the operator command, dry run first. */
-	operatorCommand?: string;
-}
 /**
  * INSTALL LAYER — one axis of "did this install fully land?".
  *
@@ -6006,20 +5912,6 @@ export interface ReconcileReport {
 	 * only channel the caller has back to the installer.
 	 */
 	layers?: InstallLayerReport[];
-	/**
-	 * TEMPLATE-LIFECYCLE Contract C: the conversion ops this template's profiles
-	 * are still waiting on. Present only when a `packageVersion` stamp was at
-	 * stake. `versionHeld` = the stamp was NOT written because a consentable data
-	 * change is pending (or could not be measured): the content above converged,
-	 * the DATA did not, so the marker may not claim it did. The person consents
-	 * through the update door (`/packages/apply` `acceptDataChanges`).
-	 */
-	dataChanges?: {
-		pending: TemplateDataChange[];
-		versionHeld: boolean;
-		/** Set when the pending set could not be read — the stamp is held. */
-		error?: string;
-	};
 }
 export interface StatusMoveActor {
 	/**
@@ -13026,6 +12918,85 @@ export interface DependencyState {
 	declared: DependencyNodeRef[];
 }
 /**
+ * Where a workspace's template stands in the catalog (TEMPLATE-LIFECYCLE
+ * Contract A):
+ *   - `current`  — in the catalog cache, not retired;
+ *   - `retired`  — in the cache as a tombstone (`replacedBy` may name the move);
+ *   - `unlisted` — absent from the cache AND the last template sync was a
+ *     provably COMPLETE fetch, so "not in the catalog" is a fact;
+ *   - `unknown`  — absent, and the last sync was not provably complete (failed,
+ *     partial, empty, never ran). An empty result and a failed read are
+ *     different facts: this is the one we cannot call "unlisted".
+ */
+export type TemplateLifecycle = "current" | "retired" | "unlisted" | "unknown";
+/** The TemplateHealth axes for one workspace's stamped template identity. */
+export interface TemplateHealth {
+	attached: boolean;
+	stamped: boolean;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	drifted: boolean;
+	/** Catalog standing of the attached template; `null` when not attached. */
+	lifecycle: TemplateLifecycle | null;
+	/** Retired only: the live slug the catalog names as its replacement. */
+	replacedBy: string | null;
+	/** Retired only: the catalog's one-sentence reason. */
+	retiredReason: string | null;
+	/** A plain sentence for `retired` / `unlisted`; `null` otherwise. */
+	lifecycleWarning: string | null;
+}
+/**
+ * One OVERLAY composed onto a workspace (`settings.installedPacks`): a pack
+ * layered onto the space's own template (business-developer on a CRM space).
+ * Classified by the SAME `templateHealthFor` the workspace row uses — one
+ * derivation — only the sentence differs, because the remedy differs: an
+ * overlay is not a space, so there is nothing to retire-into.
+ */
+export interface OverlayTemplateHealth {
+	slug: string;
+	installedVersion: string | null;
+	latestVersion: string | null;
+	drifted: boolean;
+	lifecycle: TemplateLifecycle;
+	replacedBy: string | null;
+	retiredReason: string | null;
+	lifecycleWarning: string | null;
+	/**
+	 * Retired, and its replacement is already on this space (the space's own
+	 * template, or another overlay on it): its fields stay, nothing to move.
+	 */
+	replacementHere: boolean;
+}
+/** One workspace's identity + its template health — the MCP `template_health` row shape. */
+export interface WorkspaceTemplateHealth extends TemplateHealth {
+	workspaceId: string;
+	workspaceName: string;
+	packageSlug: string | null;
+	/** The overlays composed onto this space, each with its own standing. */
+	overlays: OverlayTemplateHealth[];
+	/**
+	 * The proposals this space's last template apply is waiting on, LIVE
+	 * (`awaitingApprovalByWorkspace`): still pending, by id. `[]` when nothing
+	 * waits — including once they were approved or rejected (plain drift then).
+	 */
+	awaitingApproval: string[];
+	/**
+	 * Where the last template apply on this space stands (`readTemplateState`)
+	 * — the one state a client draws its mark from (building / failed /
+	 * partial / awaiting approval…), never re-derived from the sentence.
+	 * `null` = no template state recorded.
+	 */
+	state: TemplateApplyStateName | null;
+	/** Why the last template apply did not finish — `templateApplyWarning`. `null` = nothing to say. */
+	applyWarning: string | null;
+	/**
+	 * Non-fatal template problems in this space — a retired / unlisted template
+	 * (`lifecycleWarning`, first), then each overlay's warning, and an `always` skill whose body is over the
+	 * per-skill budget (it loads on demand instead). Empty when there are none.
+	 */
+	warnings: string[];
+}
+/**
  * Outcome of seeding ONE dependency's post-workspace layers (capabilities +
  * playbooks) — surfaced up through `ResolvedPackageDependency.seedOutcome` so
  * a caller (CLI/browser) can see "3/4 capabilities seeded; X FAILED: <reason>"
@@ -13035,7 +13006,7 @@ export interface DependencyState {
  */
 export interface DependencySeedOutcome {
 	slug: string;
-	/** No `capabilities`/`playbooks` declared for this template — nothing to seed. */
+	/** No layer-2 kind declared for this template (`declaresLayerTwo`) — nothing to seed. */
 	status: "no-layers" | "seeded" | "failed";
 	/** Layer keys `applyPackagePostWorkspace` reported (e.g. ["capabilities","playbooks"]). */
 	layers?: string[];
@@ -13108,18 +13079,6 @@ export interface TemplateDoorReply {
 	/** The pod's sentence for why the apply is not finished; null when it is. */
 	warning: string | null;
 }
-/**
- * Where a workspace's template stands in the catalog (TEMPLATE-LIFECYCLE
- * Contract A):
- *   - `current`  — in the catalog cache, not retired;
- *   - `retired`  — in the cache as a tombstone (`replacedBy` may name the move);
- *   - `unlisted` — absent from the cache AND the last template sync was a
- *     provably COMPLETE fetch, so "not in the catalog" is a fact;
- *   - `unknown`  — absent, and the last sync was not provably complete (failed,
- *     partial, empty, never ran). An empty result and a failed read are
- *     different facts: this is the one we cannot call "unlisted".
- */
-export type TemplateLifecycle = "current" | "retired" | "unlisted" | "unknown";
 /** What an app shows for a template it needs. */
 export interface EnsureTemplateCard {
 	slug: string;
@@ -27320,6 +27279,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		templateHealth: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				driftedOnly?: boolean | undefined;
+			} | undefined;
+			output: {
+				workspaces: WorkspaceTemplateHealth[];
+				driftedCount: number;
+				total: number;
+			};
+			meta: object;
+		}>;
 		listInstallableTemplates: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				query?: string | undefined;
