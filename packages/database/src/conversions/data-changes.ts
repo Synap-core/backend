@@ -221,7 +221,11 @@ export function describeConversionOp(op: ConversionOp): string {
         ? `Make the "${op.slug}" role visible in all spaces.`
         : "Make pod-wide roles visible in all spaces.";
     case "remapPropertyValues":
-      return `Move each "${op.slug}"'s "${op.sourceKey}" onto "${op.targetKey}", translating the values, then remove "${op.sourceKey}".`;
+      // In place (sourceKey === targetKey) nothing is moved or removed: only
+      // the old values are translated.
+      return op.sourceKey === op.targetKey
+        ? `Translate the old "${op.sourceKey}" values of each "${op.slug}" to the new ones.`
+        : `Move each "${op.slug}"'s "${op.sourceKey}" onto "${op.targetKey}", translating the values, then remove "${op.sourceKey}".`;
     case "moveBasePropertyToFacet":
       return `Move each "${op.slug}"'s "${op.sourceKey}" onto its "${op.facetSlug}" role.`;
     case "renamePropertyKey":
