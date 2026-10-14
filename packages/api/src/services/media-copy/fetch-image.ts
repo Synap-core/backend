@@ -34,12 +34,21 @@ import {
 
 /** Images up to 25 MB: a large photo fits, a video or a dump does not. */
 export const MEDIA_COPY_MAX_BYTES = 25 * 1024 * 1024;
+/**
+ * A decoder allocates width × height × 4 bytes whatever the file size: a tiny
+ * crafted header can claim a 60k × 60k canvas (a decompression bomb for every
+ * client that draws it). Refused past either bound.
+ */
+export const MEDIA_COPY_MAX_SIDE = 16_384;
+export const MEDIA_COPY_MAX_PIXELS = 100_000_000;
 const TIMEOUT_MS = 30_000;
 const REDIRECT_HOPS = 3;
 
 export type ImageFetchFailure =
   | "blocked"
   | "http_4xx"
+  /** 408 Request Timeout / 429 Too Many Requests: the server says "later". */
+  | "http_retry_later"
   | "http_5xx"
   | "too_large"
   | "not_image"
@@ -118,7 +127,12 @@ export async function fetchExternalImage(
       await cancel(res);
       return {
         ok: false,
-        reason: res.status >= 500 ? "http_5xx" : "http_4xx",
+        reason:
+          res.status >= 500
+            ? "http_5xx"
+            : res.status === 408 || res.status === 429
+              ? "http_retry_later"
+              : "http_4xx",
       };
     }
     const declared = Number(res.headers.get("content-length"));
@@ -134,6 +148,14 @@ export async function fetchExternalImage(
       return streamed;
     }
     const size = sniffImageSize(streamed.bytes, streamed.mime);
+    if (
+      size &&
+      (size.width > MEDIA_COPY_MAX_SIDE ||
+        size.height > MEDIA_COPY_MAX_SIDE ||
+        size.width * size.height > MEDIA_COPY_MAX_PIXELS)
+    ) {
+      return { ok: false, reason: "too_large" };
+    }
     return {
       ok: true,
       bytes: streamed.bytes,

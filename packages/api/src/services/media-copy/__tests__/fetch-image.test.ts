@@ -3,7 +3,11 @@
  * injected; the real SSRF validator is used unless a test says otherwise.
  */
 import { describe, expect, it, vi } from "vitest";
-import { fetchExternalImage } from "../fetch-image.js";
+import {
+  fetchExternalImage,
+  MEDIA_COPY_MAX_SIDE,
+  PERMANENT_FETCH_FAILURES,
+} from "../fetch-image.js";
 import { png } from "./fixtures.js";
 
 /** A body served chunk by chunk; counts how many chunks the reader pulled. */
@@ -155,5 +159,32 @@ describe("fetchExternalImage", () => {
         fetch: streamed([], { status: 503 }).fetch,
       })
     ).toEqual({ ok: false, reason: "http_5xx" });
+  });
+
+  it("408 and 429 mean 'later', not a permanent 4xx", async () => {
+    for (const status of [408, 429]) {
+      expect(
+        await fetchExternalImage(URL_OK, {
+          fetch: streamed([], { status }).fetch,
+        })
+      ).toEqual({ ok: false, reason: "http_retry_later" });
+    }
+    expect(PERMANENT_FETCH_FAILURES.has("http_retry_later")).toBe(false);
+  });
+
+  it("refuses a header claiming a canvas past the side or pixel bound", async () => {
+    for (const [w, h] of [
+      [MEDIA_COPY_MAX_SIDE + 1, 8],
+      [12_000, 12_000],
+    ] as const) {
+      expect(
+        await fetchExternalImage(URL_OK, { fetch: streamed([png(w, h)]).fetch })
+      ).toEqual({ ok: false, reason: "too_large" });
+    }
+    expect(
+      await fetchExternalImage(URL_OK, {
+        fetch: streamed([png(MEDIA_COPY_MAX_SIDE, 8)]).fetch,
+      })
+    ).toMatchObject({ ok: true, width: MEDIA_COPY_MAX_SIDE });
   });
 });
