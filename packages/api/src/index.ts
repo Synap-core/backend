@@ -331,6 +331,7 @@ export { runInboundAttachmentIngest } from "./services/connectors/ingest-inbound
 // Entity media copy (D2): the reactor (registered at boot) enqueues; the runner
 // fills the jobs IoC slot and copies an entity's external images into the pod.
 export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";
+export { backfillEntityMediaCopies } from "./services/media-copy/backfill-media-copy.js";
 export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy-reactor.js";
 export {
   runEventSync,

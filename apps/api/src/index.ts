@@ -2109,6 +2109,26 @@ try {
           apiLogger.info(
             "pg-boss job queue started with all workers registered"
           );
+
+          // Media-copy BACKFILL (D2): entities written before the reactor
+          // existed never got a pod copy of their images. Once the startup
+          // reconciles have stamped every kind's presentation, enqueue the
+          // SAME per-entity copy job for each one that owes media — spread
+          // out, resumable, stamped on pod_settings so a later boot is a
+          // no-op until the media scope changes. Off the boot path.
+          void startupHooksSettled
+            .then(async () => {
+              const { backfillEntityMediaCopies } = await import("@synap/api");
+              const r = await backfillEntityMediaCopies();
+              if (r.status === "completed")
+                apiLogger.info(r, "Media-copy backfill enqueued");
+            })
+            .catch((err) =>
+              apiLogger.warn(
+                { err },
+                "Media-copy backfill failed (non-fatal; resumes next boot)"
+              )
+            );
         } catch (err) {
           apiLogger.error(
             { err },
@@ -2135,7 +2155,11 @@ try {
 // Run startup hooks after server is listening. `validateCriticalSecrets` is
 // imported here too but CALLED earlier (pre-serve config block above) — ES
 // imports are hoisted, so the binding is available when that block evaluates.
-import { runStartupHooks, validateCriticalSecrets } from "./startup-hooks.js";
+import {
+  runStartupHooks,
+  startupHooksSettled,
+  validateCriticalSecrets,
+} from "./startup-hooks.js";
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });

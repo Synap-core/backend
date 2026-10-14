@@ -604,10 +604,29 @@ async function ensureLocalUser(): Promise<void> {
   }
 }
 
+let settleStartupHooks!: () => void;
+/**
+ * Resolves once `runStartupHooks` has finished (or failed). For a boot pass
+ * that must read what the seeders / reconciles wrote — e.g. the media-copy
+ * backfill reads each kind's `uiHints.presentation`, which the template
+ * reconcile stamps — but that also needs pg-boss, which starts elsewhere.
+ */
+export const startupHooksSettled: Promise<void> = new Promise((resolve) => {
+  settleStartupHooks = resolve;
+});
+
 /**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
+  try {
+    await runStartupHooksInner();
+  } finally {
+    settleStartupHooks();
+  }
+}
+
+async function runStartupHooksInner(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
   // NOTE: required-secret validation now runs PRE-`serve()` in index.ts's config
