@@ -10,6 +10,7 @@
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "zod";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
+import { profilePresentationSchema } from "./profile-presentation-schema.js";
 import { protectedProcedure } from "../../trpc.js";
 import {
   db,
@@ -245,6 +246,7 @@ export const definitionEngineProcedures = {
                   // The profile's ONE lifecycle (work model L1). Validated by
                   // the apply's own door (`withLifecycleOptions`), not here.
                   lifecycle: templateLifecycleSchema.optional(),
+                  presentation: profilePresentationSchema.optional(),
                   // Proposal format: flat property list
                   properties: z
                     .array(
@@ -269,6 +271,7 @@ export const definitionEngineProcedures = {
                       icon: z.string().optional(),
                       color: z.string().optional(),
                       description: z.string().optional(),
+                      presentation: profilePresentationSchema.optional(),
                     })
                     .optional(),
                   // Registry format: propertyDefs with nested uiHints (alternative to properties[])
@@ -1899,6 +1902,7 @@ export const definitionEngineProcedures = {
                 profileKind: z.enum(["kind", "role"]).optional(),
                 applicableKinds: z.array(z.string()).optional(),
                 lifecycle: templateLifecycleSchema.optional(),
+                presentation: profilePresentationSchema.optional(),
                 properties: z
                   .array(
                     z.object({
@@ -1918,6 +1922,7 @@ export const definitionEngineProcedures = {
                     icon: z.string().optional(),
                     color: z.string().optional(),
                     description: z.string().optional(),
+                    presentation: profilePresentationSchema.optional(),
                   })
                   .optional(),
                 propertyDefs: z
@@ -2157,6 +2162,7 @@ export const definitionEngineProcedures = {
                   color: z.string().optional(),
                   description: z.string().optional(),
                   scope: z.string().optional(),
+                  presentation: profilePresentationSchema.optional(),
                   properties: z
                     .array(
                       z.object({
@@ -2178,6 +2184,7 @@ export const definitionEngineProcedures = {
                       icon: z.string().optional(),
                       color: z.string().optional(),
                       description: z.string().optional(),
+                      presentation: profilePresentationSchema.optional(),
                     })
                     .optional(),
                   propertyDefs: z

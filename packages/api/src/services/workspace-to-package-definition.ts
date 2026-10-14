@@ -31,6 +31,7 @@
  *     inline capability shape to reconstruct losslessly).
  */
 
+import { parseProfilePresentation } from "@synap-core/types/presentation";
 import { readSpaceBrief } from "@synap-core/types/space-brief";
 import { RULE_CATEGORY, readRuleMetadata } from "./rules/index.js";
 import {
@@ -178,6 +179,10 @@ export async function workspaceToPackageDefinition(opts: {
       semanticSlug: p.semanticSlug,
       profileKind: p.profileKind as "kind" | "role" | undefined,
       applicableKinds: p.applicableKinds ?? undefined,
+      // The kind's presentation round-trips (entity rendering, decision 8) —
+      // only when it still parses under the ONE parser, so an export never
+      // carries a declaration the apply doors would refuse.
+      ...exportedPresentation(uiHints.presentation),
       properties: propsToEmit.map((ep) => {
         const epHints = (ep.uiHints as Record<string, unknown> | null) ?? {};
         const epConstraints =
@@ -768,4 +773,15 @@ export function playbookRowToPackagePlaybook(
     ...(expectedOutputs.length > 0 ? { expectedOutputs } : {}),
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
+}
+
+/** `{ presentation }` when the stored `uiHints.presentation` parses, else `{}`. */
+function exportedPresentation(stored: unknown): {
+  presentation?: Record<string, unknown>;
+} {
+  if (stored === undefined || stored === null) return {};
+  const parsed = parseProfilePresentation(stored);
+  return parsed.ok
+    ? { presentation: parsed.value as unknown as Record<string, unknown> }
+    : {};
 }

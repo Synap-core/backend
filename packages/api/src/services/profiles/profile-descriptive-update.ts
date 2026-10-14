@@ -22,8 +22,12 @@ import {
   humanizeToken,
 } from "@synap-core/types/vocabulary";
 
-/** The descriptive uiHints keys the define door carries. */
-const DESCRIPTIVE_UI_HINTS = ["description", "icon"] as const;
+/**
+ * The descriptive uiHints keys the define door carries. `presentation` (how
+ * the kind renders — family + media source, `@synap-core/types/presentation`)
+ * is descriptive too: a re-declare that changes it is the same governed update.
+ */
+const DESCRIPTIVE_UI_HINTS = ["description", "icon", "presentation"] as const;
 
 export interface DescriptiveProfileState {
   displayName: string;
@@ -44,14 +48,33 @@ export interface DescriptiveProfilePatch {
 }
 
 export interface DescriptiveProfileDiff {
-  /** Changed field names, in a fixed order (`displayName`, `description`, `icon`, `defaultValues`). */
+  /** Changed field names, in a fixed order (`displayName`, `description`, `icon`, `presentation`, `defaultValues`). */
   changed: string[];
   /** What to write — full merged `uiHints` / `defaultValues`, never a partial. */
   patch: DescriptiveProfilePatch;
 }
 
+/**
+ * Key-order blind: a stored jsonb object comes back with Postgres's key order
+ * (`presentation` is written by `setProfilePresentation`), so a plain
+ * `JSON.stringify` compare would read an unchanged object as changed.
+ */
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v as Record<string, unknown>)
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map(
+        (k) =>
+          `${JSON.stringify(k)}:${stableJson((v as Record<string, unknown>)[k])}`
+      )
+      .join(",")}}`;
+  return JSON.stringify(v ?? null);
+}
+
 function sameJson(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return stableJson(a ?? null) === stableJson(b ?? null);
 }
 
 export function diffDescriptiveProfileFields(

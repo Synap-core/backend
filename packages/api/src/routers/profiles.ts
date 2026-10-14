@@ -44,6 +44,7 @@ import {
 } from "../utils/permission-check.js";
 import { setProfileRenderer } from "../services/profiles/set-profile-renderer.js";
 import { mergeApplicableKinds } from "../utils/merge-applicable-kinds.js";
+import { parseProfilePresentation } from "@synap-core/types/presentation";
 import { diffDescriptiveProfileFields } from "../services/profiles/profile-descriptive-update.js";
 import {
   RENDERER_SCOPES,
@@ -324,7 +325,22 @@ export const profilesRouter = router({
           .regex(/^[a-z0-9-]+$/),
         displayName: z.string().min(1).max(200),
         parentProfileId: z.string().uuid().optional(),
-        uiHints: z.record(z.string(), z.unknown()).optional(),
+        // `uiHints.presentation` (entity rendering, decision 8) is judged by
+        // the ONE parser — an invalid declaration is refused with its issues.
+        uiHints: z
+          .record(z.string(), z.unknown())
+          .superRefine((hints, ctx) => {
+            if (hints.presentation === undefined) return;
+            const parsed = parseProfilePresentation(hints.presentation);
+            if (!parsed.ok)
+              for (const issue of parsed.issues)
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  path: ["presentation"],
+                  message: `${issue.path}: ${issue.message}`,
+                });
+          })
+          .optional(),
         /** Default property values applied to new entities of this type. */
         defaultValues: z.record(z.string(), z.unknown()).optional(),
         scope: ProfileScopeSchema.default("workspace"),

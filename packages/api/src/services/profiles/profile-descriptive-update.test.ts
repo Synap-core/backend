@@ -17,6 +17,38 @@ const EXISTING = {
 };
 
 describe("diffDescriptiveProfileFields", () => {
+  it("presentation: a change is descriptive; a key-reordered equal one is not", () => {
+    const stored = {
+      ...EXISTING,
+      uiHints: {
+        ...EXISTING.uiHints,
+        // Postgres jsonb key order, not the parser's.
+        presentation: {
+          media: { kind: "auto", source: { property: "url" } },
+          family: "link",
+        },
+      },
+    };
+    expect(
+      diffDescriptiveProfileFields(stored, {
+        uiHints: {
+          presentation: {
+            family: "link",
+            media: { source: { property: "url" }, kind: "auto" },
+          },
+        },
+      }).changed
+    ).toEqual([]);
+    const changed = diffDescriptiveProfileFields(stored, {
+      uiHints: { presentation: { family: "media" } },
+    });
+    expect(changed.changed).toEqual(["presentation"]);
+    expect(changed.patch.uiHints).toEqual({
+      ...EXISTING.uiHints,
+      presentation: { family: "media" },
+    });
+  });
+
   it("absent or equal fields change nothing", () => {
     expect(
       diffDescriptiveProfileFields(EXISTING, {
