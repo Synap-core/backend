@@ -251,3 +251,51 @@ export async function verifyIsDelegationToken(
     maxExpiresAt: maxExp,
   };
 }
+
+/**
+ * Refresh a delegation the IS still holds (`POST /api/hub/delegation/refresh`,
+ * SECURITY-PLAN-R1 §3 "for long IS work"). The current token must verify; the
+ * new one carries the SAME sub, act, channel, run, audience and `max_exp`, a
+ * new `jti`, and `exp = min(now + 15 min, max_exp)`. A token at or past
+ * `max_exp` cannot be refreshed (it no longer verifies; a refresh that would
+ * leave no lifetime throws `POD_JWT_EXPIRED`). Nothing widens: no claim the
+ * caller sends is read — only the verified token.
+ *
+ * The previous token is NOT revoked: calls of the same turn already in flight
+ * still carry it, and it dies at its own `exp` (≤ 15 min). A refresh chain
+ * therefore holds at most two live tokens for one turn, both bounded by the
+ * same `max_exp` (see REPLAY MODEL above).
+ */
+export async function refreshIsDelegationToken(
+  token: string,
+  options: {
+    isKnownAudience: (audience: string) => boolean | Promise<boolean>;
+    nowSeconds?: number;
+  }
+): Promise<{
+  token: string;
+  /** Unix seconds. */
+  expiresAt: number;
+  previous: VerifiedIsDelegation;
+}> {
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const previous = await verifyIsDelegationToken(token, {
+    isKnownAudience: options.isKnownAudience,
+    nowSeconds: now,
+  });
+  const next = mintIsDelegationToken(
+    {
+      isUrl: previous.audience,
+      operatorUserId: previous.operatorUserId,
+      agentUserId: previous.agentUserId,
+      channelId: previous.channelId,
+      runId: previous.runId,
+      maxExpiresAt: previous.maxExpiresAt,
+    },
+    now
+  );
+  const { exp } = JSON.parse(
+    Buffer.from(next.split(".")[1]!, "base64url").toString("utf8")
+  ) as { exp: number };
+  return { token: next, expiresAt: exp, previous };
+}

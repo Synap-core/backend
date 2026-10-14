@@ -66,6 +66,7 @@ import {
   registerPlaybooksRoutes,
   registerSetupRoutes,
   registerDeviceRoutes,
+  registerDelegationRoutes,
   registerMcpRedeemRoutes,
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
@@ -261,6 +262,8 @@ app.use(
       // Mint/rotate return the plaintext feed URL once — never cache.
       "/calendar/feed",
       "/calendar/feed/rotate",
+      // Returns a fresh IS delegation token — a credential, never cached.
+      "/delegation/refresh",
     ],
     // secretBodyPattern uses the default — see middleware source.
   })
@@ -274,6 +277,7 @@ app.use(
 // The route-file boundaries below are aligned with the original line order in
 // the previous monolithic file so behavior is preserved character-for-character.
 registerAuthRoutes(app); // /auth/status — bearer introspection
+registerDelegationRoutes(app); // /delegation/refresh — the IS renews its per-turn delegation (D4)
 registerUsersRoutes(app); // /users/me
 // Static `/workspaces/ensure-template` BEFORE the `/workspaces/:id` family.
 registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Contract B)

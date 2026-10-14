@@ -23,6 +23,7 @@ import {
   IS_DELEGATION_PURPOSE,
   isDelegationHeaders,
   mintIsDelegationToken,
+  refreshIsDelegationToken,
   verifyIsDelegationToken,
 } from "../is-delegation.js";
 
@@ -250,5 +251,71 @@ describe("IS delegation: minting condition (key file present)", () => {
     expect(getPodKeyId()).toBeTruthy();
     const token = isDelegationHeaders(grant())[IS_DELEGATION_HEADER];
     expect(token).toBeTruthy();
+  });
+});
+
+describe("IS delegation: refresh (POST /api/hub/delegation/refresh)", () => {
+  it("keeps sub, act, channel, run, aud and max_exp; new jti; a fresh 15-minute life", async () => {
+    const t = now();
+    const first = mintIsDelegationToken(grant(), t);
+    const before = await verifyIsDelegationToken(first, known);
+    // 10 minutes into the turn: 5 minutes left on the first token.
+    const { token } = await refreshIsDelegationToken(first, {
+      ...known,
+      nowSeconds: t + 600,
+    });
+    const after = await verifyIsDelegationToken(token, {
+      ...known,
+      nowSeconds: t + 600,
+    });
+    expect(after).toMatchObject({
+      operatorUserId: "operator-1",
+      agentUserId: "agent-1",
+      channelId: "channel-1",
+      runId: "run-1",
+      audience: IS,
+      scopes: before.scopes,
+      maxExpiresAt: before.maxExpiresAt,
+    });
+    expect(after.jti).not.toBe(before.jti);
+    expect(after.expiresAt).toBeLessThanOrEqual(after.maxExpiresAt);
+  });
+
+  it("never outlives max_exp: near the bound, exp = max_exp", async () => {
+    const t = now();
+    const token = mintIsDelegationToken(
+      { ...grant(), maxExpiresAt: t + 120 },
+      t
+    );
+    const { token: next } = await refreshIsDelegationToken(token, known);
+    const verified = await verifyIsDelegationToken(next, known);
+    expect(verified.maxExpiresAt).toBe(t + 120);
+    expect(verified.expiresAt).toBeLessThanOrEqual(t + 120);
+  });
+
+  it("is refused past max_exp (the token no longer verifies) → POD_JWT_EXPIRED", async () => {
+    const t = now();
+    const token = mintIsDelegationToken(
+      { ...grant(), maxExpiresAt: t + 120 },
+      t
+    );
+    await expect(
+      refreshIsDelegationToken(token, { ...known, nowSeconds: t + 121 })
+    ).rejects.toMatchObject({ code: "POD_JWT_EXPIRED" });
+  });
+
+  it("refuses what it would not verify: another audience, another purpose", async () => {
+    const token = mintIsDelegationToken(grant());
+    await expect(
+      refreshIsDelegationToken(token, { isKnownAudience: () => false })
+    ).rejects.toMatchObject({ code: "POD_JWT_INVALID" });
+    const cpToken = signPodJwt(
+      { audience: IS, purpose: "invites" },
+      { sub: "operator-1" },
+      60
+    );
+    await expect(
+      refreshIsDelegationToken(cpToken, known)
+    ).rejects.toMatchObject({ code: "POD_JWT_INVALID" });
   });
 });

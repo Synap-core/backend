@@ -77,6 +77,7 @@ export { registerNotificationsRoutes } from "./notifications.js";
 export { registerEntityShareRoutes } from "./entity-share.js";
 export { registerSetupRoutes } from "./setup.js";
 export { registerDeviceRoutes } from "./device.js";
+export { registerDelegationRoutes } from "./delegation.js";
 export { registerMcpRedeemRoutes } from "./mcp-redeem.js";
 export { registerAgentsRoutes } from "./agents.js";
 export { registerMessagingRoutes } from "./messaging.js";
