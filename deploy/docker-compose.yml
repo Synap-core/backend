@@ -85,10 +85,6 @@ x-backend-env: &backend-env
   HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}
   INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
   INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
-  # X-Internal-Key for the IS /internal/* + /api/knowledge/answer routes (synthesis).
-  # MUST match the IS's INTELLIGENCE_HUB_INTERNAL_KEY — omitting it sends an empty
-  # key and synthesis fails with 401 (synthesis_unavailable, sources but no answer).
-  INTELLIGENCE_HUB_INTERNAL_KEY: ${INTELLIGENCE_HUB_INTERNAL_KEY:-}
   # Shared secret for the realtime server's cross-process /bridge/emit endpoint
   # (packages/realtime) — the ONE genuine backend↔realtime hop. Validation is
   # fail-OPEN: if empty, /bridge/emit accepts unauthenticated (localhost only).

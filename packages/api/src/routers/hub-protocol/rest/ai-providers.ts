@@ -40,7 +40,8 @@ import {
 } from "../../ai-providers.schema.js";
 import {
   pushProvidersToIS,
-  resolveISAdminEndpoint,
+  probeProviderOnIS,
+  ISProviderError,
 } from "../../../utils/push-providers-to-is.js";
 import {
   resolveProviderCredentialsBatch,
@@ -424,36 +425,21 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     });
   }
 
-  // POST /ai-providers/:id/probe — live connectivity test via IS admin
+  // POST /ai-providers/:id/probe — live connectivity test via the IS provider door
   app.post("/ai-providers/:id/probe", async (c) => {
     if (missingScope(c)) {
       return c.json({ error: `Missing scope: ${PROVIDER_SCOPE}` }, 403);
     }
     const providerId = c.req.param("id");
-    const { endpoint, adminKey } = await resolveISAdminEndpoint();
-    if (!adminKey) {
-      return c.json({ error: "IS not configured" }, 503);
-    }
     try {
-      const res = await fetch(
-        `${endpoint}/admin/providers/${providerId}/test`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Admin-Key": adminKey,
-          },
-          signal: AbortSignal.timeout(15_000),
-        }
-      );
-      const body = (await res.json()) as {
-        ok?: boolean;
-        models?: string[];
-        latencyMs?: number;
-        error?: string;
-      };
-      return c.json(body);
+      return c.json(await probeProviderOnIS(providerId));
     } catch (err) {
+      if (err instanceof ISProviderError) {
+        return c.json(
+          { ok: false, error: err.message },
+          err.code === "IS_NOT_CONFIGURED" ? 503 : 502
+        );
+      }
       return c.json({ ok: false, error: String(err) }, 502);
     }
   });

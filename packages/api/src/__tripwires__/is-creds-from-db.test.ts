@@ -18,16 +18,10 @@ import { join, relative } from "path";
  * instead of reading the env var. Do NOT add your file to the allowlist.
  */
 
-// KNOWN, tracked exceptions — pod→IS INTERNAL routes (admin provider-sync +
-// fire-and-forget telemetry to /api/internal/*): a different category than
-// per-customer AI calls, pending its own migration. The goal is to drive this
-// list to EMPTY. New code must never be added here.
-//
-// The admin provider-sync now has a SINGLE door (utils/push-providers-to-is.ts):
-// the tRPC + Hub REST routers both delegate to it, so the env read lives in one
-// place instead of two. The `X-Admin-Key` it reads is a CP↔IS shared boot secret
-// with no `intelligence_services` column — distinct from the DB callback apiKey.
-const ALLOWLIST = new Set<string>(["utils/push-providers-to-is.ts"]);
+// The allowlist is EMPTY: the provider sync used to read the CP<->IS boot secret
+// for `/admin/providers`; it now uses the pod's own DB-registered key against
+// the IS per-customer `/api/provider-config` door. New code must never be added.
+const ALLOWLIST = new Set<string>();
 
 const BANNED = "process.env.INTELLIGENCE_HUB_INTERNAL_KEY";
 

@@ -21,7 +21,8 @@ import { encryptServiceKey } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   pushProvidersToIS,
-  resolveISAdminEndpoint,
+  probeProviderOnIS,
+  ISProviderError,
 } from "../utils/push-providers-to-is.js";
 
 const logger = createLogger({ module: "ai-providers" });
@@ -170,48 +171,29 @@ export const aiProvidersRouter = router({
     }),
 
   /**
-   * Probe a provider via the IS admin API (live connectivity test).
+   * Probe a provider via the IS per-customer provider API (live connectivity test).
    * Returns latency + discovered model list.
    */
   probe: podProcedure
     .input(z.object({ providerId: z.string() }))
     .mutation(async ({ input }) => {
-      const { endpoint, adminKey } = await resolveISAdminEndpoint();
-      if (!adminKey) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "IS not configured",
-        });
-      }
-
-      const res = await fetch(
-        `${endpoint}/admin/providers/${input.providerId}/test`,
-        {
-          method: "POST",
-          headers: { "X-Admin-Key": adminKey },
-          signal: AbortSignal.timeout(15_000),
+      try {
+        return await probeProviderOnIS(input.providerId);
+      } catch (err) {
+        if (err instanceof ISProviderError) {
+          throw new TRPCError({
+            code:
+              err.code === "IS_NOT_CONFIGURED"
+                ? "PRECONDITION_FAILED"
+                : "BAD_GATEWAY",
+            message: err.message,
+          });
         }
-      ).catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: String(err),
         });
-      });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new TRPCError({
-          code: "BAD_GATEWAY",
-          message: `IS probe failed: ${res.status} ${text}`,
-        });
       }
-
-      return res.json() as Promise<{
-        ok: boolean;
-        models: string[];
-        latencyMs: number;
-        error?: string;
-      }>;
     }),
 
   /**

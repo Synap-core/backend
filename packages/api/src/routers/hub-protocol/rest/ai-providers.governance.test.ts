@@ -112,10 +112,12 @@ vi.mock("../../../utils/push-providers-to-is.js", () => ({
   pushProvidersToIS: vi.fn(async () => {
     h.isPushes++;
   }),
-  resolveISAdminEndpoint: vi.fn(async () => ({
-    endpoint: "http://is.test",
-    adminKey: "k",
+  probeProviderOnIS: vi.fn(async () => ({
+    ok: true,
+    models: [],
+    latencyMs: 1,
   })),
+  ISProviderError: class ISProviderError extends Error {},
 }));
 
 import { registerAiProvidersRoutes } from "./ai-providers.js";
