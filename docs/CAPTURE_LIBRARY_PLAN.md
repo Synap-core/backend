@@ -129,7 +129,7 @@ Every wave:
 
 ### L2: The standing Library (pod)
 
-**Status (2026-10-13):** pod core shipped on `claude/festive-turing-ebdyco` — `library_groups` (0328), the read model, curate, add (runs, dedup, share note as a capture), build/rebuild (new items only) and Read now through the shared Build core, one search, health + orient `StartHere.library`, tRPC `library` + Hub `/library/{add,list,search}`. Light read + chips: see `library-light-read`. Reference: [`LIBRARY.md`](LIBRARY.md).
+**Status (2026-10-13):** pod core shipped on `claude/festive-turing-ebdyco` — `library_groups` (0328), the read model, curate, add (runs, dedup, share note as a capture), build/rebuild (update mode; what is still waiting per item and group) and Read now through the shared Build core, one search, health + orient `StartHere.library`, tRPC `library` + Hub `/library/{add,list,search}`. Light read + chips: see `library-light-read`. Pre-merge fixes (2026-10-14): agent refusal on every `import.*` write, delete/restore/seen, keep-alive opt-in, rollout marker, `deprecated_intake_path` events. Reference: [`LIBRARY.md`](LIBRARY.md).
 
 - **Model:** the Library is a lens over staged items (intake-source documents with `importItem`), not one giant session.
   - Items carry the Library marker.
