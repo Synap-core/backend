@@ -5,13 +5,14 @@
  *   - `buildLibraryGroup`: CLAIMS the group (`library_groups.building_at`,
  *     under a row lock — a double tap or a second device is refused), reads its
  *     kept, unarchived members — on a REBUILD only the items staged after
- *     `built_at` — and files the bundle in the newest member's run (the run is
- *     the unit of undo). On success the group records `built_at` and appends
- *     the bundle's proposal id to `build_proposal_ids`; each item read records
- *     `importCuration.builtAt`. A refusal or a failure releases the claim.
- *     Update mode (reusing `container_entity_id`, `update_*` ops for what the
- *     group made before) is the core's to add — the group row carries what it
- *     needs.
+ *     items still WAITING in the group (`waitingInGroupSql`) — and files the
+ *     bundle in the newest member's open run (the run is the unit of undo;
+ *     today's run when that one closed). On success the group records
+ *     `built_at` and appends the bundle's proposal id to `build_proposal_ids`;
+ *     each item read records `importCuration.builtBy[group]`. A refusal or a
+ *     failure releases the claim. A group built before is rebuilt in UPDATE
+ *     mode (`rebuild`: its container reused, `update_*` ops for what its
+ *     earlier bundles made), refused while the last bundle waits for review.
  *   - `readNowLibraryItem`: the explicit "Read now" — the item alone, no group
  *     container.
  *
@@ -82,6 +83,17 @@ function runOf(row: { metadata: unknown }): string | null {
   return typeof id === "string" ? id : null;
 }
 
+/** A Library row as the Build core reads it (its metadata is an object bag). */
+function asImportItemRow(row: LibraryItemRow): ImportItemRow {
+  return {
+    id: row.id,
+    metadata: (row.metadata ?? {}) as Record<string, unknown>,
+    createdAt: row.createdAt,
+    storageKey: row.storageKey,
+    mimeType: row.mimeType,
+  };
+}
+
 /** The members Build reads, each steered by THIS group's note only. */
 function asMembers(rows: readonly LibraryItemRow[], group: ImportGroup) {
   return rows.flatMap((row) => {
@@ -89,7 +101,7 @@ function asMembers(rows: readonly LibraryItemRow[], group: ImportGroup) {
     return view
       ? [
           {
-            row: row as unknown as ImportItemRow,
+            row: asImportItemRow(row),
             view: { ...view, groupKeys: [group.key] },
           },
         ]
@@ -377,7 +389,7 @@ export async function readNowLibraryItem(args: {
     // Read now is the person's explicit choice: it reads even a "later" item.
     members: [
       {
-        row: row as unknown as ImportItemRow,
+        row: asImportItemRow(row),
         view: { ...view, decision: "keep", groupKeys: [group.key] },
       },
     ],

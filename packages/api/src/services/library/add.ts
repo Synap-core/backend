@@ -45,7 +45,7 @@ import {
 } from "../imports/session.js";
 import { stageImportItems, type ImportStageDeps } from "../imports/stage.js";
 import { stageIntakeSource } from "../intake/stage-intake-source.js";
-import { libraryItemsWhere, type LibraryDb } from "./read-model.js";
+import { libraryItemsWhere, runIdSql, type LibraryDb } from "./read-model.js";
 
 const logger = createLogger({ module: "library/add" });
 
@@ -126,10 +126,7 @@ export async function ensureLibraryRun(args: {
       .select({ n: drizzleSql<number>`count(*)::int` })
       .from(documents)
       .where(
-        and(
-          libraryItemsWhere(args.userId),
-          drizzleSql`${documents.metadata} #>> '{intakeSource,sessionId}' = ${c.id}`
-        )
+        and(libraryItemsWhere(args.userId), drizzleSql`${runIdSql} = ${c.id}`)
       );
     // A run full enough to refuse the batch makes way for a fresh one.
     if (Number(row?.n ?? 0) + args.incoming <= IMPORT_LIMITS.itemsMax) {

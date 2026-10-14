@@ -33,7 +33,7 @@ import { LIBRARY_LIMITS } from "@synap-core/types/imports";
 import { libraryReadTextKey } from "@synap/database";
 import { libraryPageHtmlKey } from "./page-html.js";
 import { rowsOf } from "../../utils/execute-rows.js";
-import { waitingInGroupSql } from "./read-model.js";
+import { isArchivedOn, waitingInGroupSql } from "./read-model.js";
 import { db as defaultDb, podSettings, drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
@@ -125,7 +125,7 @@ export async function archiveUnseenLibraryItems(args: {
     WHERE id IN (
       SELECT id FROM documents
       WHERE deleted_at IS NULL AND metadata ? 'importItem'
-        AND (metadata #>> '{importCuration,archivedAt}') IS NULL
+        AND NOT ${isArchivedOn(drizzleSql.raw("metadata"))}
         AND (metadata #>> '{importCuration,builtAt}') IS NULL
         AND jsonb_array_length(COALESCE(metadata -> 'importCuration' -> 'groupIds', '[]'::jsonb)) = 0
         AND COALESCE((metadata #>> '{importCuration,seenAt}')::timestamptz, created_at)
@@ -235,7 +235,7 @@ export async function longestWaitingGroups(
       ON d.user_id = g.user_id AND d.deleted_at IS NULL
      AND d.metadata ? 'importItem'
      AND COALESCE(d.metadata -> 'importCuration' -> 'groupIds', '[]'::jsonb) ? g.id::text
-     AND (d.metadata #>> '{importCuration,archivedAt}') IS NULL
+     AND NOT ${isArchivedOn(drizzleSql.raw("d.metadata"))}
      AND ${waitingInGroupSql(drizzleSql.raw("d.metadata"), drizzleSql.raw("g.id::text"))}
     WHERE g.archived_at IS NULL AND g.building_at IS NULL
     GROUP BY g.id
@@ -282,7 +282,7 @@ export async function resurfaceCandidates(args: {
       FROM current_work cw
       JOIN documents d ON d.user_id = cw.user_id AND d.deleted_at IS NULL
        AND d.metadata ? 'importItem'
-       AND (d.metadata #>> '{importCuration,archivedAt}') IS NULL
+       AND NOT ${isArchivedOn(drizzleSql.raw("d.metadata"))}
        AND (d.metadata #>> '{importCuration,builtAt}') IS NULL
        AND COALESCE((d.metadata #>> '{importCuration,seenAt}')::timestamptz, d.created_at)
            < ${unseen.toISOString()}::timestamptz

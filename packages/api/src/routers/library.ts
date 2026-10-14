@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { db } from "@synap/database";
 import { router, podProcedure } from "../trpc.js";
 import {
   aiRateLimitMiddleware,
@@ -61,7 +62,6 @@ import {
   LibraryActionError,
   runLibraryAction,
 } from "../services/library/run-action.js";
-import { db } from "@synap/database";
 import { libraryHealth, searchLibrary } from "../services/library/search.js";
 import {
   buildLibraryGroup,

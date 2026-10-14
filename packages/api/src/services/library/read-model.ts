@@ -109,7 +109,15 @@ export const readStatusSql = drizzleSql<string>`COALESCE(
     WHEN 'title_only' THEN 'title_only'
     ELSE 'not_read' END)`;
 
-export const isArchivedSql = drizzleSql`(${documents.metadata} #>> '{importCuration,archivedAt}') IS NOT NULL`;
+/** The import run an item was staged in (`intakeSource.sessionId`), as text. */
+export const runIdSql = drizzleSql<string>`(${documents.metadata} #>> '{intakeSource,sessionId}')`;
+
+/** Archived, as an expression over ANY metadata column (raw queries with aliases use this). */
+export function isArchivedOn(metadata: SQL): SQL {
+  return drizzleSql`((${metadata} #>> '{importCuration,archivedAt}') IS NOT NULL)`;
+}
+
+export const isArchivedSql = isArchivedOn(drizzleSql`${documents.metadata}`);
 
 /**
  * Proposal statuses under which a Build still COUNTS for its items: waiting
@@ -332,7 +340,7 @@ export function libraryLensWhere(
   if (lens.workspaceId) parts.push(eq(documents.workspaceId, lens.workspaceId));
   if (lens.projectId) {
     // A run carries the project; its items carry the run.
-    parts.push(drizzleSql`(${documents.metadata} #>> '{intakeSource,sessionId}') IN (
+    parts.push(drizzleSql`${runIdSql} IN (
       SELECT ${focusSessions.id}::text FROM ${focusSessions}
        WHERE ${focusSessions.userId} = ${userId}
          AND ${focusSessions.projectId} = ${lens.projectId})`);

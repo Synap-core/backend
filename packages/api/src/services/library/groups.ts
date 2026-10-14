@@ -45,6 +45,7 @@ import {
 import {
   isArchivedSql,
   libraryItemsWhere,
+  runIdSql,
   libraryLensWhere,
   readStatusSql,
   waitingGroupIdsSql,
@@ -396,8 +397,10 @@ export async function setItemGroupIds(args: {
 
 /**
  * Turn every per-import group not yet adopted into a Library group, once.
- * Returns how many were adopted. A failure is logged and rethrown — a Library
- * read that silently skipped adoption would show adopted items as ungrouped.
+ * Returns how many were adopted. A session whose adoption fails is logged and
+ * retried on the next read (the person is not marked clean); it never fails
+ * the Library read itself — the items are all there, that import's groups
+ * just join later.
  */
 export async function adoptImportGroups(args: {
   database?: LibraryDb;
@@ -464,7 +467,7 @@ export async function adoptImportGroups(args: {
             .where(
               and(
                 libraryItemsWhere(args.userId),
-                drizzleSql`${documents.metadata} #>> '{intakeSource,sessionId}' = ${s.id}`,
+                drizzleSql`${runIdSql} = ${s.id}`,
                 drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupKeys', '[]'::jsonb) ? ${g.key}`
               )
             );
