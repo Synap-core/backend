@@ -9,7 +9,7 @@ description: >
   "npx create-synap-app". NOT the `synap` skill (capture/recall in a pod) nor
   `synap-ui` (views inside the pod's own UI) — this is about writing app CODE.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: []
     optional_env: [SYNAP_POD_URL, SYNAP_WORKSPACE_ID]

@@ -6,11 +6,11 @@ export interface RegistrationTrace {
   verificationError?: string;
 }
 
-// Mirrors `@synap-core/types` integrationKindSchema. Kept as a literal (not an
-// import) so this client package stays dependency-free; keep the value set in
-// sync. NB: "openclaw" is a live integration kind (not a write-source) — see the
-// note on integrationKindSchema; do not drop it in an openclaw cleanup.
-export type IntegrationKind = "raycast" | "cli" | "openclaw" | "custom";
+// The kinds a caller may BUILD a connect URL for. `@synap-core/types`
+// integrationKindSchema accepts these plus the legacy "openclaw" (older CLIs
+// still send it — see the note there); this client never offers it. Kept as a
+// literal (not an import) so this client package stays dependency-free.
+export type IntegrationKind = "raycast" | "cli" | "custom";
 
 export interface DeeplinkContext {
   apiKey: string;
@@ -220,7 +220,7 @@ export function buildPodAdminConnectUrl(input: {
  * Canonical integration-connect URL builder.
  *
  * Targets pod-admin's native `/connect` page directly. Prefer this over
- * `buildPodAdminConnectUrl` for any new CLI/Raycast/OpenClaw release
+ * `buildPodAdminConnectUrl` for any new CLI/Raycast release
  * — the legacy form goes through a backend 302 hop.
  *
  * For `podUrl` callers, derive the pod-admin URL: replace the leading

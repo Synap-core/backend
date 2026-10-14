@@ -13,7 +13,7 @@ description: >
   skill only if a domain is actually missing). A project is optional (reuse if
   present; never invent one on a team pod). Ask, don't assume.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY

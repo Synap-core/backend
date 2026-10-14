@@ -1,7 +1,7 @@
 /**
  * SKILL.toml Parser
  *
- * Parses the ZeroClaw skill manifest format.
+ * Parses the SKILL.toml skill manifest format.
  * Format: TOML metadata file + companion markdown instructions.
  *
  * Example SKILL.toml:
@@ -23,7 +23,7 @@ export interface ParsedSkillToml {
   description: string;
   dependencies?: string[];
   instructions: string;
-  source: "zeroclaw" | "custom";
+  source: "skill-toml" | "custom";
   skillType: "instruction";
 }
 
@@ -88,7 +88,7 @@ export function parseSkillToml(
       ? (meta["dependencies.tools"] as string[])
       : undefined,
     instructions,
-    source: "zeroclaw",
+    source: "skill-toml",
     skillType: "instruction",
   };
 }

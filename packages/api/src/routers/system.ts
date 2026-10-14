@@ -874,7 +874,6 @@ export const systemRouter = router({
   getPodRuntimeConfig: podAdminProcedure.query(async () => {
     const envKeys = [
       "DOMAIN",
-      "OPENCLAW_DOMAIN",
       "PUBLIC_URL",
       "INTELLIGENCE_HUB_URL",
       "CONTROL_PLANE_URL",
@@ -897,15 +896,11 @@ export const systemRouter = router({
     const caddy = await readFirstAvailableFile(
       deployCandidates.map((dir) => `${dir}/Caddyfile`)
     );
-    const openclawAuthSnippet = await readFirstAvailableFile(
-      deployCandidates.map((dir) => `${dir}/openclaw_auth.snippet`)
-    );
 
     return {
       env,
       files: {
         caddyfile: caddy,
-        openclawAuthSnippet,
       },
       notes: {
         fileAccess:

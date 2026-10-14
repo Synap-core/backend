@@ -34,10 +34,6 @@ const INTEGRATION_INFO: Record<
     label: "Synap CLI",
     description: "Command-line and scripting access",
   },
-  openclaw: {
-    label: "OpenClaw",
-    description: "AI agent with Hub Protocol + MCP tools",
-  },
   custom: {
     label: "Custom integration",
     description: "Generic Hub Protocol access",

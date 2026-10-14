@@ -1,7 +1,7 @@
 /**
  * OpenAI-Compatible Chat Completions API — /v1/chat/completions
  *
- * Lets OpenClaw (and any OpenAI-compatible client) use Synap's Intelligence
+ * Lets any OpenAI-compatible client use Synap's Intelligence
  * Service as their AI provider. Translates between the OpenAI wire format
  * and the Synap IS SSE protocol.
  *

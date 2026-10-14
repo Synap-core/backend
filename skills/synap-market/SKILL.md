@@ -13,7 +13,7 @@ description: >
   about the PACKAGE layer: finding, installing, and publishing reusable
   templates/capabilities/automations/cells to/from the Control Plane catalog.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: []
     optional_env: [SYNAP_POD_URL, SYNAP_WORKSPACE_ID, SYNAP_HUB_API_KEY]

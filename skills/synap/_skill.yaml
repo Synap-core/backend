@@ -12,7 +12,7 @@ description: >
   when the user asks about their own data. Do NOT use this skill for extending
   the schema (use synap-schema) or building dashboards and views (use synap-ui).
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
       optional_env:

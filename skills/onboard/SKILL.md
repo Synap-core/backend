@@ -14,7 +14,7 @@ description: >
   domain is data on the space; this skill is the reusable intelligence that
   consumes it.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY

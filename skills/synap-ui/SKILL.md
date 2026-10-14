@@ -14,7 +14,7 @@ description: >
   to the user before committing — workspaces are lenses on data, not silos,
   and the user decides when a new lens is warranted.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY

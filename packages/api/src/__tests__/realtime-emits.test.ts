@@ -89,7 +89,7 @@ describe("openclaw:message:received — bridge wire shape", () => {
         {
           channelId: "ch_1",
           messageId: "msg_1",
-          // @ts-expect-error — exercise runtime validation; "slack" is not in OpenClawPlatform
+          // @ts-expect-error — exercise runtime validation; "slack" is not in ExternalMessagePlatform
           platform: "slack",
           excerpt: "x",
           receivedAt: "2026-05-05T10:00:00Z",

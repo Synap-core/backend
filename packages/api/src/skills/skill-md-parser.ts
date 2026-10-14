@@ -1,7 +1,7 @@
 /**
  * SKILL.md Parser
  *
- * Parses the OpenClaw community skill format.
+ * Parses the SKILL.md skill format (Agent Skills / community registries).
  * Format: YAML frontmatter + markdown body
  *
  * Example:
@@ -15,7 +15,7 @@
  * # Research Analyst
  * You are a meticulous research analyst...
  *
- * Compatible with 5,700+ skills on ClawHub.
+ * Compatible with community SKILL.md registries.
  */
 
 export interface ParsedSkillMd {
@@ -25,7 +25,7 @@ export interface ParsedSkillMd {
   dependencies?: string[];
   /** Full markdown body after frontmatter — injected into agent system prompt */
   instructions: string;
-  source: "clawhub" | "custom";
+  source: "skill-md" | "custom";
   skillType: "instruction";
 }
 
@@ -86,7 +86,7 @@ export function parseSkillMd(content: string): ParsedSkillMd | null {
       ? (meta.dependencies as string[])
       : undefined,
     instructions: body,
-    source: "clawhub",
+    source: "skill-md",
     skillType: "instruction",
   };
 }

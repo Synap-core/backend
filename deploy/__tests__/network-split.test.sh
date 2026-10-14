@@ -3,10 +3,11 @@
 # Tripwire: the pod's docker networks keep untrusted services away from the
 # pod's data and identity admin APIs, and every real call path stays wired.
 # ============================================================================
-# The defect (SECURITY-PLAN-R2 S3c, 2026-10-14): openclaw (runs agent-driven
-# code), rsshub (fetches arbitrary URLs) and browserless (headless Chrome) sat on
-# synap-net beside the UNAUTHENTICATED Kratos/Hydra admin APIs (4434/4445),
-# postgres, redis and MinIO: one SSRF in a scraper = account takeover.
+# The defect (SECURITY-PLAN-R2 S3c, 2026-10-14): rsshub (fetches arbitrary URLs)
+# and browserless (headless Chrome) — and, until it was removed the same day,
+# the bundled agent container — sat on synap-net beside the UNAUTHENTICATED
+# Kratos/Hydra admin APIs (4434/4445), postgres, redis and MinIO: one SSRF in a
+# scraper = account takeover.
 #
 # Asserts, on the PARSED compose YAML (every set derived, never hand-listed):
 #   UNTRUSTED = services labelled synap.network.zone=sandbox.
@@ -26,7 +27,7 @@
 #   D. every ADMIN service sits on exactly one network, the same one for all;
 #   E. every member of that network is ADMIN or has an EDGE with an ADMIN
 #      service (caller: backend/realtime/caddy; callee: postgres via DSN).
-#   Non-vacuity: >=3 untrusted, >=4 protected, >=2 admin, >=20 edges, >=5 caddy upstreams,
+#   Non-vacuity: >=2 untrusted, >=4 protected, >=2 admin, >=20 edges, >=5 caddy upstreams,
 #   >=1 kratos webhook edge, and the URL extractor still reads a literal sample.
 #
 # NOT covered: docker-compose.override.yml (Eve adds eve-network, which joins
@@ -152,7 +153,7 @@ for f in fails:
 if not fails:
     print(f"  ✓ sandbox {sorted(untrusted)} shares no network with {sorted(protected)}; "
           f"{len(edges)} call paths all on a shared network; admin {sorted(admin)} alone on {sorted(admin_nets)} with their callers")
-nv = len(untrusted) >= 3 and len(protected) >= 4 and len(admin) >= 2 and len(edges) >= 20 and ncaddy >= 5 and nhook >= 1
+nv = len(untrusted) >= 2 and len(protected) >= 4 and len(admin) >= 2 and len(edges) >= 20 and ncaddy >= 5 and nhook >= 1
 print(("  ✓ " if nv else "  ✗ ") + f"non-vacuity: {len(untrusted)} sandbox, {len(protected)} protected, "
       f"{len(admin)} admin, {len(edges)} edges, {ncaddy} caddy upstreams, {nhook} kratos webhooks")
 sys.exit(1 if fails or not nv else 0)

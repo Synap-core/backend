@@ -14,7 +14,7 @@ description: >
   Do NOT use this skill for creating instances of existing types — the core
   `synap` skill handles that. This skill changes the SCHEMA, not the data.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY

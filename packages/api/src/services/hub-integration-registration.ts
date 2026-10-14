@@ -17,7 +17,7 @@ import { apiKeys } from "@synap/database/schema";
 /** Default scopes for externally provisioned agents via setup/agent.
  *
  * `realtime:observe` is included so every agent provisioned through this path
- * (Eve, OpenClaw, etc.) can subscribe to the Socket.IO `/presence`
+ * (Eve, any self-hosted agent) can subscribe to the Socket.IO `/presence`
  * namespace using its API key. This is the load-bearing scope for Phase 3A
  * of the Eve OS vision — the channels viz subscribes to workspace event
  * broadcasts using the `eve` agent's key. Read-only; emitting events back
@@ -73,13 +73,6 @@ export const INTEGRATION_HUB_SCOPES: Record<string, string[]> = {
   // cli gets everything SETUP_AGENT_HUB_SCOPES grants, plus data access
   cli: [...SETUP_AGENT_HUB_SCOPES, "data.read", "data.write"],
   raycast: [
-    "hub-protocol.read",
-    "hub-protocol.write",
-    "mcp.read",
-    "mcp.write",
-    "data.read",
-  ],
-  openclaw: [
     "hub-protocol.read",
     "hub-protocol.write",
     "mcp.read",

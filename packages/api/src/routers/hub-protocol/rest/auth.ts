@@ -3,7 +3,7 @@
  *
  * `GET /auth/status` — when called with a valid bearer key, returns the
  * introspection of that key (id, scopes, expiry, owning user). External
- * operators (Eve CLI, OpenClaw, custom integrations) use this to verify
+ * operators (Eve CLI, custom integrations) use this to verify
  * what their key can do BEFORE attempting privileged calls.
  *
  * The endpoint is auth-gated by the same middleware as the rest of

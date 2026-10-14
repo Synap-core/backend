@@ -13,7 +13,7 @@ description: >
   when the user asks about their own data. Do NOT use this skill for extending
   the schema (use synap-schema) or building dashboards and views (use synap-ui).
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
       optional_env:
@@ -600,7 +600,7 @@ Say it **once, at the end, in one line**. **Offer, don't auto-build.** One nudge
 
 ## Synap-first operating mode
 
-> **MCP clients** (Claude Desktop, Raycast, OpenClaw with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
+> **MCP clients** (Claude Desktop, Raycast, any agent with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
 
 These five rules override default assistant behavior when connected to a Synap pod:
 
@@ -2140,7 +2140,7 @@ If a guideline lets you proceed, follow it instead of blocking. If none applies,
 
 Every block door also carries the guidance in its response, as a safety net: `outputs/block`, an `addOutput`, a PATCH that adds a human-owned slot, or a create that declares one already blocked. That response comes back with `blockGuidelines: { status: "matched", matches: [{ expectedLabel, blockedReason, guidelines, message }] }`. If you see it, read it: the slot is filed, and a guideline covers this block. If it lets you proceed, do the work and reclaim the slot (`unblockOutput`). `status: "unavailable"` means the guidelines could not be read. A guideline never retires a slot, and it never changes what governance allows.
 
-**CLI** (use when running as Claude Code / OpenClaw agent):
+**CLI** (use when running as Claude Code or another terminal agent):
 
 ```bash
 synap session start --goal "<goal>" [--workspace <id>]                 # create + start a session
@@ -2712,7 +2712,7 @@ The cell appears immediately in the side panel with "Q2 Revenue Report" as the t
 
 > **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
-### CLI commands (when running as Claude Code / OpenClaw agent)
+### CLI commands (when running as Claude Code or another terminal agent)
 
 ```bash
 # Build a multi-file cell source into a single ES module bundle

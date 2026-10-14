@@ -65,14 +65,8 @@ const MINT_SITES: Record<string, string> = {
     "issueKey — behind POST /apps/:id/key AND tRPC apps.issueKey (App Connect, one service). Runs ONLY after the app/connect proposal is approved; owner-only; refuses an agent principal (else an agent key owned by the same human would pass the owner test) AND a grant-bound key (an app key must never mint app keys); mints the app's user_pat and attaches one grant per approved workspace (client_id = app.public_id).",
   "packages/api/src/routers/hub-protocol/rest/keys.ts":
     "/keys/rotate-cli — hub_inbound read+write keys only, keeps expiry (2026-10-06).",
-  "packages/api/src/routers/intelligence-registry.ts":
-    "provisionAgent / rotateAgentKey — pod-admin provisioning of agent services.",
-  "packages/api/src/routers/intelligence.ts":
-    "provisionService — pod-admin provisioning of an intelligence service key.",
   "apps/api/src/routers/provision.ts":
-    "is_internal key behind a CP-signed JWT; activate-addon agent key.",
-  "packages/api/src/scripts/provision-agent.ts":
-    "Operator CLI script (no HTTP door).",
+    "is_internal key behind a CP-signed JWT.",
   "packages/database/src/scripts/init-hub-keys.ts":
     "Operator bootstrap script, raw SQL (no HTTP door).",
 };
@@ -147,18 +141,18 @@ describe("API-key mint sites are known", () => {
  * key by its own primitive (the `is_internal` IS key in provision.ts is the
  * IS's service key, owned by "system", not an agent).
  */
+// The bundled-agent provisioning doors (intelligenceRegistry.provisionAgent /
+// rotateAgentKey, intelligence.provisionService, the CP activate-addon, the
+// provision-agent script) were removed with OpenClaw (2026-10-14): every other
+// agent key goes through the agent door, so one raw agent-key minter is left.
 const AGENT_KEY_MINTS: Partial<Record<keyof typeof MINT_SITES, number>> = {
   "packages/api/src/services/agent-identity-service.ts": 2,
-  "packages/api/src/routers/intelligence-registry.ts": 2, // provision + rotate
-  "packages/api/src/routers/intelligence.ts": 2, // provision + re-provision
-  "apps/api/src/routers/provision.ts": 1, // activate-addon (OpenClaw)
-  "packages/api/src/scripts/provision-agent.ts": 2,
 };
 const ATTACH_CALL = /\b(?:attachAgentKeyGrant|attachGrantOrRevoke)\(/;
 
 describe("every agent key minted by a raw primitive carries its grant", () => {
   it("each agent-key mint file attaches the grant as often as it mints", () => {
-    expect(Object.keys(AGENT_KEY_MINTS).length).toBeGreaterThanOrEqual(5);
+    expect(Object.keys(AGENT_KEY_MINTS).length).toBeGreaterThanOrEqual(1);
     expect(ATTACH_CALL.test("await attachAgentKeyGrant({")).toBe(true);
     const short: string[] = [];
     for (const [file, mints] of Object.entries(AGENT_KEY_MINTS)) {
@@ -244,7 +238,8 @@ describe("every mint attaches a grant (P5 — deny by default)", () => {
       if (attaches < mints)
         short.push(`${file}: ${attaches} attach for ${mints} mints`);
     }
-    expect(mintsSeen).toBeGreaterThanOrEqual(15);
+    // 14 since the bundled-agent provisioning doors were removed (2026-10-14).
+    expect(mintsSeen).toBeGreaterThanOrEqual(14);
     expect(
       short,
       "Attach a grant after each mint — a key with no grant touches nothing. Use attachFullAccessGrant for a key that is its holder's own full reach."

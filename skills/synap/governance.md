@@ -62,7 +62,7 @@ Agents can perform these actions directly without a proposal:
 - `view.create`
 - `channel.create`
 - `bento.arrange`
-- `filesystem.write_workspace` (OpenClaw sandbox only)
+- `filesystem.write_workspace` (agent sandbox only)
 
 **Proposal-gated** (always require approval when done by agents):
 
@@ -110,7 +110,7 @@ You do not poll or wait. The user's experience is asynchronous.
 
 An agent user is a pod-wide user with `agentMetadata.writesRequireProposal` set. Created by `POST /api/hub/setup/agent`. Each agent user has:
 
-- `agentType`: a free-form string (`"claude-code"`, `"openclaw"`, `"raycast"`, `"custom"`)
+- `agentType`: a free-form string (`"claude-code"`, `"codex"`, `"raycast"`, `"custom"`)
 - `agentMetadata`: arbitrary JSON for config
 - Hub API keys scoped to `hub-protocol.read` + `hub-protocol.write` + `mcp.*`
 

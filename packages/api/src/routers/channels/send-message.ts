@@ -1048,7 +1048,7 @@ export const sendMessageProcedure = protectedProcedure
           : undefined; // empty array = no MCPs
     }
     // If channelMcpIds is null, use workspace defaults (backward compat)
-    // Inject the resolved intelligence service's MCP endpoint (e.g. ZeroClaw/OpenClaw)
+    // Inject the resolved intelligence service's MCP endpoint (an external agent's)
     // as a pre-configured HTTP MCP server so agents can use its local tools.
     // Guard: only inject if explicitly approved — prevents unauthorized tool injection.
     if (resolvedService.mcpEndpoint && resolvedService.mcpApproved) {
@@ -1058,7 +1058,7 @@ export const sendMessageProcedure = protectedProcedure
         transport: "http" as const,
         url: resolvedService.mcpEndpoint,
         enabled: true,
-        // The IS's OWN local tools (ZeroClaw/OpenClaw), already owner-approved via
+        // The IS's OWN local tools (an external agent's), already owner-approved via
         // `mcpApproved`. Explicitly inline: an absent policy means GOVERNED, and
         // these tools have no pod tool row to govern through, so leaving it out
         // would make every one of them fail.
@@ -1293,7 +1293,7 @@ export const sendMessageProcedure = protectedProcedure
           // The legacy `route_to_channel` event above stays for backwards-compat.
           // Internal Synap-to-Synap routing → targetPlatform="synap"; the
           // viz layer can distinguish that from external relay routes when
-          // OpenClaw-side outbound emit lands.
+          // an agent-side outbound emit lands.
           const routingPayload = (chunk as { routing?: { reason?: string } })
             .routing;
           void emitTyped(
@@ -1973,7 +1973,7 @@ export const sendMessageProcedure = protectedProcedure
     });
 
     // Outbound relay: for EXTERNAL channels, forward the AI response back to
-    // the external platform via OpenClaw's OpenAI-compatible endpoint.
+    // the external platform via the `channels` service (relayToExternalChannel).
     // Non-blocking — failure here must never affect the response to the frontend.
     const externalMeta = (channel.metadata ?? {}) as {
       relayEnabled?: boolean;

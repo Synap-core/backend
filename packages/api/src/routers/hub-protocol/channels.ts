@@ -1,7 +1,7 @@
 /**
  * Hub Protocol — Channels Router
  *
- * Allows external intelligence services (OpenClaw, etc.) to interact with channels
+ * Allows external intelligence services (any agent) to interact with channels
  * in the Synap workspace. All write operations go through governance:
  *
  *   AI proposes createExternalChannel
@@ -14,8 +14,9 @@
  * whitelist — users must explicitly approve importing external conversations.
  * Workspaces can opt in by adding "channel.create_external" to autoApproveFor.
  *
- * A2AI procedures are for agent-to-agent async communication. OpenClaw uses these
- * to post messages into shared A2AI channels and poll for Synap IS responses.
+ * A2AI procedures are for agent-to-agent async communication. An external agent
+ * uses these to post messages into shared A2AI channels and poll for Synap IS
+ * responses.
  */
 
 import { z } from "zod";
@@ -52,7 +53,7 @@ import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { emitTyped } from "../../utils/event-emit.js";
 import { makeExcerpt } from "../../utils/excerpt.js";
 import { EventNames } from "@synap-core/types/events";
-import type { OpenClawPlatform } from "@synap-core/types/events";
+import type { ExternalMessagePlatform } from "@synap-core/types/events";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { assertMayActAs } from "./guard.js";
@@ -61,15 +62,16 @@ import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { TRPCError } from "@trpc/server";
 
 /**
- * Sources we can map straight to {@link OpenClawPlatform} for the
- * `openclaw:message:received` realtime event. Sources outside this set still
+ * Sources we can map straight to {@link ExternalMessagePlatform} for the
+ * `openclaw:message:received` realtime event (legacy wire name — see
+ * ExternalMessageReceivedEvent). Sources outside this set still
  * land in DB normally; the viz emit is silently skipped (the event payload's
  * `platform` enum is closed and we'd rather drop than misrepresent).
  *
- * TODO(eve-channels): extend the registry's OpenClawPlatform union if/when
+ * TODO(eve-channels): extend the registry's ExternalMessagePlatform union if/when
  * slack/email/sms become first-class bridge platforms.
  */
-const OPENCLAW_PLATFORM_MAP: Record<string, OpenClawPlatform> = {
+const EXTERNAL_PLATFORM_MAP: Record<string, ExternalMessagePlatform> = {
   telegram: "telegram",
   whatsapp: "whatsapp",
   discord: "discord",
@@ -341,7 +343,7 @@ export const channelsRouter = router({
    * Send a message to an existing external-import channel (hot path).
    * Requires: hub-protocol.write scope
    *
-   * Used by OpenClaw to relay incoming Telegram/WhatsApp messages into a channel
+   * Used by an external agent to relay incoming Telegram/WhatsApp messages into a channel
    * that was previously approved by the user. No proposal needed since the channel
    * already exists (it was approved when created via createExternalChannel).
    *
@@ -350,7 +352,7 @@ export const channelsRouter = router({
   sendExternalMessage: scopedProcedure(["hub-protocol.write"])
     .input(
       z.object({
-        /** Agent user ID representing OpenClaw in Synap */
+        /** Agent user ID representing the relaying agent in Synap */
         agentUserId: z.string().optional(),
         workspaceId: z.string().uuid(),
         externalSource: z.enum(EXTERNAL_SOURCES),
@@ -463,17 +465,17 @@ export const channelsRouter = router({
       });
 
       // Phase 3B: feed the eve-dashboard channels viz. We only emit when the
-      // external source maps to a known OpenClawPlatform — see
-      // {@link OPENCLAW_PLATFORM_MAP}. Privacy gating is enforced at the
+      // external source maps to a known ExternalMessagePlatform — see
+      // {@link EXTERNAL_PLATFORM_MAP}. Privacy gating is enforced at the
       // consumer; the excerpt is truncated here purely to bound payload size.
-      const openclawPlatform = OPENCLAW_PLATFORM_MAP[input.externalSource];
-      if (openclawPlatform) {
+      const platform = EXTERNAL_PLATFORM_MAP[input.externalSource];
+      if (platform) {
         void emitTyped(
           "openclaw:message:received",
           {
             channelId: channel.id,
             messageId,
-            platform: openclawPlatform,
+            platform,
             excerpt: makeExcerpt(input.content),
             receivedAt: new Date().toISOString(),
           },
@@ -498,7 +500,7 @@ export const channelsRouter = router({
     }),
 
   /**
-   * Post a message into an A2AI channel from an external agent (e.g. OpenClaw).
+   * Post a message into an A2AI channel from an external agent.
    * Requires: hub-protocol.write scope
    *
    * Governance rules:
@@ -645,7 +647,7 @@ export const channelsRouter = router({
         .set({ updatedAt: new Date() })
         .where(eq(channels.id, input.channelId));
 
-      // Keystone fact write: an external agent (e.g. OpenClaw) just posted
+      // Keystone fact write: an external agent just posted
       // into this A2AI channel — inbound from the pod's perspective. Guarded
       // by reaching here only after the insert above.
       await emitMessageEvent({
@@ -738,7 +740,7 @@ export const channelsRouter = router({
    * Poll an A2AI channel for new messages since a given timestamp.
    * Requires: hub-protocol.read scope
    *
-   * Used by OpenClaw to check for Synap IS responses without holding a connection open.
+   * Used by an external agent to check for Synap IS responses without holding a connection open.
    * Returns messages in ascending order (oldest first).
    */
   pollA2AIChannel: scopedProcedure(["hub-protocol.read"])
@@ -1008,7 +1010,7 @@ export const channelsRouter = router({
    * List A2AI channels for a workspace.
    * Requires: hub-protocol.read scope
    *
-   * Used by OpenClaw to discover channels it participates in or is invited to.
+   * Used by an external agent to discover channels it participates in or is invited to.
    */
   listA2AIChannels: scopedProcedure(["hub-protocol.read"])
     .input(

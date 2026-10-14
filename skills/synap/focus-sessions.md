@@ -44,7 +44,7 @@ If a guideline lets you proceed, follow it instead of blocking. If none applies,
 
 Every block door also carries the guidance in its response, as a safety net: `outputs/block`, an `addOutput`, a PATCH that adds a human-owned slot, or a create that declares one already blocked. That response comes back with `blockGuidelines: { status: "matched", matches: [{ expectedLabel, blockedReason, guidelines, message }] }`. If you see it, read it: the slot is filed, and a guideline covers this block. If it lets you proceed, do the work and reclaim the slot (`unblockOutput`). `status: "unavailable"` means the guidelines could not be read. A guideline never retires a slot, and it never changes what governance allows.
 
-**CLI** (use when running as Claude Code / OpenClaw agent):
+**CLI** (use when running as Claude Code or another terminal agent):
 
 ```bash
 synap session start --goal "<goal>" [--workspace <id>]                 # create + start a session

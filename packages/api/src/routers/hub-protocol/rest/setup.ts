@@ -2,7 +2,7 @@
  * Hub Protocol REST — agent setup endpoint.
  *
  * Creates an agent user + Hub Protocol API key for external services
- * (e.g. OpenClaw). Mounted at POST /setup/agent and skip-listed from
+ * (any self-hosted agent). Mounted at POST /setup/agent and skip-listed from
  * the regular API-key auth middleware (it does its own auth here).
  */
 
@@ -902,7 +902,7 @@ export function registerSetupRoutes(app: HubHono): void {
         });
         if (humans.length > 1) {
           // ── FAIL CLOSED: multi-human pod without explicit linkedUserId ────
-          // JWT / OpenClaw / provisioning must name the human. Silently picking
+          // JWT / agent / provisioning must name the human. Silently picking
           // the oldest human mis-attributes memory dual-writes and creator×type
           // singleton ownership on multi-user pods.
           logger.warn(

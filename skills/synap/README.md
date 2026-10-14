@@ -4,9 +4,8 @@ Sovereign AI knowledge infrastructure for agents. Typed entity graph, documents,
 
 ## Install
 
-```bash
-openclaw skill install synap
-```
+Copy `synap/` into your agent's skill directory (Claude Code: `~/.claude/skills/synap/`),
+or let `npx @synap-core/cli init` install it for the agents it finds.
 
 ## What It Does
 
@@ -30,8 +29,7 @@ git clone https://github.com/synap-core/backend && cd backend/deploy
 cp .env.example .env
 docker compose up -d
 # Visit https://your-domain/registration to create account
-./setup-openclaw.sh
-openclaw skill install synap
+npx @synap-core/cli init --pod-url https://your-domain
 ```
 
 ### Managed Pod (15/mo)
@@ -39,7 +37,7 @@ openclaw skill install synap
 1. Sign up at [synap.live](https://synap.live)
 2. Settings > API Keys > Create key (`hub-protocol.read` + `hub-protocol.write`)
 3. Set `SYNAP_HUB_API_KEY` and `SYNAP_POD_URL` in your environment
-4. `openclaw skill install synap`
+4. Install the skill into your agent (see Install)
 
 ## Environment Variables
 
@@ -54,7 +52,7 @@ openclaw skill install synap
 ## Architecture
 
 ```
-OpenClaw Agent → Hub Protocol REST (/api/hub/*) → Synap Pod
+Your agent    → Hub Protocol REST (/api/hub/*) → Synap Pod
                  Bearer: SYNAP_HUB_API_KEY        PostgreSQL + Typesense + pgvector
 ```
 
@@ -63,7 +61,6 @@ OpenClaw Agent → Hub Protocol REST (/api/hub/*) → Synap Pod
 ## Replaces
 
 This skill combines and replaces the previous `synap-memory` and `synap-os` skills.
-No need to install them separately — `synap` includes everything.
 
 ## Links
 

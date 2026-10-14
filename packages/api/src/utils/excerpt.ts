@@ -2,7 +2,7 @@
  * Excerpt truncation helper for realtime event payloads.
  *
  * Used by emit sites that ship a short preview of a message body across the
- * realtime bridge (e.g. `openclaw:message:received`, `synap:reply:routed`).
+ * realtime bridge (e.g. `openclaw:message:received` — legacy name, `synap:reply:routed`).
  * Privacy enforcement is the consumer's job — we just bound payload size at
  * the producer to keep the bridge light.
  */

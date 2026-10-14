@@ -118,7 +118,7 @@ export const secrets = pgTable(
     //                        such rows, but no longer written and cannot be granted to AI.
     encryptionMode: text("encryption_mode").notNull().default("server"),
 
-    // Optional: links this secret to a registered intelligence service (e.g. "openclaw-abc12345").
+    // Optional: links this secret to a registered intelligence service (its serviceId).
     // Used by getServiceConfig to fetch credentials by serviceId without scanning all user secrets.
     serviceId: text("service_id"),
 

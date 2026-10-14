@@ -2,7 +2,6 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
-    "scripts/provision-agent": "src/scripts/provision-agent.ts",
     "scripts/create-admin-cli": "src/scripts/create-admin-cli.ts",
     "scripts/user-admin-cli": "src/scripts/user-admin-cli.ts",
     "scripts/field-crypto": "src/scripts/field-crypto-cli.ts",

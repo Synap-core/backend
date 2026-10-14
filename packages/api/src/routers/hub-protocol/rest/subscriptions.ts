@@ -3,7 +3,7 @@
  *
  * Read-only facade over the reactive primitives on the event spine. Mirrors the
  * core tRPC `subscriptions.*` and `webhooks.deliveries` procedures so external
- * subscribers (the Reactions UI, OpenClaw) can read the same projection over
+ * subscribers (the Reactions UI, external agents) can read the same projection over
  * REST.
  *
  * GET /api/hub/subscriptions                  — user-wide Pulse feed

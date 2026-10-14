@@ -4,8 +4,7 @@
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
  * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows — the same signal `provisionAgent` uses to detect an
- * already-pod-wide agent. Owner-floored: only the caller's own agent-users, so a
+ * `workspace_members` rows (none ⇒ pod-wide). Owner-floored: only the caller's own agent-users, so a
  * guessed id can't leak another owner's agent identity.
  */
 
@@ -71,7 +70,7 @@ export async function agentProfile(params: {
   }
 
   // Scope: workspace-membership presence. No rows ⇒ pod-wide (the sovereign
-  // whole-brain agent), matching how provisionAgent detects a pod-wide agent.
+  // whole-brain agent).
   const memberRows = await db
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)

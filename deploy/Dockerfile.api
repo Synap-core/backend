@@ -64,7 +64,7 @@ RUN --mount=type=cache,id=turbo-backend,target=/app/.turbo \
       --filter=@synap/database \
       --concurrency=1
 
-# Build provision-agent script separately (standalone bundle, not affected by turbo cache)
+# Build the admin CLI scripts separately (standalone bundle, not affected by turbo cache)
 RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts
 
 # Deploy API package (pnpm deploy works perfectly for single package)
@@ -102,7 +102,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sq
 # Copy the built server dist from the builder stage
 COPY --from=builder --chown=nodejs:nodejs /app/apps/api/dist ./dist/
 
-# Copy the provision-agent script (built from packages/api by the separate tsup step)
+# Copy the admin CLI scripts (built from packages/api by the separate tsup step)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./dist/scripts/
 
 # pnpm deploy --legacy doesn't create top-level symlinks for all packages.

@@ -22,19 +22,9 @@ const migrationPath = join(
   here,
   "../../../database/migrations/0228_agent_creator_type_unique.sql"
 );
-const intelligencePath = join(here, "../routers/intelligence.ts");
-const intelligenceRegistryPath = join(
-  here,
-  "../routers/intelligence-registry.ts"
-);
-const provisionAgentScriptPath = join(here, "../scripts/provision-agent.ts");
 const captureAgentPath = join(
   here,
   "../services/capture-agent/ensure-capture-agent.ts"
-);
-const provisionRouterPath = join(
-  here,
-  "../../../../apps/api/src/routers/provision.ts"
 );
 
 describe("agent creator×type singleton (tripwire)", () => {
@@ -92,38 +82,12 @@ describe("agent creator×type singleton (tripwire)", () => {
   });
 
   // ── Remaining find doors (must not stay agentType-only) ─────────────────
-
-  it("intelligence.provisionService finds by creator×type", () => {
-    const src = readFileSync(intelligencePath, "utf8");
-    expect(src).toMatch(/eq\(users\.createdByUserId,\s*ctx\.userId\)/);
-    expect(src).toMatch(/eq\(users\.agentType, serviceType\)/);
-  });
-
-  it("intelligence-registry findProvisionedAgent requires createdByUserId", () => {
-    const src = readFileSync(intelligenceRegistryPath, "utf8");
-    expect(src).toMatch(
-      /async function findProvisionedAgent\(\s*workspaceId: string \| null,\s*serviceType: string,\s*createdByUserId: string/
-    );
-    expect(src).toMatch(/eq\(users\.createdByUserId, createdByUserId\)/);
-  });
-
-  it("provision-agent script findAgent scopes by createdByUserId", () => {
-    const src = readFileSync(provisionAgentScriptPath, "utf8");
-    expect(src).toMatch(/eq\(users\.createdByUserId, createdByUserId\)/);
-    expect(src).toMatch(/createdByUserId: ownerUserId/);
-  });
+  // (The bundled-agent doors — provisionService, findProvisionedAgent, the
+  // provision-agent script, the CP add-on activate — were removed 2026-10-14.)
 
   it("getCaptureAgentUserId resolves via owner creator×type", () => {
     const src = readFileSync(captureAgentPath, "utf8");
     expect(src).toMatch(/resolvePodOwnerUserId/);
     expect(src).toMatch(/findCaptureAgent\(ownerUserId\)/);
-  });
-
-  it("CP openclaw activate attributes agentType + createdByUserId columns", () => {
-    const src = readFileSync(provisionRouterPath, "utf8");
-    expect(src).toMatch(/eq\(users\.agentType, "openclaw"\)/);
-    expect(src).toMatch(/eq\(users\.createdByUserId, ownerUserId\)/);
-    expect(src).toMatch(/createdByUserId: ownerUserId/);
-    expect(src).not.toMatch(/pod-wide singleton/);
   });
 });

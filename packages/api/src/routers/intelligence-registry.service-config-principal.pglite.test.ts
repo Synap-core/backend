@@ -127,7 +127,7 @@ describe("getServiceConfig — reads the key principal, never the linked human",
   });
 
   it("does not hand over the human's service blob either", async () => {
-    await addSecret(HUMAN, "openclaw-human", { SYNAP_HUB_API_KEY: "human" });
+    await addSecret(HUMAN, "svc-human", { SYNAP_HUB_API_KEY: "human" });
 
     await expect(agentKeyCaller().getServiceConfig()).rejects.toMatchObject({
       code: "NOT_FOUND",
@@ -136,7 +136,7 @@ describe("getServiceConfig — reads the key principal, never the linked human",
 
   it("returns the key principal's own service bootstrap blob", async () => {
     await addSecret(HUMAN, null, { password: "human-bank-password" });
-    await addSecret(AGENT, "openclaw-agent1", { SYNAP_HUB_API_KEY: "mine" });
+    await addSecret(AGENT, "svc-agent1", { SYNAP_HUB_API_KEY: "mine" });
 
     await expect(agentKeyCaller().getServiceConfig()).resolves.toEqual({
       SYNAP_HUB_API_KEY: "mine",

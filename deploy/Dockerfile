@@ -60,7 +60,7 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
       --filter=@synap/realtime \
       --concurrency=1
 
-# Build provision-agent script (standalone tsup bundle)
+# Build the admin CLI scripts (standalone tsup bundle)
 RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts
 
 # Deploy each service to its own self-contained directory
@@ -128,7 +128,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sq
 # substrate 503s and the seeder no-ops in production.
 COPY --from=builder --chown=nodejs:nodejs /app/skills ./api/skills
 
-# Provision-agent script
+# Admin CLI scripts (create-admin-cli, user-admin-cli, field-crypto)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./api/dist/scripts/
 
 # Shameful hoist for API node_modules (pnpm deploy --legacy doesn't create top-level symlinks)

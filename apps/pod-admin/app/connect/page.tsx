@@ -3,7 +3,7 @@
  *
  * Standalone page (no admin chrome) that any signed-in pod user can hit
  * to provision a Hub Protocol API key for an external integration
- * (Synap CLI, Raycast, OpenClaw, Claude Desktop via MCP, etc.).
+ * (Synap CLI, Raycast, Claude Desktop via MCP, any agent, etc.).
  *
  * Replaces the legacy admin-ui `/admin/connect` page deleted in the
  * auth refactor. Existing in-the-wild CLI/Raycast installs that still
@@ -15,7 +15,8 @@
  * to `/login?return=/connect?<original query>` and come back here.
  *
  * Query parameters:
- *   integration       — "raycast" | "cli" | "openclaw" | "custom"
+ *   integration       — "raycast" | "cli" | "custom" (anything else, including
+ *                       the legacy "openclaw" older CLIs still send, is custom)
  *   agent_type        — optional agent signal. When "claude-web" (with
  *                       integration=custom), the page takes the CP-MCP
  *                       consent-code path instead of minting a plaintext key:
@@ -129,7 +130,7 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
 
 function normalizeIntegration(
   raw: string | undefined
-): "raycast" | "cli" | "openclaw" | "custom" {
-  if (raw === "raycast" || raw === "cli" || raw === "openclaw") return raw;
+): "raycast" | "cli" | "custom" {
+  if (raw === "raycast" || raw === "cli") return raw;
   return "custom";
 }

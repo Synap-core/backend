@@ -2041,7 +2041,6 @@ cmd_install() {
     local INTELLIGENCE_KEY=""
     local REPO_URL="https://github.com/synap-core/backend.git"
     local INTERACTIVE=true
-    local WITH_OPENCLAW=false
     local WITH_RSSHUB=false
     local TUNNEL_PROVIDER=""
     local TUNNEL_TOKEN_ARG=""
@@ -2128,7 +2127,10 @@ cmd_install() {
                 shift
                 ;;
             --with-openclaw)
-                WITH_OPENCLAW=true
+                # Retired (2026-10-14): Synap no longer bundles an agent. Still
+                # accepted so an older caller (Eve's `--synap-repo` install)
+                # does not abort the install; it does nothing.
+                echo -e "${YELLOW}--with-openclaw is retired and ignored: Synap no longer bundles an agent. Connect any agent from your laptop (npx @synap-core/cli init).${NC}"
                 shift
                 ;;
             --with-rsshub)
@@ -2206,7 +2208,6 @@ ${YELLOW}Options:${NC}
   
   ${GREEN}--intelligence-url <url>${NC} URL of Intelligence Service (e.g. http://localhost:3001)
   ${GREEN}--intelligence-key <key>${NC} Hub Protocol API Key for Intelligence Service
-  ${GREEN}--with-openclaw${NC}        Provision OpenClaw agent automatically after install
   ${GREEN}--with-rsshub${NC}          Start RSSHub + browserless (compose profile rsshub)
   ${GREEN}--tunnel <provider>${NC}    Enable tunnel after install (cloudflare | pangolin)
   ${GREEN}--tunnel-token <TOKEN>${NC}        Tunnel token (pairs with --tunnel)
@@ -2239,9 +2240,6 @@ ${YELLOW}Examples:${NC}
   # With Intelligence Service config
   synap install --domain localhost --intelligence-url http://localhost:3001 --intelligence-key my-secret-key
 
-  # Provision OpenClaw during install
-  synap install --domain example.com --with-openclaw
-
   # Enable RSS aggregation (RSSHub + browserless)
   synap install --domain localhost --with-rsshub
 
@@ -2253,8 +2251,8 @@ ${YELLOW}Examples:${NC}
   synap install --domain example.com --tunnel cloudflare --tunnel-token-file /path/to/token
 
 ${YELLOW}After install:${NC}
-  This script installs the pod only. Agent connections (OpenClaw, Raycast,
-  other MCP clients) are handled from your laptop with @synap-core/cli:
+  This script installs the pod only. Agent connections (Claude Code, Raycast,
+  any MCP client) are handled from your laptop with @synap-core/cli:
     npm install -g @synap-core/cli
     npx @synap-core/cli init --pod-url https://<your-pod>
 
@@ -2932,25 +2930,6 @@ EOF
         unset ADMIN_PASSWORD
     fi
 
-    # Provision agent services requested at install time
-    # OpenClaw provisioning needs at least one workspace row (workspace_members for the agent).
-    # Token bootstrap creates the first workspace only AFTER /admin/bootstrap — so defer here.
-    if [ "$WITH_OPENCLAW" = "true" ]; then
-        echo ""
-        if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
-            echo -e "${YELLOW}🤖 OpenClaw: deferred (token bootstrap has no workspace yet).${NC}"
-            echo "  After you finish admin bootstrap and can sign in, run from this directory:"
-            echo "    ./synap services add openclaw"
-            echo "  Optional: check public reachability first:"
-            echo "    ./synap connectivity"
-        else
-            echo -e "${BLUE}🤖 Provisioning OpenClaw agent...${NC}"
-            cmd_services add "openclaw" || {
-                echo -e "${YELLOW}⚠️  OpenClaw provisioning failed. Run 'synap services add openclaw' manually after startup.${NC}"
-            }
-        fi
-    fi
-
     if [ "$WITH_RSSHUB" = "true" ]; then
         echo ""
         echo -e "${BLUE}📡 Starting RSSHub profile (rsshub + browserless)...${NC}"
@@ -3035,14 +3014,6 @@ EOF
             echo "  Then open /admin"
         fi
     fi
-    if [ "$WITH_OPENCLAW" = "true" ]; then
-        if [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
-            echo "  ./synap services add openclaw   # After bootstrap (OpenClaw was deferred)"
-            echo "  ./synap connectivity              # If your public domain does not load"
-        else
-            echo "  ./synap services status openclaw  # Check OpenClaw status"
-        fi
-    fi
     if [ "$WITH_RSSHUB" = "true" ]; then
         echo "  ./synap profiles status rsshub   # RSSHub + browserless"
     fi
@@ -3069,22 +3040,11 @@ EOF
     echo "  1. Install the user CLI:"
     echo "     npm install -g @synap-core/cli"
     echo ""
-    echo "  2. Connect your workspace and any AI agents (OpenClaw, Raycast, MCP clients):"
+    echo "  2. Connect your workspace and any AI agent (Claude Code, Raycast, any MCP client):"
     echo "     npx @synap-core/cli init --pod-url ${PUBLIC_URL_HINT}"
-    echo ""
-    echo "  3. Optional — install OpenClaw on this server (self-hosted):"
-    echo "     ./synap services add openclaw"
     echo ""
     echo "For ops (health, logs, backups, updates) — keep using ./synap on this server."
     echo "════════════════════════════════════════════════════════════════"
-
-    if [ "$WITH_OPENCLAW" = "true" ]; then
-        echo ""
-        echo -e "${BLUE}🤖 OpenClaw is running on this server.${NC}"
-        echo "   To connect OpenClaw on your laptop:"
-        echo "     npx @synap-core/cli oc connect --pod-url ${PUBLIC_URL_HINT}"
-        echo ""
-    fi
 
     if [ -n "$TUNNEL_ENABLED" ]; then
         echo ""
@@ -4146,6 +4106,13 @@ USAGE
 
     echo -e "${BLUE}🔄 Updating Synap (${mode}${ref:+: $ref})...${NC}"
     synap_update_engine "$mode" "$ref" "$force"
+
+    # Keys a removed feature left in .env (env.schema `retired`) go now, through
+    # the one writer and against the schema this update just installed —
+    # re-sourced, since a release installs a new env-config.sh under this process.
+    if ! ( source ./env-config.sh && SYNAP_ENV_FILE=.env envcfg_drop_retired ); then
+        echo -e "${YELLOW}⚠️  Could not remove retired keys from .env (nothing reads them; run \`synap config validate\`).${NC}"
+    fi
 
     # Idempotent admin seed — ensures the users/workspace rows exist after
     # every update. create-admin-cli.js is a no-op when the admin already
@@ -5257,7 +5224,7 @@ cmd_exec() {
 }
 
 # ============================================================================
-# PROFILES — Optional docker-compose profiles (RSSHub, OpenClaw, monitoring)
+# PROFILES — Optional docker-compose profiles (RSSHub, monitoring)
 # ============================================================================
 
 cmd_profiles() {
@@ -5276,7 +5243,7 @@ cmd_profiles() {
         enable)
             local name="${1:-}"
             if [ -z "$name" ]; then
-                echo -e "${RED}Usage: synap profiles enable <rsshub|openclaw|monitoring>${NC}"
+                echo -e "${RED}Usage: synap profiles enable <rsshub|monitoring>${NC}"
                 exit 1
             fi
             case "$name" in
@@ -5284,17 +5251,13 @@ cmd_profiles() {
                     echo -e "${BLUE}📡 Enabling RSSHub (browserless + rsshub)...${NC}"
                     docker compose --profile rsshub up -d browserless rsshub
                     ;;
-                openclaw)
-                    echo -e "${BLUE}🤖 Enabling OpenClaw container...${NC}"
-                    docker compose --profile openclaw up -d openclaw
-                    ;;
                 monitoring)
                     echo -e "${BLUE}📊 Enabling Dozzle (logs UI)...${NC}"
                     docker compose --profile monitoring up -d dozzle
                     ;;
                 *)
                     echo -e "${RED}Unknown profile: ${name}${NC}"
-                    echo "Known: rsshub, openclaw, monitoring"
+                    echo "Known: rsshub, monitoring"
                     exit 1
                     ;;
             esac
@@ -5304,7 +5267,7 @@ cmd_profiles() {
         disable)
             local name="${1:-}"
             if [ -z "$name" ]; then
-                echo -e "${RED}Usage: synap profiles disable <rsshub|openclaw|monitoring>${NC}"
+                echo -e "${RED}Usage: synap profiles disable <rsshub|monitoring>${NC}"
                 exit 1
             fi
             case "$name" in
@@ -5312,17 +5275,13 @@ cmd_profiles() {
                     echo -e "${BLUE}📡 Stopping RSSHub stack...${NC}"
                     docker compose stop rsshub browserless 2>/dev/null || true
                     ;;
-                openclaw)
-                    echo -e "${BLUE}🤖 Stopping OpenClaw...${NC}"
-                    docker compose stop openclaw 2>/dev/null || true
-                    ;;
                 monitoring)
                     echo -e "${BLUE}📊 Stopping Dozzle...${NC}"
                     docker compose stop dozzle 2>/dev/null || true
                     ;;
                 *)
                     echo -e "${RED}Unknown profile: ${name}${NC}"
-                    echo "Known: rsshub, openclaw, monitoring"
+                    echo "Known: rsshub, monitoring"
                     exit 1
                     ;;
             esac
@@ -5331,7 +5290,7 @@ cmd_profiles() {
 
         status)
             echo -e "${BLUE}Optional profile services:${NC}"
-            docker compose ps rsshub browserless openclaw dozzle 2>/dev/null || true
+            docker compose ps rsshub browserless dozzle 2>/dev/null || true
             ;;
 
         help|--help|-h|"")
@@ -5341,16 +5300,14 @@ ${BLUE}Synap Profiles${NC} — Optional Docker Compose stacks
 ${YELLOW}Usage:${NC}
   synap profiles enable <name>    Start profile services
   synap profiles disable <name>   Stop profile services
-  synap profiles status             Show rsshub / openclaw / dozzle status
+  synap profiles status             Show rsshub / dozzle status
 
 ${YELLOW}Names:${NC}
   rsshub       RSSHub + browserless (RSS aggregation)
-  openclaw     OpenClaw agent container (use synap services add openclaw to provision keys)
   monitoring   Dozzle log viewer (port 8888)
 
 ${YELLOW}Install-time:${NC}
   synap install --domain localhost --with-rsshub
-  synap install --domain example.com --with-openclaw
 
 ${YELLOW}Environment:${NC}
   SYNAP_DEPLOY_DIR=/path/to/deploy  # Run from any cwd
@@ -5756,157 +5713,6 @@ EOF
         *)
             echo -e "${RED}Unknown tunnel action: ${action}${NC}"
             echo "Run 'synap tunnel help'"
-            exit 1
-            ;;
-    esac
-}
-
-# ============================================================================
-# SERVICES COMMAND
-# Manages external agent service provisioning (OpenClaw, ZeroClaw, etc.)
-# ============================================================================
-
-cmd_services() {
-    local deploy_dir=$(get_deploy_dir)
-    if [ -z "$deploy_dir" ]; then
-        echo -e "${RED}Error: Not in Synap installation directory${NC}"
-        exit 1
-    fi
-
-    cd "$deploy_dir"
-
-    local subcommand="${1:-help}"
-    shift || true
-
-    # Resolve workspace context for all subcommands that need it
-    local workspace_id=""
-    local admin_email=""
-    if [ -f ".env" ]; then
-        workspace_id=$(grep "^WORKSPACE_ID=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-        admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || true)
-    fi
-
-    case "$subcommand" in
-        list)
-            echo -e "${BLUE}🤖 Listing provisioned agent services...${NC}"
-            docker compose exec -T backend \
-                sh -c "ACTION=list node dist/scripts/provision-agent.js" 2>/dev/null || {
-                    echo -e "${YELLOW}Tip: ensure the backend container is running (synap start)${NC}"
-                }
-            ;;
-
-        add)
-            local service_type="${1:-}"
-            if [ -z "$service_type" ]; then
-                echo -e "${RED}Usage: synap services add <type>${NC}"
-                echo "Known types: openclaw, zeroclaw"
-                exit 1
-            fi
-
-            echo -e "${BLUE}🤖 Provisioning ${service_type} agent...${NC}"
-            docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} node dist/scripts/provision-agent.js"
-            ;;
-
-        remove)
-            local assume_yes=false
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --yes|-y) assume_yes=true; shift ;;
-                    *) break ;;
-                esac
-            done
-            local service_type="${1:-}"
-            if [ -z "$service_type" ]; then
-                echo -e "${RED}Usage: synap services remove [--yes|-y] <type>${NC}"
-                exit 1
-            fi
-
-            echo -e "${YELLOW}⚠️  This will revoke all API keys and delete the ${service_type} agent user.${NC}"
-            if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
-                read -p "Continue? (y/N): " confirm
-                if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-                    echo "Cancelled."
-                    exit 0
-                fi
-            fi
-
-            echo -e "${BLUE}🗑️  Deprovisioning ${service_type} agent...${NC}"
-            docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} ACTION=remove node dist/scripts/provision-agent.js"
-            ;;
-
-        status)
-            local service_type="${1:-}"
-            if [ -z "$service_type" ]; then
-                echo -e "${RED}Usage: synap services status <type>${NC}"
-                exit 1
-            fi
-
-            echo -e "${BLUE}🔍 Checking ${service_type} status...${NC}"
-            docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} ACTION=status node dist/scripts/provision-agent.js"
-            ;;
-
-        rotate)
-            local assume_yes=false
-            while [ $# -gt 0 ]; do
-                case "$1" in
-                    --yes|-y) assume_yes=true; shift ;;
-                    *) break ;;
-                esac
-            done
-            local service_type="${1:-}"
-            if [ -z "$service_type" ]; then
-                echo -e "${RED}Usage: synap services rotate [--yes|-y] <type>${NC}"
-                exit 1
-            fi
-
-            echo -e "${YELLOW}⚠️  This will revoke the existing API key and issue a new one.${NC}"
-            if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
-                read -p "Continue? (y/N): " confirm
-                if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-                    echo "Cancelled."
-                    exit 0
-                fi
-            fi
-
-            echo -e "${BLUE}🔑 Rotating ${service_type} API key...${NC}"
-            docker compose exec -T backend \
-                sh -c "SERVICE_TYPE=${service_type} WORKSPACE_ID=${workspace_id} ADMIN_EMAIL=${admin_email} ACTION=rotate node dist/scripts/provision-agent.js"
-            ;;
-
-        help|--help|-h|"")
-            cat << EOF
-${BLUE}Synap Services${NC} — Manage external agent service provisioning
-
-${YELLOW}Note:${NC} ${GREEN}synap services add openclaw${NC} needs at least one workspace in Postgres.
-If you used ${GREEN}ADMIN_BOOTSTRAP_MODE=token${NC}, finish ${GREEN}/admin/bootstrap${NC} first (install defers OpenClaw in that mode).
-
-${YELLOW}Usage:${NC}
-  synap services list              List all provisioned agent users
-  synap services add <type>        Provision a new agent service
-  synap services remove [--yes|-y] <type>   Deprovision (revoke keys + delete agent user)
-  synap services status <type>     Check provisioned + registered status
-  synap services rotate [--yes|-y] <type>   Rotate the Hub Protocol API key
-
-  Non-interactive confirm: ${GREEN}SYNAP_ASSUME_YES=1${NC} or ${GREEN}--yes${NC} / ${GREEN}-y${NC} before <type>
-
-${YELLOW}Known service types:${NC}
-  openclaw    World-interface agent (shell, browser, filesystem, messaging)
-  zeroclaw    LLM inference agent
-
-${YELLOW}Examples:${NC}
-  synap services add openclaw
-  synap services status openclaw
-  synap services rotate openclaw
-  synap services remove openclaw
-EOF
-            ;;
-
-        *)
-            echo -e "${RED}Unknown services subcommand: $subcommand${NC}"
-            echo "Run 'synap services help' for usage"
             exit 1
             ;;
     esac
@@ -6319,9 +6125,8 @@ ${YELLOW}Management:${NC}
   synap clean [type]             Clean Docker resources (interactive if no type)
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
-  synap services <sub> [type]    Manage external agent services (OpenClaw, ZeroClaw, etc.)
   synap users <sub>              Manage pod users (list, add-admin, reset-password, delete)
-  synap profiles <sub> [name]  Enable/disable optional compose profiles (rsshub, openclaw, monitoring)
+  synap profiles <sub> [name]  Enable/disable optional compose profiles (rsshub, monitoring)
   synap tunnel <sub>             Enable/disable Cloudflare or Pangolin tunnels (alternative to direct DNS)
   synap reset [--full [--delete-data]]  Wipe data (backup first, type the domain to confirm)
 
@@ -6363,14 +6168,10 @@ ${YELLOW}Examples:${NC}
   synap config set PUBLIC_URL=https://pod.example.com POD_AGENT_AUDIENCE=https://pod.example.com
   synap config validate && synap apply
   synap doctor --json
-  synap services add openclaw   # Provision OpenClaw agent
-  synap services status openclaw # Check OpenClaw status
-  synap services rotate openclaw # Rotate OpenClaw API key
-  synap services remove openclaw # Remove OpenClaw agent
   synap users list
   synap users reset-password relay@example.com    # hidden prompt; --password-stdin for scripts
   synap profiles enable rsshub     # RSSHub + browserless (optional stack)
-  synap profiles disable openclaw  # Stop OpenClaw container
+  synap profiles disable rsshub    # Stop the RSSHub stack
   synap tunnel enable cloudflare --token <TOKEN>   # Expose via Cloudflare Tunnel
   synap tunnel status                              # Show active tunnel(s)
   synap tunnel disable                             # Stop all tunnels
@@ -6510,10 +6311,6 @@ case "${1:-help}" in
     exec)
         shift
         cmd_exec "$@"
-        ;;
-    services)
-        shift
-        cmd_services "$@"
         ;;
     users)
         shift

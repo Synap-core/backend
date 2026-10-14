@@ -8,7 +8,7 @@
  * Accepts three credential types:
  *   1. `Authorization: Bearer <pod+jwt>` — the per-turn IS delegation this pod
  *      signed itself (D4, `authenticateIsDelegation` below)
- *   2. `Authorization: Bearer <api-key>` — IS agents, OpenClaw, CLI (API key auth)
+ *   2. `Authorization: Bearer <api-key>` — IS agents, external agents, CLI (API key auth)
  *   3. `X-Session-Token: <kratos-token>` — browser extension, web clients (Kratos session auth)
  *
  * Session-token callers receive full hub-protocol.read + hub-protocol.write scopes.
@@ -312,7 +312,7 @@ export const hubAuthMiddleware = async (
     return next();
   }
 
-  // ── 1. Try API key (agents / IS / OpenClaw) ─────────────────────────────
+  // ── 1. Try API key (agents / IS) ─────────────────────────────
   const authHeader = c.req.header("authorization") ?? null;
   const token = extractBearerToken(authHeader);
 

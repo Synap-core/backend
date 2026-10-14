@@ -167,8 +167,8 @@ services:
     # Eve-managed pods add `eve-network` (+ aliases) in their own
     # docker-compose.override.yml, which also declares the network. Keeping it
     # out of THIS file is what lets a host without Eve start the backend.
-    # ory-admin: KRATOS_/HYDRA_ADMIN_URL. sandbox: RSSHUB_URL, and openclaw
-    # calls back into this API (see the `networks:` block at the end).
+    # ory-admin: KRATOS_/HYDRA_ADMIN_URL. sandbox: RSSHUB_URL (see the
+    # `networks:` block at the end).
     networks:
       - synap-net
       - ory-admin
@@ -743,7 +743,6 @@ services:
       #   (unset)              → ./Caddyfile        — direct deployment, Caddy manages Let's Encrypt
       #   ./Caddyfile.local    → Cloudflare Tunnel  — auto_https off, serves plain HTTP on port 80
       - ${CADDYFILE_PATH:-./Caddyfile}:/etc/caddy/Caddyfile:ro
-      - ./openclaw_auth.snippet:/etc/caddy/openclaw_auth.snippet:ro
       # Registration proof (served at /.well-known/synap-registration while
       # `synap install --register-token` registers; empty otherwise).
       - ./state/registration-nonce:/srv/synap-registration:ro
@@ -755,11 +754,11 @@ services:
       # POD_ADMIN_URL is the API's explicit public redirect target.
       POD_ADMIN_DOMAIN: ${POD_ADMIN_DOMAIN:?POD_ADMIN_DOMAIN must be set to this Pod Admin hostname in deploy/.env}
       EMAIL: ${LETSENCRYPT_EMAIL}
-    # ory-admin: proxies kratos:4433 / hydra:4444. sandbox: proxies openclaw.
+    # ory-admin: proxies kratos:4433 / hydra:4444. No sandbox: it proxies no
+    # sandboxed service.
     networks:
       - synap-net
       - ory-admin
-      - sandbox
     depends_on:
       backend:
         condition: service_started
@@ -771,44 +770,6 @@ services:
       - 127.0.0.11 # Docker's internal DNS (for container names)
       - 1.1.1.1 # Cloudflare (for external domains like ACME CAs)
       - 8.8.8.8 # Google (fallback)
-
-  # ============================================================================
-  # OPENCLAW (opt-in — managed via control plane /openclaw/provision)
-  #
-  # For cloud-managed pods: activated automatically by the CP provisioning flow.
-  # For self-hosted: fill in SYNAP_* vars in /opt/synap/.env, then run:
-  #   docker compose --profile openclaw up -d openclaw
-  #   openclaw skill install https://raw.githubusercontent.com/synap-app/synap-backend/main/skills/synap-os/SKILL.md
-  #
-  # Environment variables injected by the provisioning flow:
-  #   OPENCLAW_HUB_API_KEY  — Hub Protocol key bound to the OpenClaw agent user
-  #   SYNAP_AGENT_USER_ID   — Agent user ID for attribution and RBAC on the pod
-  #   SYNAP_WORKSPACE_ID    — Workspace the agent is scoped to
-  # ============================================================================
-  openclaw:
-    container_name: openclaw
-    image: ghcr.io/openclaw/openclaw:latest
-    restart: unless-stopped
-    volumes:
-      - openclaw_config:/root/.openclaw
-      - openclaw_workspace:/root/openclaw/workspace
-    environment:
-      - SYNAP_POD_URL=${SYNAP_POD_URL:-http://backend:4000}
-      - SYNAP_HUB_API_KEY=${OPENCLAW_HUB_API_KEY} # Hub Protocol key (injected by provisioning flow)
-      - SYNAP_AGENT_USER_ID=${SYNAP_AGENT_USER_ID} # Agent user ID for Hub Protocol attribution
-      - SYNAP_WORKSPACE_ID=${SYNAP_WORKSPACE_ID} # Workspace scope for this agent
-      - SYNAP_PROJECT_ID=${SYNAP_PROJECT_ID:-} # Optional project lens (synap npm CLI `synap openclaw` writes it)
-      - OPENCLAW_MODEL=anthropic/claude-sonnet-4-6 # AI model
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} # Required for the model above
-    ports:
-      - "127.0.0.1:18789:18789" # OpenClaw gateway — SSH health checks use localhost:18789
-    # Runs agent-driven code: sandbox only (backend + caddy, no DB/Ory/MinIO).
-    labels:
-      synap.network.zone: sandbox
-    networks:
-      - sandbox
-    profiles:
-      - openclaw
 
   # ============================================================================
   # RSSHUB — Optional RSS aggregation service
@@ -1072,8 +1033,6 @@ volumes:
   typesense_data:
   caddy_data:
   caddy_config:
-  openclaw_config:
-  openclaw_workspace:
   prometheus-data:
   grafana-data:
   pod_agent_state:
@@ -1084,9 +1043,9 @@ volumes:
 #   ory-admin  Kratos + Hydra (their admin APIs are unauthenticated by design)
 #              with ONLY their callers: backend(+canary), realtime, caddy, and
 #              postgres for their DSN.
-#   sandbox    services labelled synap.network.zone=sandbox (openclaw, rsshub,
-#              browserless) with ONLY their callers/callees: backend(+canary)
-#              and caddy. No database, redis, MinIO, Ory or docker.sock holder.
+#   sandbox    services labelled synap.network.zone=sandbox (rsshub,
+#              browserless) with ONLY their callers/callees: backend(+canary).
+#              No database, redis, MinIO, Ory or docker.sock holder.
 # None is `internal: true`: kratos needs SMTP/OIDC egress, the sandbox needs the
 # web. A new service joins synap-net unless it calls/serves one of the above.
 # ============================================================================

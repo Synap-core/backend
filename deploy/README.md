@@ -269,7 +269,6 @@ All optional services are gated behind Compose profiles. Enable with `--profile 
 | ------------------- | ----------------------------------------- | ------------------------------------------------------- |
 | `monitoring`        | dozzle, prometheus, grafana, alertmanager | Full observability stack (logs UI + metrics + alerts)   |
 | `canary`            | backend-canary                            | Pre-production image validation (used by update-pod.sh) |
-| `openclaw`          | openclaw                                  | Self-hosted AI agent                                    |
 | `rsshub`            | rsshub, browserless                       | RSS aggregation                                         |
 | `cloudflare-tunnel` | cloudflared                               | Expose pod via Cloudflare Tunnel                        |
 | `pangolin-tunnel`   | pangolin-tunnel                           | Expose pod via Pangolin                                 |
@@ -278,7 +277,7 @@ All optional services are gated behind Compose profiles. Enable with `--profile 
 Example:
 
 ```bash
-docker compose --profile monitoring --profile openclaw up -d
+docker compose --profile monitoring --profile rsshub up -d
 ```
 
 Services with `restart: always` (backend, postgres, etc.) always start by default.

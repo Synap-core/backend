@@ -35,7 +35,7 @@ const passthroughSchema = z.record(z.string(), z.unknown());
 // {actor}:{entity}:{action} — strict schemas (new convention)
 // ============================================================================
 
-const openClawPlatformSchema = z.enum([
+const externalMessagePlatformSchema = z.enum([
   "telegram",
   "whatsapp",
   "signal",
@@ -44,10 +44,11 @@ const openClawPlatformSchema = z.enum([
   "voice",
 ]);
 
-const openclawMessageReceivedSchema = z.object({
+// Wire name `openclaw:message:received` is legacy — see ExternalMessageReceivedEvent.
+const externalMessageReceivedSchema = z.object({
   channelId: z.string().min(1),
   messageId: z.string().min(1),
-  platform: openClawPlatformSchema,
+  platform: externalMessagePlatformSchema,
   excerpt: z.string(),
   receivedAt: z.string().min(1),
 });
@@ -157,7 +158,7 @@ const aiProposalSchema = z.object({
  */
 export const EventSchemas: Partial<Record<EventName, z.ZodType>> = {
   // {actor}:{entity}:{action}
-  "openclaw:message:received": openclawMessageReceivedSchema,
+  "openclaw:message:received": externalMessageReceivedSchema,
   "synap:reply:routed": synapReplyRoutedSchema,
   "import:file:progress": importFileProgressSchema,
   "ui:focus": uiFocusSchema,

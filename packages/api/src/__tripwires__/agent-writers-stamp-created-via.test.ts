@@ -3,10 +3,9 @@
  * (`users.created_via`, migration 0225).
  *
  * WHY. `agentUsers.list` decides `builtIn` from the origin (`withAgentOrigin`)
- * and Settings › Agents folds or lists an agent on it. OpenClaw add-on
- * activation (`apps/api/.../provision.ts`) and surface-agent provisioning
- * (`routers/intelligence.ts`) never stamped it, so their agents had no origin
- * at all. 0285 backfills the pod's own agents; this keeps new writers honest.
+ * and Settings › Agents folds or lists an agent on it. The (since removed,
+ * 2026-10-14) bundled-agent add-on activation and service provisioning never
+ * stamped it, so their agents had no origin at all. 0285 backfills the pod's own agents; this keeps new writers honest.
  *
  * HOW (derived, never hand-listed). Every non-test .ts under `packages/api/src`
  * and `apps/api/src` is walked; each object literal that contains
@@ -77,9 +76,10 @@ for (const root of ROOTS) {
 
 describe("every agent-user writer stamps createdVia", () => {
   it("finds the known writers (non-vacuity) and the brace match works", () => {
-    expect(writers.length).toBeGreaterThanOrEqual(8);
+    // 5 since the bundled-agent writers were removed (2026-10-14).
+    expect(writers.length).toBeGreaterThanOrEqual(5);
     expect(writers.map((w) => w.file)).toContain(
-      "apps/api/src/routers/provision.ts"
+      "packages/api/src/services/agent-identity-service.ts"
     );
     expect(
       enclosingObject('x({ a: { b: 1 }, userType: "agent", c: 2 })', 20)

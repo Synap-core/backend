@@ -517,7 +517,7 @@ app.get("/status/release", async (c) => {
 // 2026-05 auth refactor; the connect surface moved to pod-admin's
 // native `/connect` page on the `pod-admin.<root>` subdomain.
 //
-// In-the-wild Synap CLI / Raycast / OpenClaw installs still build URLs
+// In-the-wild Synap CLI / Raycast / agent installs still build URLs
 // against `${podUrl}/admin/connect?integration=…&redirect_uri=…`. We
 // 302 those to the new home so existing installs keep working without
 // a CLI/Raycast upgrade. Future releases of those clients should target
@@ -1104,7 +1104,7 @@ app.route("/api/integrations/capabilities", integrationsCapabilitiesApp);
 import { channelGatewayApp } from "./routers/channel-gateway.js";
 app.route("/api/channels/gateway", channelGatewayApp);
 
-// MCP Server endpoint (for external agents: ZeroClaw, OpenClaw, Claude Desktop, Cursor)
+// MCP Server endpoint (for external agents: Claude Code, Claude Desktop, Cursor, …)
 // Auth: Hub Protocol API key via Authorization: Bearer <key>
 // Protocol: JSON-RPC 2.0 over HTTP POST
 app.route("/mcp", mcpHttpApp);

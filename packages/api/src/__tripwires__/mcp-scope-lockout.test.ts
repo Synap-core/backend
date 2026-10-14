@@ -4,8 +4,6 @@ import {
   SETUP_AGENT_HUB_SCOPES,
   INTEGRATION_HUB_SCOPES,
 } from "../services/hub-integration-registration.js";
-import { zeroclawEntry } from "../utils/agent-services/services/zeroclaw.js";
-import { openclawEntry } from "../utils/agent-services/services/openclaw.js";
 
 /**
  * TRIPWIRE — every real key-minting site must derive to a NON-EMPTY MCP scope.
@@ -50,18 +48,6 @@ describe("tripwire: no key-minting scope set derives to zero MCP access", () => 
       expect(deriveMcpScopes(scopes).length).toBeGreaterThan(0);
     }
   );
-
-  it("zeroclaw service defaultScopes grants MCP access", () => {
-    expect(deriveMcpScopes(zeroclawEntry.defaultScopes).length).toBeGreaterThan(
-      0
-    );
-  });
-
-  it("openclaw service defaultScopes grants MCP access", () => {
-    expect(deriveMcpScopes(openclawEntry.defaultScopes).length).toBeGreaterThan(
-      0
-    );
-  });
 
   it("the out-of-repo mint sites' literal scope set grants MCP access", () => {
     // hub-key.ts, agents.ts (synap-cli), init-hub-keys.ts — see file header.

@@ -45,7 +45,7 @@ export interface ServiceResolutionContext {
   workspaceId?: string;
   /**
    * Capability hint for service selection.
-   * "channels" routes to a service with the "channels" capability (e.g. OpenClaw/ZeroClaw)
+   * "channels" routes to a service with the "channels" capability (an external agent that relays to messaging platforms)
    * before falling back to workspace/user preferences.
    */
   capability?: "chat" | "analysis" | "channels" | "default";
@@ -55,7 +55,7 @@ export interface ResolvedService {
   serviceId: string;
   endpoint: string;
   client: IntelligenceHubClient;
-  /** MCP server URL exposed by this service (ZeroClaw/OpenClaw local tools) */
+  /** MCP server URL exposed by this service (an external agent's local tools) */
   mcpEndpoint?: string;
   /**
    * Whether this service's MCP endpoint has been explicitly approved for tool injection.
@@ -192,7 +192,7 @@ export async function selectIntelligenceService(
   const capability = ctx.capability || "default";
   // 0. Capability-first routing: if a specific capability is requested (e.g. "channels"),
   //    find a service that explicitly advertises it before checking workspace preferences.
-  //    This ensures relay traffic goes to OpenClaw/ZeroClaw, not the default IS.
+  //    This ensures relay traffic goes to that service, not the default IS.
   if (
     capability !== "default" &&
     capability !== "chat" &&

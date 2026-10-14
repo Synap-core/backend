@@ -74,6 +74,7 @@ function connectionLabel(hubId: string | null | undefined): string {
   if (!hubId) return "Personal access token";
   if (hubId === "integration:cli") return "Synap CLI";
   if (hubId === "integration:raycast") return "Raycast";
+  // Keys minted before OpenClaw was unbundled (2026-10-14) still exist.
   if (hubId === "integration:openclaw") return "OpenClaw";
   if (hubId === "integration:custom") return "Custom integration";
   if (hubId.startsWith("integration:"))

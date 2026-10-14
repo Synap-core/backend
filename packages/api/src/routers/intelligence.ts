@@ -15,8 +15,7 @@ import {
 } from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc, or, like, sql, drizzleSql } from "@synap/database";
-import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import { db, eq, and, desc, or, like, drizzleSql } from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
@@ -25,22 +24,16 @@ import {
   ChannelType,
   ChannelStatus,
   intelligenceServices,
-  users,
-  apiKeys,
   mcpServers,
   compactedStates,
   agents,
   podSettings,
   getDefaultPodIntelligenceDefaults,
   type NewIntelligenceCommand,
-  type AgentMetadata,
 } from "@synap/database/schema";
 import { workspaces } from "@synap/database/schema";
-import { EventRepository, ApiKeyRepository } from "@synap/database";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
-import { SERVICE_CATALOG } from "../utils/agent-services/index.js";
-import { attachAgentKeyGrant } from "../services/agent-identity-service.js";
 import {
   parseCommandTemplate,
   validateArgumentValues,
@@ -1086,8 +1079,8 @@ export const intelligenceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireUserId(ctx.userId);
-      // Support both exact match and slug-prefix match.
-      // OpenClaw is registered as "openclaw-{userId}" but the frontend sends "openclaw".
+      // Support both exact match and slug-prefix match (a service registered
+      // as "<slug>-{userId}" is addressed by "<slug>").
       const service = await db.query.intelligenceServices.findFirst({
         where: or(
           eq(intelligenceServices.serviceId, input.serviceId),
@@ -1208,209 +1201,12 @@ export const intelligenceRouter = router({
   }),
 
   /**
-   * provisionService
-   *
-   * Self-hosted equivalent of `./synap services add <serviceType>`.
-   * Creates an agent user + Hub Protocol API key for the given service type,
-   * and returns the Docker run command with credentials embedded.
-   *
-   * Called by the OpenClaw onboarding wizard instead of POST /openclaw/provision
-   * (cloud path). The result is shown to the user as a copy-paste Docker command.
-   * Once the container is started, it connects to the pod via Hub Protocol and
-   * self-registers as an intelligence service.
-   *
-   * Idempotent per (createdByUserId, serviceType): if THIS human already has
-   * an agent of this type, rotates and returns a fresh key (key is only shown
-   * once otherwise — other humans get their own principal).
-   */
-  provisionService: podProcedure
-    .input(
-      z.object({
-        serviceType: z.enum(["openclaw"]),
-        /** Override the pod URL embedded in the Docker run command. Defaults to PUBLIC_URL env var. */
-        podUrlOverride: z.string().url().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { serviceType, podUrlOverride } = input;
-      const workspaceId = ctx.workspaceId ?? null;
-
-      // Authenticated human provisions their own (creator × type) agent.
-      const entry = SERVICE_CATALOG[serviceType];
-      if (!entry) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Unknown service type: ${serviceType}`,
-        });
-      }
-
-      // Creator×type: one openclaw (etc.) principal per human, not pod-wide.
-      // Aligns with provisionSurfaceAgentKey / migration 0228.
-      const [existing] = await db
-        .select({ id: users.id, email: users.email })
-        .from(users)
-        .where(
-          and(
-            eq(users.userType, "agent"),
-            eq(users.agentType, serviceType),
-            eq(users.createdByUserId, ctx.userId)
-          )
-        )
-        .limit(1);
-
-      const podUrl =
-        podUrlOverride ?? process.env.PUBLIC_URL ?? "http://localhost:4000";
-
-      if (existing) {
-        // Idempotent — rotate key and return fresh docker command
-        await revokeApiKeys(db, {
-          where: and(
-            eq(apiKeys.userId, existing.id),
-            eq(apiKeys.isActive, true)
-          ),
-          reason: "Re-provisioned via UI",
-        });
-
-        const keyPrefix =
-          process.env.NODE_ENV === "production"
-            ? "synap_hub_live_"
-            : "synap_hub_test_";
-        const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
-
-        const eventRepo = new EventRepository(sql);
-        const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-        const created = await apiKeyRepo.create(
-          {
-            keyName: `${entry.displayName} — rotated`,
-            keyPrefix,
-            key: plainKey,
-            scope: entry.defaultScopes,
-            userId: existing.id,
-            keyType: "hub_inbound",
-            description: `Hub Protocol auth token for ${entry.displayName} agent service.`,
-          },
-          ctx.userId ?? "system"
-        );
-        // An AI's key always carries its limits (its stored capabilities).
-        await attachAgentKeyGrant({
-          apiKeyId: created.id,
-          agentUserId: existing.id,
-          onBehalfOf: ctx.userId,
-          expiresAt: null,
-          createdBy: ctx.userId,
-        });
-
-        const dockerRunCommand =
-          entry.buildDockerCommand?.({
-            podUrl,
-            workspaceId: workspaceId ?? "pod-wide",
-            agentUserId: existing.id,
-            apiKey: plainKey,
-          }) ?? null;
-
-        return {
-          alreadyProvisioned: true,
-          agentUserId: existing.id,
-          dockerRunCommand,
-          env: {
-            SYNAP_POD_URL: podUrl,
-            SYNAP_HUB_API_KEY: plainKey,
-            SYNAP_WORKSPACE_ID: workspaceId ?? "pod-wide",
-            SYNAP_AGENT_USER_ID: existing.id,
-          },
-        };
-      }
-
-      // Create new agent user for this human (creator × type). No workspace
-      // membership required — surface agents are human-owned, not workspace-tied.
-      const agentId = randomUUID();
-      const shortId = agentId.slice(0, 8);
-      const email = `agent-${serviceType}-${shortId}@synap.agent`;
-
-      await db.insert(users).values({
-        id: agentId,
-        email,
-        name: `${entry.displayName} Agent`,
-        emailVerified: true,
-        userType: "agent",
-        agentType: serviceType,
-        isPersonalAgent: false,
-        createdByUserId: ctx.userId,
-        // Provenance (0225): the same origin the IS registry stamps for its
-        // agents. It holds a hub key, so `withAgentOrigin` still lists it.
-        createdVia: "intelligence-service",
-        agentMetadata: {
-          agentType: serviceType,
-          description: entry.description,
-          createdByUserId: ctx.userId,
-          isPersonalAgent: false,
-          capabilities: entry.agentCapabilities,
-        } satisfies AgentMetadata,
-        // INVARIANT: agents NEVER carry a Kratos identity — `kratos_identity_id
-        // IS NULL` is the human↔agent discriminator (see agent-identity-service.ts
-        // + the agent-kratos-identity-invariant tripwire). Do not stamp a sentinel.
-        kratosIdentityId: null,
-        timezone: "UTC",
-        locale: "en",
-      });
-
-      const keyPrefix =
-        process.env.NODE_ENV === "production"
-          ? "synap_hub_live_"
-          : "synap_hub_test_";
-      const plainKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
-
-      const eventRepo = new EventRepository(sql);
-      const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
-      const created = await apiKeyRepo.create(
-        {
-          keyName: `${entry.displayName} — pod-wide`,
-          keyPrefix,
-          key: plainKey,
-          scope: entry.defaultScopes,
-          userId: agentId,
-          keyType: "hub_inbound",
-          description: `Hub Protocol auth token for ${entry.displayName} agent service. Used by the ${entry.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
-        },
-        ctx.userId ?? "system"
-      );
-      await attachAgentKeyGrant({
-        apiKeyId: created.id,
-        agentUserId: agentId,
-        onBehalfOf: ctx.userId,
-        expiresAt: null,
-        createdBy: ctx.userId,
-      });
-
-      const dockerRunCommand =
-        entry.buildDockerCommand?.({
-          podUrl,
-          workspaceId: workspaceId ?? "pod-wide",
-          agentUserId: agentId,
-          apiKey: plainKey,
-        }) ?? null;
-
-      return {
-        alreadyProvisioned: false,
-        agentUserId: agentId,
-        dockerRunCommand,
-        env: {
-          SYNAP_POD_URL: podUrl,
-          SYNAP_HUB_API_KEY: plainKey,
-          SYNAP_WORKSPACE_ID: workspaceId ?? "pod-wide",
-          SYNAP_AGENT_USER_ID: agentId,
-        },
-      };
-    }),
-
-  /**
    * provisionMcpService
    *
    * Provision an MCP-only tool service (not a Hub Protocol agent).
    * Currently supports: "firecrawl" — web scraping and content extraction.
    *
-   * Unlike provisionService (which creates an agent user + Hub Protocol key),
-   * this just:
+   * It creates no agent user or Hub Protocol key; it just:
    *   1. Creates an mcpServers row so the Intelligence Hub can connect to it
    *   2. Returns the Docker run command for the user to run locally
    *

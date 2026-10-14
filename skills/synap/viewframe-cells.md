@@ -106,7 +106,7 @@ The cell appears immediately in the side panel with "Q2 Revenue Report" as the t
 
 > **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
-### CLI commands (when running as Claude Code / OpenClaw agent)
+### CLI commands (when running as Claude Code or another terminal agent)
 
 ```bash
 # Build a multi-file cell source into a single ES module bundle

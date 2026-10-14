@@ -88,14 +88,23 @@ crit="$(grep -oE 'for key in [A-Z_ ]+; do' "$HERE/synap" | head -1 | sed 's/for 
 for k in $crit; do case ",$(flags_of "$k")," in *,required,*) ;; *) bad "critical key $k is not 'required' in env.schema";; esac; done
 [ -n "$crit" ] && ok "cmd_update's critical keys ($crit) are required"
 
-# No orphan: every schema key is still used somewhere.
+# No orphan: every schema key is still used somewhere — except a `retired` key,
+# which by definition nothing reads (it is listed only to be tolerated).
+retired_keys="$(awk '/^[ \t]*(#|$)/ {next} $3 ~ /(^|,)retired(,|$)/ {print $1}' "$SCHEMA")"
 used_text="$(cat "$HERE/deploy/.env.example" "$HERE/deploy/docker-compose.yml" "$HERE/synap" "$HERE/install.sh" "$HERE"/deploy/*.sh "$HERE"/deploy/pod-agent/*.js 2>/dev/null)"
 orphans=""
 for k in $(schema_keys); do
+  echo "$retired_keys" | grep -qx "$k" && continue
   case "$k" in *\*) p="${k%\*}"; grep -q "$p" <<<"$used_text" || orphans="$orphans $k"; continue ;; esac
   grep -qw "$k" <<<"$used_text" || orphans="$orphans $k"
 done
 [ -z "$orphans" ] && ok "every env.schema key is still used by the compose file, .env.example or the CLI" || bad "orphan schema keys (nothing uses them):$orphans"
+# A retired key is really retired: the compose file reads none of them. The
+# literal sample keeps the retired matcher honest (it must see the flag).
+echo "$retired_keys" | grep -qx OPENCLAW_HUB_API_KEY && ok "self-check: the retired matcher sees OPENCLAW_HUB_API_KEY" || bad "self-check: retired matcher blind ($(n "$retired_keys") keys)"
+still_read=""
+for k in $retired_keys; do echo "$compose_keys" | grep -qx "$k" && still_read="$still_read $k"; done
+[ -z "$still_read" ] && ok "no retired key ($(n "$retired_keys")) is read by docker-compose.yml" || bad "retired keys still read by compose:$still_read"
 
 # Every type in the schema is one env-config.sh understands.
 types="$(awk '/^[ \t]*(#|$)/ {next} {print $2}' "$SCHEMA" | sort -u)"
@@ -240,13 +249,33 @@ out="$(cd "$DEPLOY" && SYNAP_DEPLOY_DIR="$DEPLOY" dash -c '. ./env-config.sh && 
 [ "$out" = "$(printf 'true\nrc=1')" ] && ok "env-config.sh works SOURCED under dash (set, read, refusal)" || bad "dash: $out"
 grep -q '^DEBUG=true$' "$DEPLOY/.env" && ok "dash write landed" || bad "dash write missing"
 
-# 14. CP configure keys (claim-warm-pod, openclaw-provision, exposure) stay accepted
+# 14. CP configure keys (claim-warm-pod, exposure — and the retired OpenClaw
+#     add-on keys an OLDER Control Plane still sends) stay accepted
 reset_env
 synap config set DOMAIN=claimed.example.com PUBLIC_URL=https://claimed.example.com POD_ADMIN_DOMAIN=pod-admin.claimed.example.com \
   POD_ADMIN_URL=https://pod-admin.claimed.example.com FRONTEND_URL=https://claimed.example.com CORS_ORIGIN=https://claimed.example.com \
   ALLOWED_ORIGINS=https://claimed.example.com POD_AGENT_AUDIENCE=https://claimed.example.com OPENCLAW_HUB_API_KEY=k \
   SYNAP_AGENT_USER_ID=u SYNAP_WORKSPACE_ID=w CLOUDFLARED_TUNNEL_TOKEN=t
 [ $? = 0 ] && ok "every key the Control Plane sends via configure is accepted" || bad "CP configure keys: $(cat "$TMP/out")"
+[ "$(envval DOMAIN)" = claimed.example.com ] && ! grep -qE '^(OPENCLAW_HUB_API_KEY|SYNAP_AGENT_USER_ID|SYNAP_WORKSPACE_ID)=' "$DEPLOY/.env" \
+  && grep -q "ignored OPENCLAW_HUB_API_KEY — retired" "$TMP/out" \
+  && ok "retired keys in a batch are dropped (not written), the rest of the batch lands" || bad "retired keys written or batch lost: $(cat "$TMP/out")"
+
+# 14b. retired keys already in a .env: validate warns (never errors), the
+#      update's drop removes them through the one writer (backup kept).
+reset_env; printf 'OPENCLAW_HUB_API_KEY=old-key\nSYNAP_PROJECT_ID=p\n' >> "$DEPLOY/.env"
+synap config validate; rc=$?
+[ "$rc" = 0 ] && grep -q "OPENCLAW_HUB_API_KEY.*retired" "$TMP/out" && ok "validate: a retired key is a warning, not an error" || bad "validate on a retired key (rc=$rc): $(cat "$TMP/out")"
+out="$(cd "$DEPLOY" && SYNAP_DEPLOY_DIR="$DEPLOY" dash -c '. ./env-config.sh && envcfg_drop_retired' 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ! grep -qE '^(OPENCLAW_HUB_API_KEY|SYNAP_PROJECT_ID)=' "$DEPLOY/.env" && [ "$(envval DOMAIN)" = pod.example.com ] && [ "$(baks)" = 1 ] \
+  && grep -q "^OPENCLAW_HUB_API_KEY=" "$DEPLOY"/.env.bak.* && ! grep -q old-key <<<"$out" \
+  && ok "envcfg_drop_retired removes retired keys only, keeps a backup, prints no value (dash)" || bad "drop_retired (rc=$rc): $out"
+out="$(cd "$DEPLOY" && SYNAP_DEPLOY_DIR="$DEPLOY" dash -c '. ./env-config.sh && envcfg_drop_retired' 2>&1)"
+[ -z "$out" ] && [ "$(baks)" = 1 ] && ok "envcfg_drop_retired is a silent no-op when none is left (no backup)" || bad "drop_retired second run: $out"
+# Structural (the update engine is not run here): cmd_update drops them AFTER
+# the engine installed the new schema, re-sourcing env-config.sh.
+awk '/^cmd_update\(\) \{/{p=1} p&&/^}/{exit} p' "$HERE/synap" | grep -A6 'synap_update_engine "\$mode"' | grep -q 'source ./env-config.sh && SYNAP_ENV_FILE=.env envcfg_drop_retired' \
+  && ok "cmd_update runs envcfg_drop_retired after synap_update_engine" || bad "cmd_update no longer drops retired keys after the engine"
 
 # 15. configure-pod.sh (pod-agent's `configure`, run by busybox sh) writes only
 #     through the door, all-or-nothing, and uses the PINNED compose project.
@@ -262,6 +291,12 @@ configure DOMAIN=x.example.com PATH=/usr/bin --recreate backend; rc=$?
   && ok "configure-pod: one unknown key → nothing written, no container touched" || bad "configure-pod refusal (rc=$rc): $(cat "$TMP/out") $(cat "$FAKE_LOG")"
 configure PUBLIC_URL=https://drift.example.com; [ $? != 0 ] && [ "$(envval PUBLIC_URL)" = https://pod.example.com ] && ok "configure-pod: PUBLIC_URL without POD_AGENT_AUDIENCE refused" || bad "configure-pod audience drift accepted"
 configure OPENAI_API_KEY=sk-CONFIGSECRET; grep -q CONFIGSECRET "$TMP/out" && bad "configure-pod logged a secret" || ok "configure-pod never logs values"
+# An older Control Plane's retired OpenClaw add-on configure: accepted, the
+# retired keys dropped, the profile (no service carries it now) harmless.
+reset_env
+configure OPENCLAW_HUB_API_KEY=k SYNAP_AGENT_USER_ID=u SYNAP_WORKSPACE_ID=w --profile openclaw; rc=$?
+[ "$rc" = 0 ] && ! grep -qE '^(OPENCLAW_HUB_API_KEY|SYNAP_AGENT_USER_ID|SYNAP_WORKSPACE_ID)=' "$DEPLOY/.env" && [ "$(baks)" = 0 ] \
+  && ok "configure-pod: an old CP's retired OpenClaw payload succeeds and writes nothing" || bad "configure-pod retired payload (rc=$rc): $(cat "$TMP/out")"
 
 # 16. update-agent.sh: pod-agent comes from the release's DIGEST pin, never a host build
 cp "$HERE/deploy/update-agent.sh" "$DEPLOY/"

@@ -62,11 +62,6 @@ ALLOWLIST=(
   "backend|synap|1|mv -f \"\$draft\" .env"
   # Fresh-host restore door: the snapshot's own .env (verified, previous one kept).
   "backend|deploy/pgdata-safety.sh|1|(umask 077 && cp \"\$stage\$_BK_CT_DEPLOY/.env\" \"\$deploy/.env\") || return 1"
-  # synap.sh (`./synap.sh deploy --zeroclaw`) appends to the INTELLIGENCE
-  # service's deploy/.env, not the pod's.
-  "backend|synap.sh|1|echo \"\" >> \"\$INTELLIGENCE_DIR/deploy/.env\""
-  "backend|synap.sh|1|echo \"# ZeroClaw Bridge\" >> \"\$INTELLIGENCE_DIR/deploy/.env\""
-  "backend|synap.sh|1|echo \"ZEROCLAW_API_KEY=\$zckey\" >> \"\$INTELLIGENCE_DIR/deploy/.env\""
 )
 
 # ── self-check: the matchers still see what they hunt, and nothing benign ─────

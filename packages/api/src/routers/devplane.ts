@@ -393,7 +393,7 @@ export const devplaneRouter = router({
         repoUrl: "https://github.com/synap-core/synap-cli",
         techStack: "Node.js, Commander.js",
         appDescription:
-          "npx @synap/cli init — three-path flow: connect existing OpenClaw, fresh server, or laptop. Provisions agent + API key via Hub Protocol.",
+          "npx @synap/cli init — connect this laptop's agents to a pod. Provisions agent + API key via Hub Protocol.",
       });
 
       // ── Services ──────────────────────────────────────────────────────────

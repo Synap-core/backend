@@ -401,7 +401,7 @@ app.doc31("/openapi.json", {
     title: "Synap Hub Protocol",
     version: "1.0.0",
     description:
-      "REST surface for IS, agents, sidecars (OpenWebUI pipelines, OpenClaw), CLI, " +
+      "REST surface for IS, agents, sidecars (OpenWebUI pipelines, any agent), CLI, " +
       "and external integrations. Auth: Bearer API key OR X-Session-Token. " +
       "Idempotency-Key is supported on all writes.",
   },

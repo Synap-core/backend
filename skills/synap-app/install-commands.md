@@ -36,7 +36,7 @@ older `0.x` versions on the registry are a different, abandoned package.
 synap skills get synap-app
 
 # or wire a tool end-to-end (skills + MCP), any target
-synap connect --target=cursor        # or claude, openclaw, …
+synap connect --target=cursor        # or claude, …
 ```
 
 Alternatively, the scaffolded project ships an `AGENTS.md` at its root — most AI

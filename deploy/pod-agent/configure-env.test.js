@@ -44,7 +44,7 @@ test("the immutable set is derived from env.schema and is not vacuous", () => {
 });
 
 test("every key the Control Plane sends via configure stays accepted", () => {
-  // claim-warm-pod.ts, openclaw-provision.ts, backup-vault, pod-email-relay
+  // claim-warm-pod.ts, backup-vault, pod-email-relay
   assert.equal(
     statusFor({
       envVars: [
@@ -62,6 +62,9 @@ test("every key the Control Plane sends via configure stays accepted", () => {
     }),
     202
   );
+  // An older Control Plane's retired OpenClaw add-on payload (keys now
+  // `retired` in env.schema, a profile no service carries) is still accepted:
+  // env-config.sh drops the retired keys, compose ignores the empty profile.
   assert.equal(
     statusFor({
       envVars: {
@@ -148,7 +151,7 @@ test("POD_AGENT_AUDIENCE moves only together with a matching PUBLIC_URL", () => 
 });
 
 test("profiles and recreate must be compose names", () => {
-  assert.equal(statusFor({ profiles: ["openclaw\n--force"] }), 400);
+  assert.equal(statusFor({ profiles: ["rsshub\n--force"] }), 400);
   assert.equal(statusFor({ recreate: ["--remove-orphans"] }), 400);
   assert.equal(statusFor({ recreate: "backend" }), 400);
 });
@@ -160,7 +163,7 @@ test("an unreadable or empty schema refuses env writes (fail closed)", () => {
     503
   );
   // nothing to write ⇒ nothing to check against
-  assert.equal(statusFor({ profiles: ["openclaw"] }, null), 202);
+  assert.equal(statusFor({ profiles: ["rsshub"] }, null), 202);
 });
 
 test("errors never echo a value", () => {

@@ -72,7 +72,7 @@ beforeEach(() => {
 });
 
 const DOORS: Array<[string, unknown]> = [
-  ["/setup/agent", { agentType: "openclaw" }],
+  ["/setup/agent", { agentType: "my-agent" }],
   ["/setup/service", { name: "svc" }],
   ["/setup/magic-link", { email: "owner@example.com" }],
 ];
@@ -91,7 +91,7 @@ describe("PROVISIONING_TOKEN after the pod has an owner (D9)", () => {
   it("a Kratos identity alone counts as bootstrapped", async () => {
     listIdentities.mockResolvedValue({ data: [{ id: "k1" }] });
     humanCount.mockResolvedValue([{ count: 0 }]);
-    const res = await post("/setup/agent", TOKEN, { agentType: "openclaw" });
+    const res = await post("/setup/agent", TOKEN, { agentType: "my-agent" });
     expect(res.status).toBe(403);
   });
 
@@ -121,7 +121,7 @@ describe("before bootstrap and on other failures", () => {
   it("a wrong token stays a 401 and never reads bootstrap state", async () => {
     ownerExists(true);
     const res = await post("/setup/agent", "test-wrong-token", {
-      agentType: "openclaw",
+      agentType: "my-agent",
     });
     expect(res.status).toBe(401);
     expect(humanCount).not.toHaveBeenCalled();
@@ -130,7 +130,7 @@ describe("before bootstrap and on other failures", () => {
   it("an unreadable bootstrap state is a 503, not an accept", async () => {
     listIdentities.mockResolvedValue({ data: [] });
     humanCount.mockRejectedValue(new Error("db down"));
-    const res = await post("/setup/agent", TOKEN, { agentType: "openclaw" });
+    const res = await post("/setup/agent", TOKEN, { agentType: "my-agent" });
     expect(res.status).toBe(503);
     expect(((await res.json()) as { code: string }).code).toBe(
       "BOOTSTRAP_STATE_UNAVAILABLE"

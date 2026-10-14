@@ -1822,8 +1822,8 @@ export const skillsRouter = router({
    * Install a skill from a URL (SKILL.md or SKILL.toml format)
    *
    * Supports:
-   *   - OpenClaw ClawHub skills (SKILL.md with YAML frontmatter)
-   *   - ZeroClaw skills (SKILL.toml with companion markdown)
+   *   - SKILL.md skills (YAML frontmatter)
+   *   - SKILL.toml skills (with companion markdown)
    *
    * The `code` field stores the instruction text.
    * `metadata.skillType = 'instruction'` tells the Intelligence Hub
@@ -1873,7 +1873,7 @@ export const skillsRouter = router({
       let parsed;
       if (isToml) {
         // For TOML manifests, try to load a companion SKILL.md at the same URL base.
-        // Many ZeroClaw skills store the instruction markdown separately.
+        // Many SKILL.toml skills store the instruction markdown separately.
         let companionMarkdown: string | undefined;
         // Build companion URL: replace .toml extension, or append .md for extension-less URLs
         const companionUrl = input.url.endsWith(".toml")

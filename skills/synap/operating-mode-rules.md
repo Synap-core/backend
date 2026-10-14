@@ -1,6 +1,6 @@
 ## Synap-first operating mode
 
-> **MCP clients** (Claude Desktop, Raycast, OpenClaw with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
+> **MCP clients** (Claude Desktop, Raycast, any agent with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
 
 These five rules override default assistant behavior when connected to a Synap pod:
 

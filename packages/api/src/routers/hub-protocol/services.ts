@@ -1,7 +1,7 @@
 /**
  * Hub Protocol — Services Router
  *
- * Allows external intelligence services (OpenClaw, ZeroClaw, custom agents)
+ * Allows external intelligence services (any external agent)
  * to self-register as intelligence services on this Data Pod using only a
  * Hub Protocol API key — no Kratos session required.
  *
@@ -38,7 +38,7 @@ export const servicesRouter = router({
   /**
    * Register or update an intelligence service on this Data Pod.
    *
-   * Called by the Synap control plane during OpenClaw/ZeroClaw provisioning.
+   * Called by a provisioner (the control plane, an agent's own setup).
    * Idempotent: if the serviceId already exists, it is updated in-place.
    *
    * The service is auto-approved for MCP tool injection (mcpApproved: true)

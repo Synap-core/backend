@@ -86,7 +86,7 @@ with a scoped key. From your terminal:
 ```bash
 npm install -g @synap-core/cli
 synap init                                  # point the CLI at your pod
-synap connect --target=claude-code          # or: cursor · raycast · openclaw · claude-desktop
+synap connect --target=claude-code          # or: cursor · raycast · claude-desktop
 ```
 
 The agent then works against the same records you do, with the same proposal

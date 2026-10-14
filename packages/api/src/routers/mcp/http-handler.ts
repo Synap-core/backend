@@ -2,7 +2,7 @@
  * MCP HTTP Handler
  *
  * Exposes the Synap Hub Protocol as an MCP (Model Context Protocol) server
- * over HTTP. External agents (ZeroClaw, OpenClaw, Claude Desktop, Cursor)
+ * over HTTP. External agents (Claude Code, Claude Desktop, Cursor, …)
  * can use this endpoint to read/write Synap data with full governance.
  *
  * Protocol: MCP Streamable HTTP. The installed SDK (1.29.0) declares

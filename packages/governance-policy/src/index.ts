@@ -777,7 +777,7 @@ export const AGENT_STRUCTURE_WRITE_EVENT_KEYS: readonly GateEventKey[] = (
 /**
  * Filesystem paths ALWAYS blocked for external agent writes, regardless of user
  * approval or workspace settings. Backend enforcement layer (the synap-os skill
- * also enforces these on the OpenClaw side as the first line of defence).
+ * also enforces these on the agent side as the first line of defence).
  */
 export const BLOCKED_FILESYSTEM_PATHS: readonly RegExp[] = [
   /synap[-_]backend/i,

@@ -15,6 +15,8 @@
 #     (COMPOSE_PROJECT_NAME) is never changed; an `immutable` secret that
 #     already has a value needs --force (it indexes data on disk);
 #   • POD_AGENT_AUDIENCE must stay equal to PUBLIC_URL (pod-agent trust);
+#   • a `retired` key (a removed feature's) is accepted and DROPPED, never
+#     written: an older writer does not fail, and `synap update` removes it;
 #   • the write is atomic (temp file in the same dir + mv) and a user-facing
 #     change first copies .env to .env.bak.<UTC ts> (0600, newest 10 kept);
 #   • secret values are never printed — only masked.
@@ -32,6 +34,7 @@
 #   envcfg_validate [env-file]       one finding per line: error|KEY|message / warn|KEY|message
 #   envcfg_diff [from-file] [to-file]                           masked; default newest .env.bak.* → .env
 #   envcfg_services_for KEY...       compose services whose config reads one of KEYs
+#   envcfg_drop_retired              remove every `retired` key still in .env (backup kept)
 #   envcfg_write_raw S|U|C|R KEY [VALUE]  internal writers (no schema, no backup)
 # ============================================================================
 
@@ -77,6 +80,12 @@ envcfg_meta() {
 _ec_has_flag() { # <flags> <flag>
     case ",$1," in *",$2,"*) return 0 ;; esac
     return 1
+}
+
+# <key> is flagged `retired` in the schema: nothing in the pod reads it.
+envcfg_is_retired() {
+    _ec_rm="$(envcfg_lookup "$1")"
+    [ -n "$_ec_rm" ] && _ec_has_flag "${_ec_rm#* }" retired
 }
 
 # Masking: a schema `secret`, or — for keys the schema does not type — a name
@@ -332,9 +341,11 @@ envcfg_set() {
     fi
     [ -s "$_ec_pairs" ] || { _ec_err "nothing to set"; rm -f "$_ec_pairs"; return 2; }
 
-    # 1. every pair, every reason — nothing is written unless all pass
+    # 1. every pair, every reason — nothing is written unless all pass (a
+    #    retired key is not checked: it is dropped in step 3)
     _ec_bad=""
     while IFS="$(printf '\t')" read -r _ec_k _ec_v; do
+        envcfg_is_retired "$_ec_k" && continue
         _ec_r="$(_ec_check_pair "$_ec_k" "$_ec_v" "$_ec_force")" || _ec_bad="${_ec_bad}${_ec_r}
 "
     done < "$_ec_pairs"
@@ -355,6 +366,10 @@ envcfg_set() {
     _ec_ed="$(umask 077 && mktemp)" || { rm -f "$_ec_pairs"; return 1; }
     ENVCFG_CHANGED_KEYS=""
     while IFS="$(printf '\t')" read -r _ec_k _ec_v; do
+        if envcfg_is_retired "$_ec_k"; then
+            printf '%s\n' "config: ignored $_ec_k — retired, nothing in the pod reads it"
+            continue
+        fi
         printf 'S\t%s\t%s\n' "$_ec_k" "$(_ec_render "$_ec_k" "$_ec_v")" >> "$_ec_ed"
         if [ "$(envcfg_value "$_ec_k")" != "$_ec_v" ] || ! envcfg_has_key "$_ec_k"; then
             ENVCFG_CHANGED_KEYS="$ENVCFG_CHANGED_KEYS $_ec_k"
@@ -400,6 +415,24 @@ envcfg_unset() { # [--force] KEY...
     [ "$_ec_rc" = 0 ] || return "$_ec_rc"
     echo "config: previous .env kept as $ENVCFG_LAST_BACKUP"
     _ec_report_recreate $ENVCFG_CHANGED_KEYS
+}
+
+# Remove every `retired` key still assigned in .env, through the same atomic
+# edit as `unset`, with a backup; prints names only. `synap update` runs it.
+envcfg_drop_retired() {
+    _ec_drop=""
+    for _ec_k in $(envcfg_file_keys | sort -u); do
+        if envcfg_is_retired "$_ec_k"; then _ec_drop="$_ec_drop $_ec_k"; fi
+    done
+    [ -n "$_ec_drop" ] || return 0
+    _ec_ed="$(umask 077 && mktemp)" || return 1
+    for _ec_k in $_ec_drop; do printf 'U\t%s\n' "$_ec_k" >> "$_ec_ed"; done
+    envcfg_backup || { rm -f "$_ec_ed"; return 1; }
+    _ec_rc=0; _ec_apply_edits "$_ec_ed" || _ec_rc=$?; rm -f "$_ec_ed"
+    [ "$_ec_rc" = 3 ] && _ec_rc=0
+    [ "$_ec_rc" = 0 ] || return "$_ec_rc"
+    for _ec_k in $_ec_drop; do echo "config: removed retired $_ec_k"; done
+    echo "config: previous .env kept as $ENVCFG_LAST_BACKUP"
 }
 
 # ── recreate derivation ───────────────────────────────────────────────────────
@@ -461,6 +494,10 @@ envcfg_validate() {
         _ec_meta="$(envcfg_meta "$_ec_k")"
         if [ -z "$_ec_meta" ]; then
             echo "error|$_ec_k|unknown key: not in deploy/env.schema and not read by docker-compose.yml"
+            continue
+        fi
+        if _ec_has_flag "${_ec_meta#* }" retired; then
+            echo "warn|$_ec_k|retired: nothing in the pod reads it any more (\`synap update\` removes it)"
             continue
         fi
         _ec_v="$(envcfg_value "$_ec_k" "$_ec_f")"

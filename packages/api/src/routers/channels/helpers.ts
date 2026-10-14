@@ -553,14 +553,12 @@ export async function ensureAgentUser(
 
 /**
  * Relay the Synap AI's response to an external platform (Telegram, WhatsApp, etc.)
- * via the registered OpenClaw intelligence service.
+ * via whichever registered intelligence service declares the `channels`
+ * capability. If none is registered, this is a silent no-op.
  *
- * Uses the `channels` capability to find the service that handles external messaging.
- * If no such service is registered (no OpenClaw), this is a silent no-op.
- *
- * OpenClaw expects an OpenAI-compatible POST to `/v1/chat/completions` with an
- * `x-openclaw-session-key` header containing the platform's native channel ID.
- * It routes the content to the correct platform + contact automatically.
+ * The contract: an OpenAI-compatible POST to `/v1/chat/completions`, with the
+ * platform's native channel ID in `x-synap-channel-key` and the platform in
+ * `x-synap-channel-platform`; the service routes it to the right contact.
  */
 export async function relayToExternalChannel(opts: {
   workspaceId: string | undefined;
@@ -577,7 +575,7 @@ export async function relayToExternalChannel(opts: {
     service = await resolveIntelligenceService({
       userId,
       workspaceId,
-      capability: "channels", // routes to OpenClaw/ZeroClaw which have "channels" capability
+      capability: "channels", // a service that relays to external platforms
     });
   } catch {
     return; // no service registered for channels capability — silent no-op
@@ -602,8 +600,8 @@ export async function relayToExternalChannel(opts: {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-openclaw-session-key": externalChannelId,
-      "x-openclaw-platform": externalSource,
+      "x-synap-channel-key": externalChannelId,
+      "x-synap-channel-platform": externalSource,
     },
     body: JSON.stringify({
       model: "synap-relay",

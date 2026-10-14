@@ -13,8 +13,7 @@ export function registerUsersRoutes(app: HubHono): void {
     path: "/users/me",
     tags: ["Users"],
     summary: "Echo the authenticated identity",
-    description:
-      "Used by OpenClaw, CLI, and external agents to verify their API key.",
+    description: "Used by the CLI and external agents to verify their API key.",
     responses: {
       200: {
         description: "Identity",
@@ -31,7 +30,7 @@ export function registerUsersRoutes(app: HubHono): void {
 
   /**
    * GET /users/me — return the authenticated agent/user identity.
-   * Used by OpenClaw, CLI, and external agents to verify their API key.
+   * Used by the CLI and external agents to verify their API key.
    */
   app.get("/users/me", async (c) => {
     const userId = c.get("userId") as string | undefined;

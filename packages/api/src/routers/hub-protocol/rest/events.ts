@@ -1,6 +1,6 @@
 /**
  * Hub Protocol REST — events query (`query_recent_events` tool for IS agents)
- * + live SSE stream for external subscribers (OpenClaw, OpenWebUI mirror,
+ * + live SSE stream for external subscribers (external agents, OpenWebUI mirror,
  * connectors that previously polled).
  */
 
@@ -184,7 +184,7 @@ export function registerEventsRoutes(app: HubHono): void {
    * GET /events/stream — Server-Sent Events
    *
    * Long-lived SSE connection that pushes Synap event-chain events to the
-   * subscriber in real time. Replaces polling for OpenClaw mirror, OpenWebUI
+   * subscriber in real time. Replaces polling for an agent mirror, OpenWebUI
    * sync, and other external integrations.
    *
    * Auth: `hub-protocol.read` scope, Bearer API key (handled by upstream

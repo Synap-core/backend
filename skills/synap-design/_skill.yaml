@@ -11,7 +11,7 @@ description: >
   approval, implement, compare). For views, bento dashboards and workspaces
   over pod data, pair it with synap-ui.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY

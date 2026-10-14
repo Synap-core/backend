@@ -64,11 +64,7 @@ const AGENT_DELETES_IN_COVERED: Record<string, number> = {
 };
 
 /** Files that delete agent users only. */
-const AGENT_IDENTITY = [
-  "routers/agent-users.ts",
-  "routers/intelligence-registry.ts",
-  "scripts/provision-agent.ts",
-];
+const AGENT_IDENTITY = ["routers/agent-users.ts"];
 
 function userDeletionSites(): string[] {
   const entries = readdirSync(srcRoot, { recursive: true }) as string[];

@@ -76,15 +76,21 @@ export interface DocumentVersionCreatedEvent {
 // Actor-prefixed events ({actor}:{entity}:{action}) — see docstring on EventNames
 // =============================================================================
 
-/** Platforms that OpenClaw bridges into Synap channels. */
-export type OpenClawPlatform =
+/** Platforms an external agent bridges into Synap channels. */
+export type ExternalMessagePlatform =
   "telegram" | "whatsapp" | "signal" | "matrix" | "discord" | "voice";
 
-/** External chat platform message ingested via OpenClaw → routed into a Synap channel. */
-export interface OpenClawMessageReceivedEvent {
+/**
+ * External chat platform message ingested by an external agent → routed into a
+ * Synap channel. Emitted on the wire as `openclaw:message:received`: a legacy
+ * NAME (Eve's dashboard listens for it), not an OpenClaw dependency — the
+ * event fires for any agent that relays through `sendExternalMessage`.
+ * Cut-over: add a generic name, move Eve's dashboard, then drop this one.
+ */
+export interface ExternalMessageReceivedEvent {
   channelId: string;
   messageId: string;
-  platform: OpenClawPlatform;
+  platform: ExternalMessagePlatform;
   /** Short preview of the message body. Truncated upstream — no PII normalization here. */
   excerpt: string;
   /** ISO-8601 timestamp from when the bridge accepted the inbound message. */
@@ -217,7 +223,7 @@ export interface DomainServerToClientEvents {
   "chat:stream": (data: ChatStreamEvent) => void;
 
   // {actor}:{entity}:{action} — new convention. New events MUST land here, not above.
-  "openclaw:message:received": (data: OpenClawMessageReceivedEvent) => void;
+  "openclaw:message:received": (data: ExternalMessageReceivedEvent) => void;
   "synap:reply:routed": (data: SynapReplyRoutedEvent) => void;
   "import:file:progress": (data: ImportFileProgressEvent) => void;
 
@@ -290,7 +296,8 @@ export type DomainEventName =
  * Actor vocabulary:
  * - `user` — direct human action
  * - `agent` — Synap agent (orchestrator, persona)
- * - `openclaw` — messaging ingress (external chat → Synap)
+ * - `openclaw` — LEGACY name of messaging ingress (external chat → Synap);
+ *   see {@link ExternalMessageReceivedEvent}. Do not use it for new events.
  * - `synap` — the brain (notifications, channel routing, AI streaming)
  * - `system` — infra / cron / lifecycle
  *
@@ -311,7 +318,7 @@ export const EventNames = {
   CHAT_STREAM: "chat:stream",
 
   // {actor}:{entity}:{action} — NEW convention. Add new events here.
-  OPENCLAW_MESSAGE_RECEIVED: "openclaw:message:received",
+  EXTERNAL_MESSAGE_RECEIVED: "openclaw:message:received", // legacy wire name
   SYNAP_REPLY_ROUTED: "synap:reply:routed",
   IMPORT_FILE_PROGRESS: "import:file:progress",
 

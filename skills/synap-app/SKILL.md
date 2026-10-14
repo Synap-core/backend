@@ -10,7 +10,7 @@ description: >
   "npx create-synap-app". NOT the `synap` skill (capture/recall in a pod) nor
   `synap-ui` (views inside the pod's own UI) — this is about writing app CODE.
 metadata:
-  openclaw:
+  synap:
     requires:
       env: []
     optional_env: [SYNAP_POD_URL, SYNAP_WORKSPACE_ID]
@@ -112,7 +112,7 @@ older `0.x` versions on the registry are a different, abandoned package.
 synap skills get synap-app
 
 # or wire a tool end-to-end (skills + MCP), any target
-synap connect --target=cursor        # or claude, openclaw, …
+synap connect --target=cursor        # or claude, …
 ```
 
 Alternatively, the scaffolded project ships an `AGENTS.md` at its root — most AI
