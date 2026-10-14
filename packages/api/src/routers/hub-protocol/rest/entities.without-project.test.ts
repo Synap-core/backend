@@ -17,8 +17,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: { query: {} } };
 });
 
-const getEntities = vi.fn(async () => []);
-const countWithoutProject = vi.fn(async () => ({
+const getEntities = vi.fn(
+  async (_input: Record<string, unknown>) => [] as unknown[]
+);
+const countWithoutProject = vi.fn(async (_input: { userId: string }) => ({
   total: 3,
   byProfile: [
     { profileSlug: "note", count: 2 },

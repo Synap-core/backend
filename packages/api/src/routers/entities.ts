@@ -67,6 +67,7 @@ export {
 export const entitiesRouter = router({
   countByProfile: readProcs.countByProfile,
   countByProfileAll: readProcs.countByProfileAll,
+  countWithoutProject: readProcs.countWithoutProject,
   groupByFacetStatus: readProcs.groupByFacetStatus,
   create: createProcs.create,
   list: readProcs.list,
