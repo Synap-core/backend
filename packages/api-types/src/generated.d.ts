@@ -10274,6 +10274,13 @@ export interface SearchResult {
 	document: any;
 	highlights?: any;
 	textMatch: number;
+	/**
+	 * A `documents` hit that is a Library item: clients open it in the Library
+	 * (in its first group when it has one), never the document editor.
+	 */
+	libraryItem?: {
+		groupId?: string;
+	};
 }
 export interface SearchResponse {
 	results: SearchResult[];
@@ -14822,7 +14829,7 @@ export interface NotificationCatalogue {
 }
 export type PreferenceScope = "pod" | "workspace";
 export interface LibraryKeepAliveSettings {
-	/** Weekly "Build one group" + resurfacing. Default true (quiet: in-app only). */
+	/** Quiet archive, weekly "Build one group" and resurfacing. Default false (opt-in). */
 	enabled: boolean;
 	/** Days unseen before an ungrouped, unbuilt item is archived. 0 = never. */
 	archiveAfterDays: number;
