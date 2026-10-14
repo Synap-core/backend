@@ -106,7 +106,7 @@ beforeAll(async () => {
   );
   for (const d of [D_FILE, D_MEDIA, D_UNRELATED]) {
     await q(
-      `insert into documents (id, user_id, workspace_id, title, type, current_version, content_revision, storage_key) values ($1,$2,null,'Doc','image',1,1,$3)`,
+      `insert into documents (id, user_id, workspace_id, title, type, current_version, content_revision, storage_key, mime_type) values ($1,$2,null,'Doc','image',1,1,$3,'image/webp')`,
       [d, OWNER, keyOf(d)]
     );
   }
@@ -177,6 +177,15 @@ describe("file door read floor — documents", () => {
     expect(await loadSignableDocument(ATTACKER, D_UNRELATED)).toBeUndefined();
   });
 
+  it("carries the served mime type, by either leg", async () => {
+    expect((await loadSignableDocument(OWNER, D_FILE))?.mimeType).toBe(
+      "image/webp"
+    );
+    expect((await loadSignableDocument(MEMBER, D_MEDIA))?.mimeType).toBe(
+      "image/webp"
+    );
+  });
+
   it("an unknown id is undefined, not a throw", async () => {
     expect(await loadSignableDocument(MEMBER, randomUUID())).toBeUndefined();
   });
@@ -187,6 +196,7 @@ describe("file door read floor — file entities", () => {
     expect(await loadSignableFileEntity(MEMBER, E_SHARED)).toEqual({
       id: E_SHARED,
       storageKey: keyOf(D_FILE),
+      mimeType: "image/webp",
     });
   });
 
@@ -198,6 +208,7 @@ describe("file door read floor — file entities", () => {
     expect(await loadSignableFileEntity(ATTACKER, E_ATTACK)).toEqual({
       id: E_ATTACK,
       storageKey: undefined,
+      mimeType: null,
     });
   });
 });

@@ -5,6 +5,9 @@
  *
  * POST /upload — multipart file upload → entity creation
  * GET /:entityId/url — presigned download URL for a file entity
+ *
+ * Both URL doors answer `{ url, expiresAt, mimeType }` (`mimeType` null when
+ * unknown).
  */
 
 import { Hono } from "hono";
@@ -828,7 +831,10 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
       Date.now() + expiresInSeconds * 1000
     ).toISOString();
 
-    return c.json({ url, expiresAt });
+    // `mimeType`: a stored media ref may carry no mime (an entityRef, an
+    // upload), and drawability is decided on the SERVED type, so the door
+    // says what it signed. Dimensions are not stored for uploads.
+    return c.json({ url, expiresAt, mimeType: document.mimeType });
   } catch (error) {
     logger.error(
       { err: error, documentId },
@@ -877,7 +883,7 @@ fileUploadApp.get("/:entityId/url", async (c) => {
       Date.now() + expiresInSeconds * 1000
     ).toISOString();
 
-    return c.json({ url, expiresAt });
+    return c.json({ url, expiresAt, mimeType: entity.mimeType });
   } catch (error) {
     logger.error({ err: error, entityId }, "Failed to generate presigned URL");
     return c.json({ error: "Failed to generate URL" }, 500);

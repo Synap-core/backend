@@ -36,6 +36,8 @@ import { loadReadableDocument } from "./document-edit-access.js";
 export interface SignableDocument {
   id: string;
   storageKey: string | null;
+  /** The type the blob was stored (and is served) with; null when unknown. */
+  mimeType: string | null;
 }
 
 /**
@@ -49,7 +51,11 @@ export async function loadSignableDocument(
 ): Promise<SignableDocument | undefined> {
   try {
     const doc = await loadReadableDocument(userId, documentId);
-    return { id: doc.id, storageKey: doc.storageKey ?? null };
+    return {
+      id: doc.id,
+      storageKey: doc.storageKey ?? null,
+      mimeType: doc.mimeType ?? null,
+    };
   } catch (err) {
     if (!(err instanceof TRPCError && err.code === "NOT_FOUND")) throw err;
   }
@@ -76,15 +82,23 @@ export async function loadSignableDocument(
 
   const doc = await db.query.documents.findFirst({
     where: eq(documents.id, documentId),
-    columns: { id: true, storageKey: true },
+    columns: { id: true, storageKey: true, mimeType: true },
   });
-  return doc ? { id: doc.id, storageKey: doc.storageKey ?? null } : undefined;
+  return doc
+    ? {
+        id: doc.id,
+        storageKey: doc.storageKey ?? null,
+        mimeType: doc.mimeType ?? null,
+      }
+    : undefined;
 }
 
 export interface SignableFileEntity {
   id: string;
   /** The blob key: the linked document's, else the legacy property. */
   storageKey: string | undefined;
+  /** The served type: the linked document's, else the entity's `mimeType`. */
+  mimeType: string | null;
 }
 
 /**
@@ -107,21 +121,26 @@ export async function loadSignableFileEntity(
   });
   if (!entity) return undefined;
 
+  const props = (entity.properties ?? {}) as Record<string, unknown>;
   let storageKey: string | undefined;
+  let mimeType: string | null = null;
   if (entity.documentId) {
     const doc = await db.query.documents.findFirst({
       where: and(
         eq(documents.id, entity.documentId),
         eq(documents.userId, entity.userId)
       ),
-      columns: { storageKey: true },
+      columns: { storageKey: true, mimeType: true },
     });
     storageKey = doc?.storageKey ?? undefined;
+    mimeType = doc?.mimeType ?? null;
   }
   if (!storageKey) {
     // Early `file` entities kept the key on the entity, not a documents row.
-    const props = (entity.properties ?? {}) as Record<string, unknown>;
     if (typeof props.storageKey === "string") storageKey = props.storageKey;
   }
-  return { id: entity.id, storageKey };
+  if (!mimeType && typeof props.mimeType === "string" && props.mimeType) {
+    mimeType = props.mimeType;
+  }
+  return { id: entity.id, storageKey, mimeType };
 }
