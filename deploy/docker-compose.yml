@@ -55,6 +55,10 @@ x-backend-env: &backend-env
   # `docker compose up` ERROR on a missing/empty key instead of substituting "".
   # Generate once and persist in deploy/.env: openssl rand -hex 32
   VAULT_SERVER_KEY: ${VAULT_SERVER_KEY:?VAULT_SERVER_KEY must be set in deploy/.env (openssl rand -hex 32)}
+  # Field-encryption keyring (@synap-core/field-crypto), newest first. Unset =
+  # today's formats. Rotate only via deploy/runbooks/rotate-field-key.md.
+  SYNAP_FIELD_KEYS: ${SYNAP_FIELD_KEYS:-}
+  SYNAP_FIELD_ALLOW_LEGACY_PLAINTEXT: ${SYNAP_FIELD_ALLOW_LEGACY_PLAINTEXT:-true}
   # Federation assertions and owner handoffs are browser-facing security
   # boundaries. Neither may fall back to an in-cluster Docker hostname.
   # Fresh and upgraded installers write both values; self-hosted operators may
@@ -163,8 +167,12 @@ services:
     # Eve-managed pods add `eve-network` (+ aliases) in their own
     # docker-compose.override.yml, which also declares the network. Keeping it
     # out of THIS file is what lets a host without Eve start the backend.
+    # ory-admin: KRATOS_/HYDRA_ADMIN_URL. sandbox: RSSHUB_URL, and openclaw
+    # calls back into this API (see the `networks:` block at the end).
     networks:
       - synap-net
+      - ory-admin
+      - sandbox
 
   # ============================================================================
   # BACKEND CANARY (update validation — profile-gated, never in production)
@@ -192,8 +200,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    # Same networks as `backend`: the canary runs the same env (Ory admin URLs,
+    # RSSHUB_URL), so it must reach the same hosts to validate the image.
     networks:
       - synap-net
+      - ory-admin
+      - sandbox
     profiles:
       - canary
 
@@ -257,8 +269,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    # ory-admin: KRATOS_PUBLIC_URL (session checks).
     networks:
       - synap-net
+      - ory-admin
     # Ensure proper DNS resolution (Docker's internal DNS can be flaky)
     dns:
       - 127.0.0.11 # Docker's internal DNS
@@ -431,8 +445,10 @@ services:
       - ${POSTGRES_INIT_SCRIPT:-../docker/postgres/init-databases.sh}:/docker-entrypoint-initdb.d/init-databases.sh
     ports:
       - "127.0.0.1:5432:5432"
+    # ory-admin: Kratos and Hydra keep their databases here (DSN).
     networks:
       - synap-net
+      - ory-admin
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U synap"]
       interval: 10s
@@ -597,6 +613,10 @@ services:
     restart: always
     environment:
       DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
+      # Each is an ORDERED comma list `new,old` (Ory parses a non-JSON value of
+      # an array key as CSV): the first signs/encrypts, all verify/decrypt. A
+      # single value is a one-item list. Cipher items are exactly 32 chars.
+      # Rotation: deploy/runbooks/rotate-ory-secrets.md
       SECRETS_COOKIE: ${KRATOS_SECRETS_COOKIE}
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
@@ -639,8 +659,11 @@ services:
     ports:
       - "127.0.0.1:4433:4433"
       - "127.0.0.1:4434:4434"
+    # ory-admin ONLY: its admin API (4434) is unauthenticated by design, so it
+    # is reachable only from the services that call it (backend, realtime,
+    # caddy for 4433) — never from the sandbox. Webhooks go to backend:4000.
     networks:
-      - synap-net
+      - ory-admin
     healthcheck:
       test:
         [
@@ -676,14 +699,18 @@ services:
       URLS_SELF_ISSUER: https://${DOMAIN}
       URLS_CONSENT: https://${DOMAIN}/consent
       URLS_LOGIN: https://${DOMAIN}/login
+      # Ordered comma list `new,old`, same rules as Kratos above. Hydra never
+      # re-encrypts: keep the old value, or the data it sealed becomes unreadable.
+      # Rotation: deploy/runbooks/rotate-ory-secrets.md
       SECRETS_SYSTEM: ${ORY_HYDRA_SECRETS_SYSTEM}
     depends_on:
       hydra-migrate:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+    # ory-admin ONLY — same reason as kratos (admin API 4445 is unauthenticated).
     networks:
-      - synap-net
+      - ory-admin
     ports:
       - "127.0.0.1:4444:4444"
       - "127.0.0.1:4445:4445"
@@ -728,8 +755,11 @@ services:
       # POD_ADMIN_URL is the API's explicit public redirect target.
       POD_ADMIN_DOMAIN: ${POD_ADMIN_DOMAIN:?POD_ADMIN_DOMAIN must be set to this Pod Admin hostname in deploy/.env}
       EMAIL: ${LETSENCRYPT_EMAIL}
+    # ory-admin: proxies kratos:4433 / hydra:4444. sandbox: proxies openclaw.
     networks:
       - synap-net
+      - ory-admin
+      - sandbox
     depends_on:
       backend:
         condition: service_started
@@ -772,8 +802,11 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} # Required for the model above
     ports:
       - "127.0.0.1:18789:18789" # OpenClaw gateway — SSH health checks use localhost:18789
+    # Runs agent-driven code: sandbox only (backend + caddy, no DB/Ory/MinIO).
+    labels:
+      synap.network.zone: sandbox
     networks:
-      - synap-net
+      - sandbox
     profiles:
       - openclaw
 
@@ -789,17 +822,20 @@ services:
       - "127.0.0.1:1200:1200"
     environment:
       - NODE_ENV=production
-      - CACHE_TYPE=redis
-      - REDIS_URL=redis://redis:6379
+      # In-process cache (RSSHub's default). The shared redis sat on synap-net,
+      # and a sandboxed scraper must not reach the pod's data network.
+      - CACHE_TYPE=memory
       - PUPPETEER_WS_ENDPOINT=ws://browserless:3000
       - ACCESS_KEY=${RSSHUB_ACCESS_KEY:-}
     depends_on:
-      - redis
       - browserless
     profiles:
       - rsshub
+    # Fetches arbitrary URLs: sandbox only (backend calls it via RSSHUB_URL).
+    labels:
+      synap.network.zone: sandbox
     networks:
-      - synap-net
+      - sandbox
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:1200/"]
       interval: 30s
@@ -822,8 +858,11 @@ services:
       - MAX_QUEUE_LENGTH=20
     profiles:
       - rsshub
+    # Headless Chrome on arbitrary pages: sandbox only (rsshub drives it).
+    labels:
+      synap.network.zone: sandbox
     networks:
-      - synap-net
+      - sandbox
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/readiness"]
       interval: 30s
@@ -1039,6 +1078,22 @@ volumes:
   grafana-data:
   pod_agent_state:
 
+# ============================================================================
+# NETWORKS — who may reach whom (tripwire: deploy/__tests__/network-split.test.sh)
+#   synap-net  the pod's core: data stores, API, workers, monitoring, pod-agent.
+#   ory-admin  Kratos + Hydra (their admin APIs are unauthenticated by design)
+#              with ONLY their callers: backend(+canary), realtime, caddy, and
+#              postgres for their DSN.
+#   sandbox    services labelled synap.network.zone=sandbox (openclaw, rsshub,
+#              browserless) with ONLY their callers/callees: backend(+canary)
+#              and caddy. No database, redis, MinIO, Ory or docker.sock holder.
+# None is `internal: true`: kratos needs SMTP/OIDC egress, the sandbox needs the
+# web. A new service joins synap-net unless it calls/serves one of the above.
+# ============================================================================
 networks:
   synap-net:
+    driver: bridge
+  ory-admin:
+    driver: bridge
+  sandbox:
     driver: bridge
