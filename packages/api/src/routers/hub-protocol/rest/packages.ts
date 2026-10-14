@@ -524,6 +524,12 @@ function dataChangesNeedConsentBody(
     dataChanges: pending,
     missing: consent.missing.map((c) => c.opKey),
     destructiveAccepted: consent.destructiveAccepted,
+    /**
+     * The caller is an agent: its agreement is never enough, whatever it
+     * listed. A client says "a person must run this", never "you have not
+     * agreed" (which sends the agent round the same command forever).
+     */
+    needsPerson: agent,
   };
 }
 

@@ -259,6 +259,7 @@ describe("POST /packages/apply — data changes need the person's consent", () =
     const body = await res.json();
     expect(body.code).toBe("DATA_CHANGES_NEED_CONSENT");
     expect(body.missing.sort()).toEqual([DEAL.opKey, LEAD.opKey].sort());
+    expect(body.needsPerson).toBe(false);
     expect(body.dataChanges.map((c: { opKey: string }) => c.opKey)).toContain(
       CHURNED.opKey
     );
@@ -303,7 +304,13 @@ describe("POST /packages/apply — data changes need the person's consent", () =
       acceptDataChanges: [DEAL.opKey, LEAD.opKey],
     });
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe("DATA_CHANGES_NEED_CONSENT");
+    const body = await res.json();
+    expect(body.code).toBe("DATA_CHANGES_NEED_CONSENT");
+    // It listed everything, so nothing is "missing": the refusal is WHO asked.
+    // `needsPerson` is what lets a client say so (dogfood 2026-10-14: the CLI
+    // told the agent "you have not agreed" and to re-run the same command).
+    expect(body.missing).toEqual([]);
+    expect(body.needsPerson).toBe(true);
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockRun).not.toHaveBeenCalled();
   });
