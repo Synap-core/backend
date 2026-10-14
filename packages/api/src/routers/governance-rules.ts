@@ -62,6 +62,7 @@ import {
   readNextRungs,
 } from "../services/proposals/next-rung.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
+import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
   activeRulePredicate,
   podOrWorkspaceScopePredicate,
@@ -267,6 +268,18 @@ const CreateInputSchema = z
   });
 
 export const governanceRulesRouter = router({
+  /**
+   * THE agent × work matrix (agent routing W2): every agent's verdict on every
+   * process of every space, answered by the ONE resolver through a read
+   * snapshot (`services/governance/agent-matrix.ts`). `lens: "pod"` needs a pod
+   * admin; `lens: "mine"` is the caller's own agents in the spaces they see.
+   */
+  matrix: protectedProcedure
+    .input(z.object({ lens: z.enum(["pod", "mine"]) }))
+    .query(async ({ ctx, input }) => {
+      if (input.lens === "pod") await assertPodAdmin(ctx.userId);
+      return readAgentMatrix({ userId: ctx.userId, lens: input.lens });
+    }),
   /**
    * List active rules (not revoked, not expired) visible to the caller:
    * pod-scope rules (visible to everyone — they're global) plus workspace-scope

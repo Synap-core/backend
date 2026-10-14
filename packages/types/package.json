@@ -301,6 +301,10 @@
       "types": "./dist/trust-ladder/index.d.ts",
       "import": "./dist/trust-ladder/index.js"
     },
+    "./agent-matrix": {
+      "types": "./dist/agent-matrix/index.d.ts",
+      "import": "./dist/agent-matrix/index.js"
+    },
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"
