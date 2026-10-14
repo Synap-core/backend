@@ -13,6 +13,13 @@ values and examples. Never use a component or prop the catalog does not document
   component's props, usage and stories; `stories-find-by-component` for real usage.
 - **Otherwise, the static manifest:** `/manifests/components.json` in the Storybook build. Each entry
   is a component with its props (name, type, required, default) and story examples.
+- **Then the component inventory:** `synap-app/apps/storybook/inventory/components.json` lists every
+  component family the product needs (universal and Synap-specific), each with its ONE canonical
+  component, its variants and states, and a verdict. Its audit, `/component-audit.json` in the
+  Storybook build (the `#/map` canvas shows it), adds which families have a story and which copies
+  still live. Storybook covers only part of the library, so a family absent from Storybook is not proof
+  that nothing exists. `consolidate` names the canonical: build on it, never on a listed copy.
+  `missing` means propose the component, story first. `retire` means never use it.
 - If you can read neither, stop and say so. Never design from what you remember a component looks like.
 - The library lacks what you need? Say so and propose the component, story first. Never fake it with
   a generic box.
