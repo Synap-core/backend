@@ -328,6 +328,59 @@ describe("light read", () => {
     expect(calls.extract).toBe(1);
   });
 
+  it("a long file costs ONE AI call: the extraction's summary is reused, no summarize call", async () => {
+    const id = await stageItem({
+      item: {
+        source: { kind: "file", mimeType: "application/pdf" },
+        contentStatus: "file",
+      },
+      body: "pdfbytes",
+      mimeType: "application/pdf",
+    });
+    const { deps, calls } = makeDeps({
+      async extractFile() {
+        calls.extract++;
+        return {
+          text: LONG_PAGE,
+          summary: "A local-first conference programme.",
+        };
+      },
+    });
+    expect(await read(id, deps)).toMatchObject({
+      status: "read",
+      usedAi: true,
+    });
+    expect(calls.extract).toBe(1);
+    expect(calls.summarize).toBe(0);
+    expect((await readOf(id))!.summary).toBe(
+      "A local-first conference programme."
+    );
+  });
+
+  it("a text-like file too big for a light read is never buffered", async () => {
+    const id = await stageItem({
+      item: {
+        source: {
+          kind: "file",
+          mimeType: "text/csv",
+          sizeBytes: 500 * 1024 * 1024,
+        },
+        contentStatus: "file",
+      },
+      body: "a,b\n1,2",
+      mimeType: "text/csv",
+    });
+    let reads = 0;
+    const { deps } = makeDeps({
+      readBytes: async () => {
+        reads++;
+        return Buffer.from("a,b");
+      },
+    });
+    expect(await read(id, deps)).toMatchObject({ status: "unreadable" });
+    expect(reads).toBe(0);
+  });
+
   it("audio is transcribed", async () => {
     const id = await stageItem({
       item: {

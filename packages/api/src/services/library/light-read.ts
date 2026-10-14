@@ -15,9 +15,12 @@
  *   | Instagram / TikTok link      | nothing — `needs_file` (never scraped)  | no  |
  *   | title-only                   | nothing — `title_only`                  | no  |
  *
- * Then: a summary (AI when the budget allows and the text is long, else the
- * first sentences), and the action chips — the deterministic detectors first,
- * the AI's suggestions merged after when the summary call ran anyway.
+ * Then: a summary — for a file, the one extraction call's own summary (ONE AI
+ * call per file); otherwise AI when the budget allows and the text is long,
+ * else the first sentences — and the action chips: the deterministic
+ * detectors first, the AI's suggestions merged after when a summary call ran.
+ * A text-like file (txt, csv, json…) larger than
+ * `LIGHT_READ_TEXT_FILE_BYTES_MAX` is never buffered.
  *
  * Writes (the only writes):
  *   - the text, to its own storage object beside the item
@@ -84,6 +87,18 @@ export const LIGHT_READ_SUMMARY_MAX = 400;
 export const LIGHT_READ_SHORT_TEXT = 280;
 /** Bytes the pod sends the IS for one file. */
 export const LIGHT_READ_FILE_BYTES_MAX = 20 * 1024 * 1024;
+/** Group names offered to the summary call to pick from. */
+const LIGHT_READ_GROUPS_OFFERED = 20;
+/** Groups the summary call may pick for one item. */
+const LIGHT_READ_GROUPS_PICKED = 2;
+/** Characters of read text the lexical group match sees. */
+const LIGHT_READ_SUGGEST_TEXT_MAX = 2000;
+/** The file extraction's own timeout (a bulk-lane read is never urgent). */
+const LIGHT_READ_EXTRACT_TIMEOUT_MS = 60_000;
+/** Output budget of the summary call. */
+const LIGHT_READ_SUMMARY_MAX_TOKENS = 600;
+/** Bytes of a text-like file (txt, csv, json, md…) a light read buffers at most. */
+export const LIGHT_READ_TEXT_FILE_BYTES_MAX = 4 * 1024 * 1024;
 /** IS failures before an item is marked `unreadable`. */
 export const LIGHT_READ_MAX_ATTEMPTS = 3;
 
@@ -107,7 +122,7 @@ export interface LightReadDeps {
     mimeType: string;
     filename?: string;
     title: string;
-  }): Promise<{ text?: string; degraded?: boolean } | null>;
+  }): Promise<{ text?: string; degraded?: boolean; summary?: string } | null>;
   /** IS transcript. `null` = the IS failed (retry); `{ok:false}` = cannot be transcribed. */
   transcribe(input: {
     content: string;
@@ -150,6 +165,8 @@ interface ItemRow {
   metadata: unknown;
   storageKey: string | null;
   mimeType: string | null;
+  /** Stored bytes (0 when unknown). */
+  size: number | null;
 }
 
 const TEXT_LIKE =
@@ -182,7 +199,13 @@ export function extractiveSummary(text: string): string {
 }
 
 type Got =
-  | { kind: "text"; text: string; usedAi: boolean }
+  | {
+      kind: "text";
+      text: string;
+      usedAi: boolean;
+      /** A summary the reading call already wrote (a file's extraction). */
+      summary?: string;
+    }
   | { kind: "status"; status: LibraryReadStatus; usedAi?: boolean }
   /** The IS failed: retry later (counts an attempt). */
   | { kind: "retry"; usedAi: boolean };
@@ -201,6 +224,7 @@ async function loadRow(
       metadata: documents.metadata,
       storageKey: documents.storageKey,
       mimeType: documents.mimeType,
+      size: documents.size,
     })
     .from(documents)
     .where(
@@ -232,16 +256,25 @@ async function readContent(args: {
     if (!holder?.storageKey) return { kind: "status", status: "unreadable" };
     const mimeType =
       s.mimeType ?? holder.mimeType ?? "application/octet-stream";
+    // The size is known BEFORE reading (the item's card, else the stored
+    // row): a file too big for a light read is never buffered at all.
+    const size =
+      typeof s.sizeBytes === "number" ? s.sizeBytes : (holder.size ?? 0);
     if (TEXT_LIKE.test(mimeType)) {
-      const text = (await deps.readBytes(holder.storageKey)).toString("utf-8");
+      if (size > LIGHT_READ_TEXT_FILE_BYTES_MAX) {
+        return { kind: "status", status: "unreadable" };
+      }
+      const bytes = await deps.readBytes(holder.storageKey);
+      // A size the row did not know: the bound still holds after the read.
+      const text = bytes
+        .subarray(0, LIGHT_READ_TEXT_FILE_BYTES_MAX)
+        .toString("utf-8")
+        .slice(0, LIGHT_READ_TEXT_MAX);
       return text.trim()
         ? { kind: "text", text, usedAi: false }
         : { kind: "status", status: "unreadable" };
     }
-    if (
-      typeof s.sizeBytes === "number" &&
-      s.sizeBytes > LIGHT_READ_FILE_BYTES_MAX
-    ) {
+    if (size > LIGHT_READ_FILE_BYTES_MAX) {
       return { kind: "status", status: "unreadable" };
     }
     if (!(await reserve())) return { kind: "status", status: "over_budget" };
@@ -265,7 +298,12 @@ async function readContent(args: {
     });
     if (got === null) return { kind: "retry", usedAi: true };
     return !got.degraded && got.text?.trim()
-      ? { kind: "text", text: got.text, usedAi: true }
+      ? {
+          kind: "text",
+          text: got.text,
+          usedAi: true,
+          ...(got.summary?.trim() ? { summary: got.summary.trim() } : {}),
+        }
       : { kind: "status", status: "unreadable", usedAi: true };
   }
 
@@ -482,7 +520,11 @@ export async function lightReadLibraryItem(args: {
   let summary = extractiveSummary(text);
   let aiActions: LibraryAction[] = [];
   let aiGroups: unknown;
-  if (text.length > LIGHT_READ_SHORT_TEXT) {
+  if (got.summary) {
+    // ONE AI call per file: the extraction that read it already summarised it
+    // (chips come from the rule detectors; groups from the lexical match).
+    summary = got.summary.slice(0, LIGHT_READ_SUMMARY_MAX);
+  } else if (text.length > LIGHT_READ_SHORT_TEXT) {
     // The summary is the read's one AI call (a file already holds its unit).
     const may = usedAi || (await deps.reserveAi({ userId, itemId }));
     if (may) {
@@ -493,7 +535,7 @@ export async function lightReadLibraryItem(args: {
           text: text.slice(0, LIGHT_READ_SUMMARY_INPUT_MAX),
           today: now.toISOString().slice(0, 10),
           // The same call picks groups: no second AI call for suggestions.
-          groups: groups.slice(0, 20).map((g) => g.name),
+          groups: groups.slice(0, LIGHT_READ_GROUPS_OFFERED).map((g) => g.name),
         });
         aiGroups = answer?.groups;
         const aiSummary =
@@ -522,7 +564,9 @@ export async function lightReadLibraryItem(args: {
   });
   await indexQuietly(deps, itemId);
   const suggested = await suggest(
-    [title, cardText, summary, text.slice(0, 2000)].join("\n"),
+    [title, cardText, summary, text.slice(0, LIGHT_READ_SUGGEST_TEXT_MAX)].join(
+      "\n"
+    ),
     aiGroups
   );
   return {
@@ -594,13 +638,19 @@ export function defaultLightReadDeps(args: {
         // A Library read is never urgent: the bulk spend lane.
         visionLane: "bulk" as const,
         ...(visionModelId ? { visionModelId } : {}),
-        timeoutMs: 60_000,
+        timeoutMs: LIGHT_READ_EXTRACT_TIMEOUT_MS,
       };
       const answer = await c.structure(structureInput);
       if (!answer) return null;
       const ex = answer.extraction;
+      // The structurer's first record describes the file: its summary, so
+      // the read makes no second (summarize) call.
+      const described = answer.entities?.find(
+        (e) => typeof e.description === "string" && e.description.trim()
+      )?.description;
       return {
         ...(typeof ex?.text === "string" ? { text: ex.text } : {}),
+        ...(described ? { summary: described } : {}),
         degraded: Boolean(ex?.degraded),
       };
     },
@@ -619,7 +669,7 @@ export function defaultLightReadDeps(args: {
         prompt: [
           `Today is ${input.today}.`,
           input.groups?.length
-            ? `The person's groups: ${JSON.stringify(input.groups)}. Put in "groups" the names (copied exactly) of at most 2 groups this item clearly belongs to, else [].`
+            ? `The person's groups: ${JSON.stringify(input.groups)}. Put in "groups" the names (copied exactly) of at most ${LIGHT_READ_GROUPS_PICKED} groups this item clearly belongs to, else [].`
             : "",
           `Title: ${input.title}`,
           "---",
@@ -628,7 +678,7 @@ export function defaultLightReadDeps(args: {
           .filter(Boolean)
           .join("\n"),
         json: true,
-        maxTokens: 600,
+        maxTokens: LIGHT_READ_SUMMARY_MAX_TOKENS,
       });
       return out && typeof out === "object"
         ? (out as { summary?: unknown; actions?: unknown; groups?: unknown })
