@@ -302,6 +302,17 @@ describe("readTemplateState — legacy derivation", () => {
       templateApplyUnfinished({ template: t, provisioningStatus: "failed" })
     ).toBe(false);
   });
+
+  it.each([["exploded"], [""], [42], [null]])(
+    "an UNKNOWN stored state (%j) reads as unfinished, never as a converged 'active' (review S6 — the legacy path's conservative reading)",
+    (state) => {
+      const t = readTemplateState({
+        template: { slug: "crm", version: "h-2", state, at: "t" },
+      });
+      expect(t?.state).toBe("layer-2-not-run");
+      expect(isTemplateApplyUnfinished(t)).toBe(true);
+    }
+  );
 });
 
 describe("mergeTemplateState + legacyMirror", () => {

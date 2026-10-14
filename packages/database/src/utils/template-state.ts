@@ -164,11 +164,16 @@ function parsePacks(v: unknown): TemplatePackEntry[] | undefined {
   return out;
 }
 
-/** A stored `settings.template`, read defensively (it is JSONB). */
+/**
+ * A stored `settings.template`, read defensively (it is JSONB). An unknown
+ * state (corrupt, or written by a newer pod) reads as UNFINISHED
+ * ("layer-2-not-run") — the conservative reading the legacy derivation gives
+ * an unknown record: never "active", which would trust its stamp.
+ */
 function normalize(t: Record<string, unknown>): TemplateState {
   const state = STATES.has(t.state as string)
     ? (t.state as TemplateApplyStateName)
-    : "active";
+    : "layer-2-not-run";
   const out: TemplateState = {
     slug: str(t.slug) ?? null,
     version: str(t.version) ?? null,
