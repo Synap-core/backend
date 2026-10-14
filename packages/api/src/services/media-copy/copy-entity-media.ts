@@ -23,9 +23,9 @@
  *
  * The ENTITY write is a direct row update, not `entities.update`: it emits no
  * entity event, so the copy can never re-trigger itself. The stored copy's
- * `documents` row does emit `document.create.completed` (the fact bus peer
- * sync replicates from) and is marked as a media copy so document lists leave
- * it out (`media-copy-documents.ts`).
+ * `documents` row does emit `document.create.completed` (every document
+ * write's one fact) and is marked as a media copy so document lists leave it
+ * out (`media-copy-documents.ts`, which says why the event stays).
  *
  * announce → after a run that COPIED something, ONE realtime `entity:updated`
  *            push (`emitHubRealtimeEvent`, the bridge door for direct writes)
