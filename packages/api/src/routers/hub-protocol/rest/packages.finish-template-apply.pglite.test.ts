@@ -319,7 +319,11 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
       state: "awaiting-approval",
     });
     const [health] = await listWorkspaceTemplateHealth([id]);
-    expect(health).toMatchObject({ stamped: false, drifted: true });
+    expect(health).toMatchObject({
+      stamped: false,
+      drifted: true,
+      state: "awaiting-approval",
+    });
   });
 
   it("(1b) health names the proposal it waits on — read live, plain drift once decided", async () => {
@@ -386,7 +390,11 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     expect(settings.provisioningStatus).toBe("active");
     expect(settings.templateApply).toBeNull();
     const [health] = await listWorkspaceTemplateHealth([id]);
-    expect(health).toMatchObject({ stamped: true, drifted: false });
+    expect(health).toMatchObject({
+      stamped: true,
+      drifted: false,
+      state: "active",
+    });
   });
 
   it("(3) an overlay pack's version is recorded only once its layer 2 converged", async () => {

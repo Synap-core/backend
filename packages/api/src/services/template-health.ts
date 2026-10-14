@@ -30,6 +30,7 @@ import {
   templateApplyUnfinished,
   readTemplateState,
   type TemplateState,
+  type TemplateApplyStateName,
 } from "@synap/database";
 import {
   cpCatalogCache,
@@ -562,6 +563,13 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
    * waits — including once they were approved or rejected (plain drift then).
    */
   awaitingApproval: string[];
+  /**
+   * Where the last template apply on this space stands (`readTemplateState`)
+   * — the one state a client draws its mark from (building / failed /
+   * partial / awaiting approval…), never re-derived from the sentence.
+   * `null` = no template state recorded.
+   */
+  state: TemplateApplyStateName | null;
   /** Why the last template apply did not finish — `templateApplyWarning`. `null` = nothing to say. */
   applyWarning: string | null;
   /**
@@ -664,6 +672,7 @@ export async function listWorkspaceTemplateHealth(
       ...health,
       overlays,
       awaitingApproval,
+      state: state?.state ?? null,
       applyWarning,
       warnings: [
         ...(applyWarning ? [applyWarning] : []),
