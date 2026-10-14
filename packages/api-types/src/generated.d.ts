@@ -3247,7 +3247,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "human" | "automation" | "playbook";
+			data: "human" | "agent" | "playbook" | "automation";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3262,7 +3262,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "human" | "automation" | "playbook";
+			$type: "human" | "agent" | "playbook" | "automation";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3368,7 +3368,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3536,6 +3536,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
+			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3547,7 +3548,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -3830,7 +3830,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "human" | "capability" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4627,7 +4627,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -17111,8 +17111,7 @@ export interface OpenTarget {
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
  * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows — the same signal `provisionAgent` uses to detect an
- * already-pod-wide agent. Owner-floored: only the caller's own agent-users, so a
+ * `workspace_members` rows (none ⇒ pod-wide). Owner-floored: only the caller's own agent-users, so a
  * guessed id can't leak another owner's agent identity.
  */
 export interface AgentProfile {
@@ -20934,7 +20933,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -20988,7 +20987,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21687,7 +21686,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21741,7 +21740,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21788,7 +21787,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21842,7 +21841,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21905,7 +21904,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21959,7 +21958,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -23251,21 +23250,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				env: {
-					key: "NODE_ENV" | "PUBLIC_URL" | "DOMAIN" | "CONTROL_PLANE_URL" | "OPENCLAW_DOMAIN" | "INTELLIGENCE_HUB_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
+					key: "NODE_ENV" | "PUBLIC_URL" | "DOMAIN" | "CONTROL_PLANE_URL" | "INTELLIGENCE_HUB_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
 					value: string | null;
 				}[];
 				files: {
 					caddyfile: {
-						path: null;
-						content: null;
-					} | {
-						path: string;
-						content: string;
-					} | {
-						path: string;
-						content: null;
-					};
-					openclawAuthSnippet: {
 						path: null;
 						content: null;
 					} | {
@@ -25791,77 +25780,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		provisionAgent: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				serviceType: string;
-			};
-			output: {
-				status: "already_provisioned";
-				agentUserId: string;
-				agentEmail: string;
-				workspaceId: null;
-				podUrl: string;
-				configUrl: string;
-				serviceId?: undefined;
-				apiKey?: undefined;
-			} | {
-				status: "provisioned";
-				agentUserId: `${string}-${string}-${string}-${string}-${string}`;
-				agentEmail: string;
-				serviceId: string;
-				workspaceId: string | null;
-				podUrl: string;
-				configUrl: string;
-				apiKey: string | null;
-			};
-			meta: object;
-		}>;
-		deprovisionAgent: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				serviceType: string;
-			};
-			output: {
-				status: "deprovisioned";
-			};
-			meta: object;
-		}>;
-		rotateAgentKey: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				serviceType: string;
-			};
-			output: {
-				status: "rotated";
-				serviceId: string;
-				configUrl: string;
-				apiKey: string;
-			};
-			meta: object;
-		}>;
-		getAgentStatus: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				serviceType: string;
-			};
-			output: {
-				provisioned: false;
-				serviceRegistered: boolean;
-				mcpEndpoint: string | null;
-				mcpApproved: boolean;
-				agentUserId: string | null;
-				agentEmail: string | null;
-				podUrl: string;
-				workspaceId: string;
-			} | {
-				provisioned: true;
-				serviceRegistered: boolean;
-				mcpEndpoint: string | null;
-				mcpApproved: boolean;
-				agentUserId: string;
-				agentEmail: string;
-				podUrl: string;
-				workspaceId: string;
-			};
-			meta: object;
-		}>;
 		getServiceConfig: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: Record<string, string>;
@@ -25875,145 +25793,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				stored: boolean;
 				secretId: string;
-			};
-			meta: object;
-		}>;
-		getOpenClawOverview: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			output: {
-				workspace: {
-					id: string;
-					name: string;
-				};
-				deploymentModel: "hybrid-explicit";
-				lifecycleDomains: {
-					infra: "synap-cli";
-					runtime: "openclaw-cli";
-				};
-				openclaw: {
-					provisioned: boolean;
-					registered: boolean;
-					serviceType: string;
-					agentUserId: {} | null;
-					agentEmail: string | null;
-					activeHubKeys: number;
-					serviceId: null;
-					displayName: string;
-					version: null;
-					webhookUrl: null;
-					mcpEndpoint: null;
-					mcpApproved: boolean;
-					health: {
-						lastCheckAt: string | null;
-						status: string;
-					};
-					links: {
-						hostedUiUrl: string;
-						docsUrl: string;
-					} | {
-						hostedUiUrl: null;
-						docsUrl: string;
-					};
-				};
-				controlPlane: {
-					url: string | null;
-					podId: string | null;
-					tier: string | null;
-				};
-				operations: {
-					supportsManagedOps: boolean;
-					notes: string;
-					commands: string[];
-				};
-			};
-			meta: object;
-		}>;
-		validateOpenClawConnection: import("@trpc/server").TRPCMutationProcedure<{
-			input: void;
-			output: {
-				ok: boolean;
-				status: "not_provisioned";
-				checkedAt: string;
-				message: string;
-			} | {
-				ok: boolean;
-				status: "provisioned";
-				checkedAt: string;
-				message: string;
-			} | {
-				ok: boolean;
-				status: "healthy";
-				checkedAt: string;
-				message: string;
-			};
-			meta: object;
-		}>;
-		runOpenClawDiagnostics: import("@trpc/server").TRPCMutationProcedure<{
-			input: void;
-			output: {
-				checkedAt: string;
-				checks: {
-					agentProvisioned: boolean;
-					serviceRegistered: boolean;
-					webhookReachable: boolean;
-					mcpApproved: boolean;
-				};
-				metadata: {
-					keyId: string | null;
-					createdAt: string | null;
-					lastUsedAt: string | null;
-					usageCount: number;
-					scopes: string[];
-				};
-				message: string;
-			};
-			meta: object;
-		}>;
-		getOpenClawDockerCommand: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			output: {
-				status: "not_provisioned";
-				message: string;
-				dockerCommand: null;
-				placeholderApiKey?: undefined;
-			} | {
-				status: "provisioned";
-				message: string;
-				dockerCommand: string | null;
-				placeholderApiKey: string | null;
-			};
-			meta: object;
-		}>;
-		getOpenClawStatus: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			output: {
-				provisioned: boolean;
-				method: string | null;
-				newKeyId: string | null;
-				oldAgentId: string | null;
-				oldAgentEmail: string | null;
-				message: string;
-			};
-			meta: object;
-		}>;
-		getOpenClawHostedUiLink: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			output: {
-				url: string;
-				customUrl: boolean;
-				available: boolean;
-			};
-			meta: object;
-		}>;
-		runOpenClawRuntimeAction: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				action: "restart" | "safe_update" | "rollback";
-			};
-			output: {
-				automated: boolean;
-				action: "restart" | "safe_update" | "rollback";
-				commands: string[];
-				message: string;
 			};
 			meta: object;
 		}>;
@@ -26445,24 +26224,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				commands: Record<string, string>;
-			};
-			meta: object;
-		}>;
-		provisionService: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				serviceType: "openclaw";
-				podUrlOverride?: string | undefined;
-			};
-			output: {
-				alreadyProvisioned: boolean;
-				agentUserId: string;
-				dockerRunCommand: string | null;
-				env: {
-					SYNAP_POD_URL: string;
-					SYNAP_HUB_API_KEY: string;
-					SYNAP_WORKSPACE_ID: string;
-					SYNAP_AGENT_USER_ID: string;
-				};
 			};
 			meta: object;
 		}>;
@@ -31605,7 +31366,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				status: "installed";
 				kind: "instruction";
-				source: "custom" | "clawhub" | "zeroclaw";
+				source: "custom" | "skill-md" | "skill-toml";
 				version: string;
 				proposalId?: undefined;
 			};
@@ -36185,7 +35946,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -37997,7 +37758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				steps: RecipeStep[];
 				linkedEnvironmentId: string | null;
 				linkedAppSlug: string | null;
-				onFailure: "continue" | "rollback" | "stop";
+				onFailure: "continue" | "stop" | "rollback";
 				rollbackRecipeId: string | null;
 				recipeTemplate: "custom" | "kamal" | "docker-compose" | "git-pull" | null;
 			};
