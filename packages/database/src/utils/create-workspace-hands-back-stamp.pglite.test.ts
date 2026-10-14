@@ -12,9 +12,10 @@
  *      `packageVersion`, and leaves `provisioningStatus: "pending"`;
  *  (2) a resume of a FAILED space clears the failure and leaves it "pending"
  *      (not "active"), with no stamp;
- *  (3) the reconcile util (the boot pass's stamp channel) holds a version it
- *      is asked to stamp while the space's last apply is unfinished
- *      (`templateApply` recorded), and stamps it once that record is cleared.
+ *  (3) the reconcile util binds the template identity and never writes the
+ *      version (W4: the boot pass's stamp now goes through the api finisher's
+ *      boot channel, `finishBootConvergence`, which holds it while the last
+ *      apply is unfinished — pinned in `template-apply-finisher.boot.pglite`).
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 
@@ -176,31 +177,26 @@ describe("the create/resume core hands the stamp back", () => {
     expect(readTemplateState(s)?.failedStep).toBeUndefined();
   });
 
-  it("(3) the reconcile util never stamps over an unfinished apply", async () => {
+  it("(3) the reconcile util binds the identity and never writes a version", async () => {
     const { workspaceId } = await createWorkspaceFromDefinition({
-      definition: { workspaceName: "Boot held" },
+      definition: { workspaceName: "Boot identity" },
       userId: USER,
-      packageSlug: "boot-held",
       createdBy: "provisioning",
     });
     await writeTemplateState(h.db, workspaceId, {
-      state: "awaiting-approval",
-      pendingVersion: "h-3",
+      state: "active",
+      version: "h-2",
     });
-    const reconcile = () =>
-      reconcileWorkspaceFromDefinition({
-        workspaceId,
-        userId: USER,
-        definition: { workspaceName: "Boot held" },
-        packageSlug: "boot-held",
-        packageVersion: "h-3",
-        pendingDataChanges: [],
-      });
-    await reconcile();
-    expect((await settingsOf(workspaceId)).packageVersion).toBeUndefined();
-    // The update door's finisher cleared the record: now the version lands.
-    await writeTemplateState(h.db, workspaceId, { state: "active" });
-    await reconcile();
-    expect((await settingsOf(workspaceId)).packageVersion).toBe("h-3");
+    await reconcileWorkspaceFromDefinition({
+      workspaceId,
+      userId: USER,
+      definition: { workspaceName: "Boot identity" },
+      packageSlug: "boot-identity",
+    });
+    const s = await settingsOf(workspaceId);
+    expect(readTemplateState(s)).toMatchObject({
+      slug: "boot-identity",
+      version: "h-2",
+    });
   });
 });

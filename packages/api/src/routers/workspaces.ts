@@ -20,7 +20,6 @@
  * the generated `workspaces:` type in api-types stays byte-identical.
  */
 
-import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "zod";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import {
@@ -223,6 +222,11 @@ const coreProcedures = {
         );
       }
 
+      // 6. Universal base defaults at birth (boot re-converges them).
+      const { reconcileBaseDefaults } =
+        await import("../services/template-apply/base-defaults.js");
+      await reconcileBaseDefaults({ workspaceId, userId: ctx.userId });
+
       return {
         status: "created" as const,
         workspaceId: created.id,
@@ -417,80 +421,17 @@ const coreProcedures = {
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
-      // Ensure default workspace setup (for existing workspaces created before these features)
-      // These are one-time operations per workspace.
-      // Default views are NOT auto-created — the frontend renders views ephemerally.
+      // A read writes nothing. Default views are NOT auto-created — the
+      // frontend renders views ephemerally.
       //
       // The default WHITEBOARD is NOT auto-created here anymore. There is exactly
       // ONE canonical whiteboard per pod, resolved lazily via the single door
       // `views.resolveScopedSurface` ({ type: 'whiteboard' }, no scope) on first
       // open. Per-workspace auto-created boards produced a graveyard of empty
       // `isMain` boards the canonical door never reached.
-      // Universal operational defaults — the report automation, default commands
-      // and relation defs — come from the first-party `base` template through the
-      // ONE reconcile door. The automation step is VERSION-AWARE (a content-hash
-      // over base's flow): a prompt change to base overwrites the stale row on the
-      // next read, which self-heals the seed-version freeze the old hardcoded
-      // seeder suffered (a workspace only reconciled when someone opened Settings).
-      // Legacy `ensure*` seeders are the fallback ONLY if `base` is somehow
-      // unresolvable (should not happen with the bundled 0.10.0 template).
-      const { reconcileWorkspaceFromDefinition } =
-        await import("@synap/database");
-      const { resolveWorkspaceTemplate } =
-        await import("../services/capabilities/resolve-workspace-template.js");
-      const baseTemplate = await resolveWorkspaceTemplate("base");
-      if (baseTemplate) {
-        try {
-          // Pass ONLY base's operational carriers — never its workspace-shell
-          // fields. base declares `workspaceVisibility: "pod_visible"` (+ name
-          // "Base"), and the door's settings step OVERWRITES visibility/subtype
-          // unconditionally — so handing it base's full definition would flip
-          // every reconciled workspace pod-visible and clobber a domain
-          // workspace's template stamp. base is an operational OVERLAY (its
-          // profiles/views/home are empty by design), so only the automation +
-          // commands + relation defs may cross into an existing workspace. No
-          // packageSlug/packageVersion either: base is not the workspace's
-          // template identity.
-          const baseDef = baseTemplate.workspaceDefinition;
-          const baseReport = await reconcileWorkspaceFromDefinition({
-            validateFlow: unfilteredAiFanoutError,
-            workspaceId: input.id,
-            userId: ctx.userId,
-            definition: {
-              flowAutomations: baseDef.flowAutomations ?? [],
-              commands: baseDef.commands ?? [],
-              relationDefs: baseDef.relationDefs ?? [],
-            } as unknown as Parameters<
-              typeof reconcileWorkspaceFromDefinition
-            >[0]["definition"],
-          });
-          console.log(
-            `[workspaces.get] base reconcile:`,
-            "automations",
-            baseReport.automations,
-            "commands",
-            baseReport.commands,
-            "relationDefs",
-            baseReport.relationDefs
-          );
-        } catch (err) {
-          console.error(`[workspaces.get] base reconcile failed:`, err);
-        }
-      } else {
-        // Fallback: `base` unresolvable — seed commands + relation defs via the
-        // legacy hardcoded utilities. The report automation is NOT seeded here:
-        // its only source is base.yaml (reconciled above), so if `base` is
-        // unresolvable the automation simply waits for the next `get` once the
-        // template resolves. There is no hardcoded report flow to fall back to
-        // anymore — that duplicate copy was retired (base.yaml is the SSOT).
-        const { ensureDefaultCommands, ensureDefaultRelationDefs } =
-          await import("@synap/database");
-        await ensureDefaultCommands(input.id, ctx.userId);
-        await ensureDefaultRelationDefs(input.id, ctx.userId);
-        console.warn(
-          `[workspaces.get] base template unresolved — used legacy seeders (commands + relation defs only)`
-        );
-      }
+      // The universal `base` defaults are NOT reconciled here any more: a READ
+      // wrote on every call (founder decision 2, 2026-10-13). They converge at
+      // birth and at boot (`template-apply/base-defaults.ts`).
 
       // Return workspace. The pod-canonical whiteboard is resolved lazily on
       // first open (views.resolveScopedSurface), not eagerly stamped here.

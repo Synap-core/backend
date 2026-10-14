@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   reconcileWorkspacePlaybooksToTemplate: vi.fn(),
   reconcileInstalledPacks: vi.fn(),
   applyTemplateRules: vi.fn(),
+  finishBootConvergence: vi.fn(),
   rulesConverged: true,
 }));
 
@@ -54,6 +55,9 @@ vi.mock("@synap/database", async () => ({
     select: () => ({ from: async () => h.rows }),
   }),
   reconcileWorkspaceFromDefinition: h.reconcileWorkspaceFromDefinition,
+  pendingTemplateDataChanges: async () => [],
+  sql: {},
+  holdsTemplateStamp: () => false,
 }));
 
 vi.mock("@synap/api", () => ({
@@ -84,14 +88,23 @@ vi.mock("@synap/api", () => ({
   readOverlayLedger: () => [],
   applyTemplateRules: h.applyTemplateRules,
   templateRulesConverged: () => h.rulesConverged,
+  reconcileBaseDefaults: async () => "reconciled",
+  finishBootConvergence: h.finishBootConvergence,
 }));
 
 import { reconcileWorkspacesToTemplates } from "./reconcile-workspaces-to-templates.js";
 
+/** The version the boot pass handed the finisher's boot channel, if any. */
+const stamped = () =>
+  (
+    h.finishBootConvergence.mock.calls
+      .map((c) => c[0] as { workspaceId: string; version?: string })
+      .find((a) => a.workspaceId === "ws-brand") ?? null
+  )?.version;
 /** The domain pass is the call that carries `packageSlug`. */
-const domainStamp = () =>
+const domainPass = () =>
   h.reconcileWorkspaceFromDefinition.mock.calls
-    .map((c) => c[0] as { packageSlug?: string; packageVersion?: string })
+    .map((c) => c[0] as { packageSlug?: string })
     .find((a) => a.packageSlug === "brand-library");
 
 describe("reconcileWorkspacesToTemplates — template rules", () => {
@@ -108,6 +121,10 @@ describe("reconcileWorkspacesToTemplates — template rules", () => {
       .mockResolvedValue({ failed: [], results: [] });
     h.reconcileInstalledPacks.mockReset().mockResolvedValue([]);
     h.applyTemplateRules.mockReset().mockResolvedValue([]);
+    h.finishBootConvergence.mockReset().mockResolvedValue({
+      versionStamped: true,
+      packsRecorded: 0,
+    });
     h.rulesConverged = true;
     h.rows = [
       {
@@ -133,20 +150,21 @@ describe("reconcileWorkspacesToTemplates — template rules", () => {
 
   it("stamps the version when rules converged, withholds it when not", async () => {
     await reconcileWorkspacesToTemplates();
-    expect(domainStamp()?.packageVersion).toBe("2.0.0");
+    expect(stamped()).toBe("2.0.0");
 
     h.reconcileWorkspaceFromDefinition.mockClear();
+    h.finishBootConvergence.mockClear();
     h.rulesConverged = false;
     await reconcileWorkspacesToTemplates();
-    expect(domainStamp()).toBeDefined();
-    expect(domainStamp()?.packageVersion).toBeUndefined();
+    expect(domainPass()).toBeDefined();
+    expect(stamped()).toBeUndefined();
   });
 
   it("a throwing rule applier costs the stamp, never the space's reconcile", async () => {
     h.applyTemplateRules.mockRejectedValue(new Error("db down"));
     h.rulesConverged = false;
     await reconcileWorkspacesToTemplates();
-    expect(domainStamp()).toBeDefined();
-    expect(domainStamp()?.packageVersion).toBeUndefined();
+    expect(domainPass()).toBeDefined();
+    expect(stamped()).toBeUndefined();
   });
 });

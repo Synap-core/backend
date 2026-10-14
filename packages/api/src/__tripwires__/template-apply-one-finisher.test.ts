@@ -21,8 +21,9 @@
  *      is that door for every wrapper over it: a file calling `applyTemplate(`
  *      is finished by the module, and must not also call the core itself;
  *  (2) a version STAMP reaches `writeTemplateState(` only from the finisher
- *      and from the reconcile util's boot channel (held while the last apply
- *      is unfinished, re-checked under the writer's lock);
+ *      module — its apply door and its boot channel (`finishBootConvergence`,
+ *      held while the last apply is unfinished, re-checked under the writer's
+ *      lock). Since W4 the reconcile util binds the identity only;
  *  (3) no file outside the module writes `template` or a mirrored key into
  *      settings (`mergeSettings(` / `.set(` / `.create(` / `.update(` spans that
  *      touch settings, `settings.<key> =`, `const|let *settings* = {…}`
@@ -31,9 +32,9 @@
  *      derived by listing the directories; the guarded key list is parsed
  *      out of the module's own `TEMPLATE_STATE_MIRROR_KEYS`;
  *  (4) an overlay pack's VERSION is recorded only by the finisher (on
- *      convergence) and the boot ledger pass; compose records the PACK
- *      without a version — every `upsertPack(` / `withPack(` caller outside
- *      the module is derived and classified.
+ *      convergence, and its boot channel for the boot ledger pass); compose
+ *      records the PACK without a version — every `upsertPack(` / `withPack(`
+ *      caller outside the module is derived and classified.
  *
  * NOT covered, measured: granularity is the FILE, not the call site (a door
  * file with two core calls and one finisher call stays green). (3) reads
@@ -269,7 +270,7 @@ describe("template apply — one finisher writes the stamp and active", () => {
     expect(both).toEqual([]);
   });
 
-  it("(2) a version stamp reaches writeTemplateState only from the finisher and the boot channel", () => {
+  it("(2) a version stamp reaches writeTemplateState only from the finisher (apply + boot channel)", () => {
     const files = [...apiFiles, ...walk(APPS_API_SRC), ...walk(DB_SRC)];
     const stampers = files
       .filter((p) => p !== MODULE)
@@ -280,18 +281,10 @@ describe("template apply — one finisher writes the stamp and active", () => {
       )
       .map(rel)
       .sort();
-    // Classified: the finisher (on convergence) and the reconcile util (the
-    // boot pass's channel, which gates on its own convergence report and holds
-    // the stamp while the last apply is unfinished).
-    expect(stampers).toEqual(
-      [
-        FINISHER,
-        relative(
-          API_SRC,
-          join(DB_SRC, "utils/reconcile-workspace-from-definition.ts")
-        ),
-      ].sort()
-    );
+    // The finisher alone: its apply door (on convergence) and its boot
+    // channel (what the boot pass checked; held while the last apply is
+    // unfinished). W4 took the boot pass's channel out of the reconcile util.
+    expect(stampers).toEqual([FINISHER]);
   });
 
   it("(3) only the template-state module writes settings.template or a mirrored key", () => {
@@ -383,19 +376,16 @@ describe("template apply — one finisher writes the stamp and active", () => {
     ).toBe(false);
   });
 
-  it("(4) only the finisher and the boot ledger pass record an overlay's version", () => {
+  it("(4) only the finisher (its boot channel for the ledger pass) records an overlay's version", () => {
     const files = [...apiFiles, ...walk(APPS_API_SRC), ...walk(DB_SRC)].filter(
       (p) => p !== MODULE
     );
     const PACK_CALL = /(?<!function\s)\b(upsertPack|withPack)\s*\(/;
     const callers = files.filter((p) => PACK_CALL.test(code(p))).map(rel);
-    // Non-vacuity: compose, the finisher and the boot ledger pass all call it.
+    // Non-vacuity: compose and the finisher call it (W4: the boot ledger pass
+    // records through the finisher's boot channel).
     expect(callers.sort()).toEqual(
-      [
-        "services/compose-overlay.ts",
-        "services/reconcile-installed-packs.ts",
-        FINISHER,
-      ].sort()
+      ["services/compose-overlay.ts", FINISHER].sort()
     );
     // Compose records the pack WITHOUT a version (layer 2 has not run yet).
     const composeSpans = callSpans(

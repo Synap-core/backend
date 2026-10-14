@@ -104,17 +104,8 @@ import {
   type PropertyTargetResolutionReport,
 } from "./resolve-property-target-profiles.js";
 import { createLogger } from "@synap-core/core";
-import { templateApplyUnfinished } from "./template-apply-state.js";
-import {
-  isTemplateApplyUnfinished,
-  writeTemplateState,
-} from "./template-state.js";
+import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
-import {
-  holdsTemplateStamp,
-  pendingTemplateDataChanges,
-  type TemplateDataChange,
-} from "../conversions/data-changes.js";
 import {
   mergeWorkspacePrimarySurface,
   resolveWorkspacePrimarySurface,
@@ -137,17 +128,13 @@ export interface ReconcileOptions {
    */
   mergeCapabilities?: boolean;
   /**
-   * Package provenance to stamp onto the reconciled workspace's settings —
-   * mirrors the create path (`create-workspace-from-definition.ts`) so an
-   * install-onto-existing (`market attach --onto <ws>`) leaves the workspace
-   * trackable by `market update` instead of stuck at "version unknown". Only
-   * threaded for an EXPLICIT install-onto-existing target; a natural declared/
-   * transitive compose onto a base carrying its own identity passes neither, so
-   * the base's own stamp is never clobbered. Set only when provided (never
-   * overwrites an existing stamp with undefined).
+   * The template IDENTITY to bind to the reconciled space (an explicit
+   * install-onto-existing, the boot pass). Never the version: the stamp says
+   * "converged", which this layer-1 pass alone cannot earn — it is written
+   * only by the ONE finisher (`finishTemplateApply` / `finishBootConvergence`,
+   * @synap/api). Set only when provided.
    */
   packageSlug?: string;
-  packageVersion?: string;
   /**
    * Flow-persist validator for seeded automations: returns an error message, or
    * null when the flow may be stored. INJECTED because this package has no
@@ -157,12 +144,6 @@ export interface ReconcileOptions {
    * `automations.rejected`.
    */
   validateFlow?: (flow: unknown) => string | null;
-  /**
-   * The template's pending data changes, when the caller already computed them
-   * (the boot sweep memoizes per template). Absent → computed here, only when a
-   * `packageVersion` stamp is at stake. See `ReconcileReport.dataChanges`.
-   */
-  pendingDataChanges?: readonly TemplateDataChange[];
 }
 
 /**
@@ -375,20 +356,6 @@ export interface ReconcileReport {
    * only channel the caller has back to the installer.
    */
   layers?: InstallLayerReport[];
-  /**
-   * TEMPLATE-LIFECYCLE Contract C: the conversion ops this template's profiles
-   * are still waiting on. Present only when a `packageVersion` stamp was at
-   * stake. `versionHeld` = the stamp was NOT written because a consentable data
-   * change is pending (or could not be measured): the content above converged,
-   * the DATA did not, so the marker may not claim it did. The person consents
-   * through the update door (`/packages/apply` `acceptDataChanges`).
-   */
-  dataChanges?: {
-    pending: TemplateDataChange[];
-    versionHeld: boolean;
-    /** Set when the pending set could not be read — the stamp is held. */
-    error?: string;
-  };
 }
 
 /** A live view row, narrowed to what definition view-reference resolution reads. */
@@ -584,86 +551,19 @@ export async function reconcileWorkspaceFromDefinition(
   ) {
     settingsPatch.intent = null;
   }
-  // Package provenance stamp — additive, mirrors the create path. Only written
-  // when provided (install-onto-existing), so a re-attach with the same version
-  // is a no-op and a natural compose never clobbers the base's own stamp.
-  // Written through the ONE template-state writer (below), not this patch.
-  let stampVersion: string | undefined;
-  if (opts.packageVersion) {
-    // MARKER INVARIANT: the version stamp claims the template converged. A
-    // pending data change the template depends on means it did not, so the
-    // stamp is held until the person consents at the update door. A read that
-    // fails proves nothing either way: held too (never stamp unearned).
-    const profileSlugs = (definition.profiles ?? [])
-      .map((p) => p.slug)
-      .filter((slug): slug is string => typeof slug === "string" && !!slug);
-    let held = false;
-    try {
-      const pending = [
-        ...(opts.pendingDataChanges ??
-          (await pendingTemplateDataChanges(sql, profileSlugs))),
-      ];
-      held = holdsTemplateStamp(pending);
-      report.dataChanges = { pending, versionHeld: held };
-    } catch (err) {
-      held = true;
-      report.dataChanges = {
-        pending: [],
-        versionHeld: true,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-    if (held) {
-      logger.warn(
-        {
-          workspaceId,
-          packageSlug: opts.packageSlug,
-          packageVersion: opts.packageVersion,
-          pending: report.dataChanges.pending.map((c) => c.opKey),
-          error: report.dataChanges.error,
-        },
-        "reconcile: template version stamp HELD — data changes await consent (synap templates update)"
-      );
-    } else if (templateApplyUnfinished(ws.settings)) {
-      // The last apply on this space did not finish (a layer-2 failure, or a
-      // layer 2 still waiting on approval / never run): this pass did not run
-      // that layer either, so it cannot earn the stamp. The update door
-      // finishes the apply and its finisher stamps (`finishTemplateApply`).
-      logger.warn(
-        {
-          workspaceId,
-          packageSlug: opts.packageSlug,
-          packageVersion: opts.packageVersion,
-        },
-        "reconcile: template version stamp HELD — the last template apply did not finish (synap templates update)"
-      );
-    } else {
-      stampVersion = opts.packageVersion;
-    }
-  }
-  const identityKeys = [
-    ...(opts.packageSlug ? ["packageSlug"] : []),
-    ...(stampVersion ? ["packageVersion"] : []),
-  ];
+  // Template identity — written through the ONE template-state writer, only
+  // when provided, so a natural compose never clobbers the base's own slug.
+  // The version stamp is NOT this pass's to write (see `packageSlug`).
+  const identityKeys = opts.packageSlug ? ["packageSlug"] : [];
   if (Object.keys(settingsPatch).length > 0 || identityKeys.length > 0) {
     report.settings.merged = [...Object.keys(settingsPatch), ...identityKeys];
     if (!dryRun && Object.keys(settingsPatch).length > 0)
       await workspaceRepo.mergeSettings(workspaceId, settingsPatch, userId);
-    // Identity + stamp through the ONE template-state writer. The unfinished
-    // check is re-made under its row lock, so an apply recorded unfinished
-    // between the read above and this write still holds the stamp.
-    if (!dryRun && identityKeys.length > 0)
+    if (!dryRun && opts.packageSlug)
       await writeTemplateState(
         dbConn,
         workspaceId,
-        (current) => {
-          const stamp = stampVersion && !isTemplateApplyUnfinished(current);
-          if (!opts.packageSlug && !stamp) return null;
-          return {
-            ...(opts.packageSlug ? { slug: opts.packageSlug } : {}),
-            ...(stamp ? { version: stampVersion } : {}),
-          };
-        },
+        { slug: opts.packageSlug },
         { userId }
       );
   }

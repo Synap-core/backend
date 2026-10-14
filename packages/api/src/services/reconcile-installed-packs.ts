@@ -15,7 +15,8 @@
  *   - its playbooks through `reconcileWorkspacePlaybooksToTemplate` (source-
  *     linked 3-way merge; owner edits reported, never overwritten);
  *   - then — and ONLY when both converged — the ledger entry's `version`
- *     advances to the version just reconciled (invariant 1: the stamp asserts
+ *     advances to the version just reconciled, through the one finisher's
+ *     boot channel (`finishBootConvergence`; invariant 1: the stamp asserts
  *     only what was checked).
  *
  * Non-fatal per pack. A pack whose template cannot be resolved (retired,
@@ -28,13 +29,11 @@
 
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
-  db,
   readTemplateState,
-  withPack,
-  writeTemplateState,
   reconcileWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
+import { finishBootConvergence } from "./template-apply-finisher.js";
 import { overlayDefinitionForIdentifiedBase } from "./compose-overlay.js";
 import {
   playbookReportConverged,
@@ -145,21 +144,14 @@ export async function reconcileInstalledPacks(opts: {
     }
   }
 
-  if (advanced.length > 0) {
-    // Applied onto the ledger as stored NOW, under the ONE template-state
-    // writer's row lock — a pack recorded meanwhile is kept, never overwritten.
-    await writeTemplateState(
-      db,
-      opts.workspaceId,
-      (current) => ({
-        packs: advanced.reduce(
-          (packs, pack) => withPack(packs, pack, now),
-          current?.packs
-        ),
-      }),
-      { userId: opts.ownerId }
-    );
-  }
+  // Through the ONE finisher's boot channel, onto the ledger as stored NOW
+  // under the template-state writer's row lock — a pack recorded meanwhile is
+  // kept, never overwritten.
+  await finishBootConvergence({
+    workspaceId: opts.workspaceId,
+    userId: opts.ownerId,
+    packs: advanced,
+  });
   return out;
 }
 

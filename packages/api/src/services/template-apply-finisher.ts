@@ -204,3 +204,57 @@ export async function reopenFailedLayerTwo(
     { userId }
   );
 }
+
+/**
+ * The BOOT channel of the one finisher (D19 / D20): the boot pass converges a
+ * space's own template (layer 1 + playbooks + rules, every boot) and its
+ * overlay packs, and hands here only what it CHECKED converged:
+ *   - `version`: the space's template version. Written only when the last
+ *     apply on the space is finished and no build is in flight — this pass did not run every layer 2
+ *     kind (capabilities, automations, cells, skills…), so it cannot finish an
+ *     apply that is awaiting approval, partial, never ran layer 2, or failed;
+ *     the update door does, and its finisher stamps;
+ *   - `packs`: overlay packs whose layer 1 + playbooks converged.
+ * The state is never changed here: a boot pass builds nothing and fails
+ * nothing it would have to record.
+ */
+export async function finishBootConvergence(input: {
+  workspaceId: string;
+  userId: string;
+  version?: string;
+  packs?: Array<{ slug: string; version: string }>;
+}): Promise<{ versionStamped: boolean; packsRecorded: number }> {
+  const { workspaceId, userId, version, packs = [] } = input;
+  if (!version && packs.length === 0)
+    return { versionStamped: false, packsRecorded: 0 };
+  const { getDb, writeTemplateState, withPack, isTemplateApplyUnfinished } =
+    await import("@synap/database");
+  let versionStamped = false;
+  await writeTemplateState(
+    await getDb(),
+    workspaceId,
+    (current) => {
+      const now = new Date().toISOString();
+      // "failed" is unfinished too; "building" is another door's build.
+      const stamp =
+        !!version &&
+        current?.state !== "building" &&
+        !isTemplateApplyUnfinished(current);
+      if (!stamp && packs.length === 0) return null;
+      versionStamped = stamp;
+      return {
+        ...(stamp ? { version } : {}),
+        ...(packs.length > 0
+          ? {
+              packs: packs.reduce(
+                (acc, pack) => withPack(acc, pack, now),
+                current?.packs
+              ),
+            }
+          : {}),
+      };
+    },
+    { userId }
+  );
+  return { versionStamped, packsRecorded: packs.length };
+}

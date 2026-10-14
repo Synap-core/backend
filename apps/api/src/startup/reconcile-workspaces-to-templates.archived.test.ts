@@ -20,9 +20,12 @@ const h = vi.hoisted(() => ({
   reconcileWorkspacePlaybooksToTemplate: vi.fn(),
   reconcileInstalledPacks: vi.fn(),
   resolveTemplateCatalog: vi.fn(),
+  reconcileBaseDefaults: vi.fn(),
 }));
 
 vi.mock("@synap-core/core", () => ({
+  // Imported by the real template-state module's identity guard (never hit).
+  ConflictError: class ConflictError extends Error {},
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -31,7 +34,15 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async () => ({
+  readTemplateState: (
+    await vi.importActual<
+      typeof import("../../../../packages/database/src/utils/template-state.js")
+    >("../../../../packages/database/src/utils/template-state.js")
+  ).readTemplateState,
+  pendingTemplateDataChanges: async () => [],
+  sql: {},
+  holdsTemplateStamp: () => false,
   workspaces: {
     id: "id",
     ownerId: "ownerId",
@@ -71,6 +82,11 @@ vi.mock("@synap/api", () => ({
   playbookReportConverged: () => true,
   applyTemplateRules: async () => [],
   templateRulesConverged: () => true,
+  reconcileBaseDefaults: h.reconcileBaseDefaults,
+  finishBootConvergence: async () => ({
+    versionStamped: true,
+    packsRecorded: 0,
+  }),
 }));
 
 import { reconcileWorkspacesToTemplates } from "./reconcile-workspaces-to-templates.js";
@@ -97,6 +113,7 @@ describe("reconcileWorkspacesToTemplates — archived workspaces are frozen", ()
       .mockReset()
       .mockResolvedValue({ failed: [] });
     h.reconcileInstalledPacks.mockReset().mockResolvedValue([]);
+    h.reconcileBaseDefaults.mockReset().mockResolvedValue("reconciled");
     h.resolveTemplateCatalog.mockReset().mockResolvedValue(CATALOG);
     h.rows = [
       {
@@ -118,10 +135,11 @@ describe("reconcileWorkspacesToTemplates — archived workspaces are frozen", ()
 
   it("reconciles the live workspace through every pass (non-vacuity)", async () => {
     await reconcileWorkspacesToTemplates();
-    // base pass + domain pass
+    // base pass (the base-defaults door) + domain pass
+    expect(touched(h.reconcileBaseDefaults)).toContain(LIVE);
     expect(
       touched(h.reconcileWorkspaceFromDefinition).filter((id) => id === LIVE)
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(touched(h.reconcileWorkspacePlaybooksToTemplate)).toContain(LIVE);
     expect(touched(h.reconcileInstalledPacks)).toContain(LIVE);
   });
@@ -129,6 +147,7 @@ describe("reconcileWorkspacesToTemplates — archived workspaces are frozen", ()
   it("never touches the archived one — base, domain, playbooks, packs", async () => {
     await reconcileWorkspacesToTemplates();
     expect(touched(h.reconcileWorkspaceFromDefinition)).not.toContain(ARCHIVED);
+    expect(touched(h.reconcileBaseDefaults)).not.toContain(ARCHIVED);
     expect(touched(h.reconcileWorkspacePlaybooksToTemplate)).not.toContain(
       ARCHIVED
     );

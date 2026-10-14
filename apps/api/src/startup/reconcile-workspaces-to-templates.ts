@@ -29,7 +29,7 @@
  * resolver falls back to the frozen `@synap-core/workspace-templates` bundle the
  * pod was built with, so an OFFLINE boot is BYTE-IDENTICAL to reading the bundle
  * directly (what this hook did before). This is the SAME door
- * `reconcileWorkspaceIfStale` already uses for the runtime version-aware sync.
+ * the one template apply (`applyTemplate`) uses for an install or update.
  *
  * Idempotent + additive + non-fatal:
  *  - `reconcileWorkspaceFromDefinition` only CREATES what's missing; it never
@@ -57,6 +57,7 @@ import {
   workspaces,
   reconcileWorkspaceFromDefinition,
   pendingTemplateDataChanges,
+  holdsTemplateStamp,
   readTemplateState,
   type TemplateDataChange,
   type WorkspaceDefinitionInput,
@@ -71,6 +72,8 @@ import {
   readOverlayLedger,
   applyTemplateRules,
   templateRulesConverged,
+  reconcileBaseDefaults,
+  finishBootConvergence,
   type ResolvedWorkspaceTemplate,
   type TemplateCatalogView,
 } from "@synap/api";
@@ -116,34 +119,16 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   // seed-version freeze at deploy time (every boot syncs every workspace).
   const baseTemplate = await resolveWorkspaceTemplate("base");
   if (baseTemplate) {
-    // ONLY base's operational carriers cross into existing workspaces — never its
-    // workspace-shell fields. base declares `workspaceVisibility: "pod_visible"`
-    // and the door's settings step OVERWRITES visibility/subtype unconditionally,
-    // so its full definition would flip every workspace pod-visible and clobber
-    // domain workspaces' template stamps. base is an operational OVERLAY (empty
-    // profiles/views/home). No packageSlug/packageVersion: base is not any
-    // workspace's template identity (the subtype pass below owns that stamp).
-    const bd = baseTemplate.workspaceDefinition;
-    const baseOperationalDefinition = {
-      flowAutomations: bd.flowAutomations ?? [],
-      commands: bd.commands ?? [],
-      relationDefs: bd.relationDefs ?? [],
-    } as unknown as WorkspaceDefinitionInput;
+    // The one base-defaults door (`template-apply/base-defaults.ts`), shared
+    // with birth: only base's operational carriers cross into a space.
     let baseReconciled = 0;
     for (const ws of rows) {
-      try {
-        await reconcileWorkspaceFromDefinition({
-          workspaceId: ws.id,
-          userId: ws.ownerId,
-          definition: baseOperationalDefinition,
-        });
-        baseReconciled++;
-      } catch (err) {
-        logger.warn(
-          { err, workspaceId: ws.id },
-          "Base-defaults reconcile failed (non-fatal)"
-        );
-      }
+      const outcome = await reconcileBaseDefaults({
+        workspaceId: ws.id,
+        userId: ws.ownerId,
+        base: baseTemplate,
+      });
+      if (outcome === "reconciled") baseReconciled++;
     }
     logger.info(
       { baseReconciled, total: rows.length, version: baseTemplate.version },
@@ -226,11 +211,11 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
 
   // DATA CHANGES (TEMPLATE-LIFECYCLE Contract C): a template whose profiles a
   // pending conversion op still touches is NOT stamped to its new version —
-  // the reconciler holds the stamp (marker invariant) and health keeps showing
+  // this pass holds the stamp (marker invariant) and health keeps showing
   // the space drifted, so `synap templates update` is where the person sees
   // the change and consents. Boot never runs a conversion. Computed ONCE per
   // template (a dry run per pending op); a failed read is left to the
-  // reconciler, which then holds the stamp rather than guess.
+  // pass below, which then holds the stamp rather than guess.
   const pendingByKey = new Map<string, TemplateDataChange[] | undefined>();
   const pendingFor = async (
     key: string,
@@ -250,7 +235,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     } catch (err) {
       logger.warn(
         { err, templateKey: key },
-        "Pending template data changes unreadable — the reconciler will hold the stamp"
+        "Pending template data changes unreadable — the version stamp is held"
       );
       pending = undefined;
     }
@@ -345,41 +330,54 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         );
       }
 
-      // STAMP-ON-WRITE: pass the slug+version this pass is converging TO, so
-      // `settings.packageVersion` advances in lockstep with the content it
-      // reconciled. Before this, the boot sweep reconciled content but left the
-      // stamp untouched — so `settings.packageVersion` lied (a workspace could
-      // read "stale/unknown" while its content was current). This is now the
-      // SINGLE stamp-on-reconcile authority for the JSONB `settings.packageSlug`
-      // /`packageVersion` the drift surfaces (Hub `/workspaces`, CLI, browser)
-      // read; the old column-keyed `package-version-backfill` worker (which
-      // stamped a version it never reconciled) has been removed. `subtype` is
-      // the resolved template slug this pass operates on (its own contract);
-      // `reconcileWorkspaceFromDefinition` only writes these when present.
+      // Layer 1, additively, binding the template identity (never the
+      // version: this util does not stamp).
       const report = await reconcileWorkspaceFromDefinition({
         workspaceId: ws.id,
         userId: ws.ownerId,
         definition:
           resolved.workspaceDefinition as unknown as WorkspaceDefinitionInput,
         packageSlug: templateKey,
-        packageVersion:
-          playbooksConverged && rulesConverged ? resolved.version : undefined,
-        pendingDataChanges: await pendingFor(templateKey, resolved),
       });
-      if (report.dataChanges?.versionHeld) {
+
+      // THE STAMP, through the one finisher's boot channel — only for what
+      // this pass CHECKED: layer 1 + playbooks + rules converged and no
+      // consentable data change is pending (TEMPLATE-LIFECYCLE Contract C:
+      // a pending — or unmeasurable — data change holds the stamp; the person
+      // consents at `synap templates update`). The channel also holds it
+      // while the space's last apply is unfinished.
+      const pending = await pendingFor(templateKey, resolved);
+      const dataHeld = !pending || holdsTemplateStamp(pending);
+      if (dataHeld && resolved.version) {
         versionHeld++;
         logger.warn(
           {
             workspaceId: ws.id,
             templateKey,
             version: resolved.version,
-            pending: report.dataChanges.pending.map((c) => ({
+            pending: pending?.map((c) => ({
               opKey: c.opKey,
               affected: c.affected,
             })),
           },
           "Template version stamp held: data changes await consent (synap templates update)"
         );
+      }
+      const current = readTemplateState(ws.settings, {
+        packageSlug: ws.packageSlug,
+      });
+      if (
+        playbooksConverged &&
+        rulesConverged &&
+        !dataHeld &&
+        resolved.version &&
+        resolved.version !== current?.version
+      ) {
+        await finishBootConvergence({
+          workspaceId: ws.id,
+          userId: ws.ownerId,
+          version: resolved.version,
+        });
       }
 
       const changed =

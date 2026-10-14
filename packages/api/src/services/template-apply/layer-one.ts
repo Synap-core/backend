@@ -33,6 +33,7 @@ import {
   type ResolvedWorkspaceTemplate,
 } from "../capabilities/resolve-workspace-template.js";
 import { reopenFailedLayerTwo } from "../template-apply-finisher.js";
+import { reconcileBaseDefaults } from "./base-defaults.js";
 import { planTemplateApply, type TemplateApplyAction } from "./plan.js";
 import { resolveTarget } from "./resolve-target.js";
 
@@ -287,6 +288,8 @@ export async function applyLayerOne(
         onProgress,
       });
       if (proposalId) await stampKey(result.workspaceId, proposalId);
+      // The universal `base` defaults at birth (boot re-converges them).
+      await reconcileBaseDefaults({ workspaceId: result.workspaceId, userId });
       try {
         await getBoss().send("workspace-init", {
           workspaceId: result.workspaceId,
