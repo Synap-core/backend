@@ -46,7 +46,13 @@ describe("GET /status/backup body", () => {
         status: "failed",
         detail: "fingerprint mismatch: recorded 5|100|1, restored 5|99|1",
       }),
-      run({ status: "failed", finished_at: "2026-10-04T11:30:00Z", size_bytes: null, snapshot_id: null, detail: "restic backup failed at rest:https://u:pw@vault" }),
+      run({
+        status: "failed",
+        finished_at: "2026-10-04T11:30:00Z",
+        size_bytes: null,
+        snapshot_id: null,
+        detail: "restic backup failed at rest:https://u:pw@vault",
+      }),
     ],
     NOW
   );
@@ -56,7 +62,12 @@ describe("GET /status/backup body", () => {
     expect(body).toEqual({
       status: "failed",
       offsite: true, // the newest SUCCESS was pushed
-      lastBackup: { at: "2026-10-04T11:30:00.000Z", status: "failed", sizeBytes: null, snapshotId: null },
+      lastBackup: {
+        at: "2026-10-04T11:30:00.000Z",
+        status: "failed",
+        sizeBytes: null,
+        snapshotId: null,
+      },
       lastSuccessAt: "2026-10-04T11:00:00.000Z",
       lastDrill: { at: "2026-10-04T10:00:00.000Z", status: "failed" },
       staleAfterHours: 26,
@@ -72,7 +83,9 @@ describe("GET /status/backup body", () => {
     const body = await backupStatusBody(async () => full, NOW);
     const text = JSON.stringify(body);
     for (const k of keysOf(body))
-      expect(k).not.toMatch(/fingerprint|detail|password|secret|key|repo|credential|url/i);
+      expect(k).not.toMatch(
+        /fingerprint|detail|password|secret|key|repo|credential|url/i
+      );
     expect(text).not.toContain("5|100|1");
     expect(text).not.toContain("5|99|1");
     expect(text).not.toContain("rest:");
@@ -80,20 +93,29 @@ describe("GET /status/backup body", () => {
   });
 
   it("a failed ledger read is `unknown` with a note — never `never`", async () => {
-    const body = await backupStatusBody(async () => {
-      throw new Error('relation "backup_runs" does not exist');
-    }, NOW, () => {});
+    const body = await backupStatusBody(
+      async () => {
+        throw new Error('relation "backup_runs" does not exist');
+      },
+      NOW,
+      () => {}
+    );
     expect(body.status).toBe("unknown");
     expect(body.note).toMatch(/backup_runs/);
     expect(body.lastBackup).toBeNull();
   });
 
   it("a failed read's raw error goes to the server log, never the public body", async () => {
-    const RAW = 'connect ECONNREFUSED 10.0.3.7:5432 user "synap" password authentication failed';
+    const RAW =
+      'connect ECONNREFUSED 10.0.3.7:5432 user "synap" password authentication failed';
     const log = vi.fn();
-    const body = await backupStatusBody(async () => {
-      throw new Error(RAW);
-    }, NOW, log);
+    const body = await backupStatusBody(
+      async () => {
+        throw new Error(RAW);
+      },
+      NOW,
+      log
+    );
     expect(JSON.stringify(body)).not.toContain("ECONNREFUSED");
     expect(JSON.stringify(body)).not.toContain("10.0.3.7");
     expect(log).toHaveBeenCalledTimes(1);
@@ -101,7 +123,9 @@ describe("GET /status/backup body", () => {
   });
 
   it("toPublicBackupStatus keeps `never` for an empty ledger", () => {
-    expect(toPublicBackupStatus(projectBackupStatus([], NOW), NOW).status).toBe("never");
+    expect(toPublicBackupStatus(projectBackupStatus([], NOW), NOW).status).toBe(
+      "never"
+    );
   });
 });
 
@@ -110,42 +134,90 @@ describe("/health data check", () => {
   const base = { stateDir: "/s", now: () => NOW };
 
   it("EMPTY: the pod was initialized and has no users → status degraded", async () => {
-    const d = await checkDataHealth({ ...base, exists: exists(["/s", "/s/postgres-initialized"]), hasUsers: async () => false });
-    expect(d).toMatchObject({ status: "empty", initialized: true, hasUsers: false });
+    const d = await checkDataHealth({
+      ...base,
+      exists: exists(["/s", "/s/postgres-initialized"]),
+      hasUsers: async () => false,
+    });
+    expect(d).toMatchObject({
+      status: "empty",
+      initialized: true,
+      hasUsers: false,
+    });
     expect(healthStatusFor(d)).toBe("degraded");
   });
   it("ok: initialized with users", async () => {
-    const d = await checkDataHealth({ ...base, exists: exists(["/s", "/s/postgres-initialized"]), hasUsers: async () => true });
+    const d = await checkDataHealth({
+      ...base,
+      exists: exists(["/s", "/s/postgres-initialized"]),
+      hasUsers: async () => true,
+    });
     expect([d.status, healthStatusFor(d)]).toEqual(["ok", "ok"]);
   });
   it("ok: a brand-new pod (no marker) with no users is not an alarm", async () => {
-    const d = await checkDataHealth({ ...base, exists: exists(["/s"]), hasUsers: async () => false });
-    expect(d).toMatchObject({ status: "ok", initialized: false, hasUsers: false });
+    const d = await checkDataHealth({
+      ...base,
+      exists: exists(["/s"]),
+      hasUsers: async () => false,
+    });
+    expect(d).toMatchObject({
+      status: "ok",
+      initialized: false,
+      hasUsers: false,
+    });
   });
   it("state dir not visible → initialized null (cannot alarm), still ok", async () => {
-    const d = await checkDataHealth({ ...base, exists: exists([]), hasUsers: async () => false });
+    const d = await checkDataHealth({
+      ...base,
+      exists: exists([]),
+      hasUsers: async () => false,
+    });
     expect(d).toMatchObject({ status: "ok", initialized: null });
   });
   it("a failed users check is `unknown` — not ok, not empty — and its raw error stays in the log", async () => {
-    const RAW = 'password authentication failed for user "synap" at 10.0.3.7:5432';
+    const RAW =
+      'password authentication failed for user "synap" at 10.0.3.7:5432';
     const log = vi.fn();
-    const d = await checkDataHealth({ ...base, log, exists: exists(["/s", "/s/postgres-initialized"]), hasUsers: async () => { throw new Error(RAW); } });
-    expect(d).toMatchObject({ status: "unknown", hasUsers: null, error: "users check failed" });
+    const d = await checkDataHealth({
+      ...base,
+      log,
+      exists: exists(["/s", "/s/postgres-initialized"]),
+      hasUsers: async () => {
+        throw new Error(RAW);
+      },
+    });
+    expect(d).toMatchObject({
+      status: "unknown",
+      hasUsers: null,
+      error: "users check failed",
+    });
     expect(JSON.stringify(d)).not.toContain("password");
     expect(JSON.stringify(d)).not.toContain("10.0.3.7");
     expect((log.mock.calls[0]?.[0] as Error | undefined)?.message).toBe(RAW);
     expect(healthStatusFor(d)).toBe("ok");
   });
   it("a hung users check times out to `unknown` (liveness never hangs on the DB)", async () => {
-    const d = await checkDataHealth({ ...base, log: () => {}, exists: exists(["/s"]), timeoutMs: 20, hasUsers: () => new Promise(() => {}) });
-    expect(d).toMatchObject({ status: "unknown", error: "users check timed out" });
+    const d = await checkDataHealth({
+      ...base,
+      log: () => {},
+      exists: exists(["/s"]),
+      timeoutMs: 20,
+      hasUsers: () => new Promise(() => {}),
+    });
+    expect(d).toMatchObject({
+      status: "unknown",
+      error: "users check timed out",
+    });
   });
 });
 
 describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
   // Behaviour above is the unit; this pins that the routes USE it. It reads
   // source text: it cannot see a handler that is registered but shadowed.
-  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts"), "utf8");
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts"),
+    "utf8"
+  );
   const block = (route: string) => {
     const i = src.indexOf(`app.get("${route}"`);
     expect(i, `${route} registered`).toBeGreaterThan(-1);
@@ -153,8 +225,15 @@ describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
   };
   it("/health awaits the data + auth checks, derives status from both, returns both", () => {
     const b = block("/health");
-    expect(b).toContain("await Promise.all([podDataHealth(), podAuthHealth()])");
-    expect(b).toContain("status: healthStatusFor(data, authHealth)");
+    // Formatting-insensitive: prettier wraps these calls and adds trailing commas.
+    const flat = (t: string) =>
+      t.replace(/\s+/g, "").replace(/,([\])}])/g, "$1");
+    expect(flat(b)).toContain(
+      flat("await Promise.all([podDataHealth(), podAuthHealth()])")
+    );
+    expect(flat(b)).toContain(
+      flat("status: healthStatusFor(data, authHealth)")
+    );
     expect(b).toMatch(/\n\s+data,\n/);
     expect(b).toMatch(/\n\s+authHealth,\n/);
     expect(b).toContain('auth: "ory-stack"'); // the stack name keeps its type
@@ -169,6 +248,8 @@ describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
   });
   it("non-vacuity: the source read is the real index.ts", () => {
     expect(src).toContain('app.get("/status/release"');
-    expect(resolve(fileURLToPath(import.meta.url))).toMatch(/apps\/api\/src\/status\//);
+    expect(resolve(fileURLToPath(import.meta.url))).toMatch(
+      /apps\/api\/src\/status\//
+    );
   });
 });
