@@ -58,6 +58,26 @@ import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "profiles-router" });
 
+/**
+ * A profile's `uiHints` as create AND update accept it: `presentation` (how
+ * the kind's entities are drawn) is judged by the ONE parser, so an invalid
+ * declaration is refused with its issues by either door — a declaration the
+ * renderers cannot read never reaches the row.
+ */
+const ProfileUiHintsInput = z
+  .record(z.string(), z.unknown())
+  .superRefine((hints, ctx) => {
+    if (hints.presentation === undefined) return;
+    const parsed = parseProfilePresentation(hints.presentation);
+    if (!parsed.ok)
+      for (const issue of parsed.issues)
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["presentation"],
+          message: `${issue.path}: ${issue.message}`,
+        });
+  });
+
 const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
 
 /**
@@ -325,22 +345,7 @@ export const profilesRouter = router({
           .regex(/^[a-z0-9-]+$/),
         displayName: z.string().min(1).max(200),
         parentProfileId: z.string().uuid().optional(),
-        // `uiHints.presentation` (entity rendering, decision 8) is judged by
-        // the ONE parser — an invalid declaration is refused with its issues.
-        uiHints: z
-          .record(z.string(), z.unknown())
-          .superRefine((hints, ctx) => {
-            if (hints.presentation === undefined) return;
-            const parsed = parseProfilePresentation(hints.presentation);
-            if (!parsed.ok)
-              for (const issue of parsed.issues)
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  path: ["presentation"],
-                  message: `${issue.path}: ${issue.message}`,
-                });
-          })
-          .optional(),
+        uiHints: ProfileUiHintsInput.optional(),
         /** Default property values applied to new entities of this type. */
         defaultValues: z.record(z.string(), z.unknown()).optional(),
         scope: ProfileScopeSchema.default("workspace"),
@@ -1046,7 +1051,7 @@ export const profilesRouter = router({
         id: z.string().uuid(),
         displayName: z.string().min(1).max(200).optional(),
         parentProfileId: z.string().uuid().optional().nullable(),
-        uiHints: z.record(z.string(), z.unknown()).optional(),
+        uiHints: ProfileUiHintsInput.optional(),
         /** Default property values applied to new entities of this type. */
         defaultValues: z.record(z.string(), z.unknown()).optional(),
         /**
