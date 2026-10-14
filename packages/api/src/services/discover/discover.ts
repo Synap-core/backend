@@ -181,6 +181,11 @@ export interface StartHere {
      * — a pulling worker for it must stop, or the same work would run twice.
      */
     | { status: "bound" }
+    /**
+     * A person PAUSED this agent: it takes no new work until resumed. A worker
+     * idles (keeps polling) rather than launching anything. Its keys still work.
+     */
+    | { status: "paused" }
     | StartHereUnavailable;
   /**
    * Open sessions the caller OWNS whose criteria are not all graded —

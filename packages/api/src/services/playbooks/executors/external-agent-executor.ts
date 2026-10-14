@@ -48,6 +48,7 @@ import type {
 import { createLogger } from "@synap-core/core";
 import {
   db,
+  entities,
   focusSessions,
   playbooks,
   users,
@@ -60,6 +61,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { isLikelyUUID } from "@synap-core/types/proposals";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { externalAgentCallFailedReason } from "@synap-core/types/agents";
 import {
@@ -100,12 +102,21 @@ interface SessionRow {
   userId: string;
   agentIds: string[];
   metadata: Record<string, unknown>;
+  projectId: string | null;
+  workspaceId: string | null;
 }
 
 async function loadSession(sessionId: string): Promise<SessionRow | null> {
   const row = await db.query.focusSessions.findFirst({
     where: eq(focusSessions.id, sessionId),
-    columns: { id: true, userId: true, agentIds: true, metadata: true },
+    columns: {
+      id: true,
+      userId: true,
+      agentIds: true,
+      metadata: true,
+      projectId: true,
+      workspaceId: true,
+    },
   });
   if (!row) return null;
   return {
@@ -113,7 +124,22 @@ async function loadSession(sessionId: string): Promise<SessionRow | null> {
     userId: row.userId,
     agentIds: Array.isArray(row.agentIds) ? (row.agentIds as string[]) : [],
     metadata: asRecord(row.metadata),
+    projectId: row.projectId ?? null,
+    workspaceId: row.workspaceId ?? null,
   };
+}
+
+/** The kind (profile row) of the run's subject, for the assignment rung. */
+async function subjectProfileId(
+  subjectId: string | undefined
+): Promise<string | null> {
+  if (!subjectId || !isLikelyUUID(subjectId)) return null;
+  const [row] = await db
+    .select({ profileId: entities.profileId })
+    .from(entities)
+    .where(eq(entities.id, subjectId))
+    .limit(1);
+  return row?.profileId ?? null;
 }
 
 /** The agent's own door key, by REFERENCE (id + prefix) — never the secret. */
@@ -319,6 +345,13 @@ export class ExternalAgentExecutor implements Executor {
       accept: ["dispatch"],
       selector: named ? { agentUserId: named } : null,
       roster: session.agentIds,
+      // What the run is about — the assignment rung (W1b).
+      targets: {
+        playbook: ctx.playbookId ?? null,
+        profile: await subjectProfileId(ctx.subjectId),
+        project: session.projectId,
+        workspace: session.workspaceId ?? ctx.workspaceId ?? null,
+      },
       pool: "owned",
     });
     if (choice.kind === "refused") {

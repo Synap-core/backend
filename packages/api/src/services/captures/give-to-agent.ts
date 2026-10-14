@@ -50,6 +50,7 @@ import {
   LIVE_RUN_STATUSES,
   playbookRuns,
   readDocumentVersionContent,
+  users,
 } from "@synap/database";
 import { resolveAgentDirection } from "@synap-core/types/agents";
 import { AccessContext, scopedDb } from "../../access/index.js";
@@ -228,6 +229,26 @@ export async function giveCaptureToAgent(p: {
     if (routed.kind !== "routed") return { status: "agent_not_found" };
     bound = routed.reach === "dispatch";
     agent = { id: found.id, name: found.name };
+  } else if (row.workspaceId) {
+    // Nobody named: the agent a person ASSIGNED to the capture's space takes
+    // it (W1b). Only the assignment rung — with no assignment the work stays
+    // for "the next agent that checks in", never handed to whichever agent
+    // happens to be the only one.
+    const routed = await route({
+      ownerId: p.userId,
+      accept: ["dispatch", "pull"],
+      targets: { workspace: row.workspaceId },
+      pool: "owned",
+    });
+    if (routed.kind === "routed" && routed.via === "assigned") {
+      const [assignee] = await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, routed.agentUserId))
+        .limit(1);
+      bound = routed.reach === "dispatch";
+      agent = { id: routed.agentUserId, name: assignee?.name ?? null };
+    }
   }
 
   const [latest] = await db
