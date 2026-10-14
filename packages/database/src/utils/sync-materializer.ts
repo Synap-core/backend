@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 import { createLogger } from "@synap-core/core";
-import { eq } from "drizzle-orm";
+import { eq, sql, type SQL } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { events } from "../schema/events.js";
 import { entities } from "../schema/entities.js";
@@ -404,6 +404,34 @@ export async function resolveMaterializedEntityType(
   return (data.type as string) ?? "note";
 }
 
+/**
+ * `systemData.media` / `mediaCopyFailures` are POD-LOCAL: a media copy is a
+ * document in the pod's OWN storage, copied by its own job. A peer's values
+ * name documents (and storage keys) that live on the peer, so a replica that
+ * took them would block this pod's own copy (the URL reads as "copied") and a
+ * later replica would wipe the copies this pod made. Replication therefore
+ * never carries them: they are stripped on the way in, and an update keeps
+ * the row's local values.
+ */
+const POD_LOCAL_SYSTEM_DATA_KEYS = ["media", "mediaCopyFailures"] as const;
+
+export function withoutPodMedia(systemData: unknown): Record<string, unknown> {
+  if (
+    !systemData ||
+    typeof systemData !== "object" ||
+    Array.isArray(systemData)
+  )
+    return {};
+  const out = { ...(systemData as Record<string, unknown>) };
+  for (const key of POD_LOCAL_SYSTEM_DATA_KEYS) delete out[key];
+  return out;
+}
+
+/** The replica's systemData, with this row's own media keys laid back over it. */
+export function replicaKeepingLocalMedia(systemData: unknown): SQL {
+  return sql`${JSON.stringify(withoutPodMedia(systemData))}::jsonb || jsonb_strip_nulls(jsonb_build_object('media', ${entities.systemData} -> 'media', 'mediaCopyFailures', ${entities.systemData} -> 'mediaCopyFailures'))`;
+}
+
 async function materializeEntity(
   action: string,
   subjectId: string,
@@ -435,7 +463,7 @@ async function materializeEntity(
         documentId: data.documentId as string | undefined,
         properties: data.properties ?? {},
         ...lifecycleReplica,
-        systemData: data.systemData ?? {},
+        systemData: withoutPodMedia(data.systemData),
         version: (data.version as number) ?? 1,
       })
       .onConflictDoUpdate({
@@ -447,7 +475,7 @@ async function materializeEntity(
           type: resolvedType,
           properties: data.properties ?? {},
           ...lifecycleReplica,
-          systemData: data.systemData ?? {},
+          systemData: replicaKeepingLocalMedia(data.systemData),
           version: (data.version as number) ?? 1,
           updatedAt: new Date(),
         },

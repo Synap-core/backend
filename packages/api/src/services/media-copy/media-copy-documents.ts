@@ -3,10 +3,13 @@
  * not a document anyone filed. It is marked at store time
  * (`metadata.uploadKind = "media-copy"`, `metadata.mediaCopyOf = <entityId>`)
  * and every document LIST leaves it out (Files, the mention picker). It is
- * still a real document: the file door signs it, the entity's systemData
- * names it, and its `document.create.completed` event stays — that event row
- * is the fact bus peer sync replicates from, and an entity whose copy never
- * reached a peer would name a document the peer does not have.
+ * still a real document: the file door signs it and the entity's systemData
+ * names it. Its `document.create.completed` event stays: it is the one fact
+ * every document write emits (event log, SSE, peer sync, audit), and
+ * silencing it would take an event-less write path in DocumentRepository for
+ * this one caller. The harm the event did cause — copies flooding document
+ * lists — is this exclusion's job. (Peers never ADOPT a copy: replication
+ * strips `systemData.media`, see `withoutPodMedia` in sync-materializer.)
  */
 import { sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
