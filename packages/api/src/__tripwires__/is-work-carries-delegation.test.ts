@@ -23,6 +23,9 @@ const IS_WORK_ENDPOINTS = [
   "/api/skills/execute",
   "/api/tasks/execute",
   "/api/proactive-scan",
+  // `/api/skills/:id/dry-run`: the IS builds an operator client from the body
+  // userId, so a dry-run is IS work for a person (W4-D4B finding).
+  "/dry-run",
 ];
 /**
  * Each such file must CALL `isDelegationHeaders(` (@synap/database).

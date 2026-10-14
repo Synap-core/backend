@@ -27,7 +27,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, skills } from "@synap/database";
+import { db, eq, isDelegationHeaders, skills } from "@synap/database";
 
 import { skillsRouter } from "../../skills.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
@@ -599,6 +599,11 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
           headers: {
             "Content-Type": "application/json",
             "X-API-Key": serviceApiKey,
+            // D4: the IS acts for acting.userId on this dry-run.
+            ...isDelegationHeaders({
+              isUrl: endpoint,
+              operatorUserId: acting.userId,
+            }),
           },
           body: JSON.stringify({
             userId: acting.userId,

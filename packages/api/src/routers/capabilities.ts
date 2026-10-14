@@ -43,6 +43,7 @@ import {
   isNull,
   inArray,
   drizzleSql,
+  isDelegationHeaders,
 } from "@synap/database";
 import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
@@ -1663,6 +1664,8 @@ export const capabilitiesRouter = router({
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": isApiKey,
+          // D4: the IS acts for ctx.userId on this dry-run — a per-run token.
+          ...isDelegationHeaders({ isUrl, operatorUserId: ctx.userId }),
         },
         body: JSON.stringify({
           userId: ctx.userId,
