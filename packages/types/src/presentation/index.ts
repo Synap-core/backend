@@ -4,8 +4,8 @@
  * The ONE contract between the catalog (a kind declares its presentation on its
  * profile, stored as `profiles.uiHints.presentation`), the pod (validation,
  * backfill, the capture-copy job that fills `entities.systemData.media`) and
- * every renderer (web, relay). Plan: pod document ede89d4d (entity rendering
- * consolidation, approved 2026-10-13).
+ * every renderer (web, relay) — so a kind is drawn the same way on every
+ * surface, from what its profile declares rather than from per-surface code.
  *
  * Model (what the market converged on): ONE object, a small fixed set of
  * ALTITUDES chosen by the host; the kind's FAMILY chooses the anatomy; users
@@ -64,8 +64,9 @@ export interface ProfilePresentation {
 }
 
 /**
- * One media item the pod copied into itself (decision D2: external images are
- * copied at capture, never hot-linked). Written by the pod's copy job to
+ * One media item the pod copied into itself. External images are copied, never
+ * hot-linked: an <img> on a third-party URL leaks the viewer's IP and referrer
+ * and dies with the source. Written by the pod's copy job to
  * `entities.systemData.media`; never user-editable.
  */
 export interface EntityMediaCopy {
@@ -182,6 +183,20 @@ export function parseProfilePresentation(
   }
 
   return issues.length ? { ok: false, issues } : { ok: true, value: out };
+}
+
+/**
+ * A profile's presentation read off its `uiHints` (`uiHints.presentation`),
+ * or `null` when it declares none or an invalid one. The ONE reader: the pod
+ * (media copy, capture), web and relay all take a profile row's uiHints
+ * through here, so "what does this kind declare" has one answer.
+ */
+export function presentationFromUiHints(
+  uiHints: unknown,
+): ProfilePresentation | null {
+  if (!isRecord(uiHints) || uiHints.presentation === undefined) return null;
+  const parsed = parseProfilePresentation(uiHints.presentation);
+  return parsed.ok ? parsed.value : null;
 }
 
 /** Read `systemData.media` defensively (written by the pod, but stored as jsonb). */

@@ -1,6 +1,7 @@
 /**
- * Copy an entity's external images INTO the pod (decision D2: no hot-linking —
- * no IP/referrer leak, survives the source's deletion).
+ * Copy an entity's external images INTO the pod: no hot-linking, so no
+ * IP/referrer leak to the image host, and the picture survives the source's
+ * deletion.
  *
  * Fills the `ENTITY_MEDIA_COPY_QUEUE` IoC slot (registered by apps/api at boot).
  * The job is enqueued by the entity-media-copy reactor on an entity's create /
@@ -49,26 +50,27 @@ import {
   EntityBodyService,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import type { EntityMediaCopy } from "@synap-core/types/presentation";
+import {
+  presentationFromUiHints,
+  type EntityMediaCopy,
+} from "@synap-core/types/presentation";
 import { storeDocumentFromBuffer } from "../../routers/file-upload.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { fetchExternalImage, type ImageFetchResult } from "./fetch-image.js";
 import {
   mergeMediaSystemData,
   planMediaCopy,
-  presentationOf,
   transientRetryDelaySeconds,
   type MediaCopyFailure,
 } from "./media-plan.js";
 import { getBoss } from "@synap/events";
-import { ENTITY_MEDIA_COPY_QUEUE } from "@synap/jobs/workers/entity-media-copy-worker.js";
+import {
+  ENTITY_MEDIA_COPY_QUEUE,
+  type EntityMediaCopyQueueData,
+} from "@synap/jobs/workers/entity-media-copy-worker.js";
 import { entityMediaCopySingletonKey } from "./media-copy-reactor.js";
 
 const logger = createLogger({ module: "entity-media-copy" });
-
-export interface EntityMediaCopyJobData {
-  entityId: string;
-}
 
 export interface EntityMediaCopyResult {
   status: "skipped" | "copied";
@@ -113,7 +115,7 @@ function announceMediaCopied(entity: {
 }
 
 export async function runEntityMediaCopy(
-  input: EntityMediaCopyJobData,
+  input: EntityMediaCopyQueueData,
   deps: CopyEntityMediaDeps = {}
 ): Promise<EntityMediaCopyResult> {
   const skipped: EntityMediaCopyResult = {
@@ -140,7 +142,7 @@ export async function runEntityMediaCopy(
   const urls = planMediaCopy({
     properties: row.properties as Record<string, unknown> | null,
     systemData: row.systemData,
-    presentation: presentationOf(row.uiHints),
+    presentation: presentationFromUiHints(row.uiHints),
   });
   if (urls.length === 0) return skipped;
 

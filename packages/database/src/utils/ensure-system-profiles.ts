@@ -28,14 +28,14 @@ import {
 
 /**
  * How the system kinds PRESENT themselves (`ProfilePresentation`,
- * `@synap-core/types/presentation`; entity rendering plan ede89d4d, decision
- * 8). Backfilled into `uiHints.presentation` by `ensureSystemProfiles` ONLY
+ * `@synap-core/types/presentation`) — declared as data so every renderer draws
+ * them alike. Backfilled into `uiHints.presentation` by `ensureSystemProfiles` ONLY
  * where the row has none — a template that refines a system kind keeps its
  * refinement. Only the kinds whose family is obvious; every other system kind
  * falls to the renderer's mime/generic fallback. Values must parse under
  * `parseProfilePresentation` and name properties the kind links
  * (`SYSTEM_PROFILE_PROPERTY_LINKS`) — pinned by
- * `ensure-system-profiles.presentation.test.ts`.
+ * `ensure-system-profiles-presentation.pglite.test.ts`.
  */
 export const SYSTEM_PROFILE_PRESENTATIONS: Readonly<
   Record<string, Record<string, unknown>>

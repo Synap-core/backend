@@ -1518,7 +1518,7 @@ export async function createWorkspaceFromDefinition(
       };
       profileIds.push(created!.id);
 
-      // Presentation (entity rendering, decision 8): converge
+      // Presentation (how the kind's entities are drawn): converge
       // `uiHints.presentation` on the new OR reused row, BEFORE the property
       // pass below (which `continue`s early for a reused profile). Merged into
       // the live ui_hints — icon/color/description survive.

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { parseProfilePresentation } from "@synap-core/types/presentation";
 
 /**
- * `profiles[].presentation` (entity rendering, decision 8) — and its CP
+ * `profiles[].presentation` (how the kind's entities are drawn) — and its CP
  * registry spelling `profiles[].uiHints.presentation`. JUDGED here, by the ONE
  * parser (`parseProfilePresentation`, `@synap-core/types/presentation`): an
  * invalid declaration is refused with the parser's issues, a valid one is

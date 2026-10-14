@@ -3,7 +3,7 @@
  * pod copy for, and how a run's outcome folds into `systemData` without
  * clobbering anything else there.
  *
- * Sources (decision D2 — external images are copied into the pod):
+ * Sources (external images are copied into the pod, never hot-linked):
  *   1. the profile's DECLARED media property (`uiHints.presentation.media.source
  *      .property`) when it holds an http(s) URL (or a list of them);
  *   2. `media-urls` — media URLs a producer handed over at capture (Apify
@@ -17,7 +17,6 @@
  */
 
 import {
-  parseProfilePresentation,
   readEntityMediaCopies,
   type EntityMediaCopy,
   type ProfilePresentation,
@@ -33,17 +32,6 @@ export const CAPTURED_MEDIA_URLS_PROPERTY = "media-urls";
 export const MAX_MEDIA_URLS_PER_ENTITY = 12;
 /** A transient failure (timeout, 5xx) is retried on later runs up to this. */
 export const MAX_TRANSIENT_ATTEMPTS = 3;
-
-/** The profile's presentation, or null when it declares none (or an invalid one). */
-export function presentationOf(uiHints: unknown): ProfilePresentation | null {
-  const raw =
-    uiHints && typeof uiHints === "object"
-      ? (uiHints as Record<string, unknown>).presentation
-      : undefined;
-  if (raw === undefined) return null;
-  const parsed = parseProfilePresentation(raw);
-  return parsed.ok ? parsed.value : null;
-}
 
 /**
  * The property that holds this kind's own media URL, or null. A link's

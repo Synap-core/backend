@@ -1,19 +1,21 @@
 import { describe, expect, it } from "vitest";
-import type { EntityMediaCopy } from "@synap-core/types/presentation";
+import {
+  presentationFromUiHints,
+  type EntityMediaCopy,
+} from "@synap-core/types/presentation";
 import {
   CAPTURED_MEDIA_URLS_PROPERTY,
   collectMediaSourceUrls,
   mergeMediaSystemData,
   planMediaCopy,
-  presentationOf,
 } from "../media-plan.js";
 import { foldCapturedImage } from "../capture-media.js";
 
-const declared = presentationOf({
+const declared = presentationFromUiHints({
   presentation: { family: "record", media: { source: { property: "image" } } },
 });
 /** The real link shape (catalog bookmark/article): the declared property IS the page. */
-const linkDeclared = presentationOf({
+const linkDeclared = presentationFromUiHints({
   presentation: { family: "link", media: { source: { property: "url" } } },
 });
 
@@ -28,12 +30,12 @@ const copy = (
   copiedAt: "2026-10-13T00:00:00.000Z",
 });
 
-describe("presentationOf", () => {
+describe("presentationFromUiHints", () => {
   it("reads a valid declaration, null for none or invalid", () => {
     expect(declared?.media?.source).toEqual({ property: "image" });
-    expect(presentationOf({})).toBeNull();
-    expect(presentationOf(null)).toBeNull();
-    expect(presentationOf({ presentation: { family: "nope" } })).toBeNull();
+    expect(presentationFromUiHints({})).toBeNull();
+    expect(presentationFromUiHints(null)).toBeNull();
+    expect(presentationFromUiHints({ presentation: { family: "nope" } })).toBeNull();
   });
 });
 

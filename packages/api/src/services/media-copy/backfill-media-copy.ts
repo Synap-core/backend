@@ -3,13 +3,13 @@
  * entity that already existed before the media-copy reactor did.
  *
  * The reactor (`media-copy-reactor.ts`) fires on an entity's create / update
- * only, so an entity written before D2 shipped never gets a pod copy — and
- * hosts now draw a cover ONLY from pod-held media, so without this pass every
- * existing bookmark / book / avatar loses its cover on deploy.
+ * only, so an entity that already existed when the pod learned to copy media
+ * never gets a pod copy — and hosts draw a cover ONLY from pod-held media, so
+ * without this pass every existing bookmark / book / avatar has no cover.
  *
  * ONE copy path: this module decides NOTHING about what to copy beyond the
  * runner's own plan. It reads each candidate row through the SAME
- * `presentationOf` + `planMediaCopy` the runner (`copy-entity-media.ts`) uses,
+ * `presentationFromUiHints` + `planMediaCopy` the runner (`copy-entity-media.ts`) uses,
  * and for an entity that owes media it sends the SAME job
  * (`ENTITY_MEDIA_COPY_QUEUE`, `{ entityId }`). The runner re-plans from the row
  * when the job starts, so a job for an entity that was copied in the meantime
@@ -71,8 +71,8 @@ import {
   CAPTURED_MEDIA_URLS_PROPERTY,
   declaredMediaProperty,
   planMediaCopy,
-  presentationOf,
 } from "./media-plan.js";
+import { presentationFromUiHints } from "@synap-core/types/presentation";
 import { entityMediaCopySingletonKey } from "./media-copy-reactor.js";
 
 const logger = createLogger({ module: "media-copy-backfill" });
@@ -148,7 +148,7 @@ export async function readMediaScope(): Promise<MediaScope> {
   const declared = rows
     .map((r) => ({
       id: r.id,
-      property: declaredMediaProperty(presentationOf(r.uiHints)),
+      property: declaredMediaProperty(presentationFromUiHints(r.uiHints)),
     }))
     .filter((r): r is { id: string; property: string } => r.property !== null)
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -305,7 +305,7 @@ export async function backfillEntityMediaCopies(
       const owed = planMediaCopy({
         properties: row.properties as Record<string, unknown> | null,
         systemData: row.systemData,
-        presentation: presentationOf(row.uiHints),
+        presentation: presentationFromUiHints(row.uiHints),
       });
       if (owed.length === 0) continue;
       await send(

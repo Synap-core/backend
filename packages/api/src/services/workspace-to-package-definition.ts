@@ -179,7 +179,7 @@ export async function workspaceToPackageDefinition(opts: {
       semanticSlug: p.semanticSlug,
       profileKind: p.profileKind as "kind" | "role" | undefined,
       applicableKinds: p.applicableKinds ?? undefined,
-      // The kind's presentation round-trips (entity rendering, decision 8) —
+      // The kind's presentation (how its entities are drawn) round-trips —
       // only when it still parses under the ONE parser, so an export never
       // carries a declaration the apply doors would refuse.
       ...exportedPresentation(uiHints.presentation),

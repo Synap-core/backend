@@ -32,7 +32,7 @@ import {
   type CopiedImageMime,
 } from "./image-sniff.js";
 
-/** Decision 7: images up to 25 MB. */
+/** Images up to 25 MB: a large photo fits, a video or a dump does not. */
 export const MEDIA_COPY_MAX_BYTES = 25 * 1024 * 1024;
 const TIMEOUT_MS = 30_000;
 const REDIRECT_HOPS = 3;

@@ -1,5 +1,5 @@
 /**
- * System-kind presentation backfill (entity rendering, decision 8), driven
+ * System-kind presentation backfill (how system kinds are drawn), driven
  * through the REAL `ensureSystemProfiles()` on PGlite.
  *
  * Pinned:

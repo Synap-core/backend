@@ -966,9 +966,9 @@ export async function markProfileRetired(
 }
 
 /**
- * THE ONE write of a profile's `ui_hints.presentation` (entity rendering plan
- * ede89d4d, decision 8: a kind's presentation family + media source, declared
- * on its catalog profile, stored as `uiHints.presentation` — no column).
+ * THE ONE write of a profile's `ui_hints.presentation` (a kind's presentation
+ * family + media source, declared on its catalog profile — config, not
+ * renderer code — and stored in `uiHints` so no migration is needed).
  *
  * `ui_hints` is otherwise CREATE-ONLY on the template doors, so an existing
  * pod's profile would never learn a presentation the catalog added later. This

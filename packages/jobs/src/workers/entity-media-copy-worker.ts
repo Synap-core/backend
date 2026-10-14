@@ -1,8 +1,8 @@
 /**
  * Entity Media Copy Worker — copy an entity's external images into the pod.
  *
- * Decision D2 (entity rendering consolidation, 2026-10-13): an external image
- * an entity names — in its profile's declared media property, or in the
+ * Why: an <img> on a third-party URL leaks the viewer's IP and referrer and
+ * dies with the source, so an external image an entity names — in its profile's declared media property, or in the
  * `media-urls` a capture producer handed over — is COPIED into the pod after
  * the entity exists, and recorded on `entities.systemData.media[]`. Renderers
  * then draw the pod copy, never the third-party URL.

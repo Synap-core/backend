@@ -1,5 +1,5 @@
 /**
- * A catalog profile's `presentation` (entity rendering, decision 8) reaches
+ * A catalog profile's `presentation` (how its entities are drawn) reaches
  * `profiles.ui_hints.presentation` through the REAL
  * `reconcileWorkspaceFromDefinition`, on PGlite, driven by the REAL catalog
  * profiles (the generated `templates.ts`).

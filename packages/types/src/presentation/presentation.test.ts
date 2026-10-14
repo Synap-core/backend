@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseProfilePresentation, readEntityMediaCopies } from "./index.js";
+import {
+  parseProfilePresentation,
+  presentationFromUiHints,
+  readEntityMediaCopies,
+} from "./index.js";
 
 describe("parseProfilePresentation", () => {
   it("accepts a full declaration and drops unknown keys", () => {
@@ -58,5 +62,20 @@ describe("readEntityMediaCopies", () => {
       }).map((m) => m.documentId),
     ).toEqual(["d1"]);
     expect(readEntityMediaCopies(null)).toEqual([]);
+  });
+});
+
+describe("presentationFromUiHints", () => {
+  it("reads a valid declaration off uiHints", () => {
+    expect(
+      presentationFromUiHints({ icon: "x", presentation: { family: "media" } })
+    ).toMatchObject({ family: "media" });
+  });
+  it("null when absent, invalid, or uiHints is not an object", () => {
+    expect(presentationFromUiHints({ icon: "x" })).toBeNull();
+    expect(presentationFromUiHints({ presentation: { family: "nope" } })).toBeNull();
+    expect(presentationFromUiHints(null)).toBeNull();
+    expect(presentationFromUiHints([])).toBeNull();
+    expect(presentationFromUiHints("media")).toBeNull();
   });
 });

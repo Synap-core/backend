@@ -763,7 +763,7 @@ export async function reconcileWorkspaceFromDefinition(
     }
     profileMap[profile.slug] = resolved.id;
 
-    // Presentation (entity rendering, decision 8). `ui_hints` is create-only on
+    // Presentation (how the kind's entities are drawn). `ui_hints` is create-only on
     // this door, so an EXISTING profile only learns a presentation the catalog
     // added later through here: merged into the live ui_hints (icon/color/
     // description/retired survive), written only when it differs. No marker
