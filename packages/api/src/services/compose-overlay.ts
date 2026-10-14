@@ -84,14 +84,44 @@ export class ComposeBaseNotFoundError extends Error {
 
 /**
  * The compose overlay itself failed — `assertWorkspaceWrite` or
- * `reconcileWorkspaceFromDefinition` threw. Hub maps this to a 500 "Compose
- * overlay failed"; tRPC lets it propagate to a 500 — distinct from a
- * create-path failure so each door surfaces its original message.
+ * `reconcileWorkspaceFromDefinition` threw. It keeps the original error as
+ * its `cause`, so a refusal stays a refusal at every door: the write gate's
+ * FORBIDDEN is `refusalCode` here (tRPC) and a 403 through the Hub's
+ * cause-walking `httpStatusForTrpcError`; a re-sync that broke has no
+ * refusal code and is a server fault (500).
  */
 export class ComposeOverlayError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
     this.name = "ComposeOverlayError";
+  }
+
+  /** The tRPC code of a refusal in the cause chain, or null (a server fault). */
+  get refusalCode():
+    | "BAD_REQUEST"
+    | "UNAUTHORIZED"
+    | "FORBIDDEN"
+    | "NOT_FOUND"
+    | "CONFLICT"
+    | null {
+    let cursor: unknown = this.cause;
+    for (
+      let depth = 0;
+      cursor && typeof cursor === "object" && depth < 4;
+      depth++
+    ) {
+      const code = (cursor as { code?: unknown }).code;
+      if (
+        code === "BAD_REQUEST" ||
+        code === "UNAUTHORIZED" ||
+        code === "FORBIDDEN" ||
+        code === "NOT_FOUND" ||
+        code === "CONFLICT"
+      )
+        return code;
+      cursor = (cursor as { cause?: unknown }).cause;
+    }
+    return null;
   }
 }
 
@@ -247,6 +277,6 @@ export async function composeOntoBaseWorkspace(
       ...(pendingPack ? { pendingPack } : {}),
     };
   } catch (e) {
-    throw new ComposeOverlayError((e as Error).message);
+    throw new ComposeOverlayError((e as Error).message, { cause: e });
   }
 }

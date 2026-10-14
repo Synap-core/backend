@@ -1434,3 +1434,51 @@ describe("a whole-layer-2 failure answers a fixed sentence, never the raw cause"
     expect(messageOf(run.reply)).toMatch(/applying its package layers failed/);
   });
 });
+
+// ── A compose the caller may not write is a refusal, not a 500 (review S5) ──
+
+describe("a compose onto a space the caller may only VIEW is refused as such", () => {
+  async function viewOnlyBase(): Promise<string> {
+    const id = randomUUID();
+    const other = randomUUID();
+    await q(`insert into users (id, email) values ($1, $2)`, [
+      other,
+      `${other.slice(0, 8)}@x.test`,
+    ]);
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, settings) values ($1,$2,$3,$4,'active',$5::jsonb)`,
+      [
+        id,
+        `Theirs ${id.slice(0, 8)}`,
+        other,
+        `theirs-${id.slice(0, 8)}`,
+        JSON.stringify({
+          template: {
+            slug: `theirs-${id.slice(0, 8)}`,
+            version: "t-1",
+            state: "active",
+            at: "t0",
+          },
+        }),
+      ]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner'), ($4,$2,$5,'viewer')`,
+      [randomUUID(), id, other, randomUUID(), OWNER]
+    );
+    return id;
+  }
+  const pkg: Pkg = { slug: "view-only-pack", version: "v-1", playbooks: [] };
+
+  it("tRPC createFromDefinition answers FORBIDDEN, never INTERNAL_SERVER_ERROR", async () => {
+    const run = await DOORS[3]!.apply(pkg, await viewOnlyBase());
+    expect((run.threw as { code?: string } | undefined)?.code).toBe(
+      "FORBIDDEN"
+    );
+  });
+
+  it("Hub /packages/apply answers 403, never 500", async () => {
+    const run = await DOORS[1]!.apply(pkg, await viewOnlyBase());
+    expect(run.status, JSON.stringify(run.reply)).toBe(403);
+  });
+});

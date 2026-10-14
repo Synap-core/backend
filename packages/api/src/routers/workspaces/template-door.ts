@@ -48,6 +48,7 @@ import {
   ComposeBaseUnavailableError,
   DependencyResolutionError,
   ComposeBaseNotFoundError,
+  ComposeOverlayError,
 } from "../../services/workspace-materialization-service.js";
 import type { ResolvedPackageDependency } from "../../services/package-dependency-resolver.js";
 import {
@@ -184,6 +185,14 @@ function doorError(
     return new TRPCError({
       code: "NOT_FOUND",
       message: "compose base workspace not found",
+    });
+  // A compose onto a space the caller may not write is a REFUSAL (the write
+  // gate's code), never a 500 "creation failed" with an error progress event.
+  if (err instanceof ComposeOverlayError && err.refusalCode)
+    return new TRPCError({
+      code: err.refusalCode,
+      message: `Compose overlay failed: ${err.message}`,
+      cause: err,
     });
   const message = err instanceof Error ? err.message : String(err);
   const failedStep = message.match(/at step '([^']+)'/)?.[1];
