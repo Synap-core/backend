@@ -56,7 +56,13 @@ export function declaredMediaProperty(
 /** One recorded failure, on `systemData.mediaCopyFailures` (visible on reads). */
 export interface MediaCopyFailure {
   sourceUrl: string;
-  reason: ImageFetchFailure | "store_failed";
+  /**
+   * `store_unavailable`: the pod has no usable storage (its provider is not
+   * configured). Not the URL's fault and not a transient blip: never counted
+   * toward giving up, never retried by a follow-up — the next edit (or a
+   * backfill re-scan) re-plans it once storage exists.
+   */
+  reason: ImageFetchFailure | "store_failed" | "store_unavailable";
   attempts: number;
   lastAttemptAt: string;
 }
@@ -181,7 +187,7 @@ export function planMediaCopy(input: {
   ).filter((url) => {
     if (copied.has(url)) return false;
     const failed = failures.get(url);
-    if (!failed) return true;
+    if (!failed || failed.reason === "store_unavailable") return true;
     if (PERMANENT_FETCH_FAILURES.has(failed.reason as ImageFetchFailure))
       return false;
     return failed.attempts < MAX_TRANSIENT_ATTEMPTS;
@@ -206,6 +212,7 @@ export function transientRetryDelaySeconds(
   let attempts = 0;
   for (const f of failures) {
     if (!failedThisRun.has(f.sourceUrl)) continue;
+    if (f.reason === "store_unavailable") continue;
     if (PERMANENT_FETCH_FAILURES.has(f.reason as ImageFetchFailure)) continue;
     if (f.attempts >= MAX_TRANSIENT_ATTEMPTS) continue;
     attempts = Math.max(attempts, f.attempts);

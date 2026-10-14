@@ -121,9 +121,32 @@ function announceMediaCopied(entity: {
     userId: entity.userId,
     data: {
       entityId: entity.id,
+      // Only the entity's pod-held media changed (no property, no status):
+      // a client can refresh this entity's picture without reloading every
+      // board, graph and lifecycle count — and coalesce a backfill's stream.
+      reason: "media",
       ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}),
     },
   });
+}
+
+/**
+ * The pod's storage refused a copy because it is not configured (the provider
+ * factory's ValidationError — a missing R2 key, an unknown provider). Every
+ * other copy would download its image only to be refused the same way, so
+ * for {@link STORAGE_UNAVAILABLE_BACKOFF_MS} no run fetches anything.
+ */
+export const STORAGE_UNAVAILABLE_BACKOFF_MS = 10 * 60 * 1000;
+let storageUnavailableUntil = 0;
+
+/** Test seam. */
+export function resetStorageUnavailableForTests(): void {
+  storageUnavailableUntil = 0;
+}
+
+function isStorageUnconfigured(err: unknown): boolean {
+  const e = err as { name?: unknown; context?: { provider?: unknown } } | null;
+  return e?.name === "ValidationError" && e.context?.provider !== undefined;
 }
 
 export async function runEntityMediaCopy(
@@ -179,6 +202,10 @@ export async function runEntityMediaCopy(
   const store = deps.store ?? storeDocumentFromBuffer;
   const now = deps.now ?? (() => new Date());
 
+  if (urls.length > 0 && now().getTime() < storageUnavailableUntil) {
+    return skipped;
+  }
+
   const copied: EntityMediaCopy[] = [];
   const failed: Array<{
     sourceUrl: string;
@@ -218,6 +245,18 @@ export async function runEntityMediaCopy(
         copiedAt: now().toISOString(),
       });
     } catch (err) {
+      if (isStorageUnconfigured(err)) {
+        // Not this URL's fault, and the rest would fail the same way: stop
+        // downloading, and hold every run off for a while.
+        failed.push({ sourceUrl, reason: "store_unavailable" });
+        storageUnavailableUntil =
+          now().getTime() + STORAGE_UNAVAILABLE_BACKOFF_MS;
+        logger.warn(
+          { err, entityId: row.id },
+          "entity-media-copy: pod storage is not configured — copies paused"
+        );
+        break;
+      }
       failed.push({ sourceUrl, reason: "store_failed" });
       logger.warn(
         { err, entityId: row.id, sourceUrl },

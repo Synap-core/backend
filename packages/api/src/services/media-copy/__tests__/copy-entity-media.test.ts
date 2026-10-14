@@ -96,7 +96,10 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
   createLogger: () => ({ ...log, error: vi.fn(), debug: vi.fn() }),
 }));
 
-import { runEntityMediaCopy } from "../copy-entity-media.js";
+import {
+  resetStorageUnavailableForTests,
+  runEntityMediaCopy,
+} from "../copy-entity-media.js";
 import { entityMediaCopyReactor } from "../media-copy-reactor.js";
 
 const IMG = "https://cdn.test/a.png";
@@ -124,6 +127,7 @@ beforeEach(() => {
   state.sets = [];
   state.deleteBody.mockClear();
   state.dead = new Set();
+  resetStorageUnavailableForTests();
   pipes.realtime.mockClear();
   pipes.sideEffects.mockClear();
   pipes.auditLog.mockClear();
@@ -265,7 +269,7 @@ describe("after a copy: clients refetch, the reactor never re-fires", () => {
       eventType: "entity.update.completed",
       subjectId: "e1",
       userId: "u1",
-      data: { entityId: "e1", workspaceId: "w1" },
+      data: { entityId: "e1", reason: "media", workspaceId: "w1" },
     });
     // The loop: the media-copy reactor listens on the side-effect fan-out for
     // entity.update. Nothing the copy does may reach it — nor an entity event
@@ -295,7 +299,7 @@ describe("after a copy: clients refetch, the reactor never re-fires", () => {
       }
     );
     expect(pipes.realtime).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { entityId: "e1" } })
+      expect.objectContaining({ data: { entityId: "e1", reason: "media" } })
     );
   });
 
@@ -480,6 +484,78 @@ describe("stale copies: a changed source is pruned, a deleted copy is re-made", 
     ).toEqual(["doc-again"]);
     // Nothing to discard: the deleted copy has no blob left.
     expect(discard).not.toHaveBeenCalled();
+  });
+});
+
+describe("pod storage not configured: stop downloading, never give the URL up", () => {
+  const okImage = vi.fn(async () => ({
+    ok: true as const,
+    bytes: Buffer.from([1]),
+    mime: "image/png" as const,
+  }));
+  const unconfigured = vi.fn(async () => {
+    throw Object.assign(new Error("R2 storage requires R2_ACCOUNT_ID"), {
+      name: "ValidationError",
+      context: { provider: "r2" },
+    });
+  }) as never;
+  const TWO = "https://cdn.test/b.png";
+
+  it("the first refusal stops the run; no follow-up; the next run fetches nothing", async () => {
+    okImage.mockClear();
+    state.row = entityRow({
+      properties: { "media-urls": [IMG, TWO] },
+      uiHints: {},
+    });
+    state.locked = { systemData: {} };
+    const scheduleRetry = vi.fn(async () => "job");
+    const t0 = new Date("2026-10-14T10:00:00Z");
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store: unconfigured, scheduleRetry, now: () => t0 }
+    );
+    // One download, not one per URL; the second URL stays owed, unrecorded.
+    expect(okImage).toHaveBeenCalledTimes(1);
+    const set = state.sets[0] as { systemData: { values: unknown[] } };
+    expect(JSON.parse(set.systemData.values[2] as string)).toEqual([
+      expect.objectContaining({ sourceUrl: IMG, reason: "store_unavailable" }),
+    ]);
+    expect(scheduleRetry).not.toHaveBeenCalled();
+
+    okImage.mockClear();
+    const r = await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store: unconfigured, now: () => t0 }
+    );
+    expect(r.status).toBe("skipped");
+    expect(okImage).not.toHaveBeenCalled();
+  });
+
+  it("a URL refused for storage is owed again however often it happened", async () => {
+    okImage.mockClear();
+    state.row = entityRow({
+      properties: { "media-urls": [IMG] },
+      uiHints: {},
+      systemData: {
+        mediaCopyFailures: [
+          {
+            sourceUrl: IMG,
+            reason: "store_unavailable",
+            attempts: 9,
+            lastAttemptAt: "t",
+          },
+        ],
+      },
+    });
+    state.locked = { systemData: {} };
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      {
+        fetchImage: okImage,
+        store: vi.fn(async () => ({ documentId: "d" })) as never,
+      }
+    );
+    expect(okImage).toHaveBeenCalledWith(IMG);
   });
 });
 
