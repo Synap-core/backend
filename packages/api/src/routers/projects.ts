@@ -11,13 +11,17 @@ import {
   projects,
   eq,
   desc,
+  asc,
   and,
+  inArray,
+  isNull,
   getDb,
   EventRepository,
   sql,
   ProjectRepository,
   or,
 } from "@synap/database";
+import { entities, relations } from "@synap/database/schema";
 import {
   resolveStageCategory,
   type PlaybookStage,
@@ -45,7 +49,9 @@ import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
 } from "../services/projects/project-outputs.js";
-import { AccessContext } from "../access/index.js";
+import { AccessContext, scopedDb } from "../access/index.js";
+import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
+import { BELONGS_TO_PROJECT } from "../utils/project-scope.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 import {
   hydrateUsedWorkspaces,
@@ -302,6 +308,60 @@ export const projectsRouter = router({
         });
       }
       return result;
+    }),
+
+  /**
+   * The projects a THING is filed into (its `belongs_to_project` edges) —
+   * the project chips on the thing's page (D5: a thing may sit in several).
+   * The thing must be readable (NOT_FOUND otherwise, never an empty list); a
+   * project the caller cannot see is left out by the access layer, never
+   * named. Archived projects are included with their status. Name order.
+   */
+  forEntity: podProcedure
+    .input(z.object({ entityId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      const [thing] = await db
+        .select({ id: entities.id })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.id, input.entityId),
+            isNull(entities.deletedAt),
+            entityReadVisibleWhere(ctx.userId)
+          )
+        )
+        .limit(1);
+      if (!thing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+      const filedInto = db
+        .select({ id: relations.targetEntityId })
+        .from(relations)
+        .where(
+          and(
+            eq(relations.sourceEntityId, input.entityId),
+            eq(relations.type, BELONGS_TO_PROJECT)
+          )
+        );
+      const rows = await scopedDb(AccessContext.from(ctx)).findMany<{
+        id: string;
+        name: string;
+        status: string;
+        colorSlot: number | null;
+        icon: string | null;
+      }>(projects, {
+        where: inArray(projects.id, filedInto),
+        columns: {
+          id: true,
+          name: true,
+          status: true,
+          colorSlot: true,
+          icon: true,
+        },
+        orderBy: [asc(projects.name)],
+      });
+      return { projects: rows };
     }),
 
   /**
