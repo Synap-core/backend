@@ -25,6 +25,7 @@ import {
   UNATTACHED_INVITE,
   spaceIntentCardModel,
   spaceIntentTitle,
+  projectMakingCards,
   type SpaceIntentInput,
   type SpaceProducedKindInput,
 } from "./space-intent.js";
@@ -251,6 +252,52 @@ describe("homeSpacesModel", () => {
       { workspaceId: "w2", title: "Brand" },
       { workspaceId: "w3", title: "Research · Notes" },
     ]);
+  });
+});
+
+describe("projectMakingCards (a project's things, by kind)", () => {
+  it("ONE card per kind that holds something in the project, naming its space; empty kinds are left out", () => {
+    const cards = projectMakingCards([
+      space({
+        produces: [
+          kind(),
+          kind({
+            profileSlug: "story",
+            label: "Story",
+            plural: "Stories",
+            total: 0,
+          }),
+        ],
+      }),
+      space({
+        workspaceId: "w2",
+        name: "Content",
+        label: "Content",
+        produces: [
+          kind({ profileSlug: "post", label: "Post", plural: "Posts" }),
+        ],
+      }),
+    ]);
+    expect(
+      cards.map((c) => [c.title, c.kinds.map((k) => k.profileSlug)])
+    ).toEqual([
+      ["Product · Dev", ["devplane_feature"]],
+      ["Content", ["post"]],
+    ]);
+  });
+
+  it("a kind's stated goal still outranks its live/done words on its own card", () => {
+    const goal = lensKpiFact({
+      label: "Shipped",
+      target: 4,
+      current: 1,
+      unit: "features",
+    });
+    const [card] = projectMakingCards([space()], { devplane_feature: goal });
+    expect(card!.kinds[0]!.fact).toBe("1 / 4 features");
+    expect(projectMakingCards([space()])[0]!.kinds[0]!.fact).toBe(
+      "3 in pipeline · 1 done this week"
+    );
   });
 });
 

@@ -306,6 +306,28 @@ export function homeSpacesModel(
 }
 
 /**
+ * A PROJECT's "What this project is making" (board D2, projects as places):
+ * ONE card per produced kind that holds something in the project
+ * (`total > 0` — the read is already narrowed to it), across every space,
+ * each card naming its space in its title. A kind with nothing in the project
+ * is not something the project makes. One rule for the desktop project page
+ * and the relay project page (was browser-local `projectMakingCards`).
+ */
+export function projectMakingCards(
+  spaces: readonly SpaceIntentInput[],
+  goals?: Readonly<Record<string, LensKpiFact | null | undefined>>
+): SpaceIntentCardModel[] {
+  const cards: SpaceIntentCardModel[] = [];
+  for (const space of spaces) {
+    for (const kind of space.produces) {
+      if (kind.total <= 0) continue;
+      cards.push(spaceIntentCardModel({ ...space, produces: [kind] }, goals));
+    }
+  }
+  return cards;
+}
+
+/**
  * The home's needs-you line — "3 need you · Content 2 · Sales 1" — grouped by
  * space (largest first), each part a door to that space. A zero total OMITS
  * the line (null); an unknown total keeps it, marked "–" (failed ≠ empty).
