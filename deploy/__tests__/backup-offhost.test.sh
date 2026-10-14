@@ -22,6 +22,8 @@
 #                 and on a corrupt snapshot; never touches the live postgres.
 #   R. restore  — fresh host: secrets → DBs → MinIO → fingerprint, in that
 #                 order; a mismatch is RED and leaves the staging dir.
+#   I2. init --non-interactive — no TTY: kit file 0600 (never stdout/argv), marker
+#                 state/recovery-kit=pending, re-run no-op; loop auto-init predicate.
 #   L. layout   — the compose service's paths equal the script's _BK_CT_*.
 #
 # NOT covered (needs a daemon / network): real restic/mc/pg binaries, the
@@ -233,6 +235,36 @@ ct BACKUP_REPOSITORY="$REPO" SYNAP_BACKUP_KIT_STDOUT=1 sh "$SAFETY" init >"$T/ou
 [ "$rc" = 1 ] && ! grep -q -- "$PW" "$T/out" && [ "$(cat "$T/state/backup/restic-password")" = "$PW" ] \
     && ok "second init refuses, prints no secret, keeps the password" || bad "re-init: rc=$rc"
 cp "$T/state/bin/mc" "$T/state/bin/mc.real" 2>/dev/null; cp "$T/bin/mc" "$T/state/bin/mc"   # the copied mc → our fake
+[ "$(cat "$T/state/recovery-kit" 2>/dev/null)" = saved ] && [ "$(perm "$T/state/recovery-kit")" = 644 ] \
+    && ok "interactive init → state/recovery-kit = saved (0644, outside the 0700 dir)" || bad "interactive init marker: $(cat "$T/state/recovery-kit" 2>/dev/null)"
+
+echo "── I2. init --non-interactive (no TTY: the hourly loop / the CP vault delivery)"
+S2="$T/state2"; REPO2="$T/repo2"; B2KEY="b2-application-key-9f3a"; mkdir -p "$S2/bin" && cp "$T/bin/restic" "$S2/bin/restic"
+ni() { ct SYNAP_STATE_DIR="$S2" BACKUP_REPOSITORY="$REPO2" BACKUP_B2_ACCOUNT_KEY="$B2KEY" COMPOSE_CMD="$T/bin/fake-compose" SYNAP_DEPLOY_DIR="$T/deploy" "$@"; }
+ni sh "$SAFETY" init --non-interactive >"$T/ni.out" 2>"$T/ni.err" </dev/null; rc=$?
+PW2="$(cat "$S2/backup/restic-password" 2>/dev/null)"; KIT="$S2/backup/recovery-kit.txt"
+[ "$rc" = 0 ] && [ "${#PW2}" -ge 32 ] && [ "$(perm "$KIT")" = 600 ] && [ "$(perm "$S2/backup")" = 700 ] \
+    && grep -q -- "$PW2" "$KIT" && grep -q "Repository : $REPO2" "$KIT" && grep -q "restore --from-snapshot" "$KIT" && grep -q "BACKUP_B2_ACCOUNT_KEY=$B2KEY" "$KIT" \
+    && ok "non-interactive init → kit file 0600 (repo, password, B2 key, restore steps) without a TTY" || bad "ni init: rc=$rc kit=$(perm "$KIT" 2>/dev/null) $(cat "$T/ni.err")"
+! grep -q -- "$PW2" "$T/ni.out" "$T/ni.err" && ! grep -q -- "$B2KEY" "$T/ni.out" "$T/ni.err" && ! grep -q -- "$PW2" "$CALLS" \
+    && ok "the password and keys never reach stdout, stderr or any command line" || bad "secret leaked: $(cat "$T/ni.out" "$T/ni.err")"
+[ "$(cat "$S2/recovery-kit" 2>/dev/null)" = pending ] && ok "marker state/recovery-kit = pending (recovery kit not yet saved)" || bad "marker: $(cat "$S2/recovery-kit" 2>/dev/null)"
+sum1="$(cat "$KIT" "$S2/backup/restic-password" | cksum)"; m=$(mark)
+ni sh "$SAFETY" init --non-interactive >"$T/ni.out" 2>"$T/ni.err" </dev/null; rc=$?
+[ "$rc" = 0 ] && ! calls_since "$m" | grep -q "^restic" && [ "$(cat "$KIT" "$S2/backup/restic-password" | cksum)" = "$sum1" ] && ! grep -q -- "$PW2" "$T/ni.out" "$T/ni.err" \
+    && ok "re-run is a no-op (rc 0, no restic call, kit + password unchanged, nothing printed)" || bad "ni re-run: rc=$rc $(calls_since "$m" | head -3)"
+ni sh -c '. "$1"; _bk_kit_mark saved' _ "$SAFETY"
+[ "$(cat "$S2/recovery-kit")" = saved ] && ok "kit-saved clears the pending marker" || bad "kit-saved: $(cat "$S2/recovery-kit")"
+rm -rf "$S2" "$REPO2"; mkdir -p "$S2/bin" && cp "$T/bin/restic" "$S2/bin/restic"
+due() { ct SYNAP_STATE_DIR="$S2" "$@" sh -c '. "$1"; _bk_auto_init_due && echo due || echo no' _ "$SAFETY"; }
+B2ENV=(BACKUP_REPOSITORY=b2:bucket:pods/x BACKUP_B2_ACCOUNT_ID=id BACKUP_B2_ACCOUNT_KEY=k)
+[ "$(due "${B2ENV[@]}")" = no ] && ok "loop auto-init: an unregistered pod never auto-initialises" || bad "auto-init due without registration"
+: > "$S2/registration.json"
+[ "$(due "${B2ENV[@]}")" = due ] && ok "loop auto-init: registered pod + b2 repository + B2 keys delivered → due" || bad "auto-init not due after vault delivery"
+[ "$(due BACKUP_REPOSITORY="$REPO" BACKUP_B2_ACCOUNT_ID=id BACKUP_B2_ACCOUNT_KEY=k)" = no ] && [ "$(due BACKUP_REPOSITORY=b2:bucket:x)" = no ] \
+    && ok "loop auto-init: a hand-set (non-b2 / keyless) repository is left to the interactive kit" || bad "auto-init too eager"
+mkdir -p "$S2/backup" && : > "$S2/backup/restic-password"
+[ "$(due "${B2ENV[@]}")" = no ] && ok "loop auto-init: never once a password exists" || bad "auto-init due with a password"
 
 echo "── P. push"
 echo "BACKUP_REPOSITORY=$REPO" >> "$T/deploy/.env"

@@ -305,7 +305,8 @@ pgdata_guard() {
 # Doors (the `synap` CLI and the compose `postgres-backup` service call these;
 # nothing else implements a backup):
 #   backup_init               create the repo, password → state/backup (0600),
-#                             print the recovery kit ONCE
+#                             print the recovery kit ONCE (--non-interactive:
+#                             kit file 0600 + state/recovery-kit marker instead)
 #   backup_run                dump → fingerprint gate → publish/rotate → push
 #   backup_loop               backup_run every BACKUP_INTERVAL_SECONDS (+ drill)
 #   backup_drill [snap]       restore a snapshot into a THROWAWAY postgres and
@@ -715,6 +716,7 @@ backup_loop() {
     # not held by anyone now; flock needs no such cleanup.
     _bk_lock_flock || rm -rf "$(_bk_backups_dir)/.backup.lock"
     while :; do
+        if _bk_auto_init_due; then backup_init --non-interactive || true; fi
         if backup_run && [ -n "$(_bk_cfg BACKUP_REPOSITORY)" ] && _bk_drill_due; then
             _bk_lock drill && { backup_drill latest; _bk_unlock; }
         fi
@@ -722,35 +724,10 @@ backup_loop() {
     done
 }
 
-# Create the repository and its password, then print the recovery kit ONCE.
-backup_init() {
-    local repo pw dir v kv
-    repo="$(_bk_cfg BACKUP_REPOSITORY)"
-    if [ -z "$repo" ]; then
-        _pgs_err "set BACKUP_REPOSITORY in $(_bk_env_file) first (rest:https://…, s3:…, b2:…, or a path), plus its credentials (BACKUP_AWS_* / BACKUP_B2_* / BACKUP_RESTIC_REST_*)"
-        return 2
-    fi
-    pw="$(_bk_password_file)"
-    if [ -e "$pw" ]; then
-        _pgs_err "already initialised: $pw exists. The recovery kit is shown only once; that root-only file holds the password."
-        return 1
-    fi
-    if [ ! -t 1 ] && [ "${SYNAP_BACKUP_KIT_STDOUT:-}" != 1 ]; then
-        _pgs_err "the recovery kit is printed once, to a terminal — run this interactively (or set SYNAP_BACKUP_KIT_STDOUT=1 if stdout is somewhere private)"
-        return 1
-    fi
-    _bk_ensure_restic || return 1
-    if [ -n "$(_bk_cfg MINIO_ACCESS_KEY)" ]; then _bk_ensure_mc || return 1; fi
-    dir="$(dirname "$pw")"
-    (umask 077 && mkdir -p "$dir" && chmod 700 "$dir" \
-        && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$pw.new" && chmod 600 "$pw.new") \
-        || { _pgs_err "cannot write $pw"; rm -f "$pw.new"; return 1; }
-    if ! BACKUP_PASSWORD_FILE="$pw.new" _bk_restic init >/dev/null; then
-        rm -f "$pw.new"
-        _pgs_err "restic init failed (see above). Nothing was kept. An existing repository needs its own password: restore with --password-file, not init."
-        return 1
-    fi
-    mv "$pw.new" "$pw" || return 1
+# The recovery kit as text (stdout). Contains the password: callers send it to a
+# terminal once, or to a 0600 file — never to a log.
+_bk_kit_print() {
+    local repo="$1" pw="$2" v kv
     printf '\n%s\n' "════════════════ SYNAP BACKUP RECOVERY KIT — shown ONCE ════════════════"
     printf '%s\n' "Repository : $repo"
     printf '%s\n' "Password   : $(cat "$pw")"
@@ -765,7 +742,84 @@ backup_init() {
     printf '%s\n' "device or a printed copy). Synap does not keep it: not in the snapshots, not at"
     printf '%s\n' "the control plane, not in any log. Without it the backups cannot be read."
     printf '%s\n\n' "═════════════════════════════════════════════════════════════════════════"
+}
+
+# state/recovery-kit: "pending" (kit generated, owner has not saved it) or
+# "saved". 0644 and directly in state/ — NOT in the 0700 backup/ dir — so the
+# backend can read the one word through its read-only deploy mount and report a
+# boolean on /status/backup. It holds no secret.
+_bk_kit_marker() { echo "$(_bk_state_dir)/recovery-kit"; }
+_bk_kit_mark() {  # pending|saved
+    local f; f="$(_bk_kit_marker)"
+    (umask 022 && mkdir -p "$(dirname "$f")" && printf '%s\n' "$1" > "$f.new" && mv -f "$f.new" "$f") 2>/dev/null \
+        || _pgs_err "could not write $f"
+}
+
+# Create the repository and its password.
+#   interactive (default): print the recovery kit ONCE to the terminal.
+#   --non-interactive (or SYNAP_BACKUP_NONINTERACTIVE=1): for the hourly loop and
+#     the Control Plane's vault delivery — no TTY needed. The kit goes to
+#     state/backup/recovery-kit.txt (0600), never to stdout or any log, the
+#     state/recovery-kit marker says "pending" until the owner saves it, and a
+#     re-run once initialised is a no-op (exit 0).
+backup_init() {
+    local repo pw dir auto="" kit
+    case "${1:-}" in --non-interactive) auto=1 ;; esac
+    [ "${SYNAP_BACKUP_NONINTERACTIVE:-}" = 1 ] && auto=1
+    repo="$(_bk_cfg BACKUP_REPOSITORY)"
+    if [ -z "$repo" ]; then
+        _pgs_err "set BACKUP_REPOSITORY in $(_bk_env_file) first (rest:https://…, s3:…, b2:…, or a path), plus its credentials (BACKUP_AWS_* / BACKUP_B2_* / BACKUP_RESTIC_REST_*)"
+        return 2
+    fi
+    pw="$(_bk_password_file)"
+    if [ -e "$pw" ]; then
+        if [ -n "$auto" ]; then _pgs_log "backup repository already initialised — nothing to do"; return 0; fi
+        _pgs_err "already initialised: $pw exists. The recovery kit is shown only once; that root-only file holds the password."
+        return 1
+    fi
+    if [ -z "$auto" ] && [ ! -t 1 ] && [ "${SYNAP_BACKUP_KIT_STDOUT:-}" != 1 ]; then
+        _pgs_err "the recovery kit is printed once, to a terminal — run this interactively (or set SYNAP_BACKUP_KIT_STDOUT=1 if stdout is somewhere private, or use --non-interactive to write a 0600 kit file)"
+        return 1
+    fi
+    _bk_ensure_restic || return 1
+    if [ -n "$(_bk_cfg MINIO_ACCESS_KEY)" ]; then _bk_ensure_mc || return 1; fi
+    dir="$(dirname "$pw")"
+    (umask 077 && mkdir -p "$dir" && chmod 700 "$dir" \
+        && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$pw.new" && chmod 600 "$pw.new") \
+        || { _pgs_err "cannot write $pw"; rm -f "$pw.new"; return 1; }
+    if ! BACKUP_PASSWORD_FILE="$pw.new" _bk_restic init >/dev/null; then
+        rm -f "$pw.new"
+        _pgs_err "restic init failed (see above). Nothing was kept. An existing repository needs its own password: restore with --password-file, not init."
+        return 1
+    fi
+    if [ -n "$auto" ]; then
+        # The kit file first: a password that exists nowhere but the pod's own
+        # password file is the state we are avoiding.
+        kit="$dir/recovery-kit.txt"
+        (umask 077 && _bk_kit_print "$repo" "$pw.new" > "$kit.new" && chmod 600 "$kit.new" && mv -f "$kit.new" "$kit") \
+            || { rm -f "$pw.new" "$kit.new"; _pgs_err "cannot write the recovery kit file — nothing was kept"; return 1; }
+        mv "$pw.new" "$pw" || return 1
+        _bk_kit_mark pending
+        _pgs_log "repository initialised; recovery kit written to $kit (0600) — the owner must save it" >&2
+        return 0
+    fi
+    mv "$pw.new" "$pw" || return 1
+    _bk_kit_print "$repo" "$pw"
+    _bk_kit_mark saved
     _pgs_log "repository initialised; the hourly backup service pushes from its next run (or: synap backup push)" >&2
+}
+
+# The Control Plane's vault delivery (pod-agent `configure`) puts a b2: repository
+# + B2 keys into .env on a CP-registered pod. This is the pod-side trigger: the
+# backup loop (which has restic and the state mount) initialises that repository
+# by itself, once. Deliberately narrow — only b2 + B2 credentials + a registered
+# pod — so an operator who points BACKUP_REPOSITORY somewhere by hand still gets
+# the interactive kit.
+_bk_auto_init_due() {
+    [ ! -e "$(_bk_password_file)" ] || return 1
+    [ -e "$(_bk_state_dir)/registration.json" ] || return 1
+    case "$(_bk_cfg BACKUP_REPOSITORY)" in b2:*) ;; *) return 1 ;; esac
+    [ -n "$(_bk_cfg BACKUP_B2_ACCOUNT_ID)" ] && [ -n "$(_bk_cfg BACKUP_B2_ACCOUNT_KEY)" ]
 }
 
 backup_status() {
@@ -884,13 +938,13 @@ if [ -n "$_pgs_main" ]; then
         guard)   pgdata_guard ;;
         backup)  pgdata_backup "${2:-manual}" ;;
         restore) pgdata_restore "${2:?usage: pgdata-safety.sh restore <dir>}" ;;
-        init)    backup_init ;;
+        init)    backup_init "${2:-}" ;;
         run|push) backup_run ;;
         loop)    backup_loop ;;
         drill)   _bk_lock drill || exit 1; backup_drill "${2:-latest}"; _r=$?; _bk_unlock; exit $_r ;;
         status)  backup_status ;;
         minio-import) _bk_minio_import "${2:?usage: pgdata-safety.sh minio-import <dir>}" ;;
         restore-snapshot) backup_restore_snapshot "${2:-}" ;;
-        *) echo "usage: $0 layout|guard|backup [label]|restore <dir>|init|run|loop|drill [snap]|status|restore-snapshot <snap>" >&2; exit 2 ;;
+        *) echo "usage: $0 layout|guard|backup [label]|restore <dir>|init [--non-interactive]|run|loop|drill [snap]|status|restore-snapshot <snap>" >&2; exit 2 ;;
     esac
 fi
