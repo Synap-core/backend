@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Audit tab.
+ * Governance › Activity (the former Audit tab; its `/audit` URL is kept).
  *
  * Three sub-tabs over the same filter bar:
  *   1. Activity log    — pod-wide event log with workspace filter (live data)
@@ -26,6 +26,7 @@ import {
 } from "./_lib/filter-bar";
 import { defaultDateRange } from "./_lib/format";
 import { ProposalsSection } from "./_lib/proposals-section";
+import { GovernanceHeader } from "../governance/_lib/governance-header";
 
 type Section = "activity" | "proposals" | "queue";
 const SECTIONS: Section[] = ["activity", "proposals", "queue"];
@@ -84,14 +85,7 @@ function AuditInner() {
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Audit
-        </h1>
-        <p className="text-[13px] text-foreground/55">
-          What happened on this pod.
-        </p>
-      </header>
+      <GovernanceHeader active="activity" hint="What happened on this pod." />
 
       <FilterBar
         filters={filters}
@@ -151,14 +145,7 @@ export default function AuditPage() {
 function AuditFallback() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Audit
-        </h1>
-        <p className="text-[13px] text-foreground/55">
-          What happened on this pod.
-        </p>
-      </header>
+      <GovernanceHeader active="activity" hint="What happened on this pod." />
       <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
     </div>
   );
