@@ -155,8 +155,12 @@ export async function finishTemplateApply(
       if (converged) {
         // A space another door is still building stays "building" unless
         // this apply built it.
+        const active = built || current?.state !== "building";
         return {
-          state: built || current?.state !== "building" ? "active" : "building",
+          state: active ? "active" : "building",
+          // A converged space has no build to resume: its create's ledger
+          // goes (a later failed re-sync must never read as "resume").
+          ...(active ? { completedSteps: null } : {}),
           ...(pendingVersionStamp ? { version: pendingVersionStamp } : {}),
           ...(pendingPack
             ? { packs: withPack(current?.packs, pendingPack, now) }

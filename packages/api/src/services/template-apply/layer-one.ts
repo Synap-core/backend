@@ -33,7 +33,11 @@ import {
 } from "../capabilities/resolve-workspace-template.js";
 import { reopenFailedLayerTwo } from "../template-apply-finisher.js";
 import { reconcileBaseDefaults } from "./base-defaults.js";
-import { planTemplateApply, type TemplateApplyAction } from "./plan.js";
+import {
+  planTemplateApply,
+  RESYNC_FAILED_STEP,
+  type TemplateApplyAction,
+} from "./plan.js";
 import { resolveTarget } from "./resolve-target.js";
 
 const logger = createLogger({ module: "template-apply/layer-one" });
@@ -389,22 +393,30 @@ export async function applyLayerOne(
         ...(action.reason === "adopt" ? { mergeCapabilities: true } : {}),
       });
     } catch (err) {
-      // The space exists: record the layer-1 failure honestly (the next apply
-      // plans a re-sync of it), then surface it.
+      // The space exists: record the layer-1 failure honestly, then surface
+      // it. The next apply plans a re-sync of it (`RESYNC_FAILED_STEP`); the
+      // create's resume ledger is dropped — a built space has nothing to
+      // resume, and a full ledger would read as "resume a finished build".
       await writeTemplateState(
         db,
         workspaceId,
         {
           state: "failed",
           failedLayer: 1,
-          failedStep: "reconcile",
+          failedStep: RESYNC_FAILED_STEP,
+          completedSteps: null,
           error: (err instanceof Error ? err.message : String(err)).slice(
             0,
             500
           ),
         },
         { userId }
-      ).catch(() => undefined);
+      ).catch((recordErr: unknown) =>
+        logger.warn(
+          { err: recordErr, workspaceId },
+          "template apply: re-sync failed and its failure could not be recorded"
+        )
+      );
       throw err;
     }
     return {

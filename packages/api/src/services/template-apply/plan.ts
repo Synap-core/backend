@@ -13,6 +13,10 @@
  *                                                been this template's)
  *   failed in layer 1, with a resume ledger    → resume-layer1 (the create core
  *                                                continues from its steps)
+ *   failed in a layer-1 RE-SYNC (`reconcile`)  → resync (the space was built:
+ *                                                its ledger is the create's,
+ *                                                every step done — a "resume"
+ *                                                would run nothing, then stamp)
  *   failed in layer 1, NO ledger               → resync (the row exists: a
  *                                                resume would re-run step 1 and
  *                                                mint a second space / 409)
@@ -37,6 +41,9 @@ import {
 /** The step `createWorkspaceFromDefinition` records once the row exists. */
 export const WORKSPACE_ROW_STEP = "workspace";
 
+/** The failed step layer one records when a re-sync of a BUILT space throws. */
+export const RESYNC_FAILED_STEP = "reconcile";
+
 export type TemplateApplyAction =
   | { kind: "create" }
   | { kind: "resume-layer1"; completedSteps: string[] }
@@ -46,6 +53,7 @@ export type TemplateApplyAction =
         | "stale"
         | "failed-layer-2"
         | "failed-no-ledger"
+        | "failed-resync"
         | "unfinished"
         | "adopt";
       /** Leave "failed" before layer 2 re-runs. */
@@ -84,6 +92,8 @@ export function planTemplateApply(
   if (state?.state === "failed") {
     if (isFailedInLayerTwo(state))
       return { kind: "resync", reason: "failed-layer-2", reopen: true };
+    if (state.failedStep === RESYNC_FAILED_STEP)
+      return { kind: "resync", reason: "failed-resync", reopen: true };
     const steps = state.completedSteps ?? [];
     if (steps.includes(WORKSPACE_ROW_STEP))
       return { kind: "resume-layer1", completedSteps: steps };

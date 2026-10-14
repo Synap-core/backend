@@ -40,6 +40,21 @@ describe("planTemplateApply", () => {
       { kind: "resume-layer1", completedSteps: ["workspace", "profiles"] },
     ],
     [
+      "a failed RE-SYNC on a built space (full ledger left by its create) → re-sync + reopen, never a no-op resume",
+      {
+        target: {
+          state: st({
+            state: "failed",
+            failedLayer: 1,
+            failedStep: "reconcile",
+            completedSteps: ["workspace", "member", "profiles", "home"],
+          }),
+        },
+        version: "h-2",
+      },
+      { kind: "resync", reason: "failed-resync", reopen: true },
+    ],
+    [
       "failed in layer 1 with NO ledger → re-sync the existing row, never re-create",
       {
         target: { state: st({ state: "failed", failedLayer: 1 }) },

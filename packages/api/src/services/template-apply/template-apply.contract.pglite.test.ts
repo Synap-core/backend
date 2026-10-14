@@ -46,6 +46,22 @@ const h = vi.hoisted(() => ({
   resynced: [] as string[],
   /** Make layer 2 throw as a whole (a whole-layer failure). */
   failLayerTwo: false,
+  /** Make the layer-1 re-sync throw. */
+  failResync: false,
+  /** Every step the real create core records, in its order. */
+  coreSteps: [
+    "workspace",
+    "member",
+    "profiles",
+    "relations",
+    "templates",
+    "views",
+    "bento",
+    "home",
+    "entities",
+    "flows",
+    "relations-seed",
+  ],
   /** The pod catalog cache, by slug (what `installFromCatalog` resolves). */
   catalog: new Map<string, Record<string, unknown>>(),
 }));
@@ -89,6 +105,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         );
       if (!workspaceId) {
         workspaceId = uuid();
+        // The row as the real core inserts it: `settings.template` through
+        // the real `templateStateSettings` (state "building", empty ledger).
         await client.query(
           `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, settings) values ($1,$2,$3,$4,'pending',$5::jsonb)`,
           [
@@ -96,10 +114,17 @@ vi.mock("@synap/database", async (importOriginal) => {
             input.workspaceName ?? `New ${workspaceId.slice(0, 8)}`,
             input.userId,
             input.packageSlug ?? null,
-            JSON.stringify({
-              provisioningStatus: "pending",
-              ...(input.packageSlug ? { packageSlug: input.packageSlug } : {}),
-            }),
+            JSON.stringify(
+              (
+                actual.templateStateSettings as (
+                  p: Record<string, unknown>
+                ) => Record<string, unknown>
+              )({
+                slug: input.packageSlug ?? null,
+                state: "building",
+                completedSteps: [],
+              })
+            ),
           ]
         );
         await client.query(
@@ -107,6 +132,15 @@ vi.mock("@synap/database", async (importOriginal) => {
           [uuid(), workspaceId, input.userId]
         );
       }
+      // …and it ends as the real core ends: the FULL resume ledger written,
+      // the state left "building" for the finisher.
+      await (
+        actual.writeTemplateState as (
+          d: unknown,
+          id: string,
+          p: Record<string, unknown>
+        ) => Promise<unknown>
+      )(db, workspaceId, { state: "building", completedSteps: h.coreSteps });
       return {
         workspaceId,
         profileIds: [],
@@ -121,6 +155,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     reconcileWorkspaceFromDefinition: async (input: {
       workspaceId: string;
     }) => {
+      if (h.failResync) throw new Error("re-sync exploded");
       h.resynced.push(input.workspaceId);
       return {
         workspaceId: input.workspaceId,
@@ -1047,5 +1082,51 @@ describe("a pack composed onto a base whose layer 2 failed", () => {
     expect(state?.packs?.find((p) => p.slug === pack.slug)?.version).toBe(
       "p-1"
     );
+  });
+});
+
+// ── A failed layer-1 RE-SYNC (review F1) ───────────────────────────────────
+//
+// A built space carries its create's full resume ledger. When a later
+// re-sync throws, the next apply must re-sync it again — never "resume" a
+// build whose every step is done (a no-op) and then stamp the new version
+// whose layer 1 never ran.
+
+describe("a failed layer-1 re-sync", () => {
+  it("is re-synced by the next apply, and only that re-sync earns the stamp", async () => {
+    const slug = "resync-fails-once";
+    const apply = (pkg: Pkg) =>
+      applyTemplate({
+        definition: body(pkg) as never,
+        actor: { userId: OWNER },
+        source: "contract",
+        identity: {
+          packageSlug: pkg.slug,
+          packageVersion: pkg.version,
+          proposalId: pkg.slug,
+          workspaceName: body(pkg).workspaceName as string,
+        },
+      });
+    await apply({ slug, version: "f-1", playbooks: ["Qualify"] });
+    const { id } = await theSpace(slug);
+    const v2: Pkg = { slug, version: "f-2", playbooks: ["Qualify", "Close"] };
+    h.failResync = true;
+    try {
+      await expect(apply(v2)).rejects.toThrow(/re-sync exploded/);
+    } finally {
+      h.failResync = false;
+    }
+    expect((await theSpace(slug)).state).toMatchObject({
+      state: "failed",
+      failedLayer: 1,
+      version: "f-1",
+    });
+    h.resynced.length = 0;
+    const reply = await apply(v2);
+    expect(reply.action).toMatchObject({ kind: "resync" });
+    expect(h.resynced).toContain(id);
+    const after = await theSpace(slug);
+    expect(after.id).toBe(id);
+    expect(after.state).toMatchObject({ state: "active", version: "f-2" });
   });
 });
