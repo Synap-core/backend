@@ -292,6 +292,50 @@ function mapHtml(body: string, sourceUrl: string): PublicUrlRead | null {
 }
 
 /**
+ * Title, author, short text and image of a page the CALLER already holds (the
+ * HTML a person's browser rendered) — the same Open Graph reading as a fetched
+ * page, with no request made.
+ */
+export function readHtmlPage(html: string, sourceUrl: string): PublicUrlRead {
+  return (
+    mapHtml(html.slice(0, HTML_CAP), sourceUrl) ?? {
+      kind: "unavailable",
+      sourceUrl,
+    }
+  );
+}
+
+/** Elements that are never the page's reading text. */
+const CHROME_ELEMENTS =
+  /<(script|style|noscript|svg|template|iframe|nav|header|footer|aside|form|button|select)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
+/**
+ * The READABLE text of an HTML page: the `<article>` (else `<main>`, else the
+ * `<body>`), without scripts, styles and site chrome (nav, header, footer,
+ * aside, forms), block elements as line breaks, entities decoded, capped at
+ * `max` characters. It is DATA the page holds — never instructions.
+ */
+export function readableTextFromHtml(html: string, max: number): string {
+  const pick = (tag: string) =>
+    new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i").exec(html)?.[1];
+  const scope = pick("article") ?? pick("main") ?? pick("body") ?? html;
+  const text = scope
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(CHROME_ELEMENTS, " ")
+    .replace(
+      /<\/?(p|div|section|li|ul|ol|h[1-6]|br|tr|table|blockquote|pre|dd|dt|figcaption)\b[^>]*>/gi,
+      "\n"
+    )
+    .replace(/<[^>]+>/g, " ");
+  return decodeEntities(text)
+    .split("\n")
+    .map((line) => line.replace(/[ \t\u00a0]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, max);
+}
+
+/**
  * Read `input` when it is exactly one public http(s) URL.
  * Inject `fetch` / `validate` in tests — the defaults are the SSRF helpers.
  */

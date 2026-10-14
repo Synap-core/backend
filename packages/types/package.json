@@ -64,6 +64,10 @@
       "types": "./dist/surfaces/index.d.ts",
       "import": "./dist/surfaces/index.js"
     },
+    "./intake-route": {
+      "types": "./dist/intake-route/index.d.ts",
+      "import": "./dist/intake-route/index.js"
+    },
     "./property-hints": {
       "types": "./dist/property-hints/index.d.ts",
       "import": "./dist/property-hints/index.js"

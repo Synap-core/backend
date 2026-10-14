@@ -1847,6 +1847,8 @@ try {
                 source: p.source as never,
                 items: p.items,
                 sessionId: p.sessionId ?? null,
+                // The caller's opt-in, carried by the job (deterministic when absent).
+                ...(p.aiStructure === true ? { aiStructure: true } : {}),
               });
               // Project the orchestrator's own numbers into the queue's OUTPUT
               // contract (ImportCorpusResult). pg-boss persists whatever the
@@ -1881,6 +1883,39 @@ try {
               };
             });
             apiLogger.info("Registered import-corpus handler (IoC)");
+          }
+
+          // IoC: the Library light read (one item) and its hourly sweep. jobs
+          // owns both queues; the readers, the IS client and the AI budget live
+          // in api, so the handlers are filled here.
+          {
+            const {
+              registerLibraryLightReadHandler,
+              registerLibraryLightReadSweepHandler,
+            } =
+              await import("@synap/jobs/workers/library-light-read-worker.js");
+            const { runLibraryLightReadJob, sweepLibraryLightReads } =
+              await import("@synap/api");
+            registerLibraryLightReadHandler((p) => runLibraryLightReadJob(p));
+            registerLibraryLightReadSweepHandler(() =>
+              sweepLibraryLightReads()
+            );
+            apiLogger.info("Registered library light-read handlers (IoC)");
+          }
+
+          // IoC: the Library keep-alive pass (daily). jobs owns the queue and
+          // its cron; the pass writes notifications through NotificationService,
+          // which lives in api, so the handler is filled here.
+          {
+            const { registerLibraryKeepAliveHandler } =
+              await import("@synap/jobs/workers/library-keep-alive-worker.js");
+            const { runLibraryKeepAlive } = await import("@synap/api");
+            registerLibraryKeepAliveHandler(async () => {
+              const { archived, suggested, resurfaced } =
+                await runLibraryKeepAlive();
+              return { archived, suggested, resurfaced };
+            });
+            apiLogger.info("Registered library keep-alive handler (IoC)");
           }
 
           // IoC: fill the capability / signal / feed-runner slots owned by

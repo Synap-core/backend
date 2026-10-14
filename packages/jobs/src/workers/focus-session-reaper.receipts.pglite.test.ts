@@ -26,7 +26,8 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions, proposals, messages } from "@synap/database/schema";
-import { closeIdleReceipts } from "./focus-session-reaper.js";
+import { closeIdleReceipts, SESSION_IS_STALE } from "./focus-session-reaper.js";
+import { db } from "@synap/database";
 import { registerSessionCloser } from "../utils/session-close.js";
 
 const BASIC =
@@ -124,5 +125,33 @@ describe("closeIdleReceipts", () => {
     expect(await closeIdleReceipts()).toBe(0);
     expect(closed).not.toContain(busy);
     expect(closed).not.toContain(fresh);
+  });
+});
+
+describe("SESSION_IS_STALE", () => {
+  const staleIds = async () =>
+    (
+      await (db as any)
+        .select({ id: focusSessions.id })
+        .from(focusSessions)
+        .where(SESSION_IS_STALE)
+    ).map((r: { id: string }) => r.id);
+
+  it("never stales an open import (it waits on the person), but stales a finished one", async () => {
+    const curating = await session({
+      metadata: {
+        importCuration: { version: 1, phase: "curating", groups: [] },
+      },
+      idleHours: 72,
+    });
+    const done = await session({
+      metadata: { importCuration: { version: 1, phase: "done", groups: [] } },
+      idleHours: 72,
+    });
+    const plain = await session({ metadata: {}, idleHours: 72 });
+    const ids = await staleIds();
+    expect(ids).not.toContain(curating);
+    expect(ids).toContain(done);
+    expect(ids).toContain(plain);
   });
 });

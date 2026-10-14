@@ -26,7 +26,12 @@ vi.mock("@synap/storage", () => ({
 
 import { loadDocumentBodyTexts } from "./document-body-text.js";
 
-type Row = { id: string; storageKey: string | null; mimeType: string | null };
+type Row = {
+  id: string;
+  storageKey: string | null;
+  mimeType: string | null;
+  metadata?: unknown;
+};
 
 /** A visible stand-in for markdown-core's `markdownToPlainText`. */
 const OPTS = { markdownText: (md: string) => `plain(${md})` };
@@ -80,5 +85,38 @@ describe("loadDocumentBodyTexts", () => {
       html: "<p>Hi</p>",
       txt: "plain words",
     });
+  });
+
+  it("a Library item is searched by its light-read text, never its raw bytes or URL", async () => {
+    blobs.set("k/url-body", Buffer.from("https://example.com/a", "utf-8"));
+    blobs.set("k/pdf", Buffer.from("%PDF-1.7 raw bytes", "utf-8"));
+    blobs.set(
+      "library-read/u/read.txt",
+      Buffer.from("What the page says.", "utf-8")
+    );
+    const { texts, failed } = await loadDocumentBodyTexts(
+      fakeDb([
+        {
+          id: "read",
+          storageKey: "k/url-body",
+          mimeType: "text/plain",
+          metadata: {
+            importItem: { title: "A" },
+            importRead: { status: "read", textKey: "library-read/u/read.txt" },
+          },
+        },
+        {
+          id: "unread",
+          storageKey: "k/pdf",
+          mimeType: "text/plain",
+          metadata: { importItem: { title: "B" } },
+        },
+      ]),
+      ["read", "unread"],
+      OPTS
+    );
+    // Read → its text. Not read yet → no text (title-only), and not a failure.
+    expect(Object.fromEntries(texts)).toEqual({ read: "What the page says." });
+    expect(failed.size).toBe(0);
   });
 });

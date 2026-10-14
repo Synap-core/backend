@@ -2386,6 +2386,9 @@ export const proposalsRouter = router({
           (r.skillIds?.length ?? 0) +
           (r.automationIds?.length ?? 0) +
           (r.ruleIds?.length ?? 0) +
+          (r.playbookIds?.length ?? 0) +
+          (r.viewIds?.length ?? 0) +
+          (r.rowPatches?.length ?? 0) +
           (r.propertyDiffs?.length ?? 0);
         const at = new Date();
         let liveLeft = -1;

@@ -58,7 +58,13 @@ export const REAPER_STALE_HOURS = 24;
 export const SESSION_IS_STALE = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`,
-  drizzleSql`NOT ${focusSessionWaitsOnPersonWhere()}`
+  drizzleSql`NOT ${focusSessionWaitsOnPersonWhere()}`,
+  // An open import waits on the person (curating can take days): its
+  // `importCuration.phase` is the liveness signal, not `updatedAt`. A LIBRARY
+  // run ("Kept from <device>, <day>") is not a curation: it is done once its
+  // day has passed — its items live on in the Library regardless.
+  drizzleSql`(coalesce(${focusSessions.metadata} -> 'importCuration' ->> 'phase', 'done') = 'done'
+    OR ((${focusSessions.metadata} -> 'libraryRun' ->> 'day') < to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD')))`
 );
 
 /**

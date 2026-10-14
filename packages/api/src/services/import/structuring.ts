@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import {
   db,
   getDb,
@@ -18,26 +17,11 @@ import {
 } from "../../routers/capture.js";
 import { completeKnowledgeProperties } from "@synap/database";
 import {
-  adaptItems,
   parseCsvTable,
-  csvRowsToTypedImportItems,
-  type ImportSource as ImportAdapterSource,
   type CsvTablePlan,
 } from "../../import/import-adapters.js";
-import {
-  buildImportProposal,
-  importProposalToComposite,
-  type ImportItem,
-} from "../../import/import-items.js";
-import { aiEnrichImportItems } from "../../import/import-ai.js";
-import {
-  deepStructureImportItems,
-  makeGraphResolver,
-} from "../../import/import-deep.js";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
-import { searchService } from "@synap/search";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
-import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import {
   computeImportGraphIdempotencyKey,
   findPriorCaptureGraphProposal,
@@ -167,7 +151,7 @@ export async function stampScopeAwareHomesOnOps(
 
 /**
  * The `data` payload for an `import.graph` proposal. Centralised so the three
- * proposal-creation sites (submitBatch / analyze / analyzeLarge) cannot drift —
+ * proposal-creation sites (analyze / analyzeLarge) cannot drift —
  * a new provenance field is added ONCE, here. These keys are read by
  * `buildRequestFromProposal` → the proposal review UI:
  *   source     — where it came from
@@ -544,228 +528,4 @@ export async function buildCsvTablePlan(
     );
     return null;
   }
-}
-
-/**
- * Route a parsed source through the canonical import ENGINE: adapt raw records
- * → ImportItems → (best-effort AI structuring) → buildImportProposal →
- * importProposalToComposite → ONE governed `import.graph` composite proposal.
- *
- * This replaces the old per-row entity-proposal loop: a whole file (or batch
- * of files) for a source becomes a SINGLE reviewable graph proposal that, on
- * approval, materializes N entities + M relations atomically and (because the
- * proposal is workspace-bound) workspace-scoped via proposals.approve.
- *
- * AI enrichment is on by default and best-effort: any IS failure falls back to
- * the deterministic proposal (items unchanged). Returns the created proposal id
- * or null when the source produced no items. The caller resolves + memoizes the
- * `profileHints` (singular per-batch) and passes them in.
- */
-export async function proposeImportGraph(
-  ctx: OrchestratorContext,
-  profileHints: ProfileHints,
-  source: ImportAdapterSource,
-  raw: Array<{ path: string; content: string }>,
-  provenance?: {
-    /** Stable id for this import unit (batchId) — used as `data.sourceId`. */
-    sourceId?: string;
-    /** Object-storage location of the raw uploaded blob, if any. */
-    contentRef?: { storageKey: string; mimeType?: string; size?: number };
-  }
-): Promise<{
-  proposalId: string | null;
-  itemCount: number;
-  /** True when `proposalId` is a PRIOR proposal returned by idempotency. */
-  deduplicated: boolean;
-}> {
-  const { workspaceId, userId } = ctx;
-  // IS routing + the live-search resolver take an optional workspaceId; a
-  // pod-wide import (null) resolves the user-default service and an
-  // unscoped search.
-  const wsId = workspaceId ?? undefined;
-
-  const { availableProfiles, validSlugs, availableWorkspaces } = profileHints;
-
-  // CSV is a TABLE: infer ONE profile + column→property mapping for the whole
-  // file and build TYPED items, instead of the shallow row→untyped-note path.
-  // Best-effort — if the planner is unavailable, `items` stays empty here and
-  // we fall through to the shallow adapter below.
-  let items: ImportItem[] = [];
-  if (source === "csv" && raw.length > 0) {
-    // Infer the plan from the first file (submitBatch sends one CSV per call);
-    // apply it to every file's rows.
-    const plan = await buildCsvTablePlan(
-      ctx,
-      raw[0].content,
-      validSlugs,
-      availableProfiles
-    );
-    if (plan) {
-      for (const r of raw) {
-        const { rows } = parseCsvTable(r.content);
-        items.push(...csvRowsToTypedImportItems(rows, plan));
-      }
-    }
-  }
-  if (items.length === 0) items = adaptItems(source, raw);
-  if (items.length === 0)
-    return { proposalId: null, itemCount: 0, deduplicated: false };
-
-  // Prose (markdown/obsidian) → DEEP extraction: decompose each note into
-  // multiple typed entities + relations, merged + deduplicated across notes.
-  // Structured rows (csv/bookmark) stay on the SHALLOW path (1 row = 1 entity,
-  // which is correct for them). Deep is best-effort: if it yields nothing
-  // (IS down, all timeouts), we fall back to shallow so an import never fails.
-  // Prose sources go through DEEP extraction (note/transcript → entity graph).
-  // JSON-chat imports are flattened to a transcript by the json adapter, so
-  // they belong here too — the conversation content yields entities+relations.
-  const isProse =
-    source === "obsidian" || source === "markdown" || source === "json";
-  let operations: CompositeProposalOperation[] | undefined;
-  let summary: string | undefined;
-  let itemCount = items.length;
-
-  if (isProse) {
-    try {
-      // Stored guidelines — the ONE assembler every structure call reads through.
-      const { assembleStructureContext } = await import("@synap/database");
-      const importContext = await assembleStructureContext({
-        db,
-        userId,
-        workspaceId: wsId,
-        sourceKind: `import:${source}`,
-        entityKinds: [...validSlugs],
-      });
-      const { client } = await resolveIntelligenceService({
-        userId,
-        workspaceId: wsId,
-        capability: "default",
-      });
-      const deep = await deepStructureImportItems(
-        items,
-        client,
-        {
-          availableProfiles,
-          validSlugs,
-          availableWorkspaces,
-          resolveExisting: makeGraphResolver(searchService, {
-            userId,
-            workspaceId: wsId,
-          }),
-          ...(importContext.instructions
-            ? { instructions: importContext.instructions }
-            : {}),
-        },
-        { logger }
-      );
-      if (deep.stats.entityCount > 0) {
-        operations = deep.operations;
-        itemCount = deep.stats.itemsProcessed;
-        summary = buildImportSummary(deep.operations, source);
-        logger.info(
-          { ...deep.stats, userId, source },
-          "deep import structured"
-        );
-      } else {
-        logger.warn(
-          { userId, source },
-          "deep import produced no entities — falling back to shallow"
-        );
-      }
-    } catch (e) {
-      logger.warn(
-        { e, userId, source },
-        "deep import failed — falling back to shallow"
-      );
-    }
-  }
-
-  if (!operations) {
-    // Shallow path: best-effort AI typing (1 item → 1 typed entity). Any IS
-    // failure leaves items unchanged and the deterministic proposal stands.
-    try {
-      const { client } = await resolveIntelligenceService({
-        userId,
-        workspaceId: wsId,
-        capability: "default",
-      });
-      await aiEnrichImportItems(
-        items,
-        client,
-        { availableProfiles },
-        { logger }
-      );
-    } catch (e) {
-      logger.warn(
-        { e, userId, source },
-        "import submitBatch AI enrich failed, using deterministic"
-      );
-    }
-    const proposal = buildImportProposal(items, "references", validSlugs);
-    operations = importProposalToComposite(proposal).operations;
-    itemCount = proposal.stats.itemCount;
-    summary = buildImportSummary(operations, source);
-  }
-
-  // IDEMPOTENCY: a re-run over the same corpus resolves to the proposal the
-  // caller ALREADY has instead of filing a clone. `deduplicated` makes that
-  // visible — a returned id must never read as "freshly filed".
-  const prior = await findPriorImportGraphProposal({
-    userId,
-    workspaceId: workspaceId ?? null,
-    projectId: ctx.projectId ?? null,
-    operations,
-  });
-  if (prior) {
-    logger.info(
-      { userId, source, proposalId: prior.id },
-      "import.graph: identical graph already proposed — returning prior"
-    );
-    return { proposalId: prior.id, itemCount, deduplicated: true };
-  }
-
-  // The RAW door: each file's content is staged as an import_item source
-  // BEFORE the proposal, so the proposal names it. A deduplicated re-run
-  // returned above — its raw was staged by the run that filed the prior.
-  // Failures are counted/named on the result, never fail the import.
-  const { recordImportIntake } =
-    await import("../intake/record-import-intake.js");
-  const intake = await recordImportIntake({
-    database: db,
-    userId,
-    workspaceId: workspaceId ?? null,
-    sessionId: ctx.sessionId ?? null,
-    source,
-    items: raw,
-    run: {},
-  });
-
-  const targetId = randomUUID();
-  const { proposal: created } = await createEventBackedProposal({
-    userId,
-    workspaceId,
-    targetType: "entity",
-    targetId,
-    proposalType: "capture.graph",
-    action: "create",
-    source: "import",
-    summary,
-    sessionId: ctx.sessionId ?? null,
-    projectId: ctx.projectId ?? null,
-    data: buildImportGraphProposalData({
-      sourceDocumentIds: intake.sourceDocumentIds,
-      operations,
-      source,
-      sourceId: provenance?.sourceId ?? targetId,
-      contentRef: provenance?.contentRef,
-      workspaceId: workspaceId ?? null,
-      projectId: ctx.projectId ?? null,
-    }),
-  });
-
-  return {
-    proposalId: (created as { id?: string })?.id ?? null,
-    itemCount,
-    deduplicated: false,
-  };
 }

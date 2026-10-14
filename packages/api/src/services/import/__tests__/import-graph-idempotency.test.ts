@@ -10,8 +10,8 @@ import {
 /**
  * The `import.graph` duplicate hole, closed.
  *
- * Three of the four `import.graph` writers (proposeImportGraph / analyze /
- * analyzeLarge — all sharing `buildImportGraphProposalData`) stamped NO
+ * The `import.graph` writers (analyze / analyzeLarge — both sharing
+ * `buildImportGraphProposalData`) stamped NO
  * `idempotencyKey`, and the dedup predicate is
  * `data ->> 'idempotencyKey' = $key` — which NEVER matches NULL. A keyless
  * proposal was therefore invisible to dedup in both directions, permanently

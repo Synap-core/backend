@@ -182,6 +182,38 @@ describe("focus-session reaper", () => {
   });
 });
 
+describe("focus-session reaper: imports and Library runs", () => {
+  it("spares an open curate import; reaps a Library run whose day has passed; spares today's", async () => {
+    const curating = {
+      importCuration: { version: 1, phase: "curating", groups: [] },
+    };
+    const today = new Date().toISOString().slice(0, 10);
+    const run = (day: string) => ({
+      importCuration: { version: 1, phase: "collecting", groups: [] },
+      libraryRun: { device: "relay", day, workspaceId: null, projectId: null },
+    });
+    const importing = await session({
+      idleHours: 30,
+      outputs: DONE,
+      metadata: curating,
+    });
+    const yesterday = await session({
+      idleHours: 30,
+      outputs: DONE,
+      metadata: run("2026-10-12"),
+    });
+    const current = await session({
+      idleHours: 30,
+      outputs: DONE,
+      metadata: run(today),
+    });
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", importing)).toBe("active");
+    expect(await statusOf("focus_sessions", yesterday)).toBe("stale");
+    expect(await statusOf("focus_sessions", current)).toBe("active");
+  });
+});
+
 describe("an OPEN agent question waits on the person (external agents ask and stop)", () => {
   it("focus-session reaper: never stales a quiet session with an open question; the answered twin stales", async () => {
     const asking = await session({ idleHours: 30 });

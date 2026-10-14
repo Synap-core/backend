@@ -83,6 +83,7 @@ import {
 import {
   readSessionRunManifest,
   recordSessionRunManifest,
+  type RunEngine,
 } from "../intake/record-session-run-manifest.js";
 import {
   INTAKE_SOURCE_METADATA_KEY,
@@ -170,6 +171,25 @@ export interface RerunReplayArgs {
   idempotencyNamespace: string;
   workspaceId: string | null;
   projectId: string | null;
+  /**
+   * The engine the PARENT run recorded. An import replays with the same one:
+   * a deterministic run stays deterministic and an AI-read run is read again,
+   * whatever today's default is.
+   */
+  engine?: RunEngine;
+}
+
+/**
+ * The `aiStructure` an import replay passes for the parent's recorded engine.
+ * `deterministic` → off. Any engine that reached (or tried to reach) a model —
+ * `structure`, `degraded`, `unknown` (an AI-enriched shallow run recorded no
+ * attribution) — → on. No recorded engine → undefined: today's default.
+ */
+export function importAiStructureForEngine(
+  engine: RunEngine | undefined
+): boolean | undefined {
+  if (engine === undefined) return undefined;
+  return engine !== "deterministic";
 }
 
 export interface RerunReplayers {
@@ -718,6 +738,7 @@ export async function rerunSession(args: {
     idempotencyNamespace,
     workspaceId: parent.workspaceId,
     projectId: parent.projectId,
+    engine: manifest.engine,
   };
   const replayers =
     args.replayers ??
@@ -1194,6 +1215,10 @@ export function defaultReplayers(
         // The rerun's own dedup namespace: the parent's identical graph is
         // never handed back; only a retry inside THIS rerun dedups.
         idempotencyNamespace: a.idempotencyNamespace,
+        // Same engine as the run it replays (deep stays deep).
+        ...(importAiStructureForEngine(a.engine) !== undefined
+          ? { aiStructure: importAiStructureForEngine(a.engine) }
+          : {}),
       });
       if (!result.proposalId) {
         return { outcome: "not_structured", reason: "no graph was proposed" };

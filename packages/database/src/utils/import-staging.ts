@@ -1,0 +1,55 @@
+/**
+ * A STAGED import item (Import → Curate → Build) is an intake-source document
+ * that carries `metadata.intakeSource.pending = "awaiting_curation"` until its
+ * group is built. Nothing lists it as a capture or a document, and the search
+ * reindex skips it: it is the person's raw batch, not yet anybody's record.
+ *
+ * The value mirrors `IMPORT_STAGED_MARKER` in `@synap-core/types/imports`
+ * (this package does not depend on that one); a parity test in `@synap/api`
+ * (`services/imports/__tests__/imports.pglite.test.ts`, "the staged marker")
+ * keeps them equal.
+ */
+
+import { sql, type SQL } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
+
+export const IMPORT_AWAITING_CURATION = "awaiting_curation";
+
+/**
+ * `metadata` does NOT carry the staged marker. Spelled `IS DISTINCT FROM` so a
+ * row with no metadata / no intake source (NULL) is kept, never dropped.
+ */
+export function notStagedImportItemWhere(metadataColumn: AnyPgColumn): SQL {
+  return sql`(${metadataColumn} #>> '{intakeSource,pending}') IS DISTINCT FROM ${IMPORT_AWAITING_CURATION}`;
+}
+
+/** True when a document's metadata bag marks it as a staged import item. */
+export function isStagedImportItem(metadata: unknown): boolean {
+  const source = (metadata as { intakeSource?: { pending?: unknown } } | null)
+    ?.intakeSource;
+  return source?.pending === IMPORT_AWAITING_CURATION;
+}
+
+/** `documents.metadata.importItem` — the key whose presence makes a document a Library item. */
+export const LIBRARY_ITEM_KEY = "importItem";
+
+/**
+ * `metadata` is NOT a Library item (CAPTURE_LIBRARY_PLAN decision 4). A
+ * Library item — anything staged with `importItem` — is never a row of a
+ * capture or document list, before or after its group is built: it lives in
+ * the Library. A row with no metadata (NULL) is kept, never dropped.
+ */
+export function notLibraryItemWhere(metadataColumn: AnyPgColumn): SQL {
+  return sql`NOT COALESCE(${metadataColumn} ? ${LIBRARY_ITEM_KEY}, false)`;
+}
+
+/**
+ * What the search index holds of `documents`: everything but a staged import
+ * item — EXCEPT a Library item, which is indexed from the moment it is kept
+ * (CAPTURE_LIBRARY_PLAN decision 4): by its title before the light read, by
+ * its read text after (`loadDocumentBodyTexts`). Library items stay out of the
+ * capture and document LISTS (`notLibraryItemWhere`), not out of search.
+ */
+export function searchIndexableDocumentWhere(metadataColumn: AnyPgColumn): SQL {
+  return sql`(${notStagedImportItemWhere(metadataColumn)} OR COALESCE(${metadataColumn} ? ${LIBRARY_ITEM_KEY}, false))`;
+}

@@ -11,6 +11,11 @@
  * text to index and is left out. A FAILED read is reported per document in
  * `failed` — never folded into "no text" — so a caller can keep the previous
  * index entry instead of overwriting it with nothing.
+ *
+ * A LIBRARY item (`metadata.importItem`) is the exception: its stored body is
+ * the raw it was kept as (a URL, a file's bytes), not text. Its text is what
+ * the light read wrote beside it (`metadata.importRead.textKey`). Before the
+ * light read there is no text — the item is found by its title only.
  */
 
 import { inArray } from "drizzle-orm";
@@ -24,6 +29,30 @@ export const YJS_STATE_PREFIX = "yjs:";
 
 export function isYjsStateText(text: string): boolean {
   return text.startsWith(YJS_STATE_PREFIX);
+}
+
+/** Where the light read stores a Library item's text (never over the item's own bytes). */
+export function libraryReadTextKey(userId: string, itemId: string): string {
+  return `library-read/${userId}/${itemId}.txt`;
+}
+
+/**
+ * The storage key to read a document's TEXT from: the light read's text for a
+ * Library item (none before the read), the stored body for anything else.
+ */
+export function documentTextStorageKey(row: {
+  storageKey: string | null;
+  metadata?: unknown;
+}): string | null {
+  const meta = row.metadata as
+    | { importItem?: unknown; importRead?: { textKey?: unknown } }
+    | null
+    | undefined;
+  if (meta && typeof meta === "object" && meta.importItem) {
+    const key = meta.importRead?.textKey;
+    return typeof key === "string" && key ? key : null;
+  }
+  return row.storageKey;
 }
 
 export interface DocumentBodyTexts {
@@ -57,26 +86,30 @@ export async function loadDocumentBodyTexts(
       id: documents.id,
       storageKey: documents.storageKey,
       mimeType: documents.mimeType,
+      metadata: documents.metadata,
     })
     .from(documents)
     .where(inArray(documents.id, documentIds));
 
   await Promise.all(
     rows.map(async (row) => {
-      // An external reference (no stored bytes) has no body to index.
-      if (!row.storageKey) return;
+      const key = documentTextStorageKey(row);
+      // An external reference (no stored bytes) — or a Library item not read
+      // yet — has no body to index.
+      if (!key) return;
+      const mimeType = key === row.storageKey ? row.mimeType : "text/plain";
       let body: Buffer;
       try {
-        body = await storage.downloadBuffer(row.storageKey);
+        body = await storage.downloadBuffer(key);
       } catch (err) {
         failed.set(row.id, err instanceof Error ? err.message : String(err));
         return;
       }
-      const text = documentVersionContentPreview(body, row.mimeType);
+      const text = documentVersionContentPreview(body, mimeType);
       if (!text || isYjsStateText(text)) return;
       texts.set(
         row.id,
-        (row.mimeType ?? "").includes("markdown")
+        (mimeType ?? "").includes("markdown")
           ? options.markdownText(text)
           : text
       );

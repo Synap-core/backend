@@ -98,7 +98,10 @@ export interface CreateNotificationInput {
     | "proactive_message"
     | "session"
     | "automation"
-    | "track";
+    | "track"
+    // Library keep-alive: a group's id, or (resurfacing) the project's id.
+    | "library_group"
+    | "library";
   sourceId?: string;
   workspaceUrl?: string;
 

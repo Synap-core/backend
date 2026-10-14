@@ -95,6 +95,13 @@ export interface IntakeSourceMetadata {
   sourceMessageId?: string;
   /** The outside system's own id for the raw (a Cal.com booking uid). */
   externalRef?: string;
+  /**
+   * A STAGED import item (Import → Curate → Build): nothing has read it yet
+   * and nobody has decided what it is. Every capture/document list and the
+   * search reindex skip it (`notStagedImportItemWhere`, @synap/database);
+   * Build clears it. See `@synap-core/types/imports` IMPORT_STAGED_MARKER.
+   */
+  pending?: "awaiting_curation";
 }
 
 export interface StageIntakeSourceInput {
@@ -131,6 +138,14 @@ export interface StageIntakeSourceInput {
   sourceMessageId?: string;
   /** See {@link IntakeSourceMetadata.externalRef}. */
   externalRef?: string;
+  /** See {@link IntakeSourceMetadata.pending}. Written on CREATE only. */
+  pending?: "awaiting_curation";
+  /**
+   * Sibling metadata keys written beside `intakeSource` on CREATE only (an
+   * import item's `importItem` / `importCuration`). `intakeSource` itself is
+   * never overridable through this bag.
+   */
+  extraMetadata?: Record<string, unknown>;
   /**
    * A replay of a raw that is ALREADY stored (rerun, structure again): reuse
    * that row — the caller's own, live intake source — instead of matching by
@@ -332,8 +347,11 @@ export async function stageIntakeSource(
       ? { sourceMessageId: input.sourceMessageId }
       : {}),
     ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+    ...(input.pending ? { pending: input.pending } : {}),
   };
   const title = deriveTitle(input);
+  const { [INTAKE_SOURCE_METADATA_KEY]: _ignored, ...extraMetadata } =
+    input.extraMetadata ?? {};
 
   if (keepBytes) {
     const staged = await stageSourceBlob({
@@ -350,7 +368,7 @@ export async function stageIntakeSource(
       ...(input.file!.extractedTextTruncated
         ? { extractedTextTruncated: true }
         : {}),
-      metadata: { [INTAKE_SOURCE_METADATA_KEY]: sourceMeta },
+      metadata: { ...extraMetadata, [INTAKE_SOURCE_METADATA_KEY]: sourceMeta },
     });
     return {
       documentId: staged.documentId,
@@ -372,7 +390,7 @@ export async function stageIntakeSource(
       type: "markdown",
       content: body as string,
       mimeType: "text/markdown",
-      metadata: { [INTAKE_SOURCE_METADATA_KEY]: sourceMeta },
+      metadata: { ...extraMetadata, [INTAKE_SOURCE_METADATA_KEY]: sourceMeta },
       provenance: { createdByKind: "human" },
     }
   );

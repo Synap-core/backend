@@ -102,6 +102,14 @@ import {
   CONNECTION_SYNC_RUN_QUEUE,
   CONNECTION_SYNC_CRON,
 } from "./workers/connection-sync-run.js";
+import {
+  LIBRARY_LIGHT_READ_SWEEP_QUEUE,
+  LIBRARY_LIGHT_READ_SWEEP_CRON,
+} from "./workers/library-light-read-worker.js";
+import {
+  LIBRARY_KEEP_ALIVE_QUEUE,
+  LIBRARY_KEEP_ALIVE_CRON,
+} from "./workers/library-keep-alive-worker.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -205,6 +213,26 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: focus-session-reaper (every hour)");
+
+  // Library light read sweep (hourly — re-enqueues Library items not read yet
+  // or held over budget; "over budget" is read later, never dropped)
+  await scheduleSafe(
+    boss,
+    LIBRARY_LIGHT_READ_SWEEP_QUEUE,
+    LIBRARY_LIGHT_READ_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: library-light-read-sweep (hourly)");
+
+  // Library keep-alive (daily at 04:23 UTC — quiet auto-archive, the weekly
+  // "Build one group" suggestion, resurfacing; a pod setting turns it off)
+  await scheduleSafe(
+    boss,
+    LIBRARY_KEEP_ALIVE_QUEUE,
+    LIBRARY_KEEP_ALIVE_CRON,
+    {}
+  );
+  logger.info("Registered cron: library-keep-alive (daily at 4:23 AM UTC)");
 
   // Session titler (every 10min — derived names for untitled runs/captures, one
   // generated name per unnamed work session/receipt, one outcome-aware rename

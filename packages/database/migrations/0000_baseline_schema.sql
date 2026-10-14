@@ -172,6 +172,30 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
 
+-- library_groups — the Library's persistent groups (mirrors 0328,
+-- CAPTURE_LIBRARY_PLAN L2). Owner-floored; item membership lives on the item.
+CREATE TABLE IF NOT EXISTS "library_groups" (
+  "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"             text NOT NULL,
+  "workspace_id"        uuid,
+  "key"                 text NOT NULL,
+  "name"                text NOT NULL,
+  "note"                text,
+  "origin"              text NOT NULL DEFAULT 'user',
+  "outputs"             jsonb NOT NULL DEFAULT '[]'::jsonb,
+  "container_entity_id" uuid,
+  "building_at"         timestamptz,
+  "built_at"            timestamptz,
+  "build_proposal_ids"  jsonb NOT NULL DEFAULT '[]'::jsonb,
+  "archived_at"         timestamptz,
+  "created_at"          timestamptz NOT NULL DEFAULT now(),
+  "updated_at"          timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "library_groups_user_key_unique"
+  ON "library_groups" ("user_id", "key");
+CREATE INDEX IF NOT EXISTS "library_groups_user_live_idx"
+  ON "library_groups" ("user_id", "updated_at") WHERE "archived_at" IS NULL;
+
 -- device_auth_requests — the device door (mirrors 0321, MACHINE-IDENTITY-PLAN
 -- W2). Hashes only: no code, token or key is ever stored in clear.
 CREATE TABLE IF NOT EXISTS "device_auth_requests" (
@@ -695,6 +719,10 @@ CREATE INDEX IF NOT EXISTS "documents_type_idx"    ON "documents" ("type");
 CREATE UNIQUE INDEX IF NOT EXISTS "documents_upload_storage_key_unique"
   ON "documents" ("storage_key")
   WHERE "storage_key" LIKE 'files/%/uploads/%';
+-- The Library read index (mirrors 0328).
+CREATE INDEX IF NOT EXISTS "documents_library_items_idx"
+  ON "documents" ("user_id", "created_at" DESC, "id")
+  WHERE "deleted_at" IS NULL AND "metadata" ? 'importItem';
 
 CREATE TABLE IF NOT EXISTS "document_versions" (
   "id"          uuid    PRIMARY KEY DEFAULT gen_random_uuid(),

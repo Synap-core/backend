@@ -12,6 +12,7 @@ import {
   eq,
   isNull,
   loadDocumentBodyTexts,
+  searchIndexableDocumentWhere,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
@@ -192,7 +193,12 @@ export class IndexingService {
 
       case "documents": {
         const docRows = await db.query.documents.findMany({
-          where: inArray(schema.documents.id, ids),
+          // A staged import item is not indexed — except a Library item, which
+          // is (title-only until its light read; see fullReindex below).
+          where: and(
+            inArray(schema.documents.id, ids),
+            searchIndexableDocumentWhere(schema.documents.metadata)
+          ),
         });
         // The documents table has NO `content` column. Index the stored body —
         // the markdown as it is now (a person's saves cut no version row, so the
@@ -370,7 +376,14 @@ export class IndexingService {
             break;
           case "documents":
             dbRecords = await db.query.documents.findMany({
-              where: (d, { isNull }) => isNull(d.deletedAt),
+              // A STAGED import item is not indexed until its group is built —
+              // except a Library item (`importItem`): kept means findable, by
+              // its title before the light read and its read text after.
+              where: (d, { isNull, and }) =>
+                and(
+                  isNull(d.deletedAt),
+                  searchIndexableDocumentWhere(d.metadata)
+                ),
             });
             break;
           case "views":

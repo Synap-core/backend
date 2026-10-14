@@ -19,6 +19,12 @@ export const documentsCollectionSchema: CollectionCreateSchema = {
     { name: "content", type: "string", optional: true },
     { name: "documentType", type: "string", facet: true, optional: true },
     { name: "projectId", type: "string", facet: true, optional: true },
+    // A Library item (`metadata.importItem`): clients open it in the Library,
+    // not the document editor. Optional, so an existing collection gains it
+    // additively (collection-service reconciles new fields) and fullReindex
+    // fills it.
+    { name: "libraryItem", type: "bool", facet: true, optional: true },
+    { name: "libraryGroupId", type: "string", optional: true },
 
     // Ranking signals
     { name: "viewCount", type: "int32", optional: true },

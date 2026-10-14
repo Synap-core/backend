@@ -33,7 +33,10 @@ import type {
   AutomationCreateCaller,
   RuleCreateCaller,
   PlaybookCreateCaller,
+  ViewCreateCaller,
+  CompositeUpdateCaller,
 } from "./materialize-composite.js";
+import { buildCompositeUpdateCaller } from "./composite-update-caller.js";
 // Type-only: no runtime edge, so the lazy-import cycle guard above still holds.
 import type { materializeApprovedAutomation } from "../routers/automations.js";
 
@@ -62,10 +65,15 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   automationCaller: AutomationCreateCaller;
   ruleCaller: RuleCreateCaller;
   playbookCaller: PlaybookCreateCaller;
+  viewCaller: ViewCreateCaller;
+  updateCaller: CompositeUpdateCaller;
 } {
   const { database, userId, workspaceId, auditSource } = ctx;
 
   return {
+    // A Library rebuild's CHANGES (`update_*`), each through its object's
+    // existing update door — see `composite-update-caller.ts`.
+    updateCaller: buildCompositeUpdateCaller(ctx),
     skillCaller: {
       create: async (skillOp) => {
         const { insertSkillGoverned } = await import("../routers/skills.js");
@@ -122,12 +130,11 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
               ? { description: automationOp.description }
               : {}),
             triggerType: automationOp.triggerType,
-            // CONTRACT GAP (reported, not papered over): the pinned
-            // `create_automation` op carries no `triggerConfig`. We read one
-            // off the flowDefinition when the producer embedded it, otherwise
-            // an event automation lands with an empty trigger config and cannot
-            // match — visible, not silent, because the automation is DRAFT
-            // either way.
+            // The op carries its trigger config INSIDE the flow
+            // (`flowDefinition.triggerConfig`). The preflight
+            // (`validatePlanOperations`) refuses an EVENT automation without
+            // `triggerConfig.eventPattern`, so `{}` here is only ever a
+            // cron / webhook / manual trigger that needs none.
             triggerConfig: flow?.triggerConfig ?? {},
             flowDefinition: automationOp.flowDefinition as {
               nodes: Array<Record<string, unknown>>;
@@ -222,6 +229,108 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
           });
         }
         return { id: created.playbook.id };
+      },
+    },
+
+    // A LIST (`create_view`), through the EXISTING `views.create` door — the
+    // same caller shape the `view/create` approval executor builds
+    // (`executors/view.ts`), membership-floored. No agentUserId: the graph's
+    // governance decision is already made.
+    //
+    // Scoping: the members become the view's FIXED set (`query.entityIds`,
+    // honoured by `views.execute`); the group container is recorded on the
+    // config as `membersOf`, so a later "members of X" filter can make the
+    // list live. Kinds: the op's slugs, else the members' own kinds.
+    viewCaller: {
+      create: async (viewOp) => {
+        const {
+          getWorkspaceMembership,
+          ProfileResolutionService,
+          entities,
+          inArray,
+        } = await import("@synap/database");
+        const viewWorkspaceId = viewOp.workspaceId ?? workspaceId;
+        let workspaceRole = "owner";
+        if (viewWorkspaceId) {
+          const membership = await getWorkspaceMembership(
+            database as Parameters<typeof getWorkspaceMembership>[0],
+            viewWorkspaceId,
+            userId
+          );
+          if (!membership) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "No workspace access",
+            });
+          }
+          workspaceRole = membership.role;
+        }
+
+        const scopeProfileIds = new Set<string>();
+        if (viewOp.scopeProfileSlugs?.length) {
+          const resolver = new ProfileResolutionService(database);
+          for (const slug of viewOp.scopeProfileSlugs) {
+            const profile = await resolver.resolveProfile(
+              slug,
+              userId,
+              viewWorkspaceId ?? null
+            );
+            if (!profile?.id) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `create_view: no kind "${slug}" in this space`,
+              });
+            }
+            scopeProfileIds.add(profile.id);
+          }
+        } else if (viewOp.entityIds.length > 0) {
+          const rows = await database
+            .select({ profileId: entities.profileId })
+            .from(entities)
+            .where(inArray(entities.id, viewOp.entityIds));
+          for (const row of rows) {
+            if (row.profileId) scopeProfileIds.add(row.profileId);
+          }
+        }
+        if (scopeProfileIds.size === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "create_view: the list names no kind and none of its things has one",
+          });
+        }
+
+        const { viewsRouter } = await import("../routers/views.js");
+        const caller = viewsRouter.createCaller({
+          db: database,
+          authenticated: true as const,
+          userId,
+          workspaceId: viewWorkspaceId ?? null,
+          workspaceRole,
+        } as unknown as Parameters<typeof viewsRouter.createCaller>[0]);
+        const created = await caller.create({
+          name: viewOp.name,
+          type: viewOp.viewType,
+          ...(viewWorkspaceId ? { workspaceId: viewWorkspaceId } : {}),
+          scopeProfileIds: [...scopeProfileIds],
+          ...(viewOp.entityIds.length > 0
+            ? { query: { entityIds: viewOp.entityIds } }
+            : {}),
+          config: {
+            ...(viewOp.config ?? {}),
+            ...(viewOp.containerEntityId
+              ? { membersOf: viewOp.containerEntityId }
+              : {}),
+          },
+        });
+        const view = (created as { view?: { id?: string } | null }).view;
+        if (created.status !== "created" || !view?.id) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `create_view did not apply (${created.status})`,
+          });
+        }
+        return { id: view.id };
       },
     },
   };

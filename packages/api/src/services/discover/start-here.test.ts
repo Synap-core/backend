@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   sessionsThrow: false,
   capsThrow: false,
   owingThrow: false,
+  libraryThrow: false,
 }));
 
 vi.mock("../../routers/mcp/handlers/shared.js", () => ({
@@ -103,6 +104,15 @@ vi.mock("../focus-sessions/session-nudges.js", () => ({
   },
 }));
 
+// The Library's health reads through its own service (pinned on PGlite in
+// `library/__tests__/library.pglite.test.ts`).
+vi.mock("../library/search.js", () => ({
+  libraryHealth: async () => {
+    if (h.libraryThrow) throw new Error("library read failed");
+    return { unread: 3, groupsWaiting: 1, oldestWaitDays: 9 };
+  },
+}));
+
 import { buildStartHere } from "./start-here.js";
 
 const caller = {
@@ -166,6 +176,8 @@ describe("startHere", () => {
       "sessionsOwingGrade",
       "topKinds",
       "actions",
+      // What the person kept and has not built — state, after the work.
+      "library",
       "learnMore",
       "beforeYouFinish",
     ]);
@@ -174,11 +186,27 @@ describe("startHere", () => {
       oldestDays: 6,
       oldestLink: "https://pod.example/open/prop-old",
       lens: "authored",
-    });    // Before any write: the title rules (c-system-skill).
+    }); // Before any write: the title rules (c-system-skill).
     expect(s.learnMore).toEqual({
       skill: "system/synap/lenses",
       writing: "system/synap/writing-titles",
     });
+  });
+
+  it("carries the Library's health; an unreadable Library is unavailable, not zero", async () => {
+    const ok = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(ok.library).toEqual({
+      unread: 3,
+      groupsWaiting: 1,
+      oldestWaitDays: 9,
+    });
+    h.libraryThrow = true;
+    try {
+      const failed = await build({ status: "ok", count: 0, oldestDays: 0 });
+      expect(failed.library).toEqual({ status: "unavailable" });
+    } finally {
+      h.libraryThrow = false;
+    }
   });
 
   it("an unreadable pending queue is unavailable, not zero", async () => {
