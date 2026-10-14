@@ -79,6 +79,11 @@ vi.mock("@synap/database", async (importOriginal) => {
         workspaceMembers: { findFirst: findMembership },
         users: { findFirst: findUser },
       },
+      // Human count for the bootstrap read (D9): 0 = the pod has no owner
+      // yet, the only time PROVISIONING_TOKEN is accepted.
+      select: () => ({
+        from: () => ({ where: async () => [{ count: 0 }] }),
+      }),
     },
   };
 });
@@ -306,7 +311,7 @@ describe("POST /setup/service — a key mints only within its own grants", () =>
     );
   });
 
-  it("an operator credential (PROVISIONING_TOKEN) keeps the full-access default", async () => {
+  it("an operator credential (PROVISIONING_TOKEN, before bootstrap) keeps the full-access default", async () => {
     process.env.PROVISIONING_TOKEN = "prov-token";
     findUser.mockResolvedValue({ id: HUMAN, userType: "human" });
     findMembership.mockResolvedValue({ id: "m-1" });

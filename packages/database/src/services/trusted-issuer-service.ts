@@ -177,50 +177,180 @@ export class TrustedIssuerService {
   /**
    * Seed deployment-provided issuers on Pod startup.
    *
+   * Scopes are PINNED, never widened by the issuer (security decision D7):
+   * `allowedScopes` is the release-pinned bootstrap set the pod code decides
+   * (`CONTROL_PLANE_ISSUER_SCOPES` for the CP). `requestedScopes` is what the
+   * issuer itself declares (the CP's `/federation/metadata`); any requested
+   * scope beyond what the row already holds is recorded as a PENDING scope
+   * request for the owner (`getPendingScopes`) and is granted only when the
+   * owner approves it through `trustedIssuers.approve` — or, when the pod
+   * opted in (`autoAcceptRequestedScopes`, the `trust.autoAcceptCpScopes`
+   * pod setting), granted here.
+   *
    * For each entry:
-   * - If no row exists → insert with status "approved" and isBuiltIn = true.
-   * - If a built-in row already exists → add newly required built-in scopes
-   *   without removing any operator-approved scope.
+   * - If no row exists → insert with status "approved", isBuiltIn = true and
+   *   the planned scopes (see `planBuiltInScopes`).
+   * - If a built-in row already exists → add newly pinned scopes without
+   *   removing any operator-approved scope; record/refresh the pending request.
    * - If a non-built-in row already exists → leave it untouched.
    *
-   * Safe to call on every pod boot — fully idempotent.
+   * Safe to call on every pod boot — fully idempotent (an unchanged pending
+   * request keeps its original `requestedAt`). Returns, per seeded built-in
+   * row, the scopes still waiting for the owner.
    */
   async seedBuiltIn(
     entries: Array<{
       issuerUrl: string;
       displayName: string;
       description?: string;
-      allowedScopes: string[];
+      /** Release-pinned bootstrap scopes — the only scopes granted here by default. */
+      allowedScopes: readonly string[];
+      /** Scopes the issuer declares for itself; never granted without consent. */
+      requestedScopes?: readonly string[];
+      /** Pod opted in to granting issuer-declared scopes without review. */
+      autoAcceptRequestedScopes?: boolean;
     }>
-  ): Promise<void> {
+  ): Promise<Array<{ issuerUrl: string; pendingScopes: string[] }>> {
+    const results: Array<{ issuerUrl: string; pendingScopes: string[] }> = [];
     for (const entry of entries) {
       const existing = await this.getByUrl(entry.issuerUrl);
-      if (existing) {
-        if (existing.isBuiltIn) {
-          const allowedScopes = Array.from(
-            new Set([...existing.allowedScopes, ...entry.allowedScopes])
-          );
-          if (allowedScopes.length !== existing.allowedScopes.length) {
-            await db
-              .update(trustedIssuers)
-              .set({ allowedScopes, updatedAt: new Date() })
-              .where(eq(trustedIssuers.id, existing.id));
-          }
-        }
-        continue;
-      }
+      if (existing && !existing.isBuiltIn) continue;
 
-      await db
-        .insert(trustedIssuers)
-        .values({
-          issuerUrl: entry.issuerUrl,
-          displayName: entry.displayName,
-          description: entry.description ?? null,
-          allowedScopes: entry.allowedScopes,
-          status: "approved",
-          isBuiltIn: true,
-        })
-        .onConflictDoNothing();
+      const plan = planBuiltInScopes({
+        current: existing?.allowedScopes ?? [],
+        pinned: entry.allowedScopes,
+        requested: entry.requestedScopes ?? [],
+        autoAcceptRequested: entry.autoAcceptRequestedScopes === true,
+      });
+      const requestData = withPendingScopeRequest(
+        existing?.initialRequestData ?? null,
+        plan.pendingScopes
+      );
+
+      if (existing) {
+        const scopesChanged =
+          plan.allowedScopes.length !== existing.allowedScopes.length;
+        if (scopesChanged || requestData.changed) {
+          await db
+            .update(trustedIssuers)
+            .set({
+              ...(scopesChanged ? { allowedScopes: plan.allowedScopes } : {}),
+              ...(requestData.changed
+                ? {
+                    initialRequestData:
+                      requestData.value as TrustedIssuerInsert["initialRequestData"],
+                  }
+                : {}),
+              updatedAt: new Date(),
+            })
+            .where(eq(trustedIssuers.id, existing.id));
+        }
+      } else {
+        await db
+          .insert(trustedIssuers)
+          .values({
+            issuerUrl: entry.issuerUrl,
+            displayName: entry.displayName,
+            description: entry.description ?? null,
+            allowedScopes: plan.allowedScopes,
+            status: "approved",
+            isBuiltIn: true,
+            initialRequestData:
+              requestData.value as TrustedIssuerInsert["initialRequestData"],
+          })
+          .onConflictDoNothing();
+      }
+      results.push({
+        issuerUrl: entry.issuerUrl,
+        pendingScopes: plan.pendingScopes,
+      });
     }
+    return results;
   }
+}
+
+/**
+ * Where a built-in issuer's pending scope request lives: a key on the row's
+ * `initial_request_data` (the issuer's own request payload). No new column —
+ * the request is the issuer's ask, and `trustedIssuers.list` already returns
+ * the row to the owner.
+ */
+export const PENDING_SCOPE_REQUEST_KEY = "pendingScopeRequest";
+
+export interface PendingScopeRequest {
+  scopes: string[];
+  requestedAt: string;
+}
+
+/**
+ * Pure scope plan for a built-in issuer (D7). The issuer never widens its
+ * own grant: `allowedScopes` = what the row holds ∪ the release-pinned set;
+ * a requested scope outside that is pending — unless the pod opted in to
+ * auto-accept, in which case it is granted and nothing is pending.
+ */
+export function planBuiltInScopes(input: {
+  current: readonly string[];
+  pinned: readonly string[];
+  requested: readonly string[];
+  autoAcceptRequested: boolean;
+}): { allowedScopes: string[]; pendingScopes: string[] } {
+  const allowed = Array.from(new Set([...input.current, ...input.pinned]));
+  const extra = Array.from(new Set(input.requested)).filter(
+    (s) => !allowed.includes(s)
+  );
+  if (input.autoAcceptRequested) {
+    return { allowedScopes: [...allowed, ...extra], pendingScopes: [] };
+  }
+  return { allowedScopes: allowed, pendingScopes: extra.sort() };
+}
+
+/**
+ * The scopes an issuer has asked for and the owner has not granted yet.
+ * Filters by the row's CURRENT grant, so an owner approval clears the ask
+ * immediately (the next boot also rewrites the stored request).
+ */
+export function getPendingScopes(issuer: TrustedIssuer): string[] {
+  const data = issuer.initialRequestData;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const req = (data as Record<string, unknown>)[PENDING_SCOPE_REQUEST_KEY];
+  if (!req || typeof req !== "object") return [];
+  const scopes = (req as { scopes?: unknown }).scopes;
+  if (!Array.isArray(scopes)) return [];
+  return scopes.filter(
+    (s): s is string =>
+      typeof s === "string" && !issuer.allowedScopes.includes(s)
+  );
+}
+
+function withPendingScopeRequest(
+  current: unknown,
+  pendingScopes: string[]
+): { value: Record<string, unknown> | null; changed: boolean } {
+  const base =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : null;
+  const prev = base?.[PENDING_SCOPE_REQUEST_KEY] as
+    PendingScopeRequest | undefined;
+  const prevScopes = Array.isArray(prev?.scopes) ? [...prev.scopes].sort() : [];
+  const same =
+    prevScopes.length === pendingScopes.length &&
+    prevScopes.every((s, i) => s === pendingScopes[i]);
+  if (same) return { value: base, changed: false };
+  if (pendingScopes.length === 0) {
+    if (!base) return { value: null, changed: false };
+    delete base[PENDING_SCOPE_REQUEST_KEY];
+    return {
+      value: Object.keys(base).length > 0 ? base : null,
+      changed: true,
+    };
+  }
+  const request: PendingScopeRequest = {
+    scopes: pendingScopes,
+    requestedAt: new Date().toISOString(),
+  };
+  return {
+    value: { ...(base ?? {}), [PENDING_SCOPE_REQUEST_KEY]: request },
+    changed: true,
+  };
 }

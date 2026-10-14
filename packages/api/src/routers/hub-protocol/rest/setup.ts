@@ -159,6 +159,62 @@ async function checkKratosIdentity(): Promise<boolean> {
 }
 
 /**
+ * Has this pod's owner been created yet? The ONE reading of "bootstrapped"
+ * (the same rule `/setup/status` reports as `!needsSetup`): a Kratos identity
+ * or a human `users` row exists. Throws when the users read fails, so a
+ * caller can tell "not bootstrapped" from "could not tell".
+ */
+async function isOwnerBootstrapped(): Promise<boolean> {
+  if (await checkKratosIdentity()) return true;
+  const [row] = await db
+    .select({ count: count() })
+    .from(users)
+    .where(eq(users.userType, "human"));
+  return Number(row?.count ?? 0) > 0;
+}
+
+/** Typed refusal for a PROVISIONING_TOKEN presented after bootstrap (D9). */
+export const PROVISIONING_TOKEN_RETIRED = "PROVISIONING_TOKEN_RETIRED";
+
+/**
+ * PROVISIONING_TOKEN is a BOOTSTRAP-ONLY credential (security decision D9):
+ * it is accepted only until the pod has an owner. After that every door that
+ * still recognises it answers a typed 403 naming the replacement — the
+ * device flow (`synap init`) or the owner's signed-in session. Call this
+ * only AFTER the token matched, so a wrong token still reads as a plain 401.
+ *
+ * Returns null when the token may be used; otherwise the response to send.
+ * A failed bootstrap read is a 503, never a silent accept.
+ */
+async function refuseProvisioningTokenAfterBootstrap(
+  c: Context<{ Variables: HubVariables }>
+): Promise<Response | null> {
+  let bootstrapped: boolean;
+  try {
+    bootstrapped = await isOwnerBootstrapped();
+  } catch (err) {
+    logger.error({ err }, "provisioning token: bootstrap state unreadable");
+    return c.json(
+      {
+        error: "Could not read this pod's setup state. Try again shortly.",
+        code: "BOOTSTRAP_STATE_UNAVAILABLE",
+      },
+      503
+    );
+  }
+  if (!bootstrapped) return null;
+  logger.warn("provisioning token refused: the pod already has an owner");
+  return c.json(
+    {
+      error:
+        "The PROVISIONING_TOKEN only works before this pod has an owner. Connect with `synap init` (approve the code from your signed-in session), or create keys from the owner's session.",
+      code: PROVISIONING_TOKEN_RETIRED,
+    },
+    403
+  );
+}
+
+/**
  * Probe the pod-admin invariant. Returns a structured result the operator
  * (or eve's post-update probe) can act on.
  *
@@ -367,9 +423,12 @@ async function authenticateServiceSetupRequest(
     // Not a valid JWT or issuer lookup failed — fall through
   }
 
-  // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
+  // Try 2: PROVISIONING_TOKEN — bootstrap-only (D9): before the pod has an
+  // owner; afterwards a typed 403 PROVISIONING_TOKEN_RETIRED.
   const provisioningToken = process.env.PROVISIONING_TOKEN;
   if (provisioningToken && safeTokenEqual(token, provisioningToken)) {
+    const refusal = await refuseProvisioningTokenAfterBootstrap(c);
+    if (refusal) return { ok: false, response: refusal };
     return { ok: true, authMethod: "provisioning_token", jwtIssuerUrl };
   }
 
@@ -595,10 +654,13 @@ export function registerSetupRoutes(app: HubHono): void {
       // Not a valid JWT or issuer lookup failed — fall through
     }
 
-    // Try 2: PROVISIONING_TOKEN (self-hosted pods — env var known only to operator)
+    // Try 2: PROVISIONING_TOKEN — bootstrap-only (D9): before the pod has an
+    // owner; afterwards a typed 403 PROVISIONING_TOKEN_RETIRED.
     if (!authenticated) {
       const provisioningToken = process.env.PROVISIONING_TOKEN;
       if (provisioningToken && safeTokenEqual(token, provisioningToken)) {
+        const refusal = await refuseProvisioningTokenAfterBootstrap(c);
+        if (refusal) return refusal;
         authenticated = true;
         authMethod = "provisioning_token";
       }
@@ -1920,7 +1982,7 @@ export function registerSetupRoutes(app: HubHono): void {
   //
   // Auth: PROVISIONING_TOKEN only.
   // Generates a short-lived JWT the operator pastes into their browser.
-  // Guard: if a human user already exists → 409.
+  // Guard: bootstrap-only (D9) — once the pod has an owner → typed 403.
   app.post("/setup/magic-link", async (c) => {
     // Auth
     const provisioningToken = process.env.PROVISIONING_TOKEN;
@@ -1939,19 +2001,9 @@ export function registerSetupRoutes(app: HubHono): void {
       );
     }
 
-    // Guard: already has admin? (check Kratos first, then Synap DB fallback)
-    const kratosHasIdentity = await checkKratosIdentity();
-    const dbHasHuman = Number(
-      (
-        await db
-          .select({ count: count() })
-          .from(users)
-          .where(eq(users.userType, "human"))
-      )?.[0]?.count ?? 0
-    );
-    if (kratosHasIdentity || dbHasHuman > 0) {
-      return c.json({ error: "Admin already exists" }, 409);
-    }
+    // Guard: bootstrap-only — the one bootstrap reading (D9).
+    const refusal = await refuseProvisioningTokenAfterBootstrap(c);
+    if (refusal) return refusal;
 
     const magicToken = jwt.sign(
       { purpose: "first_admin_setup" },
@@ -1968,7 +2020,7 @@ export function registerSetupRoutes(app: HubHono): void {
   //
   // Auth: PROVISIONING_TOKEN in header OR magicToken in body.
   // Body: { email, password, name?, magicToken? }
-  // Guard: if human users already exist → 409.
+  // Guard: bootstrap-only (D9) — once the pod has an owner → typed 403.
   app.post("/setup/first-admin", async (c) => {
     const provisioningToken = process.env.PROVISIONING_TOKEN;
 
@@ -2035,19 +2087,9 @@ export function registerSetupRoutes(app: HubHono): void {
       );
     }
 
-    // Guard: admin already exists? (check Kratos first, then Synap DB fallback)
-    const kratosHasIdentity = await checkKratosIdentity();
-    const dbHasHuman = Number(
-      (
-        await db
-          .select({ count: count() })
-          .from(users)
-          .where(eq(users.userType, "human"))
-      )?.[0]?.count ?? 0
-    );
-    if (kratosHasIdentity || dbHasHuman > 0) {
-      return c.json({ error: "Admin already exists" }, 409);
-    }
+    // Guard: bootstrap-only — the one bootstrap reading (D9).
+    const refusal = await refuseProvisioningTokenAfterBootstrap(c);
+    if (refusal) return refusal;
 
     try {
       // D7: no auto-created blank workspace — the owner starts with the

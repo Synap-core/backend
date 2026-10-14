@@ -22,6 +22,7 @@ import {
   workspaceMembers,
   TrustedIssuerService,
   CONTROL_PLANE_ISSUER_SCOPES,
+  podSettings,
 } from "@synap/database";
 import { recordSystemProfilesBootResult } from "./startup/boot-status.js";
 import { randomUUID, randomBytes } from "crypto";
@@ -216,17 +217,49 @@ async function seedDefaultCorsOrigins(): Promise<void> {
  * legitimately differs under multi-region / custom-domain / internal-hostname /
  * self-hosted-split deployments. So we DISCOVER the declared issuer by fetching
  * `${CONTROL_PLANE_URL}/federation/metadata` over the SSRF-safe client and seed
- * THAT `iss` (plus the CP's declared scopes). On ANY failure — fetch error,
+ * THAT `iss`. On ANY failure — fetch error,
  * non-2xx, malformed body, or a CP too old to serve the endpoint — we fall back
  * to the historical behavior: derive the issuer from CONTROL_PLANE_URL and use
  * the hardcoded bootstrap scope set. We do NOT require issuer == transport
  * origin; decoupling them is the whole point.
+ *
+ * SCOPES ARE PINNED (security decision D7). The CP never grants itself power
+ * on this pod: the row gets the release-pinned `CONTROL_PLANE_ISSUER_SCOPES`,
+ * whatever the metadata declares. A declared scope beyond the row's grant is
+ * recorded as a PENDING request for the owner (`getPendingScopes`), granted
+ * only by the owner (`trustedIssuers.approve`) — or here, when the pod opted
+ * in with the `trust.autoAcceptCpScopes` pod setting (default false; a
+ * managed pod may set it).
  *
  * Skipped silently when CONTROL_PLANE_URL is unset — a self-hosted pod with no
  * Control Plane is a legitimate configuration. Idempotent (`seedBuiltIn` only
  * adds missing built-in scopes, never removes operator-approved ones) and
  * non-fatal, exactly like the neighbouring seedDefaultCorsOrigins hook.
  */
+/**
+ * The pod's `trust.autoAcceptCpScopes` setting (pod_settings singleton).
+ * Default false. A failed read answers false — the fail-safe direction: an
+ * unreadable setting can only leave a CP scope pending, never grant it.
+ */
+async function readAutoAcceptCpScopes(): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ settings: podSettings.settings })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+    const trust = (row?.settings as Record<string, unknown> | null | undefined)
+      ?.trust as Record<string, unknown> | undefined;
+    return trust?.autoAcceptCpScopes === true;
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Could not read trust.autoAcceptCpScopes — Control Plane scope requests stay pending"
+    );
+    return false;
+  }
+}
+
 async function seedControlPlaneIssuer(): Promise<void> {
   const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
   if (!controlPlaneUrl) return; // self-hosted without a CP — nothing to trust
@@ -234,20 +267,19 @@ async function seedControlPlaneIssuer(): Promise<void> {
   try {
     // Prefer the CP-DECLARED issuer (transport URL may differ from signing iss).
     let issuerUrl: string | null = null;
-    // Canonical bootstrap scopes: the ONE CP scope list (@synap/database).
-    let allowedScopes: string[] = [...CONTROL_PLANE_ISSUER_SCOPES];
+    // What the CP ASKS for — never what it gets (see D7 above).
+    let requestedScopes: string[] = [];
     let source: "declared" | "transport" = "declared";
 
     try {
       const metadata = await fetchFederationMetadata(controlPlaneUrl);
       issuerUrl = metadata.issuer;
-      allowedScopes = metadata.scopes;
+      requestedScopes = metadata.scopes;
     } catch (discoveryErr) {
       // CP too old, unreachable, or malformed metadata — fall back to deriving
       // the issuer from the transport URL (historical behavior).
       source = "transport";
       issuerUrl = normalizeIssuerUrl(controlPlaneUrl);
-      allowedScopes = [...CONTROL_PLANE_ISSUER_SCOPES];
       logger.warn(
         {
           controlPlaneUrl,
@@ -268,7 +300,8 @@ async function seedControlPlaneIssuer(): Promise<void> {
       return;
     }
 
-    await new TrustedIssuerService().seedBuiltIn([
+    const autoAcceptRequestedScopes = await readAutoAcceptCpScopes();
+    const [seeded] = await new TrustedIssuerService().seedBuiltIn([
       {
         issuerUrl,
         displayName: "Synap Control Plane",
@@ -276,12 +309,26 @@ async function seedControlPlaneIssuer(): Promise<void> {
           source === "declared"
             ? "Built-in issuer for the Synap Control Plane (federated sign-in and identity linking). Discovered from /federation/metadata."
             : "Built-in issuer for the Synap Control Plane (federated sign-in and identity linking). Seeded from CONTROL_PLANE_URL.",
-        allowedScopes,
+        // Canonical bootstrap scopes: the ONE CP scope list (@synap/database).
+        allowedScopes: CONTROL_PLANE_ISSUER_SCOPES,
+        requestedScopes,
+        autoAcceptRequestedScopes,
       },
     ]);
 
+    if (seeded && seeded.pendingScopes.length > 0) {
+      logger.warn(
+        { issuerUrl, pendingScopes: seeded.pendingScopes },
+        "Control Plane declares scopes this pod has not granted — pending owner approval (trustedIssuers.approve)"
+      );
+    }
     logger.info(
-      { issuerUrl, source, scopeCount: allowedScopes.length },
+      {
+        issuerUrl,
+        source,
+        pinnedScopeCount: CONTROL_PLANE_ISSUER_SCOPES.length,
+        autoAcceptRequestedScopes,
+      },
       "Seeded Control Plane as built-in trusted issuer"
     );
   } catch (err) {

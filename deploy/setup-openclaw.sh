@@ -8,17 +8,19 @@
 #
 # Prerequisites:
 #   - A running Synap pod (docker compose up -d)
-#   - PROVISIONING_TOKEN set in your Synap .env
+#   - Your pod has an owner, and you created a Hub API key from the owner's
+#     session (Settings → API keys). The PROVISIONING_TOKEN no longer mints
+#     agent keys once the pod has an owner (security decision D9).
 #   - jq installed (brew install jq / apt install jq)
 #
 # Usage:
 #   ./setup-openclaw.sh
 #   ./setup-openclaw.sh --pod-url http://localhost:4000
-#   ./setup-openclaw.sh --pod-url http://localhost:4000 --token MY_TOKEN
+#   ./setup-openclaw.sh --pod-url http://localhost:4000 --api-key YOUR_KEY
 #
 # Environment variables (alternative to flags):
 #   SYNAP_POD_URL          Pod URL (default: http://localhost:4000)
-#   PROVISIONING_TOKEN     Admin provisioning token
+#   SYNAP_API_KEY          Hub API key created from the owner's session
 #   ENV_FILE               Path to .env file (default: .env)
 #   COMPOSE_FILE           Docker compose file (default: docker-compose.yml)
 #
@@ -29,7 +31,7 @@ set -euo pipefail
 # ── Defaults ─────────────────────────────────────────────────────────────────
 
 POD_URL="${SYNAP_POD_URL:-http://localhost:4000}"
-TOKEN="${PROVISIONING_TOKEN:-}"
+TOKEN="${SYNAP_API_KEY:-}"
 ENV_FILE="${ENV_FILE:-.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 
@@ -41,7 +43,7 @@ while [[ $# -gt 0 ]]; do
       POD_URL="$2"
       shift 2
       ;;
-    --token)
+    --api-key)
       TOKEN="$2"
       shift 2
       ;;
@@ -75,16 +77,11 @@ if ! command -v jq &> /dev/null; then
 fi
 
 if [ -z "$TOKEN" ]; then
-  # Try to read from .env file
-  if [ -f "$ENV_FILE" ]; then
-    TOKEN=$(grep -E '^PROVISIONING_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)
-  fi
-  if [ -z "$TOKEN" ]; then
-    echo "ERROR: PROVISIONING_TOKEN is required."
-    echo "  Set it via: --token <TOKEN>, PROVISIONING_TOKEN env var,"
-    echo "  or ensure it exists in $ENV_FILE"
-    exit 1
-  fi
+  echo "ERROR: a Hub API key is required."
+  echo "  Create one from your signed-in session (Settings → API keys), then pass"
+  echo "  it via --api-key <KEY> or the SYNAP_API_KEY env var."
+  echo "  (The PROVISIONING_TOKEN no longer mints agent keys once the pod has an owner.)"
+  exit 1
 fi
 
 echo "=== Synap + OpenClaw Setup ==="
@@ -140,6 +137,7 @@ fi
 
 # Parse response
 HUB_API_KEY=$(echo "$HTTP_BODY" | jq -r '.hubApiKey')
+REVIEW_URL=$(echo "$HTTP_BODY" | jq -r '.reviewUrl // empty')
 AGENT_USER_ID=$(echo "$HTTP_BODY" | jq -r '.agentUserId')
 WORKSPACE_ID=$(echo "$HTTP_BODY" | jq -r '.workspaceId')
 
@@ -150,6 +148,11 @@ if [ "$HUB_API_KEY" = "null" ] || [ -z "$HUB_API_KEY" ]; then
 fi
 
 echo "OK - Agent credentials created"
+if [ -n "$REVIEW_URL" ]; then
+  echo ""
+  echo "  The key works once you approve the connection:"
+  echo "    $REVIEW_URL"
+fi
 
 # ── Step 3: Write to .env ──────────────────────────────────────────────────
 

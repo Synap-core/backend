@@ -1,0 +1,152 @@
+/**
+ * D7 — the Control Plane never widens its own grant on a pod.
+ *
+ * Drives the REAL `TrustedIssuerService.seedBuiltIn` on PGlite against the
+ * REAL `trusted_issuers` DDL (migration 0001). Pinned:
+ *  - a fresh seed grants exactly the release-pinned set, whatever the issuer
+ *    requests; a requested scope beyond it is PENDING, not granted;
+ *  - an existing built-in row is never widened by a request either (the
+ *    boot path that used to union `/federation/metadata` scopes);
+ *  - an owner approval clears the ask (`getPendingScopes` filters by grant);
+ *  - the opt-in (`autoAcceptRequestedScopes`) grants and leaves nothing pending;
+ *  - an unchanged request is idempotent (`requestedAt` is not rewritten).
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const h = vi.hoisted(() => {
+  const state = {
+    client: null as null | {
+      exec: (sql: string) => Promise<unknown>;
+    },
+    db: null as unknown,
+    async init(): Promise<unknown> {
+      if (!state.db) {
+        const { PGlite } = await import("@electric-sql/pglite");
+        const { drizzle } = await import("drizzle-orm/pglite");
+        const schema = await import("../schema/index.js");
+        const client = new PGlite();
+        state.client = client as unknown as typeof state.client;
+        state.db = drizzle(client, { schema });
+      }
+      return state.db;
+    },
+  };
+  return state;
+});
+
+vi.mock("../client-pg.js", async () => {
+  const db = await h.init();
+  return { db, sql: undefined, getDb: async () => db };
+});
+
+import {
+  TrustedIssuerService,
+  getPendingScopes,
+  PENDING_SCOPE_REQUEST_KEY,
+} from "./trusted-issuer-service.js";
+import { CONTROL_PLANE_ISSUER_SCOPES } from "../schema/trusted-issuers.js";
+
+const DDL = readFileSync(
+  fileURLToPath(
+    new URL("../../migrations/0001_trusted_issuers.sql", import.meta.url)
+  ),
+  "utf8"
+);
+
+const CP = "https://api.test-cp.example";
+const WIDER = "membership:activate";
+const PINNED = [...CONTROL_PLANE_ISSUER_SCOPES];
+
+function seedCp(
+  svc: TrustedIssuerService,
+  requested: string[],
+  autoAccept = false
+) {
+  return svc.seedBuiltIn([
+    {
+      issuerUrl: CP,
+      displayName: "Synap Control Plane",
+      allowedScopes: PINNED,
+      requestedScopes: requested,
+      autoAcceptRequestedScopes: autoAccept,
+    },
+  ]);
+}
+
+beforeEach(async () => {
+  await h.init();
+  await h.client!.exec(`DROP TABLE IF EXISTS "trusted_issuers"; ${DDL}`);
+});
+
+describe("seedBuiltIn — CP scopes are pinned, wider = owner consent (D7)", () => {
+  it("a fresh seed grants the pinned set only; the extra request is pending", async () => {
+    const svc = new TrustedIssuerService();
+    const [res] = await seedCp(svc, [...PINNED, WIDER]);
+    const row = (await svc.getByUrl(CP))!;
+    expect([...row.allowedScopes].sort()).toEqual([...PINNED].sort());
+    expect(row.allowedScopes).not.toContain(WIDER);
+    expect(row.status).toBe("approved");
+    expect(res.pendingScopes).toEqual([WIDER]);
+    expect(getPendingScopes(row)).toEqual([WIDER]);
+  });
+
+  it("an existing built-in row is not widened by a later request", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, PINNED);
+    expect(getPendingScopes((await svc.getByUrl(CP))!)).toEqual([]);
+
+    await seedCp(svc, [...PINNED, WIDER]); // a CP that started asking for more
+    const row = (await svc.getByUrl(CP))!;
+    expect(row.allowedScopes).not.toContain(WIDER);
+    expect(getPendingScopes(row)).toEqual([WIDER]);
+  });
+
+  it("the owner's approval grants the scope and clears the ask", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const row = (await svc.getByUrl(CP))!;
+    const approved = await svc.approve(row.id, "owner-1", [...PINNED, WIDER]);
+    expect(approved.allowedScopes).toContain(WIDER);
+    expect(getPendingScopes(approved)).toEqual([]);
+
+    await seedCp(svc, [...PINNED, WIDER]); // next boot keeps the grant
+    const after = (await svc.getByUrl(CP))!;
+    expect(after.allowedScopes).toContain(WIDER);
+    expect(
+      (after.initialRequestData as Record<string, unknown> | null)?.[
+        PENDING_SCOPE_REQUEST_KEY
+      ]
+    ).toBeUndefined();
+  });
+
+  it("trust.autoAcceptCpScopes (opt-in) grants the request; nothing pending", async () => {
+    const svc = new TrustedIssuerService();
+    const [res] = await seedCp(svc, [...PINNED, WIDER], true);
+    const row = (await svc.getByUrl(CP))!;
+    expect(row.allowedScopes).toContain(WIDER);
+    expect(res.pendingScopes).toEqual([]);
+    expect(getPendingScopes(row)).toEqual([]);
+  });
+
+  it("an unchanged request is idempotent", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const first = (await svc.getByUrl(CP))!;
+    await seedCp(svc, [WIDER, ...PINNED]);
+    const second = (await svc.getByUrl(CP))!;
+    expect(second.initialRequestData).toEqual(first.initialRequestData);
+    expect(second.updatedAt.getTime()).toBe(first.updatedAt.getTime());
+  });
+
+  it("a non-built-in row with the same URL is left untouched", async () => {
+    const svc = new TrustedIssuerService();
+    await svc.registerPending(CP, "Someone else", null);
+    const [res] = await seedCp(svc, [...PINNED, WIDER]);
+    expect(res).toBeUndefined();
+    const row = (await svc.getByUrl(CP))!;
+    expect(row.status).toBe("pending");
+    expect(row.allowedScopes).toEqual([]);
+  });
+});
