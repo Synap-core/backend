@@ -55,6 +55,7 @@ import { emitSideEffects } from "@synap/events";
 import { isGuidelineSourceKind } from "./source-kind.js";
 import { getWorkspaceRole, isPodAdmin } from "../../utils/workspace-role.js";
 import { mergeProposalRevision } from "../proposals/proposals-service.js";
+import { TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE } from "../trusted-issuers/widen-scopes-type.js";
 
 export interface CorrectionGuidelineScope {
   scopeKind: StructureGuidelineScopeKind;
@@ -412,6 +413,12 @@ export function governanceApprovalFloorFor(
   // legacy branch and approvable by ANY authenticated pod user through this one
   // (both review-authority helpers short-circuit on `workspaceId: null`).
   if (proposalType === "settings.update") return "pod-admin";
+  // A trusted issuer's wider grant (D7) changes what an outside service may do
+  // on the WHOLE pod — the same write `trustedIssuers.approve` keeps behind
+  // `podAdminProcedure`. Pinned here, at the floor every approval door
+  // passes, so it never rests on how the review ladder reads a pod-wide row.
+  if (proposalType === TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE)
+    return "pod-admin";
   if (proposalType.startsWith("governance.")) return "pod-admin";
   return "none";
 }

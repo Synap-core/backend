@@ -42,6 +42,7 @@ import {
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
   fetchFederationMetadata,
+  syncTrustedIssuerScopeRequest,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 import { backfillAllWorkspacesTeamPersonBridge } from "./startup/backfill-team-person-bridge.js";
@@ -226,10 +227,12 @@ async function seedDefaultCorsOrigins(): Promise<void> {
  * SCOPES ARE PINNED (security decision D7). The CP never grants itself power
  * on this pod: the row gets the release-pinned `CONTROL_PLANE_ISSUER_SCOPES`,
  * whatever the metadata declares. A declared scope beyond the row's grant is
- * recorded as a PENDING request for the owner (`getPendingScopes`), granted
- * only by the owner (`trustedIssuers.approve`) — or here, when the pod opted
- * in with the `trust.autoAcceptCpScopes` pod setting (default false; a
- * managed pod may set it).
+ * recorded as a PENDING request and filed as ONE `trusted_issuer.widen_scopes`
+ * proposal in the owner's review queue (`syncTrustedIssuerScopeRequest`),
+ * granted only when a pod admin approves it (or through the admin
+ * `trustedIssuers.approve` door) — or here, when the pod opted in with the
+ * `trust.autoAcceptCpScopes` pod setting (default false; a managed pod may
+ * set it): then nothing is filed and the granted scopes are logged.
  *
  * Skipped silently when CONTROL_PLANE_URL is unset — a self-hosted pod with no
  * Control Plane is a legitimate configuration. Idempotent (`seedBuiltIn` only
@@ -267,8 +270,10 @@ async function seedControlPlaneIssuer(): Promise<void> {
   try {
     // Prefer the CP-DECLARED issuer (transport URL may differ from signing iss).
     let issuerUrl: string | null = null;
-    // What the CP ASKS for — never what it gets (see D7 above).
-    let requestedScopes: string[] = [];
+    // What the CP ASKS for — never what it gets (see D7 above). Undefined
+    // while unknown: a failed discovery is not "the CP asks for nothing", and
+    // must not clear (or withdraw) a request the owner is still deciding.
+    let requestedScopes: string[] | undefined;
     let source: "declared" | "transport" = "declared";
 
     try {
@@ -316,11 +321,37 @@ async function seedControlPlaneIssuer(): Promise<void> {
       },
     ]);
 
+    if (seeded && autoAcceptRequestedScopes && seeded.grantedScopes.length) {
+      logger.warn(
+        { issuerUrl, grantedScopes: seeded.grantedScopes },
+        "Control Plane scopes granted without review (trust.autoAcceptCpScopes)"
+      );
+    }
     if (seeded && seeded.pendingScopes.length > 0) {
       logger.warn(
         { issuerUrl, pendingScopes: seeded.pendingScopes },
-        "Control Plane declares scopes this pod has not granted — pending owner approval (trustedIssuers.approve)"
+        "Control Plane declares scopes this pod has not granted — pending owner approval"
       );
+    }
+    // D7: the owner SEES the request — one pending proposal in their review
+    // queue, kept in step with the row (filed, unchanged, declined after a
+    // rejection, or withdrawn when the ask changed). Its own failure must not
+    // undo the seed above.
+    if (seeded) {
+      try {
+        const outcome = await syncTrustedIssuerScopeRequest(issuerUrl);
+        if (outcome.action !== "none" && outcome.action !== "unchanged") {
+          logger.info(
+            { issuerUrl, ...outcome },
+            "Control Plane scope request synced to the owner's review queue"
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { err, issuerUrl },
+          "Could not file the Control Plane scope request for review (non-fatal) — retried next start"
+        );
+      }
     }
     logger.info(
       {

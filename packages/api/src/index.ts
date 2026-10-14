@@ -191,6 +191,10 @@ export {
   type FederationMetadata,
 } from "./utils/federation-metadata-client.js";
 export {
+  syncTrustedIssuerScopeRequest,
+  type ScopeRequestSyncOutcome,
+} from "./services/trusted-issuers/scope-request-proposal.js";
+export {
   APPLICATION_CONNECTION_SCOPES,
   normalizeApplicationClientId,
   normalizeApplicationOrigin,
@@ -487,6 +491,9 @@ export {
   reconcileInstalledPacks,
   type InstalledPackReconcileOutcome,
 } from "./services/reconcile-installed-packs.js";
+// W4 — the boot pass's base defaults and its stamp channel (one finisher).
+export { reconcileBaseDefaults } from "./services/template-apply/base-defaults.js";
+export { finishBootConvergence } from "./services/template-apply-finisher.js";
 export {
   resolveTemplateCatalog,
   readOverlayLedger,

@@ -206,6 +206,23 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("profile.change_scope", "past")).toBe("Rescoped");
   });
 
+  it("names a trusted issuer's scope request in both moods (D7)", () => {
+    // The stored proposalType is `trusted_issuer.widen_scopes`; humanize had
+    // no past tense, so a receipt read "Widen scopes".
+    expect(
+      resolveActionLabel("trusted_issuer.widen_scopes", "imperative")
+    ).toBe("Widen access");
+    expect(resolveActionLabel("widen_scopes", "past")).toBe("Widened access");
+    // The title the pod files the request under names WHOSE access widens.
+    expect(
+      buildObjectActionTitle({
+        action: "trusted_issuer.widen_scopes",
+        objectKind: "trusted_issuer",
+        objectName: "Synap Control Plane",
+      })
+    ).toBe('Widen access for Trusted issuer "Synap Control Plane"');
+  });
+
   it("names project filing in both moods (humanize would read 'File entities')", () => {
     expect(resolveActionLabel("file_entities", "imperative")).toBe("File");
     expect(resolveActionLabel("project.file_entities", "past")).toBe("Filed");

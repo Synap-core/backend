@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { GuidelineSupersedeConflictError } from "@synap/database";
+import { TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE } from "../trusted-issuers/widen-scopes-type.js";
 import {
   recordCorrectionAsGuideline,
   applyStructureGuidelineApproval,
@@ -276,6 +277,14 @@ describe("D1 — approval authority: whoever the guideline applies to decides", 
       governanceApprovalFloorFor("governance.structure_guideline_extra")
     ).toBe("pod-admin");
     expect(governanceApprovalFloorFor("capture.graph")).toBe("none");
+  });
+
+  it("a trusted issuer's wider grant (D7) is pod-admin-only", () => {
+    // Pinned to the filer's own constant: approving it changes what an
+    // outside service may do on the whole pod.
+    expect(
+      governanceApprovalFloorFor(TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE)
+    ).toBe("pod-admin");
   });
 
   // The unified gov-config door writes the SAME privileged rows (rules /

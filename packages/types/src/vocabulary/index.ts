@@ -315,6 +315,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // changed. One word so "<verb> <noun>" reads "Rescope kind"; humanize had no
   // past tense ("Change scope" on a receipt).
   change_scope: { imperative: "Rescope", past: "Rescoped" },
+  // D7 — a trusted service (the Control Plane) asking the pod owner for more
+  // access than its pinned grant (`trusted_issuer.widen_scopes`). Reads
+  // "Widen access for Trusted issuer "…"" with the preposition below; humanize
+  // had no past tense ("Widen scopes" on a receipt).
+  widen_scopes: { imperative: "Widen access", past: "Widened access" },
   // Filing EXISTING records into a project (`project/file_entities`) and
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".
@@ -480,6 +485,7 @@ export const PIN_LIST_CAP = 50;
 export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
   section_update: "in",
   session_narrative_update: "of",
+  widen_scopes: "for",
 };
 
 function resolveActionPreposition(action: string | null | undefined): string {

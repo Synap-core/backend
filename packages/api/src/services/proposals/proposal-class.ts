@@ -160,6 +160,10 @@ const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // D13 — changing a kind's scope / grants / entityScope widens (or narrows)
   // which spaces see the kind and its records. ADMIN-floored for agents.
   "profile/change_scope",
+  // D7 — an outside service (the Control Plane) asking the pod owner for
+  // scopes beyond its pinned grant. Approving decides what that service may
+  // do here. Filed by `services/trusted-issuers/scope-request-proposal.ts`.
+  "trusted_issuer/trusted_issuer.widen_scopes",
 ]);
 
 /**

@@ -624,6 +624,15 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // The update pack is the same shape (one review over N items) and is
   // `forcePropose`d at its one door; flooring it keeps a rule inert here too.
   "entity.update_pack" satisfies GateEventKey,
+  // D7 — the pod owner's consent to a trusted issuer's (the Control Plane's)
+  // request for scopes beyond its pinned grant. Its whole value is that a
+  // person said yes: filed directly at boot (`syncTrustedIssuerScopeRequest`),
+  // never through the gate, and floored so no rule or list can ever resolve it.
+  // Both spellings: the direct-door key (typed — its proposalType is dotted,
+  // so the composed key repeats the subject) and the subject + verb key a gate
+  // or a "make a rule from this" would compose.
+  "trusted_issuer.trusted_issuer.widen_scopes" satisfies DirectProposalEventKey,
+  "trusted_issuer.widen_scopes",
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
@@ -2401,6 +2410,11 @@ export const DIRECT_PROPOSAL_DOORS = {
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
   "workspace/join": "direct",
+  // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
+  // `services/trusted-issuers/scope-request-proposal.ts`; approved by
+  // `routers/proposals/executors/trusted-issuer.ts` (pod admin, a person —
+  // `trusted_issuer.widen_scopes` is a HUMAN GATE event key).
+  "trusted_issuer/trusted_issuer.widen_scopes": "direct",
 } as const satisfies Record<string, GovernedWriteCreator>;
 
 /** Every governed-write door — the tripwire's LEFT side. */

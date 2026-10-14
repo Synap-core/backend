@@ -44,6 +44,7 @@ vi.mock("../client-pg.js", async () => {
 import {
   TrustedIssuerService,
   getPendingScopes,
+  getDeclinedScopes,
   PENDING_SCOPE_REQUEST_KEY,
 } from "./trusted-issuer-service.js";
 import { CONTROL_PLANE_ISSUER_SCOPES } from "../schema/trusted-issuers.js";
@@ -57,6 +58,7 @@ const DDL = readFileSync(
 
 const CP = "https://api.test-cp.example";
 const WIDER = "membership:activate";
+const OTHER = "sync";
 const PINNED = [...CONTROL_PLANE_ISSUER_SCOPES];
 
 function seedCp(
@@ -148,5 +150,114 @@ describe("seedBuiltIn — CP scopes are pinned, wider = owner consent (D7)", () 
     const row = (await svc.getByUrl(CP))!;
     expect(row.status).toBe("pending");
     expect(row.allowedScopes).toEqual([]);
+  });
+});
+
+describe("owner consent — grant / decline the CP's request (D7)", () => {
+  it("granting the request adds EXACTLY the asked scopes and clears the ask", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER, OTHER]);
+    const row = (await svc.getByUrl(CP))!;
+    const res = await svc.grantRequestedScopes(row.id, "owner-1", [
+      WIDER,
+      OTHER,
+    ]);
+    expect(res.status).toBe("granted");
+    const after = (await svc.getByUrl(CP))!;
+    expect([...after.allowedScopes].sort()).toEqual(
+      [...PINNED, WIDER, OTHER].sort()
+    );
+    expect(getPendingScopes(after)).toEqual([]);
+    expect(
+      (after.initialRequestData as Record<string, unknown> | null)?.[
+        PENDING_SCOPE_REQUEST_KEY
+      ]
+    ).toBeUndefined();
+    expect(after.reviewedBy).toBe("owner-1");
+  });
+
+  it("never grants a scope the issuer did not ask for (a revised payload)", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const row = (await svc.getByUrl(CP))!;
+    const res = await svc.grantRequestedScopes(row.id, "owner-1", [
+      WIDER,
+      "admin",
+    ]);
+    expect(res).toEqual({ status: "not_requested", scopes: ["admin"] });
+    const after = (await svc.getByUrl(CP))!;
+    expect(after.allowedScopes).not.toContain(WIDER);
+    expect(after.allowedScopes).not.toContain("admin");
+    expect(getPendingScopes(after)).toEqual([WIDER]);
+  });
+
+  it("never resurrects a revoked issuer", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const row = (await svc.getByUrl(CP))!;
+    await svc.revoke(row.id, "owner-1");
+    const res = await svc.grantRequestedScopes(row.id, "owner-1", [WIDER]);
+    expect(res).toEqual({ status: "not_approved", issuerStatus: "revoked" });
+    const after = (await svc.getByUrl(CP))!;
+    expect(after.status).toBe("revoked");
+    expect(after.allowedScopes).not.toContain(WIDER);
+  });
+
+  it("a declined ask is not re-asked on the next boot; a DIFFERENT ask is", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const row = (await svc.getByUrl(CP))!;
+    expect(await svc.declineRequestedScopes(row.id, [WIDER], "prop-1")).toBe(
+      true
+    );
+    const declined = (await svc.getByUrl(CP))!;
+    expect(getPendingScopes(declined)).toEqual([]);
+    expect(getDeclinedScopes(declined)).toEqual([WIDER]);
+
+    const [same] = await seedCp(svc, [...PINNED, WIDER]); // next boot, same ask
+    expect(same!.pendingScopes).toEqual([]);
+    expect(getPendingScopes((await svc.getByUrl(CP))!)).toEqual([]);
+
+    const [changed] = await seedCp(svc, [...PINNED, WIDER, OTHER]);
+    expect(changed!.pendingScopes).toEqual([WIDER, OTHER].sort());
+  });
+
+  it("a decision about an OLDER ask never clears a newer one", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER, OTHER]);
+    const row = (await svc.getByUrl(CP))!;
+    expect(await svc.declineRequestedScopes(row.id, [WIDER], "prop-old")).toBe(
+      false
+    );
+    expect(getPendingScopes((await svc.getByUrl(CP))!).sort()).toEqual(
+      [WIDER, OTHER].sort()
+    );
+  });
+
+  it("a reconsidered (declined) ask can still be granted", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const row = (await svc.getByUrl(CP))!;
+    await svc.declineRequestedScopes(row.id, [WIDER], "prop-1");
+    const res = await svc.grantRequestedScopes(row.id, "owner-1", [WIDER]);
+    expect(res.status).toBe("granted");
+    const after = (await svc.getByUrl(CP))!;
+    expect(after.allowedScopes).toContain(WIDER);
+    expect(getDeclinedScopes(after)).toEqual([]);
+  });
+
+  it("an UNKNOWN ask (discovery failed) keeps the stored request", async () => {
+    const svc = new TrustedIssuerService();
+    await seedCp(svc, [...PINNED, WIDER]);
+    const [res] = await svc.seedBuiltIn([
+      {
+        issuerUrl: CP,
+        displayName: "Synap Control Plane",
+        allowedScopes: PINNED,
+        requestedScopes: undefined,
+      },
+    ]);
+    expect(res!.pendingScopes).toEqual([WIDER]);
+    expect(getPendingScopes((await svc.getByUrl(CP))!)).toEqual([WIDER]);
   });
 });

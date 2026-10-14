@@ -12,6 +12,10 @@ import {
   DURABLE_OBJECT_VERBS,
   capabilityRunVerbId,
 } from "./proposal-class.js";
+import {
+  TRUSTED_ISSUER_TARGET_TYPE,
+  TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
+} from "../trusted-issuers/widen-scopes-type.js";
 
 const API_SRC = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -73,6 +77,24 @@ function scanCapabilityProposalSites(): {
 describe("classifyProposal", () => {
   it("an app asking for reach is an ACCESS decision (app/connect)", () => {
     expect(classifyProposal("connect", "app")).toBe("access");
+  });
+
+  it("a trusted issuer asking for wider scopes is an ACCESS decision (D7)", () => {
+    // Pinned to the filer's own constants, so the local literal in
+    // ACCESS_DOORS cannot drift from what the pod files.
+    expect(
+      classifyProposal(
+        TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
+        TRUSTED_ISSUER_TARGET_TYPE
+      )
+    ).toBe("access");
+    // An access request never expires: the owner's answer is still owed.
+    expect(
+      proposalLifetimeHours(
+        TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
+        TRUSTED_ISSUER_TARGET_TYPE
+      )
+    ).toBeNull();
   });
 
   it("classifies the four shapes present in the live queue", () => {
