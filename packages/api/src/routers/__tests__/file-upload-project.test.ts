@@ -61,6 +61,12 @@ vi.mock("@synap/database", () => {
   };
 });
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
+// The read floor of the URL doors pulls in the access layer; these tests
+// drive the upload doors only.
+vi.mock("../../utils/stored-file-access.js", () => ({
+  loadSignableDocument: vi.fn(),
+  loadSignableFileEntity: vi.fn(),
+}));
 vi.mock("@synap/auth", () => ({
   authMiddleware: async (
     c: { set: (k: string, v: unknown) => void },

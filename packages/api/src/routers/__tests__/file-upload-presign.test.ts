@@ -88,6 +88,12 @@ vi.mock("@synap/database", () => {
 });
 const WS_FOR_MOCK = "11111111-1111-4111-8111-111111111111";
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
+// The read floor of the URL doors pulls in the access layer; these tests
+// drive the upload doors only.
+vi.mock("../../utils/stored-file-access.js", () => ({
+  loadSignableDocument: vi.fn(),
+  loadSignableFileEntity: vi.fn(),
+}));
 vi.mock("@synap/auth", () => ({ authMiddleware: vi.fn() }));
 vi.mock("../../access/guest-containment.js", () => ({
   refuseGuestSession: vi.fn(),

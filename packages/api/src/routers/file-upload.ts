@@ -14,10 +14,8 @@ import { storage } from "@synap/storage";
 import {
   db,
   eq,
-  and,
   entities,
   documents,
-  workspaceMembers,
   workspaces,
   materializeEntity,
   resolveImportEntityPlacement,
@@ -29,6 +27,10 @@ import { authMiddleware } from "@synap/auth";
 import { refuseGuestSession } from "../access/guest-containment.js";
 import { TRPCError } from "@trpc/server";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import {
+  loadSignableDocument,
+  loadSignableFileEntity,
+} from "../utils/stored-file-access.js";
 import {
   requestPresignedUpload,
   storeDocumentFromPresignedUpload,
@@ -800,33 +802,21 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
   const documentId = c.req.param("documentId");
 
   try {
-    const document = await db.query.documents.findFirst({
-      where: eq(documents.id, documentId),
-      columns: {
-        id: true,
-        userId: true,
-        workspaceId: true,
-        storageKey: true,
-      },
-    });
-
-    if (!document || !document.storageKey) {
-      return c.json({ error: "Document file not found" }, 404);
-    }
-
-    if (document.userId !== userId) {
-      if (!document.workspaceId) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, document.workspaceId),
-          eq(workspaceMembers.userId, userId)
-        ),
+    // The read floor, not owner-or-member of the document's workspace: a
+    // pod-wide document (no workspace) is also readable through an entity the
+    // caller can read that holds it (its file, or a media copy).
+    const document = await loadSignableDocument(userId, documentId);
+    if (!document) {
+      const exists = await db.query.documents.findFirst({
+        where: eq(documents.id, documentId),
+        columns: { id: true },
       });
-      if (!membership) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+      return exists
+        ? c.json({ error: "Forbidden" }, 403)
+        : c.json({ error: "Document file not found" }, 404);
+    }
+    if (!document.storageKey) {
+      return c.json({ error: "Document file not found" }, 404);
     }
 
     const expiresInSeconds = 3600;
@@ -860,58 +850,22 @@ fileUploadApp.get("/:entityId/url", async (c) => {
   const entityId = c.req.param("entityId");
 
   try {
-    const entity = await db.query.entities.findFirst({
-      where: eq(entities.id, entityId),
-      columns: {
-        id: true,
-        userId: true,
-        properties: true,
-        workspaceId: true,
-        documentId: true,
-      },
-    });
-
+    // The entity's own read floor (registered `entities` rule) — a pod-wide
+    // file entity is readable by more than its author. The bytes follow it
+    // only from a document its OWNER owns: `entities.document_id` is reachable
+    // from writers (`attachSourceBlob` once took a proposal-carried id), so a
+    // link alone never proves the document is the entity's to share.
+    const entity = await loadSignableFileEntity(userId, entityId);
     if (!entity) {
-      return c.json({ error: "File entity not found" }, 404);
-    }
-
-    // Verify ownership (userId must match)
-    if (entity.userId !== userId) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
-
-    // The kind filter was intentionally dropped: bytes resolve for ANY entity
-    // that carries a documentId (file, brand-asset) — the canonical link, not
-    // the kind, gates downloadability. Access is owner-gated above
-    // (entity.userId === userId) AND again on the documents row below.
-    //
-    // The entity check alone used to be the whole story ("authorize on the
-    // entity, not the documents row"), and it was true only while
-    // `entities.document_id` was unreachable from user input. It was not:
-    // `attachSourceBlob` wrote it from a proposal-carried `documentId`, so an
-    // entity could be pointed at ANOTHER user's document and this endpoint
-    // would presign it. That leg is now gated at the writer too — this
-    // predicate is the second lock, and the one that holds for any future
-    // writer of the column.
-    // Canonical path: resolve bytes via entities.documentId → documents.storageKey.
-    // Read-time fallback to the legacy properties.storageKey for un-migrated
-    // rows (early `file` entities stored the storage key in entity properties
-    // rather than on the documents row).
-    let storageKey: string | undefined;
-    if (entity.documentId) {
-      const doc = await db.query.documents.findFirst({
-        where: and(
-          eq(documents.id, entity.documentId),
-          eq(documents.userId, userId)
-        ),
-        columns: { storageKey: true },
+      const exists = await db.query.entities.findFirst({
+        where: eq(entities.id, entityId),
+        columns: { id: true },
       });
-      storageKey = doc?.storageKey ?? undefined;
+      return exists
+        ? c.json({ error: "Forbidden" }, 403)
+        : c.json({ error: "File entity not found" }, 404);
     }
-    if (!storageKey) {
-      const props = entity.properties as Record<string, unknown>;
-      storageKey = props.storageKey as string | undefined;
-    }
+    const storageKey = entity.storageKey;
 
     if (!storageKey) {
       return c.json({ error: "File has no storage key" }, 404);
