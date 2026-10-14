@@ -13,7 +13,10 @@ import {
 import { users, type AgentMetadata } from "../schema/users.js";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { governanceRules } from "../schema/governance-rules.js";
-import { governanceCeilings } from "../schema/governance-ceilings.js";
+import {
+  governanceCeilings,
+  type GovernanceCeilingAxis,
+} from "../schema/governance-ceilings.js";
 import { events } from "../schema/events.js";
 import { channels, ChannelType } from "../schema/channels.js";
 import { entities } from "../schema/entities.js";
@@ -24,7 +27,8 @@ import {
   ENTITY_BODY_LANES,
   getWorkspaceGovernanceMode,
   matchesActionPattern,
-  DEFAULT_DAILY_WRITE_CEILING,
+  CEILING_DEFAULTS,
+  TIGHTEN_ONLY_CEILING_AXES,
   PROPOSE_REASON,
   REVERSIBLE_CLASS_PATTERN,
   type ChannelCapabilityGrant,
@@ -1174,25 +1178,84 @@ export interface ResolveDailyWriteCeilingInput {
 export async function resolveDailyWriteCeiling(
   input: ResolveDailyWriteCeilingInput
 ): Promise<number> {
-  const { db, agentUserId, workspaceId } = input;
+  return (
+    await resolveCeiling({
+      db: input.db,
+      axis: "daily_write_count",
+      agentUserId: input.agentUserId,
+      workspaceId: input.workspaceId ?? null,
+    })
+  ).value;
+}
 
+// ---------------------------------------------------------------------------
+// THE ceiling resolver (the caps fold, W1c / 0330)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile-time floor: `CEILING_DEFAULTS` (@synap/governance-policy) names
+ * exactly the axis enum. A new axis with no default — or a default for an axis
+ * that no longer exists — collapses this to `never` and the build stops.
+ */
+type _CeilingDefaultsCoverAxes = [
+  Exclude<GovernanceCeilingAxis, keyof typeof CEILING_DEFAULTS>,
+  Exclude<keyof typeof CEILING_DEFAULTS, GovernanceCeilingAxis>,
+] extends [never, never]
+  ? true
+  : never;
+const _ceilingDefaultsCoverAxes: _CeilingDefaultsCoverAxes = true;
+void _ceilingDefaultsCoverAxes;
+
+export interface ResolveCeilingInput {
+  db: DbHandle;
+  axis: GovernanceCeilingAxis;
+  /** The acting agent; omitted ⇒ only `any` rows apply. */
+  agentUserId?: string | null;
+  workspaceId?: string | null;
+  /** The one thing the limit is for (e.g. `{ type: "automation", id }`). */
+  subject?: { type: string; id: string } | null;
+}
+
+export interface ResolvedCeiling {
+  value: number;
+  /** `row` — a stored ceiling decided it; `default` — `CEILING_DEFAULTS`. */
+  source: "row" | "default";
+  ceilingId: string | null;
+}
+
+/**
+ * THE reader of every numeric governance limit. The most specific ACTIVE row
+ * wins: subject match (+8) > principal (agent 2 · class 1 · any 0) > scope
+ * (workspace 2 · pod 0), newest `created_at` breaking ties — the same ranking
+ * `resolveGovernanceRule` uses, with the subject on top. A row naming another
+ * subject never applies. No row ⇒ `CEILING_DEFAULTS[axis]`. A tighten-only
+ * axis (`TIGHTEN_ONLY_CEILING_AXES`) never resolves above its default.
+ */
+export async function resolveCeiling(
+  input: ResolveCeilingInput
+): Promise<ResolvedCeiling> {
+  const { db, axis, agentUserId, workspaceId, subject } = input;
   const candidates = (await db
     .select({
+      id: governanceCeilings.id,
       principalKind: governanceCeilings.principalKind,
       scopeKind: governanceCeilings.scopeKind,
+      subjectId: governanceCeilings.subjectId,
       limitValue: governanceCeilings.limitValue,
       createdAt: governanceCeilings.createdAt,
     })
     .from(governanceCeilings)
     .where(
       and(
-        eq(governanceCeilings.axis, "daily_write_count"),
+        eq(governanceCeilings.axis, axis),
         isNull(governanceCeilings.revokedAt),
         or(
           isNull(governanceCeilings.expiresAt),
           gt(governanceCeilings.expiresAt, new Date())
         ),
-        principalEligible(governanceCeilings, agentUserId),
+        agentUserId
+          ? principalEligible(governanceCeilings, agentUserId)
+          : eq(governanceCeilings.principalKind, "any"),
         or(
           eq(governanceCeilings.scopeKind, "pod"),
           workspaceId
@@ -1201,18 +1264,30 @@ export async function resolveDailyWriteCeiling(
                 eq(governanceCeilings.workspaceId, workspaceId)
               )
             : sql`false`
+        ),
+        or(
+          isNull(governanceCeilings.subjectId),
+          subject
+            ? and(
+                eq(governanceCeilings.subjectType, subject.type),
+                eq(governanceCeilings.subjectId, subject.id)
+              )
+            : sql`false`
         )
       )
     )) as Array<{
+    id: string;
     principalKind: "agent" | "any" | "class";
     scopeKind: "workspace" | "pod";
+    subjectId: string | null;
     limitValue: number;
     createdAt: Date;
   }>;
 
-  let best: { score: number; createdAt: Date; limitValue: number } | undefined;
+  let best: (typeof candidates)[number] & { score: number } | undefined;
   for (const row of candidates) {
     const score =
+      (row.subjectId ? 8 : 0) +
       principalSpecificity(row.principalKind) +
       (row.scopeKind === "workspace" ? 2 : 0);
     if (
@@ -1220,11 +1295,20 @@ export async function resolveDailyWriteCeiling(
       score > best.score ||
       (score === best.score && row.createdAt > best.createdAt)
     ) {
-      best = { score, createdAt: row.createdAt, limitValue: row.limitValue };
+      best = { ...row, score };
     }
   }
 
-  return best ? best.limitValue : DEFAULT_DAILY_WRITE_CEILING;
+  const fallback: number = CEILING_DEFAULTS[axis];
+  if (!best) return { value: fallback, source: "default", ceilingId: null };
+  const tightenOnly = (
+    TIGHTEN_ONLY_CEILING_AXES as ReadonlyArray<GovernanceCeilingAxis>
+  ).includes(axis);
+  return {
+    value: tightenOnly ? Math.min(best.limitValue, fallback) : best.limitValue,
+    source: "row",
+    ceilingId: best.id,
+  };
 }
 
 export interface ResolvePendingProposalCapInput {
@@ -1246,45 +1330,15 @@ export interface ResolvePendingProposalCapInput {
 export async function resolvePendingProposalCap(
   input: ResolvePendingProposalCapInput
 ): Promise<number | null> {
-  const { db, agentUserId } = input;
-
-  const candidates = (await db
-    .select({
-      principalKind: governanceCeilings.principalKind,
-      limitValue: governanceCeilings.limitValue,
-      createdAt: governanceCeilings.createdAt,
-    })
-    .from(governanceCeilings)
-    .where(
-      and(
-        eq(governanceCeilings.axis, "pending_proposal_cap"),
-        isNull(governanceCeilings.revokedAt),
-        or(
-          isNull(governanceCeilings.expiresAt),
-          gt(governanceCeilings.expiresAt, new Date())
-        ),
-        eq(governanceCeilings.scopeKind, "pod"),
-        principalEligible(governanceCeilings, agentUserId)
-      )
-    )) as Array<{
-    principalKind: "agent" | "any" | "class";
-    limitValue: number;
-    createdAt: Date;
-  }>;
-
-  let best: { score: number; createdAt: Date; limitValue: number } | undefined;
-  for (const row of candidates) {
-    const score = principalSpecificity(row.principalKind);
-    if (
-      !best ||
-      score > best.score ||
-      (score === best.score && row.createdAt > best.createdAt)
-    ) {
-      best = { score, createdAt: row.createdAt, limitValue: row.limitValue };
-    }
-  }
-
-  return best ? best.limitValue : null;
+  // Pod scope only: the proposal cap is a per-agent pod-wide budget. `null`
+  // when no row decided — the api applies its trust multiplier to the default.
+  const r = await resolveCeiling({
+    db: input.db,
+    axis: "pending_proposal_cap",
+    agentUserId: input.agentUserId,
+    workspaceId: null,
+  });
+  return r.source === "row" ? r.value : null;
 }
 
 /**

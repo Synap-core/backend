@@ -283,6 +283,35 @@ export const DEFAULT_DAILY_WRITE_CEILING = 500;
 export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
 
 /**
+ * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
+ * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
+ * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
+ * reader. `@synap/database` pins this table's key set to the axis enum at
+ * compile time (a new axis with no default does not build), and an api
+ * tripwire pins the published copies in `@synap-core/types`
+ * (`AI_DISPATCH_GUARDRAILS`, `DEFAULT_WORKER_MAX_PENDING_APPROVALS`) equal.
+ */
+export const CEILING_DEFAULTS = {
+  daily_write_count: DEFAULT_DAILY_WRITE_CEILING,
+  /** Base pending-proposal cap; the api multiplies it for a trusted agent. */
+  pending_proposal_cap: 10,
+  automation_ai_dispatch_per_run: 25,
+  automation_ai_dispatch_daily: 50,
+  worker_pending_approvals: 20,
+  worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
+} as const;
+
+/**
+ * Axes a stored row may only LOWER, never raise past its default: the
+ * irreversible-send cap stays a platform limit (see
+ * {@link WORKER_IRREVERSIBLE_DAILY_CEILING}) — a person can tighten it for one
+ * worker, never widen it.
+ */
+export const TIGHTEN_ONLY_CEILING_AXES = [
+  "worker_irreversible_sends_daily",
+] as const satisfies ReadonlyArray<keyof typeof CEILING_DEFAULTS>;
+
+/**
  * The three gov-config stores the unified `settings.update` door can target.
  */
 export type GovConfigStore =

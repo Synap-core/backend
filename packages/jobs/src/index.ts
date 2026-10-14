@@ -51,6 +51,10 @@ export {
   type ParentSettleOutcome,
 } from "./utils/automation-parent-settle.js";
 
+// A worker enablement's effective pending-approvals cap — the ONE rule the
+// api's run gate and this package's backlog release share (caps fold, W1c).
+export { resolveWorkerMaxPending } from "./utils/worker-backlog-release.js";
+
 // CP catalog sync — kind vocabulary (imported by @synap/api's catalog-cache-query.ts)
 export { type CatalogKind } from "./workers/cp-catalog-sync.js";
 export {

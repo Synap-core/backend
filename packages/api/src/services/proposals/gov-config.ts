@@ -47,7 +47,10 @@ export interface SettingsUpdateProposalData {
   targetPattern?: string;
   targetProfile?: string | null;
   verdict?: "auto" | "propose";
-  axis?: "daily_write_count" | "pending_proposal_cap";
+  /** Any `governance_ceilings` axis (the caps fold, W1c). */
+  axis?: GovernanceCeilingAxis;
+  /** A ceiling for ONE thing (e.g. `{ type: "automation", id }`); omit = every one. */
+  subject?: { type: string; id: string } | null;
   limitValue?: number;
   // config_settings:
   configScopeKind?: ConfigScopeKind;
@@ -123,8 +126,9 @@ export async function applyGovConfigChange(
     } else {
       const axis = (spec.axis ?? "daily_write_count") as GovernanceCeilingAxis;
       const agentUserId = spec.agentUserId ?? null;
-      // Supersede the prior active pod-scoped ceiling on this axis so the new
-      // one is the single effective row (mirrors the legacy raise_ceiling).
+      const subject = spec.subject ?? null;
+      // Supersede the prior active pod-scoped ceiling on this axis (for this
+      // agent and this subject) so the new one is the single effective row.
       await db
         .update(governanceCeilings)
         .set({ revokedAt: new Date() })
@@ -136,6 +140,12 @@ export async function applyGovConfigChange(
               ? eq(governanceCeilings.agentUserId, agentUserId)
               : isNull(governanceCeilings.agentUserId),
             eq(governanceCeilings.scopeKind, "pod"),
+            subject
+              ? and(
+                  eq(governanceCeilings.subjectType, subject.type),
+                  eq(governanceCeilings.subjectId, subject.id)
+                )
+              : isNull(governanceCeilings.subjectId),
             isNull(governanceCeilings.revokedAt)
           )
         );
@@ -147,6 +157,8 @@ export async function applyGovConfigChange(
           agentUserId,
           scopeKind: "pod",
           workspaceId: null,
+          subjectType: subject?.type ?? null,
+          subjectId: subject?.id ?? null,
           limitValue: typeof spec.limitValue === "number" ? spec.limitValue : 0,
           sourceProposalId: sourceProposalId ?? null,
           createdBy,

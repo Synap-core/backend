@@ -82,7 +82,10 @@ beforeAll(async () => {
       created_by text NOT NULL DEFAULT 'x',
       created_at timestamptz NOT NULL DEFAULT now(),
       revoked_at timestamptz,
-      expires_at timestamptz
+      expires_at timestamptz,
+      -- 0330 (the caps fold): read by the one ceiling resolver.
+      subject_type text,
+      subject_id text
     );
     CREATE TABLE events (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

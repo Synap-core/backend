@@ -42,6 +42,7 @@ import {
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
 import { getBoss } from "@synap/events";
+import { resolveCeiling } from "@synap/database/agent-governance";
 import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
@@ -68,12 +69,31 @@ export function workerSpecOfFlow(
   return null;
 }
 
-export function workerMaxPendingOf(spec: PlaybookRunWorkerSpec): number {
+/**
+ * THE effective "sends waiting on a person" cap of ONE worker enablement (the
+ * caps fold, W1c): a `governance_ceilings` row (axis
+ * `worker_pending_approvals`, for this automation or pod-wide) wins; else the
+ * enablement's own `maxPendingApprovals`; else the default. Clamped to
+ * 1..WORKER_MAX_PENDING_APPROVALS_CEILING. Shared by the run gate
+ * (`gateWorkerRun`) and the backlog release — one rule.
+ */
+export async function resolveWorkerMaxPending(
+  automationId: string,
+  declared: number | undefined
+): Promise<number> {
+  const ceiling = await resolveCeiling({
+    db,
+    axis: "worker_pending_approvals",
+    subject: { type: "automation", id: automationId },
+  });
+  const own =
+    typeof declared === "number" && Number.isInteger(declared)
+      ? declared
+      : null;
   const n =
-    typeof spec.maxPendingApprovals === "number" &&
-    Number.isInteger(spec.maxPendingApprovals)
-      ? spec.maxPendingApprovals
-      : DEFAULT_WORKER_MAX_PENDING_APPROVALS;
+    ceiling.source === "row"
+      ? ceiling.value
+      : (own ?? DEFAULT_WORKER_MAX_PENDING_APPROVALS);
   return Math.min(Math.max(n, 1), WORKER_MAX_PENDING_APPROVALS_CEILING);
 }
 
@@ -99,7 +119,7 @@ export async function releaseHeldWorkerRuns(
   if (!spec) return [];
 
   const room =
-    workerMaxPendingOf(spec) -
+    (await resolveWorkerMaxPending(automationId, spec.maxPendingApprovals)) -
     (await countWorkerPendingApprovals(automationId));
   if (room <= 0) return [];
   const held = await listHeldWorkerRuns(

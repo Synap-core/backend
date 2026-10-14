@@ -39,6 +39,11 @@ import {
 export const governanceCeilingAxisEnum = pgEnum("governance_ceiling_axis", [
   "daily_write_count",
   "pending_proposal_cap",
+  // 0330 — the caps fold (agent routing W1c).
+  "automation_ai_dispatch_per_run",
+  "automation_ai_dispatch_daily",
+  "worker_pending_approvals",
+  "worker_irreversible_sends_daily",
 ]);
 export const GOVERNANCE_CEILING_AXES = governanceCeilingAxisEnum.enumValues;
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
@@ -59,6 +64,11 @@ export const governanceCeilings = pgTable(
     scopeKind: governanceScopeEnum("scope_kind").notNull(),
     // Set when scopeKind = 'workspace'.
     workspaceId: uuid("workspace_id"),
+
+    // 0330: the one thing the limit is for (e.g. `automation` + its id). Both
+    // NULL = every subject. A subject match outranks principal and scope.
+    subjectType: text("subject_type"),
+    subjectId: text("subject_id"),
 
     // The numeric limit for this axis (e.g. max writes/UTC-day). No default —
     // the fallback lives ONLY in DEFAULT_DAILY_WRITE_CEILING (see file header).

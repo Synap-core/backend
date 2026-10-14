@@ -999,6 +999,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "principal_class",
     addedBy: "0320_machine_identity.sql",
   },
+  {
+    table: "governance_ceilings",
+    column: "subject_type",
+    addedBy: "0330_governance_ceiling_axes_fold.sql",
+  },
+  {
+    table: "governance_ceilings",
+    column: "subject_id",
+    addedBy: "0330_governance_ceiling_axes_fold.sql",
+  },
   // device_auth_requests — the device door (0321). Absence means the CLI
   // cannot connect a computer at all.
   {

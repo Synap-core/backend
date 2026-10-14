@@ -30,8 +30,10 @@ import { db, and, eq, ne, drizzleSql, automationRuns } from "@synap/database";
 import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
+  MAX_AI_DISPATCHES_PER_DAY_KEY,
   readMaxAiDispatchesPerDay,
 } from "@synap-core/types/automations";
+import { resolveCeiling } from "@synap/database/agent-governance";
 import { PolicyBlockedError } from "../utils/automation-governance.js";
 import { logger } from "./automation-executor-logger.js";
 
@@ -108,7 +110,6 @@ export function openAiDispatchBudget(input: {
   triggerConfig: unknown;
   perRun?: number;
 }): AiDispatchBudget {
-  const perRun = input.perRun ?? AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerRun;
   const dayRead = readMaxAiDispatchesPerDay(input.triggerConfig);
   if (!dayRead.ok) {
     logger.warn(
@@ -116,9 +117,18 @@ export function openAiDispatchBudget(input: {
       "Ignoring malformed maxAiDispatchesPerDay on a stored automation — using the default"
     );
   }
-  const perDay = dayRead.ok
-    ? dayRead.value
-    : AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerDayDefault;
+  // The automation's OWN `triggerConfig.maxAiDispatchesPerDay`, when it set one.
+  const ownPerDay =
+    dayRead.ok &&
+    (input.triggerConfig as Record<string, unknown> | null)?.[
+      MAX_AI_DISPATCHES_PER_DAY_KEY
+    ] != null
+      ? dayRead.value
+      : null;
+  // Until `load()` reads the ceilings (THE resolver, `resolveCeiling`), the
+  // published defaults stand in.
+  let perRun = input.perRun ?? AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerRun;
+  let perDay = ownPerDay ?? AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerDayDefault;
 
   let loaded = false;
   let usedThisRun = 0;
@@ -126,6 +136,17 @@ export function openAiDispatchBudget(input: {
 
   const load = async (): Promise<void> => {
     if (loaded) return;
+    // The caps fold (W1c): both limits are `governance_ceilings` axes. A row
+    // for THIS automation (or a pod-wide one) wins; for the daily cap the
+    // automation's own triggerConfig value comes next; else the default.
+    const subject = { type: "automation", id: input.automationId };
+    const [runCap, dayCap] = await Promise.all([
+      resolveCeiling({ db, axis: "automation_ai_dispatch_per_run", subject }),
+      resolveCeiling({ db, axis: "automation_ai_dispatch_daily", subject }),
+    ]);
+    perRun = input.perRun ?? runCap.value;
+    perDay =
+      dayCap.source === "row" ? dayCap.value : (ownPerDay ?? dayCap.value);
     const [own] = await db
       .select({ count: automationRuns.aiDispatchCount })
       .from(automationRuns)
@@ -163,8 +184,12 @@ export function openAiDispatchBudget(input: {
       .where(eq(automationRuns.id, input.runId));
 
   return {
-    perRun,
-    perDay,
+    get perRun() {
+      return perRun;
+    },
+    get perDay() {
+      return perDay;
+    },
     get usedThisRun() {
       return usedThisRun;
     },
