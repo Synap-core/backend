@@ -25,6 +25,9 @@
 #   resume    a pod step fails after a 200 → re-run re-applies the kept response
 #             without calling the CP again
 #   nulls     oidc + intelligence null → both skipped, install succeeds
+#   podkey    §8: the pod's own P-256 key is born on the host (0600, never sent),
+#             its PUBLIC JWK rides in the register body; no key → the code is
+#             not spent; `synap pod-key enroll` sends only the public JWK
 #   bootstrap install.sh: retired flags refused with the new spelling; bundle
 #             sha mismatch refused; happy path unpacks, links the CLI, execs
 #             `synap install --non-interactive --release <id> …`
@@ -75,6 +78,11 @@ class H(http.server.BaseHTTPRequestHandler):
             mode = rd("cp-mode", "200")
             if mode != "200": return self.send(int(mode), '{"error":"injected %s"}' % mode)
             return self.send(200, rd("cp-response.json"))
+        if self.path.startswith("/pods/") and self.path.endswith("/keys/enroll"):
+            mode = rd("enroll-mode", "200")
+            if mode != "200": return self.send(int(mode), '{"error":"injected","code":"ENROLLMENT_CODE_INVALID"}')
+            jwk = json.loads(body)["podPublicJwk"]
+            return self.send(200, json.dumps({"podId": self.path.split("/")[2], "kid": "kid-" + jwk["x"][:8], "replaced": 0}))
         fail = rd("pod-fail")
         if fail and fail in self.path:
             os.remove(os.path.join(D, "pod-fail")); return self.send(500, '{"error":"injected pod failure"}')
@@ -106,6 +114,12 @@ case "$*" in
   "compose ps"*) exit 0 ;;
   "compose exec -T postgres psql"*federationOidcClient*) echo "pod-client-1|pod-secret-1|https://cp.test"; exit 0 ;;
   "compose exec -T postgres psql"*) cat >/dev/null 2>&1; echo 1; exit 0 ;;
+  "compose run --rm --no-deps -T --user 0:0 --entrypoint node "*)
+    # The CLI's real key script, on this host, against the host side of the -v mount.
+    [ -f "$F/podkey-fail" ] && exit 1
+    shift 9; host="${2%%:*}"
+    while [ "$1" != backend ]; do shift; done; shift
+    SYNAP_PODKEY_DIR="$host" SYNAP_PODKEY_UID=10001 exec node -e "$2" ;;
   "compose run --rm kratos-migrate"*) [ -f "$F/migrate-fail" ] && exit 1; exit 0 ;;
   "compose"*" up "*) : > "$F/up"; exit 0 ;;
   "compose"*) exit 0 ;;
@@ -187,6 +201,8 @@ run_install --non-interactive --release "$REL" --domain pod.example.org --email 
 [ "$(env_of POD_ADMIN_DOMAIN)" = "pod-admin.example.org" ] && [ -n "$(env_of VAULT_SERVER_KEY)" ] \
   && ok "plain: derived admin host + compose-required VAULT_SERVER_KEY" || bad "plain: POD_ADMIN_DOMAIN=$(env_of POD_ADMIN_DOMAIN)"
 [ ! -s "$TMP/calls.log" ] && [ -z "$(env_of CONTROL_PLANE_URL)" ] && ok "plain: no Control Plane contacted, no trust written" || bad "plain: CP contacted"
+[ -s "$DEPLOY/state/pod-identity/pod-key.pem" ] && [ "$(jq -r .crv "$DEPLOY/state/pod-identity.pub.json")" = P-256 ] \
+  && ok "plain: an unregistered pod gets its own identity key too" || bad "plain: no pod identity key"
 run_install --non-interactive --release "$REL"; rc=$?
 [ "$rc" = 0 ] && [ "$(env_of DOMAIN)" = "pod.example.org" ] && ok "plain: a flagless re-run takes every value from the existing .env" || { bad "plain: rerun rc=$rc"; show; }
 
@@ -214,6 +230,15 @@ run_install "${REG[@]}"; rc=$?
 [ "$(req pods_register '.body|fromjson|.release')" = "$REL" ] && [ "$(req pods_register '.body|fromjson|.serverIp')" = 203.0.113.7 ] \
   && req pods_register '.body|fromjson|.installerVersion' | grep -qE '^synap-cli@[0-9a-f]{12}$' \
   && ok "happy: CP got release, serverIp, installerVersion" || bad "happy: release/serverIp/installerVersion $(req pods_register .body)"
+[ "$(req pods_register '.body|fromjson|.podPublicJwk|[.kty,.crv]|join(" ")')" = "EC P-256" ] \
+  && [ "$(req pods_register '.body|fromjson|.podPublicJwk|keys|join(",")')" = "crv,kty,x,y" ] \
+  && [ "$(req pods_register '.body|fromjson|.podPublicJwk.x')" = "$(jq -r .x "$DEPLOY/state/pod-identity.pub.json")" ] \
+  && ok "happy: §8 the register body carries the pod's PUBLIC JWK only (no d)" || bad "happy: podPublicJwk $(req pods_register '.body|fromjson|.podPublicJwk')"
+KEYF="$DEPLOY/state/pod-identity/pod-key.pem"
+[ "$(stat -f %Lp "$KEYF" 2>/dev/null || stat -c %a "$KEYF")" = 600 ] && grep -q 'BEGIN PRIVATE KEY' "$KEYF" \
+  && [ "$(stat -f %Lp "$DEPLOY/state/pod-identity" 2>/dev/null || stat -c %a "$DEPLOY/state/pod-identity")" = 700 ] \
+  && ok "happy: the private key is a 0600 file in a 0700 dir under state/ (not the DB)" || bad "happy: key file mode/contents"
+grep -q 'PRIVATE KEY' "$TMP/req-pods_register.json" "$S/out" && bad "happy: private key material left the host / reached the log" || ok "happy: no private key material in the request or the log"
 [ "$(cat "$TMP/nonce-seen")" = "{\"nonce\":\"$NONCE\"}" ] && ok "happy: the nonce (sha256 of synap-registration:<code>) was served DURING the call" || bad "happy: nonce during call: '$(cat "$TMP/nonce-seen")'"
 [ ! -e "$DEPLOY/state/registration-nonce/nonce.json" ] && ok "happy: the nonce is gone after the call" || bad "happy: nonce still served"
 # applied locally, in order, with the right secrets
@@ -241,6 +266,26 @@ rm -f "$TMP/calls.log"
 run_install "${REG[@]}"; rc=$?
 [ "$rc" = 0 ] && ! grep -q '/pods/register' "$TMP/calls.log" 2>/dev/null && grep -q 'already registered as pod pod_123' "$S/out" \
   && ok "rerun: second install succeeds without calling the CP" || { bad "rerun: rc=$rc"; show; }
+
+# ── podkey: the key is stable, its absence never spends the code ─────────────
+before="$(shasum "$KEYF" 2>/dev/null | cut -d' ' -f1)"
+( cd "$DEPLOY" && PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" bash "$ROOT/synap" pod-key ensure ) >"$S/out" 2>&1 </dev/null
+[ "$(shasum "$KEYF" | cut -d' ' -f1)" = "$before" ] && ok "podkey: ensure keeps an existing key (idempotent)" || bad "podkey: ensure replaced the key"
+podkey_enroll() { ( cd "$DEPLOY" && PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" bash "$ROOT/synap" pod-key enroll "$@" ) >"$S/out" 2>&1 </dev/null; }
+podkey_enroll --pod-id pod-perso --code "$TOKEN" --control-plane "$BASE"; rc=$?
+[ "$rc" = 0 ] && [ "$(req pods_pod-perso_keys_enroll '.body|fromjson|.token')" = "$TOKEN" ] \
+  && [ "$(req pods_pod-perso_keys_enroll '.body|fromjson|.podPublicJwk|keys|join(",")')" = "crv,kty,x,y" ] \
+  && [ "$(jq -r .podId "$DEPLOY/state/pod-identity-enrollment.json")" = pod-perso ] \
+  && ok "podkey: enroll sends the code + PUBLIC JWK to /pods/<id>/keys/enroll and records the result" || { bad "podkey: enroll rc=$rc"; show; }
+grep -q "$TOKEN" "$S/out" && bad "podkey: enroll printed the code" || ok "podkey: enroll never prints the code"
+echo 401 > "$TMP/enroll-mode"; podkey_enroll --pod-id pod-perso --code "$TOKEN" --control-plane "$BASE"; rc=$?
+[ "$rc" != 0 ] && grep -q 'ENROLLMENT_CODE_INVALID' "$S/out" && ok "podkey: a refused enrollment fails loudly with the CP's code" || { bad "podkey: refused enroll rc=$rc"; show; }
+rm -f "$TMP/enroll-mode"
+podkey_enroll --pod-id 'x;y' --code "$TOKEN"; [ $? != 0 ] && grep -q -- '--pod-id must be' "$S/out" && ok "podkey: a malformed --pod-id is refused before any call" || bad "podkey: bad pod id accepted"
+setup nokey; cp_response "$OIDC" "$INTEL"; : > "$FAKE/podkey-fail"
+run_install "${REG[@]}"; rc=$?
+[ "$rc" != 0 ] && grep -q 'The code is still unused' "$S/out" && ! grep -q '/pods/register' "$TMP/calls.log" 2>/dev/null \
+  && ok "podkey: no key → registration refused locally, the code is not spent" || { bad "podkey: nokey rc=$rc"; show; }
 
 # ── refused: CP 401 ───────────────────────────────────────────────────────────
 setup refused; cp_response "$OIDC" "$INTEL"; echo 401 > "$TMP/cp-mode"

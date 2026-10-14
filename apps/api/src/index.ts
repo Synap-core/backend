@@ -40,6 +40,7 @@ import {
   integrationsCapabilitiesApp,
   mcpHttpApp,
   oauthApp,
+  podIdentityJwksApp,
   fileUploadApp,
   mediaTranscribeApp,
   externalSkillsApp,
@@ -1122,6 +1123,9 @@ app.route("/mcp", mcpHttpApp);
 //   GET  /authorize  (PKCE S256 → pod-admin consent screen)
 //   POST /token      (code → an `api_keys` row; PKCE verifier enforced)
 app.route("/", oauthApp);
+// GET /.well-known/synap-pod-jwks — the public half of this pod's identity key
+// (D1). Public + cacheable; the CP trusts only the key registered with it.
+app.route("/", podIdentityJwksApp);
 
 // External API — Skills invocation (API key auth, scope: skills.invoke)
 // GET  /api/external/skills         — list active skills

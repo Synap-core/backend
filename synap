@@ -1581,9 +1581,9 @@ _reg_call_cp() {
     resp="$(umask 077 && mktemp state/registration/reply.XXXXXX)" || { rm -f "$body"; return 1; }
     jq -n --arg token "$token" --arg name "$REG_NAME" --arg podUrl "$pod_url" --arg adminUrl "$admin_url" \
         --arg serverIp "$(_reg_server_ip)" --arg installerVersion "$(_reg_installer_version)" \
-        --arg release "$(_ue_env_get SYNAP_RELEASE_ID)" \
+        --arg release "$(_ue_env_get SYNAP_RELEASE_ID)" --slurpfile podKey "$SYNAP_POD_KEY_PUB" \
         '{token:$token, name:$name, podUrl:$podUrl, adminUrl:$adminUrl, serverIp:$serverIp,
-          installerVersion:$installerVersion, release:$release}
+          installerVersion:$installerVersion, release:$release, podPublicJwk:$podKey[0]}
          | if .serverIp == "" then del(.serverIp) else . end' > "$body"
     # §3/§6.2: the proof the CP may fetch for a custom domain — present only for
     # the duration of the call (Caddy serves state/registration-nonce/nonce.json).
@@ -1685,6 +1685,9 @@ _reg_register_pod() {
             _reg_err "the backend is not healthy — not registering. The code is still unused: fix the pod, then re-run the same command."
             return 1
         }
+        # §8: the pod's own public key rides in the registration (the code is
+        # not spent if the key cannot be produced).
+        _podkey_ensure || { _reg_err "no pod identity key — not registering. The code is still unused."; return 1; }
         _reg_call_cp "$token" "$cp" || return 1
     fi
     local errors
@@ -1704,6 +1707,104 @@ _reg_register_pod() {
         state/registration/response.json > state/registration.json
     rm -f state/registration/response.json state/registration/steps
     _reg_ok "registered as pod $(jq -r .podId state/registration.json)"
+}
+
+# ============================================================================
+# POD IDENTITY KEY — the pod's OWN ES256 keypair (SECURITY-PLAN-R1 §1, D1/D8;
+# PODPROV-CONTRACT §8)
+# ============================================================================
+# Born here, on the host, once: state/pod-identity/pod-key.pem (PKCS#8 P-256,
+# 0600, owned by the backend's uid; dir 0700) by `synap install` (every pod) or
+# `synap pod-key ensure|enroll` (pods installed before this; `synap update` does
+# not touch it — an update stays a no-op on the same release). A FILE in the deploy dir,
+# never a database row — a DB dump must not yield the pod's identity. The
+# backend reads it through the deploy dir it already mounts read-only
+# (/opt/synap/deploy) and is the ONE signer (packages/api/src/utils/
+# pod-identity.ts#signPodJwt). The private half never leaves this host; only
+# the public JWK is sent — in POST {cp}/pods/register, or, for a pod that
+# never registered, by `synap pod-key enroll`.
+#
+# Generated in a throwaway container of the backend image, as root, so the
+# file can be handed to the backend's uid whether or not this shell is root.
+# Idempotent: an existing key is kept, and its public half re-derived.
+SYNAP_POD_KEY_DIR="state/pod-identity"
+SYNAP_POD_KEY_PUB="state/pod-identity.pub.json"
+SYNAP_POD_BACKEND_UID="10001"   # the backend image's `nodejs` user (deploy/Dockerfile)
+_PODKEY_JS='const fs=require("fs"),c=require("crypto"),p=require("path");const d=process.env.SYNAP_PODKEY_DIR,f=p.join(d,"pod-key.pem"),uid=Number(process.env.SYNAP_PODKEY_UID||0);fs.mkdirSync(d,{recursive:true,mode:0o700});let pem;try{pem=fs.readFileSync(f,"utf8")}catch(e){if(e.code!=="ENOENT")throw e;pem=c.generateKeyPairSync("ec",{namedCurve:"prime256v1"}).privateKey.export({format:"pem",type:"pkcs8"});fs.writeFileSync(f,pem,{mode:0o600,flag:"wx"})}const k=c.createPrivateKey(pem);if(k.asymmetricKeyType!=="ec"||k.asymmetricKeyDetails.namedCurve!=="prime256v1"){process.stderr.write("pod-key.pem is not an EC P-256 key");process.exit(2)}if(process.getuid&&process.getuid()===0&&uid){fs.chownSync(d,uid,uid);fs.chownSync(f,uid,uid)}fs.chmodSync(d,0o700);fs.chmodSync(f,0o600);const j=c.createPublicKey(k).export({format:"jwk"});process.stdout.write(JSON.stringify({kty:j.kty,crv:j.crv,x:j.x,y:j.y}))'
+
+_podkey_log() { echo -e "${BLUE}[pod-key] $*${NC}"; }
+_podkey_ok()  { echo -e "${GREEN}[pod-key] ✓ $*${NC}"; }
+_podkey_err() { echo -e "${RED}[pod-key] ❌ $*${NC}" >&2; }
+
+# Ensures the key exists; writes its PUBLIC half to $SYNAP_POD_KEY_PUB (0644).
+# Must run in the deploy dir. Returns non-zero (and says why) on failure.
+_podkey_ensure() {
+    local out tmp
+    mkdir -p "$SYNAP_POD_KEY_DIR" 2>/dev/null || true
+    out="$(docker compose run --rm --no-deps -T --user 0:0 --entrypoint node \
+        -v "$(pwd)/${SYNAP_POD_KEY_DIR}:/pod-identity" \
+        -e SYNAP_PODKEY_DIR=/pod-identity -e SYNAP_PODKEY_UID="$SYNAP_POD_BACKEND_UID" \
+        backend -e "$_PODKEY_JS" 2>/dev/null)" || { _podkey_err "could not create or read the pod identity key"; return 1; }
+    if ! printf '%s' "$out" | jq -e '.kty == "EC" and .crv == "P-256" and (.x|type) == "string" and (.y|type) == "string" and (has("d")|not)' >/dev/null 2>&1; then
+        _podkey_err "the pod identity key did not yield a P-256 public key"
+        return 1
+    fi
+    tmp="$(mktemp "${SYNAP_POD_KEY_PUB}.XXXXXX")" || return 1
+    printf '%s\n' "$out" | jq -c '{kty, crv, x, y}' > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$SYNAP_POD_KEY_PUB"
+}
+
+# synap pod-key ensure | show | enroll --pod-id <id> --code <spr_…> [--control-plane <url>]
+cmd_pod_key() {
+    local deploy_dir
+    deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in a Synap installation directory${NC}"; exit 1
+    fi
+    cd "$deploy_dir"
+    local action="${1:-show}"; shift 2>/dev/null || true
+    case "$action" in
+        ensure)
+            _podkey_ensure || exit 1
+            _podkey_ok "pod identity key ready (public half in ${SYNAP_POD_KEY_PUB})" ;;
+        show)
+            [ -s "$SYNAP_POD_KEY_PUB" ] || _podkey_ensure || exit 1
+            jq . "$SYNAP_POD_KEY_PUB" ;;
+        enroll)
+            # A pod that never registered (installed by hand): its owner mints a
+            # single-use code in the Control Plane (POST /pods/:id/keys/enrollment-code)
+            # and runs this ON the pod. Only the public JWK is sent.
+            local pod_id="" code="" cp=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --pod-id) pod_id="${2:-}"; shift 2 ;;
+                    --code) code="${2:-}"; shift 2 ;;
+                    --control-plane) cp="${2:-}"; shift 2 ;;
+                    *) _podkey_err "unknown option: $1"; exit 1 ;;
+                esac
+            done
+            cp="${cp:-$(_ue_env_get CONTROL_PLANE_URL)}"; cp="${cp:-$SYNAP_CONTROL_PLANE_DEFAULT}"; cp="${cp%/}"
+            [[ "$pod_id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { _podkey_err "--pod-id must be the Control Plane pod id"; exit 1; }
+            _reg_valid_token "$code" || { _podkey_err "--code must be an enrollment code from the Control Plane (spr_…)"; exit 1; }
+            _reg_valid_cp_url "$cp" || { _podkey_err "--control-plane must be an https URL"; exit 1; }
+            _podkey_ensure || exit 1
+            local resp http
+            resp="$(umask 077 && mktemp "${TMPDIR:-/tmp}/synap-enroll.XXXXXX")" || exit 1
+            _podkey_log "POST ${cp}/pods/${pod_id}/keys/enroll"
+            http="$(jq -c --arg token "$code" '{token: $token, podPublicJwk: .}' "$SYNAP_POD_KEY_PUB" \
+                | curl -sS --max-time 60 -o "$resp" -w '%{http_code}' -H 'Content-Type: application/json' \
+                    --data-binary @- "${cp}/pods/${pod_id}/keys/enroll" 2>/dev/null)" || http="${http:-000}"
+            if [ "$http" != 200 ]; then
+                _podkey_err "the Control Plane refused the enrollment (HTTP ${http}): $(jq -r '.code // empty' "$resp" 2>/dev/null) $(jq -r '.error // empty' "$resp" 2>/dev/null | head -c 300)"
+                rm -f "$resp"; exit 1
+            fi
+            jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg cp "$cp" \
+                '{podId, kid, controlPlaneUrl: $cp, enrolledAt: $at}' "$resp" > state/pod-identity-enrollment.json
+            rm -f "$resp"
+            _podkey_ok "enrolled as pod $(jq -r .podId state/pod-identity-enrollment.json) (key $(jq -r .kid state/pod-identity-enrollment.json))" ;;
+        *)
+            echo "Usage: synap pod-key ensure | show | enroll --pod-id <id> --code <spr_…> [--control-plane <url>]"
+            exit 1 ;;
+    esac
 }
 
 cmd_install() {
@@ -2667,6 +2768,12 @@ EOF
 
     jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg edge "$install_edge" '. + {appliedAt:$at, edge:$edge, installed:true}' \
         "$install_manifest" > state/current-release.json || true
+
+    # Every pod gets its own identity key (registered or not); a registration
+    # below requires it and fails loudly on its own.
+    if [ -z "$REGISTER_TOKEN" ]; then
+        _podkey_ensure || echo -e "${YELLOW}⚠️  No pod identity key yet — run './synap pod-key ensure' later.${NC}"
+    fi
 
     # Registration (PODPROV-CONTRACT §3): only once the stack is up; a failure
     # here fails the install loudly (the stack keeps running, re-run to retry).
@@ -5925,6 +6032,7 @@ ${YELLOW}Management:${NC}
   synap apply                    Recreate running services so they see the current .env (guarded; no prune)
   synap doctor [--json]          Read-only health: env drift, compose projects, checkout, release, backups, pgdata
   synap federation <action>      External sign-in: status | connect-cloud | disable
+  synap pod-key <action>         This pod's own identity key: ensure | show | enroll --pod-id <id> --code <spr_…>
   synap clean [type]             Clean Docker resources (interactive if no type)
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
@@ -6088,6 +6196,10 @@ case "${1:-help}" in
     federation|fed)
         shift
         cmd_federation "$@"
+        ;;
+    pod-key)
+        shift
+        cmd_pod_key "$@"
         ;;
     rebuild)
         shift
