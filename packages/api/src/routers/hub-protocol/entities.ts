@@ -99,7 +99,15 @@ export const entitiesRouter = router({
         limit: input.limit || 50,
         offset: input.offset ?? 0,
         ...(input.projectId ? { projectId: input.projectId } : {}),
-        ...(input.withoutProject ? { withoutProject: true } : {}),
+        // "Not in a project" ignores the caller's active space (the regular
+        // list does); only an EXPLICIT workspaceId narrows it, so forward
+        // that one as the list's own input.
+        ...(input.withoutProject
+          ? {
+              withoutProject: true,
+              ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+            }
+          : {}),
         ...(input.includePodWide !== undefined
           ? { includePodWide: input.includePodWide }
           : {}),

@@ -135,7 +135,7 @@ export const readProcs = {
             isNull(entities.deletedAt),
             notProbeEntityWhere(),
             entityReadVisibleWhere(ctx.userId),
-            notInAnyProjectWhere(entities.id)
+            notInAnyProjectWhere(entities.id, ctx.userId)
           )
         )
         .groupBy(entities.type);
@@ -307,8 +307,10 @@ export const readProcs = {
         projectWithinWorkspace: z.boolean().optional(),
         /**
          * "Not in a project" — only the things filed into NO live project
-         * (`notInAnyProjectWhere`), the other half of `projectId`. A narrow on
-         * whatever lens is set (no lens = the user floor). Giving it with
+         * the caller can see (`notInAnyProjectWhere`), the other half of
+         * `projectId`. Narrowed only by an EXPLICIT `workspaceId` — the
+         * active-space header is ignored, so with none it is the user floor,
+         * exactly what `countWithoutProject` counts. Giving it with
          * `projectId` is a contradiction and a 400.
          */
         withoutProject: z.boolean().optional(),
@@ -398,10 +400,18 @@ export const readProcs = {
       // entity half used the full user floor, so every workspace-lensed role
       // (grp-interrogation in Foundation) vanished from an unlensed
       // get_entities(facetSlug) and its rows lost their facetSlugs (X1).
+      //
+      // "Not in a project" is an inbox over EVERYTHING the caller can read:
+      // only an explicit `workspaceId` narrows it, never the active-space
+      // header (relay sends it on every request, the desktop through its
+      // workspace link) — the list must open exactly what
+      // `countWithoutProject` counted.
       const lensWorkspaceId =
         input.workspaceId !== undefined
           ? input.workspaceId
-          : (ctx.workspaceId ?? undefined);
+          : input.withoutProject
+            ? undefined
+            : (ctx.workspaceId ?? undefined);
       // Space × project: the project narrows THIS workspace (never replaces it).
       const projectReplacesScope =
         !!input.projectId &&
@@ -533,7 +543,7 @@ export const readProcs = {
               "withoutProject and projectId contradict each other — ask for one project or for the things in none",
           });
         }
-        conditions.push(notInAnyProjectWhere(entities.id));
+        conditions.push(notInAnyProjectWhere(entities.id, ctx.userId));
       }
 
       // Facet filter (Kind + Facets): narrow to entities carrying a live
@@ -744,7 +754,7 @@ export const readProcs = {
           ...(input.projectId
             ? { narrow: projectLensWhere(entities.id, input.projectId) }
             : input.withoutProject
-              ? { narrow: notInAnyProjectWhere(entities.id) }
+              ? { narrow: notInAnyProjectWhere(entities.id, ctx.userId) }
               : {}),
         }
       );

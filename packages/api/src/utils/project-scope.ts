@@ -43,6 +43,8 @@
  */
 
 import { grantReadPredicate } from "../access/grant-read.js";
+import { projectVisibleWhere } from "../access/project-visibility.js";
+import { AccessContext } from "../access/context.js";
 import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
 import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -476,18 +478,31 @@ export function projectLensWhere(
 }
 
 /**
- * NARROWING LENS — "Not in a project": the entity is filed into NO project,
- * i.e. it carries no `belongs_to_project` edge to a project that still exists.
- * The other half of `projectLensWhere`, and like it PURE narrowing — the caller
- * ANDs it with the access floor; on its own it never grants a row.
+ * NARROWING LENS — "Not in a project": the entity is filed into no project
+ * THE VIEWER CAN SEE, i.e. it carries no `belongs_to_project` edge to a
+ * project that still exists and is visible to `userId` (`projectVisibleWhere`,
+ * the `projects` rule `projects.forEntity` reads through — no lens). The other
+ * half of `projectLensWhere`, and like it PURE narrowing — the caller ANDs it
+ * with the access floor; on its own it never grants a row.
+ *
+ * Viewer-relative on purpose: a thing filed only into projects the viewer
+ * cannot see shows them no project chip, so it must sit in THEIR inbox —
+ * otherwise it is hidden from both places at once.
  *
  * Only an edge to a LIVE `projects` row counts. Projects are hard-deleted and
  * their edges are left behind (`ProjectRepository.delete`), so a bare
  * "has any edge" test would hide a thing whose only project was deleted from
  * BOTH places at once — in no project, and not in the inbox either. An
  * archived project still holds its things.
+ *
+ * The ONE predicate: `entities.countWithoutProject`, `entities.list
+ * ({withoutProject})` and `entities.listMulti({withoutProject})` all read it,
+ * so a count of N opens a list of N.
  */
-export function notInAnyProjectWhere(entityIdColumn: AnyPgColumn): SQL {
+export function notInAnyProjectWhere(
+  entityIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
   const filed = db
     .select({ id: relations.sourceEntityId })
     .from(relations)
@@ -495,7 +510,8 @@ export function notInAnyProjectWhere(entityIdColumn: AnyPgColumn): SQL {
     .where(
       and(
         eq(relations.type, BELONGS_TO_PROJECT),
-        isNotNull(relations.sourceEntityId)
+        isNotNull(relations.sourceEntityId),
+        projectVisibleWhere(AccessContext.operator({ userId }))
       )
     );
   return not(inArray(entityIdColumn, filed));
