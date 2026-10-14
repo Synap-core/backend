@@ -2,6 +2,9 @@
  * Import → Curate → Build — the `import.*` procedures of a metadata-first
  * import (spread into the `import` router, `routers/import.ts`).
  *
+ * Every WRITE is person-only (`personProcedure`): an import run is a Library
+ * run, and nothing an agent sends lands in the Library.
+ *
  * Every procedure is OWNER-FLOORED: the import is a focus session the caller
  * owns; a foreign or missing id reads NOT_FOUND. The logic lives in
  * `services/imports/*` — one module per step; these are thin doors.
@@ -16,6 +19,11 @@
  *   discard    drop the never-built items and close the import
  */
 
+import {
+  INLINE_BASE64_MAX,
+  ImportStageItemSchema,
+  personProcedure,
+} from "./library-shared.js";
 import { z } from "zod";
 import { podProcedure } from "../trpc.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
@@ -30,7 +38,6 @@ import {
   type ImportGroupResult,
   type ImportItemView,
   type ImportListEntry,
-  type ImportStageItemInput,
   type ImportStageResult,
   type ImportView,
 } from "@synap-core/types/imports";
@@ -57,42 +64,6 @@ import { discardImport } from "../services/imports/discard.js";
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
 const L = IMPORT_LIMITS;
-/** Base64 grows bytes by 4/3; a little slack for padding. */
-const INLINE_BASE64_MAX = Math.ceil((L.inlineFileBytesMax * 4) / 3) + 8;
-
-const itemNote = z.string().max(L.itemNoteMax).optional();
-
-export const ImportStageItemSchema: z.ZodType<ImportStageItemInput> =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("url"),
-      url: z.string().min(1).max(4000),
-      title: z.string().max(500).optional(),
-      note: itemNote,
-      /** The page as the browser rendered it (a login-only page). */
-      html: z.string().max(L.pageHtmlMax).optional(),
-    }),
-    z.object({
-      kind: z.literal("text"),
-      text: z.string().min(1).max(200_000),
-      title: z.string().max(500).optional(),
-      note: itemNote,
-    }),
-    z.object({
-      kind: z.literal("file"),
-      filename: z.string().min(1).max(500),
-      mimeType: z.string().min(1).max(200),
-      documentId: z.string().uuid().optional(),
-      contentBase64: z.string().max(INLINE_BASE64_MAX).optional(),
-      sizeBytes: z.number().int().nonnegative().optional(),
-      sha256: z
-        .string()
-        .regex(/^[0-9a-fA-F]{64}$/)
-        .optional(),
-      note: itemNote,
-    }),
-  ]);
-
 const groupKey = z.string().min(1).max(64);
 const itemIds = z.array(z.string().uuid()).min(1).max(L.itemsMax);
 
@@ -146,7 +117,7 @@ const sessionId = z.string().uuid();
 
 export const importCurateProcedures = {
   /** Open an import (phase `collecting`) when `sessionId` is absent, else append. */
-  stage: podProcedure
+  stage: personProcedure
     .input(
       z.object({
         sessionId: sessionId.optional(),
@@ -234,7 +205,7 @@ export const importCurateProcedures = {
     }),
 
   /** One AI pass over titles → groups. Deterministic fallback is SAID. */
-  group: podProcedure
+  group: personProcedure
     .use(aiRateLimitMiddleware)
     .input(z.object({ sessionId }))
     .mutation(async ({ ctx, input }): Promise<ImportGroupResult> => {
@@ -255,7 +226,7 @@ export const importCurateProcedures = {
     }),
 
   /** Apply the person's edits atomically. */
-  curate: podProcedure
+  curate: personProcedure
     .input(
       z.object({
         sessionId,
@@ -277,7 +248,7 @@ export const importCurateProcedures = {
     }),
 
   /** The bytes Build needs for an item (a `needs_file` reel, …). */
-  attachFile: podProcedure
+  attachFile: personProcedure
     .input(
       z
         .object({
@@ -298,7 +269,7 @@ export const importCurateProcedures = {
     }),
 
   /** One group → one governed bundle. `proposed` is success. */
-  build: podProcedure
+  build: personProcedure
     .use(aiRateLimitMiddleware)
     .input(z.object({ sessionId, groupKey }))
     .mutation(async ({ ctx, input }): Promise<ImportBuildResult> => {
@@ -320,7 +291,7 @@ export const importCurateProcedures = {
     }),
 
   /** Drop the never-built items and close the import. */
-  discard: podProcedure
+  discard: personProcedure
     .input(z.object({ sessionId }))
     .mutation(async ({ ctx, input }): Promise<{ discarded: number }> => {
       const userId = requireUserId(ctx.userId);

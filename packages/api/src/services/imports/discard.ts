@@ -9,6 +9,9 @@
  * without this door a never-built item would outlive its import forever.
  */
 
+import { TRPCError } from "@trpc/server";
+import { LIBRARY_RUN_KEY } from "../library/add.js";
+import { enqueueLibrarySearch } from "../library/search-index.js";
 import {
   db as defaultDb,
   documents,
@@ -41,6 +44,15 @@ export async function discardImport(args: {
     userId: args.userId,
     sessionId: args.sessionId,
   });
+  // A Library run is not a batch to drop: its items are the person's kept
+  // things. Removing one is `library.curate` `item.delete` (undoable).
+  if (session.metadata[LIBRARY_RUN_KEY]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "These are kept in your Library. Remove items from the Library instead.",
+    });
+  }
   const deleted = await database
     .update(documents)
     .set({ deletedAt: new Date() })
@@ -73,6 +85,11 @@ export async function discardImport(args: {
       reason: "Import discarded",
     });
   }
+  // Out of search now, not at the next full reindex.
+  await enqueueLibrarySearch(
+    "delete",
+    deleted.map((d) => d.id)
+  );
   // Attached files go with their item; the count is the person's items.
   return { discarded: deleted.filter((d) => d.isItem).length };
 }
