@@ -11,8 +11,9 @@
  *     IS the key when no explicit one was stored;
  *   - a freehand proposal (no template marker) still keys on its row id.
  *
- * `materializeWorkspaceCore` records its args then throws a sentinel, so the
- * post-materialize bookkeeping needs no stubbing.
+ * Layer one of the ONE apply (`applyLayerOne`, which receives the identity)
+ * records its args then throws a sentinel, so the post-materialize
+ * bookkeeping needs no stubbing. The core only resolves deps (`deferCreate`).
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -38,12 +39,18 @@ vi.mock(
     ...(await orig<
       typeof import("../../../../services/workspace-materialization-service.js")
     >()),
-    materializeWorkspaceCore: async (a: Record<string, unknown>) => {
-      h.materializeArgs.push(a);
-      throw new Error("SENTINEL_MATERIALIZED");
-    },
+    materializeWorkspaceCore: async () => ({
+      status: "resolved",
+      dependencies: [],
+    }),
   })
 );
+vi.mock("../../../../services/template-apply/layer-one.js", () => ({
+  applyLayerOne: async (a: Record<string, unknown>) => {
+    h.materializeArgs.push(a);
+    throw new Error("SENTINEL_MATERIALIZED");
+  },
+}));
 
 import { proposalExecRegistry } from "../../execution-registry.js";
 import type { ProposalExecutorArgs } from "../../execution-registry.js";

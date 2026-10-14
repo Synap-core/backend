@@ -2,7 +2,7 @@
  * An AGENT's template update of an installed space, from the apply door's
  * proposal to the approved rows — on PGlite, through the real
  * `POST /packages/apply` door, the real `workspace/update` executor, the real
- * `materializeWorkspaceCore` → idempotent re-hit → `reconcileWorkspaceIfStale`,
+ * ONE apply (`applyTemplate`: resolveTarget → plan → layer one re-sync),
  * the real `applyPackagePostWorkspace` and the real `playbooks.create`.
  *
  * The incident (perso pod, 2026-10-12): `synap market update builder-workspace`
@@ -75,6 +75,37 @@ vi.mock("@synap/database", async (importOriginal) => {
       views: { wouldOrphan: [] },
     }),
     pendingTemplateDataChanges: async () => [],
+    // A FRESH create's layer-1 engine runs on the database package's own
+    // client (not this PGlite): stand it in with the row it would write,
+    // following its contract (left "pending", the version handed back). A
+    // resume / any other create still runs the real function.
+    createWorkspaceFromDefinition: async (input: Record<string, unknown>) => {
+      const slug = input.packageSlug as string | undefined;
+      if (!slug || !h.freshSlugs.has(slug) || input.resumeFrom)
+        return (
+          actual.createWorkspaceFromDefinition as (i: unknown) => unknown
+        )(input);
+      const { randomUUID: uuid } = await import("node:crypto");
+      const id = uuid();
+      await client.query(
+        `insert into workspaces (id, name, owner_id, package_slug, provisioning_proposal_id, provisioning_status, settings)
+         values ($1,$2,$3,$4,$4,'pending','{"provisioningStatus":"pending"}'::jsonb)`,
+        [id, input.workspaceName, input.userId, slug]
+      );
+      await client.query(
+        `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+        [uuid(), id, input.userId]
+      );
+      return {
+        workspaceId: id,
+        profileIds: [],
+        viewIds: [],
+        entityIds: [],
+        ...(input.packageVersion
+          ? { pendingVersionStamp: input.packageVersion }
+          : {}),
+      };
+    },
   };
 });
 vi.mock(
@@ -101,33 +132,6 @@ vi.mock(
       typeof import("../../../../services/workspace-creation-service.js")
     >()),
     checkOneSpacePerDomain: async () => ({ action: "create" }),
-    // A FRESH create's layer-1 engine runs on the database package's own
-    // client (not this PGlite): stand it in with the row it would write. The
-    // re-hit path (no fresh create) still runs the real function.
-    createWorkspaceFromDefinitionIdempotent: async (
-      input: Record<string, unknown>
-    ) => {
-      const actual =
-        await import("../../../../services/workspace-creation-service.js");
-      const slug = input.packageSlug as string | undefined;
-      if (!slug || !h.freshSlugs.has(slug))
-        return (
-          (await vi.importActual(
-            "../../../../services/workspace-creation-service.js"
-          )) as typeof actual
-        ).createWorkspaceFromDefinitionIdempotent(input as never);
-      const id = randomUUID();
-      await h.client!.query(
-        `insert into workspaces (id, name, owner_id, package_slug, provisioning_proposal_id, settings)
-         values ($1,$2,$3,$4,$4,'{"provisioningStatus":"active"}'::jsonb)`,
-        [id, input.workspaceName, input.userId, slug]
-      );
-      await h.client!.query(
-        `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
-        [randomUUID(), id, input.userId]
-      );
-      return { workspaceId: id, created: true, outcome: "created" };
-    },
   })
 );
 // The gate's one rule that matters here: a floored write by an AGENT files a

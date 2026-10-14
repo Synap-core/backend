@@ -17,7 +17,9 @@
  * Pinned here, by source scan:
  *  (1) every file that calls the create/resume core is a DOOR and calls
  *      `finishTemplateApply(` — the set is DERIVED by grep, so a new door joins
- *      the scan by existing;
+ *      the scan by existing. Since W2 the ONE apply (`template-apply/index.ts`)
+ *      is that door for every wrapper over it: a file calling `applyTemplate(`
+ *      is finished by the module, and must not also call the core itself;
  *  (2) a version STAMP reaches `writeTemplateState(` only from the finisher
  *      and from the reconcile util's boot channel (held while the last apply
  *      is unfinished, re-checked under the writer's lock);
@@ -226,14 +228,14 @@ describe("template apply — one finisher writes the stamp and active", () => {
     const doors = apiFiles.filter(
       (p) => !PLUMBING.has(rel(p)) && CORE_CALL.test(code(p))
     );
-    // Non-vacuity: the derived set is the door list (2026-10-12: Hub
-    // packages, Hub workspaces, MCP, invites, tRPC definition-engine, approve
-    // executor, marketplace-install, dependency-resolver).
-    expect(doors.length).toBeGreaterThanOrEqual(8);
+    // Non-vacuity: the derived set is the door list (2026-10-14: the ONE
+    // apply, Hub workspaces, MCP, invites, tRPC definition-engine,
+    // dependency-resolver — Hub packages, the approve executor and
+    // marketplace-install now wrap `applyTemplate`, below).
+    expect(doors.length).toBeGreaterThanOrEqual(6);
     expect(doors.map(rel)).toEqual(
       expect.arrayContaining([
-        "routers/hub-protocol/rest/packages.ts",
-        "routers/proposals/executors/workspace.ts",
+        "services/template-apply/index.ts",
         "services/package-dependency-resolver.ts",
       ])
     );
@@ -241,6 +243,25 @@ describe("template apply — one finisher writes the stamp and active", () => {
       .filter((p) => !/\bfinishTemplateApply\s*\(/.test(code(p)))
       .map(rel);
     expect(missing).toEqual([]);
+  });
+
+  it("(1b) a wrapper over applyTemplate never also drives the core itself", () => {
+    const APPLY_CALL = /(?<!function\s)\bapplyTemplate\s*\(/;
+    const wrappers = apiFiles
+      .filter((p) => rel(p) !== "services/template-apply/index.ts")
+      .filter((p) => APPLY_CALL.test(code(p)));
+    // Non-vacuity: the W2 wrappers (D1/D2, D3/D4, D14).
+    expect(wrappers.map(rel)).toEqual(
+      expect.arrayContaining([
+        "routers/hub-protocol/rest/packages.ts",
+        "routers/proposals/executors/workspace.ts",
+        "services/capabilities/marketplace-install.ts",
+      ])
+    );
+    // A wrapper that also called the core would run a second, unfinished
+    // apply beside the module's (the pre-W2 spread this guards against).
+    const both = wrappers.filter((p) => CORE_CALL.test(code(p))).map(rel);
+    expect(both).toEqual([]);
   });
 
   it("(2) a version stamp reaches writeTemplateState only from the finisher and the boot channel", () => {

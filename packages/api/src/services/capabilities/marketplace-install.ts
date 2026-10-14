@@ -74,7 +74,6 @@ import {
   type CreateCapabilityResult,
 } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
-import type { CreateWorkspaceFromDefinitionResult } from "../workspace-creation-service.js";
 // Type-only (erased at runtime) — the applier itself is imported dynamically at
 // its call site, mirroring the approve-executors, so this module never pulls the
 // post-workspace layer graph into an eager import cycle.
@@ -566,263 +565,138 @@ export async function applyMarketInstall(
             )) as unknown as WorkspaceDefinitionInput & {
         workspaceName?: string;
       };
-      // Idempotency: packageSlug/proposalId both set to the catalog slug, so a
-      // re-install by the same user converges to the existing workspace
-      // (createWorkspaceFromDefinitionIdempotent's own key, not re-derived here).
-      // THE shared materialization core (the Hub `/packages/apply`, tRPC and
-      // approve-executor doors all drive it): resolves `dependencies`, layers
-      // an overlay (`compose`) or a PACK (D8 — never its own workspace) onto
-      // its base, else idempotently creates via
-      // `createWorkspaceFromDefinitionIdempotent`. This door used to call that
-      // create directly, so a pack installed through the agent door still left
-      // a stray suite workspace and an overlay became a rogue workspace.
-      const { materializeWorkspaceCore } =
-        await import("../workspace-materialization-service.js");
-      const core = await materializeWorkspaceCore({
-        definition,
-        userId: input.userId,
-        selfSlug: input.slug,
-        proposalId: input.slug,
-        packageSlug: input.slug,
-        packageVersion: entry?.version ?? input.version ?? undefined,
-        workspaceName: definition.workspaceName,
-        templateId: input.slug,
-        templateName: entry?.name ?? input.slug,
-      });
-      // `created` (new or idempotent re-hit, with its reconcile outcome) or
-      // `composed` (layered onto an existing workspace — layer 2 always runs,
-      // exactly as the Hub door's composed branch does).
-      const result =
-        core.status === "created"
-          ? core.created
-          : {
-              workspaceId: (core as { workspaceId: string }).workspaceId,
-              created: false,
-              outcome: undefined as
-                CreateWorkspaceFromDefinitionResult["outcome"] | undefined,
-            };
-
-      // ── LAYER 2 (post-workspace) ─────────────────────────────────────────
-      // `createWorkspaceFromDefinitionIdempotent` materializes ONLY layer 1
-      // (profiles / views / bento / entity links). Its own doc says a caller
-      // that also wants the living layers MUST call `applyPackagePostWorkspace`
-      // itself — and this branch never did, so a workspace package installed
-      // through the AGENT door (MCP/CLI `market.install`, and `capability.install`
-      // proposal approval) arrived with ZERO capabilities, playbooks,
-      // automations, loops, cells and action placements, while the browser/Hub
-      // door (`POST /api/hub/packages/apply`) applied all of them. Same package,
-      // two doors, different workspaces.
-      //
-      // The body IS the resolved package definition, passed through verbatim —
-      // exactly what `hub-protocol/rest/packages.ts` and the `workspace/create`
-      // approve-executor do (`body: definition as …`). This is safe precisely
-      // because a CP package definition's `automations[]` is the GRAPH-FLOW wire
-      // shape (`PackageDefinitionOutput.automations` = `PackageAutomationWire` =
-      // `PackagePostWorkspaceBody['automations']`), NOT the loop-style
-      // `{trigger, action:{playbookSlug}}` shape a `createFromDefinition` input
-      // carries — that other shape needs `buildPostWorkspaceBodyFromDefinition`
-      // (routers/workspaces/helpers.ts) and must never be fed here.
-      // PARSED, not cast. The shapes already match — but the Hub door's schema
-      // also applies DEFAULTS that the applier's own routers do not: it defaults
-      // `automations[].status` and `playbooks[].status` to "active", while
-      // routers/automations.ts and routers/playbooks.ts default them to "draft".
-      // A CP package definition carries `defaultStatus` and leaves `status`
-      // absent, so casting installs every automation and playbook DRAFT —
-      // installed, inert, no error — while the SAME package through the Hub door
-      // goes live. Parsing here is what makes the two doors agree; a cast is
-      // precisely what let them drift.
-      // Dynamic, like the applier import below: this module deliberately never
-      // pulls a router (and its Hono/DB graph) into an eager import.
+      // PARSED, not cast, BEFORE anything is applied: the Hub door's schema
+      // applies DEFAULTS the appliers' own routers do not (`automations[]` /
+      // `playbooks[]` status → "active"; the routers default to "draft"). A CP
+      // package carries `defaultStatus` and leaves `status` absent, so a raw
+      // cast installed every automation and playbook DRAFT while the same
+      // package through the Hub door went live. Dynamic import: this module
+      // never pulls a router (and its Hono/DB graph) into an eager import.
       const { PackageApplySchema } =
         await import("../../routers/hub-protocol/rest/packages.js");
       const parsed = PackageApplySchema.safeParse(definition);
       if (!parsed.success) {
         logger.error(
           { slug: input.slug, issues: parsed.error.issues },
-          "Package definition failed layer-2 validation"
+          "Package definition failed validation"
         );
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Package "${input.slug}" has an invalid definition for its living layers (capabilities/automations/playbooks). The workspace was created; nothing further was applied.`,
+          message: `Package "${input.slug}" has an invalid definition (capabilities/automations/playbooks). Nothing was applied.`,
         });
       }
       const postBody = parsed.data as unknown as PackagePostWorkspaceBody & {
         projectId?: string;
         projectName?: string;
         projectSurface?: unknown;
-      };
-      // Engagement project (named install): resolve before layer 2 so uses-edges
-      // and seed filing stamp onto the project.
-      if (input.projectId || input.projectName) {
-        const { resolveProjectForPackInstall } =
-          await import("../resolve-project-for-pack-install.js");
-        const resolved = await resolveProjectForPackInstall({
-          userId: input.userId,
-          agentUserId: input.agentUserId ?? undefined,
-          projectId: input.projectId,
-          projectName: input.projectName,
-          packageSlug: input.slug,
-          homeWorkspaceId: result.workspaceId,
-        });
-        if ("error" in resolved) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: resolved.error,
-          });
-        }
-        postBody.projectId = resolved.projectId;
-        if (
-          postBody.projectSurface &&
-          typeof postBody.projectSurface === "object"
-        ) {
-          const {
-            getDb,
-            sql,
-            projects,
-            eq,
-            ProjectRepository,
-            EventRepository,
-          } = await import("@synap/database");
-          const dbConn = await getDb();
-          const [existing] = await dbConn
-            .select({ settings: projects.settings })
-            .from(projects)
-            .where(eq(projects.id, resolved.projectId))
-            .limit(1);
-          const prev = (existing?.settings ?? {}) as Record<string, unknown>;
-          const eventRepo = new EventRepository(sql);
-          const projectRepo = new ProjectRepository(dbConn, eventRepo);
-          await projectRepo.update(
-            resolved.projectId,
-            { settings: { ...prev, layout: postBody.projectSurface } },
-            input.userId
-          );
-        }
-      }
-      // ⚠️ KNOWN, DELIBERATE UNDER-CONVERGENCE — read before "fixing" the gate.
-      // The `outcome !== "unchanged"` condition below is copied from the Hub
-      // door, but the two callers are NOT in the same situation. Hub REST ran
-      // layer 2 on its first install, so "unchanged" there honestly means
-      // "layer 2 is already applied". THIS branch never ran layer 2 for anyone
-      // before today, yet those workspaces were still stamped with
-      // `settings.packageVersion` at create time. A same-version reinstall
-      // therefore returns "unchanged" and skips layer 2 PERMANENTLY, so
-      // workspaces installed through the agent door BEFORE this fix do not
-      // repair themselves — reinstall is the user's only lever and it does
-      // nothing. Only a CP template content-hash change would repair them.
-      //
-      // This is stated rather than silently patched because widening the gate
-      // has a real cost (re-seeding every capability means a Control-Plane
-      // fetch each — the reason the Hub gate exists at all), and a repair pass
-      // is a deliberate migration, not a side effect of this fix. Per
-      // backend-rules.md this is HONEST under-convergence: nothing claims these
-      // workspaces converged. Do NOT add a stamp asserting they did.
-      //
-      // Same "is there a layer 2 at all" gate the `workspace/create`
-      // approve-executor uses (executors/workspace.ts) — a template with no
-      // living layers must not pay for a caller context + agent enrollment.
-      const needsPost = Boolean(
-        postBody.capabilities?.length ||
-        postBody.automations?.length ||
-        postBody.playbooks?.length ||
-        postBody.loops?.length ||
-        postBody.cells?.length ||
-        postBody.actionPlacements?.length ||
-        postBody.projectId
-      );
-      // Skip when the idempotent create determined the workspace is already
-      // current — the identical `postWorkspaceOutcome !== "unchanged"` gate
-      // `hub-protocol/rest/packages.ts` applies, and for the same reason: a
-      // no-op reinstall would otherwise re-fetch every capability template from
-      // the Control Plane on every call.
-      let postWorkspace: Record<string, unknown> | undefined;
-      if (needsPost && result.outcome !== "unchanged") {
-        const { applyPackagePostWorkspace } =
-          await import("../package-apply-post-workspace.js");
-        try {
-          postWorkspace = await applyPackagePostWorkspace({
-            workspaceId: result.workspaceId,
-            // `_meta.slug` namespaces an inline cell's typeKey
-            // (`cell:<slug>:<key>`) and the applier REFUSES a cell without it
-            // rather than minting an un-reconcilable duplicate row. The catalog
-            // slug we were installed by IS that identity, so supply it when the
-            // fetched definition carries no `_meta` of its own.
-            body: {
-              ...postBody,
-              _meta: {
-                ...postBody._meta,
-                slug: postBody._meta?.slug ?? input.slug,
-              },
-            },
-            userId: input.userId,
-            // No `agentUserId`: an agent-initiated market.install ALWAYS
-            // proposes (runMarketInstall), so every path that reaches here is
-            // acting on a human's authority — the operator's own call, or the
-            // approver's. Same posture as the `workspace/create` executor's
-            // "approver is authority for creates".
-            scopes: [],
-          });
-        } catch (err) {
-          // Per-ITEM isolation already lives inside `applyPackagePostWorkspace`
-          // (each capability/automation/playbook/cell is caught and reported as
-          // {status:"error"}), so a throw here is a whole-layer failure. Surface
-          // it rather than returning a silent partial: the applier has already
-          // stamped `provisioningStatus:"failed"`, which is what lets the NEXT
-          // install resume and re-run this layer. Matches both reference callers
-          // (Hub REST propagates; the approve-executor rethrows a scrubbed
-          // TRPCError). The raw cause goes to the operator log only.
-          logger.warn(
-            { err, slug: input.slug, workspaceId: result.workspaceId },
-            "market.install template: post-workspace layers failed"
-          );
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: `Workspace ${result.workspaceId} was created from "${input.slug}", but applying its package layers (capabilities/playbooks/automations/loops/cells) failed — re-run the install to resume.`,
-          });
-        }
-      }
+      } & Record<string, unknown>;
 
-      // A1 — ONE SHAPE ACROSS BOTH INSTALL DOORS. This door RETHROWS a
-      // whole-layer failure (the deliberate asymmetry with
-      // `createFromDefinition`, which returns a `failed` layer instead — see
-      // that catch). But a whole-layer throw is not the only partial: the
-      // applier catches each item and records `{status:"error"}` in the bag,
-      // and NOTHING read those statuses, so an install whose every capability
-      // errored returned `postWorkspace` and looked resolved. `layers[]` is the
-      // same `InstallLayerReport` type `createFromDefinition` emits — not a
-      // second shape — so a consumer branches on one field for either door.
-      // The ONE finisher: the version the core handed back is stamped, and a
-      // newly built space marked "active", only when layer 2 landed
-      // (`{}` = the template has no living layers). An "unchanged" re-hit
-      // that skipped layer 2 ran nothing to finish.
-      if (!(needsPost && !postWorkspace)) {
-        const { finishTemplateApply } =
-          await import("../template-apply-finisher.js");
-        await finishTemplateApply({
-          workspaceId: result.workspaceId,
-          userId: input.userId,
-          built: result.outcome === "created",
-          pendingVersionStamp:
-            core.status === "created"
-              ? core.created.pendingVersionStamp
-              : core.status === "composed"
-                ? core.pendingVersionStamp
-                : undefined,
-          pendingPack:
-            core.status === "composed" ? core.pendingPack : undefined,
-          post: postWorkspace ?? {},
-        });
-      }
-      const layers = summarizePostWorkspaceLayers(postWorkspace);
+      // THE ONE template apply (the Hub `/packages/apply` and approve doors
+      // run it too): resolves `dependencies`, layers an overlay (`compose`) or
+      // a PACK (D8 — never its own workspace) onto its base, else finds the
+      // space holding the slug (or creates it), plans, builds / re-syncs
+      // layer 1, applies layer 2 from the same source, and stamps the version
+      // only on convergence. The catalog slug is the idempotency key.
+      //
+      // No `agentUserId`: an agent-initiated market.install ALWAYS proposes
+      // (runMarketInstall), so every path that reaches here acts on a human's
+      // authority — the operator's own call, or the approver's.
+      const { applyTemplate } = await import("../template-apply/index.js");
+      const applied = await applyTemplate({
+        definition,
+        layerTwoBody: postBody,
+        actor: { userId: input.userId, scopes: [] },
+        source: "market.install",
+        identity: {
+          packageSlug: input.slug,
+          packageVersion: entry?.version ?? input.version ?? undefined,
+          proposalId: input.slug,
+          workspaceName: definition.workspaceName,
+          templateId: input.slug,
+          templateName: entry?.name ?? input.slug,
+        },
+        // Engagement project (named install): resolved once the space exists,
+        // before layer 2, so uses-edges and seed filing stamp onto it.
+        beforeLayerTwo: async (homeWorkspaceId) => {
+          if (!input.projectId && !input.projectName) return;
+          const { resolveProjectForPackInstall } =
+            await import("../resolve-project-for-pack-install.js");
+          const resolved = await resolveProjectForPackInstall({
+            userId: input.userId,
+            agentUserId: input.agentUserId ?? undefined,
+            projectId: input.projectId,
+            projectName: input.projectName,
+            packageSlug: input.slug,
+            homeWorkspaceId,
+          });
+          if ("error" in resolved) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: resolved.error,
+            });
+          }
+          if (
+            postBody.projectSurface &&
+            typeof postBody.projectSurface === "object"
+          ) {
+            const {
+              getDb,
+              sql,
+              projects,
+              eq,
+              ProjectRepository,
+              EventRepository,
+            } = await import("@synap/database");
+            const dbConn = await getDb();
+            const [existing] = await dbConn
+              .select({ settings: projects.settings })
+              .from(projects)
+              .where(eq(projects.id, resolved.projectId))
+              .limit(1);
+            const prev = (existing?.settings ?? {}) as Record<string, unknown>;
+            const projectRepo = new ProjectRepository(
+              dbConn,
+              new EventRepository(sql)
+            );
+            await projectRepo.update(
+              resolved.projectId,
+              { settings: { ...prev, layout: postBody.projectSurface } },
+              input.userId
+            );
+          }
+          return { projectId: resolved.projectId };
+        },
+      });
+
+      // ONE SHAPE ACROSS THE INSTALL DOORS: `layers[]` is the same
+      // `InstallLayerReport` `createFromDefinition` emits. Per-item errors in
+      // the layer-2 bag become a `failed` layer; a whole-layer failure is
+      // recorded on the space (`failed`, layer 2) and reported here — never
+      // thrown, the space is in place and `synap templates update` finishes it.
+      const postWorkspace =
+        applied.layer2.status === "applied" ? applied.layer2.post : undefined;
+      // The raw cause is logged by `applyTemplate` (operator log only — it
+      // can carry DB/connector internals); the caller gets a fixed sentence.
+      const layers =
+        applied.layer2.status === "failed"
+          ? [
+              {
+                layer: "post-workspace" as const,
+                status: "failed" as const,
+                message: `The space is in place, but applying its package layers failed. Run \`synap templates update ${input.slug}\` to finish it.`,
+              },
+            ]
+          : summarizePostWorkspaceLayers(postWorkspace);
       return {
         kind: "template",
-        workspaceId: result.workspaceId,
-        created: result.created,
+        workspaceId: applied.workspaceId,
+        created: applied.layerOne?.created ?? false,
         // Additive only — `kind`/`workspaceId`/`created` are unchanged for the
         // two existing consumers (builtin-verbs' passthrough result and the
         // `capability.install` executor, which stores the object opaquely).
         ...(postWorkspace ? { postWorkspace } : {}),
         ...(layers.length > 0 ? { layers } : {}),
+        ...(applied.warning ? { templateApplyWarning: applied.warning } : {}),
         // W3b: the project-scope playbooks this install made startable, read
         // through the same pure derivation `createFromDefinition` uses. A
         // caller may OFFER to start one on a project; never auto-started.

@@ -26,11 +26,11 @@ const logger = createLogger({ module: "proposal-approve-executors-workspace" });
 
 /**
  * Approve a template apply (`source: "packages.apply"`, or any gated
- * create-from-definition): materialize through the SAME `materializeWorkspaceCore`
- * the Hub `/packages/apply` door uses — a FRESH create, or an idempotent re-hit
- * that reconciles layer 1 onto the space already holding the template — then
- * the SAME post-workspace layers (`applyPackagePostWorkspace`), then the version
- * stamp, only if layer 2 converged.
+ * create-from-definition): the ONE template apply (`applyTemplate`) the Hub
+ * `/packages/apply` door runs — a FRESH create, or the space already holding
+ * the template re-synced — then layer 2, then the version stamp, only if
+ * layer 2 converged. This executor is the governance (a person approved);
+ * the apply is the module's.
  *
  * Shared by `workspace/create` and by `workspace/update` for a template UPDATE
  * of an existing space (the honest shape the apply door files when the slug is
@@ -65,14 +65,8 @@ async function executeTemplateApplyApproval({
     return { success: true, alreadyApproved: true };
   }
 
-  const {
-    materializeWorkspaceCore,
-    materializeReportStatus,
-    ComposeBaseUnavailableError,
-    DependencyResolutionError,
-    ComposeBaseNotFoundError,
-    ComposeOverlayError,
-  } = await import("../../../services/workspace-materialization-service.js");
+  const { applyTemplate } =
+    await import("../../../services/template-apply/index.js");
 
   // Template identity (0308): a template proposal installs under its slug
   // (installed once per pod). Falling back to the proposal ROW id as the
@@ -105,193 +99,55 @@ async function executeTemplateApplyApproval({
     });
   }
 
-  let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
-  try {
-    core = await materializeWorkspaceCore({
-      // The core never stamps: the version comes back as
-      // `pendingVersionStamp` and `finishTemplateApply` below stamps it only
-      // once the post-workspace layers converged.
+  // The ONE template apply, as the APPROVER: a fresh create, or the space
+  // already holding the template re-synced (layer 1 from the catalog's fresh
+  // copy, layer 2 from the same source), then the stamp — only if layer 2
+  // converged. A layer-2 failure is recorded on the space and reported below,
+  // never thrown: the space is in place.
+  const applied = await approveTemplateApply(() =>
+    applyTemplate({
       definition:
         innerDefinition as unknown as import("@synap/database").WorkspaceDefinitionInput,
-      userId,
-      agentUserId: proposal.agentUserId ?? undefined,
-      proposalId:
-        explicitKey ??
-        (isTemplateProposal ? packageSlug : undefined) ??
-        input.proposalId,
-      workspaceName: (inner.workspaceName as string | undefined) ?? name,
-      templateId: inner.templateId as string | undefined,
-      packageSlug,
-      // The version the apply door stamped onto the proposal — the same
-      // FALLBACK the direct door passes (a private template the pod's catalog
-      // cache cannot resolve); a cache-resolved version still wins.
-      packageVersion: inner.packageVersion as string | undefined,
-      workspaceType: inner.workspaceType as
-        "personal" | "agent" | "project" | "operational" | undefined,
-      createdBy:
-        (inner.createdBy as "user" | "provisioning" | "plugin" | undefined) ??
-        "provisioning",
-    });
-  } catch (e) {
-    if (
-      e instanceof DependencyResolutionError ||
-      e instanceof ComposeBaseUnavailableError ||
-      e instanceof ComposeOverlayError
-    ) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: (e as Error).message,
-      });
-    }
-    if (e instanceof ComposeBaseNotFoundError) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: (e as Error).message,
-      });
-    }
-    throw e;
-  }
-
-  // deferCreate is never set here — core is "created" | "composed" (both
-  // carry workspaceId). Narrow so the "resolved"-only union arm is excluded.
-  if (core.status === "resolved") {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message:
-        "Workspace materialize returned resolved-without-create (unexpected on approve path)",
-    });
-  }
-  const workspaceId = core.workspaceId;
+      layerTwoBody:
+        innerDefinition as unknown as ApplyTemplateInput["layerTwoBody"],
+      // Approver authority covers ONLY what the server resolved from the
+      // catalog; the agent's own body keeps the agent's governance (an
+      // automation lands as a draft, a floored write proposes). The agent is
+      // enrolled either way, so its follow-on writes don't collapse to joins.
+      actor: {
+        userId,
+        agentUserId: proposal.agentUserId ?? undefined,
+        approved: true,
+        scopes: [],
+      },
+      source: "approve:workspace/create",
+      alwaysRunLayerTwo: inner.source === "packages.apply",
+      identity: {
+        packageSlug,
+        // The version the apply door stamped onto the proposal — the FALLBACK
+        // for a private template the pod's catalog cache cannot resolve.
+        packageVersion: inner.packageVersion as string | undefined,
+        proposalId:
+          explicitKey ??
+          (isTemplateProposal ? packageSlug : undefined) ??
+          input.proposalId,
+        workspaceName: (inner.workspaceName as string | undefined) ?? name,
+        templateId: inner.templateId as string | undefined,
+        workspaceType: inner.workspaceType as
+          "personal" | "agent" | "project" | "operational" | undefined,
+        createdBy:
+          (inner.createdBy as "user" | "provisioning" | "plugin" | undefined) ??
+          "provisioning",
+      },
+    })
+  );
+  const workspaceId = applied.workspaceId;
 
   // Stamp the produced workspaceId onto the proposal row so clients/revert
   // can recover it (ProposalMaterializedRecord has no workspaceIds field —
   // store as a sibling lifecycle key next to materialized).
-  const updatedData = {
-    ...((proposal.data as Record<string, unknown> | null | undefined) ?? {}),
-    materializedWorkspaceId: workspaceId,
-    materializeStatus: materializeReportStatus(core),
-  };
-
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
-      data: updatedData,
-      reviewedBy: userId,
-      reviewedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(proposals.id, input.proposalId));
-
-  // packages.apply: after workspace materialize, run the SAME post-workspace
-  // layers as the grant path (enroll agent + caps/autos/playbooks/loops).
-  // Without this, every agent package install silently dropped Phase 2.
-  const source = inner.source as string | undefined;
-  const storedDefinition = (inner.definition ?? {}) as Record<string, unknown>;
-  // SOURCE MUST MATCH LAYER 1 (the tRPC door's `reconcileExisting` rule):
-  // a re-hit that reconciled against the FRESH server-resolved template
-  // syncs layer 2 from that same template, not the stored copy, which may
-  // predate the version layer 1 just applied.
-  const created = core.status === "created" ? core.created : undefined;
-  const pendingVersionStamp =
-    created?.pendingVersionStamp ??
-    (core.status === "composed" ? core.pendingVersionStamp : undefined);
-  const resolvedPackage = created?.packageDefinition as
-    Record<string, unknown> | undefined;
-  const definition: Record<string, unknown> = resolvedPackage
-    ? {
-        ...resolvedPackage,
-        _meta: {
-          ...((resolvedPackage._meta as Record<string, unknown>) ?? {}),
-          ...(packageSlug ? { slug: packageSlug } : {}),
-          ...(pendingVersionStamp ? { version: pendingVersionStamp } : {}),
-        },
-        // The engagement project is the CALLER's, never the template's.
-        ...(storedDefinition.projectId !== undefined
-          ? { projectId: storedDefinition.projectId }
-          : {}),
-      }
-    : storedDefinition;
-  const needsPost =
-    source === "packages.apply" ||
-    Boolean(
-      definition.capabilities ||
-      definition.automations ||
-      definition.playbooks ||
-      definition.loops ||
-      definition.projectId
-    );
-  let post: Record<string, unknown> | undefined;
-  if (needsPost) {
-    try {
-      const { applyPackagePostWorkspace } =
-        await import("../../../services/package-apply-post-workspace.js");
-      post = await applyPackagePostWorkspace({
-        workspaceId,
-        body: definition as Parameters<
-          typeof applyPackagePostWorkspace
-        >[0]["body"],
-        userId,
-        // Approver authority covers ONLY what the server resolved from the
-        // catalog (`resolvedPackage`, the CP cache / bundle body for the
-        // slug): a person approved that package, so its new playbook lands
-        // instead of re-filing as a second proposal. Anything else is the
-        // AGENT's own body (a fresh create, a same-version re-hit, a private
-        // template) and keeps the agent's governance — an automation lands
-        // as a draft, a floored write proposes — or an agent could plant an
-        // ACTIVE trigger, or overwrite a same-name one, as the person. The
-        // agent is enrolled either way, so its follow-on writes don't
-        // collapse to join proposals.
-        ...(resolvedPackage
-          ? { enrollAgentUserId: proposal.agentUserId ?? undefined }
-          : { agentUserId: proposal.agentUserId ?? undefined }),
-        scopes: [],
-      });
-    } catch (e) {
-      // Workspace already exists — surface post-layer failure rather than
-      // leaving APPROVED with a silent partial package. Scrub the raw cause
-      // (it can carry DB/connector internals) to the operator log; the client
-      // gets a fixed message, not the interpolated exception text (E1).
-      logger.warn(
-        { proposalId: input.proposalId, err: (e as Error).message },
-        "template apply approve: package layers failed post-workspace"
-      );
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message:
-          "The space is in place, but applying its package layers failed.",
-      });
-    }
-  }
-
-  // The ONE finisher: the version layer 1 handed back is stamped, and a
-  // newly built space marked "active", only when layer 2 actually landed
-  // (nothing errored, nothing still proposed). Otherwise the space keeps its
-  // previous stamp and records why, so the next `market update` still sees
-  // the drift and re-applies. A throw above already left it unstamped (and
-  // the space marked `provisioningStatus:"failed"` for the resume path).
-  const { finishTemplateApply } =
-    await import("../../../services/template-apply-finisher.js");
-  const finished = await finishTemplateApply({
-    workspaceId,
-    userId,
-    built: created?.outcome === "created",
-    pendingVersionStamp,
-    pendingPack: core.status === "composed" ? core.pendingPack : undefined,
-    post: needsPost ? (post ?? {}) : {},
-  });
-  const versionStamped = finished.versionStamped;
-  if (pendingVersionStamp && !versionStamped) {
-    logger.warn(
-      {
-        proposalId: input.proposalId,
-        workspaceId,
-        version: pendingVersionStamp,
-        state: finished.state,
-      },
-      "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
-    );
-  }
+  await markApproved(proposal, input.proposalId, userId, applied);
+  const refusals = layerTwoRefusals(applied, input.proposalId);
 
   // Report to IS telemetry (fire-and-forget — never blocks)
   reportApproved(deps, proposal, input.proposalId);
@@ -305,8 +161,108 @@ async function executeTemplateApplyApproval({
   return {
     success: true,
     primaryId: workspaceId,
-    ...(pendingVersionStamp ? { versionStamped } : {}),
+    ...(applied.pendingVersionStamp
+      ? { versionStamped: applied.finished?.versionStamped ?? false }
+      : {}),
+    ...(refusals.length > 0 ? { refusals } : {}),
   };
+}
+
+type ApplyTemplateInput =
+  import("../../../services/template-apply/index.js").ApplyTemplateInput;
+
+type TemplateApplyResult = Awaited<
+  ReturnType<
+    (typeof import("../../../services/template-apply/index.js"))["applyTemplate"]
+  >
+>;
+
+/** Run an approved apply; map its layer-1 errors to the executor's codes. */
+async function approveTemplateApply(
+  run: () => Promise<TemplateApplyResult>
+): Promise<TemplateApplyResult> {
+  const {
+    ComposeBaseUnavailableError,
+    DependencyResolutionError,
+    ComposeBaseNotFoundError,
+    ComposeOverlayError,
+  } = await import("../../../services/workspace-materialization-service.js");
+  try {
+    return await run();
+  } catch (e) {
+    if (
+      e instanceof DependencyResolutionError ||
+      e instanceof ComposeBaseUnavailableError ||
+      e instanceof ComposeOverlayError
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: (e as Error).message,
+      });
+    }
+    if (e instanceof ComposeBaseNotFoundError) {
+      throw new TRPCError({ code: "NOT_FOUND", message: (e as Error).message });
+    }
+    throw e;
+  }
+}
+
+/** Mark the proposal APPROVED with the space it materialized. */
+async function markApproved(
+  proposal: ProposalExecutorArgs["proposal"],
+  proposalId: string,
+  userId: string,
+  applied: TemplateApplyResult
+): Promise<void> {
+  await db
+    .update(proposals)
+    .set({
+      status: ProposalStatus.APPROVED,
+      data: {
+        ...((proposal.data as Record<string, unknown> | null | undefined) ??
+          {}),
+        materializedWorkspaceId: applied.workspaceId,
+        materializeStatus: applied.materializeStatus,
+      },
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(proposals.id, proposalId));
+}
+
+/**
+ * What the reviewer is told when the approved apply did not finish: layer 2
+ * failed (recorded on the space; `synap templates update` finishes it), or it
+ * did not converge (the version is not stamped, so the next update re-applies).
+ */
+function layerTwoRefusals(
+  applied: TemplateApplyResult,
+  proposalId: string
+): string[] {
+  if (applied.layer2.status === "failed") {
+    const err = applied.layer2.error;
+    // The raw cause goes to the operator log only (it can carry internals).
+    logger.warn(
+      { proposalId, err: err instanceof Error ? err.message : String(err) },
+      "template apply approved: package layers failed post-workspace — recorded on the space"
+    );
+    return [
+      "The space is in place, but applying its package layers failed. Run `synap templates update` to finish it.",
+    ];
+  }
+  if (applied.pendingVersionStamp && !applied.finished?.versionStamped) {
+    logger.warn(
+      {
+        proposalId,
+        workspaceId: applied.workspaceId,
+        version: applied.pendingVersionStamp,
+        state: applied.finished?.state,
+      },
+      "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
+    );
+  }
+  return [];
 }
 
 /** Register the workspace/* approve executors. */
@@ -669,12 +625,10 @@ export function registerWorkspaceExecutors(): void {
   // existing) proposes via `subjectType:"workspace", action:"update"` when the
   // caller can't auto-approve (workspace.update ∈ ADMIN_ACTIONS). Without this
   // executor the generic `*/*` catch-all only flipped the row APPROVED — the
-  // additive reconcile never ran. Re-runs the SAME `materializeWorkspaceCore`
-  // (targetWorkspaceId forces the `composeOntoBaseWorkspace` branch) the grant
-  // path drives, from the FULL package body the route already stores as
-  // `data.definition` (packages.ts:246-276), then the SAME phase-2
-  // `applyPackagePostWorkspace` layers — stamping the APPROVER as the acting
-  // userId (mirrors workspace/create's approve-as-authority above).
+  // additive reconcile never ran. Runs the ONE template apply (`applyTemplate`,
+  // targetWorkspaceId forces the compose branch) the grant path drives, from
+  // the FULL package body the route stores as `data.definition`, as the
+  // APPROVER (mirrors workspace/create's approve-as-authority above).
   registerProposalExecutor({
     key: "workspace/update",
     async execute(args) {
@@ -1000,123 +954,41 @@ export function registerWorkspaceExecutors(): void {
         return { success: true, primaryId: targetWorkspaceId };
       }
 
-      const {
-        materializeWorkspaceCore,
-        materializeReportStatus,
-        ComposeBaseUnavailableError,
-        DependencyResolutionError,
-        ComposeBaseNotFoundError,
-        ComposeOverlayError,
-      } =
-        await import("../../../services/workspace-materialization-service.js");
-
+      // Install ONTO this space (compose): the ONE template apply, as the
+      // APPROVER — the additive reconcile, the same layer 2, then the
+      // `--onto` identity's stamp / the pack's version, only on convergence.
       const definition = (inner.definition ?? {}) as Record<string, unknown>;
-
-      let core: Awaited<ReturnType<typeof materializeWorkspaceCore>>;
-      try {
-        core = await materializeWorkspaceCore({
+      const { applyTemplate } =
+        await import("../../../services/template-apply/index.js");
+      const applied = await approveTemplateApply(() =>
+        applyTemplate({
           definition:
             definition as unknown as import("@synap/database").WorkspaceDefinitionInput,
-          userId,
-          agentUserId: proposal.agentUserId ?? undefined,
-          selfSlug: inner.packageSlug as string | undefined,
+          layerTwoBody: definition,
+          actor: {
+            userId,
+            agentUserId: proposal.agentUserId ?? undefined,
+            approved: true,
+            scopes: [],
+          },
+          source: "approve:workspace/update",
           targetWorkspaceId,
-          proposalId:
-            (inner.proposalId as string | undefined) ?? input.proposalId,
-          workspaceName: inner.workspaceName as string | undefined,
-          templateId: inner.templateId as string | undefined,
-          packageSlug: inner.packageSlug as string | undefined,
-          packageVersion: inner.packageVersion as string | undefined,
-          workspaceType: inner.workspaceType as
-            "personal" | "agent" | "project" | "operational" | undefined,
-        });
-      } catch (e) {
-        if (
-          e instanceof DependencyResolutionError ||
-          e instanceof ComposeBaseUnavailableError ||
-          e instanceof ComposeOverlayError
-        ) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: (e as Error).message,
-          });
-        }
-        if (e instanceof ComposeBaseNotFoundError) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: (e as Error).message,
-          });
-        }
-        throw e;
-      }
-
-      // targetWorkspaceId always forces the "composed" branch inside
-      // materializeWorkspaceCore (never "created"/"resolved") — narrow so the
-      // rest of this executor can read workspaceId unconditionally.
-      if (core.status !== "composed") {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Workspace update materialize returned unexpected status "${core.status}" for a targeted install`,
-        });
-      }
-      const workspaceId = core.workspaceId;
-
-      const updatedData = {
-        ...((proposal.data as Record<string, unknown> | null | undefined) ??
-          {}),
-        materializedWorkspaceId: workspaceId,
-        materializeStatus: materializeReportStatus(core),
-      };
-
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          data: updatedData,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
+          alwaysRunLayerTwo: true,
+          identity: {
+            packageSlug: inner.packageSlug as string | undefined,
+            packageVersion: inner.packageVersion as string | undefined,
+            proposalId:
+              (inner.proposalId as string | undefined) ?? input.proposalId,
+            workspaceName: inner.workspaceName as string | undefined,
+            templateId: inner.templateId as string | undefined,
+            workspaceType: inner.workspaceType as
+              "personal" | "agent" | "project" | "operational" | undefined,
+          },
         })
-        .where(eq(proposals.id, input.proposalId));
-
-      // Phase 2: same post-workspace layers the grant path always runs after a
-      // "composed" outcome (packages.ts has no `unchanged` discriminator on
-      // that branch — it always re-seeds, see packages.ts:450).
-      try {
-        const { applyPackagePostWorkspace } =
-          await import("../../../services/package-apply-post-workspace.js");
-        const post = await applyPackagePostWorkspace({
-          workspaceId,
-          body: definition as Parameters<
-            typeof applyPackagePostWorkspace
-          >[0]["body"],
-          userId,
-          agentUserId: proposal.agentUserId ?? undefined,
-          scopes: [],
-        });
-        // An `--onto` identity's version is stamped only once layer 2 landed.
-        const { finishTemplateApply } =
-          await import("../../../services/template-apply-finisher.js");
-        await finishTemplateApply({
-          workspaceId,
-          userId,
-          built: false,
-          pendingVersionStamp: core.pendingVersionStamp,
-          pendingPack: core.pendingPack,
-          post,
-        });
-      } catch (e) {
-        // Scrub the raw cause to the operator log; the client gets a fixed
-        // message, not interpolated exception text (E1).
-        logger.warn(
-          { proposalId: input.proposalId, err: (e as Error).message },
-          "workspace update: package layers failed post-workspace"
-        );
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Workspace updated, but applying its package layers failed.",
-        });
-      }
+      );
+      const workspaceId = applied.workspaceId;
+      await markApproved(proposal, input.proposalId, userId, applied);
+      const refusals = layerTwoRefusals(applied, input.proposalId);
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1127,7 +999,11 @@ export function registerWorkspaceExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, primaryId: workspaceId };
+      return {
+        success: true,
+        primaryId: workspaceId,
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 

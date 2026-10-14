@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 /**
  * TRIPWIRE — `market.install({kind:"template"})` must apply LAYER 2.
@@ -23,6 +24,14 @@ import { join } from "path";
  * the same package installed from the browser arrived complete. One package, two
  * doors, two different workspaces — the door-parity severance class.
  *
+ * W2 (one template apply): the branch now calls `applyTemplate(`, the ONE apply
+ * every install door runs, and the layer-2 call lives in that module. The
+ * invariant is therefore pinned in two halves: the template branch calls
+ * `applyTemplate(` in executable code, and `applyTemplate` itself calls both
+ * the layer-1 path and `applyPackagePostWorkspace(`. Runtime reachability (the
+ * playbook actually lands through this door) is pinned by
+ * `services/template-apply/template-apply.contract.pglite.test.ts`.
+ *
  * This is invisible to `tsc` (dropping a call is type-correct) and to a naive
  * `rg -c applyPackagePostWorkspace marketplace-install.ts`, which reported 1 for
  * a file whose only occurrence was inside a COMMENT. So: a SOURCE SCAN that
@@ -43,10 +52,10 @@ import { join } from "path";
  * cannot be dropped again without a red test.
  */
 
-const SOURCE = join(
-  process.cwd(),
-  "packages/api/src/services/capabilities/marketplace-install.ts"
-);
+// Resolved from this file, not the CWD (it ENOENT'd when run from packages/api).
+const API_SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SOURCE = join(API_SRC, "services/capabilities/marketplace-install.ts");
+const APPLY = join(API_SRC, "services/template-apply/index.ts");
 
 /**
  * Strip line comments, block comments and string/template literals. Everything
@@ -73,7 +82,7 @@ describe("tripwire: market.install template branch applies post-workspace layer 
   const raw = readFileSync(SOURCE, "utf8");
   const stripped = stripCommentsAndStrings(raw);
 
-  it("the template branch calls applyPackagePostWorkspace in EXECUTABLE code", () => {
+  it("the template branch runs applyTemplate in EXECUTABLE code", () => {
     // Which `case "..."` is the template one, by order in the raw source.
     const rawCases = [...raw.matchAll(/case\s+"([a-z]+)"\s*:\s*\{/g)].map(
       (m) => m[1]
@@ -109,22 +118,31 @@ describe("tripwire: market.install template branch applies post-workspace layer 
     ).toBeGreaterThan(start);
     const body = stripped.slice(start, end);
 
-    // Layer 1 is expected to still be there — if it is not, this test is
-    // asserting against a branch that no longer does what it is named for.
-    // W3a: layer 1 now goes through the SHARED materialization core (deps,
-    // compose overlays, D8 packs), which itself calls the idempotent create.
+    // The branch runs the ONE template apply.
     expect(
-      body.includes("materializeWorkspaceCore("),
-      "the template branch no longer creates the workspace — this tripwire is stale, fix it deliberately"
+      body.includes("applyTemplate("),
+      "market.install({kind:'template'}) no longer runs applyTemplate() — the " +
+        "ONE apply that builds layer 1 AND applies layer 2. Do not re-implement " +
+        "either here; call applyTemplate() as the Hub and approve doors do."
     ).toBe(true);
+  });
 
-    // Layer 2 — the actual invariant.
+  it("applyTemplate runs layer 1 AND layer 2 in executable code", () => {
+    const apply = stripCommentsAndStrings(readFileSync(APPLY, "utf8"));
+    const fn = apply.slice(
+      apply.indexOf("export async function applyTemplate(")
+    );
+    expect(fn.length, "applyTemplate() not found").toBeGreaterThan(100);
+    const body = fn.slice(
+      0,
+      fn.indexOf("\nexport ") > 0 ? fn.indexOf("\nexport ") : undefined
+    );
+    expect(body.includes("applyLayerOne(")).toBe(true);
+    expect(body.includes("materializeWorkspaceCore(")).toBe(true);
     expect(
       body.includes("applyPackagePostWorkspace("),
-      "market.install({kind:'template'}) creates the workspace but never applies " +
-        "capabilities/playbooks/automations/loops/cells/actionPlacements. Call " +
-        "applyPackagePostWorkspace() in the template branch, as " +
-        "hub-protocol/rest/packages.ts and proposals/executors/workspace.ts do."
+      "applyTemplate() builds the space but never applies capabilities/" +
+        "playbooks/automations/loops/cells/actionPlacements."
     ).toBe(true);
   });
 

@@ -56,8 +56,42 @@ vi.mock("@synap/database", async (importOriginal) => ({
   preflightWorkspaceFromDefinition: (...a: unknown[]) => mockPreflight(...a),
 }));
 
+// The ONE apply (`applyTemplate`, W2) asks the core for deps/compose only
+// (`deferCreate`), then runs its layer one. A "created" answer staged by a
+// test is handed to layer one (mocked below), so each test keeps staging the
+// space the way it always did.
+const shim = vi.hoisted(() => ({
+  created: null as null | Record<string, unknown>,
+  layerOneArgs: [] as Record<string, unknown>[],
+}));
+vi.mock("../../../services/template-apply/layer-one.js", () => ({
+  applyLayerOne: async (i: Record<string, unknown>) => {
+    shim.layerOneArgs.push(i);
+    const c = shim.created ?? {};
+    return {
+      action:
+        c.outcome === "created"
+          ? { kind: "create" }
+          : c.outcome === "unchanged"
+            ? { kind: "unchanged", checked: true }
+            : { kind: "resync", reason: "stale", reopen: false },
+      ...c,
+    };
+  },
+}));
+vi.mock("../../../services/template-apply/resolve-target.js", () => ({
+  resolveTarget: async () => ({ found: false }),
+  findLegacyWorkspaceMatch: async () => null,
+}));
 vi.mock("../../../services/workspace-materialization-service.js", () => ({
-  materializeWorkspaceCore: (...a: unknown[]) => mockMaterialize(...a),
+  materializeWorkspaceCore: async (...a: unknown[]) => {
+    const r = (await mockMaterialize(...a)) as
+      { status?: string; created?: Record<string, unknown> } | undefined;
+    if (r?.status !== "created") return r;
+    shim.created = r.created ?? null;
+    return { status: "resolved", dependencies: [] };
+  },
+  materializeReportStatus: () => "composed",
   ComposeBaseUnavailableError: class extends Error {},
   DependencyResolutionError: class extends Error {},
   ComposeBaseNotFoundError: class extends Error {},
@@ -66,6 +100,7 @@ vi.mock("../../../services/workspace-materialization-service.js", () => ({
 
 vi.mock("../../../services/package-apply-post-workspace.js", () => ({
   applyPackagePostWorkspace: (...a: unknown[]) => mockApplyPost(...a),
+  markLayerTwoFailed: async () => undefined,
   TemplateIncompleteError: class extends Error {},
 }));
 

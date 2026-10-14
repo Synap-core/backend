@@ -37,6 +37,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 vi.mock("../../../services/workspace-materialization-service.js", () => ({
   materializeWorkspaceCore: (...a: unknown[]) => mockMaterialize(...a),
+  materializeReportStatus: () => "composed",
   ComposeBaseUnavailableError: class extends Error {},
   DependencyResolutionError: class extends Error {},
   ComposeBaseNotFoundError: class extends Error {},
@@ -44,6 +45,25 @@ vi.mock("../../../services/workspace-materialization-service.js", () => ({
 }));
 vi.mock("../../../services/package-apply-post-workspace.js", () => ({
   applyPackagePostWorkspace: (...a: unknown[]) => mockApplyPost(...a),
+  markLayerTwoFailed: async () => undefined,
+  TemplateIncompleteError: class extends Error {},
+}));
+// Layer one of the ONE apply (`applyTemplate`, W2) for a standalone apply:
+// the space exists and is re-synced; the version handed back is the one asked.
+vi.mock("../../../services/template-apply/layer-one.js", () => ({
+  applyLayerOne: async (i: { packageVersion?: string }) => ({
+    workspaceId: TARGET,
+    created: false,
+    outcome: "reconciled",
+    action: { kind: "resync", reason: "stale", reopen: false },
+    ...(i.packageVersion ? { pendingVersionStamp: i.packageVersion } : {}),
+  }),
+}));
+vi.mock("../../../services/template-apply-finisher.js", () => ({
+  finishTemplateApply: async () => ({
+    state: "converged",
+    versionStamped: true,
+  }),
 }));
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: (...a: unknown[]) => mockCheckPermission(...a),
@@ -112,11 +132,28 @@ describe("POST /packages/apply — the stamp is derived, never the caller's labe
     });
     mockVerdict.mockResolvedValue({ action: "create" });
     mockApplyPost.mockResolvedValue({});
-    mockMaterialize.mockResolvedValue({
-      status: "created",
-      workspaceId: TARGET,
-      created: { workspaceId: TARGET, created: false, outcome: "reconciled" },
-    });
+    // `--onto` composes onto the target (the version comes back pending);
+    // without a target the ONE apply's layer one runs (mocked above).
+    mockMaterialize.mockImplementation(
+      async (i: { targetWorkspaceId?: string; packageVersion?: string }) =>
+        i.targetWorkspaceId
+          ? {
+              status: "composed",
+              workspaceId: TARGET,
+              composeTargetWorkspaceId: TARGET,
+              dependencies: [],
+              reconcile: {
+                profiles: { added: [] },
+                properties: { added: [], conflicts: [] },
+                views: { added: [] },
+                entityLinks: { added: [] },
+              },
+              ...(i.packageVersion
+                ? { pendingVersionStamp: i.packageVersion }
+                : {}),
+            }
+          : { status: "resolved", dependencies: [] }
+    );
   });
 
   const derived = appliedPackageVersion({

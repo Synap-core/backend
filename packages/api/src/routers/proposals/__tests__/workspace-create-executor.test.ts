@@ -29,24 +29,25 @@ describe("workspace/create approve executor registration", () => {
     expect(src).toMatch(/key:\s*["']workspace\/create["']/);
   });
 
-  it("materializes via materializeWorkspaceCore (shared core, not a fork)", () => {
-    // The executor body must call the shared core — not invent a second create
-    // path. Its body is `executeTemplateApplyApproval` (shared with the
-    // template-update arm of `workspace/update`), so: the key delegates to it,
-    // and it drives the shared core from the stored definition.
+  it("materializes via the ONE template apply (shared core, not a fork)", () => {
+    // The executor body must call the shared apply — not invent a second
+    // create path. Its body is `executeTemplateApplyApproval` (shared with the
+    // template-update arm of `workspace/update`), so: the key delegates to it
+    // (registered by reference), and it runs `applyTemplate` (which drives
+    // the core and layer 2 — pinned by the market-install layer-2 tripwire)
+    // from the stored definition.
     const createBlock = src.slice(
       src.indexOf('key: "workspace/create"'),
       src.indexOf('key: "workspace/join"')
     );
-    expect(createBlock).toContain("executeTemplateApplyApproval(");
+    expect(createBlock).toMatch(/execute:\s*executeTemplateApplyApproval\b/);
     const body = src.slice(
       src.indexOf("async function executeTemplateApplyApproval("),
       src.indexOf("export function registerWorkspaceExecutors(")
     );
     expect(body.length).toBeGreaterThan(0);
-    expect(body).toContain("materializeWorkspaceCore");
+    expect(body).toContain("applyTemplate(");
     expect(body).toContain("inner.definition");
-    expect(body).toContain("applyPackagePostWorkspace");
   });
 });
 
@@ -58,9 +59,14 @@ describe("packages.apply gate data shape (Phase 0 contract)", () => {
     expect(src).toMatch(/definition:\s*body/);
     expect(src).toMatch(/source:\s*["']packages\.apply["']/);
     expect(src).toMatch(/createdBy:\s*["']provisioning["']/);
-    // Must still gate on workspace create.
-    expect(src).toMatch(/subjectType:\s*["']workspace["']/);
-    expect(src).toMatch(/action:\s*["']create["']/);
+    // Must still gate on workspace create (an update when a space already
+    // holds the template). Until W2 this regex matched the AUDIT log's
+    // `action: "create"` literal, not the gate, which is a ternary.
+    const gate = src.slice(src.indexOf("checkPermissionOrPropose({"));
+    expect(gate).toMatch(/subjectType:\s*["']workspace["']/);
+    expect(gate).toMatch(
+      /action:[^\n]*\?\s*["']update["']\s*:\s*["']create["']/
+    );
   });
 
   it("does not use name-only gate data", () => {

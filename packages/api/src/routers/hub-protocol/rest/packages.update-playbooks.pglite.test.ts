@@ -71,8 +71,35 @@ vi.mock("../../../services/preflight-compose-target.js", () => ({
 }));
 // Layer 1 (the space itself) is not under test: the space exists and its
 // stamp already equals the template's — the "unchanged" outcome.
+// The ONE apply (`applyTemplate`, W2) asks the core for deps/compose only
+// (`deferCreate`), then runs its layer one: the staged "created" answer is
+// handed to layer one (mocked here), so the space is staged as before.
+const shim = vi.hoisted(() => ({
+  created: null as null | Record<string, unknown>,
+}));
+vi.mock("../../../services/template-apply/layer-one.js", () => ({
+  applyLayerOne: async () => {
+    const c = shim.created ?? {};
+    return {
+      action:
+        c.outcome === "unchanged"
+          ? { kind: "unchanged", checked: true }
+          : { kind: "resync", reason: "stale", reopen: false },
+      ...c,
+    };
+  },
+}));
 vi.mock("../../../services/workspace-materialization-service.js", () => ({
-  materializeWorkspaceCore: (...a: unknown[]) => h.materialize!(...a),
+  materializeWorkspaceCore: async (...a: unknown[]) => {
+    const r = (await h.materialize!(...a)) as {
+      status?: string;
+      created?: Record<string, unknown>;
+    };
+    if (r?.status !== "created") return r;
+    shim.created = r.created ?? null;
+    return { status: "resolved", dependencies: [] };
+  },
+  materializeReportStatus: () => "composed",
   ComposeBaseUnavailableError: class extends Error {},
   DependencyResolutionError: class extends Error {},
   ComposeBaseNotFoundError: class extends Error {},

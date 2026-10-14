@@ -10,18 +10,20 @@ import { z } from "zod";
 import { type HubHono, httpStatusForTrpcError } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
-  materializeWorkspaceCore,
   ComposeBaseUnavailableError,
   DependencyResolutionError,
   ComposeBaseNotFoundError,
   ComposeOverlayError,
 } from "../../../services/workspace-materialization-service.js";
 import {
-  applyPackagePostWorkspace,
   TemplateIncompleteError,
+  type PackagePostWorkspaceBody,
 } from "../../../services/package-apply-post-workspace.js";
-import { finishTemplateApply } from "../../../services/template-apply-finisher.js";
-import { templateApplyWarningFor } from "../../../services/template-health.js";
+import {
+  applyTemplate,
+  previewTemplateApply,
+  type TemplateApplyResult,
+} from "../../../services/template-apply/index.js";
 import { installedTemplateSpace } from "../../../services/installed-template-space.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
@@ -539,6 +541,9 @@ export function nonWorkspacePackageKind(
   return null;
 }
 
+/** The engagement project could not be resolved: the door answers 400. */
+class ProjectResolveError extends Error {}
+
 // ─── Route registration ──────────────────────────────────────────────────────
 
 export function registerPackagesRoutes(app: HubHono): void {
@@ -558,26 +563,47 @@ export function registerPackagesRoutes(app: HubHono): void {
   // `materializeWorkspaceCore` for full-fidelity dep/compose preview).
   app.post("/packages/preflight", async (c) => {
     const userId = c.get("userId");
-    const body = PackageApplySchema.parse(await c.req.json());
+    const raw = (await c.req.json()) as Record<string, unknown>;
+    const body = PackageApplySchema.parse(raw);
+    const composeTarget = await resolvePreflightComposeTarget({
+      definition: body,
+      userId,
+      targetWorkspaceId: body.targetWorkspaceId,
+    });
     const report = await preflightWorkspaceFromDefinition({
       definition: body as unknown as WorkspaceDefinitionInput,
       userId,
-      composeTarget: await resolvePreflightComposeTarget({
-        definition: body,
-        userId,
-        targetWorkspaceId: body.targetWorkspaceId,
-      }),
+      composeTarget,
+    });
+    // What an apply would DO — the same lookup and plan `/apply` runs
+    // (`previewTemplateApply`), with no lock and no write.
+    const packageSlug = body._meta?.slug?.trim() || undefined;
+    const apply = await previewTemplateApply({
+      userId,
+      packageSlug,
+      // The version `/apply` would stamp: the hash of what was sent, never
+      // the caller's label (`appliedPackageVersion`, the same rule).
+      packageVersion:
+        body._meta?.version !== undefined
+          ? appliedPackageVersion(raw)
+          : undefined,
+      proposalId: packageSlug,
+      workspaceName: body.workspaceName,
+      ...(composeTarget
+        ? { compose: { workspaceId: composeTarget.workspaceId } }
+        : {}),
     });
     // The update preview: what data this update would change, counted by the
     // conversion engine's dry run (`[]` for a fresh install). A failed read is
     // reported as such, never as "no changes".
     try {
       const dataChanges = (await updateDataChanges(body)) ?? [];
-      return c.json({ ...report, dataChanges }, 200);
+      return c.json({ ...report, apply, dataChanges }, 200);
     } catch (err) {
       return c.json(
         {
           ...report,
+          apply,
           dataChanges: null,
           dataChangesError: err instanceof Error ? err.message : String(err),
         },
@@ -878,128 +904,74 @@ export function registerPackagesRoutes(app: HubHono): void {
       };
     }
 
-    // ── Steps 0-1: Resolve dependencies + create-or-compose (shared core) ──
-    // The dependency-resolve + compose-overlay logic is the ONE shared door
-    // core (`materializeWorkspaceCore`) that the tRPC `createFromDefinition`
-    // path also drives. This door owns only the mapping into `result.workspace`
-    // / `result.dependencies`, the audit stamp, and the 4xx/5xx bodies below.
-    let workspaceId: string | undefined;
-    // Reconcile outcome for the (only) idempotent-create path
-    // (`createWorkspaceFromDefinitionIdempotent`, surfaced via
-    // `core.created.outcome`) — used below to gate the post-workspace
-    // capabilities/automations/playbooks/loops re-seed. `undefined` for the
-    // `composed` branch (no such discriminator there) — the safe default,
-    // meaning "seed fully" (never skipped).
-    let postWorkspaceOutcome:
-      "created" | "reconciled" | "unchanged" | undefined;
-    let pendingVersionStamp: string | undefined;
-    let pendingPack: { slug: string; version: string } | undefined;
+    // ── The ONE template apply ────────────────────────────────────────────
+    // resolve deps / compose → resolveTarget → plan → layer 1 → layer 2 →
+    // finish (`services/template-apply`). This door owns only its governance
+    // (above), the engagement project, the audit stamp and the response.
+    let applied: TemplateApplyResult;
     try {
-      const core = await materializeWorkspaceCore({
+      applied = await applyTemplate({
         definition: body as unknown as WorkspaceDefinitionInput,
-        userId,
-        agentUserId,
-        selfSlug: body._meta?.slug,
-        // The core never stamps: the version comes back as
-        // `pendingVersionStamp` and `finishTemplateApply` below stamps it
-        // only once the post-workspace layers converged.
-        proposalId: idempotencyKey,
-        workspaceName,
-        templateId: body._meta?.slug ?? undefined,
-        packageSlug: body._meta?.slug,
-        packageVersion: body._meta?.version,
-        workspaceType: body.workspaceType,
+        layerTwoBody: body as unknown as PackagePostWorkspaceBody &
+          Record<string, unknown>,
+        actor: { userId, agentUserId, scopes: c.get("scopes") ?? [] },
+        source: "packages.apply",
         targetWorkspaceId: body.targetWorkspaceId,
+        alwaysRunLayerTwo: true,
+        identity: {
+          packageSlug: body._meta?.slug,
+          packageVersion: body._meta?.version,
+          proposalId: idempotencyKey,
+          workspaceName,
+          templateId: body._meta?.slug ?? undefined,
+          workspaceType: body.workspaceType,
+        },
+        // Engagement project: reuse projectId, or mint/reuse by projectName
+        // (human) — once the space exists, before layer 2 stamps onto it.
+        beforeLayerTwo: async (homeWorkspaceId) => {
+          if (!body.projectId && !body.projectName) return;
+          const resolved = await resolveProjectForPackInstall({
+            userId,
+            agentUserId,
+            projectId: body.projectId,
+            projectName: body.projectName,
+            packageSlug: body._meta?.slug,
+            homeWorkspaceId,
+          });
+          if ("error" in resolved)
+            throw new ProjectResolveError(resolved.error);
+          result.project = {
+            projectId: resolved.projectId,
+            created: resolved.created,
+            reused: resolved.reused,
+          };
+          // Apply engagement UI pack into projects.settings.layout (P2 surface).
+          if (body.projectSurface && typeof body.projectSurface === "object") {
+            const dbConn = await getDb();
+            const [existing] = await dbConn
+              .select({ settings: projects.settings })
+              .from(projects)
+              .where(eq(projects.id, resolved.projectId))
+              .limit(1);
+            const prev = (existing?.settings ?? {}) as Record<string, unknown>;
+            const projectRepo = new ProjectRepository(
+              dbConn,
+              new EventRepository(sql)
+            );
+            await projectRepo.update(
+              resolved.projectId,
+              { settings: { ...prev, layout: body.projectSurface } },
+              userId
+            );
+            result.projectSurfaceApplied = true;
+          }
+          return { projectId: resolved.projectId };
+        },
       });
-      // Surface the resolved dependency graph only when deps were declared —
-      // matches the pre-refactor response (key omitted for no-dep applies).
-      if (body.dependencies?.length) {
-        result.dependencies = core.dependencies;
-        // Top-level rollup of dependencies[].seedOutcome — the other silent-
-        // success gap: a caller previously had to scan the array itself to
-        // answer "did everything seed?". `attempted` counts every dependency
-        // seeding was actually run for (installed/composed with capabilities
-        // or playbooks to seed); a dep with no such layers ("no-layers") is
-        // NOT a failure and is excluded from `attempted`. Non-fatal semantics
-        // unchanged — this is a read-only summary, not a new failure mode.
-        const seedOutcomes = core.dependencies
-          .map((d) => d.seedOutcome)
-          .filter((o): o is DependencySeedOutcome => !!o);
-        result.seedSummary = {
-          attempted: seedOutcomes.length,
-          seeded: seedOutcomes.filter((o) => o.status === "seeded").length,
-          failed: seedOutcomes
-            .filter((o) => o.status === "failed")
-            .map((o) => ({ slug: o.slug, error: o.error ?? "unknown error" })),
-        };
-      }
-      if (core.status === "composed") {
-        workspaceId = core.workspaceId;
-        pendingVersionStamp = core.pendingVersionStamp;
-        pendingPack = core.pendingPack;
-        result.workspace = {
-          status: "composed",
-          workspaceId,
-          onto: core.composeTargetWorkspaceId,
-          reconcile: {
-            profilesAdded: core.reconcile.profiles.added,
-            propertiesAdded: core.reconcile.properties.added.length,
-            viewsAdded: core.reconcile.views.added,
-            entityLinksAdded: core.reconcile.entityLinks.added,
-            propertyConflicts: core.reconcile.properties.conflicts,
-            // W4b: the overlay's seeds, adopted by (kind, title) — reported,
-            // never silent (created 0 + adopted N = nothing duplicated).
-            ...(core.reconcile.seeds
-              ? {
-                  seeds: {
-                    created: core.reconcile.seeds.entitiesCreated,
-                    adopted: core.reconcile.seeds.entitiesAdopted,
-                    relationsCreated: core.reconcile.seeds.relationsCreated,
-                    errors: core.reconcile.seeds.errors,
-                  },
-                }
-              : {}),
-          },
-        };
-        auditLog({
-          subjectType: "workspace",
-          subjectId: workspaceId,
-          action: "update",
-          phase: "completed",
-          userId,
-          data: { templateSlug: body._meta?.slug, composed: true },
-        });
-      } else if (core.status === "created") {
-        // Hub never passes deferCreate, so the core never returns "resolved".
-        workspaceId = core.workspaceId;
-        postWorkspaceOutcome = core.created.outcome;
-        pendingVersionStamp = core.created.pendingVersionStamp;
-        result.workspace = {
-          status: "created",
-          workspaceId: core.workspaceId,
-          // Explicit discriminator (E4 fix) — `status:"created"` above is kept
-          // for backward-compat, but a caller should read `outcome` to tell a
-          // genuine new-workspace materialization apart from an idempotent
-          // re-hit that was reconciled or left unchanged. See
-          // `CreateWorkspaceFromDefinitionResult.outcome` for the derivation.
-          outcome: core.created.outcome,
-          // Set when an idempotent re-hit was additively synced to a newer
-          // template (W2b, `reconcileWorkspaceIfStale`) instead of a silent
-          // no-op — lets the CLI/agent caller see drift was picked up.
-          ...(core.created.reconciled
-            ? { reconciled: core.created.reconciled }
-            : {}),
-        };
-        auditLog({
-          subjectType: "workspace",
-          subjectId: core.workspaceId,
-          action: "create",
-          phase: "completed",
-          userId,
-          data: { templateSlug: body._meta?.slug },
-        });
-      }
     } catch (e) {
+      if (e instanceof ProjectResolveError) {
+        return c.json({ error: e.message }, 400);
+      }
       if (e instanceof ComposeBaseUnavailableError) {
         // A compose was requested but its base could not be resolved (e.g. a
         // private CP-only base with no built-in template). Do NOT fall back to
@@ -1032,155 +1004,115 @@ export function registerPackagesRoutes(app: HubHono): void {
           httpStatusForTrpcError(e) as never
         );
       }
-      // The remaining case is an idempotent-create failure.
+      // The remaining case is a layer-1 create / re-sync failure.
       return c.json(
         { error: "Workspace creation failed", detail: (e as Error).message },
         httpStatusForTrpcError(e) as never
       );
     }
+    const workspaceId = applied.workspaceId;
+    const engagementProjectId =
+      (result.project as { projectId?: string } | undefined)?.projectId ??
+      body.projectId;
 
-    // ── Steps 1b–6: enroll agent + capabilities/automations/playbooks/loops
-    // + project links — ONE shared door with the workspace/create approve path.
-    //
-    // Skip entirely when the idempotent-create path determined the workspace
-    // is already current (`postWorkspaceOutcome === "unchanged"`) — mirrors
-    // the `syncLayers` gate the tRPC `createFromDefinition` door's own
-    // `reconcileExisting` already applies (`routers/workspaces.ts` ~line
-    // 3016: `syncLayers = !!outcome.report` when `outcome.checked`, so an
-    // in-sync no-op never re-runs `applyPackagePostWorkspace`). The Hub REST
-    // door lacked this gate, so it re-seeded every capability (each a
-    // Control-Plane fetch, `cp-template-client.ts`) on EVERY apply — even a
-    // no-op reinstall — driving the 120s Hub-call timeout. `undefined`
-    // (the `composed` branch, which has no such discriminator) always runs,
-    // same as before this fix — a drifted/new install (version differs, or
-    // no stamp) is unaffected: `postWorkspaceOutcome` is only ever
-    // `"unchanged"` when `reconcileWorkspaceIfStale` did a real version
-    // comparison AND found no drift.
-
-    // Engagement project: reuse projectId, or mint/reuse by projectName (human).
-    let engagementProjectId = body.projectId;
-    if (body.projectId || body.projectName) {
-      const resolved = await resolveProjectForPackInstall({
-        userId,
-        agentUserId,
-        projectId: body.projectId,
-        projectName: body.projectName,
-        packageSlug: body._meta?.slug,
-        homeWorkspaceId: workspaceId ?? null,
-      });
-      if ("error" in resolved) {
-        return c.json({ error: resolved.error }, 400);
-      }
-      engagementProjectId = resolved.projectId;
-      result.project = {
-        projectId: resolved.projectId,
-        created: resolved.created,
-        reused: resolved.reused,
+    // Surface the resolved dependency graph only when deps were declared —
+    // with a top-level rollup of `dependencies[].seedOutcome`, so a caller
+    // need not scan the array to answer "did everything seed?". A dependency
+    // with no layers to seed is not counted as attempted.
+    if (body.dependencies?.length) {
+      result.dependencies = applied.dependencies;
+      const seedOutcomes = applied.dependencies
+        .map((d) => d.seedOutcome)
+        .filter((o): o is DependencySeedOutcome => !!o);
+      result.seedSummary = {
+        attempted: seedOutcomes.length,
+        seeded: seedOutcomes.filter((o) => o.status === "seeded").length,
+        failed: seedOutcomes
+          .filter((o) => o.status === "failed")
+          .map((o) => ({ slug: o.slug, error: o.error ?? "unknown error" })),
       };
-      // Thread into post-workspace so seed entities + uses-edge stamp land.
-      body.projectId = resolved.projectId;
-
-      // Apply engagement UI pack into projects.settings.layout (P2 surface).
-      if (body.projectSurface && typeof body.projectSurface === "object") {
-        const dbConn = await getDb();
-        const [existing] = await dbConn
-          .select({ settings: projects.settings })
-          .from(projects)
-          .where(eq(projects.id, resolved.projectId))
-          .limit(1);
-        const prev = (existing?.settings ?? {}) as Record<string, unknown>;
-        const eventRepo = new EventRepository(sql);
-        const projectRepo = new ProjectRepository(dbConn, eventRepo);
-        await projectRepo.update(
-          resolved.projectId,
-          {
-            settings: {
-              ...prev,
-              layout: body.projectSurface,
-            },
-          },
-          userId
-        );
-        result.projectSurfaceApplied = true;
-      }
     }
+    if (applied.compose) {
+      const report = applied.compose.report;
+      result.workspace = {
+        status: "composed",
+        workspaceId,
+        onto: applied.compose.onto,
+        reconcile: {
+          profilesAdded: report.profiles.added,
+          propertiesAdded: report.properties.added.length,
+          viewsAdded: report.views.added,
+          entityLinksAdded: report.entityLinks.added,
+          propertyConflicts: report.properties.conflicts,
+          // W4b: the overlay's seeds, adopted by (kind, title) — reported,
+          // never silent (created 0 + adopted N = nothing duplicated).
+          ...(report.seeds
+            ? {
+                seeds: {
+                  created: report.seeds.entitiesCreated,
+                  adopted: report.seeds.entitiesAdopted,
+                  relationsCreated: report.seeds.relationsCreated,
+                  errors: report.seeds.errors,
+                },
+              }
+            : {}),
+        },
+      };
+    } else {
+      result.workspace = {
+        status: "created",
+        workspaceId,
+        // Read `outcome` to tell a new space from an idempotent re-hit that
+        // was re-synced (`reconciled`, with its report) or left `unchanged`.
+        outcome: applied.outcome,
+        ...(applied.layerOne?.reconciled
+          ? { reconciled: applied.layerOne.reconciled }
+          : {}),
+      };
+    }
+    auditLog({
+      subjectType: "workspace",
+      subjectId: workspaceId,
+      action: applied.compose ? "update" : "create",
+      phase: "completed",
+      userId,
+      data: {
+        templateSlug: body._meta?.slug,
+        ...(applied.compose ? { composed: true } : {}),
+      },
+    });
 
-    // A template whose action placement names a playbook/automation that
-    // exists nowhere (no row, no pending proposal) is INCOMPLETE: answer it as
-    // a typed 422 the CLI can print, never an "unexpected server error" 500.
-    try {
-      if (workspaceId && postWorkspaceOutcome !== "unchanged") {
-        const post = await applyPackagePostWorkspace({
-          workspaceId,
-          body,
-          userId,
-          agentUserId,
-          scopes: c.get("scopes") ?? [],
-        });
-        Object.assign(result, post);
-        // The ONE finisher: stamps the version + marks the space active only
-        // when layer 2 converged; otherwise records why (`templateApply`) so
-        // health reads the space drifted and the next update finishes it.
-        const finished = await finishTemplateApply({
-          workspaceId,
-          userId,
-          built: postWorkspaceOutcome === "created",
-          pendingVersionStamp,
-          pendingPack,
-          post,
-        });
-        result.versionStamped = finished.versionStamped;
-        if (finished.templateApply) {
-          result.templateApply = finished.templateApply;
-          // The pod's ONE sentence for why it is not finished (the CLI prints it).
-          result.templateApplyWarning =
-            await templateApplyWarningFor(workspaceId);
-        }
-      } else if (workspaceId && body.playbooks?.length) {
-        // "unchanged" says the version STAMP matches — not that every playbook
-        // the template declares exists. A stamp written by a pass that did not
-        // create a later-added playbook (boot reports it `missing`; it never
-        // creates) would otherwise leave that playbook off the pod for good: an
-        // update is exactly this door, and it would short-circuit here. The
-        // playbook layer alone is database-only (no Control Plane fetch, the
-        // cost the skip exists to avoid): it creates what is missing through the
-        // same governed create, reconciles the rest, and keeps owner archives.
-        const post = await applyPackagePostWorkspace({
-          workspaceId,
-          body: { _meta: body._meta, playbooks: body.playbooks },
-          userId,
-          agentUserId,
-          scopes: c.get("scopes") ?? [],
-        });
-        Object.assign(result, post);
-        // Nothing to stamp (the version already matched), but a playbook that
-        // only got PROPOSED is recorded, so health keeps the space drifted.
-        const finished = await finishTemplateApply({
-          workspaceId,
-          userId,
-          built: false,
-          post,
-        });
-        if (finished.templateApply) {
-          result.templateApply = finished.templateApply;
-          // The pod's ONE sentence for why it is not finished (the CLI prints it).
-          result.templateApplyWarning =
-            await templateApplyWarningFor(workspaceId);
-        }
-      }
-    } catch (e) {
-      if (e instanceof TemplateIncompleteError) {
+    // Layer 2, as reported by the ONE apply: a failure is recorded on the
+    // space (`failed`, layer 2) and answered — never a 500 once layer 1 exists.
+    if (applied.layer2.status === "applied")
+      Object.assign(result, applied.layer2.post);
+    if (applied.layer2.status === "failed") {
+      const error = applied.layer2.error;
+      // A placement naming a playbook/automation that exists nowhere: the
+      // template is INCOMPLETE — a typed 422 the CLI can print.
+      if (error instanceof TemplateIncompleteError) {
         return c.json(
           {
-            error: `This template is incomplete: ${e.message}.`,
-            reasonCode: e.reasonCode,
-            missing: e.missing,
+            error: `This template is incomplete: ${error.message}.`,
+            reasonCode: error.reasonCode,
+            missing: error.missing,
           },
           422
         );
       }
-      throw e;
+      result.layer2 = {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
+    if (applied.finished) {
+      if (applied.outcome !== "unchanged")
+        result.versionStamped = applied.finished.versionStamped;
+      if (applied.finished.templateApply)
+        result.templateApply = applied.finished.templateApply;
+    }
+    // The pod's ONE sentence for why it is not finished (the CLI prints it).
+    if (applied.warning) result.templateApplyWarning = applied.warning;
 
     // Stamp uses-edges onto every resolved require/compose workspace (shared
     // domains the engagement spans). Main workspace is stamped in post above;

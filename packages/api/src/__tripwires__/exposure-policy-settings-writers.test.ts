@@ -118,9 +118,15 @@ const CLASSIFIED: Record<string, { sites: number; why: string }> = {
     sites: 1,
     why: "{...stored, actionPlacements}",
   },
-  "packages/api/src/services/workspace-creation-service.ts": {
-    sites: 3,
-    why: "settings || {fixed keys} / {...stored, proposalId}",
+  // One template apply (W1/W2): the idempotency key and the template state
+  // are written key-only (`settings || {…}` of code-literal keys).
+  "packages/api/src/services/template-apply/layer-one.ts": {
+    sites: 1,
+    why: "settings || {proposalId}",
+  },
+  "packages/database/src/utils/template-state.ts": {
+    sites: 1,
+    why: "settings || {template + its legacy mirror keys} (minus retired mirror keys)",
   },
   "packages/database/src/utils/create-default-whiteboard.ts": {
     sites: 2,

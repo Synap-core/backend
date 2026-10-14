@@ -40,6 +40,15 @@ vi.mock("../template-apply-finisher.js", () => ({
 vi.mock("../workspace-creation-service.js", () => ({
   createWorkspaceFromDefinitionIdempotent: createWorkspaceMock,
 }));
+// Layer one of the ONE apply (`applyTemplate`, W2) — the workspace applier the
+// fetched definition is handed to.
+vi.mock("../template-apply/layer-one.js", () => ({
+  applyLayerOne: async (input: Record<string, unknown>) => ({
+    ...(await createWorkspaceMock(input)),
+    outcome: "created",
+    action: { kind: "create" },
+  }),
+}));
 vi.mock("./create-from-definition.js", () => ({
   createCapabilityFromDefinition: vi.fn(),
   loadCapabilityTemplate: vi.fn(),

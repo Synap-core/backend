@@ -175,8 +175,10 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
       "utf8"
     );
     // The executor applies the STORED definition, which the Hub door stored
-    // AFTER its parse — so it inherits exactly what that parse keeps.
-    expect(exec).toMatch(/applyPackagePostWorkspace\(/);
+    // AFTER its parse — so it inherits exactly what that parse keeps. Since
+    // W2 it hands it to the ONE apply as the layer-2 body.
+    expect(exec).toMatch(/applyTemplate\(/);
+    expect(exec).toMatch(/layerTwoBody:\s*(?:innerDefinition|definition)\b/);
   });
 
   it("tRPC createFromDefinition → body builder → loop applier → playbooks.create", async () => {
