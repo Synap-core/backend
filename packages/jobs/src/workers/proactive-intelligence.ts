@@ -15,7 +15,16 @@
  */
 
 import type PgBoss from "pg-boss";
-import { db, eq, and, gte, desc, isNull, entities } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  gte,
+  desc,
+  isNull,
+  entities,
+  isDelegationHeaders,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 // Type-only: the VALUE side of @synap/intelligence-client is loaded via dynamic
 // import below (this module's existing pattern), and a type import is erased.
@@ -174,6 +183,12 @@ async function callProactiveScanBrain(args: {
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      // D4: the scan's hub calls run as `userId` on a per-run token.
+      ...isDelegationHeaders({
+        isUrl: service.endpoint,
+        operatorUserId: userId,
+        agentUserId: service.agentUserId,
+      }),
     };
     if (service.serviceApiKey) {
       headers["Authorization"] = `Bearer ${service.serviceApiKey}`;

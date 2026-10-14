@@ -7,7 +7,10 @@
  * re-exports it from `utils/pod-identity.ts`.
  *
  *
- *   signPodJwt({ audience, purpose }, claims, ttlSeconds)   ≤ 300 s
+ *   signPodJwt({ audience, purpose }, claims, ttlSeconds)   ≤ 300 s (or the
+ *                                                           purpose's ceiling)
+ *   verifyOwnPodJwt(token, purpose)                         a token it signed,
+ *                                                           handed back to it
  *   getPodJwks()                                            public half
  *
  * Key material: an ES256 (P-256) PKCS#8 PEM in a FILE, never in the database —
@@ -40,6 +43,21 @@ import { readFileSync } from "node:fs";
 
 export const POD_JWT_TYP = "pod+jwt";
 export const POD_JWT_MAX_TTL_SECONDS = 300;
+
+/**
+ * Purposes whose ONLY verifier is this pod itself may live longer than the
+ * 300 s the CP accepts. `is_delegation` (SECURITY-PLAN-R1 §3, D4) is handed to
+ * the Intelligence Service for one turn and comes back on every hub call the
+ * turn makes, so it must outlast a slow turn; it is never sent to the CP.
+ */
+export const POD_JWT_PURPOSE_TTL_CEILINGS: Readonly<Record<string, number>> = {
+  is_delegation: 900,
+};
+
+/** The longest a token for `purpose` may live. */
+export function podJwtTtlCeiling(purpose: string): number {
+  return POD_JWT_PURPOSE_TTL_CEILINGS[purpose] ?? POD_JWT_MAX_TTL_SECONDS;
+}
 export const DEFAULT_POD_IDENTITY_KEY_FILE =
   "/opt/synap/deploy/state/pod-identity/pod-key.pem";
 
@@ -62,7 +80,11 @@ export type PodIdentityErrorCode =
   /** The enrollment record exists but cannot be read (utils/pod-cp-auth). */
   | "POD_ENROLLMENT_UNREADABLE"
   /** The key on disk is not the key the Control Plane enrolled. */
-  | "POD_KEY_NOT_ENROLLED";
+  | "POD_KEY_NOT_ENROLLED"
+  /** A token presented back to this pod is not one it signed, as presented. */
+  | "POD_JWT_INVALID"
+  /** A token this pod signed has run out its lifetime. */
+  | "POD_JWT_EXPIRED";
 
 export class PodIdentityError extends Error {
   constructor(
@@ -215,7 +237,9 @@ function canonicalAudience(value: string): string {
 
 /**
  * Sign a short-lived token AS this pod, for one audience and one purpose.
- * `ttlSeconds` is capped at 300 (the CP refuses anything longer).
+ * `ttlSeconds` is capped at 300 (the CP refuses anything longer), or at the
+ * purpose's own ceiling (`POD_JWT_PURPOSE_TTL_CEILINGS`) for a token only this
+ * pod ever verifies.
  */
 export function signPodJwt(
   binding: PodTokenBinding,
@@ -229,14 +253,15 @@ export function signPodJwt(
       "A pod token needs a purpose."
     );
   }
+  const ceiling = podJwtTtlCeiling(binding.purpose);
   if (
     !Number.isInteger(ttlSeconds) ||
     ttlSeconds <= 0 ||
-    ttlSeconds > POD_JWT_MAX_TTL_SECONDS
+    ttlSeconds > ceiling
   ) {
     throw new PodIdentityError(
       "POD_JWT_BAD_REQUEST",
-      `A pod token lives 1–${POD_JWT_MAX_TTL_SECONDS} seconds.`
+      `A "${binding.purpose}" pod token lives 1–${ceiling} seconds.`
     );
   }
   for (const name of RESERVED_CLAIMS) {
@@ -271,4 +296,87 @@ export function signPodJwt(
 
 function b64url(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function decodeSegment(segment: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      Buffer.from(segment, "base64url").toString("utf8")
+    );
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `token` is SHAPED like a pod token (JWS compact, `typ: pod+jwt`).
+ * Reads the header only and proves nothing — a door uses it to pick which
+ * verifier runs, never to trust the token.
+ */
+export function isPodJwtShaped(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  return decodeSegment(parts[0])?.typ === POD_JWT_TYP;
+}
+
+/** Tolerated clock drift on `iat` between the pod's own processes. */
+const OWN_TOKEN_CLOCK_SKEW_SECONDS = 60;
+
+/**
+ * Verify a token THIS pod signed and someone handed back (the IS delegation,
+ * SECURITY-PLAN-R1 §3). The ONE pod-side verifier, the mirror of `signPodJwt`:
+ * ES256 under this pod's own key (`kid` must be its thumbprint), `iss` = this
+ * pod's origin, the expected `purpose`, unexpired, and no longer-lived than the
+ * purpose allows. Returns the payload; the CALLER checks `aud` and its own
+ * claims. Throws `PodIdentityError` (`POD_JWT_INVALID` / `POD_JWT_EXPIRED`,
+ * or the identity errors when this pod holds no usable key).
+ */
+export function verifyOwnPodJwt(
+  token: string,
+  purpose: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): Record<string, unknown> {
+  const invalid = (why: string) =>
+    new PodIdentityError("POD_JWT_INVALID", `This pod token ${why}.`);
+  const parts = token.split(".");
+  if (parts.length !== 3) throw invalid("is not a signed token");
+  const header = decodeSegment(parts[0]);
+  const payload = decodeSegment(parts[1]);
+  if (!header || !payload) throw invalid("is not a signed token");
+  if (header.alg !== "ES256" || header.typ !== POD_JWT_TYP) {
+    throw invalid("is not a pod token");
+  }
+  const { privateKey, kid } = loadIdentity();
+  if (header.kid !== kid) throw invalid("was not signed by this pod's key");
+  const ok = crypto.verify(
+    "sha256",
+    Buffer.from(`${parts[0]}.${parts[1]}`),
+    { key: crypto.createPublicKey(privateKey), dsaEncoding: "ieee-p1363" },
+    Buffer.from(parts[2], "base64url")
+  );
+  if (!ok) throw invalid("was not signed by this pod's key");
+  if (payload.iss !== podIssuerOrigin()) throw invalid("names another issuer");
+  if (payload.purpose !== purpose) throw invalid("is for another purpose");
+  const { iat, exp } = payload;
+  if (
+    typeof iat !== "number" ||
+    typeof exp !== "number" ||
+    iat > nowSeconds + OWN_TOKEN_CLOCK_SKEW_SECONDS ||
+    exp - iat > podJwtTtlCeiling(purpose)
+  ) {
+    throw invalid("has an invalid lifetime");
+  }
+  if (exp <= nowSeconds) {
+    throw new PodIdentityError(
+      "POD_JWT_EXPIRED",
+      "This pod token has expired."
+    );
+  }
+  if (typeof payload.aud !== "string" || typeof payload.jti !== "string") {
+    throw invalid("is missing its audience or id");
+  }
+  return payload;
 }

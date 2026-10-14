@@ -20,7 +20,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and, inArray, or } from "@synap/database";
+import { db, eq, and, inArray, or, isDelegationHeaders } from "@synap/database";
 import { channels, workspaceMembers } from "@synap/database/schema";
 import { getPodCallback } from "../../utils/pod-callback.js";
 import { ChannelType, ChannelStatus } from "@synap/database/schema";
@@ -403,6 +403,13 @@ externalChatApp.post(
           "Content-Type": "application/json",
           "X-API-Key": isApiKey,
           "X-Synap-Channel": "api",
+          // D4: this turn's hub calls run as `userId` on a per-turn token.
+          ...isDelegationHeaders({
+            isUrl,
+            operatorUserId: userId,
+            channelId: resolvedChannelId,
+            runId: durableTurn.id,
+          }),
         },
         body: JSON.stringify(isBody),
         signal: AbortSignal.timeout(120_000), // 2 min timeout for long AI responses

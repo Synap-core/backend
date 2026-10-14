@@ -42,7 +42,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and } from "@synap/database";
+import { db, eq, and, isDelegationHeaders } from "@synap/database";
 import { getPodCallback } from "../utils/pod-callback.js";
 import {
   channels,
@@ -488,6 +488,12 @@ chatStreamApp.post("/stream", async (c) => {
         "Content-Type": "application/json",
         "X-API-Key": isApiKey,
         "X-Synap-Channel": "session",
+        // D4: this turn's hub calls run as `userId` on a per-turn token.
+        ...isDelegationHeaders({
+          isUrl,
+          operatorUserId: userId,
+          channelId: isBody.threadId,
+        }),
       },
       body: JSON.stringify(isBody),
       signal: AbortSignal.timeout(120_000),

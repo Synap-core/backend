@@ -17,6 +17,7 @@ import {
   desc,
   inArray,
   getActingAgentUserId,
+  isDelegationHeaders,
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
@@ -1754,6 +1755,8 @@ export const skillsRouter = router({
           headers: {
             "Content-Type": "application/json",
             "X-API-Key": hubApiKey,
+            // D4: the skill's hub calls run as `userId` on a per-run token.
+            ...isDelegationHeaders({ isUrl: hubUrl, operatorUserId: userId }),
           },
           body: JSON.stringify({
             skillId: input.id,

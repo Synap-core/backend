@@ -18,7 +18,7 @@
 
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { db, eq, and } from "@synap/database";
+import { db, eq, and, isDelegationHeaders } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { iterateISChatStream } from "@synap/intelligence-client";
@@ -813,6 +813,13 @@ openaiCompatApp.post(
             "Content-Type": "application/json",
             "X-API-Key": isApiKey,
             "X-Synap-Channel": "api",
+            // D4: this turn's hub calls run as `userId` on a per-turn token.
+            ...isDelegationHeaders({
+              isUrl,
+              operatorUserId: userId,
+              channelId: resolvedChannelId,
+              runId: durableTurn.id,
+            }),
           },
           body: JSON.stringify(isBody),
           signal: AbortSignal.timeout(120_000),
@@ -925,6 +932,13 @@ openaiCompatApp.post(
           "Content-Type": "application/json",
           "X-API-Key": isApiKey,
           "X-Synap-Channel": "api",
+          // D4: this turn's hub calls run as `userId` on a per-turn token.
+          ...isDelegationHeaders({
+            isUrl,
+            operatorUserId: userId,
+            channelId: resolvedChannelId,
+            runId: durableTurn.id,
+          }),
         },
         body: JSON.stringify(isBody),
         signal: AbortSignal.timeout(120_000),

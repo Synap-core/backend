@@ -20,6 +20,7 @@
 import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
+import { isDelegationHeaders } from "@synap/database";
 
 /** Mirrors the Intelligence Hub `SkillExecutionResult`. */
 export interface SkillExecutionResult {
@@ -74,6 +75,8 @@ export async function executeSkillViaIS(args: {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": isApiKey,
+        // D4: the skill's hub calls run as `userId` on a per-run token.
+        ...isDelegationHeaders({ isUrl, operatorUserId: args.userId }),
       },
       body: JSON.stringify({
         skillId: args.skillId,

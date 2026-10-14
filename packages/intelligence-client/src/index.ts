@@ -38,6 +38,8 @@ export {
   selectIntelligenceService,
   envIntelligenceEndpoint,
   describeServingIntelligence,
+  isIntelligenceServiceOrigin,
+  _resetIntelligenceServiceOriginsForTest,
 } from "./intelligence-routing.js";
 
 export type {

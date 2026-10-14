@@ -5,9 +5,11 @@
  * `app.use("/*", hubAuthMiddleware)`), so the door itself — not a re-derived
  * helper — can be exercised by tests. Behaviour and ordering are unchanged.
  *
- * Accepts two credential types:
- *   1. `Authorization: Bearer <api-key>` — IS agents, OpenClaw, CLI (API key auth)
- *   2. `X-Session-Token: <kratos-token>` — browser extension, web clients (Kratos session auth)
+ * Accepts three credential types:
+ *   1. `Authorization: Bearer <pod+jwt>` — the per-turn IS delegation this pod
+ *      signed itself (D4, `authenticateIsDelegation` below)
+ *   2. `Authorization: Bearer <api-key>` — IS agents, OpenClaw, CLI (API key auth)
+ *   3. `X-Session-Token: <kratos-token>` — browser extension, web clients (Kratos session auth)
  *
  * Session-token callers receive full hub-protocol.read + hub-protocol.write scopes.
  * Skip auth for endpoints listed in skipAuthPaths.
@@ -33,7 +35,13 @@ import {
   CONVERSATION_HEADER,
   CONVERSATION_CWD_HEADER,
   isProbeApiKey,
+  isPodJwtShaped,
+  grantOfScope,
+  PodIdentityError,
+  verifyIsDelegationToken,
+  type VerifiedIsDelegation,
 } from "@synap/database";
+import { isIntelligenceServiceOrigin } from "@synap/intelligence-client";
 
 import { apiKeyService } from "../../../services/api-keys.js";
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
@@ -86,6 +94,129 @@ export function extractBearerToken(
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;
 }
+
+/**
+ * TRANSITION SWITCH (D4 step 4 → 5). While the IS fleet moves to delegation
+ * tokens, the legacy `is_internal` key + `X-Delegated-Operator-Id` is still
+ * accepted and LOGGED. `SYNAP_IS_LEGACY_DELEGATION=refuse` turns it off once
+ * the log reads zero (founder cut-over); anything else keeps accepting.
+ */
+export function legacyIsDelegationAllowed(): boolean {
+  return process.env.SYNAP_IS_LEGACY_DELEGATION?.trim() !== "refuse";
+}
+
+const legacyDelegationSeen = new Map<
+  string,
+  { count: number; since: number }
+>();
+const LEGACY_DELEGATION_LOG_INTERVAL_MS = 60_000;
+
+/**
+ * "is_internal delegated header accepted" — the signal the cut-over is watched
+ * to zero on. One line per key per minute (with the count), never per request.
+ */
+function logLegacyDelegation(keyId: string): void {
+  const now = Date.now();
+  const seen = legacyDelegationSeen.get(keyId);
+  if (!seen) {
+    legacyDelegationSeen.set(keyId, { count: 0, since: now });
+    logger.warn(
+      { keyIdPrefix: shortenKeyId(keyId), count: 1 },
+      "is_internal delegated header accepted"
+    );
+    return;
+  }
+  seen.count++;
+  if (now - seen.since >= LEGACY_DELEGATION_LOG_INTERVAL_MS) {
+    logger.warn(
+      { keyIdPrefix: shortenKeyId(keyId), count: seen.count },
+      "is_internal delegated header accepted"
+    );
+    seen.count = 0;
+    seen.since = now;
+  }
+}
+
+/**
+ * A Bearer this pod signed as an IS delegation (D4, `utils/is-delegation.ts`).
+ *
+ * The principal is the SAME one the legacy `is_internal` key + header produced
+ * — operator = `userId` = `linkedUserId`, `keyType` "is_internal", no acting
+ * agent — so every downstream rule keyed on that principal (B1 persona naming
+ * in `getCaller`, plaintext provider credentials, the human-only run cancel,
+ * channel-grouped sessions) behaves exactly as before. What changes is where
+ * the operator comes from: the pod's own signature over `sub`, never a header
+ * the caller picks. Two deliberate narrowings:
+ *   - no `apiKeyId`, so `mayActAsUser` refuses a body `userId` other than the
+ *     operator (the stored key could name ANY user);
+ *   - `act.sub` is verified but NOT entered as the request's acting agent:
+ *     `getActingAgentUserId()` outranks the persona the IS names per write
+ *     (`permission-check.ts`), so entering it would move every IS write onto a
+ *     different governance lane — a separate, dogfooded step.
+ * Grant: the same explicit full access the `is_internal` key carries.
+ */
+async function authenticateIsDelegation(
+  c: Context<{ Variables: HubVariables }>,
+  next: Next,
+  token: string
+): Promise<Response | void> {
+  let delegation: VerifiedIsDelegation;
+  try {
+    delegation = await verifyIsDelegationToken(token, {
+      isKnownAudience: isIntelligenceServiceOrigin,
+    });
+  } catch (err) {
+    if (!(err instanceof PodIdentityError)) throw err; // a failed read is not a refusal
+    logger.warn({ code: err.code }, "IS delegation token refused");
+    return authErrorResponse(
+      c,
+      err.code === "POD_JWT_EXPIRED" ? "expired" : "key_revoked",
+      { message: err.message }
+    );
+  }
+
+  const headerOperator = c.req.header("x-delegated-operator-id");
+  if (headerOperator && headerOperator !== delegation.operatorUserId) {
+    logger.warn(
+      { jti: delegation.jti },
+      "IS delegation refused: X-Delegated-Operator-Id differs from the token's operator"
+    );
+    return authErrorResponse(c, "key_revoked", {
+      message: "The delegated operator header does not match the delegation.",
+    });
+  }
+  const operator = await db.query.users.findFirst({
+    where: eq(users.id, delegation.operatorUserId),
+    columns: { id: true },
+  });
+  if (!operator) {
+    return authErrorResponse(c, "key_revoked", {
+      message: "This delegation's operator is not a user of this pod.",
+    });
+  }
+
+  // One bucket per AI service, as the single is_internal key had.
+  if (
+    !apiKeyService.checkRateLimit(
+      `is-delegation:${delegation.audience}`,
+      "request"
+    )
+  ) {
+    return c.json({ error: "Rate limit exceeded" }, 429);
+  }
+
+  c.set("userId", delegation.operatorUserId);
+  c.set("linkedUserId", delegation.operatorUserId);
+  c.set("scopes", delegation.scopes);
+  c.set("keyType", "is_internal");
+  c.set("keyWorkspaceId", null);
+  const refused = await refuseGuestPrincipal(c);
+  if (refused) return refused;
+  return runWithGrant(IS_DELEGATION_GRANT, () => next());
+}
+
+/** The explicit full access the `is_internal` key is minted with (provision.ts). */
+const IS_DELEGATION_GRANT = grantOfScope({ permissions: ["*"] });
 
 export const hubAuthMiddleware = async (
   c: Context<{ Variables: HubVariables }>,
@@ -184,6 +315,10 @@ export const hubAuthMiddleware = async (
   // ── 1. Try API key (agents / IS / OpenClaw) ─────────────────────────────
   const authHeader = c.req.header("authorization") ?? null;
   const token = extractBearerToken(authHeader);
+
+  if (token && isPodJwtShaped(token)) {
+    return authenticateIsDelegation(c, next, token);
+  }
 
   if (token) {
     // Use getApiKeyStatus (introspecting variant) so we can return a
@@ -350,9 +485,20 @@ export const hubAuthMiddleware = async (
     // only read inside this branch, so it can never be triggered by a key that
     // isn't is_internal. WRITES STAY GOVERNED: agentUserId is set to the IS key
     // owner, so the write-gate routes agent mutations through proposals.
+    //
+    // TRANSITION (D4): this branch is the LEGACY path. A current IS sends the
+    // pod-signed delegation instead (`authenticateIsDelegation` above); this
+    // one is accepted and logged until `SYNAP_IS_LEGACY_DELEGATION=refuse`.
     if (keyRecord.keyType === "is_internal") {
       const op = c.req.header("x-delegated-operator-id");
+      if (op && !legacyIsDelegationAllowed()) {
+        return authErrorResponse(c, "key_revoked", {
+          message:
+            "This pod no longer accepts a stored AI-service key acting for a user. The AI service must send this turn's delegation.",
+        });
+      }
       if (op) {
+        logLegacyDelegation(keyRecord.id);
         // Validate the delegated operator names a real user on this pod before
         // trusting it as the read floor. Without this, an is_internal caller
         // could set an arbitrary header and read as any (or a non-existent) user.

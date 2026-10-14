@@ -22,6 +22,8 @@
  * which side gave up, after how long, against what budget, at what payload size.
  */
 
+import { isDelegationHeaders } from "@synap/database/is-delegation";
+
 import { drainISChatStream } from "./is-chat-stream.js";
 import type { DrainISChatStreamResult } from "./is-chat-stream.js";
 import {
@@ -103,6 +105,13 @@ export async function requestHeadlessChatText(
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    // D4: the turn's hub calls run on this per-turn token, not a stored key.
+    ...isDelegationHeaders({
+      isUrl: serviceUrl,
+      operatorUserId: payload.userId,
+      agentUserId: payload.agentUserId,
+      channelId: payload.threadId,
+    }),
   };
   if (serviceApiKey) {
     headers["Authorization"] = `Bearer ${serviceApiKey}`;
@@ -205,6 +214,11 @@ export async function requestTaskExecute(
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": serviceApiKey,
+        ...isDelegationHeaders({
+          isUrl: serviceUrl,
+          operatorUserId: payload.userId,
+          runId: payload.taskId,
+        }),
       },
       body,
       signal: controller.signal,

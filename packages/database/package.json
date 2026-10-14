@@ -41,6 +41,11 @@
       "import": "./dist/utils/api-key-revocation.js",
       "default": "./dist/utils/api-key-revocation.js"
     },
+    "./is-delegation": {
+      "types": "./dist/utils/is-delegation.d.ts",
+      "import": "./dist/utils/is-delegation.js",
+      "default": "./dist/utils/is-delegation.js"
+    },
     "./capture-routing": {
       "types": "./dist/services/capture-routing.d.ts",
       "import": "./dist/services/capture-routing.js",

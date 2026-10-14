@@ -95,6 +95,62 @@ export function envIntelligenceEndpoint(): string {
   return process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
 }
 
+const SERVICE_ORIGINS_TTL_MS = 60_000;
+let serviceOriginsCache: { origins: Set<string>; readAt: number } | null = null;
+
+/** Test-only: forget the cached service origins. */
+export function _resetIntelligenceServiceOriginsForTest(): void {
+  serviceOriginsCache = null;
+}
+
+async function readIntelligenceServiceOrigins(): Promise<Set<string>> {
+  const rows = await db
+    .select({ webhookUrl: intelligenceServices.webhookUrl })
+    .from(intelligenceServices)
+    .where(
+      and(
+        drizzleSql`${intelligenceServices.status} IN ('active', 'credential_error')`,
+        eq(intelligenceServices.enabled, true)
+      )
+    );
+  const origins = new Set<string>();
+  for (const url of [
+    ...rows.map((r) => r.webhookUrl),
+    envIntelligenceEndpoint(),
+  ]) {
+    try {
+      origins.add(new URL(url).origin);
+    } catch {
+      // A malformed registered URL is never called, so it is never an audience.
+    }
+  }
+  return origins;
+}
+
+/**
+ * Whether `origin` is an AI service this pod calls — the SAME rows (and env
+ * fallback) the selection ladder above answers from. The audience check of an
+ * IS delegation token (`verifyIsDelegationToken`): a service that was disabled
+ * or removed stops being able to use the tokens it was handed. Cached for a
+ * minute; a miss re-reads once, so a service registered inside the window is
+ * not refused. A failed read throws — it is not "unknown audience".
+ */
+export async function isIntelligenceServiceOrigin(
+  origin: string
+): Promise<boolean> {
+  const now = Date.now();
+  if (
+    serviceOriginsCache &&
+    now - serviceOriginsCache.readAt < SERVICE_ORIGINS_TTL_MS &&
+    serviceOriginsCache.origins.has(origin)
+  ) {
+    return true;
+  }
+  const origins = await readIntelligenceServiceOrigins();
+  serviceOriginsCache = { origins, readAt: now };
+  return origins.has(origin);
+}
+
 /**
  * Resolve which intelligence service (agent) to use.
  * @alias resolveAgent

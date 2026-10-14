@@ -23,6 +23,7 @@ import {
   decodeStructureProgressFrame,
   type StructureProgressEvent,
 } from "@synap-core/types/capture";
+import { isDelegationHeaders } from "@synap/database/is-delegation";
 
 import { iterateISChatStream, iterateSSEDataFrames } from "./is-chat-stream.js";
 
@@ -613,6 +614,24 @@ export class IntelligenceHubClient {
   }
 
   /**
+   * D4: the per-turn delegation the IS sends back on every hub call of this
+   * turn — `sub` = the operator the caller resolved (`request.userId`, the
+   * TurnPrincipal), `aud` = this service. Minted once per call (a retry
+   * re-sends the same turn); `{}` when this pod cannot sign yet.
+   */
+  private turnDelegationHeaders(
+    request: IntelligenceHubRequest
+  ): Record<string, string> {
+    return isDelegationHeaders({
+      isUrl: this.baseUrl,
+      operatorUserId: request.userId,
+      agentUserId: request.agentUserId,
+      channelId: request.threadId,
+      runId: request.requestId,
+    });
+  }
+
+  /**
    * Send message to orchestrator agent (non-streaming, with retry + circuit breaker)
    */
   async sendMessage(
@@ -625,6 +644,7 @@ export class IntelligenceHubClient {
     }
 
     let lastError: Error | null = null;
+    const delegation = this.turnDelegationHeaders(request);
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
@@ -639,6 +659,7 @@ export class IntelligenceHubClient {
             headers: {
               "Content-Type": "application/json",
               "X-API-Key": this.apiKey,
+              ...delegation,
               ...(request.requestId
                 ? { "X-Request-Id": request.requestId }
                 : {}),
@@ -768,6 +789,7 @@ export class IntelligenceHubClient {
             "Content-Type": "application/json",
             Accept: "text/event-stream",
             "X-API-Key": this.apiKey,
+            ...this.turnDelegationHeaders(request),
             ...(request.requestId ? { "X-Request-Id": request.requestId } : {}),
             ...(request.billingChannel
               ? { "X-Synap-Channel": request.billingChannel }
