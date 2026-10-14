@@ -275,10 +275,11 @@ export const DEFAULT_DAILY_WRITE_CEILING = 500;
  * the worker starts no new run (`volume_ceiling`, `@synap-core/types/workers`)
  * — even when the sends would be approved or auto-executed.
  *
- * A constant, deliberately NOT a `governance_ceilings` axis a person can widen:
- * send-volume caps are a platform limit (every sales tool ships one), and a
- * runaway worker is exactly the case where the person is not watching. Not a
- * rule the operator edits in wave 3, so it costs no enum migration.
+ * The DEFAULT of the `worker_irreversible_sends_daily` ceiling axis (0330),
+ * which is TIGHTEN-ONLY ({@link TIGHTEN_ONLY_CEILING_AXES}): a person can lower
+ * it for one worker, never widen it past this. Send-volume caps are a platform
+ * limit (every sales tool ships one), and a runaway worker is exactly the case
+ * where the person is not watching.
  */
 export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
 
