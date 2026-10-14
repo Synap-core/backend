@@ -29,7 +29,6 @@ import type { ComposeReport } from "../compose-overlay.js";
 import type { ResolvedPackageDependency } from "../package-dependency-resolver.js";
 import {
   applyPackagePostWorkspace,
-  markLayerTwoFailed,
   type PackagePostWorkspaceBody,
 } from "../package-apply-post-workspace.js";
 import {
@@ -174,6 +173,140 @@ async function normalizeCatalogBody(
     Record<string, unknown>;
 }
 
+/** Run layer 2 on a space. A throw is REPORTED, never thrown (decision 3). */
+async function applyLayerTwo(args: {
+  workspaceId: string;
+  userId: string;
+  body: PackagePostWorkspaceBody;
+  posture: { agentUserId?: string; enrollAgentUserId?: string };
+  scopes: string[];
+  source: string;
+}): Promise<LayerTwoReport> {
+  try {
+    const post = await applyPackagePostWorkspace({
+      workspaceId: args.workspaceId,
+      body: args.body,
+      userId: args.userId,
+      ...args.posture,
+      scopes: args.scopes,
+    });
+    return { status: "applied", post };
+  } catch (error) {
+    // The space is usable; the finisher records the failure under its lock.
+    logger.warn(
+      { err: error, workspaceId: args.workspaceId, source: args.source },
+      "template apply: layer 2 failed — the space stays usable"
+    );
+    return { status: "failed", error };
+  }
+}
+
+type FinishInput = Omit<
+  Parameters<typeof finishTemplateApply>[0],
+  "workspaceId" | "userId" | "post" | "layerTwoFailed"
+>;
+
+/**
+ * The ONE finisher, told the truth about layer 2: a failure is passed as such
+ * (recorded `failed`, never stamped), never as an empty result bag (`{}`
+ * reads "nothing to land" = converged). A finisher that cannot write is
+ * logged and reported as unfinished — never thrown (decision 3), and never a
+ * stamp, because the stamp IS its write.
+ */
+async function finishWithTruth(
+  ctx: {
+    workspaceId: string;
+    userId: string;
+    source: string;
+    layer2: LayerTwoReport;
+  },
+  rest: FinishInput
+): Promise<FinishTemplateApplyResult> {
+  const { workspaceId, userId, layer2 } = ctx;
+  try {
+    return await finishTemplateApply({
+      workspaceId,
+      userId,
+      ...rest,
+      ...(layer2.status === "failed"
+        ? { post: null, layerTwoFailed: { error: layer2.error } }
+        : { post: layer2.status === "applied" ? layer2.post : {} }),
+    });
+  } catch (err) {
+    logger.error(
+      { err, workspaceId, source: ctx.source },
+      "template apply: the finisher could not record the outcome — nothing stamped"
+    );
+    return { state: "failed", versionStamped: false };
+  }
+}
+
+/**
+ * Layer 2 of a CATALOG package + the finisher, for a space layer one (or a
+ * compose) already holds — the dependency resolver's step. The same rules as
+ * `applyTemplate`: the catalog body goes through the Hub schema's defaults
+ * (`normalizeCatalogBody` — statuses → active, never DRAFT), layer 2 runs
+ * when the body declares any of its kinds (`declaresLayerTwo`), and the
+ * finisher is told the truth (a failure is recorded, never stamped).
+ */
+export async function applyCatalogLayerTwo(input: {
+  workspaceId: string;
+  userId: string;
+  agentUserId?: string;
+  source: string;
+  catalogPackage: Record<string, unknown>;
+  packageSlug: string;
+  /** The version the stamp / pack record names, on convergence. */
+  version?: string;
+  finish: FinishInput;
+}): Promise<{
+  layer2: LayerTwoReport;
+  finished: FinishTemplateApplyResult | null;
+}> {
+  const { workspaceId, userId, catalogPackage } = input;
+  let layer2: LayerTwoReport = { status: "skipped" };
+  let body: LayerTwoBody | null = null;
+  try {
+    body = await normalizeCatalogBody({
+      ...catalogPackage,
+      _meta: {
+        ...((catalogPackage._meta as Record<string, unknown>) ?? {}),
+        slug: input.packageSlug,
+        ...(input.version ? { version: input.version } : {}),
+      },
+    });
+  } catch (error) {
+    layer2 = { status: "failed", error };
+  }
+  if (body && declaresLayerTwo(body))
+    layer2 = await applyLayerTwo({
+      workspaceId,
+      userId,
+      body,
+      posture: { agentUserId: input.agentUserId },
+      // Operator (tRPC) and agent (Hub) installs both reach the resolver;
+      // capability creation is `checkPermissionOrPropose`-governed, so it
+      // self-scopes. No agent scopes to forward.
+      scopes: [],
+      source: input.source,
+    });
+  // Nothing claimed (no build, no version, no pack) and nothing failed: no
+  // outcome of THIS apply to write — finishing would mark the host space
+  // "active" over a record that is not this apply's to clear.
+  const claims =
+    input.finish.built ||
+    !!input.finish.pendingVersionStamp ||
+    !!input.finish.pendingPack;
+  const finished =
+    claims || layer2.status === "failed"
+      ? await finishWithTruth(
+          { workspaceId, userId, source: input.source, layer2 },
+          input.finish
+        )
+      : null;
+  return { layer2, finished };
+}
+
 export async function applyTemplate(
   input: ApplyTemplateInput
 ): Promise<TemplateApplyResult> {
@@ -252,33 +385,23 @@ export async function applyTemplate(
 
   let layer2: LayerTwoReport = { status: "skipped" };
   let finished: FinishTemplateApplyResult | null = null;
-  const runLayerTwo = async (
+  const runLayerTwo = (
     body: PackagePostWorkspaceBody,
     posture: { agentUserId?: string; enrollAgentUserId?: string }
-  ): Promise<LayerTwoReport> => {
-    try {
-      const post = await applyPackagePostWorkspace({
-        workspaceId,
-        body,
-        userId,
-        ...posture,
-        scopes: actor.scopes ?? [],
-      });
-      return { status: "applied", post };
-    } catch (error) {
-      // Decision 3: recorded (the applier marks `failed`, `failedLayer: 2`;
-      // marked again here for a failure before the applier ran), reported,
-      // never thrown — the space is usable.
-      await markLayerTwoFailed(workspaceId, userId, error).catch(
-        () => undefined
-      );
-      logger.warn(
-        { err: error, workspaceId, source: input.source },
-        "template apply: layer 2 failed — recorded, the space stays usable"
-      );
-      return { status: "failed", error };
-    }
-  };
+  ) =>
+    applyLayerTwo({
+      workspaceId,
+      userId,
+      body,
+      posture,
+      scopes: actor.scopes ?? [],
+      source: input.source,
+    });
+  const finish = (rest: FinishInput) =>
+    finishWithTruth(
+      { workspaceId, userId, source: input.source, layer2 },
+      rest
+    );
 
   // An APPROVED apply runs what the person approved, even on an unchanged
   // space (the agent's own additions to a same-version body — they keep the
@@ -297,13 +420,7 @@ export async function applyTemplate(
         { _meta: callerBody._meta, playbooks: callerBody.playbooks },
         { agentUserId: actor.agentUserId }
       );
-      if (layer2.status === "applied")
-        finished = await finishTemplateApply({
-          workspaceId,
-          userId,
-          built: false,
-          post: layer2.post,
-        });
+      finished = await finish({ built: false });
     }
   } else {
     const catalog = layerOne?.packageDefinition as
@@ -329,9 +446,6 @@ export async function applyTemplate(
         });
       } catch (error) {
         body = null;
-        await markLayerTwoFailed(workspaceId, userId, error).catch(
-          () => undefined
-        );
         layer2 = { status: "failed", error };
       }
       // Approver authority covers ONLY what the server resolved from the
@@ -341,19 +455,16 @@ export async function applyTemplate(
     }
     if (body && (input.alwaysRunLayerTwo || declaresLayerTwo(body)))
       layer2 = await runLayerTwo(body, posture);
-    finished = await finishTemplateApply({
-      workspaceId,
-      userId,
+    finished = await finish({
       built: outcome === "created",
       pendingVersionStamp,
       pendingPack,
-      post: layer2.status === "applied" ? layer2.post : {},
     });
   }
 
   const warning =
     finished && finished.state !== "converged"
-      ? await templateApplyWarningFor(workspaceId).catch(() => null)
+      ? await unfinishedWarning(workspaceId, finished, identity.packageSlug)
       : null;
 
   return {
@@ -375,6 +486,34 @@ export async function applyTemplate(
     finished,
     warning,
   };
+}
+
+/**
+ * The pod's sentence for an apply that did NOT finish — read fresh from the
+ * space (`templateApplyWarningFor`, what `synap templates` keeps showing).
+ * An unfinished apply always says something: when the read fails, or finds
+ * nothing recorded (the record write itself failed), a fixed sentence from
+ * what this apply knows stands in. Only an awaiting-approval apply whose
+ * proposals were all decided has nothing left to say.
+ */
+async function unfinishedWarning(
+  workspaceId: string,
+  finished: FinishTemplateApplyResult,
+  slug: string | undefined
+): Promise<string | null> {
+  let read: string | null = null;
+  try {
+    read = await templateApplyWarningFor(workspaceId);
+  } catch (err) {
+    logger.warn(
+      { err, workspaceId },
+      "template apply: unfinished, and its warning could not be read"
+    );
+  }
+  if (read || finished.state === "awaiting-approval") return read;
+  return slug
+    ? `Not finished: run \`synap templates update ${slug}\` to finish ${slug}.`
+    : "Not finished: the template apply did not complete.";
 }
 
 export interface PreviewTemplateApplyInput {

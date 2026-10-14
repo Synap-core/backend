@@ -75,10 +75,6 @@ import { applyLayerOne } from "./template-apply/layer-one.js";
 import { composeOntoBaseWorkspace } from "./compose-overlay.js";
 import { isPackDefinition, primaryPackDomain } from "./pack-definition.js";
 import {
-  applyPackagePostWorkspace,
-  type PackagePostWorkspaceBody,
-} from "./package-apply-post-workspace.js";
-import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "./capabilities/create-from-definition.js";
@@ -97,7 +93,7 @@ const logger = createLogger({ module: "package-dependency-resolver" });
  */
 export interface DependencySeedOutcome {
   slug: string;
-  /** No `capabilities`/`playbooks` declared for this template — nothing to seed. */
+  /** No layer-2 kind declared for this template (`declaresLayerTwo`) — nothing to seed. */
   status: "no-layers" | "seeded" | "failed";
   /** Layer keys `applyPackagePostWorkspace` reported (e.g. ["capabilities","playbooks"]). */
   layers?: string[];
@@ -106,114 +102,67 @@ export interface DependencySeedOutcome {
 }
 
 /**
- * Seed a materialized DEPENDENCY's post-workspace layers.
+ * Seed a materialized DEPENDENCY's post-workspace layers, and finish it.
  *
  * A dependency is materialized from a workspace-shaped definition (§4a/§4b),
  * which — by design — carries only the workspace shape (profiles/views/bento):
- * it DROPS the `capabilities` / `automations` / `playbooks` / `loops` layers
- * that the PACKAGE-shaped definition emits. So a `require: grants` dependency
- * stood up its workspace but silently never got its 4 grant capabilities, on
- * BOTH install doors (the resolver runs under Hub `packages/apply` AND tRPC
- * `createFromDefinition`). The post-workspace layers only ran for the TOP-LEVEL
- * package a Hub apply targeted — never for its dependencies.
+ * it DROPS the layer-2 kinds (capabilities, automations, playbooks, loops,
+ * cells, action placements, rules, skills) that the PACKAGE-shaped definition
+ * emits. So a `require: grants` dependency stood up its workspace but silently
+ * never got its grant capabilities, on BOTH install doors.
  *
- * Fix: after a dependency is NEWLY materialized, run the SAME shared door
- * (`applyPackagePostWorkspace`) that a top-level Hub apply runs, with the dep's
- * OWN package definition. A required dependency now gets exactly the treatment
- * a directly-installed package gets — one door, symmetric on both sides.
- *
- * Idempotent + non-fatal: the shared door reuses existing capabilities by key,
- * governed writes may return `proposed` (normal), and a failure here must never
- * abort the install — the workspace already exists. `preResolved` lets a
- * caller that already resolved this slug's template (step 3/4 below) pass the
- * SAME cache-first-resolved package definition through instead of resolving
- * it a second time.
- *
- * Returns the seed outcome AND the layer-2 result bag, which the caller hands
- * to `finishTemplateApply`: `post` is `{}` when there was nothing to seed,
- * `undefined` when the layer threw (the applier already marked the space failed).
+ * So a dependency gets exactly what a directly-installed package gets: its
+ * OWN catalog package through `applyCatalogLayerTwo` (template-apply) — the
+ * same normalization (statuses → active, never DRAFT), the same "does it
+ * declare layer 2" rule, and the ONE finisher told the truth (a failure is
+ * recorded on the space, never stamped). Non-fatal: the workspace already
+ * exists, and the outcome is surfaced, never silent.
  */
 async function seedDependencyLayers(
   workspaceId: string,
   slug: string,
   userId: string,
   agentUserId: string | undefined,
-  preResolved?: PackageDefinitionOutput
-): Promise<{
-  outcome: DependencySeedOutcome;
-  post?: Record<string, unknown>;
-}> {
-  let pkg: PackageDefinitionOutput;
-  if (preResolved) {
-    pkg = preResolved;
-  } else {
-    const resolved = await resolveWorkspaceTemplate(slug);
-    // no package form — nothing to seed
-    if (!resolved) return { outcome: { slug, status: "no-layers" }, post: {} };
-    pkg = resolved.packageDefinition;
+  pkg: PackageDefinitionOutput,
+  finish: {
+    built: boolean;
+    pendingVersionStamp?: string;
+    pendingPack?: { slug: string; version: string };
   }
-  // A package definition emits `capabilities` (from the template's
-  // `integrations`) and `playbooks` — the two post-workspace layers a template
-  // authors. Both are dropped by the workspace-shaped definition; these are
-  // what we seed.
-  const hasLayers = !!pkg.capabilities?.length || !!pkg.playbooks?.length;
-  if (!hasLayers) return { outcome: { slug, status: "no-layers" }, post: {} };
-
-  try {
-    const result = await applyPackagePostWorkspace({
-      workspaceId,
-      body: pkg as unknown as PackagePostWorkspaceBody,
-      userId,
-      agentUserId,
-      // The resolver runs under both an operator (tRPC) and an agent (Hub)
-      // install; capability creation is `checkPermissionOrPropose`-governed, so
-      // it self-scopes (created for an authorized owner, else proposed). No
-      // agent scopes to forward on the operator path.
-      scopes: [],
-    });
-    logger.info(
-      { slug, workspaceId, layers: Object.keys(result) },
-      "dependency post-workspace layers seeded"
-    );
-    return {
-      outcome: { slug, status: "seeded", layers: Object.keys(result) },
-      post: result,
-    };
-  } catch (err) {
-    logger.warn(
-      { err, slug, workspaceId },
-      "dependency post-workspace layers failed (non-fatal — workspace already exists)"
-    );
-    return {
-      outcome: {
-        slug,
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
-      },
-    };
-  }
-}
-
-/**
- * A dependency overlay composed onto its base: its `installedPacks` version is
- * recorded only once its seeded layer 2 converged (the ONE finisher). A seed
- * that threw left the base "failed" (the applier's record) — nothing to finish.
- */
-async function finishComposedDependency(
-  workspaceId: string,
-  userId: string,
-  pendingPack: { slug: string; version: string } | undefined,
-  post: Record<string, unknown> | undefined
-): Promise<void> {
-  if (!pendingPack || !post) return;
-  const { finishTemplateApply } = await import("./template-apply-finisher.js");
-  await finishTemplateApply({
+): Promise<DependencySeedOutcome> {
+  const { applyCatalogLayerTwo } = await import("./template-apply/index.js");
+  const { layer2 } = await applyCatalogLayerTwo({
     workspaceId,
     userId,
-    built: false,
-    pendingPack,
-    post,
+    agentUserId,
+    source: "dependency-resolver",
+    catalogPackage: pkg as unknown as Record<string, unknown>,
+    packageSlug: slug,
+    version: finish.pendingVersionStamp ?? finish.pendingPack?.version,
+    finish,
   });
+  if (layer2.status === "applied") {
+    logger.info(
+      { slug, workspaceId, layers: Object.keys(layer2.post) },
+      "dependency post-workspace layers seeded"
+    );
+    return { slug, status: "seeded", layers: Object.keys(layer2.post) };
+  }
+  if (layer2.status === "failed") {
+    logger.warn(
+      { err: layer2.error, slug, workspaceId },
+      "dependency post-workspace layers failed (non-fatal — workspace already exists; recorded on it)"
+    );
+    return {
+      slug,
+      status: "failed",
+      error:
+        layer2.error instanceof Error
+          ? layer2.error.message
+          : String(layer2.error),
+    };
+  }
+  return { slug, status: "no-layers" };
 }
 
 /** Editor+ roles that may host a compose overlay (write-gate floor). */
@@ -847,19 +796,13 @@ async function ensureWorkspaceDependencyPresent(
     // base workspace it composed onto (e.g. grants' 4 grant capabilities land on
     // Operations). composeOntoBaseWorkspace reconciles only the workspace shape,
     // so seed the post-workspace layers here — the same door a top-level apply runs.
-    const seeded = await seedDependencyLayers(
+    const seedOutcome = await seedDependencyLayers(
       ownComposeBase.workspaceId,
       slug,
       userId,
       agentUserId,
-      resolvedTemplate.packageDefinition
-    );
-    const seedOutcome = seeded.outcome;
-    await finishComposedDependency(
-      ownComposeBase.workspaceId,
-      userId,
-      composed.pendingPack,
-      seeded.post
+      resolvedTemplate.packageDefinition,
+      { built: false, pendingPack: composed.pendingPack }
     );
     return record(
       {
@@ -890,19 +833,13 @@ async function ensureWorkspaceDependencyPresent(
       definition,
       overlay: { slug, version: resolvedTemplate.version },
     });
-    const seeded = await seedDependencyLayers(
+    const seedOutcome = await seedDependencyLayers(
       primary.workspaceId,
       slug,
       userId,
       agentUserId,
-      resolvedTemplate.packageDefinition
-    );
-    const seedOutcome = seeded.outcome;
-    await finishComposedDependency(
-      primary.workspaceId,
-      userId,
-      composed.pendingPack,
-      seeded.post
+      resolvedTemplate.packageDefinition,
+      { built: false, pendingPack: composed.pendingPack }
     );
     return record(
       {
@@ -943,7 +880,11 @@ async function ensureWorkspaceDependencyPresent(
   // re-hit used to run layer 1 only, with no record and no stamp). Seeded from
   // the SAME source layer 1 ran against (the catalog's fresh copy on a
   // re-sync). An `unchanged` re-hit is current — nothing to re-write.
-  const seeded =
+  // …and the ONE finisher (inside `seedDependencyLayers`): the version layer
+  // one handed back is stamped (and a new space marked "active") only when
+  // its seeded layer 2 landed; a layer 2 that threw is recorded on the space.
+  // An `unchanged` re-hit (`found`) has nothing to finish.
+  const seedOutcome =
     ws.created || ws.outcome === "reconciled"
       ? await seedDependencyLayers(
           ws.workspaceId,
@@ -951,25 +892,13 @@ async function ensureWorkspaceDependencyPresent(
           userId,
           agentUserId,
           (ws.packageDefinition as PackageDefinitionOutput | undefined) ??
-            resolvedTemplate.packageDefinition
+            resolvedTemplate.packageDefinition,
+          {
+            built: ws.outcome === "created",
+            pendingVersionStamp: ws.pendingVersionStamp,
+          }
         )
       : undefined;
-  const seedOutcome = seeded?.outcome;
-  // The ONE finisher: the version layer one handed back is stamped (and a new
-  // space marked "active") only when its seeded layer 2 landed. A seed that
-  // threw left the space "failed" (the applier's record) — nothing to finish.
-  // An `unchanged` re-hit (`found`) has nothing to finish.
-  if (seeded?.post) {
-    const { finishTemplateApply } =
-      await import("./template-apply-finisher.js");
-    await finishTemplateApply({
-      workspaceId: ws.workspaceId,
-      userId,
-      built: ws.outcome === "created",
-      pendingVersionStamp: ws.pendingVersionStamp,
-      post: seeded.post,
-    });
-  }
   return record(
     {
       workspaceId: ws.workspaceId,

@@ -828,7 +828,9 @@ describe("resolvePackageDependencies", () => {
         workspaceId: "ws-crm",
         created: false,
         outcome: "reconciled",
-        packageDefinition: { playbooks: [{ name: "Fresh copy" }] },
+        packageDefinition: {
+          playbooks: [{ name: "Fresh copy", goalTemplate: "Do it" }],
+        },
         pendingVersionStamp: "h-2",
       });
       const dep = {
@@ -848,8 +850,13 @@ describe("resolvePackageDependencies", () => {
       expect(mockApplyPostWorkspace).toHaveBeenCalledWith(
         expect.objectContaining({
           workspaceId: "ws-crm",
+          // The catalog body through the Hub schema's defaults (an active
+          // playbook, never a draft) — the same normalization applyTemplate
+          // gives a catalog package.
           body: expect.objectContaining({
-            playbooks: [{ name: "Fresh copy" }],
+            playbooks: [
+              expect.objectContaining({ name: "Fresh copy", status: "active" }),
+            ],
           }),
         })
       );
@@ -871,6 +878,49 @@ describe("resolvePackageDependencies", () => {
       await resolvePackageDependencies(dep);
       expect(mockApplyPostWorkspace).not.toHaveBeenCalled();
       expect(finishTemplateApply).not.toHaveBeenCalled();
+    });
+    it("B4. a dependency that declares only a layer-2 kind other than capabilities/playbooks (skills) still gets layer 2 — the same rule as applyTemplate", async () => {
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+      mockToWorkspaceDefinition.mockReturnValue({ definition: {} });
+      mockToPackageDefinition.mockReturnValue({
+        skills: [{ slug: "crm-playbook-skill" }],
+      });
+      selectRows = [];
+      mockApplyPostWorkspace.mockClear();
+      vi.mocked(finishTemplateApply).mockClear();
+      mockCreateWorkspace.mockResolvedValue({
+        workspaceId: "ws-skills",
+        created: true,
+        outcome: "created",
+        pendingVersionStamp: "s-1",
+      });
+      await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            {
+              slug: "skills-only",
+              kind: "workspace" as const,
+              relation: "require" as const,
+            },
+          ],
+        },
+        userId: USER,
+      });
+      expect(mockApplyPostWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "ws-skills",
+          body: expect.objectContaining({
+            skills: [{ slug: "crm-playbook-skill" }],
+          }),
+        })
+      );
+      expect(finishTemplateApply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "ws-skills",
+          built: true,
+          pendingVersionStamp: "s-1",
+        })
+      );
     });
   });
 

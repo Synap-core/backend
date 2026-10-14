@@ -497,60 +497,15 @@ export interface ApplyPackagePostWorkspaceInput {
 }
 
 /**
- * Record a LAYER-2 failure (`state: "failed"`, `failedLayer: 2`) after a
- * post-workspace layer throw, through the ONE template-state writer
- * (`writeTemplateState`) — mirroring core's `handleStepError`. Best-effort:
- * a write failure must never mask the real layer error. Exported for
- * `applyTemplate`, which records a layer-2 failure that happens before this
- * applier runs (an unparseable catalog body).
- */
-export async function markLayerTwoFailed(
-  workspaceId: string,
-  userId: string,
-  cause: unknown
-): Promise<void> {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  const { getDb, writeTemplateState, LAYER_TWO_FAILED_STEP } =
-    await import("@synap/database");
-  await writeTemplateState(
-    await getDb(),
-    workspaceId,
-    {
-      state: "failed",
-      failedLayer: 2,
-      failedStep: LAYER_TWO_FAILED_STEP,
-      error: message.slice(0, 500),
-    },
-    { userId }
-  );
-}
-
-/**
- * Public door. The core engine stamps `provisioningStatus:"active"` +
- * `packageVersion` BEFORE this runs, so a bare throw here would leave the
- * workspace "active" with its living layers (capabilities/playbooks/automations/
- * loops) missing — and a same-version reinstall then sees `outcome:"unchanged"`
- * and PERMANENTLY skips re-seeding (`packages.ts` gate). Stamping "failed" on
- * throw makes the next reinstall re-enter `resumeIfFailed` → core resumes →
- * `outcome:"created"` → this door re-runs. Re-running is safe: every layer
- * applier here is idempotent (capabilities/automations/playbooks dedup by name;
- * `createLinks` dedups by unique edge). Recovery for the "living operation"
- * layer The Arch / Enterprise-OS depend on.
+ * Public door. It never records anything about the template apply itself: a
+ * throw propagates to the caller, and the caller hands it to the ONE finisher
+ * (`finishTemplateApply` with `layerTwoFailed`), which records `failed`
+ * (layer 2) under its row lock. The next update plans a re-sync of the space
+ * (`failed-layer-2`) and re-runs this door — safe, because every layer
+ * applier here is idempotent (capabilities/automations/playbooks dedup by
+ * name; `createLinks` dedups by unique edge).
  */
 export async function applyPackagePostWorkspace(
-  input: ApplyPackagePostWorkspaceInput
-): Promise<Record<string, unknown>> {
-  try {
-    return await applyPackagePostWorkspaceInner(input);
-  } catch (e) {
-    await markLayerTwoFailed(input.workspaceId, input.userId, e).catch(
-      () => {}
-    );
-    throw e;
-  }
-}
-
-async function applyPackagePostWorkspaceInner(
   input: ApplyPackagePostWorkspaceInput
 ): Promise<Record<string, unknown>> {
   const { workspaceId, body, userId, agentUserId } = input;

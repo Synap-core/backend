@@ -241,10 +241,33 @@ describe("template apply — one finisher writes the stamp and active", () => {
         "services/package-dependency-resolver.ts",
       ])
     );
+    // A door finishes by calling the finisher, or the module's catalog
+    // layer-2 step, which finishes (pinned just below).
     const missing = doors
-      .filter((p) => !/\bfinishTemplateApply\s*\(/.test(code(p)))
+      .filter(
+        (p) =>
+          !/\b(finishTemplateApply|applyCatalogLayerTwo)\s*\(/.test(code(p))
+      )
       .map(rel);
     expect(missing).toEqual([]);
+  });
+
+  it("(1a) the module's catalog layer-2 step reaches the finisher", () => {
+    const src = code(join(API_SRC, "services/template-apply/index.ts"));
+    /** A top-level function's text: from its declaration to the next one. */
+    const fnBody = (decl: string): string => {
+      const at = src.indexOf(decl);
+      expect(at, `${decl} not found`).toBeGreaterThanOrEqual(0);
+      const rest = src.slice(at + decl.length);
+      const next = rest.search(/\n(export )?(async )?function /);
+      return next > 0 ? rest.slice(0, next) : rest;
+    };
+    expect(fnBody("export async function applyCatalogLayerTwo(")).toMatch(
+      /\bfinishWithTruth\s*\(/
+    );
+    expect(fnBody("async function finishWithTruth(")).toMatch(
+      /\bfinishTemplateApply\s*\(/
+    );
   });
 
   it("(1b) a wrapper over applyTemplate never also drives the core itself", () => {

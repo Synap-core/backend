@@ -19,15 +19,16 @@
  * result. Marker invariant (backend-rules): a stamp only asserts what landed.
  *
  *   converged   → stamp the version, mark the space "active", clear the record
- *   not landed  → no stamp; record WHY in `settings.templateApply`
+ *   not landed  → no stamp; record WHY in `settings.template`
  *                 (awaiting-approval · partial · layer-2-not-run). Health reads
  *                 that as drifted, so the next update finishes the job.
+ *   layer 2 threw → no stamp; record `failed` (layer 2) — the caller passes
+ *                 `layerTwoFailed`, never an empty result bag.
  *
  * "active" means "built, nothing crashed" — a space whose layer 2 only proposed
- * is usable, and leaving it "pending" would read as an in-flight build (the
- * tRPC re-hit skips reconcile on a non-active space). The STAMP is what means
- * "converged". A layer 2 that threw already marked the space "failed"
- * (`applyPackagePostWorkspace`); this door never overwrites that.
+ * is usable, and leaving it "building" would read as an in-flight build. The
+ * STAMP is what means "converged". A space already "failed" keeps that record:
+ * only a re-sync of it (which reopens it first) clears it.
  */
 
 import type { WorkspaceSettings } from "@synap/database";
@@ -59,6 +60,13 @@ export interface FinishTemplateApplyInput {
    * at all — then a pending version is never earned here.
    */
   post: Record<string, unknown> | null;
+  /**
+   * Layer 2 threw (or its body could not be prepared). The finisher RECORDS
+   * it — `failed`, layer 2 — under its row lock: never a stamp, never
+   * "active", whatever an earlier best-effort record did or did not land.
+   * `post` is ignored then: a failure is never read from a result bag.
+   */
+  layerTwoFailed?: { error: unknown };
 }
 
 export interface FinishTemplateApplyResult {
@@ -113,6 +121,26 @@ export async function finishTemplateApply(
 ): Promise<FinishTemplateApplyResult> {
   const { workspaceId, userId, built, pendingVersionStamp, pendingPack, post } =
     input;
+  if (input.layerTwoFailed) {
+    const { getDb, writeTemplateState, LAYER_TWO_FAILED_STEP } =
+      await import("@synap/database");
+    const cause = input.layerTwoFailed.error;
+    await writeTemplateState(
+      await getDb(),
+      workspaceId,
+      {
+        state: "failed",
+        failedLayer: 2,
+        failedStep: LAYER_TWO_FAILED_STEP,
+        error: (cause instanceof Error ? cause.message : String(cause)).slice(
+          0,
+          500
+        ),
+      },
+      { userId }
+    );
+    return { state: "failed", versionStamped: false };
+  }
   // Nothing ran and nothing is claimed (e.g. a natural compose through a door
   // with no layer 2): there is no outcome to write — and clearing a record an
   // earlier, unfinished apply left would be a lie.
@@ -135,8 +163,8 @@ export async function finishTemplateApply(
         : "awaiting-approval";
 
   // Decided against the row the ONE writer locks (utils/template-state.ts):
-  // a layer 2 that threw already marked the space failed — that record wins;
-  // the resume path is what clears it.
+  // a space recorded "failed" keeps that record — only a re-sync, which
+  // reopens it before layer 2 runs, clears it.
   let failed = false;
   const written = await writeTemplateState(
     await getDb(),

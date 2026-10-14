@@ -45,7 +45,6 @@ vi.mock("../../../services/workspace-materialization-service.js", () => ({
 }));
 vi.mock("../../../services/package-apply-post-workspace.js", () => ({
   applyPackagePostWorkspace: (...a: unknown[]) => mockApplyPost(...a),
-  markLayerTwoFailed: async () => undefined,
   TemplateIncompleteError: class extends Error {},
 }));
 // Layer one of the ONE apply (`applyTemplate`, W2) for a standalone apply:

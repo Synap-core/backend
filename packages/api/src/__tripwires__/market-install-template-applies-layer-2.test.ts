@@ -12,13 +12,11 @@ import { fileURLToPath } from "url";
  *   2. capabilities / playbooks / automations / loops / cells / actionPlacements
  *      — `applyPackagePostWorkspace`.
  *
- * Layer one builds layer 1 ONLY (`template-apply/layer-one.ts`, formerly the
- * `createWorkspaceFromDefinitionIdempotent` wrapper, retired in W4); a caller which also wants
- * the post-workspace layers MUST call `applyPackagePostWorkspace` itself. The
- * browser/Hub door (`hub-protocol/rest/packages.ts`) and the `workspace/create`
- * approve-executor both do. The `case "template"` branch of `applyMarketInstall`
+ * Layer one builds layer 1 ONLY (`template-apply/layer-one.ts`); layer 2 is
+ * applied by `applyTemplate` itself, which every install door runs. Before
+ * that module existed, the `case "template"` branch of `applyMarketInstall`
  * — the AGENT door, reached by MCP/CLI `market.install` and by `capability.install`
- * proposal approval — did NOT, for its whole life: it created the workspace and
+ * proposal approval — did NOT apply layer 2, for its whole life: it created the workspace and
  * returned, so an agent-installed workspace package silently arrived with zero
  * capabilities, playbooks, automations, loops, cells and action placements while
  * the same package installed from the browser arrived complete. One package, two
@@ -27,8 +25,9 @@ import { fileURLToPath } from "url";
  * W2 (one template apply): the branch now calls `applyTemplate(`, the ONE apply
  * every install door runs, and the layer-2 call lives in that module. The
  * invariant is therefore pinned in two halves: the template branch calls
- * `applyTemplate(` in executable code, and `applyTemplate` itself calls both
- * the layer-1 path and `applyPackagePostWorkspace(`. Runtime reachability (the
+ * `applyTemplate(` in executable code, and `applyTemplate` itself calls the
+ * layer-1 path and the module's layer-2 step (`applyLayerTwo(`), which calls
+ * `applyPackagePostWorkspace(`. Runtime reachability (the
  * playbook actually lands through this door) is pinned by
  * `services/template-apply/template-apply.contract.pglite.test.ts`.
  *
@@ -46,10 +45,11 @@ import { fileURLToPath } from "url";
  * branch ever grows a real conditional that could disable layer 2, that gate
  * needs a behavioural test, not another source assertion.
  *
- * If this fails: restore the `applyPackagePostWorkspace` call in
- * `applyMarketInstall`'s `case "template"`. Do NOT satisfy it with a comment,
- * and do NOT delete the assertion — the whole point is that the layer-2 call
- * cannot be dropped again without a red test.
+ * If this fails: restore the `applyTemplate(` call in `applyMarketInstall`'s
+ * `case "template"` (or, for the second test, the layer-2 step inside
+ * `applyTemplate`). Do NOT re-implement either layer in the branch, do NOT
+ * satisfy it with a comment, and do NOT delete the assertion — the whole point
+ * is that the layer-2 call cannot be dropped again without a red test.
  */
 
 // Resolved from this file, not the CWD (it ENOENT'd when run from packages/api).
@@ -129,19 +129,27 @@ describe("tripwire: market.install template branch applies post-workspace layer 
 
   it("applyTemplate runs layer 1 AND layer 2 in executable code", () => {
     const apply = stripCommentsAndStrings(readFileSync(APPLY, "utf8"));
-    const fn = apply.slice(
-      apply.indexOf("export async function applyTemplate(")
-    );
-    expect(fn.length, "applyTemplate() not found").toBeGreaterThan(100);
-    const body = fn.slice(
-      0,
-      fn.indexOf("\nexport ") > 0 ? fn.indexOf("\nexport ") : undefined
-    );
+    /** A top-level function's text: from its declaration to the next one. */
+    const fnBody = (decl: string): string => {
+      const at = apply.indexOf(decl);
+      expect(at, `${decl} not found`).toBeGreaterThanOrEqual(0);
+      const rest = apply.slice(at + decl.length);
+      const next = rest.search(/\n(export )?(async )?function /);
+      return next > 0 ? rest.slice(0, next) : rest;
+    };
+    const body = fnBody("export async function applyTemplate(");
+    expect(body.length, "applyTemplate() not found").toBeGreaterThan(100);
     expect(body.includes("applyLayerOne(")).toBe(true);
     expect(body.includes("materializeWorkspaceCore(")).toBe(true);
     expect(
-      body.includes("applyPackagePostWorkspace("),
-      "applyTemplate() builds the space but never applies capabilities/" +
+      body.includes("applyLayerTwo("),
+      "applyTemplate() builds the space but never runs its layer-2 step."
+    ).toBe(true);
+    expect(
+      fnBody("async function applyLayerTwo(").includes(
+        "applyPackagePostWorkspace("
+      ),
+      "the module's layer-2 step never applies capabilities/" +
         "playbooks/automations/loops/cells/actionPlacements."
     ).toBe(true);
   });

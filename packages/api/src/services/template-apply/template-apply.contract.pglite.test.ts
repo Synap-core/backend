@@ -48,6 +48,9 @@ const h = vi.hoisted(() => ({
   failLayerTwo: false,
   /** Make the layer-1 re-sync throw. */
   failResync: false,
+  /** When layer 2 throws, the next N template-state writes fail (a DB blip). */
+  blipWritesAfterLayerTwo: 0,
+  failNextWrites: 0,
   /** Every step the real create core records, in its order. */
   coreSteps: [
     "workspace",
@@ -83,6 +86,16 @@ vi.mock("@synap/database", async (importOriginal) => {
       emitCompleted: async () => undefined,
     },
     getCatalogSyncStamps: async () => ({}),
+    // The ONE template-state writer, real — except for a simulated DB blip.
+    writeTemplateState: async (...args: unknown[]) => {
+      if (h.failNextWrites > 0) {
+        h.failNextWrites -= 1;
+        throw new Error("connection reset (simulated)");
+      }
+      return (actual.writeTemplateState as (...a: unknown[]) => unknown)(
+        ...args
+      );
+    },
     pendingTemplateDataChanges: async () => [],
     // The create/resume core, following its contract (pinned on the REAL core
     // by @synap/database `create-workspace-hands-back-stamp.pglite.test.ts`):
@@ -216,7 +229,10 @@ vi.mock("../package-apply-post-workspace.js", async (importOriginal) => {
     applyPackagePostWorkspace: async (
       input: Parameters<typeof actual.applyPackagePostWorkspace>[0]
     ) => {
-      if (h.failLayerTwo) throw new Error("layer 2 exploded");
+      if (h.failLayerTwo) {
+        h.failNextWrites = h.blipWritesAfterLayerTwo;
+        throw new Error("layer 2 exploded");
+      }
       return actual.applyPackagePostWorkspace(input);
     },
   };
@@ -1128,5 +1144,63 @@ describe("a failed layer-1 re-sync", () => {
     const after = await theSpace(slug);
     expect(after.id).toBe(id);
     expect(after.state).toMatchObject({ state: "active", version: "f-2" });
+  });
+});
+
+// ── A layer-2 failure whose record write hits a DB blip (review F2) ─────────
+//
+// The finisher must be told that layer 2 FAILED — never handed an empty
+// result bag (`{}` = "nothing to land" = converged). When the failure record
+// cannot be written, nothing is stamped and the space is not marked "active";
+// the door still does not throw (decision 3).
+
+describe("a layer-2 failure whose failure record cannot be written", () => {
+  it("never stamps the version nor marks the space active, and does not throw", async () => {
+    const slug = "layer-two-blip";
+    const apply = (pkg: Pkg) =>
+      applyTemplate({
+        definition: body(pkg) as never,
+        actor: { userId: OWNER },
+        source: "contract",
+        identity: {
+          packageSlug: pkg.slug,
+          packageVersion: pkg.version,
+          proposalId: pkg.slug,
+          workspaceName: body(pkg).workspaceName as string,
+        },
+      });
+    await apply({ slug, version: "b-1", playbooks: ["Qualify"] });
+    expect((await theSpace(slug)).state).toMatchObject({
+      state: "active",
+      version: "b-1",
+    });
+    h.failLayerTwo = true;
+    h.blipWritesAfterLayerTwo = 1;
+    let reply: Awaited<ReturnType<typeof apply>>;
+    try {
+      reply = await apply({
+        slug,
+        version: "b-2",
+        playbooks: ["Qualify", "Close"],
+      });
+    } finally {
+      h.failLayerTwo = false;
+      h.blipWritesAfterLayerTwo = 0;
+      h.failNextWrites = 0;
+    }
+    expect(reply.layer2.status).toBe("failed");
+    expect(reply.finished?.versionStamped).toBe(false);
+    expect(reply.finished?.state).not.toBe("converged");
+    expect(reply.warning).toBeTruthy();
+    // The stored truth: the old stamp, never the version layer 2 did not land.
+    const { state } = await theSpace(slug);
+    expect(state?.version).toBe("b-1");
+    expect(await playbooksIn((await theSpace(slug)).id)).not.toContain("Close");
+    // The next apply re-syncs (stale) and lands it.
+    await apply({ slug, version: "b-2", playbooks: ["Qualify", "Close"] });
+    expect((await theSpace(slug)).state).toMatchObject({
+      state: "active",
+      version: "b-2",
+    });
   });
 });
