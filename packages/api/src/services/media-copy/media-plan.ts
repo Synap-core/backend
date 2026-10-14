@@ -129,6 +129,33 @@ export function planMediaCopy(input: {
   );
 }
 
+/** First retry of a transient failure waits this long; each next one doubles. */
+export const TRANSIENT_RETRY_BASE_SECONDS = 15 * 60;
+
+/**
+ * When this run's failures leave a TRANSIENT one still owed (not permanent,
+ * attempts < {@link MAX_TRANSIENT_ATTEMPTS}), the delay before the follow-up
+ * run: base × 2^(attempts−1) of the most-attempted one. `null` = nothing to
+ * retry. Without a follow-up, a transient failure (a 5xx, a timeout) was only
+ * retried if the entity happened to be edited again — never, for most.
+ * Bounded: the plan stops owing the URL at the attempt cap, so the chain ends.
+ */
+export function transientRetryDelaySeconds(
+  failures: MediaCopyFailure[],
+  failedThisRun: ReadonlySet<string>
+): number | null {
+  let attempts = 0;
+  for (const f of failures) {
+    if (!failedThisRun.has(f.sourceUrl)) continue;
+    if (PERMANENT_FETCH_FAILURES.has(f.reason as ImageFetchFailure)) continue;
+    if (f.attempts >= MAX_TRANSIENT_ATTEMPTS) continue;
+    attempts = Math.max(attempts, f.attempts);
+  }
+  return attempts === 0
+    ? null
+    : TRANSIENT_RETRY_BASE_SECONDS * 2 ** (attempts - 1);
+}
+
 /**
  * Fold one run into the CURRENT `systemData` (read under the row lock):
  * `media` gains each new copy whose `sourceUrl` it does not already hold;

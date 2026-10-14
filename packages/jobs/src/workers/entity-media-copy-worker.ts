@@ -15,8 +15,11 @@
  * `registerEntityMediaCopyRunner()` — the inbound-attachment IoC pattern.
  *
  * Failure posture: the runner records per-URL failures on the entity
- * (`systemData.mediaCopyFailures`); a thrown run is logged and NOT retried by
- * pg-boss — the next update of the entity re-plans it.
+ * (`systemData.mediaCopyFailures`). A TRANSIENT one (timeout, 5xx, a failed
+ * store) makes the runner enqueue one delayed follow-up run itself, with
+ * backoff, until the attempt cap; a permanent one is final. A thrown run is
+ * logged and NOT retried by pg-boss — the next update of the entity re-plans
+ * it.
  */
 
 import type PgBoss from "pg-boss";

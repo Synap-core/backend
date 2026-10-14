@@ -60,6 +60,7 @@ const pipes = vi.hoisted(() => ({
   realtime: vi.fn(),
   sideEffects: vi.fn(async (_payload: unknown) => undefined),
   auditLog: vi.fn(async () => null),
+  bossSend: vi.fn(async () => "job"),
 }));
 vi.mock("../../../utils/domain-event-bridge.js", () => ({
   emitHubRealtimeEvent: pipes.realtime,
@@ -67,6 +68,7 @@ vi.mock("../../../utils/domain-event-bridge.js", () => ({
 vi.mock("@synap/events", () => ({
   registerReactor: vi.fn(),
   emitSideEffects: pipes.sideEffects,
+  getBoss: () => ({ send: pipes.bossSend }),
 }));
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: pipes.auditLog }));
 
@@ -369,6 +371,72 @@ describe("a stored copy the entity does not hold is discarded (no orphan blob)",
       { fetchImage: okImage, store: storeAs("doc-z") }
     );
     expect(state.deleteBody).toHaveBeenCalledWith({ documentId: "doc-z" });
+  });
+});
+
+describe("a transient failure schedules ONE bounded follow-up run", () => {
+  const fails = (reason: "timeout" | "http_5xx" | "http_4xx") =>
+    vi.fn(async () => ({ ok: false as const, reason }));
+
+  it("a timeout: a follow-up in 15 min, under the entity's one job key (default door)", async () => {
+    pipes.bossSend.mockClear();
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    await runEntityMediaCopy({ entityId: "e1" }, { fetchImage: fails("timeout") });
+    expect(pipes.bossSend).toHaveBeenCalledWith(
+      "entity-media-copy",
+      { entityId: "e1" },
+      expect.objectContaining({
+        startAfter: 900,
+        singletonKey: "entity-media-copy:e1",
+        retryLimit: 0,
+      })
+    );
+  });
+
+  it("the delay doubles with the attempts already recorded", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = {
+      systemData: {
+        mediaCopyFailures: [
+          { sourceUrl: IMG, reason: "http_5xx", attempts: 1, lastAttemptAt: "t" },
+        ],
+      },
+    };
+    const scheduleRetry = vi.fn(async () => undefined);
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: fails("http_5xx"), scheduleRetry }
+    );
+    expect(scheduleRetry).toHaveBeenCalledWith("e1", 1800);
+  });
+
+  it("at the attempt cap the chain ends", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = {
+      systemData: {
+        mediaCopyFailures: [
+          { sourceUrl: IMG, reason: "timeout", attempts: 2, lastAttemptAt: "t" },
+        ],
+      },
+    };
+    const scheduleRetry = vi.fn(async () => undefined);
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: fails("timeout"), scheduleRetry }
+    );
+    expect(scheduleRetry).not.toHaveBeenCalled();
+  });
+
+  it("a permanent refusal is never retried", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    const scheduleRetry = vi.fn(async () => undefined);
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: fails("http_4xx"), scheduleRetry }
+    );
+    expect(scheduleRetry).not.toHaveBeenCalled();
   });
 });
 
