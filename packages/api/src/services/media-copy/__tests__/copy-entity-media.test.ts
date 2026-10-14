@@ -49,6 +49,21 @@ vi.mock("@synap/database", () => {
 vi.mock("../../../routers/file-upload.js", () => ({
   storeDocumentFromBuffer: vi.fn(),
 }));
+// The three pipes a copy must NOT go through (they feed the reactor back), and
+// the one it must: the realtime bridge for direct writes.
+const pipes = vi.hoisted(() => ({
+  realtime: vi.fn(),
+  sideEffects: vi.fn(async (_payload: unknown) => undefined),
+  auditLog: vi.fn(async () => null),
+}));
+vi.mock("../../../utils/domain-event-bridge.js", () => ({
+  emitHubRealtimeEvent: pipes.realtime,
+}));
+vi.mock("@synap/events", () => ({
+  registerReactor: vi.fn(),
+  emitSideEffects: pipes.sideEffects,
+}));
+vi.mock("../../../utils/audit-log.js", () => ({ auditLog: pipes.auditLog }));
 
 import { runEntityMediaCopy } from "../copy-entity-media.js";
 import { entityMediaCopyReactor } from "../media-copy-reactor.js";
@@ -76,6 +91,9 @@ beforeEach(() => {
   state.row = undefined;
   state.locked = undefined;
   state.sets = [];
+  pipes.realtime.mockClear();
+  pipes.sideEffects.mockClear();
+  pipes.auditLog.mockClear();
 });
 
 describe("runEntityMediaCopy", () => {
@@ -185,6 +203,76 @@ describe("runEntityMediaCopy", () => {
       await runEntityMediaCopy({ entityId: "gone" }, { fetchImage })
     ).toMatchObject({ status: "skipped" });
     expect(fetchImage).not.toHaveBeenCalled();
+  });
+});
+
+describe("after a copy: clients refetch, the reactor never re-fires", () => {
+  const okImage = vi.fn(async () => ({
+    ok: true as const,
+    bytes: Buffer.from([1]),
+    mime: "image/png" as const,
+  }));
+
+  it("announces ONE realtime entity:updated and nothing through the event store or the fan-out", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    const store = vi.fn(async () => ({ documentId: "doc-1" })) as never;
+
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store }
+    );
+
+    expect(pipes.realtime).toHaveBeenCalledTimes(1);
+    expect(pipes.realtime).toHaveBeenCalledWith({
+      eventType: "entity.update.completed",
+      subjectId: "e1",
+      userId: "u1",
+      data: { entityId: "e1", workspaceId: "w1" },
+    });
+    // The loop: the media-copy reactor listens on the side-effect fan-out for
+    // entity.update. Nothing the copy does may reach it — nor the event log
+    // (whose `.completed` rows feed automations and the timeline).
+    const reachedReactor = pipes.sideEffects.mock.calls.some(([payload]) =>
+      entityMediaCopyReactor.match!(payload as never)
+    );
+    expect(reachedReactor).toBe(false);
+    expect(pipes.sideEffects).not.toHaveBeenCalled();
+    expect(pipes.auditLog).not.toHaveBeenCalled();
+  });
+
+  it("a pod-wide entity is announced to its owner's room (no workspaceId)", async () => {
+    state.row = entityRow({
+      workspaceId: null,
+      properties: { "media-urls": [IMG] },
+      uiHints: {},
+    });
+    state.locked = { systemData: {} };
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      {
+        fetchImage: okImage,
+        store: vi.fn(async () => ({ documentId: "d" })) as never,
+      }
+    );
+    expect(pipes.realtime).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { entityId: "e1" } })
+    );
+  });
+
+  it("a run that copied nothing announces nothing", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      {
+        fetchImage: vi.fn(async () => ({
+          ok: false as const,
+          reason: "not_image" as const,
+        })),
+      }
+    );
+    expect(pipes.realtime).not.toHaveBeenCalled();
   });
 });
 

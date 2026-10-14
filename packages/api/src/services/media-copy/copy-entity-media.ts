@@ -22,6 +22,19 @@
  *
  * The write is a direct row update, not `entities.update`: it emits no event,
  * so the copy can never re-trigger itself.
+ *
+ * announce → after a run that COPIED something, ONE realtime `entity:updated`
+ *            push (`emitHubRealtimeEvent`, the bridge door for direct writes)
+ *            so a client holding the entity in cache refetches and draws the
+ *            new cover. Deliberately NOT `recordDomainMutation`: that appends
+ *            an `entity.update` event AND fans out side-effects — the media-copy
+ *            reactor itself (a self-trigger), the automation matcher (an "on
+ *            update" automation firing because a picture was cached), webhooks
+ *            and re-embedding — for a change to no property anyone wrote. The
+ *            realtime push touches neither the event store nor the fan-out, so
+ *            no reactor can see it. `updatedAt` is not bumped either: it is the
+ *            "edited" time people read and sort by, and a backfill would make
+ *            every existing bookmark read "edited today".
  */
 
 import {
@@ -36,6 +49,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import type { EntityMediaCopy } from "@synap-core/types/presentation";
 import { storeDocumentFromBuffer } from "../../routers/file-upload.js";
+import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { fetchExternalImage, type ImageFetchResult } from "./fetch-image.js";
 import {
   mergeMediaSystemData,
@@ -60,6 +74,29 @@ export interface CopyEntityMediaDeps {
   fetchImage?: (url: string) => Promise<ImageFetchResult>;
   store?: typeof storeDocumentFromBuffer;
   now?: () => Date;
+  /** Tell connected clients the entity changed (default: realtime bridge). */
+  announce?: (entity: {
+    id: string;
+    userId: string;
+    workspaceId: string | null;
+  }) => void;
+}
+
+/** The realtime push only — no event row, no side-effect fan-out. */
+function announceMediaCopied(entity: {
+  id: string;
+  userId: string;
+  workspaceId: string | null;
+}): void {
+  emitHubRealtimeEvent({
+    eventType: "entity.update.completed",
+    subjectId: entity.id,
+    userId: entity.userId,
+    data: {
+      entityId: entity.id,
+      ...(entity.workspaceId ? { workspaceId: entity.workspaceId } : {}),
+    },
+  });
 }
 
 export async function runEntityMediaCopy(
@@ -142,6 +179,13 @@ export async function runEntityMediaCopy(
   }
 
   await recordMediaCopyRun(row.id, { copied, failed, at: now().toISOString() });
+  if (copied.length > 0) {
+    (deps.announce ?? announceMediaCopied)({
+      id: row.id,
+      userId: row.userId,
+      workspaceId: row.workspaceId ?? null,
+    });
+  }
   return { status: "copied", copied: copied.length, failed: failed.length };
 }
 
