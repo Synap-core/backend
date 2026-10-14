@@ -84,6 +84,13 @@ async function readHandedToYou(
       await import("@synap/database");
     const { OPEN_SESSION_STATUSES } =
       await import("@synap-core/types/focus-sessions");
+    // Reach is exclusive (THE route): a bound agent is handed work through its
+    // provider, so it is never also handed the same work to pull.
+    const { resolveAgentReach } =
+      await import("../agent-dispatch/agent-binding.js");
+    if ((await resolveAgentReach(agentUserId)) === "dispatch") {
+      return { status: "bound" };
+    }
     const rows = await db
       .select({
         id: focusSessions.id,

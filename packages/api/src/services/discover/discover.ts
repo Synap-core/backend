@@ -175,6 +175,12 @@ export interface StartHere {
           startedAt: string | null;
         }>;
       }
+    /**
+     * The agent is BOUND for dispatch: the pod hands it work through its
+     * provider (THE route, reach 'dispatch'), never by pull. Nothing is listed
+     * — a pulling worker for it must stop, or the same work would run twice.
+     */
+    | { status: "bound" }
     | StartHereUnavailable;
   /**
    * Open sessions the caller OWNS whose criteria are not all graded —

@@ -532,6 +532,12 @@ describe("captures.giveToAgent — a BOUND agent is pushed", () => {
     });
   });
 
+  it("a bound agent's orient lists nothing to pull — it is handed work through its provider", async () => {
+    // Reach is exclusive: a `synap worker` pulling for a bound agent would run
+    // the same work its provider already got.
+    expect(await handedTo(BOUND)).toEqual({ status: "bound" });
+  });
+
   it("giving it again while the hand-off is live returns that session — never a second start", async () => {
     const captureId = await seedCapture({});
     const a = await giveCaptureToAgent({
