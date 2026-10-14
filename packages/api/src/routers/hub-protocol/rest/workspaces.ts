@@ -57,6 +57,7 @@ import {
   WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
 } from "../../../services/workspace-creation-service.js";
 import { applyTemplate } from "../../../services/template-apply/index.js";
+import { appliedPackageVersion } from "../../../services/applied-package-version.js";
 import {
   ComposeBaseNotFoundError,
   ComposeBaseUnavailableError,
@@ -1107,6 +1108,23 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       typeof meta?.slug === "string" && meta.slug.trim()
         ? meta.slug.trim()
         : undefined;
+    // The pod never trusts a caller's version LABEL (incident 2026-10-06, the
+    // rule /packages/apply applies): a caller that asks for a stamp gets the
+    // version of the definition it actually sent — the RAW body minus this
+    // door's own wrapper fields, so a catalog body hashes the same here as on
+    // /packages/apply.
+    let packageVersion: string | undefined;
+    if (typeof meta?.version === "string") {
+      const rawDefinition = { ...(body as Record<string, unknown>) };
+      for (const wrapper of [
+        "proposalId",
+        "templateId",
+        "templateName",
+        "ownerUserId",
+      ])
+        delete rawDefinition[wrapper];
+      packageVersion = appliedPackageVersion(rawDefinition);
+    }
     const isTemplateInput = !!(templateId || templateName || meta);
     if (isTemplateInput && !packageSlug && !proposalId) {
       return c.json(
@@ -1165,9 +1183,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         workspaceType,
         proposalId: idempotencyKey,
         ...(packageSlug ? { packageSlug } : {}),
-        ...(typeof meta?.version === "string"
-          ? { packageVersion: meta.version }
-          : {}),
+        ...(packageVersion ? { packageVersion } : {}),
         createdBy: "provisioning",
         source: "hub.workspaces.from-definition",
       },
@@ -1199,8 +1215,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         source: "hub.workspaces.from-definition",
         identity: {
           packageSlug,
-          packageVersion:
-            typeof meta?.version === "string" ? meta.version : undefined,
+          packageVersion,
           proposalId: idempotencyKey,
           workspaceName,
           templateId,

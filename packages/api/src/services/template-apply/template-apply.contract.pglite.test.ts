@@ -284,6 +284,7 @@ import {
 import { registerWorkspaceExecutors } from "../../routers/proposals/executors/workspace.js";
 import { applyMarketInstall } from "../capabilities/marketplace-install.js";
 import { applyTemplate } from "./index.js";
+import { appliedPackageVersion } from "../applied-package-version.js";
 import { db as testDb } from "@synap/database";
 import { router } from "../../trpc.js";
 import { definitionEngineProcedures } from "../../routers/workspaces/definition-engine.js";
@@ -1353,5 +1354,57 @@ describe("a pending template data change holds the stamp on every door", () => {
       state: "active",
       version: "d-2",
     });
+  });
+});
+
+// ── A caller's version LABEL is never stamped (review F4) ──────────────────
+//
+// Hub `/workspaces/from-definition` and MCP `synap_create_workspace` stamp
+// what `/packages/apply` stamps: the version of the definition actually sent
+// (`appliedPackageVersion`, the CP's own rule) — never `_meta.version` as given.
+
+describe("a caller's version label is never stamped", () => {
+  const labelled = (slug: string) => ({
+    ...body({
+      slug,
+      version: "LABEL-the-catalog-hash",
+      playbooks: ["Qualify"],
+    }),
+  });
+  it.each([
+    [
+      "hub POST /workspaces/from-definition",
+      async (def: Record<string, unknown>) => {
+        const res = await hubWorkspacesApp().request(
+          "/workspaces/from-definition",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(def),
+          }
+        );
+        expect(res.status).toBe(200);
+      },
+    ],
+    [
+      "MCP synap_create_workspace",
+      async (def: Record<string, unknown>) => {
+        await workspaceHandlers.synap_create_workspace!({
+          toolName: "synap_create_workspace",
+          args: { name: def.workspaceName, definition: def },
+          userId: OWNER,
+          agentUserId: null,
+          apiKeyScopes: ["mcp.read", "mcp.write"],
+        } as unknown as McpToolContext);
+      },
+    ],
+  ])("%s stamps the definition's own version", async (name, send) => {
+    const slug = `label-${name.replace(/[^a-z]+/gi, "-").toLowerCase()}`;
+    const def = labelled(slug);
+    await send(def);
+    const { state } = await theSpace(slug);
+    expect(state?.state).toBe("active");
+    expect(state?.version).not.toBe("LABEL-the-catalog-hash");
+    expect(state?.version).toBe(appliedPackageVersion(def));
   });
 });

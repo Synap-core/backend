@@ -291,8 +291,15 @@ export const workspaceHandlers: McpHandlerMap = {
       definition as { _meta?: { slug?: unknown; version?: unknown } }
     )._meta;
     const metaSlug = meta?.slug;
+    // The pod never trusts a caller's version LABEL (incident 2026-10-06, the
+    // rule /packages/apply applies): asking for a stamp gets the version of
+    // the definition actually sent.
     const metaVersion =
-      typeof meta?.version === "string" ? meta.version : undefined;
+      typeof meta?.version === "string"
+        ? (
+            await import("../../../services/applied-package-version.js")
+          ).appliedPackageVersion(definition as Record<string, unknown>)
+        : undefined;
     const packageSlug =
       typeof metaSlug === "string" && metaSlug.trim()
         ? metaSlug.trim()
