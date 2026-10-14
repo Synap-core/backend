@@ -35,6 +35,7 @@ import {
   eq,
   inArray,
   isNull,
+  isNotNull,
   drizzleSql,
   declaredLifecycleProfilesStatement,
 } from "@synap/database";
@@ -60,6 +61,7 @@ import {
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { projectLensWhere } from "../../utils/project-scope.js";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { resolveActorNames } from "../../utils/resolve-actor-names.js";
 import { rosterReadFor } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
@@ -253,10 +255,13 @@ async function listHomeSpaces(userId: string): Promise<HomeSpaceRow[]> {
 
 /**
  * The spaces a project works in: the spaces it USES (`project --uses-->
- * workspace`, the same read `projects.get` shows as its parts) plus its HOME
+ * workspace`, the same read `projects.get` shows as its parts), its HOME
  * (`projects.workspace_id`, which an older project may not have a `uses` edge
- * for). The project is read through the access layer: one the caller cannot
- * see is NOT_FOUND — never a home that reads as empty.
+ * for), and every space holding a thing the caller can read that is FILED into
+ * it (`belongs_to_project`) — a thing filed from a space the project never
+ * linked must not vanish from the project's page. The project is read through
+ * the access layer: one the caller cannot see is NOT_FOUND — never a home that
+ * reads as empty.
  */
 async function projectSpaceIds(
   ctx: HomesCtx,
@@ -272,10 +277,24 @@ async function projectSpaceIds(
   if (!project) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
-  const used = await listWorkspacesUsedByProjects(db, [projectId], ctx.userId);
+  const [used, filed] = await Promise.all([
+    listWorkspacesUsedByProjects(db, [projectId], ctx.userId),
+    db
+      .selectDistinct({ workspaceId: entities.workspaceId })
+      .from(entities)
+      .where(
+        and(
+          projectLensWhere(entities.id, projectId),
+          entityReadVisibleWhere(ctx.userId),
+          isNull(entities.deletedAt),
+          isNotNull(entities.workspaceId)
+        )
+      ),
+  ]);
   return new Set([
     ...(used.get(projectId) ?? []),
     ...(project.workspaceId ? [project.workspaceId] : []),
+    ...filed.flatMap((r) => (r.workspaceId ? [r.workspaceId] : [])),
   ]);
 }
 

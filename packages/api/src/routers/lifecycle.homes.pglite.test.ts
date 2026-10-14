@@ -609,6 +609,30 @@ describe("lifecycle.home", () => {
     ).toEqual([DEV]);
   });
 
+  it("projectId also lists a space holding a thing filed into it, even one the project never linked", async () => {
+    const P = await project({ uses: [DEV] });
+    const fileInto = (thing: string) =>
+      q(
+        `insert into relations (id, user_id, source_entity_id, target_entity_id, type) values (gen_random_uuid(),$1,$2,$3,'belongs_to_project')`,
+        [USER, thing, P]
+      );
+    // MISC is not a part of P, but its deal is filed into P: it stays visible.
+    await fileInto(T.misc);
+    // A DELETED thing filed from LIB does not drag LIB in; nor does a thing in
+    // a space the caller cannot see.
+    const gone = await deal(LIB, "Deleted", "draft");
+    await q(`update entities set deleted_at = now() where id = $1`, [gone]);
+    await fileInto(gone);
+    await fileInto(T.hidden);
+
+    const home = await caller().home({ projectId: P });
+    expect(new Set(home.spaces.map((s) => s.workspaceId))).toEqual(
+      new Set([DEV, MISC])
+    );
+    const misc = home.spaces.find((s) => s.workspaceId === MISC)!;
+    expect(misc.produces.find((k) => k.profileSlug === "deal")?.total).toBe(1);
+  });
+
   it("a project in no space has no spaces; one the caller cannot see is NOT_FOUND", async () => {
     const bare = await project({});
     expect((await caller().home({ projectId: bare })).spaces).toEqual([]);
