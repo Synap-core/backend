@@ -6,21 +6,30 @@ exists, adopt or extend it (an additive variant or optional prop), never build a
 
 ## 1. Query the catalog first, never your memory
 
-The component catalog is Storybook. It is the truth for which components exist, their props, their
-values and examples. Never use a component or prop the catalog does not document.
+The component catalog is the truth for which components exist, their imports, props and examples.
+Never use a component or prop it does not document. Read it in tiers, smallest first, never a whole
+manifest.
 
-- **Storybook MCP, when connected:** `docs-list` once to see what exists, then `docs-show` for one
-  component's props, usage and stories; `stories-find-by-component` for real usage.
-- **Otherwise, the static manifest:** `/manifests/components.json` in the Storybook build. Each entry
-  is a component with its props (name, type, required, default) and story examples.
-- **Then the component inventory:** `synap-app/apps/storybook/inventory/components.json` lists every
-  component family the product needs (universal and Synap-specific), each with its ONE canonical
-  component, its variants and states, and a verdict. Its audit, `/component-audit.json` in the
-  Storybook build (the `#/map` canvas shows it), adds which families have a story and which copies
-  still live. Storybook covers only part of the library, so a family absent from Storybook is not proof
-  that nothing exists. `consolidate` names the canonical: build on it, never on a listed copy.
-  `missing` means propose the component, story first. `retire` means never use it.
-- If you can read neither, stop and say so. Never design from what you remember a component looks like.
+1. **Tier 1: `synap-app/apps/storybook/inventory/CATALOG.md`** (~3.6k tokens, committed, always
+   fresh). One line per family: need, canonical, import, status, verdict, docs id. Find the family
+   for your need here. `consolidate` = build on the canonical, never on a copy; `missing` = none yet,
+   propose it (story first); "no public entry" = export it before using it, never deep-import;
+   `deprecated: Old → New` = never import Old (a tripwire fails on new imports).
+2. **Tier 2: the family card** `apps/storybook/storybook-static/agent/cards/<family-id>.md`
+   (≤ 800 tokens, written by `pnpm --filter @synap-core/storybook build-storybook`): the import
+   line, the key props with types and defaults, one or two story snippets, the copies you must not
+   hand-roll, the plan.
+3. **Storybook MCP** (`storybook` in `.mcp.json`): `docs-show <docs id>` from the tier-1 line for
+   full props and every story; `stories-find-by-component` for real usage.
+4. **Last resort: the full manifest** `/manifests/components.json` in the Storybook build
+   (~1.8 MB). Search it; never read it whole.
+
+- The inventory behind tier 1 (`apps/storybook/inventory/components.json`) and its audit
+  (`/component-audit.json`, the `#/map` canvas) say which families have a story and which copies
+  still live. Storybook covers only part of the library: a family absent from Storybook is not proof
+  that nothing exists.
+- If you can read none of these, stop and say so. Never design from what you remember a component
+  looks like.
 - The library lacks what you need? Say so and propose the component, story first. Never fake it with
   a generic box.
 - A new or changed primitive ships with its story and JSDoc on the component and its props in the
