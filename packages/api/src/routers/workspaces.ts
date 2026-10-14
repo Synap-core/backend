@@ -1367,6 +1367,42 @@ export async function installTemplateFromCatalog(
  */
 export const workspaceCatalogRouter = router({
   /**
+   * Where every space the caller can reach stands with its template — THE
+   * pod's answer (`listWorkspaceTemplateHealth`: drifted, the apply state, the
+   * proposals it waits on, the pod's one sentence for an unfinished apply),
+   * the same rows MCP `template_health` and Hub `GET /workspaces` serve. A
+   * client draws "update available / not finished / waiting on approval"
+   * from this, never from its own version compare (review U1: the browser
+   * forked the drift rule and could not see an unfinished space).
+   */
+  templateHealth: protectedProcedure
+    .input(
+      z
+        .object({
+          /** Only the spaces that are drifted (behind, or not finished). */
+          driftedOnly: z.boolean().optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const { getUserWorkspaceIds } =
+        await import("../utils/workspace-membership.js");
+      const { listWorkspaceTemplateHealth } =
+        await import("../services/template-health.js");
+      // Access-scope FIRST (member ∪ pod-visible — the ONE predicate the Hub
+      // `/workspaces` projection and MCP use); the service never widens the
+      // lens it is handed.
+      const all = await listWorkspaceTemplateHealth(
+        await getUserWorkspaceIds(ctx.userId)
+      );
+      return {
+        workspaces: input?.driftedOnly ? all.filter((w) => w.drifted) : all,
+        driftedCount: all.filter((w) => w.drifted).length,
+        total: all.length,
+      };
+    }),
+
+  /**
    * Browse the pod's installable WORKSPACE templates — read from the pod-local
    * `cp_catalog_cache` (kind='template'), the SAME stale-while-revalidate store
    * `resolveWorkspaceTemplate` resolves an install from (synced every ~10 min by

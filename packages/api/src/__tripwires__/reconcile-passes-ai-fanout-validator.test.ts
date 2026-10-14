@@ -51,7 +51,9 @@ describe("tripwire: reconcile callers inject the AI fan-out rule", () => {
   it("finds the known callers (non-vacuity)", () => {
     const files = sites().map((s) => s.file);
     for (const known of [
-      "services/workspace-creation-service.ts",
+      // The re-sync of the ONE apply (W4 moved it out of
+      // workspace-creation-service.ts, which calls no reconcile since).
+      "services/template-apply/layer-one.ts",
       "services/compose-overlay.ts",
       "routers/workspaces/definition-engine.ts",
     ]) {
