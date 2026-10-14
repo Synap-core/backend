@@ -122,7 +122,9 @@ finding. Write the list into each variant's `critique`.
 ## 7. Where designs are viewed
 
 - **Team devbox, always on, built from `main`:** an index at `http://devbox:3000`, Storybook, the
-  design canvas (`#/design`) and the token page (`#/design-tokens`) at `http://devbox:3007`, and the
+  Design app at `http://devbox:3007`: the Map (`#/`, every component Figma-style; tokens on its
+  Foundations page, also at `#/design-tokens`), the design canvas (`#/design`) and the Lab
+  (`#/lab`, live full experiences), and the
   Storybook MCP at `http://devbox:3006/mcp`. These hosts are on the founder's private tailnet only:
   an agent or pod outside it cannot reach them.
 - **Locally, for unmerged work:** `pnpm --filter @synap-core/storybook storybook` from the monorepo
