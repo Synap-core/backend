@@ -249,6 +249,26 @@ describe("one space per domain — template installs (PGlite)", () => {
     expect(await verdict(U, slug)).toEqual({ action: "create" });
   });
 
+  it("an ARCHIVED space carrying my key does not count as a reuse: a live twin I cannot adopt is still refused (review F7 — same key floor as resolveTarget)", async () => {
+    const U = randomUUID();
+    const slug = `archkey-${uniq()}`;
+    await seed({
+      name: `Archived ${slug}`,
+      owner: U,
+      packageSlug: null,
+      key: slug,
+      archived: true,
+    });
+    await seed({
+      name: `Twin ${slug}`,
+      owner: randomUUID(),
+      member: { userId: U, role: "viewer" },
+      packageSlug: null,
+      subtype: slug,
+    });
+    expect((await verdict(U, slug)).action).toBe("refuse");
+  });
+
   it("another user's twin does not hold MY domain (the twin is not a pod identity)", async () => {
     const slug = `theirs-${uniq()}`;
     await seed({ name: `Theirs ${slug}`, owner: randomUUID(), subtype: slug });

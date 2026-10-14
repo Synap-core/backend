@@ -244,7 +244,7 @@ describe("a template is installed once per pod (PGlite, real 0308 indexes)", () 
     expect(await activeCount("package_slug = $1", [slug])).toBe(1);
   });
 
-  it("(pre-existing step 1) a member whose key hits gets the space back whatever its role — still never a second space", async () => {
+  it("a VIEWER whose key hits does not get the space back to mutate — the typed 409, still never a second space (review F7)", async () => {
     const slug = `seen-${uniq()}`;
     const viewer = randomUUID();
     const holder = await seed({
@@ -254,8 +254,8 @@ describe("a template is installed once per pod (PGlite, real 0308 indexes)", () 
       packageSlug: slug,
       key: slug,
     });
-    const r = await install(viewer, slug, `Seen ${slug}`);
-    expect(r).toMatchObject({ workspaceId: holder, created: false });
+    const e = await refusal(install(viewer, slug, `Seen ${slug}`));
+    expect(e.existingWorkspaceId).toBe(holder);
     expect(await activeCount("package_slug = $1", [slug])).toBe(1);
   });
 
@@ -381,17 +381,23 @@ describe("a template is installed once per pod (PGlite, real 0308 indexes)", () 
     expect(row.provisioning_proposal_id).toBe(slug);
   });
 
-  it("an ARCHIVED template space blocks nothing — a fresh install creates", async () => {
+  it("an ARCHIVED template space blocks nothing — a fresh install creates, also for the SAME user who archived it (its key still matches)", async () => {
+    // The discriminating input is the archiver reinstalling: the archived
+    // space still carries the key AND the archiver's membership, so only an
+    // archive filter on the key step keeps it from being handed back.
     const U = randomUUID();
     const slug = `old-${uniq()}`;
-    await seed({
+    const archived = await seed({
       name: `Old ${slug}`,
       owner: U,
       packageSlug: slug,
       key: slug,
       archived: true,
     });
-    const r = await install(randomUUID(), slug, `Old ${slug}`);
+    const r = await install(U, slug, `Old ${slug}`);
     expect(r.created).toBe(true);
+    expect(r.workspaceId).not.toBe(archived);
+    const other = await install(randomUUID(), `${slug}-b`, `Old b ${slug}`);
+    expect(other.created).toBe(true);
   });
 });

@@ -18,7 +18,10 @@ import {
   findWorkspaceIdentityConflict,
 } from "@synap/database";
 import { oneSpacePerDomainGuidance } from "./one-space-per-domain.js";
-import { findLegacyWorkspaceMatch } from "./template-apply/resolve-target.js";
+import {
+  findLegacyWorkspaceMatch,
+  findWritableKeyHolder,
+} from "./template-apply/resolve-target.js";
 
 /*
  * NAMED INSTANCES are retired (0308, founder 2026-10-06): a template is
@@ -69,23 +72,8 @@ export async function checkOneSpacePerDomain(input: {
   const { userId, packageSlug, idempotencyKey } = input;
 
   // Would this request REUSE? Then it mints nothing — never refuse a reinstall.
-  if (idempotencyKey) {
-    const [hit] = await db
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .innerJoin(
-        workspaceMembers,
-        eq(workspaceMembers.workspaceId, workspaces.id)
-      )
-      .where(
-        and(
-          eq(workspaceMembers.userId, userId),
-          eq(workspaces.provisioningProposalId, idempotencyKey)
-        )
-      )
-      .limit(1);
-    if (hit) return { action: "create" };
-  }
+  if (idempotencyKey && (await findWritableKeyHolder(userId, idempotencyKey)))
+    return { action: "create" };
   // A pod-wide identity holder: the idempotent create reuses it (or refuses
   // with the typed 409) — never a second space either way.
   if (

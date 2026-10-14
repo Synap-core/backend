@@ -6,8 +6,8 @@
  * was removed (6a2427283). An adopt names its space and skips the lookup.
  *
  * Order (unchanged from the shared core it was lifted out of):
- *   1. key       — `provisioning_proposal_id = proposalId`, a space the caller
- *                  is a member of;
+ *   1. key       — `provisioning_proposal_id = proposalId`, a LIVE space the
+ *                  caller may write (`findWritableKeyHolder`);
  *   2. holder    — the pod-wide identity holder (0308: a template is installed
  *                  once per pod, a name is held by one active space), returned
  *                  only to a caller who may WRITE it (owner / admin / editor);
@@ -188,28 +188,46 @@ async function loadTarget(
   };
 }
 
+/**
+ * Step 1 — the LIVE space carrying the idempotency key that the caller may
+ * WRITE: the same floors as the holder and legacy steps. Archiving keeps the
+ * key (`workspace-archive.ts` sets only `archivedAt`), and archived spaces
+ * hold no identity (0308): a reinstall by the person who archived it must
+ * create, never hand the archived space back. A viewer's key hit falls
+ * through to the holder step, which refuses it with the typed 409.
+ * Shared with `checkOneSpacePerDomain`, so "would this reuse?" and "what does
+ * the apply reuse?" are one answer.
+ */
+export async function findWritableKeyHolder(
+  userId: string,
+  proposalId: string
+): Promise<string | null> {
+  const rows = await db
+    .select({ id: workspaces.id, role: workspaceMembers.role })
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      eq(workspaceMembers.workspaceId, workspaces.id)
+    )
+    .where(
+      and(
+        eq(workspaceMembers.userId, userId),
+        eq(workspaces.provisioningProposalId, proposalId),
+        isNull(workspaces.archivedAt)
+      )
+    );
+  return rows.find((r) => ADOPT_WRITE_ROLES.has(r.role))?.id ?? null;
+}
+
 export async function resolveTarget(
   input: ResolveTargetInput
 ): Promise<ResolvedTarget> {
   const { userId, proposalId, packageSlug } = input;
 
-  // 1. The idempotency key, on a space the caller is a member of.
+  // 1. The idempotency key, on a live space the caller may write.
   if (proposalId) {
-    const [hit] = await db
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .innerJoin(
-        workspaceMembers,
-        eq(workspaceMembers.workspaceId, workspaces.id)
-      )
-      .where(
-        and(
-          eq(workspaceMembers.userId, userId),
-          eq(workspaces.provisioningProposalId, proposalId)
-        )
-      )
-      .limit(1);
-    if (hit) return loadTarget(hit.id, "key");
+    const hit = await findWritableKeyHolder(userId, proposalId);
+    if (hit) return loadTarget(hit, "key");
   }
 
   // 2. The pod-wide identity holder (0308), BEFORE the legacy fallback, so the
