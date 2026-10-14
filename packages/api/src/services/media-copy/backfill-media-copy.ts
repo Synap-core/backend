@@ -16,8 +16,8 @@
  * is a cheap no-op.
  *
  * Scope (narrowed in SQL, decided in JS by the plan):
- *   - entities of a profile whose `uiHints.presentation` declares a non-link
- *     PROPERTY media source (`declaredMediaProperty`, the runner's own rule);
+ *   - entities of a profile whose `uiHints.presentation` declares a PROPERTY
+ *     media source or fallback the plan reads (`declaredMediaProperties`);
  *   - entities carrying a `media-urls` property (any kind).
  *
  * Shape of the run:
@@ -30,8 +30,11 @@
  *     spread instead of stacking a second wave on top of the first;
  *   - resumable: the cursor is persisted after every batch whose sends all
  *     succeeded. A crash re-scans at most one batch; its re-sends are absorbed
- *     by the singleton slot, and a duplicate that slips past (a new day) is
- *     idempotent in the runner (sourceUrl dedupe under a row lock).
+ *     by the singleton slot (keyed on the coverage, so a re-scan after a
+ *     catalog change is NOT swallowed by the previous scan's slot), and a
+ *     duplicate that slips past is idempotent in the runner (sourceUrl dedupe
+ *     under a row lock). A send pg-boss declines (returns null) is not counted
+ *     as enqueued — it is logged.
  *
  * THE MARKER (`pod_settings.settings.mediaCopyBackfill`) asserts only what this
  * pass actually did: "every live in-scope entity up to `cursor` whose plan
@@ -40,7 +43,7 @@
  * claims an image was COPIED — that is the runner's record on
  * `systemData.media` / `systemData.mediaCopyFailures`.
  * The marker is keyed on `coverage` = a hash of the version AND the media scope
- * (each declaring profile id + its declared property). A kind that gains a
+ * (each declaring profile id + every property the plan reads on it). A kind that gains a
  * media declaration later (a catalog update) changes the hash, so the stamp of
  * a blinder scan stops short-circuiting and the pod re-scans once — entities
  * already copied plan to nothing and are not re-enqueued.
@@ -69,11 +72,15 @@ import {
 } from "@synap/jobs/workers/entity-media-copy-worker.js";
 import {
   CAPTURED_MEDIA_URLS_PROPERTY,
-  declaredMediaProperty,
+  declaredMediaProperties,
   planMediaCopy,
 } from "./media-plan.js";
-import { presentationFromUiHints } from "@synap-core/types/presentation";
+import {
+  presentationFromUiHints,
+  readEntityMediaCopies,
+} from "@synap-core/types/presentation";
 import { entityMediaCopySingletonKey } from "./media-copy-reactor.js";
+import { liveDocumentIds } from "./live-documents.js";
 
 const logger = createLogger({ module: "media-copy-backfill" });
 
@@ -81,7 +88,7 @@ const logger = createLogger({ module: "media-copy-backfill" });
  * Bump when `planMediaCopy` learns a new SOURCE (or the scope rule changes):
  * every stamp a blinder comparator wrote then stops short-circuiting.
  */
-export const MEDIA_COPY_BACKFILL_VERSION = 1;
+export const MEDIA_COPY_BACKFILL_VERSION = 2;
 /** The key on the singleton `pod_settings.settings` blob. */
 export const MEDIA_COPY_BACKFILL_SETTINGS_KEY = "mediaCopyBackfill";
 export const BACKFILL_BATCH_SIZE = 200;
@@ -148,15 +155,15 @@ export async function readMediaScope(): Promise<MediaScope> {
   const declared = rows
     .map((r) => ({
       id: r.id,
-      property: declaredMediaProperty(presentationFromUiHints(r.uiHints)),
+      properties: declaredMediaProperties(presentationFromUiHints(r.uiHints)),
     }))
-    .filter((r): r is { id: string; property: string } => r.property !== null)
+    .filter((r) => r.properties.length > 0)
     .sort((a, b) => a.id.localeCompare(b.id));
   const coverage = createHash("sha256")
     .update(
       JSON.stringify({
         v: MEDIA_COPY_BACKFILL_VERSION,
-        scope: declared.map((d) => [d.id, d.property]),
+        scope: declared.map((d) => [d.id, d.properties]),
         captured: CAPTURED_MEDIA_URLS_PROPERTY,
       })
     )
@@ -288,6 +295,7 @@ export async function backfillEntityMediaCopies(
     const page = await db
       .select({
         id: entities.id,
+        documentId: entities.documentId,
         properties: entities.properties,
         systemData: entities.systemData,
         uiHints: profiles.uiHints,
@@ -300,24 +308,41 @@ export async function backfillEntityMediaCopies(
       .orderBy(asc(entities.id))
       .limit(batchSize);
 
+    // A copy whose document was deleted counts as not made (the runner's rule).
+    const liveCopyDocumentIds = await liveDocumentIds(
+      page.flatMap((row) =>
+        readEntityMediaCopies(row.systemData).map((m) => m.documentId)
+      )
+    );
     let enqueuedInPage = 0;
     for (const row of page) {
       const owed = planMediaCopy({
         properties: row.properties as Record<string, unknown> | null,
         systemData: row.systemData,
         presentation: presentationFromUiHints(row.uiHints),
+        documentId: row.documentId,
+        liveCopyDocumentIds,
       });
       if (owed.length === 0) continue;
-      await send(
+      const jobId = await send(
         ENTITY_MEDIA_COPY_QUEUE,
         { entityId: row.id },
         {
           startAfter: new Date(nextStart),
-          singletonKey: entityMediaCopySingletonKey(row.id),
+          singletonKey: `${entityMediaCopySingletonKey(row.id)}:${scope.coverage}`,
           singletonSeconds: BACKFILL_SINGLETON_SECONDS,
           retryLimit: 0,
         }
       );
+      if (!jobId) {
+        // Declined by the singleton slot: a job for this entity under this
+        // coverage is already queued (a resumed batch). Not this pass's job.
+        logger.info(
+          { entityId: row.id },
+          "media-copy backfill: send declined (already queued)"
+        );
+        continue;
+      }
       nextStart += spacingMs;
       enqueuedInPage++;
     }

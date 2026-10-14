@@ -52,12 +52,16 @@ import {
 import { createLogger } from "@synap-core/core";
 import {
   presentationFromUiHints,
+  readEntityMediaCopies,
   type EntityMediaCopy,
+  type ProfilePresentation,
 } from "@synap-core/types/presentation";
 import { storeDocumentFromBuffer } from "../../routers/file-upload.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { fetchExternalImage, type ImageFetchResult } from "./fetch-image.js";
+import { liveDocumentIds } from "./live-documents.js";
 import {
+  collectMediaSourceUrls,
   mergeMediaSystemData,
   planMediaCopy,
   transientRetryDelaySeconds,
@@ -68,7 +72,6 @@ import {
   ENTITY_MEDIA_COPY_QUEUE,
   type EntityMediaCopyQueueData,
 } from "@synap/jobs/workers/entity-media-copy-worker.js";
-import { entityMediaCopySingletonKey } from "./media-copy-reactor.js";
 
 const logger = createLogger({ module: "entity-media-copy" });
 
@@ -87,8 +90,14 @@ export interface CopyEntityMediaDeps {
    * Used for a copy the run stored but could not record.
    */
   discard?: (documentId: string) => Promise<void>;
-  /** Enqueue the follow-up run for a transient failure (default: pg-boss). */
-  scheduleRetry?: (entityId: string, delaySeconds: number) => Promise<void>;
+  /**
+   * Enqueue the follow-up run for a transient failure (default: pg-boss).
+   * Resolves to the job id, or null when no job was created.
+   */
+  scheduleRetry?: (
+    entityId: string,
+    delaySeconds: number
+  ) => Promise<string | null>;
   /** Tell connected clients the entity changed (default: realtime bridge). */
   announce?: (entity: {
     id: string;
@@ -129,6 +138,7 @@ export async function runEntityMediaCopy(
       userId: entities.userId,
       workspaceId: entities.workspaceId,
       title: entities.title,
+      documentId: entities.documentId,
       properties: entities.properties,
       systemData: entities.systemData,
       uiHints: profiles.uiHints,
@@ -139,12 +149,28 @@ export async function runEntityMediaCopy(
     .limit(1);
   if (!row) return skipped;
 
+  const presentation = presentationFromUiHints(row.uiHints);
+  const liveCopyDocumentIds = await liveDocumentIds(
+    readEntityMediaCopies(row.systemData).map((m) => m.documentId)
+  );
   const urls = planMediaCopy({
     properties: row.properties as Record<string, unknown> | null,
     systemData: row.systemData,
-    presentation: presentationFromUiHints(row.uiHints),
+    presentation,
+    documentId: row.documentId,
+    liveCopyDocumentIds,
   });
-  if (urls.length === 0) return skipped;
+  const held = readEntityMediaCopies(row.systemData);
+  const stale = held.some(
+    (m) =>
+      !liveCopyDocumentIds.has(m.documentId) ||
+      !collectMediaSourceUrls(
+        row.properties as Record<string, unknown> | null,
+        presentation,
+        row.documentId
+      ).includes(m.sourceUrl)
+  );
+  if (urls.length === 0 && !stale) return skipped;
 
   const fetchImage = deps.fetchImage ?? ((u: string) => fetchExternalImage(u));
   const store = deps.store ?? storeDocumentFromBuffer;
@@ -204,25 +230,51 @@ export async function runEntityMediaCopy(
       new EntityBodyService(db, eventRepository).deleteBody({ documentId }));
   let recorded: RecordedRun;
   try {
-    recorded = await recordMediaCopyRun(row.id, {
-      copied,
-      failed,
-      at: now().toISOString(),
-    });
+    recorded = await recordMediaCopyRun(
+      row.id,
+      { copied, failed, at: now().toISOString() },
+      {
+        presentation,
+        deadDocumentIds: new Set(
+          held
+            .map((m) => m.documentId)
+            .filter((id) => !liveCopyDocumentIds.has(id))
+        ),
+      }
+    );
   } catch (err) {
     await discardAll(copied, new Set(), discard, row.id);
     throw err;
   }
-  const { kept, failures } = recorded;
+  const { kept, failures, pruned } = recorded;
   await discardAll(copied, kept, discard, row.id);
+  // Copies the entity no longer names (its URL changed or was removed): their
+  // blobs go too. A copy whose document is already gone has nothing to discard.
+  await discardAll(
+    pruned.filter((m) => liveCopyDocumentIds.has(m.documentId)),
+    new Set(),
+    discard,
+    row.id
+  );
   const retryIn = transientRetryDelaySeconds(
     failures,
     new Set(failed.map((f) => f.sourceUrl))
   );
   if (retryIn !== null) {
-    await (deps.scheduleRetry ?? scheduleMediaCopyRetry)(row.id, retryIn);
+    const jobId = await (deps.scheduleRetry ?? scheduleMediaCopyRetry)(
+      row.id,
+      retryIn
+    );
+    if (!jobId) {
+      // The transient failure stays recorded, so the next edit of the entity
+      // (or a backfill re-scan) re-plans it; nothing else will.
+      logger.warn(
+        { entityId: row.id, delaySeconds: retryIn },
+        "entity-media-copy: the follow-up run was not enqueued"
+      );
+    }
   }
-  if (copied.some((c) => kept.has(c.documentId))) {
+  if (copied.some((c) => kept.has(c.documentId)) || pruned.length > 0) {
     (deps.announce ?? announceMediaCopied)({
       id: row.id,
       userId: row.userId,
@@ -255,20 +307,22 @@ async function discardAll(
   }
 }
 
-/** One delayed follow-up run, under the entity's one job key. */
+/**
+ * One delayed follow-up run. Deliberately NOT under the entity's singleton
+ * slot: a slot is computed from the send time, so a retry sent from inside a
+ * run lands in the same slot as the job that is running (or the reactor's
+ * next one) and pg-boss drops it (`send` returns null). The runner re-plans
+ * from the row, so a duplicate run is harmless; a lost retry is not.
+ * Returns the job id, or null when pg-boss did not create the job.
+ */
 async function scheduleMediaCopyRetry(
   entityId: string,
   delaySeconds: number
-): Promise<void> {
-  await getBoss().send(
+): Promise<string | null> {
+  return getBoss().send(
     ENTITY_MEDIA_COPY_QUEUE,
     { entityId },
-    {
-      startAfter: delaySeconds,
-      singletonKey: entityMediaCopySingletonKey(entityId),
-      singletonSeconds: delaySeconds,
-      retryLimit: 0,
-    }
+    { startAfter: delaySeconds, retryLimit: 0 }
   );
 }
 
@@ -277,26 +331,47 @@ interface RecordedRun {
   kept: Set<string>;
   /** The entity's failure record after the run. */
   failures: MediaCopyFailure[];
+  /** Copies dropped because the entity no longer names their source. */
+  pruned: EntityMediaCopy[];
 }
 
 /**
  * Fold the run into the entity's systemData under a row lock. Only the `media`
  * and `mediaCopyFailures` keys are written (`jsonb_set`), so a concurrent
  * writer's other keys are never clobbered, and two runs never double-append.
- * Returns this run's copies the entity now holds, and its failure record.
+ * The sources kept are read from the LOCKED row, so an edit that landed while
+ * the run was fetching is honoured. Returns this run's copies the entity now
+ * holds, its failure record, and the copies it pruned.
  */
 async function recordMediaCopyRun(
   entityId: string,
-  run: Parameters<typeof mergeMediaSystemData>[1]
+  run: Parameters<typeof mergeMediaSystemData>[1],
+  ctx: {
+    presentation: ProfilePresentation | null;
+    deadDocumentIds: ReadonlySet<string>;
+  }
 ): Promise<RecordedRun> {
   return db.transaction(async (tx) => {
     const [current] = await tx
-      .select({ systemData: entities.systemData })
+      .select({
+        systemData: entities.systemData,
+        properties: entities.properties,
+        documentId: entities.documentId,
+      })
       .from(entities)
       .where(eq(entities.id, entityId))
       .for("update");
-    if (!current) return { kept: new Set<string>(), failures: [] };
-    const next = mergeMediaSystemData(current.systemData, run);
+    if (!current) return { kept: new Set<string>(), failures: [], pruned: [] };
+    const next = mergeMediaSystemData(current.systemData, run, {
+      sources: new Set(
+        collectMediaSourceUrls(
+          current.properties as Record<string, unknown> | null,
+          ctx.presentation,
+          current.documentId
+        )
+      ),
+      deadDocumentIds: ctx.deadDocumentIds,
+    });
     await tx
       .update(entities)
       .set({
@@ -309,6 +384,7 @@ async function recordMediaCopyRun(
         run.copied.map((c) => c.documentId).filter((id) => held.has(id))
       ),
       failures: next.mediaCopyFailures,
+      pruned: next.pruned,
     };
   });
 }

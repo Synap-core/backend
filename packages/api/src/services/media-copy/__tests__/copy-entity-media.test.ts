@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   locked: undefined as Record<string, unknown> | undefined,
   sets: [] as unknown[],
   deleteBody: vi.fn(async (_p: { documentId: string }) => undefined),
+  /** Copy documents that no longer exist (the liveness read leaves them out). */
+  dead: new Set<string>(),
 }));
 
 vi.mock("@synap/database", () => {
@@ -23,7 +25,19 @@ vi.mock("@synap/database", () => {
     return c;
   };
   const tx = {
-    select: () => chain(() => (state.locked ? [state.locked] : [])),
+    // The locked row: the test's systemData; properties default to the row's.
+    select: () =>
+      chain(() =>
+        state.locked
+          ? [
+              {
+                properties: state.row?.properties,
+                documentId: state.row?.documentId ?? null,
+                ...state.locked,
+              },
+            ]
+          : []
+      ),
     update: () => ({
       set: (v: unknown) => {
         state.sets.push(v);
@@ -51,6 +65,11 @@ vi.mock("@synap/database", () => {
     },
   };
 });
+// Copy-document liveness: every id is alive unless the test marks it dead.
+vi.mock("../live-documents.js", () => ({
+  liveDocumentIds: async (ids: string[]) =>
+    new Set(ids.filter((id) => !state.dead.has(id))),
+}));
 vi.mock("../../../routers/file-upload.js", () => ({
   storeDocumentFromBuffer: vi.fn(),
 }));
@@ -71,6 +90,11 @@ vi.mock("@synap/events", () => ({
   getBoss: () => ({ send: pipes.bossSend }),
 }));
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: pipes.auditLog }));
+const log = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createLogger: () => ({ ...log, error: vi.fn(), debug: vi.fn() }),
+}));
 
 import { runEntityMediaCopy } from "../copy-entity-media.js";
 import { entityMediaCopyReactor } from "../media-copy-reactor.js";
@@ -99,6 +123,7 @@ beforeEach(() => {
   state.locked = undefined;
   state.sets = [];
   state.deleteBody.mockClear();
+  state.dead = new Set();
   pipes.realtime.mockClear();
   pipes.sideEffects.mockClear();
   pipes.auditLog.mockClear();
@@ -374,23 +399,119 @@ describe("a stored copy the entity does not hold is discarded (no orphan blob)",
   });
 });
 
+describe("stale copies: a changed source is pruned, a deleted copy is re-made", () => {
+  const OLD = "https://cdn.test/old.png";
+  const okImage = vi.fn(async () => ({
+    ok: true as const,
+    bytes: Buffer.from([1]),
+    mime: "image/png" as const,
+  }));
+  const record = {
+    presentation: {
+      family: "record",
+      media: { source: { property: "image" } },
+    },
+  };
+  const held = (sourceUrl: string, documentId: string) => ({
+    documentId,
+    mime: "image/png",
+    bytes: 1,
+    sourceUrl,
+    copiedAt: "t",
+  });
+
+  it("the avatar URL changed: the new one is copied, the old copy pruned and its blob discarded", async () => {
+    const systemData = { media: [held(OLD, "doc-old")] };
+    state.row = entityRow({
+      properties: { image: IMG },
+      uiHints: record,
+      systemData,
+    });
+    state.locked = { systemData };
+    const discard = vi.fn(async () => undefined);
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      {
+        fetchImage: okImage,
+        store: vi.fn(async () => ({ documentId: "doc-new" })) as never,
+        discard,
+      }
+    );
+    const set = state.sets[0] as { systemData: { values: unknown[] } };
+    const media = JSON.parse(set.systemData.values[1] as string) as Array<{
+      documentId: string;
+    }>;
+    expect(media.map((m) => m.documentId)).toEqual(["doc-new"]);
+    expect(discard).toHaveBeenCalledWith("doc-old");
+    expect(discard).not.toHaveBeenCalledWith("doc-new");
+  });
+
+  it("a copy whose document was deleted is fetched again", async () => {
+    const systemData = { media: [held(IMG, "doc-deleted")] };
+    state.row = entityRow({
+      properties: { image: IMG },
+      uiHints: record,
+      systemData,
+    });
+    state.locked = { systemData };
+    state.dead = new Set(["doc-deleted"]);
+    const fetchImage = vi.fn(okImage);
+    const discard = vi.fn(async () => undefined);
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      {
+        fetchImage,
+        store: vi.fn(async () => ({ documentId: "doc-again" })) as never,
+        discard,
+      }
+    );
+    expect(fetchImage).toHaveBeenCalledWith(IMG);
+    const set = state.sets[0] as { systemData: { values: unknown[] } };
+    expect(
+      (
+        JSON.parse(set.systemData.values[1] as string) as Array<{
+          documentId: string;
+        }>
+      ).map((m) => m.documentId)
+    ).toEqual(["doc-again"]);
+    // Nothing to discard: the deleted copy has no blob left.
+    expect(discard).not.toHaveBeenCalled();
+  });
+});
+
 describe("a transient failure schedules ONE bounded follow-up run", () => {
   const fails = (reason: "timeout" | "http_5xx" | "http_4xx") =>
     vi.fn(async () => ({ ok: false as const, reason }));
 
-  it("a timeout: a follow-up in 15 min, under the entity's one job key (default door)", async () => {
+  it("a timeout: a follow-up in 15 min, outside any singleton slot (default door)", async () => {
     pipes.bossSend.mockClear();
     state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
     state.locked = { systemData: {} };
-    await runEntityMediaCopy({ entityId: "e1" }, { fetchImage: fails("timeout") });
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: fails("timeout") }
+    );
+    // A slot is computed from the send time: a retry sent inside a run would
+    // collide with the running job's slot and be dropped by pg-boss.
     expect(pipes.bossSend).toHaveBeenCalledWith(
       "entity-media-copy",
       { entityId: "e1" },
-      expect.objectContaining({
-        startAfter: 900,
-        singletonKey: "entity-media-copy:e1",
-        retryLimit: 0,
-      })
+      { startAfter: 900, retryLimit: 0 }
+    );
+  });
+
+  it("a follow-up pg-boss did not create (send → null) is logged, never silent", async () => {
+    log.warn.mockClear();
+    pipes.bossSend.mockResolvedValueOnce(null as never);
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: fails("timeout") }
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      { entityId: "e1", delaySeconds: 900 },
+      "entity-media-copy: the follow-up run was not enqueued"
     );
   });
 
@@ -399,11 +520,16 @@ describe("a transient failure schedules ONE bounded follow-up run", () => {
     state.locked = {
       systemData: {
         mediaCopyFailures: [
-          { sourceUrl: IMG, reason: "http_5xx", attempts: 1, lastAttemptAt: "t" },
+          {
+            sourceUrl: IMG,
+            reason: "http_5xx",
+            attempts: 1,
+            lastAttemptAt: "t",
+          },
         ],
       },
     };
-    const scheduleRetry = vi.fn(async () => undefined);
+    const scheduleRetry = vi.fn(async () => "job");
     await runEntityMediaCopy(
       { entityId: "e1" },
       { fetchImage: fails("http_5xx"), scheduleRetry }
@@ -416,11 +542,16 @@ describe("a transient failure schedules ONE bounded follow-up run", () => {
     state.locked = {
       systemData: {
         mediaCopyFailures: [
-          { sourceUrl: IMG, reason: "timeout", attempts: 2, lastAttemptAt: "t" },
+          {
+            sourceUrl: IMG,
+            reason: "timeout",
+            attempts: 2,
+            lastAttemptAt: "t",
+          },
         ],
       },
     };
-    const scheduleRetry = vi.fn(async () => undefined);
+    const scheduleRetry = vi.fn(async () => "job");
     await runEntityMediaCopy(
       { entityId: "e1" },
       { fetchImage: fails("timeout"), scheduleRetry }
@@ -431,7 +562,7 @@ describe("a transient failure schedules ONE bounded follow-up run", () => {
   it("a permanent refusal is never retried", async () => {
     state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
     state.locked = { systemData: {} };
-    const scheduleRetry = vi.fn(async () => undefined);
+    const scheduleRetry = vi.fn(async () => "job");
     await runEntityMediaCopy(
       { entityId: "e1" },
       { fetchImage: fails("http_4xx"), scheduleRetry }

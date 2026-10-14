@@ -43,7 +43,10 @@ export function foldCapturedImage<T extends CaptureProposedEntity>(
     const target = declaredMediaProperty(presentation);
     const props = { ...(entity.properties ?? {}) };
     const declared = target ? props[target] : undefined;
-    if (target && (declared === undefined || declared === null || declared === "")) {
+    if (
+      target &&
+      (declared === undefined || declared === null || declared === "")
+    ) {
       props[target] = imageUrl;
     } else if (declared !== imageUrl) {
       const prior = props[CAPTURED_MEDIA_URLS_PROPERTY];

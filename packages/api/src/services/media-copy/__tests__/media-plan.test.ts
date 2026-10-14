@@ -6,6 +6,7 @@ import {
 import {
   CAPTURED_MEDIA_URLS_PROPERTY,
   collectMediaSourceUrls,
+  declaredMediaProperties,
   mergeMediaSystemData,
   planMediaCopy,
 } from "../media-plan.js";
@@ -35,7 +36,9 @@ describe("presentationFromUiHints", () => {
     expect(declared?.media?.source).toEqual({ property: "image" });
     expect(presentationFromUiHints({})).toBeNull();
     expect(presentationFromUiHints(null)).toBeNull();
-    expect(presentationFromUiHints({ presentation: { family: "nope" } })).toBeNull();
+    expect(
+      presentationFromUiHints({ presentation: { family: "nope" } })
+    ).toBeNull();
   });
 });
 
@@ -89,7 +92,10 @@ describe("link family: the declared property is the page, never fetched", () => 
   it("the capture fold never writes the og:image into a link's url", () => {
     const [one] = foldCapturedImage(
       [{ profileSlug: "bookmark", properties: { title: "Post" } }],
-      { imageUrl: "https://blog.test/og.jpg", sourceUrl: "https://blog.test/post" },
+      {
+        imageUrl: "https://blog.test/og.jpg",
+        sourceUrl: "https://blog.test/post",
+      },
       () => linkDeclared
     );
     expect(one!.properties).toEqual({
@@ -178,7 +184,11 @@ describe("mergeMediaSystemData", () => {
       },
     ]);
     // Only the two owned keys come back — the writer jsonb_sets exactly these.
-    expect(Object.keys(next).sort()).toEqual(["media", "mediaCopyFailures"]);
+    expect(Object.keys(next).sort()).toEqual([
+      "media",
+      "mediaCopyFailures",
+      "pruned",
+    ]);
   });
 });
 
@@ -223,5 +233,86 @@ describe("foldCapturedImage (capture reader og:image)", () => {
     expect(
       foldCapturedImage(input, { imageUrl: img, sourceUrl: page }, decl)
     ).toEqual(input);
+  });
+});
+
+describe("declared fallbacks are copied in the resolver's order", () => {
+  const asset = presentationFromUiHints({
+    presentation: {
+      family: "media",
+      media: {
+        source: { property: "asset-document-id" },
+        fallbacks: [{ property: "asset-url" }],
+      },
+    },
+  });
+  const UPLOADED = "6f1c2a3b-0000-4000-8000-000000000001";
+
+  it("an external fallback is copied when the source is empty", () => {
+    expect(
+      collectMediaSourceUrls({ "asset-url": "https://x.test/logo.png" }, asset)
+    ).toEqual(["https://x.test/logo.png"]);
+  });
+
+  it("never while an earlier source already answers (an upload)", () => {
+    expect(
+      collectMediaSourceUrls(
+        { "asset-document-id": UPLOADED, "asset-url": "https://x.test/l.png" },
+        asset
+      )
+    ).toEqual([]);
+  });
+
+  it("the backfill scope names every declared property but a link's page", () => {
+    expect(declaredMediaProperties(asset)).toEqual([
+      "asset-document-id",
+      "asset-url",
+    ]);
+    expect(declaredMediaProperties(linkDeclared)).toEqual([]);
+  });
+});
+
+describe("a copy whose document is gone is owed again", () => {
+  it("planMediaCopy re-plans the URL of a copy outside the live set", () => {
+    const systemData = { media: [copy("https://x.test/a.png", "doc-gone")] };
+    const input = {
+      properties: { image: "https://x.test/a.png" },
+      systemData,
+      presentation: declared,
+    };
+    expect(planMediaCopy(input)).toEqual([]);
+    expect(
+      planMediaCopy({ ...input, liveCopyDocumentIds: new Set<string>() })
+    ).toEqual(["https://x.test/a.png"]);
+  });
+});
+
+describe("mergeMediaSystemData prunes what the entity no longer names", () => {
+  const OLD = "https://x.test/old.png";
+  const NEW = "https://x.test/new.png";
+  const run = { copied: [copy(NEW, "doc-new")], failed: [], at: "t" };
+
+  it("a copy of a URL the entity stopped naming is pruned (its blob is the caller's to discard)", () => {
+    const next = mergeMediaSystemData({ media: [copy(OLD, "doc-old")] }, run, {
+      sources: new Set([NEW]),
+    });
+    expect(next.media.map((m) => m.documentId)).toEqual(["doc-new"]);
+    expect(next.pruned.map((m) => m.documentId)).toEqual(["doc-old"]);
+  });
+
+  it("a copy whose document is known dead is pruned; an unknown one is kept", () => {
+    const next = mergeMediaSystemData(
+      { media: [copy(OLD, "doc-dead"), copy(NEW, "doc-concurrent")] },
+      { copied: [], failed: [], at: "t" },
+      { sources: new Set([OLD, NEW]), deadDocumentIds: new Set(["doc-dead"]) }
+    );
+    expect(next.media.map((m) => m.documentId)).toEqual(["doc-concurrent"]);
+    expect(next.pruned.map((m) => m.documentId)).toEqual(["doc-dead"]);
+  });
+
+  it("without `keep` nothing is pruned (append-only, the old contract)", () => {
+    const next = mergeMediaSystemData({ media: [copy(OLD, "doc-old")] }, run);
+    expect(next.pruned).toEqual([]);
+    expect(next.media).toHaveLength(2);
   });
 });

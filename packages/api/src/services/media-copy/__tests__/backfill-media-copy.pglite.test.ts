@@ -14,7 +14,9 @@
  *   - a crash mid-run resumes AFTER the last fully-enqueued batch, not at 0 and
  *     not past the failed batch, and the spread continues from the stored tail;
  *   - the completed stamp short-circuits ONLY for the coverage it scanned: a
- *     kind that gains a media declaration re-opens the scan.
+ *     kind that gains a media declaration re-opens the scan;
+ *   - a declared FALLBACK is in scope; a copy whose document is gone is owed;
+ *   - a send pg-boss declines (null) is not counted as enqueued.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -117,13 +119,14 @@ async function entity(
   return id;
 }
 
-function recorder(failOnCall?: number) {
+function recorder(failOnCall?: number, declineCall?: number) {
   const calls: Array<{ entityId: string; startAfter: Date; key: string }> = [];
   let n = 0;
   const send: BackfillSend = async (_queue, data, options) => {
     n++;
     if (failOnCall !== undefined && n === failOnCall)
       throw new Error("pg-boss down");
+    if (declineCall !== undefined && n === declineCall) return null;
     calls.push({
       entityId: data.entityId,
       startAfter: options.startAfter,
@@ -144,7 +147,7 @@ const LINK = {
 
 beforeAll(async () => {
   await h.client!.exec(
-    [schema.profiles, schema.entities, schema.podSettings]
+    [schema.profiles, schema.entities, schema.podSettings, schema.documents]
       .map((t) => ddlFor(t as PgTable))
       .join("\n")
   );
@@ -152,7 +155,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from entities; delete from profiles; delete from pod_settings;`
+    `delete from entities; delete from profiles; delete from pod_settings; delete from documents;`
   );
   await q(`insert into pod_settings (settings) values ($1)`, [
     JSON.stringify({ sibling: { kept: true } }),
@@ -166,6 +169,11 @@ describe("backfillEntityMediaCopies", () => {
     const pNone = await profile({});
 
     const owesCover = await entity(pMedia, { cover: IMG });
+    const held = randomUUID();
+    await q(
+      `insert into documents (id, user_id, title, type, storage_url, size) values ($1, $2, 'c', 'file', 'u', 1)`,
+      [held, USER]
+    );
     await entity(
       pMedia,
       { cover: IMG },
@@ -173,7 +181,7 @@ describe("backfillEntityMediaCopies", () => {
         systemData: {
           media: [
             {
-              documentId: "d",
+              documentId: held,
               mime: "image/png",
               bytes: 1,
               sourceUrl: IMG,
@@ -219,8 +227,11 @@ describe("backfillEntityMediaCopies", () => {
       "2026-10-14T10:00:00.000Z",
       "2026-10-14T10:00:06.000Z",
     ]);
-    // The reactor's key: one pending copy job per entity, whoever sent it.
-    expect(calls[0]!.key).toBe(`entity-media-copy:${owesCover}`);
+    // The entity's job key, scoped to this scan's coverage: a re-scan after a
+    // catalog change is not swallowed by the previous scan's day slot.
+    expect(calls[0]!.key).toBe(
+      `entity-media-copy:${owesCover}:${result.coverage}`
+    );
     expect(result).toMatchObject({ status: "completed", enqueued: 2 });
 
     const marker = await readBackfillMarker();
@@ -323,5 +334,60 @@ describe("backfillEntityMediaCopies", () => {
     // The first entity still owes (the job has not run here) and is re-sent;
     // the newly declared kind's entity is now in scope.
     expect(second.calls.map((c) => c.entityId)).toContain(laterOwes);
+  });
+
+  it("a declared fallback is in scope, and a copy whose document is gone is owed", async () => {
+    const pAsset = await profile({
+      presentation: {
+        family: "media",
+        media: {
+          source: { property: "asset-document-id" },
+          fallbacks: [{ property: "asset-url" }],
+        },
+      },
+    });
+    const pMedia = await profile(MEDIA);
+    const viaFallback = await entity(pAsset, { "asset-url": IMG });
+    const deletedCopy = await entity(
+      pMedia,
+      { cover: IMG },
+      {
+        systemData: {
+          media: [
+            {
+              documentId: randomUUID(), // no such document any more
+              mime: "image/png",
+              bytes: 1,
+              sourceUrl: IMG,
+              copiedAt: "t",
+            },
+          ],
+        },
+      }
+    );
+    const { send, calls } = recorder();
+    await backfillEntityMediaCopies({ send, now: () => NOW });
+    expect(calls.map((c) => c.entityId).sort()).toEqual(
+      [viaFallback, deletedCopy].sort()
+    );
+  });
+
+  it("a send pg-boss declines is not counted, and takes no slot in the spread", async () => {
+    const pMedia = await profile(MEDIA);
+    await entity(pMedia, { cover: IMG });
+    await entity(pMedia, { cover: IMG });
+    await entity(pMedia, { cover: IMG });
+    const { send, calls } = recorder(undefined, 2);
+    const result = await backfillEntityMediaCopies({
+      send,
+      now: () => NOW,
+      spacingSeconds: 6,
+    });
+    expect(result.enqueued).toBe(2);
+    expect(calls.map((c) => c.startAfter.toISOString())).toEqual([
+      "2026-10-14T10:00:00.000Z",
+      "2026-10-14T10:00:06.000Z",
+    ]);
+    expect(await readBackfillMarker()).toMatchObject({ enqueued: 2 });
   });
 });
