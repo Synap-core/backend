@@ -731,11 +731,15 @@ generate_kratos_config() {
                 _delivered=$(printf '%s' "$_resp" | grep -oE '"delivered"[[:space:]]*:[[:space:]]*true' | head -1)
             fi
             if [ -n "$_delivered" ]; then
-                # 2. Read the pushed client from the pod's OWN Postgres (pod-local,
-                #    plaintext read for the Kratos config — same trust as kratos.yml).
+                # 2. Read the pushed client through the backend's field-crypto CLI
+                #    (decrypts the secret once SYNAP_FIELD_KEYS is set; same
+                #    `clientId|clientSecret|issuer` line, same trust as kratos.yml).
                 local _row
-                _row=$(docker compose exec -T postgres psql -U synap -d synap -tAF '|' -c \
+                _row=$(docker compose exec -T backend node dist/scripts/field-crypto.js federation-oidc-client 2>/dev/null | head -1 || echo "")
+                # Older backend image (no field-crypto CLI): the secret is still plaintext in pod_settings.
+                [ -n "$_row" ] || _row=$(docker compose exec -T postgres psql -U synap -d synap -tAF '|' -c \
                     "SELECT settings->'federationOidcClient'->>'clientId', settings->'federationOidcClient'->>'clientSecret', settings->'federationOidcClient'->>'issuer' FROM pod_settings WHERE settings ? 'federationOidcClient' LIMIT 1" 2>/dev/null | head -1 || echo "")
+                case "$_row" in *'|senc:'*) _row="" ;; esac   # never render a ciphertext into Kratos
                 oidc_client_id=$(printf '%s' "$_row" | cut -d'|' -f1)
                 oidc_client_secret=$(printf '%s' "$_row" | cut -d'|' -f2)
                 oidc_issuer=$(printf '%s' "$_row" | cut -d'|' -f3)
