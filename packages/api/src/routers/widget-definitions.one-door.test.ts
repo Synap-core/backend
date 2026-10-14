@@ -44,6 +44,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AnyProcedure } from "@trpc/server";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 // ── db + realtime capture ───────────────────────────────────────────────────
 // `defineCell` is the unit under test, so its two side effects (the row it
@@ -445,9 +446,7 @@ describe("the upsert door is transport only", () => {
     join(import.meta.dirname, "widget-definitions.ts"),
     "utf8"
   );
-  const code = source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
+  const code = stripComments(source, "ts");
 
   it("delegates to defineCell", () => {
     expect(code).toMatch(/await defineCell\(\{/);

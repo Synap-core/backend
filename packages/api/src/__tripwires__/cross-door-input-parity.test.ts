@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE (T5) — cross-door INPUT parity, by ACKNOWLEDGEMENT not symmetry.
@@ -187,12 +188,6 @@ const SERVICES: ServiceSpec[] = [
 
 // ── Source utilities (same contract as T4: prose documents, only code implements) ──
 
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
-}
-
 const SKIP_DIRS = new Set([
   "node_modules",
   "dist",
@@ -331,7 +326,7 @@ function extractParamBody(source: string, fn: string): string {
 }
 
 function paramsOf(spec: ServiceSpec): string[] {
-  const source = stripComments(readFileSync(spec.file, "utf8"));
+  const source = stripComments(readFileSync(spec.file, "utf8"), "ts");
   return topLevelKeys(extractParamBody(source, spec.fn));
 }
 
@@ -356,7 +351,7 @@ function exposingModules(spec: ServiceSpec): string[] {
   const mods = [spec.file];
   const barrel = join(dirname(spec.file), "index.ts");
   if (existsSync(barrel)) {
-    const src = stripComments(readFileSync(barrel, "utf8"));
+    const src = stripComments(readFileSync(barrel, "utf8"), "ts");
     if (new RegExp(`export\\s*\\{[^}]*\\b${spec.fn}\\b[^}]*\\}`).test(src)) {
       mods.push(barrel);
     }
@@ -501,7 +496,7 @@ function resolveSchemaIdentifier(
   if (!existsSync(target)) return "";
   return resolveSchemaIdentifier(
     target,
-    stripComments(readFileSync(target, "utf8")),
+    stripComments(readFileSync(target, "utf8"), "ts"),
     name,
     depth - 1
   );
@@ -602,7 +597,7 @@ function discoverDoors(spec: ServiceSpec): Discovery {
 
   for (const { file, source } of ROUTER_SOURCES) {
     if (!importedPaths(file, source).some((p) => exposers.has(p))) continue;
-    const stripped = stripComments(source);
+    const stripped = stripComments(source, "ts");
     const sites = [
       ...stripped.matchAll(new RegExp(`\\b${spec.fn}\\s*\\(`, "g")),
     ];

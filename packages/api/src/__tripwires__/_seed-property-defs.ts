@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 import { PropertyValueType } from "@synap/database";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -136,7 +137,5 @@ export const ENUM_DEFS = SEEDED_DEFS.filter((d) =>
  * seed, `enum:` is only ever a constraints key. 27 on 2026-09-12.
  */
 export const SEED_ENUM_SITE_COUNT = (
-  SEED_SOURCE.replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1")
-    .match(/\benum:\s*\[/g) ?? []
+  stripComments(SEED_SOURCE, "ts").match(/\benum:\s*\[/g) ?? []
 ).length;

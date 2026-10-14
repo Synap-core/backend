@@ -31,6 +31,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 const SRC = readFileSync(
   fileURLToPath(new URL("./index.ts", import.meta.url)),
@@ -38,7 +39,7 @@ const SRC = readFileSync(
 );
 
 /** Strip comments so prose can never satisfy — or trip — these scans. */
-const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const CODE = stripComments(SRC, "ts");
 
 describe("SECURITY: a declared read does not bypass origin trust", () => {
   it("NON-VACUITY: the scan can see the three landmarks it reasons about", () => {

@@ -25,6 +25,7 @@ import { join, relative } from "node:path";
 import ts from "typescript";
 import { CONTENT_KINDS as DATABASE_CONTENT_KINDS } from "@synap/database/schema";
 import { CONTENT_KINDS } from "@synap-core/types/renderables";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const REPO_ROOT = join(import.meta.dirname, "../../../../..");
 const CLI_CELL = join(REPO_ROOT, "synap-cli/src/commands/cell.ts");
@@ -34,7 +35,7 @@ function literalConstKinds(src: string): string[] {
     /export const CONTENT_KINDS\s*=\s*\[([\s\S]*?)\]\s*as const/
   );
   if (!m) throw new Error("CONTENT_KINDS not found — did it move?");
-  const code = m[1]!.replace(/\/\/.*$/gm, "");
+  const code = stripComments(m[1]!, "ts");
   return [...code.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
 }
 

@@ -38,6 +38,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONTENT_KINDS } from "@synap/database/schema";
 import { SLOT_TO_CONTENT_KIND } from "../services/profiles/renderer-slots.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 // From packages/api/src/__tripwires__ up to the monorepo root (Code/synap).
 const REPO_ROOT = join(import.meta.dirname, "../../../../..");
@@ -66,9 +67,7 @@ function cpContentKinds(file: string): string[] {
   const src = readFileSync(file, "utf8");
   // Strip comments first: this repo documents the drift IN a comment that names
   // the very literals we are counting, which would otherwise be read as members.
-  const code = src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
+  const code = stripComments(src, "ts");
   const m = code.match(/contentKind\??:\s*([\s\S]*?)(?:;|\)\s*\.optional\(\))/);
   if (!m) {
     throw new Error(
@@ -141,9 +140,7 @@ describe("tripwire: every pod renderer slot is publishable from the CP", () => {
       // them — was DROPPED on the way to the pod. Enumerating a finite list was
       // the defect, not the guard, so the projection now spreads the definition
       // and this asserts THAT rather than a list of kinds.
-      const code = readFileSync(CP_PROJECTION, "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/^[ \t]*\/\/.*$/gm, "");
+      const code = stripComments(readFileSync(CP_PROJECTION, "utf8"), "ts");
       expect(
         code,
         "the marketplace cell projection no longer spreads the definition — a " +

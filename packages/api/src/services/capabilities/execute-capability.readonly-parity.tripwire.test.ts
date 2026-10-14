@@ -11,6 +11,7 @@ import {
   SKILL_METADATA_READ_ONLY,
   declaredReadOnly,
 } from "./capability-drift.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — the AUTHORED read-only declaration has ONE reader, not two.
@@ -142,9 +143,7 @@ describe("guard: `declaredReadOnly(` has exactly ONE call site in the door", () 
   );
   // Comments must be stripped: this file DOCUMENTS the rule in prose, and a
   // scan that counts prose trips on its own docblock (a named gotcha here).
-  const src = raw
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const src = stripComments(raw, "ts");
 
   it("the scan is not vacuous — it can still see the code it hunts", () => {
     expect(raw.length).toBeGreaterThan(20_000);
@@ -169,8 +168,12 @@ describe("guard: `declaredReadOnly(` has exactly ONE call site in the door", () 
     const uses = src.match(/verbDeclaresReadOnly\(/g) ?? [];
     expect(uses.length).toBeGreaterThanOrEqual(3);
     expect(src).toMatch(/const readOnly =[\s\S]{0,200}verbDeclaresReadOnly\(/);
-    expect(src).toMatch(
-      /export function capabilityVerbHasExternalEffect\([\s\S]{0,400}verbDeclaresReadOnly\(/
+    // Bounded by the function body, not a char window: comments are blanked,
+    // not deleted, so a window would count the prose inside the function.
+    const fn = src.indexOf("export function capabilityVerbHasExternalEffect(");
+    expect(fn).toBeGreaterThan(-1);
+    expect(src.slice(fn, src.indexOf("\n}\n", fn))).toContain(
+      "verbDeclaresReadOnly("
     );
   });
 });

@@ -45,6 +45,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { eq, or, type SQL } from "drizzle-orm";
 import { proposals } from "@synap/database/schema";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const dialect = new PgDialect();
 const compile = (sql: SQL) => dialect.sqlToQuery(sql);
@@ -230,10 +231,8 @@ describe("EVERY author floor in the dedup/recall file uses the shared helper", (
   });
 
   it("has ZERO bare `createdBy = caller` author floors left", () => {
-    const src = readFileSync(dedupPath, "utf8")
-      // strip comments so prose about the OLD floor never reads as code
-      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-      .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
+    // strip comments so prose about the OLD floor never reads as code
+    const src = stripComments(readFileSync(dedupPath, "utf8"), "ts");
 
     // A bare floor is one NOT immediately preceded by `or(` — inside an `or`
     // it is the first branch of the lineage predicate, which is correct.
@@ -306,9 +305,7 @@ describe("recall and dedup lanes have DIFFERENT type floors, on purpose", () => 
       "export function computeCaptureGraphIdempotencyKey"
     );
     // Strip comments: the WHY is written in prose right there and names the const.
-    const code = recallFn
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
+    const code = stripComments(recallFn, "ts");
     expect(
       code,
       "the recall lane must NOT filter by proposal type — every proposal " +
@@ -351,11 +348,6 @@ describe("advertising outside-lens rows obliges resolving them", () => {
   const globalPath = join(here, "../diagnose/global.ts");
   const resolverPath = join(here, "../diagnose/resolve-object-kind.ts");
 
-  const strip = (src: string): string =>
-    src
-      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-      .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
-
   it("both files exist", () => {
     expect(existsSync(globalPath), globalPath).toBe(true);
     expect(existsSync(resolverPath), resolverPath).toBe(true);
@@ -364,7 +356,7 @@ describe("advertising outside-lens rows obliges resolving them", () => {
   it("global health still ADVERTISES outside-lens rows (the premise)", () => {
     // NON-VACUITY: if the advertisement is ever removed, this whole obligation
     // is moot — and this test must say so loudly rather than pass on absence.
-    const src = strip(readFileSync(globalPath, "utf8"));
+    const src = stripComments(readFileSync(globalPath, "utf8"), "ts");
     expect(
       src,
       "`mineOutsideLens` is gone from whole-pod health. If that was deliberate, " +
@@ -395,7 +387,7 @@ describe("advertising outside-lens rows obliges resolving them", () => {
     "%s reaches a proposal the caller AUTHORED outside their lens",
     (_label, path) => {
       expect(existsSync(path), path).toBe(true);
-      const src = strip(readFileSync(path, "utf8"));
+      const src = stripComments(readFileSync(path, "utf8"), "ts");
 
       const lensHits = (
         src.match(/userVisibleWhere\(\s*proposals\.workspaceId/g) ?? []

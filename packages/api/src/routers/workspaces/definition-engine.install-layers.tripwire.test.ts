@@ -37,12 +37,13 @@ import { dirname, join } from "node:path";
 import { templateDoorReply, templateLayerReports } from "./template-door.js";
 import type { TemplateApplyResult } from "../../services/template-apply/index.js";
 import { layerTwoFailedSentence } from "../../services/template-health.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The engine's code, comments blanked (a comment naming a call is not one). */
-const SOURCE = readFileSync(join(here, "definition-engine.ts"), "utf8").replace(
-  /\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
-  ""
+const SOURCE = stripComments(
+  readFileSync(join(here, "definition-engine.ts"), "utf8"),
+  "ts"
 );
 
 function callsOf(name: string): number[] {

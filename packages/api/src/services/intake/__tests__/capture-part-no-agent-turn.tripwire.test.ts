@@ -19,6 +19,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const SRC = join(__dirname, "..", "..", "..");
 const BANNED = [
@@ -28,14 +29,8 @@ const BANNED = [
   /messaging\/post-message/,
 ];
 
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
 function offenders(code: string): string[] {
-  const stripped = stripComments(code);
+  const stripped = stripComments(code, "ts");
   return BANNED.filter((re) => re.test(stripped)).map(String);
 }
 

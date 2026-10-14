@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACCOUNT_PAGES } from "../lib/open-in";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 /**
  * The exit-door invariants, enforced by scanning SOURCE.
@@ -58,16 +59,9 @@ function sourceFiles(): string[] {
 
 /** Strip comments so an explanatory note about a banned pattern isn't a hit. */
 function code(text: string): string {
-  // Block comments are stripped ONLY when `/*` opens a line. The naive form
-  // treats a `/*` inside a STRING LITERAL as a comment opener and erases
-  // everything to the next `*` + `/` — swallowing any real violation in
-  // between and turning this file green. Every doc comment in this app starts
-  // its own line (JSX comments as `{/* … */}`, hence the optional brace), so
-  // anchoring costs nothing. A string literal is always preceded by a quote,
-  // so it still cannot open a comment.
-  return text
-    .replace(/^[ \t]*\{?[ \t]*\/\*[\s\S]*?\*\//gm, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  // The shared scanner: a `/*` inside a STRING LITERAL never opens a comment
+  // (the naive regex form erased real violations up to the next `*` + `/`).
+  return stripComments(text, "ts");
 }
 
 const FILES = sourceFiles().map((path) => ({

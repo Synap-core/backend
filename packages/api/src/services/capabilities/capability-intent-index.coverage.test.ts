@@ -49,33 +49,7 @@ import type { CatalogCacheEntry } from "./catalog-cache-query.js";
 // the whole registry module chain into collection, and this file tests PURE
 // folds. `import type` is erased at compile time, so it costs nothing.
 import type { RegistryCapability } from "./capability-registry.js";
-
-/**
- * Strip COMMENTS only, leaving code and string literals intact.
- *
- * ⚠️ Why comments and not strings: the guard this serves must catch a vendor
- * name used as an object KEY (`{ remotion: … }`) AND as a quoted VALUE
- * (`{ generate_media: "remotion" }`). Stripping string literals blinds it to the
- * second — which a positive control caught: with strings stripped, a planted
- * provider map passed. So strings stay.
- *
- * Comments go because the module's own docblock names `remotion` while stating
- * the code deliberately does NOT do that — a scan that reads prose fires on the
- * very documentation that describes the rule.
- *
- * ⚠️ STATED LIMIT: this is a simple scanner, not a parser. It cannot see a
- * vendor name assembled at runtime by concatenation, and a `//` inside a string
- * literal would truncate the rest of that line. Both are recorded in the test
- * that uses it rather than left implied.
- */
-function stripComments(code: string): string {
-  return (
-    code
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      // `//` not preceded by `:` so a URL inside a string ("https://…") survives.
-      .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ")
-  );
-}
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 /**
  * Vendor names a hardcoded provider map would have to contain, matched as WHOLE
@@ -378,7 +352,7 @@ describe("TRIPWIRE — Phase 4 stays inert and governed", () => {
     // EXECUTABLE vendor mapping exists. It cannot see a vendor reached by
     // concatenation, a lookup table fetched at runtime, or a name assembled
     // from parts — stated here rather than left implied.
-    const codeOnly = stripComments(src);
+    const codeOnly = stripComments(src, "ts");
     expect(
       VENDOR_PATTERN.test(codeOnly),
       "propose-intent-gap-install contains a hardcoded vendor/provider mapping " +
@@ -391,7 +365,7 @@ describe("TRIPWIRE — Phase 4 stays inert and governed", () => {
     // comments did not over-strip into blindness.
     const planted = `const PROVIDER_MAP = { generate_media: "remotion" };`;
     expect(
-      VENDOR_PATTERN.test(stripComments(planted)),
+      VENDOR_PATTERN.test(stripComments(planted, "ts")),
       "the vendor scan no longer matches a planted vendor VALUE — the " +
         "provider-map guard above is now VACUOUS and would pass unconditionally"
     ).toBe(true);
@@ -407,7 +381,7 @@ describe("TRIPWIRE — Phase 4 stays inert and governed", () => {
       " */",
     ].join("\n");
     expect(
-      VENDOR_PATTERN.test(stripComments(prose)),
+      VENDOR_PATTERN.test(stripComments(prose, "ts")),
       "the vendor scan matches inside a comment — this guard would report a " +
         "false positive on documentation"
     ).toBe(false);

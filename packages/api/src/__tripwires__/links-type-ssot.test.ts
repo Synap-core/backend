@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `LinkType` SSOT, and the Hub REST WRITE ALLOWLIST derived from it.
@@ -75,34 +76,6 @@ import { fileURLToPath } from "url";
  */
 const ALLOWLISTED_WITHOUT_TYPED_PRODUCER = ["about", "concerns", "provided_by"];
 
-/**
- * Strip BOTH `/* … *\/` block comments and `// …` line comments, so a comment's
- * prose can never be mistaken for source syntax.
- *
- * BLOCK comments matter here and the sibling endpoint tripwire does not strip
- * them — which is not an oversight there (its union carries only `//` notes) but
- * IS load-bearing here, and this file was written with the line-only stripper
- * first and went red for exactly that reason. The `spawned_from` member of the
- * schema union carries a JSDoc containing the sentence `The UI says "forked
- * from"; it never draws a graph.` — a SEMICOLON in prose. A union parse bounded
- * by `indexOf(";")` therefore stopped THREE members early, silently, and the
- * word `"branched_from"` quoted in that same prose was read as a member. That is
- * the signature defect of this codebase (a scan truncated at a brace or a
- * semicolon in a doc comment) reproducing itself inside the guard written to
- * prevent it.
- *
- * Boundary, stated: this also blanks a `//` sequence inside a string literal (a
- * URL). Nothing scanned below depends on one, and the two union parses read only
- * lowercase-and-underscore literals.
- */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/, ""))
-    .join("\n");
-}
-
 const SCHEMA_FILE = join(
   process.cwd(),
   "..",
@@ -122,7 +95,7 @@ const REST_DOOR = join(
 );
 
 function schemaUnion(): string[] {
-  const clean = stripComments(readFileSync(SCHEMA_FILE, "utf8"));
+  const clean = stripComments(readFileSync(SCHEMA_FILE, "utf8"), "ts");
   const start = clean.indexOf("export type LinkType =");
   if (start === -1) throw new Error("LinkType not found in schema");
   const end = clean.indexOf(";", start);
@@ -177,7 +150,7 @@ interface Site {
 function discoverSites(union: ReadonlySet<string>): Site[] {
   const sites: Site[] = [];
   for (const file of sourceFiles()) {
-    const src = stripComments(readFileSync(file, "utf8"));
+    const src = stripComments(readFileSync(file, "utf8"), "ts");
 
     let idx = src.indexOf("type LinkType =");
     while (idx !== -1) {
@@ -221,7 +194,7 @@ function liveLinkTypes(union: readonly string[]): Set<string> {
   const live = new Set<string>();
   for (const file of sourceFiles()) {
     if (isTestFile(file)) continue;
-    const src = stripComments(readFileSync(file, "utf8"));
+    const src = stripComments(readFileSync(file, "utf8"), "ts");
     for (const type of union) {
       const producer = new RegExp(`linkType:\\s*"${type}"`);
       const reader = new RegExp(`linkType\\s*,\\s*"${type}"`);
@@ -288,7 +261,7 @@ describe("tripwire: the Hub REST write allowlist tracks producers, not symmetry"
   });
 
   it("allowlists exactly the union members something produces or reads", () => {
-    const src = stripComments(readFileSync(REST_DOOR, "utf8"));
+    const src = stripComments(readFileSync(REST_DOOR, "utf8"), "ts");
     const match = src.match(/LINK_TYPES\s*=\s*\[([^\]]*)\]\s*as const/s);
     expect(
       match,
@@ -319,7 +292,7 @@ describe("tripwire: the Hub REST write allowlist tracks producers, not symmetry"
   });
 
   it("the set of allowlisted-but-unproduced types is exactly the pinned one", () => {
-    const src = stripComments(readFileSync(REST_DOOR, "utf8"));
+    const src = stripComments(readFileSync(REST_DOOR, "utf8"), "ts");
     const match = src.match(/LINK_TYPES\s*=\s*\[([^\]]*)\]\s*as const/s);
     const allowed = [...match![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
     const unproduced = allowed.filter((t) => !live.has(t)).sort();

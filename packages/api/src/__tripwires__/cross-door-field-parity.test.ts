@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE (T4) — cross-door FIELD parity, by ACKNOWLEDGEMENT not symmetry.
@@ -348,20 +349,6 @@ const SERVICES: ServiceSpec[] = [
 
 // ── Source utilities ─────────────────────────────────────────────────────────
 
-/**
- * Prose documents the contract; only CODE implements it. A door that merely
- * MENTIONS `writeReceipt` in a comment has not forwarded it — and several of
- * these files carry long comments naming the exact fields they drop.
- *
- * Line comments are stripped only when the `//` starts the line (after
- * whitespace), so a `"https://…"` inside a string survives intact.
- */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
-}
-
 const SKIP_DIRS = new Set([
   "node_modules",
   "dist",
@@ -637,7 +624,8 @@ interface ResultShape {
 
 function resultShapeOf(spec: ServiceSpec): ResultShape {
   const source = stripComments(
-    readFileSync(spec.typeFile ?? spec.file, "utf8")
+    readFileSync(spec.typeFile ?? spec.file, "utf8"),
+    "ts"
   );
   const body = spec.zodOutputAfter
     ? extractZodOutputBody(source, spec.zodOutputAfter)
@@ -719,7 +707,7 @@ function exposingModules(spec: ServiceSpec): string[] {
   const mods = [spec.file];
   const barrel = join(dirname(spec.file), "index.ts");
   if (existsSync(barrel)) {
-    const src = stripComments(readFileSync(barrel, "utf8"));
+    const src = stripComments(readFileSync(barrel, "utf8"), "ts");
     if (new RegExp(`export\\s*\\{[^}]*\\b${spec.fn}\\b[^}]*\\}`).test(src)) {
       mods.push(barrel);
     }
@@ -895,7 +883,7 @@ function discoverDoors(spec: ServiceSpec): Discovery {
 
   for (const { file, source, forcedRole } of corpusFor(spec)) {
     if (!importedPaths(file, source).some((p) => exposers.has(p))) continue;
-    const stripped = stripComments(source);
+    const stripped = stripComments(source, "ts");
     const role = forcedRole ?? classify(file, stripped);
     const rel = relative(API_SRC, file);
     const callRe = new RegExp(spec.callPattern ?? `\\b${spec.fn}\\s*\\(`, "g");
@@ -1391,7 +1379,8 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
     "$key: every named sub-shape of $resultType has a spec of its own",
     (spec) => {
       const source = stripComments(
-        readFileSync(spec.typeFile ?? spec.file, "utf8")
+        readFileSync(spec.typeFile ?? spec.file, "utf8"),
+        "ts"
       );
       const audited = new Set(SERVICES.map((s) => s.resultType));
       const missing = reachableShapes(source, spec.resultType).filter(
@@ -1611,7 +1600,7 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
    */
   it("the counts.* acknowledgements' arithmetic bound still holds", () => {
     const file = join(API_SRC, "services/diagnose/agent-scorecard.ts");
-    const src = stripComments(readFileSync(file, "utf8"));
+    const src = stripComments(readFileSync(file, "utf8"), "ts");
     const limit = /SCORECARD_SCAN_LIMIT\s*=\s*(\d+)/.exec(src);
     const digits = /\(\s*n\s*\/\s*total\s*\)\.toFixed\(\s*(\d+)\s*\)/.exec(src);
     expect(

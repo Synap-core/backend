@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, relative } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `err instanceof TRPCError` is BANNED under hub-protocol/rest/.
@@ -52,13 +53,6 @@ const ALLOWLIST_SUFFIXES = [join("_shared.ts")];
 // `cause instanceof TRPCError` all walked straight through undetected.
 const BANNED = /\b\w+\s+instanceof\s+TRPCError\b/;
 
-/** Strip comments so an illustrative mention of the banned pattern IN A
- * COMMENT (several files here document the incident by NAMING the dead
- * check) isn't itself flagged as an offense. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
 function tsFiles(dir: string, acc: string[] = []): string[] {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -80,7 +74,7 @@ function tsFiles(dir: string, acc: string[] = []): string[] {
 describe("tripwire: no `instanceof TRPCError` under hub-protocol/rest", () => {
   it("no REST route file checks `err instanceof TRPCError` — duck-type via httpStatusForTrpcError/errCode instead", () => {
     const offenders = tsFiles(REST_DIR)
-      .filter((f) => BANNED.test(stripComments(readFileSync(f, "utf8"))))
+      .filter((f) => BANNED.test(stripComments(readFileSync(f, "utf8"), "ts")))
       .map((f) => relative(REST_DIR, f))
       .filter((rel) => !ALLOWLIST_SUFFIXES.includes(rel));
     expect(offenders).toEqual([]);

@@ -22,6 +22,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(here, "..");
@@ -38,17 +39,12 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Real insert CALLS only — `.insert(capabilities)` not inside a comment line. */
+/** Real insert CALLS only — `.insert(capabilities)` not inside a comment. */
 function containerInserters(): string[] {
   return [...walk(API_SRC), ...walk(DATABASE_SRC)].filter((f) =>
-    readFileSync(f, "utf8")
-      .split("\n")
-      .some(
-        (line) =>
-          /\.insert\(capabilities(Table)?\)/.test(line) &&
-          !line.trimStart().startsWith("*") &&
-          !line.trimStart().startsWith("//")
-      )
+    /\.insert\(capabilities(Table)?\)/.test(
+      stripComments(readFileSync(f, "utf8"), "ts")
+    )
   );
 }
 

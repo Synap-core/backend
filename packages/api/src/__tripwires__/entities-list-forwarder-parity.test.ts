@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — the Hub forwarder must FORWARD every entity-list filter it declares.
@@ -46,17 +47,6 @@ const FORWARDER = join(
   "entities.ts"
 );
 
-/** Comments are prose; a `//` note mentioning a param name must never count as
- *  a declaration or a forward. Block comments too — a JSDoc naming a field is
- *  exactly how a scan in this repo came to read words out of prose. */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/, ""))
-    .join("\n");
-}
-
 /** The keys of a `z.object({...})`-shaped input block, read as `name: z.…`. */
 function zodKeys(src: string, startMarker: string): string[] {
   const start = src.indexOf(startMarker);
@@ -69,8 +59,8 @@ function zodKeys(src: string, startMarker: string): string[] {
 }
 
 describe("tripwire: the Hub entities forwarder passes on every filter it accepts", () => {
-  const readSrc = stripComments(readFileSync(READ_DOOR, "utf8"));
-  const fwdSrc = stripComments(readFileSync(FORWARDER, "utf8"));
+  const readSrc = stripComments(readFileSync(READ_DOOR, "utf8"), "ts");
+  const fwdSrc = stripComments(readFileSync(FORWARDER, "utf8"), "ts");
 
   const listKeys = new Set(zodKeys(readSrc, "  list: podProcedure"));
   const fwdKeys = zodKeys(fwdSrc, "  getEntities: scopedProcedure");

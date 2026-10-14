@@ -36,6 +36,7 @@ vi.mock("@synap/auth", async (importOriginal) => ({
 
 import { AccessContext } from "../access/context.js";
 import { GUEST_REFUSED_MESSAGE } from "../access/guest-containment.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROUTERS = path.resolve(HERE, "../routers");
@@ -51,16 +52,12 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * Source without comments, so a doc mention is not a use. Line comments go
- * first: a `// … /trpc/* …` line must not open a block comment that swallows
- * the code after it (it did, and hid `chat-stream.ts` from this scan).
+ * Source without comments, so a doc mention is not a use. The shared scanner:
+ * a `// … /trpc/* …` line must not open a block comment that swallows the code
+ * after it (a regex strip did, and hid `chat-stream.ts` from this scan).
  */
 function codeOnly(src: string): string {
-  return src
-    .split("\n")
-    .map((l) => l.replace(/(^|\s)\/\/.*$/, "$1"))
-    .join("\n")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+  return stripComments(src, "ts");
 }
 
 /** Top-level static imports, so that importing the name is not a use. */

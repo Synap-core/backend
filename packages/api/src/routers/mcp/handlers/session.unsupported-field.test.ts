@@ -23,11 +23,12 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const SRC = readFileSync(resolve(__dirname, "session.ts"), "utf8");
 
 /** Comment-stripped, so prose explaining the rule cannot satisfy the rule. */
-const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+const CODE = stripComments(SRC, "ts");
 
 describe("synap_update_session refuses what it cannot do", () => {
   it("the scan is not vacuous — this really is the session handler", () => {

@@ -116,12 +116,11 @@ describe("install-layers ↔ applier identifier parity (source scan)", () => {
       join(here, "..", "package-apply-post-workspace.ts"),
       "utf8"
     );
-    const lines = src.split("\n");
+    // Comments merely DESCRIBING the convention are not producers.
+    const lines = stripComments(src, "ts").split("\n");
     const offenders: string[] = [];
     lines.forEach((line, i) => {
       if (!/status:\s*"error"/.test(line)) return;
-      // Comments merely DESCRIBING the convention are not producers.
-      if (line.trimStart().startsWith("//")) return;
       const window = lines.slice(Math.max(0, i - 6), i + 7).join("\n");
       const identified = /\b(key|name):/.test(window);
       // The two SCALAR bags carry one item each, so the bag key alone names it.
@@ -136,6 +135,7 @@ describe("install-layers ↔ applier identifier parity (source scan)", () => {
 
 // ─── W3b: installedTrackTemplates ────────────────────────────────────────────
 import { installedTrackTemplates } from "./install-layers.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 describe("installedTrackTemplates — the startable methods an install produced", () => {
   it("keeps project-scope playbooks with an id (created or reused), drops the rest", () => {

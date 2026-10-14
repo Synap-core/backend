@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — session spawn (`links.spawned_from`) stays BEST-EFFORT.
@@ -35,19 +36,6 @@ const PRODUCERS = [
 ];
 
 const CALL = "recordSessionSpawn(";
-
-/**
- * Strip `//` and `/* … *​/` comments so brace-counting can't be fooled by
- * prose (these files' own header comments talk about "try/catch" and
- * "throw"). Applied to a LOCAL WINDOW around the call site, not the whole
- * file — a file-wide strip is one stray `/*`/`*​/` or `//` inside an unrelated
- * string literal away from silently eating the call itself.
- */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
 
 /** Index of the `{` that opens the innermost block directly enclosing `at`. */
 function enclosingBraceOpen(src: string, at: number): number {
@@ -169,7 +157,7 @@ describe("tripwire: session spawn (recordSessionSpawn) stays best-effort", () =>
       // file contains an unbalanced `/*`/`//`.
       const winStart = Math.max(0, rawCallIdx - WINDOW);
       const winEnd = Math.min(raw.length, rawCallIdx + WINDOW);
-      const src = stripComments(raw.slice(winStart, winEnd));
+      const src = stripComments(raw.slice(winStart, winEnd), "ts");
       const callIdx = src.indexOf(CALL);
       if (callIdx === -1) {
         findings.push(

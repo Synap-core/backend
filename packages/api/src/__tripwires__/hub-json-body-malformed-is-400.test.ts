@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a Hub route never folds a MALFORMED request body into the empty
@@ -37,7 +38,7 @@ const SWALLOW = [
 
 function offenders(src: string): number {
   // Comments may quote the idiom (the helper's own docstring does).
-  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const code = stripComments(src, "ts");
   return code.split("\n").filter((l) => SWALLOW.some((re) => re.test(l)))
     .length;
 }

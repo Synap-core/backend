@@ -38,6 +38,7 @@ import {
   readRequiredIntents,
   type LoopPlaybookDef,
 } from "./index.js";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 describe("requiredIntents — the reader is total, never silently empty", () => {
   it("non-vacuity: the field name is the one the whole package agrees on", () => {
@@ -248,9 +249,7 @@ describe("requiredIntents — the seam to the resolver is a Map, and nothing mor
       new URL("./required-intents.ts", import.meta.url),
       "utf8"
     );
-    const code = src
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/^[ \t]*\/\/.*$/gm, " ");
+    const code = stripComments(src, "ts");
     expect(code).not.toMatch(/capability-intent-index/);
     // Nor may it hold a vocabulary of its own — the fifth mirror.
     expect(code).not.toMatch(/\bABSTRACT_INTENTS\b|\bREGISTERED_EXTRAS\b/);
@@ -283,9 +282,7 @@ describe("requiredIntents — the seam to the resolver is a Map, and nothing mor
     // see a copy whose name differs from the three policed here. It is a
     // backstop on the exact name that was deleted, not a proof of absence.
     const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    const code = src
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/^[ \t]*\/\/.*$/gm, " ");
+    const code = stripComments(src, "ts");
     for (const name of [
       "AbstractVerb",
       "ABSTRACT_INTENTS",

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every IN-PROCESS caller of `executeCapability` declares its
@@ -69,12 +70,6 @@ function collect(dir: string): string[] {
   return out;
 }
 
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
-}
-
 /** Top-level keys of the object literal opening at `open`, string- and depth-aware. */
 function topLevelKeys(source: string, open: number): string[] {
   const keys: string[] = [];
@@ -117,7 +112,7 @@ function topLevelKeys(source: string, open: number): string[] {
 
 /** Each `executeCapability({ … })` call site: does its argument declare `observability`? */
 function callSites(source: string): { declares: boolean }[] {
-  const code = stripComments(source);
+  const code = stripComments(source, "ts");
   const out: { declares: boolean }[] = [];
   const re = /\bexecuteCapability\s*\(\s*/g;
   let m: RegExpExecArray | null;

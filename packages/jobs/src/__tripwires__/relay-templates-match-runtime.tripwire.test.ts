@@ -34,6 +34,7 @@ import {
   MESSAGE_ALIAS_EVENT_TYPES,
 } from "../workers/automation-trigger-matcher.js";
 import { parseContextPath } from "../workers/context-path.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** …/synap-backend/packages/jobs/src/__tripwires__ → …/synap-backend */
@@ -154,19 +155,8 @@ const CONTEXT_ROOTS = ["trigger", "steps", "automation", "loop", "item"];
  */
 const UNRESOLVABLE_AUTHORED_REFS = ["now()", "now(-30d)"];
 
-/**
- * Comments are PROSE, not authored data — the templates file documents the node
- * grammar in its own header (`steps.stepId.output.field`), and a scan that read
- * those would report defects that do not exist. Strip them once, up front.
- */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
 describe("relay automation templates match the runtime", () => {
-  const src = stripComments(readTemplates());
+  const src = stripComments(readTemplates(), "ts");
 
   it("the derived emitted-event corpus is real (never vacuously green)", () => {
     const emitted = emittedEventTypes();

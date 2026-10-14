@@ -29,6 +29,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BACKEND = join(here, "../../../..");
@@ -104,9 +105,7 @@ function walk(dir: string): string[] {
 
 /** Source with comments blanked, so prose naming a util is never a call. */
 function code(path: string): string {
-  return readFileSync(path, "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+  return stripComments(readFileSync(path, "utf8"), "ts");
 }
 
 const rel = (p: string) => relative(BACKEND, p);

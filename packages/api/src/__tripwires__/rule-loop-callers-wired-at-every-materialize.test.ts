@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every `materializeCompositeGraph` call site wires the Rule Loop
@@ -62,52 +63,6 @@ function collectSourceFiles(dir: string, out: string[] = []): string[] {
     out.push(full);
   }
   return out;
-}
-
-/**
- * Blank out COMMENTS, preserving offsets. String bodies are kept — the
- * preflight's own predicate compares against `"create_skill"` literals — but
- * the scanner still walks over strings so a `//` inside one cannot be mistaken
- * for a comment. Without this a COMMENT satisfies every `includes()` in this
- * file, which is exactly how the old runtime-preflight assertion could be
- * satisfied by prose.
- */
-function stripComments(src: string): string {
-  const out = src.split("");
-  let i = 0;
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to && k < out.length; k++) {
-      if (out[k] !== "\n") out[k] = " ";
-    }
-  };
-  while (i < src.length) {
-    const c = src[i];
-    const n = src[i + 1];
-    if (c === "/" && n === "/") {
-      const end = src.indexOf("\n", i);
-      blank(i, end === -1 ? src.length : end);
-      i = end === -1 ? src.length : end;
-    } else if (c === "/" && n === "*") {
-      const end = src.indexOf("*/", i + 2);
-      blank(i, end === -1 ? src.length : end + 2);
-      i = end === -1 ? src.length : end + 2;
-    } else if (c === '"' || c === "'" || c === "`") {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === c) break;
-        j++;
-      }
-      // String body kept verbatim; we only skip past it.
-      i = j + 1;
-    } else {
-      i++;
-    }
-  }
-  return out.join("");
 }
 
 /** Every `<marker>(` call in `src`, as [offset, balanced-paren text]. */
@@ -177,7 +132,7 @@ const WIRED = /\.\.\.\s*buildRuleLoopCallers\s*\(/;
 describe("TRIPWIRE: Rule Loop callers wired at every materialize call site", () => {
   const files = collectSourceFiles(API_SRC);
   const stripped = new Map(
-    files.map((f) => [f, stripComments(readFileSync(f, "utf8"))])
+    files.map((f) => [f, stripComments(readFileSync(f, "utf8"), "ts")])
   );
   // PER CALL SITE, not per file: import-orchestrator.ts alone holds two.
   const sites = files.flatMap((f) =>
@@ -212,7 +167,7 @@ describe("TRIPWIRE: Rule Loop callers wired at every materialize call site", () 
 
   it("the materializer REFUSES an unwired config op instead of skipping it", () => {
     const raw = readFileSync(MATERIALIZER, "utf8");
-    const src = stripComments(raw);
+    const src = stripComments(raw, "ts");
     const declAt = src.indexOf(
       "export async function materializeCompositeGraph"
     );

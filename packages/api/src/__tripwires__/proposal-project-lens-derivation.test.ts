@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — the project-lens derivation at the pending-proposal one door.
@@ -82,23 +83,12 @@ describe("proposals carry the project lens", () => {
   const src = existsSync(DOOR) ? readFileSync(DOOR, "utf8") : "";
   const ladder = existsSync(LADDER) ? readFileSync(LADDER, "utf8") : "";
 
-  /**
-   * Strip `//` and block comments. The sibling door-parity tripwire learned this
-   * the hard way in both directions: a key named only in a COMMENT satisfies a
-   * scan the code does not, and — the failure hit while writing this file — the
-   * adapter's own JSDoc says "`proposals.thread_id` FKs `channels.id`", which
-   * made the "no second ladder" check fire on PROSE describing the delegation it
-   * was meant to forbid. Scan code, never comments.
-   */
-  const stripComments = (block: string): string =>
-    block.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
-
   /** The adapter's own body — sliced so a check cannot drift onto the INSERT. */
   const deriveBody = (() => {
     const start = src.indexOf("export async function deriveProposalProjectId");
     return start === -1
       ? ""
-      : stripComments(src.slice(start, src.indexOf("\n}\n", start)));
+      : stripComments(src.slice(start, src.indexOf("\n}\n", start)), "ts");
   })();
 
   it("derives projectId from the proposal's session", () => {

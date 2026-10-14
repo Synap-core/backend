@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a session's TERMINAL status has ONE door.
@@ -78,11 +79,6 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const stripComments = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p) => p);
-
 /** A raw terminal stamp: `.update(focusSessions)` … `status: "<terminal>"`. */
 // The gap may not cross ANOTHER `.update(` — without that, a session update
 // followed within 400 chars by an unrelated `.update(playbookRuns).set({
@@ -98,7 +94,7 @@ function findViolations(roots: string[]): string[] {
     for (const file of walk(root)) {
       const rel = relative(join(API_SRC, ".."), file).replace(/\\/g, "/");
       if (rel.includes(THE_DOOR)) continue;
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       if (TERMINAL_STAMP.test(src)) hits.push(rel);
       TERMINAL_STAMP.lastIndex = 0;
     }
@@ -128,7 +124,7 @@ describe("tripwire: a session's terminal status has ONE door", () => {
     `;
     TERMINAL_STAMP.lastIndex = 0;
     expect(
-      TERMINAL_STAMP.test(stripComments(BAD)),
+      TERMINAL_STAMP.test(stripComments(BAD, "ts")),
       "the detector no longer matches a raw terminal stamp — the regex broke, " +
         "and a broken detector reports every file as clean."
     ).toBe(true);
@@ -148,7 +144,7 @@ describe("tripwire: a session's terminal status has ONE door", () => {
     `;
     TERMINAL_STAMP.lastIndex = 0;
     expect(
-      TERMINAL_STAMP.test(stripComments(OTHER_TABLE)),
+      TERMINAL_STAMP.test(stripComments(OTHER_TABLE, "ts")),
       "the detector reached past a second `.update(` and blamed a session door " +
         "for a playbook_runs status — it must bind to ONE statement."
     ).toBe(false);
@@ -157,7 +153,7 @@ describe("tripwire: a session's terminal status has ONE door", () => {
     // And it must NOT fire on a call that goes through the door.
     const GOOD = `await closeSessionViaDoor({ sessionId, userId });`;
     TERMINAL_STAMP.lastIndex = 0;
-    expect(TERMINAL_STAMP.test(stripComments(GOOD))).toBe(false);
+    expect(TERMINAL_STAMP.test(stripComments(GOOD, "ts"))).toBe(false);
     TERMINAL_STAMP.lastIndex = 0;
   });
 
@@ -234,7 +230,7 @@ describe("tripwire: a session's terminal status has ONE door", () => {
       for (const file of walk(root)) {
         const rel = relative(join(API_SRC, ".."), file).replace(/\\/g, "/");
         if (rel.includes(THE_DOOR)) continue;
-        const src = stripComments(readFileSync(file, "utf8"));
+        const src = stripComments(readFileSync(file, "utf8"), "ts");
         if (!INSERT_SHAPE.test(src)) continue;
         if (!DYNAMIC_STAMP.test(src)) continue;
         scanned += 1;

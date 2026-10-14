@@ -40,6 +40,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { getNotificationDef } from "../notifications/registry.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /** `src/__tripwires__` → src → api → packages → synap-backend. */
 const BACKEND_ROOT = join(import.meta.dirname, "../../../..");
@@ -74,11 +75,6 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Strip comments so prose describing the old pattern is never read as code. */
-function strip(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
-
 const DIRECT_INSERT = /\.insert\(\s*notifications\b/;
 
 describe("TRIPWIRE: notifications have ONE write door", () => {
@@ -105,7 +101,7 @@ describe("TRIPWIRE: notifications have ONE write door", () => {
       false
     );
     // And the comment-stripper must not be what makes this pass.
-    expect(strip("// db.insert(notifications)").trim()).toBe("");
+    expect(stripComments("// db.insert(notifications)", "ts").trim()).toBe("");
   });
 
   it("no @synap/jobs file inserts into `notifications` directly", () => {
@@ -113,7 +109,7 @@ describe("TRIPWIRE: notifications have ONE write door", () => {
     for (const file of files) {
       const rel = relative(JOBS_SRC, file);
       if (ALLOWED_DIRECT_WRITERS[rel]) continue;
-      if (DIRECT_INSERT.test(strip(readFileSync(file, "utf8")))) {
+      if (DIRECT_INSERT.test(stripComments(readFileSync(file, "utf8"), "ts"))) {
         offenders.push(rel);
       }
     }

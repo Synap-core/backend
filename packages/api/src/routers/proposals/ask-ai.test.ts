@@ -33,6 +33,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const h = vi.hoisted(() => ({
   proposalRow: null as Record<string, unknown> | null,
@@ -398,9 +399,7 @@ describe("the ONE-DOOR rule, structurally", () => {
    * whole-file scan trips on the prose that documents the rule — the exact
    * comment-scanning trap `.claude/rules/guards-and-tests.md` records.
    */
-  const src = raw
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const src = stripComments(raw, "ts");
 
   it("NON-VACUITY: comment-stripping did not empty the scan", () => {
     expect(src.length).toBeGreaterThan(800);

@@ -25,6 +25,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(here, "..");
@@ -58,23 +59,11 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const CALL = "submitCaptureGraph({";
 
-/**
- * Strip comments before scanning. `map-booking-to-graph.ts` DOCUMENTS its output
- * as "plugs straight into `submitCaptureGraph({ entities, relations })`" — a
- * prose mention, not a producer. Counting it would report a file that files no
- * proposal at all, and a tripwire that cries wolf gets suppressed.
- */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-}
-
 /** Files that FILE a capture graph — the set that must describe what it filed. */
 function captureProducers(): string[] {
   return walk(API_SRC).filter(
     (f) =>
-      stripComments(readFileSync(f, "utf8")).includes(CALL) &&
+      stripComments(readFileSync(f, "utf8"), "ts").includes(CALL) &&
       // The door itself is the fallback's owner, not a producer of it.
       !f.endsWith(join("capture-agent", "submit-capture-graph.ts"))
   );
@@ -136,7 +125,7 @@ describe("tripwire: every capture producer supplies a narrative summary", () => 
   it("each submitCaptureGraph call passes a summary", () => {
     const offenders: string[] = [];
     for (const file of producers) {
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       eachCall(src).forEach((args, n) => {
         if (!/(^|[\s,{])summary\s*:/m.test(args)) {
           offenders.push(`${relative(REPO, file)} (call #${n + 1})`);
@@ -151,7 +140,7 @@ describe("tripwire: every capture producer supplies a narrative summary", () => 
   it("no producer slices rawSource.rawText with its own literal", () => {
     const offenders: string[] = [];
     for (const file of producers) {
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       for (const args of eachCall(src)) {
         const at = args.indexOf("rawText:");
         if (at === -1) continue;

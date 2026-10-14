@@ -28,6 +28,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -62,14 +63,10 @@ function walk(dir: string): string[] {
   });
 }
 
-/** Comments name the doors in prose; only code counts. */
-const stripComments = (src: string) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-
 const doors = walk(SRC)
   .map((file) => ({
     rel: relative(SRC, file),
-    code: stripComments(readFileSync(file, "utf8")),
+    code: stripComments(readFileSync(file, "utf8"), "ts"),
   }))
   .filter((f) => DOOR_CALL.test(f.code));
 
@@ -95,7 +92,9 @@ describe("every capture door keeps its raw through the one raw door", () => {
     expect(DOOR_CALL.test('proposalType: "import.graph",')).toBe(true);
     expect(DOOR_CALL.test("// plugs into `submitCaptureGraph({`")).toBe(true);
     expect(
-      DOOR_CALL.test(stripComments("// plugs into `submitCaptureGraph({`"))
+      DOOR_CALL.test(
+        stripComments("// plugs into `submitCaptureGraph({`", "ts")
+      )
     ).toBe(false);
     expect(RAW_DOOR.test("const s = await stageCaptureSources({")).toBe(true);
     expect(RAW_DOOR.test("stageCaptureSources")).toBe(false);

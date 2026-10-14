@@ -88,6 +88,7 @@ import {
   SEEDED_REQUIRED_LINKS,
   constraintsOf,
 } from "./_seed-property-defs.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const DISCOVER_FILE = resolve(
@@ -515,10 +516,7 @@ describe("the BUILT @synap/database the seam runs on is not stale", () => {
 describe("the handler still routes through both projections", () => {
   // Granularity is the FILE, not the call site: this sees the calls NAMED and
   // the dead keys ABSENT. It cannot prove the calls are reachable.
-  const src = readFileSync(DISCOVER_FILE, "utf8").replace(
-    /\/\*[\s\S]*?\*\//g,
-    ""
-  );
+  const src = stripComments(readFileSync(DISCOVER_FILE, "utf8"), "ts");
 
   it("the handler maps its defs through `toDiscoverProperty`", () => {
     // WIDENED 2026-09-21: the call gained a second argument (measured fill),
@@ -643,10 +641,7 @@ describe("`fill` is two numbers, and ABSENT when unmeasured", () => {
   });
 
   it("the handler asks for fill only when the caller does, and never filters on it", () => {
-    const src = readFileSync(DISCOVER_FILE, "utf8").replace(
-      /\/\*[\s\S]*?\*\//g,
-      ""
-    );
+    const src = stripComments(readFileSync(DISCOVER_FILE, "utf8"), "ts");
     expect(src).toMatch(/wantsFill/);
     // A fill stat is a TIEBREAKER, never a gate: no filter/gate on `fill` may
     // remove a property from the emitted schema.

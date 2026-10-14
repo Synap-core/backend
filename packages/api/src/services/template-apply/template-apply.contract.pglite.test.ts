@@ -289,6 +289,7 @@ import { db as testDb } from "@synap/database";
 import { router } from "../../trpc.js";
 import { definitionEngineProcedures } from "../../routers/workspaces/definition-engine.js";
 import { workspaceCatalogRouter } from "../../routers/workspaces.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const OWNER = randomUUID();
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
@@ -722,7 +723,7 @@ describe("the door list is derived", () => {
     const callers = walk(API_SRC)
       .filter((p) =>
         /(?<!function\s)\bapplyTemplate\s*\(/.test(
-          readFileSync(p, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")
+          stripComments(readFileSync(p, "utf8"), "ts")
         )
       )
       .map((p) => relative(API_SRC, p));

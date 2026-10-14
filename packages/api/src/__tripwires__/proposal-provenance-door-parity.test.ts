@@ -31,6 +31,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PENDING_DOOR = resolve(
@@ -38,15 +39,6 @@ const PENDING_DOOR = resolve(
   "../../../database/src/utils/insert-pending-proposal.ts"
 );
 const RECEIPT_DOOR = resolve(HERE, "../utils/permission-check.ts");
-
-/**
- * Strip `//` and block comments. A key named only in a COMMENT would otherwise
- * satisfy the scan while the door never writes it — the exact false-green this
- * tripwire exists to prevent.
- */
-function stripComments(block: string): string {
-  return block.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
-}
 
 /**
  * Slice the object literal that follows `.values(` at `from`, by brace-matching.
@@ -89,13 +81,15 @@ describe("proposals INSERT doors — provenance parity", () => {
     valuesBlockAfter(
       pendingSource,
       pendingSource.indexOf("export async function insertPendingProposal")
-    )
+    ),
+    "ts"
   );
   const receiptValues = stripComments(
     valuesBlockAfter(
       receiptSource,
       receiptSource.indexOf("const eventKey = `${subjectType}.${action}`")
-    )
+    ),
+    "ts"
   );
 
   /**

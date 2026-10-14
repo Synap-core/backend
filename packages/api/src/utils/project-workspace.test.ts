@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 type LinkNeighbour = {
   fromType: string;
@@ -196,10 +197,7 @@ describe("linkProjectToWorkspace — not an ACL", () => {
     // Strip comments so the header's "never writes workspace_members" prose
     // cannot be mistaken for a membership API call (the same comment-in-
     // source trap the LinkType SSOT tripwire was written to prevent).
-    const code = HELPER_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(
-      /\/\/.*$/gm,
-      ""
-    );
+    const code = stripComments(HELPER_SRC, "ts");
     expect(code).toMatch(/createLink\(/);
     expect(code).not.toMatch(/workspaceMembers/);
     expect(code).not.toMatch(/workspace_members/);

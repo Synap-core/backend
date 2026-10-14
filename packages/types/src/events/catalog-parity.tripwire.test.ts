@@ -30,6 +30,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { validateEventPattern } from "./unified.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /** `src/events` → src → types → packages → synap-backend. */
 const BACKEND_ROOT = join(import.meta.dirname, "../../../..");
@@ -41,10 +42,8 @@ function catalogEventTypes(): string[] {
       `Tripwire cannot read its subject: ${CATALOG}. A moved catalog must move this test, not silence it.`
     );
   }
-  const src = readFileSync(CATALOG, "utf8")
-    // Strip comments so a prose example can never be read as a declaration.
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/.*$/gm, "");
+  // Strip comments so a prose example can never be read as a declaration.
+  const src = stripComments(readFileSync(CATALOG, "utf8"), "ts");
   const found = [
     // `[A-Za-z_]`, not `[a-z_]`: `SUBJECT_TYPES` carries camelCase subjects
     // (`inboxItem`, `apiKey`, `agentRun`, `chatThread`, `workspaceMember`,

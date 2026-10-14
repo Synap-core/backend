@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every `recordSessionArtifact(` call site forwards `expectedLabel`.
@@ -30,12 +31,6 @@ import { join } from "path";
  */
 
 const SRC_ROOT = join(process.cwd(), "src");
-
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
-}
 
 // The door's own definition, not a caller — `export async function
 // recordSessionArtifact(` matches the call-site marker too (it ends in the
@@ -105,7 +100,9 @@ describe("tripwire: every recordSessionArtifact() call forwards expectedLabel", 
     const files = tsFiles(SRC_ROOT);
     let total = 0;
     for (const f of files) {
-      total += findCallArgs(stripComments(readFileSync(f, "utf8"))).length;
+      total += findCallArgs(
+        stripComments(readFileSync(f, "utf8"), "ts")
+      ).length;
     }
     // 10 known call sites (2 human attach doors + 6 agent doors: MCP
     // synap_store_file ×2, hub documents.createDocument ×2, hub
@@ -124,7 +121,7 @@ describe("tripwire: every recordSessionArtifact() call forwards expectedLabel", 
     const files = tsFiles(SRC_ROOT);
     const offenders: string[] = [];
     for (const f of files) {
-      const source = stripComments(readFileSync(f, "utf8"));
+      const source = stripComments(readFileSync(f, "utf8"), "ts");
       const calls = findCallArgs(source);
       for (const call of calls) {
         // Explicit key (`expectedLabel: x`) or ES2015 shorthand (`expectedLabel,`
@@ -247,7 +244,9 @@ function gateLabelOffenders(source: string): {
 } {
   const offenders: string[] = [];
   let checked = 0;
-  for (const { text, isProcedure } of handlerChunks(stripComments(source))) {
+  for (const { text, isProcedure } of handlerChunks(
+    stripComments(source, "ts")
+  )) {
     const recordsLabel = callArgs(text, /recordSessionArtifact\(/g).some(
       (c) =>
         /\bexpectedLabel\s*:\s*(?!undefined\b)/.test(c.arg) ||

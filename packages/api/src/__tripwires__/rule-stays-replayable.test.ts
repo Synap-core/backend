@@ -23,6 +23,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const API_SRC = join(__dirname, "..");
 
@@ -35,11 +36,7 @@ const API_SRC = join(__dirname, "..");
 function readCode(rel: string): string {
   const path = join(API_SRC, rel);
   if (!existsSync(path)) throw new Error(`guarded file is missing: ${rel}`);
-  return readFileSync(path, "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((l) => l.replace(/\/\/.*$/, ""))
-    .join("\n");
+  return stripComments(readFileSync(path, "utf8"), "ts");
 }
 
 describe("a rule stays replayable after approval", () => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join, relative, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `governance_rules` is the ONE decision store for auto-approve /
@@ -94,13 +95,6 @@ const ALLOWLIST: Record<string, string> = {
 
 const TOKEN = "autoApproveFor";
 
-function isCommentOnlyLine(line: string): boolean {
-  const t = line.trim();
-  return (
-    t === "" || t.startsWith("//") || t.startsWith("/*") || t.startsWith("*")
-  );
-}
-
 function tsFilesUnderSrc(root: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist") continue;
@@ -143,8 +137,7 @@ function liveOffenders(): { file: string; reason: string | undefined }[] {
   const files = SCAN_ROOTS.flatMap((root) => tsFilesUnderSrc(root));
   const hits: { file: string; reason: string | undefined }[] = [];
   for (const f of files) {
-    const lines = readFileSync(f, "utf8").split("\n");
-    const codeText = lines.filter((l) => !isCommentOnlyLine(l)).join("\n");
+    const codeText = stripComments(readFileSync(f, "utf8"), "ts");
     if (codeText.includes(TOKEN)) {
       const rel = relative(REPO_ROOT, f).split("\\").join("/");
       hits.push({ file: rel, reason: ALLOWLIST[rel] });

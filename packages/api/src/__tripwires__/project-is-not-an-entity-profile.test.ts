@@ -8,6 +8,7 @@ import {
   reservedProfileSlugs,
   reservedEntityKindReason,
 } from "@synap/database";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `project` can never be an entity profile.
@@ -134,11 +135,6 @@ function rawProfileWrites(src: string): RawProfileWrite[] {
   });
 }
 
-/** Drops block comments and whole-line `//` comments, so prose cannot satisfy an assertion. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
 /** The enclosing function's source from its signature up to `index`, comments dropped. */
 function functionPrefix(src: string, index: number): string {
   const fnStart = Math.max(
@@ -149,7 +145,7 @@ function functionPrefix(src: string, index: number): string {
       "\nexport function ",
     ].map((sig) => src.lastIndexOf(sig, index))
   );
-  return stripComments(src.slice(Math.max(fnStart, 0), index));
+  return stripComments(src.slice(Math.max(fnStart, 0), index), "ts");
 }
 
 /**
@@ -360,7 +356,10 @@ describe("tripwire: `project` is not an entity profile", () => {
     ).toBeGreaterThan(-1);
     const rest = src.slice(start);
     const next = rest.slice(1).search(/\n(?:export )?(?:async )?function /);
-    const body = stripComments(next === -1 ? rest : rest.slice(0, next + 1));
+    const body = stripComments(
+      next === -1 ? rest : rest.slice(0, next + 1),
+      "ts"
+    );
     const write = body.search(/INSERT\s+INTO\s+profiles/);
     const guard = body.indexOf("assertProfileSlugNotReserved(op.slug)");
     expect(
@@ -379,7 +378,7 @@ describe("tripwire: `project` is not an entity profile", () => {
     const caseStart = src.indexOf('case "seedKindProfile": {', counts);
     expect(caseStart).toBeGreaterThan(-1);
     const caseEnd = src.indexOf("case ", caseStart + 1);
-    expect(stripComments(src.slice(caseStart, caseEnd))).toContain(
+    expect(stripComments(src.slice(caseStart, caseEnd), "ts")).toContain(
       "assertProfileSlugNotReserved(op.slug)"
     );
   });

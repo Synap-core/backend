@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every automation flow persist door runs the AI fan-out rule
@@ -39,16 +40,11 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const stripComments = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p) => p);
-
 function doors(): Array<{ file: string; checks: boolean }> {
   return walk(API_SRC)
     .map((file) => ({
       file: relative(API_SRC, file).replace(/\\/g, "/"),
-      src: stripComments(readFileSync(file, "utf8")),
+      src: stripComments(readFileSync(file, "utf8"), "ts"),
     }))
     .filter(
       ({ file, src }) =>

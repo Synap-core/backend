@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { CONTENT_KINDS } from "@synap/database/schema";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `contentKind` must reach every cell write door.
@@ -69,9 +70,7 @@ function tsFiles(dir: string, acc: string[] = []): string[] {
 
 /** Comments and string/template literals removed — what survives is executable. */
 function stripCommentsAndStrings(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ")
+  return stripComments(src, "ts")
     .replace(/`(?:\\[\s\S]|[^\\`])*`/g, '""')
     .replace(/'(?:\\.|[^\\'])*'/g, '""')
     .replace(/"(?:\\.|[^\\"])*"/g, '""');

@@ -30,6 +30,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildStoredConstraints, readStoredEnum } from "@synap/database";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const API_SRC = resolve(here, "..");
@@ -47,13 +48,6 @@ function walk(dir: string): string[] {
     else if (/\.ts$/.test(entry) && !/\.d\.ts$/.test(entry)) out.push(full);
   }
   return out;
-}
-
-/** Remove block and line comments so prose can never blind the scan. */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 /**
@@ -91,7 +85,7 @@ describe("property enum: one mapper, one stored key", () => {
     for (const file of [...walk(DB_SRC), ...walk(API_SRC)]) {
       if (file.endsWith(MAPPER)) continue;
       if (/\.test\.ts$/.test(file)) continue;
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       for (const body of uiHintsObjectBodies(src)) {
         if (/\benumValues\b/.test(body)) {
           offenders.push(file.replace(resolve(here, "..", "..", ".."), ""));
@@ -117,7 +111,7 @@ describe("property enum: one mapper, one stored key", () => {
     for (const file of [...walk(DB_SRC), ...walk(API_SRC)]) {
       if (file.endsWith(MAPPER)) continue;
       if (/\.test\.ts$/.test(file)) continue;
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       if (/constraints\s*(\??\.|\[\s*["'`])\s*enumValues/.test(src)) {
         offenders.push(file.replace(resolve(here, "..", "..", ".."), ""));
       }
@@ -150,9 +144,9 @@ describe("the detector itself works (positive control)", () => {
 
   it("stripComments removes prose but keeps code", () => {
     expect(
-      stripComments("/* uiHints: { enumValues } */ const a = 1;")
+      stripComments("/* uiHints: { enumValues } */ const a = 1;", "ts")
     ).not.toContain("enumValues");
-    expect(stripComments("const a = 1; // note\nconst b = 2;")).toContain(
+    expect(stripComments("const a = 1; // note\nconst b = 2;", "ts")).toContain(
       "const b"
     );
   });

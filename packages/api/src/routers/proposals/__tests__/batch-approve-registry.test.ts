@@ -47,6 +47,7 @@ import {
   type ProposalExecutorResult,
 } from "../execution-registry.js";
 import { readExecutorsSource } from "./read-executors-source.js";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 // vitest cwd is the api package root (mirrors execute-executors.test.ts).
 const API_SRC = join(process.cwd(), "src");
@@ -441,10 +442,7 @@ describe("(c/d) partial failure is isolated and visible", () => {
     // Strip line comments before scanning: the catch explains where its
     // `errorCode` comes from, and the word "throw" in PROSE is not a rethrow.
     // (A guard that reads comments is a guard that fires on documentation.)
-    const catchBody = BATCH_APPROVE_BLOCK.slice(catchIdx).replace(
-      /^\s*\/\/.*$/gm,
-      ""
-    );
+    const catchBody = stripComments(BATCH_APPROVE_BLOCK.slice(catchIdx), "ts");
     expect(catchBody).toContain("success: false");
     expect(catchBody).not.toContain("throw ");
   });

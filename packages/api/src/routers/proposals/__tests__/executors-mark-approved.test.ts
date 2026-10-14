@@ -46,6 +46,7 @@ vi.mock("../../../utils/push-providers-to-is.js", () => ({
 import { proposalExecRegistry } from "../execution-registry.js";
 import { registerAiProviderExecutors } from "../executors/ai-provider.js";
 import { ProposalStatus } from "@synap/database/schema";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 registerAiProviderExecutors();
 
@@ -124,8 +125,6 @@ describe("convention: every executor file marks APPROVED", () => {
     expect(registering).toContain("ai-provider.ts");
   });
 
-  const stripComments = (s: string) =>
-    s.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
   const SETS_APPROVED = /status:\s*ProposalStatus\.APPROVED/;
 
   /**
@@ -144,7 +143,8 @@ describe("convention: every executor file marks APPROVED", () => {
         if (!/^mark\w*Approved$/.test(name)) continue;
         if (!new RegExp(`\\b${name}\\(`).test(src)) continue;
         const target = stripComments(
-          readFileSync(join(dir, `${rel}.ts`), "utf8")
+          readFileSync(join(dir, `${rel}.ts`), "utf8"),
+          "ts"
         );
         if (
           new RegExp(`export async function ${name}\\b`).test(target) &&
@@ -159,14 +159,15 @@ describe("convention: every executor file marks APPROVED", () => {
 
   it("the delegation check can see a literal helper (self-check)", () => {
     const src = stripComments(
-      readFileSync(join(dir, "trusted-issuer.ts"), "utf8")
+      readFileSync(join(dir, "trusted-issuer.ts"), "utf8"),
+      "ts"
     );
     expect(SETS_APPROVED.test(src)).toBe(false);
     expect(delegatesApproval(src)).toBe(true);
   });
 
   it.each(registering)("%s sets status: ProposalStatus.APPROVED", (f) => {
-    const src = stripComments(readFileSync(join(dir, f), "utf8"));
+    const src = stripComments(readFileSync(join(dir, f), "utf8"), "ts");
     expect(SETS_APPROVED.test(src) || delegatesApproval(src), f).toBe(true);
   });
 });

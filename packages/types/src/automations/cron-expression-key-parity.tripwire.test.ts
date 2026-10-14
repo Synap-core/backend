@@ -31,6 +31,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TYPES_SRC = resolve(HERE, "."); // …/packages/types/src/automations
@@ -45,17 +46,6 @@ const ROUTER_SRC_PATH = resolve(
   BACKEND,
   "packages/api/src/routers/automations.ts"
 );
-
-/**
- * Strip comments before parsing. Without this, a future comment that merely
- * QUOTES `trigger.triggerType === "cron"` becomes the block this tripwire
- * inspects, and it starts asserting against prose. The sibling tripwire
- * (`api/src/__tripwires__/rule-compiler-emits-executor-true-nodes.test.ts`)
- * strips for exactly this reason.
- */
-function strip(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
 
 /** Balanced-brace slice starting at the FIRST `{` at or after `fromIndex`. */
 function balancedBlockFrom(src: string, fromIndex: number): string {
@@ -132,7 +122,7 @@ const schedulerSrc = readFileSync(SCHEDULER_SRC_PATH, "utf8");
 const routerSrc = readFileSync(ROUTER_SRC_PATH, "utf8");
 
 const WRITER_KEYS = triggerConfigWriteKeys(
-  blockAfter(strip(sentenceSrc), 'trigger.triggerType === "cron"')
+  blockAfter(stripComments(sentenceSrc, "ts"), 'trigger.triggerType === "cron"')
 );
 const SCHEDULER_READ_KEYS = new Set(
   [

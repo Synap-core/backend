@@ -20,12 +20,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const API_SRC = fileURLToPath(new URL("../../../", import.meta.url));
-
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
-}
 
 function tsFiles(dir: string, acc: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -42,7 +39,7 @@ function tsFiles(dir: string, acc: string[] = []): string[] {
 
 const SOURCES = tsFiles(API_SRC).map((path) => ({
   path: relative(API_SRC, path),
-  code: stripComments(readFileSync(path, "utf8")),
+  code: stripComments(readFileSync(path, "utf8"), "ts"),
 }));
 
 const captureSrc = SOURCES.find((f) => f.path === "routers/capture.ts")!.code;

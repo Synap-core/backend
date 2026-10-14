@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every `playbook_runs` TERMINAL writer settles the parent
@@ -60,11 +61,6 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const stripComments = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p) => p);
-
 /** Count terminal stamps in a (comment-stripped) source. */
 function terminalStamps(src: string): string[] {
   const found: string[] = [];
@@ -83,7 +79,7 @@ function scan(): Array<{ file: string; stamps: string[]; calls: number }> {
   const out: Array<{ file: string; stamps: string[]; calls: number }> = [];
   for (const root of [API_SRC, JOBS_SRC]) {
     for (const file of walk(root)) {
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       const stamps = terminalStamps(src);
       if (stamps.length === 0) continue;
       out.push({
@@ -139,7 +135,7 @@ describe("tripwire: a playbook_runs terminal writer settles the parent automatio
       for (const file of walk(root)) {
         expect(
           /UPDATE\s+playbook_runs\b/i.test(
-            stripComments(readFileSync(file, "utf8"))
+            stripComments(readFileSync(file, "utf8"), "ts")
           ),
           `${file} writes playbook_runs with raw SQL — this guard cannot parse it`
         ).toBe(false);

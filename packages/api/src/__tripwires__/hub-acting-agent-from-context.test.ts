@@ -28,6 +28,7 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HUB_DIR = join(process.cwd(), "src/routers/hub-protocol");
 
@@ -37,10 +38,6 @@ const HUB_DIR = join(process.cwd(), "src/routers/hub-protocol");
  * omitted field cannot skip the gate or the grant rung.
  */
 const EXEMPT = new Set(["branches.ts:createBranch", "branches.ts:mergeBranch"]);
-
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "");
-}
 
 function closeParen(s: string, open: number): number {
   let depth = 0;
@@ -73,7 +70,7 @@ interface Chunk {
 }
 
 function mutationChunks(file: string, src: string): Chunk[] {
-  const code = stripComments(src);
+  const code = stripComments(src, "ts");
   const re = /\n {2}(\w+): scopedProcedure\(/g;
   const starts: Array<{ name: string; at: number }> = [];
   for (const m of code.matchAll(re))
@@ -180,7 +177,8 @@ describe("tripwire: hub tRPC writes take the agent from the authenticated contex
 
   it("automations.create and automations.trigger gate on the same resolution", () => {
     const src = stripComments(
-      readFileSync(join(process.cwd(), "src/routers/automations.ts"), "utf8")
+      readFileSync(join(process.cwd(), "src/routers/automations.ts"), "utf8"),
+      "ts"
     );
     const create = src.slice(
       src.indexOf("  create: protectedProcedure"),

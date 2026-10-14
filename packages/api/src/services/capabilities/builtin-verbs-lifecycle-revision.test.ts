@@ -106,6 +106,7 @@ vi.mock("../../routers/profiles.js", () => ({
 }));
 
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -352,61 +353,13 @@ describe("profile.propose_retire", () => {
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Strip `//` and block comments, preserving string/template literals.
- *
- * LOAD-BEARING, learned the hard way: this file's first draft walked the raw
- * source and the scan came back missing six verbs. The cause was an APOSTROPHE
- * in a prose comment (`the verb's identity`) opening a string state that never
- * closed, plus unbalanced parentheses in other comments moving the depth
- * counter. A brace-walk that can see comments is not a brace-walk.
- */
-function stripComments(src: string): string {
-  let out = "";
-  let i = 0;
-  let quote: string | null = null;
-  while (i < src.length) {
-    const c = src[i]!;
-    if (quote) {
-      out += c;
-      if (c === "\\") {
-        out += src[i + 1] ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === quote) quote = null;
-      i++;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "/") {
-      while (i < src.length && src[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "/" && src[i + 1] === "*") {
-      i += 2;
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
-      i += 2;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
-/**
  * Brace-walk the `export const <name>: ... = { ... }` object literal and return
  * its top-level quoted keys. DELIBERATELY NOT a regex over the whole file: this
  * module is 3.5k lines of handlers full of quoted string literals, and a loose
  * regex overcounts it badly.
  */
 function topLevelQuotedKeys(raw: string, declName: string): string[] {
-  const source = stripComments(raw);
+  const source = stripComments(raw, "ts");
   const declAt = source.indexOf(`export const ${declName}`);
   if (declAt < 0) throw new Error(`declaration not found: ${declName}`);
   const open = source.indexOf("{", source.indexOf("=", declAt));
@@ -466,7 +419,7 @@ function topLevelQuotedKeys(raw: string, declName: string): string[] {
 
 /** `name: "<verb>",` entries inside SYNAP_CORE_DEFINITION's skills array. */
 function catalogVerbNames(raw: string): string[] {
-  const source = stripComments(raw);
+  const source = stripComments(raw, "ts");
   const at = source.indexOf("export const SYNAP_CORE_DEFINITION");
   if (at < 0) throw new Error("SYNAP_CORE_DEFINITION not found");
   return [...source.slice(at).matchAll(/^\s{6}name:\s*"([^"]+)",$/gm)].map(

@@ -5,6 +5,7 @@ import {
   RE_APPROVAL_FIELDS,
   allowedHostsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * Widening a skill's egress allowlist must demote its approval.
@@ -81,12 +82,19 @@ describe("allowedHosts is treated as execution-defining", () => {
       src.length,
       "source unreadable — assertion would be vacuous"
     ).toBeGreaterThan(1000);
-    // Strip comments in ONE pass; a sequential strip has eaten real code here
-    // before, at an apostrophe inside a string.
-    const code = src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+    // Strip comments with the shared scanner; a regex strip has eaten real
+    // code here before, at an apostrophe inside a string.
+    const code = stripComments(src, "ts");
     expect(code).toContain("allowedHostsChanged(");
-    // It must feed the same `execChanged` decision that writes `approved: false`.
-    expect(code).toMatch(/execChanged[\s\S]{0,800}allowedHostsChanged\(/);
+    // It must feed the same `execChanged` decision that writes `approved: false`:
+    // the call sits INSIDE the `const execChanged = …;` initializer. (Bounded by
+    // the statement, not a char window: comments are blanked, not deleted, so a
+    // window would count the prose between the two.)
+    const decl = code.indexOf("const execChanged =");
+    expect(decl, "the execChanged decision moved").toBeGreaterThan(-1);
+    expect(code.slice(decl, code.indexOf(";", decl))).toContain(
+      "allowedHostsChanged("
+    );
     expect(code).toMatch(/execChanged \? \{ approved: false \}/);
   });
 

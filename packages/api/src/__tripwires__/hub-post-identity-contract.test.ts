@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every hub-protocol REST mutating route (POST/PATCH/PUT/DELETE)
@@ -120,10 +121,6 @@ function readsBodyUserId(clean: string): boolean {
   );
 }
 
-function stripComments(s: string): string {
-  return s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-}
-
 /** Map of `createRoute` variable name → its `method` string (or null). */
 function findRouteMethodMap(src: string): Map<string, string | null> {
   const map = new Map<string, string | null>();
@@ -236,7 +233,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     const handlers = findMutatingHandlers(fixture, new Map());
     expect(handlers.length).toBe(1);
     expect(handlers[0].method).toBe("post");
-    const clean = stripComments(handlers[0].bodyText);
+    const clean = stripComments(handlers[0].bodyText, "ts");
     expect(readsBodyUserId(clean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
   });
@@ -253,7 +250,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     `;
     const handlers = findMutatingHandlers(fixture, new Map());
     expect(handlers.length).toBe(1);
-    const clean = stripComments(handlers[0].bodyText);
+    const clean = stripComments(handlers[0].bodyText, "ts");
     expect(readsBodyUserId(clean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
   });
@@ -273,7 +270,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     const directHandlers = findMutatingHandlers(directFixture, new Map());
     expect(directHandlers.length).toBe(1);
     expect(directHandlers[0].method).toBe("patch");
-    const directClean = stripComments(directHandlers[0].bodyText);
+    const directClean = stripComments(directHandlers[0].bodyText, "ts");
     expect(readsBodyUserId(directClean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(directClean)).toBe(false);
 
@@ -290,7 +287,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     const openapiHandlers = findMutatingHandlers(openapiFixture, map);
     expect(openapiHandlers.length).toBe(1);
     expect(openapiHandlers[0].method).toBe("delete");
-    const openapiClean = stripComments(openapiHandlers[0].bodyText);
+    const openapiClean = stripComments(openapiHandlers[0].bodyText, "ts");
     expect(readsBodyUserId(openapiClean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(openapiClean)).toBe(false);
   });
@@ -311,7 +308,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     const handlers = findMutatingHandlers(fixture, new Map());
     expect(handlers.length).toBe(1);
     expect(handlers[0].method).toBe("put");
-    const clean = stripComments(handlers[0].bodyText);
+    const clean = stripComments(handlers[0].bodyText, "ts");
     expect(readsBodyUserId(clean)).toBe(true);
     expect(/resolveActingContext\s*\(/.test(clean)).toBe(false);
   });
@@ -362,7 +359,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
   it("no un-allowlisted hub REST mutating handler reads body.userId without resolveActingContext / mayActAsUser", () => {
     const offenders: string[] = [];
     for (const h of allHandlers) {
-      const clean = stripComments(h.bodyText);
+      const clean = stripComments(h.bodyText, "ts");
       const hasBodyUserId = readsBodyUserId(clean);
       const hasActingContext = bindsIdentity(clean);
       if (!hasBodyUserId || hasActingContext) continue;
@@ -407,7 +404,7 @@ describe("tripwire: no inline apiKeyId identity decision outside mayActAsUser", 
   const HUB_DIR = join(process.cwd(), "src/routers/hub-protocol");
   const sources = walkTs(HUB_DIR).map((p) => ({
     rel: p.slice(HUB_DIR.length + 1),
-    clean: stripComments(readFileSync(p, "utf8")),
+    clean: stripComments(readFileSync(p, "utf8"), "ts"),
   }));
 
   it("the scan is alive: the regex bites on literal samples and the file set is plausible", () => {

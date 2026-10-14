@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every proposal-MUTATING door goes through the authority path.
@@ -69,50 +70,6 @@ const MUTATION_DOORS: [string, RegExp][] = [
 ];
 
 /**
- * Blank out COMMENTS, preserving offsets. String bodies are kept (the scans
- * below read no string contents, but a `//` inside one must not be mistaken for
- * a comment). Without this the PROSE in `build.ts` — which explains why the
- * revise door cannot go through `proposalsRouter…reject()` — classifies
- * `synap_revise_proposal` as a reject door.
- */
-function stripComments(src: string): string {
-  const out = src.split("");
-  let i = 0;
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to && k < out.length; k++) {
-      if (out[k] !== "\n") out[k] = " ";
-    }
-  };
-  while (i < src.length) {
-    const c = src[i];
-    const n = src[i + 1];
-    if (c === "/" && n === "/") {
-      const end = src.indexOf("\n", i);
-      blank(i, end === -1 ? src.length : end);
-      i = end === -1 ? src.length : end;
-    } else if (c === "/" && n === "*") {
-      const end = src.indexOf("*/", i + 2);
-      blank(i, end === -1 ? src.length : end + 2);
-      i = end === -1 ? src.length : end + 2;
-    } else if (c === '"' || c === "'" || c === "`") {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === c) break;
-        j++;
-      }
-      i = j + 1;
-    } else {
-      i++;
-    }
-  }
-  return out.join("");
-}
-
-/**
  * The balanced-brace BODY that follows `declAt`, skipping the parameter list.
  * THE fix for escape 1: `src.slice(declAt)` runs to end of file, so an
  * assertion "about" one function silently accepts evidence from every function
@@ -145,7 +102,7 @@ function bodyAfter(src: string, declAt: number): string {
 const flat = (s: string): string => s.replace(/\s+/g, " ");
 
 describe("TRIPWIRE: proposal revise goes through the authority path", () => {
-  const serviceSrc = stripComments(readFileSync(SERVICE, "utf8"));
+  const serviceSrc = stripComments(readFileSync(SERVICE, "utf8"), "ts");
   const coreAt = serviceSrc.indexOf(
     "export async function mergeProposalRevision"
   );
@@ -258,7 +215,7 @@ describe("TRIPWIRE: proposal revise goes through the authority path", () => {
     const mutating: string[] = [];
 
     for (const file of files) {
-      const src = stripComments(readFileSync(file, "utf8"));
+      const src = stripComments(readFileSync(file, "utf8"), "ts");
       // Handler entries are `  synap_x: <value>` in one object literal. The
       // value is EITHER an inline `async (…) => {…}` OR a bare identifier
       // referencing a function declared elsewhere in the file

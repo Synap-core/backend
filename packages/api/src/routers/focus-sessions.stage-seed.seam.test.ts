@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
 import { projectSessionKind } from "../services/focus-sessions/session-kind.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * Verbatim `stages` of every ACTIVE playbook that has any, live pod
@@ -380,9 +381,7 @@ describe("the update door both ACCEPTS and PERSISTS stages", () => {
     fileURLToPath(new URL("./focus-sessions.ts", import.meta.url)),
     "utf8"
   );
-  const code = source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^[ \t]*\/\/.*$/gm, "");
+  const code = stripComments(source, "ts");
 
   it("the scan is non-vacuous — it read the router and strips prose, not code", () => {
     expect(source.length).toBeGreaterThan(50_000);

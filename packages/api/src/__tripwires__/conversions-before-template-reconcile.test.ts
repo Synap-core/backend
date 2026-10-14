@@ -39,6 +39,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const BACKEND = join(__dirname, "..", "..", "..", "..");
 const INDEX =
@@ -52,10 +53,6 @@ const SCAN_ROOTS = [
   "packages/database/src",
 ].map((r) => join(BACKEND, r));
 
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
 function indicesOf(code: string, re: RegExp): number[] {
   return [...code.matchAll(re)].map((m) => m.index ?? -1);
 }
@@ -65,7 +62,7 @@ const HOOKS_CALL = /\brunStartupHooks\s*\(/g;
 
 /** Why the boot order is wrong, or null when conversions provably come first. */
 export function bootOrderViolation(src: string): string | null {
-  const code = stripComments(src);
+  const code = stripComments(src, "ts");
   const conv = indicesOf(code, CONVERSIONS_CALL);
   const hooks = indicesOf(code, HOOKS_CALL);
   if (conv.length !== 1) {
@@ -106,7 +103,7 @@ function tsFiles(dir: string, acc: string[] = []): string[] {
 function callers(files: string[], name: string): string[] {
   const call = new RegExp(`(?<!function\\s)\\b${name}\\s*\\(`);
   return files
-    .filter((f) => call.test(stripComments(readFileSync(f, "utf8"))))
+    .filter((f) => call.test(stripComments(readFileSync(f, "utf8"), "ts")))
     .map((f) => relative(BACKEND, f).split(/[\\/]/).join("/"))
     .sort();
 }

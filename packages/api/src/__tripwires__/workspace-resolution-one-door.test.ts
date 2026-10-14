@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — workspace placement has ONE door (WorkspaceResolutionService).
@@ -33,14 +34,6 @@ function read(relFromPackages: string): string {
   return existsSync(p) ? readFileSync(p, "utf8") : "";
 }
 
-/** Strip line + block comments so a comment mentioning the token isn't a hit. */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/\S*\/\/.*$/gm, (m) => m.replace(/\/\/.*$/, ""));
-}
-
 describe("tripwire: workspace placement has one door", () => {
   it("(a) agent / n8n create doors never stamp the ambient workspace as targetWorkspaceId", () => {
     const files = [
@@ -56,7 +49,7 @@ describe("tripwire: workspace placement has one door", () => {
     const AMBIENT_FALLBACK =
       /targetWorkspaceId:\s*(\w*[Ww]orkspaceId|ctx\.workspaceId)\b/;
     const offenders = files.filter((f) =>
-      AMBIENT_FALLBACK.test(stripComments(read(f)))
+      AMBIENT_FALLBACK.test(stripComments(read(f), "ts"))
     );
     expect(offenders).toEqual([]);
   });

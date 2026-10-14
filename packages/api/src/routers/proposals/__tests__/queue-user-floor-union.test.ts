@@ -27,18 +27,16 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const API_SRC = join(process.cwd(), "src");
 const read = (rel: string): string => readFileSync(join(API_SRC, rel), "utf8");
 
-/** Blank out comments so a doc-comment can never satisfy a code assertion. */
-const strip = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1: string) => p1);
-
 describe("proposalUserFloor is the ONE union floor", () => {
-  const src = strip(read("routers/proposals/scope-conditions.ts"));
+  const src = stripComments(
+    read("routers/proposals/scope-conditions.ts"),
+    "ts"
+  );
 
   it("is defined exactly once, as lens OR ownership", () => {
     expect(
@@ -71,7 +69,7 @@ describe("proposalUserFloor is the ONE union floor", () => {
 
 describe("every review-queue door floors on the SAME union", () => {
   it("Hub `listProposals` uses proposalUserFloor, not a second copy", () => {
-    const src = strip(read("routers/hub-protocol/proposals.ts"));
+    const src = stripComments(read("routers/hub-protocol/proposals.ts"), "ts");
     expect(src).toContain("proposalUserFloor(ctx.userId as string)");
     // No second definition, and no reverted bare lens.
     expect(src).not.toMatch(/userVisibleWhere\(\s*proposals\.workspaceId/);
@@ -79,7 +77,7 @@ describe("every review-queue door floors on the SAME union", () => {
   });
 
   it("Hub keeps workspaceId as an AND on top of the floor, never a replacement", () => {
-    const src = strip(read("routers/hub-protocol/proposals.ts"));
+    const src = stripComments(read("routers/hub-protocol/proposals.ts"), "ts");
     const q = src.slice(src.indexOf("proposalUserFloor(ctx.userId"));
     // The floor is pushed first, then the workspace equality is PUSHED (added),
     // never assigned over the floor. This door has no editor+ gate, so a
@@ -91,7 +89,7 @@ describe("every review-queue door floors on the SAME union", () => {
 });
 
 describe("the union does not widen an access floor", () => {
-  const src = strip(read("services/agent-identity-service.ts"));
+  const src = stripComments(read("services/agent-identity-service.ts"), "ts");
 
   it("authoredByUser has NO workspace-membership term", () => {
     const body = src.slice(
@@ -113,7 +111,10 @@ describe("the union does not widen an access floor", () => {
   });
 
   it("review AUTHORITY is untouched — the union changes reads, not rights", () => {
-    const authority = strip(read("routers/proposals/review-authority.ts"));
+    const authority = stripComments(
+      read("routers/proposals/review-authority.ts"),
+      "ts"
+    );
     expect(authority).not.toContain("proposalUserFloor");
     expect(authority).not.toContain("authoredByUser");
   });

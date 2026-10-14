@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * `LinkType` is declared TWICE and the two copies must stay identical.
@@ -43,9 +44,7 @@ const SOURCES = {
  * reports a drift that does not exist. Normalise first, match second.
  */
 function unionMembers(file: string, typeName: string): string[] {
-  const src = readFileSync(file, "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\/\/.*$/gm, "");
+  const src = stripComments(readFileSync(file, "utf8"), "ts");
   const decl = new RegExp(`export type ${typeName}\\s*=([\\s\\S]*?);`).exec(
     src
   );

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join, relative } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — the command-template miss policy must have LIVE callers.
@@ -30,20 +31,14 @@ import { join, relative } from "path";
 const ALLOWLIST = new Set<string>(["utils/command-template.ts"]);
 
 /**
- * A call to the silent door on a parsed template. Comment lines are excluded —
+ * A call to the silent door on a parsed template. Comments are blanked first —
  * `template-diagnostics.ts` legitimately NAMES `substitute()` in the prose that
  * explains why the policy exists.
  */
 const BANNED = ".substitute(";
 
 function callsSilentDoor(src: string): boolean {
-  return src.split("\n").some((line) => {
-    const t = line.trim();
-    if (t.startsWith("*") || t.startsWith("//") || t.startsWith("/*")) {
-      return false;
-    }
-    return t.includes(BANNED);
-  });
+  return stripComments(src, "ts").includes(BANNED);
 }
 
 function tsFiles(dir: string, acc: string[] = []): string[] {
@@ -135,10 +130,15 @@ describe("tripwire: template misses are never dropped in production", () => {
     // prose that legitimately names the door.
     expect(callsSilentDoor("const out = parsed.substitute(args);")).toBe(true);
     expect(callsSilentDoor("      return t.substitute({ a: 1 });")).toBe(true);
-    expect(callsSilentDoor(" * explains why .substitute( is banned here")).toBe(
-      false
-    );
+    expect(
+      callsSilentDoor("/**\n * explains why .substitute( is banned here\n */")
+    ).toBe(false);
     expect(callsSilentDoor("// legacy: parsed.substitute(args)")).toBe(false);
+    // A glob string BEFORE a real call must not open a fake comment that hides
+    // it, as the regex strip this file used to run did.
+    expect(
+      callsSilentDoor('const g = "src/*";\nparsed.substitute(args);\n/* c */')
+    ).toBe(true);
     expect(callsSilentDoor("const out = substituteWithMisses(args);")).toBe(
       false
     );

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE (T5) — governed-propose PROSE must be derived, not hardcoded.
@@ -104,13 +105,6 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Strip line + block comments so prose in a comment never reads as code. */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p1: string) => p1);
-}
-
 interface Branch {
   file: string;
   /** 1-based line of the guard. */
@@ -141,7 +135,7 @@ const GUARD =
 
 function discoverBranches(file: string): Branch[] {
   const raw = readFileSync(file, "utf8");
-  const src = stripComments(raw);
+  const src = stripComments(raw, "ts");
   const lines = src.split("\n");
   const found: Branch[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -250,6 +244,21 @@ const ACKNOWLEDGED: Ack[] = [
       "`agentUserId: undefined` argument, so the entry, not the code, records " +
       "why. If that argument ever becomes a real agent id, this reason is " +
       "wrong and the case must be re-examined.",
+  },
+  {
+    file: "routers/proposals/executors/profile.ts",
+    message: "Profile approval unexpectedly re-proposed",
+    reason:
+      "Not a governed-write door: this is the APPROVAL executor of " +
+      "`profile/create`. It calls `profilesRouter.create` with an input that " +
+      "carries no `agentUserId` (create hands `input.agentUserId` to " +
+      "`checkPermissionOrPropose`), and `maybeCreateWorkspaceJoinProposal` " +
+      "returns null without one, so this branch cannot receive a join gate; " +
+      "the string is a defensive INTERNAL_SERVER_ERROR for a re-entrant " +
+      "propose that should be impossible, the twin of the skill.ts entry. " +
+      "Surfaced 2026-10-15: the old regex comment strip hid 129 lines of this " +
+      "file from the scan. If the executor ever forwards an agentUserId, this " +
+      "reason is false and the case must be re-examined.",
   },
   {
     file: "routers/proposals/executors/entity-transition.ts",

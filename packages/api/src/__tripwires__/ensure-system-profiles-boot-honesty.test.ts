@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "fs";
 import { join, relative } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every `ensureSystemProfiles()` call site logs its result through
@@ -54,9 +55,6 @@ function sourceFiles(): string[] {
   return out;
 }
 
-const stripComments = (src: string) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
-
 const CALL = /(?:const|let)\s+(\w+)\s*=\s*await\s+ensureSystemProfiles\(\s*\)/g;
 const ANY_CALL = /await\s+ensureSystemProfiles\(\s*\)/g;
 
@@ -65,7 +63,7 @@ describe("ensureSystemProfiles boot honesty", () => {
   const sites: Array<{ file: string; variable: string; after: string }> = [];
   let bareCalls = 0;
   for (const file of files) {
-    const code = stripComments(readFileSync(file, "utf8"));
+    const code = stripComments(readFileSync(file, "utf8"), "ts");
     const captured = [...code.matchAll(CALL)];
     bareCalls += [...code.matchAll(ANY_CALL)].length - captured.length;
     for (const m of captured) {

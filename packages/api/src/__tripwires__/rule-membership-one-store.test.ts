@@ -22,6 +22,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const API_SRC = join(__dirname, "..");
 
@@ -29,23 +30,6 @@ function read(rel: string): string {
   const path = join(API_SRC, rel);
   if (!existsSync(path)) throw new Error(`guarded file is missing: ${rel}`);
   return readFileSync(path, "utf8");
-}
-
-/**
- * Strip `//` line comments and `/* *\/` blocks.
- *
- * Every assertion below scans for CODE. Without this, a doc-comment explaining
- * why `rule.behaviours` must not be read counts as reading it — which is
- * exactly what happened: the "must not derive membership from the JSONB"
- * assertion went red against a correct implementation, matching two comments
- * that said so in prose. A scan that cannot tell code from prose measures prose.
- */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/, ""))
-    .join("\n");
 }
 
 /** The body of the named tRPC procedure, up to the next procedure. */
@@ -56,7 +40,7 @@ function procedureBody(source: string, name: string): string {
     .slice(at + 1)
     .search(/\n  [a-zA-Z]+: (?:protected|workspace|public)Procedure/);
   const body = next === -1 ? source.slice(at) : source.slice(at, at + 1 + next);
-  return stripComments(body);
+  return stripComments(body, "ts");
 }
 
 describe("a rule's membership has ONE store", () => {
@@ -85,7 +69,7 @@ describe("a rule's membership has ONE store", () => {
   });
 
   it("health is derived from the edge + the automations table, never the JSONB", () => {
-    const lineage = stripComments(read("services/rules/lineage.ts"));
+    const lineage = stripComments(read("services/rules/lineage.ts"), "ts");
     const at = lineage.indexOf("export async function readRuleHealthBulk");
     expect(at, "readRuleHealthBulk not found").toBeGreaterThan(-1);
     const body = lineage.slice(at, at + 3000);
@@ -100,7 +84,7 @@ describe("a rule's membership has ONE store", () => {
   });
 
   it("the bulk reader queries the activates EDGE, never the JSONB", () => {
-    const lineage = stripComments(read("services/rules/lineage.ts"));
+    const lineage = stripComments(read("services/rules/lineage.ts"), "ts");
     // Module-private (see its docstring): matched without `export` on purpose.
     const at = lineage.indexOf("async function readRuleAutomationIdsBulk");
     expect(at).toBeGreaterThan(-1);
@@ -117,7 +101,7 @@ describe("a rule's membership has ONE store", () => {
   it("every rule row in the list gets a key, so [] means 'none' not 'unknown'", () => {
     // A caller distinguishing "no automations" from "not asked about" without a
     // second lookup is what lets the CLI fall back ONLY on an older pod.
-    const lineage = stripComments(read("services/rules/lineage.ts"));
+    const lineage = stripComments(read("services/rules/lineage.ts"), "ts");
     const at = lineage.indexOf("async function readRuleAutomationIdsBulk");
     const body = lineage.slice(at, at + 1800);
     expect(body).toMatch(/ruleSkillIds\.map\(\(id\) => \[id, \[\]\]\)/);

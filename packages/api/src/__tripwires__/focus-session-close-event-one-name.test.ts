@@ -33,6 +33,7 @@ import {
   FOCUS_SESSION_CLOSE_ACTION,
   FOCUS_SESSION_CLOSED_EVENT_TYPE,
 } from "../services/focus-sessions/close-event.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(here, "..");
@@ -61,7 +62,7 @@ const SANCTIONED = new Map<string, string>([
  * Only CODE can drift.
  */
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
+  return stripComments(src, "ts");
 }
 
 function walk(dir: string, out: string[] = []): string[] {

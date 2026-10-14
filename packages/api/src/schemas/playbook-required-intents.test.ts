@@ -37,6 +37,7 @@ import {
   playbookDefinitionSchema,
   playbookRequiredIntentsSchema,
 } from "./playbook-definition.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /** A minimal VALID definition, so each assertion is about one field. */
 const base = {
@@ -186,9 +187,7 @@ describe("requiredIntents — the vocabulary is not a fifth copy", () => {
     // Comments are stripped: this file's own prose names the leaf, and a prose
     // mention is not a dependency. Boundary measured: the scan sees CODE, so
     // it catches a real import and cannot be fooled by the docblock.
-    const code = src
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/^[ \t]*\/\/.*$/gm, " ");
+    const code = stripComments(src, "ts");
     expect(code).toContain("@synap-core/types/capability-intents");
     // It must use that door's helper rather than re-implementing membership.
     expect(code).toMatch(/unknownIntents\(/);

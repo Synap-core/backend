@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a hub REST write that reads the acting agent from the BODY also
@@ -63,12 +64,6 @@ const HELPER_DECL =
 /** `file::first-line-of-block` → why this block stays body-only. */
 const EXEMPT: Record<string, string> = {};
 
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
-}
-
 /**
  * Names of file-local helpers whose OWN body reads `c.get("agentUserId")` —
  * i.e. helpers that perform the fallback on a handler's behalf. Derived from
@@ -77,7 +72,7 @@ function stripComments(src: string): string {
  * so calling it never satisfies this tripwire.
  */
 export function fallbackHelpers(src: string): Set<string> {
-  const code = stripComments(src);
+  const code = stripComments(src, "ts");
   const firstHandler = code.search(
     /\bapp\.(?:get|post|put|patch|delete|openapi)\(/
   );
@@ -99,7 +94,7 @@ export function fallbackHelpers(src: string): Set<string> {
 }
 
 function handlerBlocks(src: string): string[] {
-  const code = stripComments(src);
+  const code = stripComments(src, "ts");
   const starts = [...code.matchAll(HANDLER_START)].map((m) => m.index ?? 0);
   return starts.map((s, i) => code.slice(s, starts[i + 1] ?? code.length));
 }

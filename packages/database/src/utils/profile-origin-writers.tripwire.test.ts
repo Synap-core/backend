@@ -25,6 +25,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const PACKAGES = join(process.cwd(), "..");
 const ROOTS = ["database/src", "api/src", "jobs/src"].map((r) =>
@@ -102,16 +103,11 @@ export function findProfileWriteSites(file: string, src: string): Site[] {
   return sites;
 }
 
-/** Drops block and line comments, so prose can neither satisfy nor hide a stamp. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
-}
-
 // `origin: x` or shorthand `origin,` / `origin }`, read after comments are stripped.
 const stamps = (s: Site) =>
   s.kind === "raw.insert"
     ? /\borigin\b/.test(s.body)
-    : /[{,]\s*origin\s*[:,}]/.test(stripComments(s.body));
+    : /[{,]\s*origin\s*[:,}]/.test(stripComments(s.body, "ts"));
 
 const all: Site[] = ROOTS.flatMap((root) =>
   walk(root).flatMap((f) =>

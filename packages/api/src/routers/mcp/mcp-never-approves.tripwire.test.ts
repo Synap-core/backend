@@ -20,6 +20,7 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const MCP_DIR = __dirname;
 
@@ -53,14 +54,8 @@ function walk(dir: string): string[] {
   });
 }
 
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
 function violations(src: string): string[] {
-  const code = stripComments(src);
+  const code = stripComments(src, "ts");
   return FORBIDDEN.filter(({ re }) => re.test(code)).map(({ name }) => name);
 }
 

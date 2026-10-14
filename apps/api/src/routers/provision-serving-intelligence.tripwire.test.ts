@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const src = readFileSync(
   fileURLToPath(new URL("./provision.ts", import.meta.url)),
@@ -25,9 +26,7 @@ function handlerBody(route: string): string {
   expect(start, `route ${route} not found`).toBeGreaterThan(-1);
   const next = src.indexOf("\nprovisionRouter.", start + 10);
   // Comments are prose ABOUT the old bug; only code is scanned.
-  return src
-    .slice(start, next === -1 ? undefined : next)
-    .replace(/^\s*\/\/.*$/gm, "");
+  return stripComments(src.slice(start, next === -1 ? undefined : next), "ts");
 }
 
 describe.each(["/status", "/diagnose-intelligence"])("%s", (route) => {

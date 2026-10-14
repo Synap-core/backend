@@ -23,6 +23,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,12 +50,10 @@ function walk(dir: string, out: string[] = []): string[] {
 
 /** Code only: comments and static import statements removed. */
 function codeOnly(src: string): string {
-  return src
-    .split("\n")
-    .map((l) => l.replace(/(^|\s)\/\/.*$/, "$1"))
-    .join("\n")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^import\s[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm, "");
+  return stripComments(src, "ts").replace(
+    /^import\s[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm,
+    ""
+  );
 }
 
 const count = (code: string, name: string) =>

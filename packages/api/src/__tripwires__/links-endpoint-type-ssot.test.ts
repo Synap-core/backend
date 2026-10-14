@@ -2,45 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
-
-/**
- * TRIPWIRE — `LinkEndpointType` is DECLARED in one place and MIRRORED in
- * others (a hand-copied union in `@synap/playbooks`, a `z.enum` array in the
- * hub-REST door). They already drifted once silently: the REST
- * `LINK_ENDPOINT_TYPES` array (rest/links.ts) was missing "automation" /
- * "project" / "secret" / "capability" that the schema union had gained, which
- * meant an agent could never create those edge kinds over the Hub Protocol
- * even though the schema allowed them.
- *
- * DERIVE, DON'T HAND-LIST. The earlier version of this test named the two
- * mirror files explicitly — which meant a THIRD mirror could be added anywhere
- * in the repo and this tripwire would sail past it, the exact fork it exists
- * to prevent. It now DISCOVERS the registration sites by scanning
- * `packages/**\/src` source (same shape as
- * `capability-drift.projection-parity.tripwire.test.ts`, which parses the
- * applier's own `.set({...})` to derive its field set):
- *
- *   site kind A — any `type LinkEndpointType = "..." | "..."` union declaration
- *   site kind B — any `[...] as const` string array whose members are ALL
- *                 members of the schema union and which holds ≥ 5 of them
- *                 (i.e. a list that is unmistakably an endpoint-type list)
- *
- * Rule B deliberately does NOT match a declared SUPERSET such as
- * `GRAPH_KINDS` (it contains "view"/"document", which are not endpoint types),
- * nor a small intentional subset such as `GrantableKind` (< 5 members).
- *
- * Every discovered site must equal the schema union EXACTLY.
- */
-
-/** Strip `// ...` line comments so a comment's prose (e.g. the words in a
- * doc-comment, or a stray `;`) can never be mistaken for source syntax when
- * scanning for block boundaries or string literals below. */
-function stripLineComments(src: string): string {
-  return src
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/, ""))
-    .join("\n");
-}
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const SCHEMA_FILE = join(
   process.cwd(),
@@ -52,7 +14,7 @@ const SCHEMA_FILE = join(
 );
 
 function schemaUnion(): string[] {
-  const clean = stripLineComments(readFileSync(SCHEMA_FILE, "utf8"));
+  const clean = stripComments(readFileSync(SCHEMA_FILE, "utf8"), "ts");
   const start = clean.indexOf("export type LinkEndpointType =");
   if (start === -1) throw new Error("LinkEndpointType not found in schema");
   const end = clean.indexOf(";", start);
@@ -90,7 +52,7 @@ interface Site {
 function discoverSites(union: ReadonlySet<string>): Site[] {
   const sites: Site[] = [];
   for (const file of sourceFiles()) {
-    const src = stripLineComments(readFileSync(file, "utf8"));
+    const src = stripComments(readFileSync(file, "utf8"), "ts");
 
     // Site kind A — a `LinkEndpointType` union declaration.
     let idx = src.indexOf("type LinkEndpointType =");

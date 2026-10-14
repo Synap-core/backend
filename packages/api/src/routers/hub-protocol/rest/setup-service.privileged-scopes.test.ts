@@ -45,6 +45,7 @@ import { describe, expect, it } from "vitest";
 
 import { SETUP_AGENT_HUB_SCOPES } from "../../../services/hub-integration-registration.js";
 import { PRIVILEGED_MINT_SCOPES } from "@synap/database/schema";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 describe("PRIVILEGED_MINT_SCOPES", () => {
   it("names providers.write — the scope the ai-providers door was narrowed to", () => {
@@ -123,9 +124,7 @@ describe("source tripwire — the handler still applies the rule", () => {
     // Comments stripped first — a `/* ... */` block naming the identifiers
     // would otherwise satisfy this scan without any code doing the work. That
     // exact trick has certified an empty implementation in this repo before.
-    const code = src
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const code = stripComments(src, "ts");
 
     expect(code).toContain('auth.authMethod === "api_key_surface"');
     expect(code).toContain("isPrivilegedMintScope");

@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 
 import { profilesRouter } from "../routers/profiles.js";
 import { capabilitiesRouter } from "../routers/capabilities.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 type Parser = { safeParse: (v: unknown) => { success: boolean } };
 type Def = { type?: string; [k: string]: unknown };
@@ -165,10 +166,7 @@ describe("renderer-ref placement: every persisting door refuses misplaced source
   it("every router file naming RendererRefSchema is loaded by this test", () => {
     // Comments stripped first: prose that names the schema (e.g. the narrowing
     // note in `entities/helpers.ts`) is not a consumer.
-    const code = (f: string) =>
-      readFileSync(f, "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const code = (f: string) => stripComments(readFileSync(f, "utf8"), "ts");
     const naming = walkFiles(ROUTERS_DIR)
       .filter((f) => /\bRendererRefSchema\b/.test(code(f)))
       .map((f) => relative(ROUTERS_DIR, f))

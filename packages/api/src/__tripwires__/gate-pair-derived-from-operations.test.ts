@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — the gate's (subjectType, action) pair is DERIVED from the
@@ -76,7 +77,8 @@ function collectSourceFiles(dir: string, out: string[] = []): string[] {
  * positive half, and a commented-out `action: "create"` trips the negative
  * half — both of which were live in this tree.
  */
-function stripCommentsAndStrings(src: string): string {
+function stripCommentsAndStrings(raw: string): string {
+  const src = stripComments(raw, "ts");
   const out = src.split("");
   let i = 0;
   const blank = (from: number, to: number): void => {
@@ -86,16 +88,7 @@ function stripCommentsAndStrings(src: string): string {
   };
   while (i < src.length) {
     const c = src[i];
-    const n = src[i + 1];
-    if (c === "/" && n === "/") {
-      const end = src.indexOf("\n", i);
-      blank(i, end === -1 ? src.length : end);
-      i = end === -1 ? src.length : end;
-    } else if (c === "/" && n === "*") {
-      const end = src.indexOf("*/", i + 2);
-      blank(i, end === -1 ? src.length : end + 2);
-      i = end === -1 ? src.length : end + 2;
-    } else if (c === '"' || c === "'" || c === "`") {
+    if (c === '"' || c === "'" || c === "`") {
       let j = i + 1;
       while (j < src.length) {
         if (src[j] === "\\") {

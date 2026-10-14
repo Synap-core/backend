@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every REJECT door hands the claimed slot back.
@@ -32,9 +33,7 @@ const API_SRC = join(process.cwd(), "src");
 const source = readFileSync(join(API_SRC, "routers", "proposals.ts"), "utf8");
 
 /** Strip line + block comments so a mention in prose is never a match. */
-const code = source
-  .replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/^[ \t]*\/\/.*$/gm, "");
+const code = stripComments(source, "ts");
 
 describe("tripwire: a rejection returns the deliverable it refused", () => {
   it("proposals.ts imports the return door and the ONE claim reader", () => {

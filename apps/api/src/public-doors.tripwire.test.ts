@@ -44,6 +44,7 @@ import {
 } from "./middleware/rate-limit-classes.js";
 import { redactSecretPath } from "./middleware/redact-secret-path.js";
 import { publicDoorTransport } from "./public-door-transport.js";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND = path.resolve(HERE, "..", "..", "..");
@@ -393,18 +394,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/**
- * Source with comments removed: block comments, and whole lines that are a
- * `//` or JSDoc `*` continuation. A trailing `// …` after code is KEPT (a
- * string may contain `//`), so a literal in a trailing comment still counts —
- * the conservative direction.
- */
+/** Source with comments blanked (the shared scanner: strings stay intact). */
 function codeOnly(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
-    .join("\n");
+  return stripComments(src, "ts");
 }
 
 const isTest = (f: string) =>

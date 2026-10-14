@@ -31,13 +31,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-
-/** Strip comments so prose can never satisfy a scan. */
-const stripped = (src: string): string =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 describe("DELETE /api/hub/skills/:id carries the acting agent", () => {
   it("NON-VACUITY: the route source still calls caller.delete at all", () => {
@@ -49,7 +46,7 @@ describe("DELETE /api/hub/skills/:id carries the acting agent", () => {
   it("the delete call site forwards agentUserId, not just the id", () => {
     // Comments stripped so the prose ABOVE the fix cannot satisfy this scan —
     // a guard passing on its own docblock has happened in this repo before.
-    const code = stripped(read("./skills-crud.ts"));
+    const code = stripComments(read("./skills-crud.ts"), "ts");
     const call = code.slice(
       code.indexOf("caller.delete({"),
       code.indexOf("caller.delete({") + 240
@@ -64,12 +61,15 @@ describe("DELETE /api/hub/skills/:id carries the acting agent", () => {
   it("skills.delete's INPUT can express the acting agent", () => {
     // The root cause was the input schema, not the call site: a route cannot
     // forward a field the procedure refuses to accept.
-    const code = stripped(read("../../skills.ts"));
+    const code = stripComments(read("../../skills.ts"), "ts");
     const at = code.indexOf("  delete: protectedProcedure");
     expect(at, "skills.delete not found — this scan is broken").toBeGreaterThan(
       -1
     );
-    const proc = code.slice(at, at + 1400);
+    // Bounded by the next procedure, not a char window: comments are blanked,
+    // not deleted, so a window would count the procedure's own prose.
+    const next = code.slice(at + 1).search(/\n {2}\w+: \w*[Pp]rocedure\b/);
+    const proc = code.slice(at, next === -1 ? undefined : at + 1 + next);
     expect(
       proc,
       "skills.delete cannot accept agentUserId, so the gate is decorative " +

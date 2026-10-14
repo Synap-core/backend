@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, relative } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a `tools` row looked up BY NAME must always be scoped (workspace
@@ -71,13 +72,6 @@ const ALLOWLIST_SUFFIXES = [
   join("services", "webhooks", "resolve-tool-by-webhook-token.ts"),
 ];
 
-/** Strip line + block comments so an illustrative anti-pattern IN A COMMENT
- * (e.g. this very file's own doc comment, or resolve-tool-by-webhook-token.ts's)
- * isn't mistaken for live code. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
 // (1) `findFirst({ ...anything..., where: eq(tools.name, …), ...anything... })`
 // — bounded lazy scan so `where` need not be the first property (a prior
 // version of this regex required `where` immediately after `{`, so
@@ -118,7 +112,7 @@ describe("tripwire: tools-by-name lookups are scoped", () => {
     const srcRoot = join(process.cwd(), "src"); // api/src
     const offenders = tsFiles(srcRoot)
       .filter((f) => {
-        const code = stripComments(readFileSync(f, "utf8"));
+        const code = stripComments(readFileSync(f, "utf8"), "ts");
         return (
           BANNED_FIND_FIRST.test(code) || BANNED_UNSCOPED_SELECT.test(code)
         );
@@ -147,7 +141,9 @@ describe("tripwire: tools-by-name lookups are scoped", () => {
     const ALWAYS_FALSE =
       /resolveTool\(\s*[^,]+,\s*\(\s*[^)]*\)\s*=>\s*(false|undefined|null|0|""|'')\s*[,)]/;
     const offenders = tsFiles(srcRoot)
-      .filter((f) => ALWAYS_FALSE.test(stripComments(readFileSync(f, "utf8"))))
+      .filter((f) =>
+        ALWAYS_FALSE.test(stripComments(readFileSync(f, "utf8"), "ts"))
+      )
       .map((f) => relative(srcRoot, f));
     expect(offenders).toEqual([]);
   });

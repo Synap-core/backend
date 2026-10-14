@@ -25,6 +25,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /** `src/__tripwires__` → src → api → packages → synap-backend → multi-repo root. */
 const REPO_ROOT = join(import.meta.dirname, "../../../../..");
@@ -38,11 +39,6 @@ const BROWSER_TYPES = join(
   "synap-app/packages/headless/src/proposal-types/types.ts"
 );
 
-/** Strip comments so prose can never be read as a field signature. */
-function strip(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
-
 /**
  * Map `op` discriminant → normalised field signatures of the interface that
  * declares it. Field text is whitespace-collapsed so formatting differences
@@ -53,7 +49,7 @@ function opFieldSignatures(file: string): Map<string, string[]> {
 }
 
 function opFieldSignaturesOf(raw: string): Map<string, string[]> {
-  const src = strip(raw);
+  const src = stripComments(raw, "ts");
   const out = new Map<string, string[]>();
   for (const m of src.matchAll(/export interface (\w+) \{([\s\S]*?)\n\}/g)) {
     const body = m[2]!;
@@ -110,7 +106,7 @@ describe("tripwire: mirrored composite ops mirror each other exactly", () => {
   it.runIf(bothCheckedOut)(
     "the browser file takes the op union from the server package",
     () => {
-      const src = strip(readFileSync(BROWSER_TYPES, "utf8"));
+      const src = stripComments(readFileSync(BROWSER_TYPES, "utf8"), "ts");
       expect(src).toMatch(
         /import type \{[^}]*\bCompositeProposalOperation\b[^}]*\} from "@synap-core\/types\/proposals"/
       );

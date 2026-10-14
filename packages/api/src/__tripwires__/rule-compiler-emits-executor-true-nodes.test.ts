@@ -32,6 +32,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /** `src/__tripwires__` → src → api → packages → synap-backend. */
 const BACKEND_ROOT = join(import.meta.dirname, "../../../..");
@@ -64,11 +65,6 @@ function read(file: string): string {
     );
   }
   return readFileSync(file, "utf8");
-}
-
-/** Strip comments so prose examples can never be read as code. */
-function strip(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
 /**
@@ -124,7 +120,7 @@ function functionBody(src: string, name: string): string {
 }
 
 describe("rule compiler emits only executor-true output types", () => {
-  const sentence = strip(read(SENTENCE));
+  const sentence = stripComments(read(SENTENCE), "ts");
 
   /** Every value of `ACTION_TO_OUTPUT_TYPE` — what an `output` node can carry. */
   const emittableOutputTypes = (() => {
@@ -143,7 +139,7 @@ describe("rule compiler emits only executor-true output types", () => {
   })();
 
   const dispatchedOutputTypes = caseLabelsOfSwitch(
-    strip(read(OUTPUT_STEP)),
+    stripComments(read(OUTPUT_STEP), "ts"),
     "data.outputType"
   );
 
@@ -161,8 +157,8 @@ describe("rule compiler emits only executor-true output types", () => {
 });
 
 describe("rule compiler emits only executor-true node types", () => {
-  const sentence = strip(read(SENTENCE));
-  const executor = strip(read(EXECUTOR));
+  const sentence = stripComments(read(SENTENCE), "ts");
+  const executor = stripComments(read(EXECUTOR), "ts");
 
   /**
    * Every `type: "…"` literal the flow builders write. Scoped to the BODIES of
@@ -207,7 +203,7 @@ describe("rule compiler emits only executor-true node types", () => {
 
 describe("the compiler's cron gate names the key the scheduler reads", () => {
   it("RUNTIME_CRON_KEY is the triggerConfig key automation-cron-scheduler.ts reads", () => {
-    const scheduler = strip(read(CRON_SCHEDULER));
+    const scheduler = stripComments(read(CRON_SCHEDULER), "ts");
     const match = scheduler.match(/triggerConfig\??\.([a-zA-Z]+) as string/);
     expect(
       match,
@@ -215,7 +211,7 @@ describe("the compiler's cron gate names the key the scheduler reads", () => {
     ).not.toBeNull();
     const runtimeKey = match![1];
 
-    const compiler = strip(read(COMPILER));
+    const compiler = stripComments(read(COMPILER), "ts");
     const declared = compiler.match(/RUNTIME_CRON_KEY\s*=\s*"([a-zA-Z]+)"/);
     expect(
       declared,
@@ -231,7 +227,7 @@ describe("the compiler's cron gate names the key the scheduler reads", () => {
     // it remains as the guard that would catch the key being dropped again.
     // `cron` must ALSO still be written: rows stored before the fix carry only
     // that key, and `triggerToSentence` reads `expression ?? cron`.
-    const sentence = strip(read(SENTENCE));
+    const sentence = stripComments(read(SENTENCE), "ts");
     const at = sentence.indexOf("function toBackendTrigger");
     const region = sentence.slice(at, at + 1200);
     expect(region).toMatch(/expression:\s*cron/);
@@ -246,9 +242,10 @@ describe("the WHEN half compiles to patterns the runtime accepts", () => {
     // entity-event rule was unbuildable. Derived from BOTH vocabularies rather
     // than pinning the three pairs, so teaching the grammar a fourth CRUD verb
     // cannot leave it unbridged.
-    const sentence = strip(read(SENTENCE));
-    const unified = strip(
-      read(join(BACKEND_ROOT, "packages/types/src/events/unified.ts"))
+    const sentence = stripComments(read(SENTENCE), "ts");
+    const unified = stripComments(
+      read(join(BACKEND_ROOT, "packages/types/src/events/unified.ts")),
+      "ts"
     );
 
     const actionsAt = unified.indexOf("EVENT_ACTIONS = [");

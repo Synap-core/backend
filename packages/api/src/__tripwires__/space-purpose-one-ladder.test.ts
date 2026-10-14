@@ -34,6 +34,7 @@ import {
   spacePurposeLine,
 } from "../services/discover/space-brief.js";
 import { toSpaceCandidate } from "../services/discover/space-catalog.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const SRC = join(__dirname, "..");
 const LADDER_FILE = "services/discover/space-brief.ts";
@@ -61,20 +62,12 @@ const FORK_BRIEF_PURPOSE = /\bbriefPurpose\(/;
 const FORK_PLACEHOLDER = /domain:\\s\*/i;
 const CALLS_LADDER = /\b(?:resolveSpacePurpose|spacePurposeLine)\(/;
 
-/**
- * Code only: prose that NAMES the ladder ("brief.purpose > goal") is not a
- * derivation. Naive (not string-aware): a `//` inside a string literal cuts
- * the rest of that line — it can only HIDE code on that line, recorded here.
- */
-const stripComments = (t: string) =>
-  t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-
 const files = walk(SRC).map((abs) => {
   const text = readFileSync(abs, "utf8");
   return {
     rel: relative(SRC, abs).split("\\").join("/"),
     text,
-    code: stripComments(text),
+    code: stripComments(text, "ts"),
   };
 });
 
@@ -89,8 +82,8 @@ describe("space purpose — one ladder", () => {
     ])
       expect(FORK_PURPOSE_READ.test(sample), sample).toBe(true);
     expect(FORK_BRIEF_PURPOSE.test("briefPurpose(brief)")).toBe(true);
-    expect(stripComments("a; // brief.purpose")).not.toMatch(FORK_PURPOSE_READ);
-    expect(stripComments("x = brief.purpose; /* c */")).toMatch(FORK_PURPOSE_READ);
+    expect(stripComments("a; // brief.purpose", "ts")).not.toMatch(FORK_PURPOSE_READ);
+    expect(stripComments("x = brief.purpose; /* c */", "ts")).toMatch(FORK_PURPOSE_READ);
     expect(FORK_PLACEHOLDER.test("/^\\s*domain:\\s*\\S+\\s*$/i")).toBe(true);
   });
 

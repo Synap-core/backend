@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — the two `diagnose` surfaces must answer the same question the
@@ -47,13 +48,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const GLOBAL = join(HERE, "../services/diagnose/global.ts");
 const CLASS = join(HERE, "../services/diagnose/index.ts");
 
-const stripComments = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p) => p);
-
-const globalSrc = stripComments(readFileSync(GLOBAL, "utf8"));
-const classSrc = stripComments(readFileSync(CLASS, "utf8"));
+const globalSrc = stripComments(readFileSync(GLOBAL, "utf8"), "ts");
+const classSrc = stripComments(readFileSync(CLASS, "utf8"), "ts");
 
 describe("tripwire: diagnose's two surfaces agree", () => {
   it("scans real files — not passing over nothing", () => {

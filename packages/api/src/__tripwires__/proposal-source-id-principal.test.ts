@@ -20,15 +20,10 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (rel: string) => readFileSync(resolve(HERE, "..", rel), "utf8");
-
-/** Blank out comments so a MENTION of a rung never counts as the rung itself. */
-const strip = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
 
 /** Every known `data.sourceId` writer and the principal it MUST write. */
 const WRITERS = [
@@ -91,7 +86,10 @@ describe("tripwire: data.sourceId writers keep their documented principal", () =
     // Prefer editing that one; this is the cheap structural backstop. Matching
     // is whitespace-tolerant on purpose — a tripwire in this repo has already
     // gone falsely red because prettier rewrapped the line it string-matched.
-    const src = strip(read("routers/proposals/review-authority.ts"));
+    const src = stripComments(
+      read("routers/proposals/review-authority.ts"),
+      "ts"
+    );
 
     const floor = src.search(
       /purpose\s*===\s*"approve"\s*&&\s*facts\.viewerIsAgent/

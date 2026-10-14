@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join, relative } from "path";
 import { fileURLToPath } from "url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every advance of `focus_sessions.current_stage` goes through ONE door.
@@ -173,8 +174,6 @@ function tsFiles(dir: string, acc: string[] = []): string[] {
  */
 function isWriteShaped(rawLine: string): boolean {
   const line = rawLine.trim();
-  if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*"))
-    return false;
   if (/\.currentStage\s*=(?!=)/.test(line)) return true;
   if (/^currentStage,$/.test(line)) return true;
   const key = /(?<![\w.])currentStage\s*:/.exec(line);
@@ -210,9 +209,11 @@ function scan(): Hit[] {
       const src = readFileSync(file, "utf8");
       if (!src.includes("currentStage")) continue;
       const lines: number[] = [];
-      src.split("\n").forEach((l, i) => {
-        if (isWriteShaped(l)) lines.push(i + 1);
-      });
+      stripComments(src, "ts")
+        .split("\n")
+        .forEach((l, i) => {
+          if (isWriteShaped(l)) lines.push(i + 1);
+        });
       if (lines.length)
         hits.push({
           key: `${prefix}:${relative(root, file).split("\\").join("/")}`,
@@ -254,9 +255,15 @@ describe("tripwire: currentStage advances go through ONE door", () => {
     expect(isWriteShaped("  currentStage: z.string().min(1).optional(),")).toBe(
       false
     );
+    // …and the scan feeds it comment-blanked source, so prose is never a write.
     expect(
-      isWriteShaped("   * updateFocusSession({ currentStage: 'post' })")
-    ).toBe(false);
+      stripComments(
+        "/**\n * updateFocusSession({ currentStage: 'post' })\n */",
+        "ts"
+      )
+        .split("\n")
+        .filter(isWriteShaped)
+    ).toEqual([]);
   });
 
   it("every writer is the door, routed through it, or acknowledged", () => {
@@ -291,7 +298,9 @@ describe("tripwire: currentStage advances go through ONE door", () => {
     const wrong: string[] = [];
     for (const [key, { stageWrite }] of Object.entries(ROUTED_THROUGH_DOOR)) {
       const src = readFileSync(join(...rootFor(key)), "utf8");
-      const writes = src.split("\n").filter(isWriteShaped).length;
+      const writes = stripComments(src, "ts")
+        .split("\n")
+        .filter(isWriteShaped).length;
       if (stageWrite === "caller" && writes === 0)
         wrong.push(`${key}: claims "caller" but writes the column nowhere`);
       if (stageWrite === "door" && writes > 0)

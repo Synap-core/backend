@@ -52,6 +52,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_PACKAGES = resolve(HERE, "../../..");
@@ -102,13 +103,6 @@ function walk(dir: string): string[] {
     }
   }
   return out;
-}
-
-/** Strip comments so documentation OF the anti-pattern never trips the guard. */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p1) => p1);
 }
 
 /** Read the balanced `{ … }` starting at `open`; returns its inner body. */
@@ -174,7 +168,7 @@ const RECORD_STRING_LITERAL =
  * this file's own tests.
  */
 function scanSource(raw: string, name: string): Violation[] {
-  const src = stripComments(raw);
+  const src = stripComments(raw, "ts");
   const violations: Violation[] = [];
   for (const m of src.matchAll(RECORD_STRING_LITERAL)) {
     const open = m.index! + m[0].length - 1;

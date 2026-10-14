@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BROWSER_SETTINGS_SECTIONS, openIn } from "../lib/open-in";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 /**
  * Two cross-repo couplings that `openIn` depends on and nothing enforced.
@@ -39,7 +40,7 @@ function constArrayMembers(source: string, name: string): string[] {
   ).exec(source);
   if (!block) return [];
   return Array.from(
-    block[1].replace(/\/\/.*$/gm, "").matchAll(/["']([^"']+)["']/g),
+    stripComments(block[1], "ts").matchAll(/["']([^"']+)["']/g),
     (m) => m[1]
   );
 }

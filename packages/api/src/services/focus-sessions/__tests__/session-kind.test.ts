@@ -30,6 +30,7 @@ import {
   sessionKindWhere,
 } from "../session-kind.js";
 import { FIXTURES } from "./session-kind.fixtures.js";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const dialect = new PgDialect();
 const compile = (sql: SQL) => dialect.sqlToQuery(sql);
@@ -181,10 +182,7 @@ describe("the runs ledger classifies through this predicate, not its own", () =>
     // literal it replaced, which is how a fix explains itself, not a second
     // spelling of the rule. (`focus-session-close-event-one-name.test.ts`
     // makes the same distinction for the same reason.)
-    const code = LEDGER.replace(/\/\*[\s\S]*?\*\//g, "").replace(
-      /(^|[^:])\/\/[^\n]*/g,
-      "$1"
-    );
+    const code = stripComments(LEDGER, "ts");
     expect(code).not.toMatch(/->>'automationId'/);
   });
 });

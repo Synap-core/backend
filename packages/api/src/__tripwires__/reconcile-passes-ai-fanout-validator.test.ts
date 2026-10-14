@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every `reconcileWorkspaceFromDefinition({...})` call in the API
@@ -29,14 +30,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const strip = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p) => p);
-
 function sites() {
   return walk(API_SRC).flatMap((f) => {
-    const src = strip(readFileSync(f, "utf8"));
+    const src = stripComments(readFileSync(f, "utf8"), "ts");
     const calls = (src.match(/\breconcileWorkspaceFromDefinition\(\{/g) ?? [])
       .length;
     if (calls === 0) return [];

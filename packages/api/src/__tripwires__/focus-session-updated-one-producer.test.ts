@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join, relative } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `focus_session:updated` has ONE producer: the listener on
@@ -73,12 +74,12 @@ function scan() {
   let listenerHasWire = false;
   for (const file of files) {
     const rel = relative(BACKEND, file);
-    const lines = readFileSync(file, "utf8").split("\n");
+    const src = readFileSync(file, "utf8");
+    const lines = src.split("\n");
+    const code = stripComments(src, "ts").split("\n");
     lines.forEach((raw, i) => {
       const at = `${rel}:${i + 1}: ${raw.trim()}`;
-      const trimmed = raw.trim();
-      if (/^(\/\/|\*|\/\*)/.test(trimmed)) return;
-      const line = raw.replace(/\s\/\/.*$/, "");
+      const line = code[i]!;
       if (rel === LISTENER) {
         if (WIRE_LITERAL.test(line)) listenerHasWire = true;
         if (BRIDGE_EVENT_LITERAL.test(line)) hits.push(at);

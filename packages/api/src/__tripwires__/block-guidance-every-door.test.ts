@@ -28,6 +28,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const API_SRC = join(__dirname, "..");
 
@@ -71,16 +72,10 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
 const doors = walk(API_SRC)
   .map((abs) => ({
     rel: relative(API_SRC, abs),
-    code: stripComments(readFileSync(abs, "utf8")),
+    code: stripComments(readFileSync(abs, "utf8"), "ts"),
   }))
   .filter((f) => WRITER_CALL.test(f.code));
 
@@ -91,7 +86,7 @@ describe("block guidance — every slot-ownership door carries the net", () => {
       false
     );
     expect(NET_CALL.test("await guidanceForBlockedSlots({")).toBe(true);
-    expect(stripComments("a // guidanceForBlockedSlots(")).not.toMatch(
+    expect(stripComments("a // guidanceForBlockedSlots(", "ts")).not.toMatch(
       NET_CALL
     );
   });

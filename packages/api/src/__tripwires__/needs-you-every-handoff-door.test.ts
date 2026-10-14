@@ -37,6 +37,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const API_SRC = join(__dirname, "..");
 
@@ -88,16 +89,10 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
 const doors = walk(API_SRC)
   .map((abs) => ({
     rel: relative(API_SRC, abs),
-    code: stripComments(readFileSync(abs, "utf8")),
+    code: stripComments(readFileSync(abs, "utf8"), "ts"),
   }))
   .filter((f) => HANDOFF.test(f.code));
 
@@ -113,7 +108,9 @@ describe("needs-you — every hand-off door tells the person", () => {
     // A TYPE naming the union mints nothing (`anchored-comment-turn.ts`).
     expect(HANDOFF.test('  owner: "human" | "agent";')).toBe(false);
     expect(NOTIFY.test("await notifySessionNeedsYou({")).toBe(true);
-    expect(stripComments("a // notifySessionNeedsYou(")).not.toMatch(NOTIFY);
+    expect(stripComments("a // notifySessionNeedsYou(", "ts")).not.toMatch(
+      NOTIFY
+    );
   });
 
   it("the derived door set is non-vacuous and contains the known doors", () => {

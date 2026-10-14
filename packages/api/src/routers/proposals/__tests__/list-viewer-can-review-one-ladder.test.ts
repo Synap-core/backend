@@ -36,12 +36,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
-
-/** Blank out comments so a MENTION of a helper never counts as a CALL. */
-const strip = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const h = vi.hoisted(() => ({
   /** `users.id` → the row the agent-class lookup sees. */
@@ -547,14 +542,15 @@ describe("the ORDER of the rungs is the guarantee", () => {
  * name, never by line number.
  */
 describe("tripwire: the list must not rebuild the ladder", () => {
-  const ROUTER = strip(
+  const ROUTER = stripComments(
     readFileSync(
       path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
         "../../proposals.ts"
       ),
       "utf-8"
-    )
+    ),
+    "ts"
   );
 
   it("proposals.ts calls no ladder rung directly", () => {
@@ -569,14 +565,15 @@ describe("tripwire: the list must not rebuild the ladder", () => {
     expect(
       (ROUTER.match(/computeCanReviewApprovalFromFacts\(/g) ?? []).length
     ).toBe(0);
-    const HELPER = strip(
+    const HELPER = stripComments(
       readFileSync(
         path.resolve(
           path.dirname(fileURLToPath(import.meta.url)),
           "../review-authority.ts"
         ),
         "utf-8"
-      )
+      ),
+      "ts"
     );
     const helperAt = HELPER.indexOf(
       "export async function resolveViewerReviewVerdicts"

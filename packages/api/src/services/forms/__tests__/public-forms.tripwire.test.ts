@@ -24,6 +24,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(HERE, "../../..");
@@ -50,13 +51,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Source without block comments and without whole-line `//` / `*` comments. */
+/** Source with comments blanked by the shared scanner. */
 function codeOnly(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .filter((line) => !/^\s*(\/\/|\*)/.test(line))
-    .join("\n");
+  return stripComments(src, "ts");
 }
 
 function resolveImport(from: string, rel: string): string | null {

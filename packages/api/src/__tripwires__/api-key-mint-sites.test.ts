@@ -29,6 +29,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
@@ -85,9 +86,9 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Strip comment lines so prose naming a primitive is not a mint. */
+/** Comments blanked so prose naming a primitive is not a mint. */
 function codeLines(src: string): string[] {
-  return src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  return stripComments(src, "ts").split("\n");
 }
 
 const minting = new Set<string>();

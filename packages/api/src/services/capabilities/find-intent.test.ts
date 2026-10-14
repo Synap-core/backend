@@ -20,6 +20,7 @@ import type { AbstractVerb } from "@synap/database/schema";
 
 import type { RegistryCapability } from "./capability-registry.js";
 import { TEMPLATE_OPT_OUT } from "../focus-sessions/match-session-template.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 const listCapabilities = vi.fn();
 const matchSessionTemplate = vi.fn();
@@ -542,9 +543,7 @@ describe("tripwire: the door never routes through understandQuery's residue", ()
     resolve(dirname(fileURLToPath(import.meta.url)), "find-intent.ts"),
     "utf8"
   );
-  const code = src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  const code = stripComments(src, "ts");
 
   it("the scan can see this file's code at all (non-vacuity)", () => {
     expect(code).toContain("rankByTerms");

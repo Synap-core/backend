@@ -31,6 +31,7 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "fs";
 import { join, relative } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const ROUTERS = join(process.cwd(), "src/routers");
 
@@ -43,10 +44,6 @@ function walk(dir: string): string[] {
     if (statSync(p).isDirectory()) return f === "__tests__" ? [] : walk(p);
     return f.endsWith(".ts") && !f.includes(".test.") ? [p] : [];
   });
-}
-
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "");
 }
 
 const AGENT_BRANCH =
@@ -80,7 +77,7 @@ interface WriteChunk extends Chunk {
 
 /** Every WRITE chunk of a file (before the agent-branch filter). */
 function writeChunks(file: string, src: string): WriteChunk[] {
-  const code = stripComments(src);
+  const code = stripComments(src, "ts");
   const decls = [...code.matchAll(DECL)].filter(
     // `c.get("…")` is a context read, not a route.
     (d) => d[3] !== "get" || (d[4] ?? "").startsWith("/")

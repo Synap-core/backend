@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `market.install({kind:"template"})` must apply LAYER 2.
@@ -69,13 +70,10 @@ function stripCommentsAndStrings(src: string): string {
   // everything to the next apostrophe. That bit a sibling tripwire in the CLI
   // on 2026-09-05 — it failed against correct code. It fails CLOSED (red, not
   // green), so it is confusing rather than dangerous; fixed anyway.
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ")
-    .replace(
-      /`(?:\\[\s\S]|[^\\`])*`|'(?:\\.|[^\\'])*'|"(?:\\.|[^\\"])*"/g,
-      '""'
-    );
+  return stripComments(src, "ts").replace(
+    /`(?:\\[\s\S]|[^\\`])*`|'(?:\\.|[^\\'])*'|"(?:\\.|[^\\"])*"/g,
+    '""'
+  );
 }
 
 describe("tripwire: market.install template branch applies post-workspace layer 2", () => {

@@ -24,13 +24,12 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function code(file: string): string {
-  return readFileSync(join(SRC, file), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  return stripComments(readFileSync(join(SRC, file), "utf8"), "ts");
 }
 
 describe("cleanup-pack cron is not scheduled (relay pack view first)", () => {

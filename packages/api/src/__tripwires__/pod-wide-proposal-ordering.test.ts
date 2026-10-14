@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = resolve(HERE, "..");
@@ -38,12 +39,6 @@ function walk(dir: string, prefix = ""): string[] {
   return out;
 }
 
-/** Blank out comments so a MENTION of a call never counts as the call. */
-const strip = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
-
 const sources: { file: string; src: string }[] = walk(SRC)
   .filter(
     (f: string) => !f.includes("__tests__") && !f.includes("__tripwires__")
@@ -51,7 +46,7 @@ const sources: { file: string; src: string }[] = walk(SRC)
   .filter((f: string) => !f.endsWith(".test.ts"))
   .map((f: string) => ({
     file: f,
-    src: strip(readFileSync(resolve(SRC, f), "utf8")),
+    src: stripComments(readFileSync(resolve(SRC, f), "utf8"), "ts"),
   }));
 
 const calls = (needle: string): string[] =>

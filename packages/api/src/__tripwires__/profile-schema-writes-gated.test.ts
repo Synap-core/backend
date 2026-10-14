@@ -30,6 +30,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const ROUTERS = join(process.cwd(), "src", "routers");
 const FILES = [
@@ -58,12 +59,6 @@ const EXEMPT: Record<string, string> = {
   "property-defs.ts::delete":
     "gated by assertWorkspaceWrite on the def row; a base/global def is refused for everyone (stricter than the ownership gate)",
 };
-
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
 
 interface Procedure {
   id: string;
@@ -95,7 +90,7 @@ function ungated(procedures: Procedure[]): string[] {
 const PROCEDURES = FILES.flatMap((file) =>
   extractProcedures(
     file,
-    stripComments(readFileSync(join(ROUTERS, file), "utf8"))
+    stripComments(readFileSync(join(ROUTERS, file), "utf8"), "ts")
   )
 );
 const MUTATIONS = PROCEDURES.filter((p) => p.body.includes(".mutation("));
@@ -121,7 +116,8 @@ describe("profile schema writes pass the ownership gate", () => {
   });
 
   it("self-check: the scan flags an ungated write, a write-before-gate, and a comment-only gate", () => {
-    const sample = stripComments(`export const r = router({
+    const sample = stripComments(
+      `export const r = router({
   bad: workspaceProcedure
     .input(z.object({}))
     .mutation(async () => { await profileRepo.delete(id); }),
@@ -132,7 +128,9 @@ describe("profile schema writes pass the ownership gate", () => {
   good: workspaceProcedure
     .mutation(async () => { await assertProfileSchemaWrite(db, u, p, o); await profileRepo.delete(id); }),
   read: workspaceProcedure.query(async () => profileRepo.update(id)),
-});`);
+});`,
+      "ts"
+    );
     expect(ungated(extractProcedures("sample.ts", sample))).toEqual([
       "sample.ts::bad: never calls the gate",
       "sample.ts::late: writes before the gate",

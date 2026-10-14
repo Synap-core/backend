@@ -17,6 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const h = vi.hoisted(() => ({
   seenSources: [] as unknown[],
@@ -154,12 +155,13 @@ describe("approval of an import graph normalizes `data.source`", () => {
 });
 
 describe("the materializer stamps ONLY the normalized source on its doors", () => {
-  const src = readFileSync(
-    join(__dirname, "..", "..", "..", "utils", "materialize-composite.ts"),
-    "utf8"
-  )
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  const src = stripComments(
+    readFileSync(
+      join(__dirname, "..", "..", "..", "utils", "materialize-composite.ts"),
+      "utf8"
+    ),
+    "ts"
+  );
 
   it("every door `source:` is `materializeSource`, derived from normalizeProposalSource", () => {
     const sourceProps = [...src.matchAll(/\bsource:\s*([^,\n}]+)/g)].map((m) =>

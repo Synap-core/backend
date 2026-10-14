@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { ProposalStatus } from "@synap/database";
 import { computeRevisedEnvelope } from "../services/proposals/proposals-service.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a staged source blob's `documentId` is UNTRUSTED, and every
@@ -46,44 +47,6 @@ import { computeRevisedEnvelope } from "../services/proposals/proposals-service.
 
 const API_SRC = join(__dirname, "..");
 const BLOB = join(API_SRC, "utils", "store-entity-source-blob.ts");
-
-/** Blank out comments, preserving offsets — prose must not satisfy a scan. */
-function stripComments(src: string): string {
-  const out = src.split("");
-  let i = 0;
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to && k < out.length; k++) {
-      if (out[k] !== "\n") out[k] = " ";
-    }
-  };
-  while (i < src.length) {
-    const c = src[i];
-    const n = src[i + 1];
-    if (c === "/" && n === "/") {
-      const end = src.indexOf("\n", i);
-      blank(i, end === -1 ? src.length : end);
-      i = end === -1 ? src.length : end;
-    } else if (c === "/" && n === "*") {
-      const end = src.indexOf("*/", i + 2);
-      blank(i, end === -1 ? src.length : end + 2);
-      i = end === -1 ? src.length : end + 2;
-    } else if (c === '"' || c === "'" || c === "`") {
-      let j = i + 1;
-      while (j < src.length) {
-        if (src[j] === "\\") {
-          j += 2;
-          continue;
-        }
-        if (src[j] === c) break;
-        j++;
-      }
-      i = j + 1;
-    } else {
-      i++;
-    }
-  }
-  return out.join("");
-}
 
 /**
  * The balanced-brace BODY that follows `declAt`, skipping the parameter list.
@@ -190,7 +153,7 @@ function sourceFiles(dir: string, acc: string[] = []): string[] {
 }
 
 describe("TRIPWIRE: a staged blob's documentId is never trusted", () => {
-  const src = stripComments(readFileSync(BLOB, "utf8"));
+  const src = stripComments(readFileSync(BLOB, "utf8"), "ts");
 
   it("attachSourceBlob loads and authorizes the document BEFORE it writes", () => {
     const at = src.indexOf("export async function attachSourceBlob");
@@ -443,7 +406,7 @@ describe("TRIPWIRE: every terminal proposal state discards the staged blob", () 
     const found: string[] = [];
 
     for (const file of files) {
-      const s = stripComments(readFileSync(file, "utf8"));
+      const s = stripComments(readFileSync(file, "utf8"), "ts");
       const helpers = localDiscardHelpers(s);
       // WRITE sites only: a `.set({ … status: ProposalStatus.X … })`. A status
       // named in a filter array or a switch is a READ and out of scope by

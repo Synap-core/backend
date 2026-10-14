@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { deriveProposalPrincipal } from "../routers/proposals/display.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * `proposals.subject_user_id` (0248) HAS TWO CONSUMERS AND THEY MUST NOT DRIFT.
@@ -181,17 +182,12 @@ describe("WRITER invariant — agent-actor doors pass the effective user", () =>
     });
 
     it(`${door.file}: every subjectUserId it stamps is an allowed expression`, () => {
-      const src = readFileSync(door.src, "utf8");
+      // Only real assignments, not prose: comments are blanked first.
+      const src = stripComments(readFileSync(door.src, "utf8"), "ts");
       const stamps = src
         .split("\n")
         .map((line, i) => [i + 1, line.trim()] as const)
-        // Only real assignments, not prose: a comment line is skipped.
-        .filter(
-          ([, line]) =>
-            /\bsubjectUserId\s*[:=]/.test(line) &&
-            !line.startsWith("*") &&
-            !line.startsWith("//")
-        );
+        .filter(([, line]) => /\bsubjectUserId\s*[:=]/.test(line));
       expect(stamps.length).toBeGreaterThan(0);
       const unexplained = stamps.filter(
         ([, line]) => !door.allowed.some((re) => re.test(line))

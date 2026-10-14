@@ -8,6 +8,7 @@ import {
   UNOPENABLE_KINDS,
 } from "./resolve-browser-route.js";
 import { PROBE_ORDER } from "../../../services/diagnose/resolve-object-kind.js";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — `/resolve/:id` may only emit labels the browser can actually route.
@@ -60,17 +61,12 @@ const OBJECT_NAV = resolve(
   "object-nav.ts"
 );
 
-/** Prose documents the grammar; only CODE decides routing. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
 const CASE_LABEL = /case\s+'([a-z-]+)'\s*:/g;
 
 /** Every kind `objectNavTarget` routes, read off the table's own source. */
 function routedKinds(source: string): Set<string> {
   const kinds = new Set<string>();
-  for (const match of stripComments(source).matchAll(CASE_LABEL)) {
+  for (const match of stripComments(source, "ts").matchAll(CASE_LABEL)) {
     kinds.add(match[1]!);
   }
   return kinds;

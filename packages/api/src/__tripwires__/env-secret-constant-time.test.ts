@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const REPO = fileURLToPath(new URL("../../../../", import.meta.url));
 
@@ -69,24 +70,29 @@ export function scan(src: string): { vars: string[]; hits: string[] } {
   }
   const hits: string[] = [];
   const NOT_A_SECRET = /^(undefined|null|true|false)$/;
-  src.split("\n").forEach((line, i) => {
-    const code = line.replace(/\/\/.*$/, "");
-    for (const m of code.matchAll(/([\w.$?]+)\s*[!=]==?\s*([\w.$?]+|["'`])/g)) {
-      const [left, right] = [m[1]!, m[2]!];
-      const isSecret = (side: string) =>
-        vars.has(side) ||
-        (/^process\.env\.(\w+)$/.test(side) &&
-          SECRET_ENV.test(side.slice("process.env.".length)));
-      const other = (side: string) =>
-        /^["'`]$/.test(side) ? null : NOT_A_SECRET.test(side) ? null : side;
-      if (
-        (isSecret(left) && other(right)) ||
-        (isSecret(right) && other(left))
-      ) {
-        hits.push(`${i + 1}: ${line.trim()}`);
+  const lines = src.split("\n");
+  stripComments(src, "ts")
+    .split("\n")
+    .forEach((code, i) => {
+      const line = lines[i]!;
+      for (const m of code.matchAll(
+        /([\w.$?]+)\s*[!=]==?\s*([\w.$?]+|["'`])/g
+      )) {
+        const [left, right] = [m[1]!, m[2]!];
+        const isSecret = (side: string) =>
+          vars.has(side) ||
+          (/^process\.env\.(\w+)$/.test(side) &&
+            SECRET_ENV.test(side.slice("process.env.".length)));
+        const other = (side: string) =>
+          /^["'`]$/.test(side) ? null : NOT_A_SECRET.test(side) ? null : side;
+        if (
+          (isSecret(left) && other(right)) ||
+          (isSecret(right) && other(left))
+        ) {
+          hits.push(`${i + 1}: ${line.trim()}`);
+        }
       }
-    }
-  });
+    });
   return { vars: [...vars], hits };
 }
 

@@ -32,6 +32,7 @@ import {
 } from "./sentence.js";
 import { validateEventPattern } from "../events/unified.js";
 import { TRIGGER_FILTER_OPERATORS } from "./filter-operators.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 describe("sentence → flow converters emit executor-true nodes", () => {
   // Regression guard: the executor only runs `type:"output"` nodes keyed on
@@ -987,10 +988,10 @@ describe("no editor offers an unevaluable operator", () => {
 
   for (const rel of EDITORS) {
     it(`${rel.split("/").pop()} derives its menu from the SSOT`, () => {
-      const src = fs
-        .readFileSync(path.join(REPO, rel), "utf8")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      const src = stripComments(
+        fs.readFileSync(path.join(REPO, rel), "utf8"),
+        "ts"
+      );
       // A CALL or a member access, not a bare mention — an import line alone
       // has satisfied a scan in this repo twice.
       expect(

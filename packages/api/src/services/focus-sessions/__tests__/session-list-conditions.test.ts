@@ -27,6 +27,7 @@ import type { SQL } from "@synap/database";
 import { sessionListConditions } from "../session-list-conditions.js";
 import { notTriagePendingWhere, triagePendingWhere } from "../triage.js";
 import { sessionKindWhere } from "../session-kind.js";
+import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 const dialect = new PgDialect();
 const sqlOf = (conds: SQL[]) => dialect.sqlToQuery(and(...conds) as SQL);
@@ -128,12 +129,13 @@ describe("the Hub REST list door does not hand-write its own copy again", () => 
    * Comments are stripped first, so prose that quotes the old line cannot
    * satisfy or fail it.
    */
-  const src = readFileSync(
-    join(__dirname, "../../../routers/hub-protocol/rest/focus-sessions.ts"),
-    "utf8"
-  )
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  const src = stripComments(
+    readFileSync(
+      join(__dirname, "../../../routers/hub-protocol/rest/focus-sessions.ts"),
+      "utf8"
+    ),
+    "ts"
+  );
 
   it("NON-VACUITY: the file was read", () => {
     expect(src).toMatch(/export function registerFocusSessionsRoutes/);

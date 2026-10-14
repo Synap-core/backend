@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — every owner-private kind in the object-graph `KIND_TABLE` must get
@@ -177,22 +178,6 @@ function isOwnerPrivateByShape(body: string | undefined): boolean {
   });
 }
 
-/**
- * Strip `//` line comments. Without this, a case that RETURNS the unsafe
- * `workspaceLensWhere` but merely mentions `ownerPrivateVisibleWhere` in an
- * explanatory comment would satisfy the content assertions below — the comment
- * would vouch for code that does the opposite.
- */
-function stripLineComments(src: string): string {
-  return src
-    .split("\n")
-    .map((l) => {
-      const i = l.indexOf("//");
-      return i === -1 ? l : l.slice(0, i);
-    })
-    .join("\n");
-}
-
 /** Case label → the source text of that case's body, from hydrationScopeWhere. */
 function parseCaseBodies(src: string): Map<string, string> {
   const start = src.indexOf("function hydrationScopeWhere");
@@ -211,7 +196,7 @@ function parseCaseBodies(src: string): Map<string, string> {
     const to =
       i + 1 < labels.length ? labels[i + 1].index! : fn.indexOf("default:");
     // Comments stripped: only executable source may satisfy the assertions.
-    out.set(m[1], stripLineComments(fn.slice(from, to)));
+    out.set(m[1], stripComments(fn.slice(from, to), "ts"));
   });
   return out;
 }

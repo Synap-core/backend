@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a PRE-FILTER must never be stricter than the AUTHORITY GATE it
@@ -57,11 +58,6 @@ const ID_RESOLVERS: Array<{ label: string; path: string }> = [
   },
 ];
 
-const strip = (src: string): string =>
-  src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
-
 describe("tripwire: a proposal pre-filter is never stricter than its gate", () => {
   it("the authority gate still treats ownership as an ALTERNATIVE to membership", () => {
     // NON-VACUITY + the premise. If the gate ever stops honouring ownership,
@@ -69,7 +65,7 @@ describe("tripwire: a proposal pre-filter is never stricter than its gate", () =
     // must fail loudly here rather than silently keep widening resolvers.
     const gate = join(API_SRC, "routers/proposals/review-authority.ts");
     expect(existsSync(gate), `missing authority gate: ${gate}`).toBe(true);
-    const src = strip(readFileSync(gate, "utf8"));
+    const src = stripComments(readFileSync(gate, "utf8"), "ts");
     expect(
       /isOwner/.test(src),
       "`review-authority.ts` no longer mentions `isOwner`. If ownership was " +
@@ -82,7 +78,7 @@ describe("tripwire: a proposal pre-filter is never stricter than its gate", () =
     "$label pairs the workspace lens with the ownership floor",
     ({ path }) => {
       expect(existsSync(path), `missing resolver: ${path}`).toBe(true);
-      const src = strip(readFileSync(path, "utf8"));
+      const src = stripComments(readFileSync(path, "utf8"), "ts");
 
       const lensHits = (
         src.match(/userVisibleWhere\(\s*proposals\.workspaceId/g) ?? []

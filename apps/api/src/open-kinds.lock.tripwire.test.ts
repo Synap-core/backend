@@ -6,6 +6,7 @@ import {
   OPEN_CLIENT_PARAM,
   TYPED_OPEN_KINDS,
 } from "./open-dispatch.js";
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 // Frozen copy of pod-admin HOST_TYPES ∪ BOUNCE_TYPES (open-params.ts).
 // Do not import that file from apps/api — tsc rootDir cannot leave src/.
@@ -75,16 +76,11 @@ const ROUTE_PROJECTION_PATH = fileURLToPath(
   )
 );
 
-/** Prose documents the grammar; only CODE decides routing. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-
 const LABEL_LITERAL = /\blabel:\s*"([a-z_-]+)"/g;
 
 function parseEmittableLabels(source: string): Set<string> {
   const labels = new Set<string>();
-  for (const m of stripComments(source).matchAll(LABEL_LITERAL)) {
+  for (const m of stripComments(source, "ts").matchAll(LABEL_LITERAL)) {
     labels.add(m[1]!);
   }
   return labels;

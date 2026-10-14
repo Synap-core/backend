@@ -51,6 +51,7 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { resolveVerifiedSessionId } from "./hub-protocol/_middleware/session.js";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OWNER = "user-owner";
@@ -148,9 +149,9 @@ describe("both doors reach the same verified handle", () => {
     // argument; any OTHER raw read must be one of the known safe forwards.
     const calls = captureSrc.match(/resolveVerifiedSessionId\(/g)?.length ?? 0;
     expect(calls).toBeGreaterThanOrEqual(1);
-    const rawReads = captureSrc
+    const rawReads = stripComments(captureSrc, "ts")
       .split("\n")
-      .filter((l) => /input\.sessionId/.test(l) && !/^\s*\/\//.test(l));
+      .filter((l) => /input\.sessionId/.test(l));
     const knownSafe = rawReads.filter(
       (l) =>
         /^\s*input\.sessionId,?\s*$/.test(l) || // an argument to the verified door

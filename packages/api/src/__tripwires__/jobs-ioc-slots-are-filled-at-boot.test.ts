@@ -31,6 +31,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /** `src/__tripwires__` → src → api → packages → synap-backend. */
 const BACKEND_ROOT = join(import.meta.dirname, "../../../..");
@@ -62,11 +63,6 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Strip comments so prose naming a slot can never be read as a declaration or a call. */
-function strip(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
-
 describe("every @synap/jobs IoC slot is filled at boot", () => {
   const declared = (() => {
     if (!existsSync(JOBS_SRC)) {
@@ -74,7 +70,7 @@ describe("every @synap/jobs IoC slot is filled at boot", () => {
     }
     const names = new Set<string>();
     for (const file of walk(JOBS_SRC)) {
-      for (const m of strip(readFileSync(file, "utf8")).matchAll(
+      for (const m of stripComments(readFileSync(file, "utf8"), "ts").matchAll(
         /export\s+function\s+(register[A-Z]\w*)\s*\(/g
       )) {
         names.add(m[1]!);
@@ -83,7 +79,7 @@ describe("every @synap/jobs IoC slot is filled at boot", () => {
     return [...names].sort();
   })();
 
-  const boot = strip(read(BOOT));
+  const boot = stripComments(read(BOOT), "ts");
 
   it("parsed both sides (the sets are non-empty)", () => {
     // An empty declared set would make every assertion below vacuously true —
