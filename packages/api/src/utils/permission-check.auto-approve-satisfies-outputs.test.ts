@@ -190,6 +190,11 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     });
   });
 
+  it("the receipt carries its real verb, never the 'update' default", async () => {
+    await checkPermissionOrPropose(OPTS);
+    expect(receiptData()).toMatchObject({ changeType: "create" });
+  });
+
   it("stamps the matching output done, with the receipt as lineage", async () => {
     sessionRow.current = openSessionWith([
       { kind: "document", label: "Spec" },

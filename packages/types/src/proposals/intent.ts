@@ -159,6 +159,14 @@ export const KIND_INTENT: Readonly<Record<string, ProposalIntent>> = {
   update_pack: "change",
   document: "change",
   facet: "change",
+  // A lifecycle move (`entity.transition`, wave 5): the object exists and
+  // its status changes — never a create, which the frontend ladder's
+  // `else create` fallback used to draw.
+  transition: "change",
+  // A verb-backed or external tool call with no better card (wave 5): it
+  // changes something the reviewer must read; "change", not "run", because
+  // `run` marks a playbook/automation run the reviewer already knows.
+  action: "change",
 
   // The DEFAULT for a link — its change type refines it (`LINK_INTENT`): an
   // unlink is a `remove`, so the header mark agrees with the red ✕ the visual

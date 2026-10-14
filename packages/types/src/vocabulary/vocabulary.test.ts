@@ -323,6 +323,29 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("reconnect", "past")).toBe("Reconnected");
   });
 
+  it("names every proposal-card verb in both moods (wave 5)", () => {
+    const pairs: Array<[string, string, string]> = [
+      ["start", "Start", "Started"],
+      ["move", "Move", "Moved"],
+      ["transition", "Move", "Moved"],
+      ["enable", "Enable", "Enabled"],
+      ["connect", "Connect", "Connected"],
+      ["file", "File", "Filed"],
+      ["attach", "Attach", "Attached"],
+      ["archive", "Archive", "Archived"],
+      ["set_brief", "Set brief", "Set brief"],
+      ["call", "Call", "Called"],
+      ["grant", "Grant", "Granted"],
+      ["create", "Create", "Created"],
+      ["link", "Link", "Linked"],
+      ["run", "Run", "Ran"],
+    ];
+    for (const [verb, imperative, past] of pairs) {
+      expect(resolveActionLabel(verb, "imperative")).toBe(imperative);
+      expect(resolveActionLabel(verb, "past")).toBe(past);
+    }
+  });
+
   it("every curated verb defines both moods", () => {
     for (const [key, verb] of Object.entries(ACTION_VERBS)) {
       expect(verb.imperative, `${key}.imperative`).toBeTruthy();

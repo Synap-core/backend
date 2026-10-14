@@ -42,6 +42,13 @@ describe("resolveProposalIntent — the mark", () => {
     expect(resolveProposalSeverity({ kind: "merge" })).toBe("destructive");
   });
 
+  it("classifies a status move and a tool action as change, never create (wave 5)", () => {
+    expect(resolveProposalIntent({ kind: "transition" }).intent).toBe("change");
+    expect(resolveProposalIntent({ kind: "action" }).intent).toBe("change");
+    expect(KIND_INTENT.transition).toBe("change");
+    expect(KIND_INTENT.action).toBe("change");
+  });
+
   it("classifies composite as create (every modelled composite op is a create)", () => {
     expect(resolveProposalIntent({ kind: "composite" }).intent).toBe("create");
   });

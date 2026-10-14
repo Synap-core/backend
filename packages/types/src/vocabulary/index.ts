@@ -449,6 +449,15 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     imperative: "Set notifications",
     past: "Set notifications",
   },
+  // Proposal cards (wave 5): a pure external tool call reads "Call · Tool
+  // ⟨name⟩" (humanize had no past: a receipt said "Call"), and a space brief
+  // edit reads "Set brief" — the verb names the part it sets, like
+  // `section_update`.
+  call: { imperative: "Call", past: "Called", progressive: "Calling" },
+  set_brief: { imperative: "Set brief", past: "Set brief" },
+  // An agent's space grant riding a track create (wave 5, decision 4): the
+  // access section reads "Grant · access" / "Granted".
+  grant: { imperative: "Grant", past: "Granted", progressive: "Granting" },
 };
 
 /**

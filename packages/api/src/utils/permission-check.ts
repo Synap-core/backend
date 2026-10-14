@@ -84,6 +84,7 @@ import {
   isLikelyUUID,
   isCompositeProposalData,
   roleExceedSentence,
+  resolveProposalAction,
 } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
@@ -2092,6 +2093,12 @@ async function evaluatePermission(
               proposalType: `${subjectType}.${action}`,
               data: {
                 ...receiptData,
+                // The receipt's VERB, read by every request builder: a flat
+                // receipt with no `changeType` defaulted to "update", so a
+                // created entity or a started session read "Updated".
+                changeType: resolveProposalAction({
+                  proposalType: `${subjectType}.${action}`,
+                }),
                 agentUserId,
                 ...(authorshipMode ? { authorshipMode } : {}),
                 // Slot claim, same top-level key the pending door writes.

@@ -20,6 +20,9 @@ export * from "./governance-policy-sentences.js";
 export * from "./review-comment.js";
 // A run on a playbook starts a session — the one classification + subject reader.
 export * from "./session-start.js";
+// The ONE reading of the verb a proposal row performs (receipts included).
+export * from "./action.js";
+import { resolveProposalAction } from "./action.js";
 
 // Re-export database types for proposals
 export type { Proposal, NewProposal } from "@synap/database";
@@ -1482,8 +1485,9 @@ export function buildRequestFromProposal(row: Proposal): UpdateRequest {
     row.agentUserId ||
     row.createdBy ||
     "";
-  const changeType =
-    (raw?.changeType as UpdateRequest["changeType"]) ?? "update";
+  // The ONE verb reading — a flat receipt (`entity.create`, no `changeType`)
+  // used to default to "update" here, so every receipt read "Update".
+  const changeType = resolveProposalAction(row) as UpdateRequest["changeType"];
   const data = isNestedEnvelope(raw)
     ? (raw!.data as UpdateRequest["data"])
     : raw && typeof raw === "object"
