@@ -124,22 +124,6 @@ export interface ComposeOntoBaseInput {
 }
 
 /**
- * Record a pack in a space's `installedPacks` ledger WITHOUT its version —
- * the version is the finisher's to write on convergence (`pendingPack`), the
- * same rule `composeOntoBaseWorkspace` follows below. For a door that layers
- * a pack onto an existing space outside compose (tRPC `createFromDefinition`
- * populating a `workspaceId`).
- */
-export async function recordInstalledPack(
-  workspaceId: string,
-  slug: string,
-  userId: string
-): Promise<void> {
-  // The ONE template-state writer: upserted under its row lock.
-  await upsertPack(db, workspaceId, { slug }, { userId });
-}
-
-/**
  * The overlay definition with the base workspace's SHELL removed — what a pack
  * may layer onto a workspace that has its own template identity. The settings
  * step of `reconcileWorkspaceFromDefinition` overwrites `workspaceSubtype` /

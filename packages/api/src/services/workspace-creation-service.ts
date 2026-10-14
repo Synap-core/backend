@@ -3,9 +3,10 @@
  *
  * The idempotent create (`createWorkspaceFromDefinitionIdempotent`, a wrapper
  * over `template-apply/layer-one.ts`), the one-space-per-domain verdict, and —
- * until W3 retires the tRPC door's copy — `reconcileWorkspaceIfStale`,
- * `failedInLayerTwo` and `withoutStamp`, which `definition-engine.ts` still
- * calls. The existing-space lookup lives in `template-apply/resolve-target.ts`.
+ * until W4 moves the boot reconcile and adopt onto `applyTemplate` —
+ * `reconcileWorkspaceIfStale`. The existing-space lookup lives in
+ * `template-apply/resolve-target.ts`; "failed in layer 2 → re-sync" is a
+ * `planTemplateApply` state (W3 retired the tRPC copies).
  */
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
@@ -20,7 +21,6 @@ import {
   or,
   findWorkspaceIdentityConflict,
   readTemplateState,
-  isFailedInLayerTwo,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
@@ -308,33 +308,6 @@ export async function checkOneSpacePerDomain(input: {
       }),
     },
   };
-}
-
-/**
- * A space whose LAYER 2 failed (capabilities / playbooks / automations —
- * `applyPackagePostWorkspace` writes `failedStep: "post-workspace"`). Layer 1
- * finished: layer 2 only ever runs on a built space. So it is NEVER resumed
- * through the core: a row with no `completedSteps` (every space built before
- * they were recorded) re-runs step 1 there, which mints a second space and
- * 409s on the name. Its `packageVersion` is not trusted either — the run that
- * failed may have stamped it before the one finisher existed, which would
- * short-circuit the re-sync as "unchanged" and skip layer 2 forever. Callers
- * re-sync it as stale (`withoutStamp`) and re-run layer 2.
- */
-export function failedInLayerTwo(
-  settings: WorkspaceSettings | null | undefined
-): boolean {
-  return isFailedInLayerTwo(readTemplateState(settings));
-}
-
-/** The settings a re-sync compares against, with the version stamp dropped. */
-export function withoutStamp(
-  settings: WorkspaceSettings | null | undefined
-): WorkspaceSettings {
-  const { packageVersion: _dropped, template, ...rest } = settings ?? {};
-  return template
-    ? { ...rest, template: { ...template, version: null } }
-    : rest;
 }
 
 /** Deterministic: owned first, then the OLDEST (the original domain space). */
