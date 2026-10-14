@@ -43,8 +43,10 @@ const HTTP_URL = /^https?:\/\/\S+$/i;
 /**
  * Resolve an entity's primary media. Order — first hit wins:
  *   a. a pod-held COPY (`systemData.media`) of the declared property's URL —
- *      the copy whose `sourceUrl` equals it, else the first copy (the pod copied
- *      a derived image, e.g. a page's og:image, for that URL);
+ *      the copy whose `sourceUrl` equals it; for the LINK family only, else the
+ *      first copy (the pod copied a derived image, the page's og:image). Any
+ *      other family with no matching copy is (b) external: a copy of a
+ *      different URL is a stale copy of the previous value;
  *   b. the DECLARED source: `{property}` holding a document id (stored) or an
  *      http(s) URL (external); `{documentId: true}` (the entity's own linked
  *      document); `{entityRef}` (another entity whose media is used);
@@ -82,11 +84,20 @@ function resolvePrimary(
   const source = presentation?.media?.source;
   const kind: PresentationMediaKind = presentation?.media?.kind ?? "auto";
 
+  // Only a LINK's declared URL is a page whose image the pod copies under a
+  // different URL (its og:image), so only a link may take a copy that does not
+  // match. For any other family (an avatar, a cover) a non-matching copy is the
+  // PREVIOUS value's: drawing it would show a stale image — forever, if the new
+  // URL's copy is refused.
+  const derivedCopy = (): EntityMediaCopy | undefined =>
+    presentation?.family === "link" ? copies[0] : undefined;
+
   if (source && "property" in source) {
     const value = firstString(props[source.property]);
     if (value && HTTP_URL.test(value)) {
-      // (a) the pod holds a copy of it: never hot-link (decision D2).
-      const copy = copies.find((c) => c.sourceUrl === value) ?? copies[0];
+      // (a) the pod holds a copy of it: never hot-link (an <img> on a third-party
+      // URL leaks the viewer's IP/referrer and dies with the source).
+      const copy = copies.find((c) => c.sourceUrl === value) ?? derivedCopy();
       if (copy) return copyRef(copy);
       // (b) not copied (yet): an external reference, drawn as a link, never an <img>.
       return { via: "external", url: value, kind };

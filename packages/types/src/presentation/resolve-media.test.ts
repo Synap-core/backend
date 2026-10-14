@@ -27,9 +27,10 @@ const copy = (
 
 const byProperty = (
   property: string,
-  kind?: "image" | "video" | "auto"
+  kind?: "image" | "video" | "auto",
+  family: ProfilePresentation["family"] = "link"
 ): ProfilePresentation => ({
-  family: "link",
+  family,
   media: { source: { property }, ...(kind ? { kind } : {}) },
 });
 
@@ -73,6 +74,34 @@ describe("resolveEntityMedia", () => {
     expect(r.primary).toEqual({
       via: "stored",
       documentId: DOC,
+      mime: "image/jpeg",
+    });
+  });
+
+  it("(a) NOT a link (avatar/cover): a copy of a different URL is stale — the new URL is external", () => {
+    const r = resolveEntityMedia(
+      {
+        id: "e",
+        properties: { avatar: URL_B },
+        systemData: { media: [copy(DOC, URL_A)] },
+      },
+      byProperty("avatar", "image", "record")
+    );
+    expect(r.primary).toEqual({ via: "external", url: URL_B, kind: "image" });
+  });
+
+  it("(a) NOT a link: the copy matching the declared URL still wins", () => {
+    const r = resolveEntityMedia(
+      {
+        id: "e",
+        properties: { avatar: URL_B },
+        systemData: { media: [copy(DOC, URL_A), copy(DOC2, URL_B)] },
+      },
+      byProperty("avatar", "image", "media")
+    );
+    expect(r.primary).toEqual({
+      via: "stored",
+      documentId: DOC2,
       mime: "image/jpeg",
     });
   });
