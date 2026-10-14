@@ -5,6 +5,7 @@
  */
 
 import { config, createLogger } from "@synap-core/core";
+import { podCpAuthHeaders } from "@synap/database";
 import type { PackagePostWorkspaceBody } from "../../services/package-apply-post-workspace.js";
 import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
 import type { PlaybookDefinition } from "../../schemas/playbook-definition.js";
@@ -162,6 +163,24 @@ export function isPodReadableWorkspace(settings: unknown): boolean {
   return visibility === "pod_visible" || visibility === "pod_joinable";
 }
 
+/**
+ * POST an invite record to the CP's `/internal/*`, authenticated by the pod's
+ * one pod→CP credential door. No credential (a self-hosted pod) = not sent.
+ */
+async function sendToCp(cpUrl: string, path: string, body: unknown) {
+  const auth = await podCpAuthHeaders({
+    purpose: "invites",
+    legacy: "internal-key",
+    controlPlaneUrl: cpUrl,
+  });
+  if (!auth) return;
+  await fetch(`${cpUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...auth.headers },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function notifyCpInviteSync(input: {
   type: "workspace" | "pod";
   inviteToken: string;
@@ -173,10 +192,9 @@ export async function notifyCpInviteSync(input: {
   expiresAt: Date;
 }) {
   const cpUrl = config.server.controlPlaneUrl;
-  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
   const podSubdomain =
     process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
-  if (!cpUrl || !internalKey || !podSubdomain) return;
+  if (!cpUrl || !podSubdomain) return;
   const backendOrigin =
     process.env.PUBLIC_BACKEND_URL || process.env.SYNAP_INSTANCE_URL;
   const body = {
@@ -191,14 +209,7 @@ export async function notifyCpInviteSync(input: {
     backendOrigin,
     expiresAt: input.expiresAt.toISOString(),
   };
-  fetch(`${cpUrl}/internal/invites/sync`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Internal-Key": internalKey,
-    },
-    body: JSON.stringify(body),
-  }).catch((err) =>
+  sendToCp(cpUrl, "/internal/invites/sync", body).catch((err) =>
     logger.warn({ err }, "Failed to sync invite to control plane")
   );
 }
@@ -211,10 +222,9 @@ export async function notifyCpInviteLifecycle(input: {
   reason?: string;
 }) {
   const cpUrl = config.server.controlPlaneUrl;
-  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
   const podSubdomain =
     process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
-  if (!cpUrl || !internalKey || !podSubdomain) return;
+  if (!cpUrl || !podSubdomain) return;
   const body = {
     podSubdomain,
     inviteToken: input.inviteToken,
@@ -223,14 +233,7 @@ export async function notifyCpInviteLifecycle(input: {
     actorUserId: input.actorUserId,
     reason: input.reason,
   };
-  fetch(`${cpUrl}/internal/invites/lifecycle`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Internal-Key": internalKey,
-    },
-    body: JSON.stringify(body),
-  }).catch((err) =>
+  sendToCp(cpUrl, "/internal/invites/lifecycle", body).catch((err) =>
     logger.warn({ err }, "Failed to sync invite lifecycle to control plane")
   );
 }

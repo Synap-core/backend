@@ -22,7 +22,7 @@
  * (public read; see synap-control-plane-api/src/routes/marketplace-apps.ts).
  */
 
-import { db, drizzleSql } from "@synap/database";
+import { db, drizzleSql, podCpAuthHeaders } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import { queryCatalogCache } from "./catalog-cache-query.js";
@@ -98,31 +98,40 @@ async function resolveCpPodId(): Promise<string | null> {
 
 /**
  * OWNER-SCOPED by-key fetch — the private-capability door. Calls the CP internal
- * endpoint (GET /internal/capabilities/:key?podId=…) authenticated with the pod
- * ↔ CP shared secret (X-Internal-Key), the same trust `cp-project-sync` uses. The
- * CP resolves this pod's OWNER and applies the author hatch (isPublic OR
- * authorId=owner), so a PRIVATE capability owned by the pod's owner resolves here
- * where the anonymous public door 404s. Returns null (→ caller falls back to the
- * public door) whenever the pod isn't CP-connected (no CONTROL_PLANE_URL /
- * SYNAP_POD_INTERNAL_KEY / podId) or on any failure. Never throws.
+ * endpoint (GET /internal/capabilities/:key) authenticated by the pod's one
+ * pod→CP credential door (`podCpAuthHeaders`): a pod-signed JWT once the pod is
+ * enrolled (the CP then knows the pod from its key), else the legacy shared
+ * secret plus `?podId=`, the same trust `cp-project-sync` uses. The CP resolves
+ * this pod's OWNER and applies the author hatch (isPublic OR authorId=owner), so
+ * a PRIVATE capability owned by the pod's owner resolves here where the
+ * anonymous public door 404s. Returns null (→ caller falls back to the public
+ * door) whenever the pod isn't CP-connected (no CONTROL_PLANE_URL / no
+ * credential / no podId for the legacy secret) or on any failure. Never throws.
  */
 async function fetchCPCapabilityTemplateByKeyAsOwner(
   key: string
 ): Promise<CPCapabilityTemplate | null> {
   const base = cpUrl();
-  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
-  if (!base || !internalKey) return null;
-
-  const podId = await resolveCpPodId();
-  if (!podId) return null;
+  if (!base) return null;
 
   try {
+    const auth = await podCpAuthHeaders({
+      purpose: "capabilities",
+      legacy: "internal-key",
+      controlPlaneUrl: base,
+    });
+    if (!auth) return null;
+    // A pod-signed caller IS its pod; only the legacy secret names it.
+    let query = "";
+    if (auth.via !== "pod-jwt") {
+      const podId = await resolveCpPodId();
+      if (!podId) return null;
+      query = `?podId=${encodeURIComponent(podId)}`;
+    }
     const res = await fetch(
-      `${base}/internal/capabilities/${encodeURIComponent(
-        key
-      )}?podId=${encodeURIComponent(podId)}`,
+      `${base}/internal/capabilities/${encodeURIComponent(key)}${query}`,
       {
-        headers: { "X-Internal-Key": internalKey },
+        headers: auth.headers,
         signal: AbortSignal.timeout(8000),
       }
     );

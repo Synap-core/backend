@@ -8,8 +8,9 @@
  * `TOOL_KEY_PATTERN`, so free text never passes. The CP learns the pod from
  * the verified relay JWT, never from the body (and its body schema is strict).
  *
- * AUTH: the pod's CP relay JWT (`type:"pod_relay"`) — the same credential the
- * connector broker uses, read through `readCpRelayCredential`.
+ * AUTH: the pod's one pod→CP credential door, `podCpAuthHeaders` (purpose
+ * "broker" — the CP's demand route shares the broker's auth): a pod-signed JWT
+ * once the pod is enrolled, else the legacy CP relay JWT (`type:"pod_relay"`).
  *
  * HONESTY: every run records its outcome on
  * `pod_settings.settings.toolDemandForward` — forwarded, nothing to forward, or
@@ -27,7 +28,7 @@ import {
   eq,
   isNull,
   profileSlugScopeCondition,
-  readCpRelayCredential,
+  podCpAuthHeaders,
 } from "@synap/database";
 import { entities, podSettings } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -187,9 +188,13 @@ export async function handleToolDemandForward(): Promise<ToolDemandForwardOutcom
   const tools = buildToolDemandPayload(rows);
   if (tools.length === 0) return finish({ status: "nothing-to-forward" });
 
-  let credential: Awaited<ReturnType<typeof readCpRelayCredential>>;
+  let credential: Awaited<ReturnType<typeof podCpAuthHeaders>>;
   try {
-    credential = await readCpRelayCredential();
+    credential = await podCpAuthHeaders({
+      purpose: "broker",
+      legacy: "relay-key",
+      controlPlaneUrl: cpUrl,
+    });
   } catch (err) {
     return finish({
       status: "not-forwarded",
@@ -205,7 +210,11 @@ export async function handleToolDemandForward(): Promise<ToolDemandForwardOutcom
         "Not forwarded: CP credential missing (no relay key from the control plane)",
     });
   }
-  if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now()) {
+  if (
+    credential.via === "relay-key" &&
+    credential.expiresAt &&
+    credential.expiresAt.getTime() <= Date.now()
+  ) {
     return finish({
       status: "not-forwarded",
       reason: "cp-credential-expired",
@@ -219,7 +228,7 @@ export async function handleToolDemandForward(): Promise<ToolDemandForwardOutcom
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${credential.key}`,
+        ...credential.headers,
       },
       body: JSON.stringify({ tools }),
       signal: AbortSignal.timeout(8000),

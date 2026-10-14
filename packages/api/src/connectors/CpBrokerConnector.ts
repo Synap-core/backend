@@ -55,7 +55,7 @@ const FAILURE_REASONS = new Set<FailureReason>([
 
 type Sent =
   | { ok: true; status: number; json: Record<string, unknown> | null }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: FailureReason };
 
 interface BrokerConnectionRow {
   connectionId: string;
@@ -68,15 +68,19 @@ interface BrokerConnectionRow {
 
 /**
  * The CP-managed pod's broker client. The pod holds no Nango key: every call
- * goes to the Control Plane's `/api/connector-broker`, authenticated with the
- * pod's CP-issued relay JWT. The CP derives the pod's identity from that token
+ * goes to the Control Plane's `/api/connector-broker`, authenticated with a
+ * bearer `opts.bearer()` hands out PER REQUEST — a pod-signed JWT (single use)
+ * or, until the pod enrolls its key, the CP-issued relay JWT (`podCpAuthHeaders`
+ * decides). The CP derives the pod's identity from that token
  * and filters Nango to the pod's `<podId>:<podUserId>` namespace, so this client
  * only ever names the pod USER — never the pod.
  */
 export class CpBrokerConnector implements ConnectionBroker {
   readonly mode = "cp" as const;
 
-  constructor(private readonly opts: { cpUrl: string; relayKey: string }) {}
+  constructor(
+    private readonly opts: { cpUrl: string; bearer: () => Promise<string> }
+  ) {}
 
   getConnectUrl(): string | null {
     return null;
@@ -87,6 +91,16 @@ export class CpBrokerConnector implements ConnectionBroker {
     path: string,
     body?: unknown
   ): Promise<Sent> {
+    let bearer: string;
+    try {
+      bearer = await this.opts.bearer();
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "unauthenticated",
+        error: `This pod's control plane credential cannot be used: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
     let res: Response;
     try {
       res = await fetch(
@@ -94,7 +108,7 @@ export class CpBrokerConnector implements ConnectionBroker {
         {
           method,
           headers: {
-            Authorization: `Bearer ${this.opts.relayKey}`,
+            Authorization: `Bearer ${bearer}`,
             "Content-Type": "application/json",
           },
           body: body === undefined ? undefined : JSON.stringify(body),
@@ -116,7 +130,9 @@ export class CpBrokerConnector implements ConnectionBroker {
 
   /** Map a non-200 broker answer onto the typed failure the pod already speaks. */
   private failure(sent: Sent): { reason: FailureReason; error: string } {
-    if (!sent.ok) return { reason: "unreachable", error: sent.error };
+    if (!sent.ok) {
+      return { reason: sent.reason ?? "unreachable", error: sent.error };
+    }
     const error =
       typeof sent.json?.error === "string"
         ? sent.json.error

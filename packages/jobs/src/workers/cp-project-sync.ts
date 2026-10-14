@@ -2,8 +2,9 @@
  * CP Project Sync Worker (P4-lite Wave 1)
  *
  * Announces the pod's FULL project list to the Control Plane's `pod_projects`
- * mirror directory: POST ${CONTROL_PLANE_URL}/internal/projects/sync with
- * X-Internal-Key. The pod stays authoritative — the CP holds a read-time
+ * mirror directory: POST ${CONTROL_PLANE_URL}/internal/projects/sync,
+ * authenticated by `podCpAuthHeaders` (a pod JWT once enrolled, else the legacy
+ * X-Internal-Key). The pod stays authoritative — the CP holds a read-time
  * mirror keyed by podId (never a URL).
  *
  * Runs every 30 minutes (reconcile) + once on startup, and is also enqueued
@@ -24,8 +25,8 @@
  * Chunked at 200 projects per request (CP edge rate limits); every chunk of
  * the same run carries full:true and the same podId.
  *
- * Skips silently (one info log) when CONTROL_PLANE_URL or
- * SYNAP_POD_INTERNAL_KEY is unset — absence is normal for self-hosted pods —
+ * Skips silently (one info log) when CONTROL_PLANE_URL is unset or the pod
+ * holds no CP credential — absence is normal for self-hosted pods —
  * or when the pod has no CP identity (no workspace settings controlPlane.podId,
  * written by the provision flow).
  *
@@ -34,7 +35,7 @@
  * as strings are normalized through new Date().
  */
 
-import { db, drizzleSql } from "@synap/database";
+import { db, drizzleSql, podCpAuthHeaders } from "@synap/database";
 import { projects, workspaces } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
@@ -135,17 +136,17 @@ async function resolveCpPodId(): Promise<string | null> {
 // One-shot skip logs — absence of CP config is normal, don't spam every 30min.
 let loggedEnvSkip = false;
 let loggedPodIdSkip = false;
+let loggedCredentialSkip = false;
 
 /** Called by the cron tick, the startup enqueue, and repository-triggered one-offs. */
 export async function handleCpProjectSync(): Promise<void> {
   const cpUrl = (process.env.CONTROL_PLANE_URL ?? "")
     .trim()
     .replace(/\/+$/, "");
-  const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
-  if (!cpUrl || !internalKey) {
+  if (!cpUrl) {
     if (!loggedEnvSkip) {
       logger.info(
-        "CONTROL_PLANE_URL / SYNAP_POD_INTERNAL_KEY unset — CP project directory sync disabled (normal for self-hosted pods)"
+        "CONTROL_PLANE_URL unset — CP project directory sync disabled (normal for self-hosted pods)"
       );
       loggedEnvSkip = true;
     }
@@ -176,13 +177,37 @@ export async function handleCpProjectSync(): Promise<void> {
   const payloads = buildProjectSyncPayloads(podId, rows);
 
   for (const payload of payloads) {
+    // Authenticated PER request: a pod JWT is single use.
+    let auth: Awaited<ReturnType<typeof podCpAuthHeaders>>;
+    try {
+      auth = await podCpAuthHeaders({
+        purpose: "projects",
+        legacy: "internal-key",
+        controlPlaneUrl: cpUrl,
+      });
+    } catch (err) {
+      logger.warn(
+        { err },
+        "This pod's CP credential cannot be used — project directory sync deferred"
+      );
+      return;
+    }
+    if (!auth) {
+      if (!loggedCredentialSkip) {
+        logger.info(
+          "No CP credential (pod key or SYNAP_POD_INTERNAL_KEY) — CP project directory sync disabled (normal for self-hosted pods)"
+        );
+        loggedCredentialSkip = true;
+      }
+      return;
+    }
     let res: Response;
     try {
       res = await fetch(`${cpUrl}/internal/projects/sync`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Internal-Key": internalKey,
+          ...auth.headers,
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(8000),

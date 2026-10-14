@@ -28,9 +28,18 @@ vi.mock("@synap/database", () => {
   return {
     CpRelayVaultUnresolvedError,
     eq: () => "eq",
-    readCpRelayCredential: async () => {
+    // The pod's one pod→CP credential door on its legacy relay-key branch (the
+    // pod-JWT branch has its own suite: database pod-cp-auth.test.ts).
+    podCpAuthHeaders: async () => {
       if (h.credentialError) throw h.credentialError;
-      return h.credential;
+      return h.credential
+        ? {
+            via: "relay-key",
+            headers: { Authorization: `Bearer ${h.credential.key}` },
+            bearer: h.credential.key,
+            expiresAt: h.credential.expiresAt,
+          }
+        : null;
     },
     db: {
       query: {

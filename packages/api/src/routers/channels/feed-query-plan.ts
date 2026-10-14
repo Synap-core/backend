@@ -2,18 +2,16 @@
  * Feed query planning — asks the Control Plane relay to expand an archetype +
  * criteria into concrete fetch targets.
  *
- * The relay key is the pod's ONE current CP credential (`readCpRelayCredential`),
- * never a copy baked into a source-config row: the CP rotates by delivering a
- * fresh row, so a per-row copy goes stale while the pod key stays live.
+ * Authenticated by the pod's one pod→CP credential door (`podCpAuthHeaders`):
+ * a pod-signed JWT once the pod is enrolled, else the pod's ONE current relay
+ * key (`readCpRelayCredential`) — never a copy baked into a source-config row:
+ * the CP rotates by delivering a fresh row, so a per-row copy goes stale.
  *
  * The outcome is typed so "no queries were planned" and "planning failed" are
  * different facts: a failure never reads as an empty plan.
  */
 
-import {
-  CpRelayVaultUnresolvedError,
-  readCpRelayCredential,
-} from "@synap/database";
+import { CpRelayVaultUnresolvedError, podCpAuthHeaders } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "feed-query-plan" });
@@ -52,9 +50,12 @@ export async function deriveFeedQueries(
     process.env.CONTROL_PLANE_URL;
   if (!relayUrl) return { status: "unavailable" };
 
-  let relayKey: string;
+  let authHeaders: Record<string, string>;
   try {
-    const credential = await readCpRelayCredential();
+    const credential = await podCpAuthHeaders({
+      purpose: "relay",
+      legacy: "relay-key",
+    });
     if (!credential) {
       return {
         status: "failed",
@@ -63,7 +64,7 @@ export async function deriveFeedQueries(
           "This pod holds no relay key from its control plane. Rotate the pod's relay key from the control plane.",
       };
     }
-    relayKey = credential.key;
+    authHeaders = credential.headers;
   } catch (err) {
     if (err instanceof CpRelayVaultUnresolvedError) {
       return {
@@ -76,7 +77,7 @@ export async function deriveFeedQueries(
     return {
       status: "failed",
       reason: "credential-read-failed",
-      message: `Could not read this pod's relay key: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Could not read this pod's control plane credential: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 
@@ -86,7 +87,7 @@ export async function deriveFeedQueries(
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${relayKey}`,
+          ...authHeaders,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ archetype, criteria }),

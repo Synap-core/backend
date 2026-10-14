@@ -14,7 +14,7 @@ import {
 
 const broker = new CpBrokerConnector({
   cpUrl: "https://cp.test/",
-  relayKey: "relay-jwt",
+  bearer: async () => "relay-jwt",
 });
 
 function json(body: unknown, status = 200): Response {

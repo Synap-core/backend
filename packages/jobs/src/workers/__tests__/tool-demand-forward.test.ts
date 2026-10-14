@@ -69,7 +69,17 @@ vi.mock("@synap/database", () => {
     eq: () => "eq",
     isNull: () => "isNull",
     profileSlugScopeCondition: async () => "kindScope",
-    readCpRelayCredential: async () => h.credential,
+    // The pod's one pod→CP credential door on its legacy relay-key branch (the
+    // pod-JWT branch has its own suite: database pod-cp-auth.test.ts).
+    podCpAuthHeaders: async () =>
+      h.credential
+        ? {
+            via: "relay-key",
+            headers: { Authorization: `Bearer ${h.credential.key}` },
+            bearer: h.credential.key,
+            expiresAt: h.credential.expiresAt,
+          }
+        : null,
     db: {
       // The demand read selects `toolKey`; the pod_settings read selects `id`.
       select: (shape: Record<string, unknown>) => {

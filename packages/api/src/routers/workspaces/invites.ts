@@ -33,6 +33,7 @@ import {
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   type WorkspaceDefinitionInput,
   notAnAppAgent,
+  podCpAuthHeaders,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
@@ -580,17 +581,24 @@ export const inviteProcedures = {
           body.workspaceName = workspaceNameForSync;
         }
 
-        const internalKey = process.env.SYNAP_POD_INTERNAL_KEY;
-        fetch(`${cpUrl}/internal/invite-email`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(internalKey ? { "X-Internal-Key": internalKey } : {}),
-          },
-          body: JSON.stringify(body),
-        }).catch((err) =>
-          logger.warn({ err }, "Failed to send invite email (non-fatal)")
-        );
+        podCpAuthHeaders({
+          purpose: "invites",
+          legacy: "internal-key",
+          controlPlaneUrl: cpUrl,
+        })
+          .then((auth) =>
+            fetch(`${cpUrl}/internal/invite-email`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(auth?.headers ?? {}),
+              },
+              body: JSON.stringify(body),
+            })
+          )
+          .catch((err) =>
+            logger.warn({ err }, "Failed to send invite email (non-fatal)")
+          );
       }
 
       void notifyCpInviteSync({

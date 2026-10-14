@@ -1705,6 +1705,9 @@ _reg_register_pod() {
         '{podId, controlPlaneUrl, issuer, catalogUrl, intelligenceUrl: (.intelligence.url // null),
           federatedSignIn: (.oidc != null), name: $name, domain: $domain, registeredAt: $at}' \
         state/registration/response.json > state/registration.json
+    # §8: the CP holds this pod's key now — sign pod→CP calls with it (R1-b).
+    _podkey_record_enrollment "$(jq -r .podId state/registration.json)" "$(jq -r '.issuer // empty' state/registration.json)" "$cp" \
+        || _reg_warn "could not write state/pod-identity-enrollment.json — run './synap pod-key enroll' to switch to the pod key"
     rm -f state/registration/response.json state/registration/steps
     _reg_ok "registered as pod $(jq -r .podId state/registration.json)"
 }
@@ -1753,6 +1756,32 @@ _podkey_ensure() {
     printf '%s\n' "$out" | jq -c '{kty, crv, x, y}' > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$SYNAP_POD_KEY_PUB"
 }
 
+# RFC 7638 kid of the public half (sha256 over {crv,kty,x,y}, base64url) —
+# the CP computes the same. Empty when openssl is missing (the record then
+# carries no kid and the backend skips its key-replaced check).
+_podkey_kid() {
+    command -v openssl >/dev/null 2>&1 || return 0
+    jq -jc '{crv, kty, x, y}' "$SYNAP_POD_KEY_PUB" 2>/dev/null \
+        | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='
+}
+
+# <podId> <issuer|""> <cp-url> — the record that tells the backend the CP knows
+# this key (packages/database utils/pod-cp-auth.ts): from then on every pod→CP
+# call is signed with it instead of the legacy shared key / relay key. Written
+# ONLY after the CP accepted the key (register or enroll). 0644: the backend
+# reads it through the read-only deploy mount; it holds no secret.
+_podkey_record_enrollment() {
+    local tmp kid
+    kid="$(_podkey_kid)"
+    tmp="$(mktemp state/pod-identity-enrollment.json.XXXXXX)" || return 1
+    jq -n --arg podId "$1" --arg issuer "$2" --arg cp "$3" --arg kid "$kid" \
+        --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{podId: $podId, kid: (if $kid == "" then null else $kid end),
+          issuer: (if $issuer == "" then null else $issuer end),
+          controlPlaneUrl: $cp, enrolledAt: $at}' > "$tmp" \
+        && chmod 644 "$tmp" && mv -f "$tmp" state/pod-identity-enrollment.json
+}
+
 # synap pod-key ensure | show | enroll --pod-id <id> --code <spr_…> [--control-plane <url>]
 cmd_pod_key() {
     local deploy_dir
@@ -1797,8 +1826,8 @@ cmd_pod_key() {
                 _podkey_err "the Control Plane refused the enrollment (HTTP ${http}): $(jq -r '.code // empty' "$resp" 2>/dev/null) $(jq -r '.error // empty' "$resp" 2>/dev/null | head -c 300)"
                 rm -f "$resp"; exit 1
             fi
-            jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg cp "$cp" \
-                '{podId, kid, controlPlaneUrl: $cp, enrolledAt: $at}' "$resp" > state/pod-identity-enrollment.json
+            _podkey_record_enrollment "$(jq -r .podId "$resp")" "$(jq -r '.issuer // empty' "$resp")" "$cp" \
+                || { _podkey_err "enrolled, but the enrollment record could not be written"; rm -f "$resp"; exit 1; }
             rm -f "$resp"
             _podkey_ok "enrolled as pod $(jq -r .podId state/pod-identity-enrollment.json) (key $(jq -r .kid state/pod-identity-enrollment.json))" ;;
         *)

@@ -26,7 +26,7 @@ import {
   CpRelayVaultUnresolvedError,
   db,
   eq,
-  readCpRelayCredential,
+  podCpAuthHeaders,
 } from "@synap/database";
 import { sourceSubscriptions, sourceConfigs } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -198,25 +198,43 @@ export async function handleFeedSourceExecute(job: {
     return { ok: false, itemCount: 0, error: msg };
   }
 
-  if (isCpRelay) {
-    let credential: Awaited<ReturnType<typeof readCpRelayCredential>>;
+  // The relay bearer comes from the pod's one pod→CP credential door, ONE per
+  // relay request: a pod-signed JWT is single use (the legacy relay key is
+  // simply read again).
+  const relayBearer = async (): Promise<
+    { ok: true; bearer: string } | { ok: false; error: string }
+  > => {
+    let credential: Awaited<ReturnType<typeof podCpAuthHeaders>>;
     try {
-      credential = await readCpRelayCredential();
+      credential = await podCpAuthHeaders({
+        purpose: "relay",
+        legacy: "relay-key",
+      });
     } catch (err) {
-      const msg =
-        err instanceof CpRelayVaultUnresolvedError
-          ? "The relay key cannot be read from the vault; rotate it from the control plane so it re-delivers a readable key"
-          : `Relay key read: ${err instanceof Error ? err.message : String(err)}`;
-      await markSubscriptionError(subscriptionId, msg);
-      return { ok: false, itemCount: 0, error: msg };
+      return {
+        ok: false,
+        error:
+          err instanceof CpRelayVaultUnresolvedError
+            ? "The relay key cannot be read from the vault; rotate it from the control plane so it re-delivers a readable key"
+            : `Relay credential read: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
-    if (!credential) {
-      const msg =
-        "This pod holds no relay key from its control plane; rotate it from the control plane";
-      await markSubscriptionError(subscriptionId, msg);
-      return { ok: false, itemCount: 0, error: msg };
+    return credential
+      ? { ok: true, bearer: credential.bearer }
+      : {
+          ok: false,
+          error:
+            "This pod holds no relay key from its control plane; rotate it from the control plane",
+        };
+  };
+
+  if (isCpRelay) {
+    const first = await relayBearer();
+    if (!first.ok) {
+      await markSubscriptionError(subscriptionId, first.error);
+      return { ok: false, itemCount: 0, error: first.error };
     }
-    resolved.relayKey = credential.key;
+    resolved.relayKey = first.bearer;
   }
 
   // ── Fan-out over derivedQueries if available ─────────────────────────────
@@ -261,10 +279,25 @@ export async function handleFeedSourceExecute(job: {
     );
 
     const seenIds = new Set<string>();
+    let firstQuery = true;
     for (const dq of derivedQueries) {
+      // A CP relay bearer serves ONE request (a pod JWT is single use).
+      let queryRelayKey = relayKey;
+      if (isCpRelay && !firstQuery) {
+        const next = await relayBearer();
+        if (!next.ok) {
+          logger.warn(
+            { subscriptionId, upstreamType: dq.upstreamType },
+            `Derived query skipped: ${next.error}`
+          );
+          continue;
+        }
+        queryRelayKey = next.bearer;
+      }
+      firstQuery = false;
       const queryConfig: Record<string, unknown> = {
         relayUrl,
-        relayKey,
+        relayKey: queryRelayKey,
         upstreamType: dq.upstreamType,
         upstreamConfig: dq.config,
       };

@@ -33,6 +33,15 @@ vi.mock("@synap/database", () => {
   return {
     db: { select: selectMock },
     drizzleSql,
+    // The pod's one pod→CP credential door on its legacy internal-key branch
+    // (the pod-JWT branch has its own suite: database pod-cp-auth.test.ts).
+    podCpAuthHeaders: async () =>
+      process.env.SYNAP_POD_INTERNAL_KEY
+        ? {
+            via: "internal-key",
+            headers: { "X-Internal-Key": process.env.SYNAP_POD_INTERNAL_KEY },
+          }
+        : null,
   };
 });
 

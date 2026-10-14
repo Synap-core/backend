@@ -258,6 +258,11 @@ order="$(grep -v '^/pods/register$' "$TMP/calls.log" | tr '\n' ' ')"
 grep -q 'compose up -d --no-deps --force-recreate backend realtime kratos' "$FAKE/docker.log" && ok "happy: backend/realtime/kratos recreated to read it" || bad "happy: no recreate after the trust write"
 grep -q 'client_id: pod-client-1' "$ROOT/kratos/kratos.yml" 2>/dev/null && ok "happy: kratos.yml renders the stored OIDC client (no CP push)" || bad "happy: kratos.yml has no oidc client"
 [ "$(jq -r .podId "$DEPLOY/state/registration.json" 2>/dev/null)" = pod_123 ] && ok "happy: state/registration.json records pod_123" || bad "happy: no registration record"
+# R1-b: the CP holds the key now, so the backend must switch to signing (pod-cp-auth.ts reads this record).
+ENR="$DEPLOY/state/pod-identity-enrollment.json"
+[ "$(jq -r .podId "$ENR" 2>/dev/null)" = pod_123 ] && [ "$(jq -r .issuer "$ENR")" = https://cp.synap.test ] \
+  && { ! command -v openssl >/dev/null || [ "$(jq -r .kid "$ENR" | tr -d '\n' | wc -c | tr -d ' ')" = 43 ]; } \
+  && ok "happy: state/pod-identity-enrollment.json records pod_123 + the CP issuer + the key's kid" || bad "happy: no enrollment record: $(cat "$ENR" 2>/dev/null)"
 if grep -rqE 'shub_secret_key|eyJowner|eyJprovision|eyJoidc|spr_' "$DEPLOY/state" 2>/dev/null; then bad "happy: a secret was left in state/"; else ok "happy: no secret left in state/"; fi
 grep -q "$TOKEN" "$S/out" && bad "happy: the code was printed to the log" || ok "happy: the code never reaches the log"
 

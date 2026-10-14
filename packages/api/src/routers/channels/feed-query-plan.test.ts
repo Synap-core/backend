@@ -2,7 +2,7 @@
  * `deriveFeedQueries` — the relay key is the pod's ONE current credential, and
  * a failed plan is never an empty one.
  *
- * Only the credential reader and `fetch` are faked; the planner outcome mapping
+ * Only the credential door (`podCpAuthHeaders`) and `fetch` are faked; the planner outcome mapping
  * runs for real.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -16,9 +16,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
-    readCpRelayCredential: async () => {
+    // The pod's one pod→CP credential door, on its legacy relay-key branch
+    // (its pod-JWT branch has its own suite: database pod-cp-auth.test.ts).
+    podCpAuthHeaders: async () => {
       if (h.credentialError) throw h.credentialError;
-      return h.credential;
+      return h.credential
+        ? {
+            via: "relay-key",
+            headers: { Authorization: `Bearer ${h.credential.key}` },
+            bearer: h.credential.key,
+            expiresAt: h.credential.expiresAt,
+          }
+        : null;
     },
   };
 });

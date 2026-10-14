@@ -26,7 +26,7 @@ import {
   CP_RELAY_SOURCE_NAME,
   CpRelayVaultUnresolvedError,
   readCpRelayCredential,
-  relayKeyExpiry,
+  podCpAuthHeaders,
 } from "@synap/database";
 import { config, createLogger } from "@synap-core/core";
 
@@ -406,11 +406,12 @@ export function isControlPlaneBrokered(): boolean {
 /**
  * The CP broker client for a Control-Plane-brokered pod, or `not-managed`.
  *
- * The pod's credential is its CP-issued relay JWT — the SAME pod credential the
- * CP relay verifies (`type:"pod_relay"`, podId claim) — delivered into the
- * `cp-relay` source config as a vault ref. `CP_RELAY_KEY` / `SOURCE_RELAY_KEY`
- * override it, mirroring the relay's own resolution. A brokered pod WITHOUT that
- * credential is a FAULT, never "not configured".
+ * The pod's credential comes from its one pod→CP door, `podCpAuthHeaders`
+ * (purpose "broker"): a pod-signed JWT, minted PER broker request, once the pod
+ * enrolled its key; until then its CP-issued relay JWT (`type:"pod_relay"`),
+ * delivered into the `cp-relay` source config as a vault ref (`CP_RELAY_KEY` /
+ * `SOURCE_RELAY_KEY` override it). A brokered pod WITHOUT a credential is a
+ * FAULT, never "not configured".
  */
 async function resolveCpBroker(): Promise<CpBrokerResolution> {
   // The URL the pod's relay credential is sent to comes from server config
@@ -419,16 +420,18 @@ async function resolveCpBroker(): Promise<CpBrokerResolution> {
   const cpUrl = config.server.controlPlaneUrl;
   if (!cpUrl) return { kind: "not-managed" };
 
-  let relayKey: string | undefined;
+  // This module's handles — the same `db` / vault resolver its callers' seam
+  // tests swap on the barrel (the reader itself lives in @synap/database).
+  const credentialFor = () =>
+    podCpAuthHeaders({
+      purpose: "broker",
+      legacy: "relay-key",
+      controlPlaneUrl: cpUrl,
+      relay: { database: db, resolveVault: resolveVaultReferences },
+    });
+  let credential: Awaited<ReturnType<typeof credentialFor>>;
   try {
-    // This module's handles — the same `db` / vault resolver its callers' seam
-    // tests swap on the barrel (the reader itself lives in @synap/database).
-    relayKey = (
-      await readCpRelayCredential({
-        database: db,
-        resolveVault: resolveVaultReferences,
-      })
-    )?.key;
+    credential = await credentialFor();
   } catch (err) {
     // A delivered key the vault cannot read is not a database fault: the
     // remedy is a fresh delivery, not a look at the pod's database.
@@ -446,7 +449,7 @@ async function resolveCpBroker(): Promise<CpBrokerResolution> {
       error: `Could not read this pod's control plane credential: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  if (!relayKey) {
+  if (!credential) {
     return {
       kind: "fault",
       reason: "broker-credential-missing",
@@ -455,9 +458,25 @@ async function resolveCpBroker(): Promise<CpBrokerResolution> {
         : "This pod is managed by a control plane but holds no relay credential, so it cannot reach its connection broker. Rotate the pod's relay key from the control plane.",
     };
   }
+  if (credential.via === "pod-jwt") {
+    // A pod JWT is single use: every broker request mints its own.
+    return {
+      kind: "ok",
+      broker: new CpBrokerConnector({
+        cpUrl,
+        bearer: async () => {
+          const next = await credentialFor();
+          if (!next) throw new Error("the pod's credential disappeared");
+          return next.bearer;
+        },
+      }),
+    };
+  }
   // Read (not verify — the CP verifies) the key's expiry, so a lapsed key is a
   // legible fault here instead of an opaque 401 from the broker.
-  const expiresAt = relayKeyExpiry(relayKey);
+  const relayKey = credential.bearer;
+  const expiresAt =
+    credential.via === "relay-key" ? credential.expiresAt : null;
   if (expiresAt && expiresAt.getTime() <= Date.now()) {
     return {
       kind: "fault",
@@ -465,7 +484,10 @@ async function resolveCpBroker(): Promise<CpBrokerResolution> {
       error: `This pod's control plane credential expired on ${expiresAt.toISOString()}. The control plane re-issues it automatically every 20 days (rotate-pod-relay-keys); if this persists, rotate the pod's relay key from the control plane.`,
     };
   }
-  return { kind: "ok", broker: new CpBrokerConnector({ cpUrl, relayKey }) };
+  return {
+    kind: "ok",
+    broker: new CpBrokerConnector({ cpUrl, bearer: async () => relayKey }),
+  };
 }
 
 /**
