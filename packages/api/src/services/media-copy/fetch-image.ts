@@ -3,10 +3,11 @@
  * a hard byte cap and a timeout, and accepted only when the bytes themselves
  * prove an allowed raster type.
  *
- *   • guard   → `validateExternalUrl` + `safeExternalFetch` (every redirect hop
- *               re-validated) — the same door as the capture reader. Its known
- *               limit applies here too: it matches hostnames, it does not
- *               resolve them, so DNS rebinding is NOT mitigated.
+ *   • guard   → `validateExternalUrl` + `safePublicFetch`: on every redirect
+ *               hop the hostname is resolved, refused when ANY address is
+ *               private/loopback/link-local/metadata, and the socket is pinned
+ *               to the vetted address (DNS rebinding closed). The URL came
+ *               from entity content, so nothing private is ever a target.
  *   • size    → a truthful `Content-Length` over the cap is refused before a
  *               byte is read; a server that omits or lies about it is cut off
  *               the moment the streamed total passes the cap (the body is
@@ -19,8 +20,9 @@
  */
 
 import {
-  safeExternalFetch,
+  safePublicFetch,
   validateExternalUrl,
+  type SafePublicFetchInit,
   type ValidateUrlResult,
 } from "@synap/shared-utils";
 import {
@@ -63,7 +65,7 @@ export type ImageFetchResult =
 export interface FetchImageDeps {
   fetch?: (
     url: string,
-    init?: RequestInit,
+    init?: SafePublicFetchInit,
     maxRedirects?: number
   ) => Promise<Response>;
   validate?: (raw: string) => ValidateUrlResult;
@@ -76,7 +78,7 @@ export async function fetchExternalImage(
   deps: FetchImageDeps = {}
 ): Promise<ImageFetchResult> {
   const validate = deps.validate ?? validateExternalUrl;
-  const fetchImpl = deps.fetch ?? safeExternalFetch;
+  const fetchImpl = deps.fetch ?? safePublicFetch;
   const maxBytes = deps.maxBytes ?? MEDIA_COPY_MAX_BYTES;
 
   if (!validate(url).valid) return { ok: false, reason: "blocked" };
@@ -103,7 +105,7 @@ export async function fetchExternalImage(
       );
     } catch (err) {
       if (controller.signal.aborted) return { ok: false, reason: "timeout" };
-      // safeExternalFetch throws "Blocked outbound request" on a bad hop.
+      // safePublicFetch throws "Blocked outbound request" on a refused hop.
       return {
         ok: false,
         reason:

@@ -12,3 +12,4 @@ export type {
   RSSFetchResult,
   BaseFeedConfig,
 } from "./feed-types-sync.js";
+export * from "./pinned-fetch.js";
