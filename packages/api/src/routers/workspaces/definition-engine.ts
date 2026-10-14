@@ -5,6 +5,10 @@
  * dominant mass of that file) — no logic changed. Composed back into
  * `workspacesRouter` by the barrel so the generated `workspaces:` type stays
  * byte-identical.
+ *
+ * The template doors here (`createFromDefinition`, `reconcileFromDefinition`,
+ * `applyDefinition` create) are thin wrappers over the ONE template apply,
+ * through `template-door.ts` (APPLY-ONE-DOOR-PLAN W3).
  */
 
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
@@ -22,68 +26,33 @@ import {
   entities,
   getDb,
   eventRepository,
-  EntityBodyService,
-  EntityRepository,
   RelationRepository,
   RelationDefRepository,
-  drizzleSql,
-  createWorkspaceFromDefinition,
   preflightWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
   readTemplateState,
   type WorkspaceDefinitionInput,
-  type ReconcileReport,
-  type InstallLayerReport,
   workspaceIntentDefinitionSchema,
 } from "@synap/database";
-import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { resolvePreflightComposeTarget } from "../../services/preflight-compose-target.js";
-import { recordInstalledPack } from "../../services/compose-overlay.js";
-import { templateInstallWire } from "../../services/template-health.js";
-import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
-import { auditLog } from "../../utils/audit-log.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
-import { emitSideEffects, getBoss } from "@synap/events";
-import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
-import {
-  withWorkspaceProposalIdLock,
-  reconcileWorkspaceIfStale,
-  failedInLayerTwo,
-  withoutStamp,
-} from "../../services/workspace-creation-service.js";
-import {
-  finishTemplateApply,
-  reopenFailedLayerTwo,
-} from "../../services/template-apply-finisher.js";
 import { resolveWorkspaceExtends } from "../../services/workspace-composition.js";
-import type { ResolvedPackageDependency } from "../../services/package-dependency-resolver.js";
-import {
-  materializeWorkspaceCore,
-  type MaterializeCoreResult,
-  ComposeBaseUnavailableError,
-  DependencyResolutionError,
-  ComposeBaseNotFoundError,
-} from "../../services/workspace-materialization-service.js";
-import { applyPackagePostWorkspace } from "../../services/package-apply-post-workspace.js";
-import {
-  applyDefinitionSeeds,
-  type DefinitionSeedResult,
-} from "../../services/definition-seeds.js";
-import {
-  summarizePostWorkspaceLayers,
-  installedTrackTemplates,
-  type InstalledTrackTemplate,
-} from "../../services/capabilities/install-layers.js";
+import type { LayerTwoBody } from "../../services/template-apply/index.js";
+import { applyDefinitionSeeds } from "../../services/definition-seeds.js";
 import { workspacePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
 import { playbookDefinitionSchema } from "../../schemas/playbook-definition.js";
 import {
-  logger,
-  isPodReadableWorkspace,
   buildPostWorkspaceBodyFromDefinition,
   type CreateDefinitionPostWorkspaceSlice,
 } from "./helpers.js";
+import {
+  applyTemplateForTrpc,
+  installTarget,
+  templateDoorReply,
+  templateLayerReports,
+} from "./template-door.js";
 
 /**
  * `triggerConfig` shape for a definition-seeded flow automation.
@@ -126,12 +95,18 @@ const templateLifecycleSchema = z.object({
 });
 
 /**
- * `settings || patch` — only the patch's keys, merged in the UPDATE itself.
- * These stamps used to write back a settings blob read earlier, which reverted
- * whatever landed in between (the finisher, a reconcile, layer 2).
+ * The layer-2 body of a tRPC definition, keyed by the space it lands on (its
+ * loop). The ONE builder, so loop-style `automations` never reach the
+ * graph-automation applier.
  */
-function mergedSettings(patch: Partial<WorkspaceSettings>) {
-  return drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+function trpcLayerTwoBody(
+  definition: CreateDefinitionPostWorkspaceSlice,
+  workspaceId: string
+): LayerTwoBody {
+  return buildPostWorkspaceBodyFromDefinition(
+    definition,
+    workspaceId
+  ) as LayerTwoBody;
 }
 
 export const definitionEngineProcedures = {
@@ -756,15 +731,18 @@ export const definitionEngineProcedures = {
           .optional(),
         linkedAgentId: z.string().optional(),
         /**
-         * Optional: populate an existing workspace instead of creating a new one.
-         * Used by the chat-first onboarding flow where a minimal workspace is
-         * created first, then the AI proposes a definition to populate it.
+         * Optional: install ONTO this existing workspace instead of creating a
+         * new one (the Marketplace "Add to workspace", the profile-pack
+         * browser, a readiness backfill). Additive (compose): a space with its
+         * own template keeps it and records this package as a pack; an
+         * unidentified space takes the package as its template.
          */
         workspaceId: z.string().uuid().optional(),
         /**
          * Optional: caller-supplied stable identifier for idempotent re-creates.
-         * If a workspace with this proposalId already exists for the user, it
-         * is returned untouched. Stamped into `settings.proposalId`.
+         * A space already holding this key is found (never a second one) and
+         * planned like any re-hit: unchanged, re-synced or resumed. Stamped
+         * into `provisioning_proposal_id` / `settings.proposalId`.
          * Used by Eve (Builder Workspace = "builder-workspace-v1") and DevPlane.
          */
         proposalId: z.string().optional(),
@@ -836,1036 +814,48 @@ export const definitionEngineProcedures = {
         await assertPackageTierAccess(ctx.userId, input.packageSlug);
       }
 
-      // Additive template sync for an ALREADY-provisioned workspace. When a
-      // caller re-runs createFromDefinition and hits the idempotent "already
-      // exists" path, bring the live workspace up to the CURRENT template
-      // NON-DESTRUCTIVELY: add missing profiles / property-defs / entityLinks
-      // (e.g. an older CRM workspace gaining the `partner` profile + its links),
-      // never delete or mutate existing data. This is the automatic re-apply
-      // trigger — every consumer that provisions on launch/signup picks up
-      // template drift for free. Best-effort: a reconcile failure must never
-      // break the (successful) idempotent return, so it is caught + logged.
-      //
-      // VERSION-AWARE (W2b): the actual compare-and-reconcile lives in the ONE
-      // shared `reconcileWorkspaceIfStale` (workspace-creation-service.ts) —
-      // the SAME entry point the Hub-door idempotent-create path
-      // (`createWorkspaceFromDefinitionIdempotent`) now also calls, so neither
-      // door reimplements the hash compare. When it can't compare (no
-      // `packageSlug`, or the resolved template carries no version signal —
-      // e.g. bundle fallback), fall back to the prior unconditional behavior
-      // (reconcile against the caller-supplied `input.definition`) — no
-      // regression for that edge.
-      /**
-       * INSTALL-LAYER HONESTY (A1). This helper runs BOTH install layers and
-       * neither is fatal — so before today a failure in either was written to a
-       * log and the caller was handed a clean payload. It now returns
-       * `{ report, layers }`: `layers` is the K8s-`status.conditions[]`-shaped
-       * per-layer verdict (`InstallLayerReport`), reported for a FAILED layer.
-       *
-       * `report` keeps its exact prior meaning ("a fresh layer-1 reconcile
-       * happened"), because both call sites derive the `outcome` discriminator
-       * from its presence — synthesizing a report for a failure would have
-       * flipped an `unchanged` install to `reconciled`.
-       */
-      const reconcileExisting = async (
-        workspaceId: string,
-        currentSettings: WorkspaceSettings | null
-      ): Promise<{
-        report: ReconcileReport | undefined;
-        layers: InstallLayerReport[];
-        /** W3b: project-scope playbooks this sync made startable. */
-        trackTemplates: InstalledTrackTemplate[];
-      }> => {
-        const layers: InstallLayerReport[] = [];
-        let trackTemplates: InstalledTrackTemplate[] = [];
-        // ── 1. Additive profiles / property-defs / views / entityLinks sync.
-        const outcome = await reconcileWorkspaceIfStale({
-          workspaceId,
-          packageSlug: input.packageSlug,
-          currentSettings,
-          userId: ctx.userId,
-          // Never stamps: the new version comes back as `pendingVersionStamp`
-          // and `finishTemplateApply` below stamps it once layer 2 converged.
-        });
-        let report: ReconcileReport | undefined;
-        // Sync the post-workspace layers only when the template ACTUALLY drifted
-        // (a fresh reconcile happened) or when we couldn't version-compare —
-        // never on an in-sync no-op, so a reconnect re-trigger stays cheap.
-        let syncLayers: boolean;
-        if (outcome.checked) {
-          report = outcome.report; // in sync (undefined) or freshly reconciled
-          // Read the field that MEANS "a reconcile write happened" rather than
-          // inferring it from the report's presence (equivalent today, but the
-          // report is a payload, not the signal).
-          syncLayers = outcome.reconciled;
-        } else {
-          try {
-            report = await reconcileWorkspaceFromDefinition({
-              validateFlow: unfilteredAiFanoutError,
-              workspaceId,
-              userId: ctx.userId,
-              definition:
-                input.definition as unknown as WorkspaceDefinitionInput,
-            });
-          } catch (err) {
-            // Non-fatal, but NO LONGER SILENT: `report` stays undefined and was
-            // returned verbatim as this mutation's success payload, so a failed
-            // layer-1 reconcile was indistinguishable from "already in sync".
-            layers.push({
-              layer: "template-reconcile",
-              status: "failed",
-              message: err instanceof Error ? err.message : String(err),
-            });
-            logger.warn(
-              { err, workspaceId },
-              "createFromDefinition: additive template reconcile failed (non-fatal)"
-            );
-          }
-          syncLayers = true;
-        }
-        // ── 2. Additive playbooks / capabilities / automations / actionPlacements
-        // sync — the post-workspace layers reconcileWorkspaceFromDefinition does
-        // NOT cover (it only touches profiles/views/entityLinks). The applier is
-        // idempotent by (name, workspaceId), so a re-install ADDS playbooks the
-        // template gained since first install (e.g. radars) WITHOUT duplicating
-        // existing ones. Mirrors the compose-overlay branch; non-fatal.
-        //
-        // SOURCE MUST MATCH LAYER 1: when the version-aware path resolved a
-        // fresh template server-side, build from THAT — not the caller's
-        // `input.definition`, which may be a stale cached copy missing exactly
-        // the playbook the new version added.
-        //
-        // ADAPT, DON'T CAST: the resolved value is a PackageDefinitionOutput,
-        // whose wire shape differs from the WorkspaceDefinitionOutput this door
-        // otherwise receives — graph automations are `automations` there but
-        // `flowAutomations` here. Casting silently (a) dropped every
-        // template-authored graph automation, and (b) fed flow-shaped rows into
-        // the LOOP-trigger mapping, where `auto.trigger` is undefined → TypeError
-        // → the whole layer-2 sync (playbooks + capabilities + placements) was
-        // swallowed by the catch below. Map the fields explicitly instead.
-        if (syncLayers) {
-          try {
-            const pkg = outcome.packageDefinition;
-            const postWorkspaceSource: CreateDefinitionPostWorkspaceSlice = pkg
-              ? {
-                  playbooks:
-                    pkg.playbooks as CreateDefinitionPostWorkspaceSlice["playbooks"],
-                  capabilities:
-                    pkg.capabilities as CreateDefinitionPostWorkspaceSlice["capabilities"],
-                  actionPlacements:
-                    pkg.actionPlacements as CreateDefinitionPostWorkspaceSlice["actionPlacements"],
-                  // The pinned workspace-templates type predates `rules`; the
-                  // resolved body carries them (CP cache or bundle).
-                  rules: (pkg as { rules?: unknown[] }).rules,
-                  // Same reason as `rules` above.
-                  skills: (pkg as { skills?: unknown[] }).skills,
-                  // The rename the old cast erased.
-                  flowAutomations:
-                    pkg.automations as CreateDefinitionPostWorkspaceSlice["flowAutomations"],
-                }
-              : (input.definition as CreateDefinitionPostWorkspaceSlice);
-            // The applier catches each item and reports `{status:"error"}` in
-            // its RESULT BAG instead of throwing, so an install where every
-            // capability errored reaches neither catch. That bag was discarded
-            // here. Summarize it through the ONE derivation.
-            const post = await applyPackagePostWorkspace({
-              workspaceId,
-              body: buildPostWorkspaceBodyFromDefinition(
-                postWorkspaceSource,
-                workspaceId
-              ),
-              userId: ctx.userId,
-              agentUserId: (ctx as { agentUserId?: string }).agentUserId,
-              scopes: [],
-            });
-            layers.push(...summarizePostWorkspaceLayers(post));
-            trackTemplates = installedTrackTemplates(post);
-            // The ONE finisher: the version layer 1 handed back is stamped
-            // only when layer 2 landed (nothing errored, nothing still
-            // proposed); otherwise it records why, health reads the space
-            // drifted, and the next reinstall re-applies.
-            await finishTemplateApply({
-              workspaceId,
-              userId: ctx.userId,
-              built: false,
-              pendingVersionStamp: outcome.pendingVersionStamp,
-              post,
-            });
-          } catch (err) {
-            // A1 — THE CHANNEL THAT WAS MISSING NOW EXISTS. Historical note kept
-            // deliberately: this catch is still non-fatal (the workspace really
-            // was created and is usable, so throwing would be a lie in the other
-            // direction), but the partial is now REPORTED on two axes instead of
-            // only logged:
-            //   • durably — `applyPackagePostWorkspace` already stamped
-            //     `provisioningStatus:"failed"` / `failedStep` / `failedStepError`
-            //     into `workspace.settings`, and Hub `GET /workspaces` now
-            //     PROJECTS those three fields (it used to drop them);
-            //   • in-response — `layers[]` below, the same `InstallLayerReport`
-            //     shape every install door uses.
-            // The resume path is unchanged: re-running the install re-runs this
-            // layer (`resumeIfFailed`).
-            //
-            // Note the asymmetry that REMAINS by design: `market.install`
-            // RETHROWS here. Two doors, two postures, one shape — see the report
-            // in `.wave2-reports/im-lifecycle.md`.
-            //
-            // Logged at ERROR because a silent partial install is the defect
-            // class this codebase keeps re-shipping — an absent signal read as
-            // success — and `warn` is where that goes to die.
-            layers.push({
-              layer: "post-workspace",
-              status: "failed",
-              message: err instanceof Error ? err.message : String(err),
-            });
-            logger.error(
-              { err, workspaceId },
-              "createFromDefinition: post-workspace layer FAILED — the workspace exists but its capabilities/playbooks/automations did not apply"
-            );
-          }
-        }
-        // Attach to the report too when there IS one, so a consumer holding only
-        // `result.reconciled` (both UIs derive that via `RouterOutputs`) sees the
-        // same verdict as one reading the top-level `layers`.
-        if (report && layers.length > 0) report = { ...report, layers };
-        return { report, layers, trackTemplates };
-      };
-
-      // Serialise concurrent calls with the same (userId, proposalId) so a
-      // hung retry can't race the original. No-op when proposalId is missing.
-      return withWorkspaceProposalIdLock(
-        ctx.userId,
-        input.proposalId,
-        async () => {
-          // Idempotency by proposalId — caller-supplied stable key. If a workspace
-          // with this proposalId already exists for the user → return it. Mirrors
-          // the Hub REST path so DevPlane and Eve see the same row when they ask
-          // for "builder-workspace-v1".
-          if (input.proposalId) {
-            const existingByProposal =
-              await db.query.workspaceMembers.findFirst({
-                where: and(
-                  eq(workspaceMembers.userId, ctx.userId),
-                  drizzleSql`EXISTS (
-              SELECT 1 FROM workspaces w
-              WHERE w.id = ${workspaceMembers.workspaceId}
-                AND w.provisioning_proposal_id = ${input.proposalId}
-            )`
-                ),
-                with: { workspace: true },
-              });
-            if (existingByProposal?.workspace) {
-              const ws = existingByProposal.workspace;
-              const wsSettings = ws.settings as WorkspaceSettings | null;
-              // Read through the ONE template state (W3 folds this branch
-              // into the apply core's plan).
-              const tState = readTemplateState(wsSettings);
-              const provStatus =
-                templateInstallWire(tState).provisioningStatus ?? undefined;
-
-              if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
-                logger.warn(
-                  {
-                    userId: ctx.userId,
-                    proposalId: input.proposalId,
-                    workspaceId: ws.id,
-                    failedStep: tState?.failedStep,
-                    completedSteps: tState?.completedSteps,
-                  },
-                  "createFromDefinition: resuming failed workspace (by proposalId)"
-                );
-                emitChatEvent({
-                  event: "workspace:creation_progress",
-                  data: {
-                    step: "resume",
-                    pct: 5,
-                    label: `Resuming from step '${tState?.failedStep ?? "unknown"}'`,
-                    status: "progress",
-                  },
-                  userId: ctx.userId,
-                });
-                const resumeResult = await createWorkspaceFromDefinition({
-                  definition: input.definition,
-                  userId: ctx.userId,
-                  workspaceName: input.workspaceName,
-                  createdBy: "user",
-                  workspaceType: input.workspaceType,
-                  linkedAgentId: input.linkedAgentId,
-                  resumeFrom: {
-                    workspaceId: ws.id,
-                    completedSteps: tState?.completedSteps ?? [],
-                  },
-                  onProgress: (step, pct, label) => {
-                    emitChatEvent({
-                      event: "workspace:creation_progress",
-                      data: { step, pct, label, status: "progress" },
-                      userId: ctx.userId,
-                    });
-                  },
-                });
-                // This door resumes layer 1 only: the finisher marks the
-                // space active, and a template version it cannot earn here is
-                // recorded "layer-2-not-run" (health: drifted) — never stamped.
-                await finishTemplateApply({
-                  workspaceId: resumeResult.workspaceId,
-                  userId: ctx.userId,
-                  built: true,
-                  pendingVersionStamp: resumeResult.pendingVersionStamp,
-                  post: null,
-                });
-                return {
-                  status: "created" as const,
-                  outcome: "created" as const,
-                  workspaceId: resumeResult.workspaceId,
-                  profileIds: resumeResult.profileIds,
-                  viewIds: resumeResult.viewIds,
-                };
-              }
-
-              logger.info(
-                {
-                  userId: ctx.userId,
-                  proposalId: input.proposalId,
-                  workspaceId: ws.id,
-                },
-                "createFromDefinition: returning existing workspace by proposalId"
-              );
-              // Opportunistically stamp appId if the caller provides one and
-              // the workspace doesn't have it yet (migration path for pre-Phase-1 workspaces).
-              if (input.appId && !wsSettings?.appId) {
-                try {
-                  await db
-                    .update(workspaces)
-                    .set({
-                      settings: mergedSettings({ appId: input.appId }),
-                    })
-                    .where(eq(workspaces.id, ws.id));
-                } catch {
-                  /* non-fatal */
-                }
-              }
-              // Active workspace already exists → additively sync it to the
-              // current template (add-only). Skipped for non-active (pending)
-              // workspaces to avoid racing an in-flight provisioning build.
-              if (failedInLayerTwo(wsSettings))
-                await reopenFailedLayerTwo(ws.id, ctx.userId, undefined);
-              const reconcileOutcome =
-                provStatus === "active" || failedInLayerTwo(wsSettings)
-                  ? await reconcileExisting(
-                      ws.id,
-                      // A layer-2 failure re-syncs as stale (its stamp is
-                      // not trusted) so layer 2 re-runs — `failedInLayerTwo`.
-                      failedInLayerTwo(wsSettings)
-                        ? withoutStamp(wsSettings)
-                        : wsSettings
-                    )
-                  : undefined;
-              const reconciled = reconcileOutcome?.report;
-              const layers = reconcileOutcome?.layers ?? [];
-              return {
-                workspaceId: ws.id,
-                entityIds: [],
-                reconciled,
-                // A1: a FAILED install layer, surfaced even when layer 1 was a
-                // no-op (`reconciled` undefined). `undefined` = nothing failed.
-                //
-                // ALWAYS present, never a conditional spread. `...(cond ? {k} : {})`
-                // makes the return literal a UNION of two shapes, and that union
-                // propagates to every consumer: it is what broke
-                // `useCreateWorkspaceFromProposal`'s read of `.composed`, since a
-                // property present on only SOME members of a union cannot be
-                // accessed at all. Keep the key uniform; vary only the value.
-                layers: layers.length > 0 ? layers : undefined,
-                // W3b: project-scope playbooks the client may OFFER to start.
-                trackTemplates: reconcileOutcome?.trackTemplates ?? [],
-                // E4 fix: explicit discriminator alongside `reconciled` so a
-                // caller doesn't have to infer "reused vs freshly reconciled"
-                // from presence/absence of the report.
-                outcome: reconciled
-                  ? ("reconciled" as const)
-                  : ("unchanged" as const),
-              };
-            }
-          }
-
-          // Idempotency: if the user already has a workspace with this packageSlug, return it.
-          // "pending" workspaces (creation in progress) are returned as-is so the client can
-          // subscribe to progress events. "failed" workspaces are returned with status "failed"
-          // so the client can offer a retry button.
-          // Prevents duplicate workspaces when the browser re-triggers onboarding on reconnect.
-          if (input.packageSlug) {
-            const existingMembership =
-              await db.query.workspaceMembers.findFirst({
-                where: and(
-                  eq(workspaceMembers.userId, ctx.userId),
-                  drizzleSql`EXISTS (
-              SELECT 1 FROM workspaces w
-              WHERE w.id = ${workspaceMembers.workspaceId}
-                AND w.package_slug = ${input.packageSlug}
-            )`
-                ),
-                with: { workspace: true },
-              });
-            if (existingMembership?.workspace) {
-              const ws = existingMembership.workspace;
-              const wsSettings = ws.settings as WorkspaceSettings | null;
-              // Read through the ONE template state (W3 folds this branch
-              // into the apply core's plan).
-              const tState = readTemplateState(wsSettings);
-              const provStatus =
-                templateInstallWire(tState).provisioningStatus ?? undefined;
-
-              if (provStatus === "failed" && !failedInLayerTwo(wsSettings)) {
-                // Automatically resume from where the previous attempt failed.
-                logger.warn(
-                  {
-                    userId: ctx.userId,
-                    packageSlug: input.packageSlug,
-                    workspaceId: ws.id,
-                    failedStep: tState?.failedStep,
-                    completedSteps: tState?.completedSteps,
-                  },
-                  "createFromDefinition: resuming failed workspace"
-                );
-                emitChatEvent({
-                  event: "workspace:creation_progress",
-                  data: {
-                    step: "resume",
-                    pct: 5,
-                    label: `Resuming from step '${tState?.failedStep ?? "unknown"}'`,
-                    status: "progress",
-                  },
-                  userId: ctx.userId,
-                });
-                // Fall through to createWorkspaceFromDefinition with resumeFrom set
-                const resumeResult = await createWorkspaceFromDefinition({
-                  definition: input.definition,
-                  userId: ctx.userId,
-                  packageSlug: input.packageSlug,
-                  packageVersion: input.packageVersion,
-                  templateId: input.templateId,
-                  templateName: input.templateName,
-                  workspaceName: input.workspaceName,
-                  createdBy: "user",
-                  workspaceType: input.workspaceType,
-                  linkedAgentId: input.linkedAgentId,
-                  resumeFrom: {
-                    workspaceId: ws.id,
-                    completedSteps: tState?.completedSteps ?? [],
-                  },
-                  onProgress: (step, pct, label) => {
-                    emitChatEvent({
-                      event: "workspace:creation_progress",
-                      data: { step, pct, label, status: "progress" },
-                      userId: ctx.userId,
-                    });
-                  },
-                });
-                // This door resumes layer 1 only: the finisher marks the
-                // space active, and a template version it cannot earn here is
-                // recorded "layer-2-not-run" (health: drifted) — never stamped.
-                await finishTemplateApply({
-                  workspaceId: resumeResult.workspaceId,
-                  userId: ctx.userId,
-                  built: true,
-                  pendingVersionStamp: resumeResult.pendingVersionStamp,
-                  post: null,
-                });
-                return {
-                  status: "created" as const,
-                  outcome: "created" as const,
-                  workspaceId: resumeResult.workspaceId,
-                  profileIds: resumeResult.profileIds,
-                  viewIds: resumeResult.viewIds,
-                };
-              }
-
-              logger.info(
-                {
-                  userId: ctx.userId,
-                  packageSlug: input.packageSlug,
-                  workspaceId: ws.id,
-                  provisioningStatus: provStatus,
-                },
-                "createFromDefinition: returning existing workspace (idempotent)"
-              );
-              // Active workspace already exists → additively sync it to the
-              // current template (add-only). Skipped for pending workspaces to
-              // avoid racing an in-flight provisioning build.
-              if (failedInLayerTwo(wsSettings))
-                await reopenFailedLayerTwo(ws.id, ctx.userId, undefined);
-              const reconcileOutcome =
-                provStatus === "active" || failedInLayerTwo(wsSettings)
-                  ? await reconcileExisting(
-                      ws.id,
-                      // A layer-2 failure re-syncs as stale (its stamp is
-                      // not trusted) so layer 2 re-runs — `failedInLayerTwo`.
-                      failedInLayerTwo(wsSettings)
-                        ? withoutStamp(wsSettings)
-                        : wsSettings
-                    )
-                  : undefined;
-              const reconciled = reconcileOutcome?.report;
-              const layers = reconcileOutcome?.layers ?? [];
-              return {
-                status:
-                  provStatus === "active" || failedInLayerTwo(wsSettings)
-                    ? ("created" as const)
-                    : ("pending" as const),
-                workspaceId: ws.id,
-                reconciled,
-                // A1: see the sibling branch above — uniform key, never a
-                // conditional spread.
-                layers: layers.length > 0 ? layers : undefined,
-                trackTemplates: reconcileOutcome?.trackTemplates ?? [],
-                // E4 fix: `status:"created"` above is the pre-existing
-                // (overloaded) field, kept for backward-compat. `outcome` is
-                // the honest discriminator: this branch is ALWAYS an
-                // idempotent re-hit of an already-existing workspace, never a
-                // fresh materialization — "reconciled" when drift was synced,
-                // "unchanged" when already current OR still pending (no
-                // version check was run for a pending workspace).
-                outcome: reconciled
-                  ? ("reconciled" as const)
-                  : ("unchanged" as const),
-              };
-            }
-          }
-
-          // ── Steps 0-0b: Resolve dependencies + compose overlay (shared core)
-          // The SAME `materializeWorkspaceCore` the Hub `POST /packages/apply`
-          // door drives — so the BROWSER install path composes overlays exactly
-          // like the CLI/agent path. Placed AFTER both idempotency short-circuits
-          // above (a proposalId/packageSlug re-install returns the existing
-          // workspace WITHOUT re-resolving) and BEFORE resolveWorkspaceExtends +
-          // the normal create below. `deferCreate:true` keeps THIS door's own
-          // richer create path (onProgress/resumeFrom/seed-docs) for the
-          // no-compose case — the shared core only resolves + (maybe) composes.
-          // The compose reconcile intentionally receives the PRE-extends
-          // `input.definition`, preserving the pre-refactor behavior (extends is
-          // resolved only for the create path below).
-          let resolvedDependencies: ResolvedPackageDependency[] = [];
-          if (input.definition.dependencies?.length) {
-            let core: MaterializeCoreResult;
-            try {
-              core = await materializeWorkspaceCore({
-                definition:
-                  input.definition as unknown as WorkspaceDefinitionInput,
-                userId: ctx.userId,
-                // The package's own identity for the cycle guard — NOT its
-                // subtype (overlays set subtype = base slug). tRPC input carries
-                // no `_meta`, so pass the packageSlug explicitly.
-                selfSlug: input.packageSlug,
-                deferCreate: true,
-              });
-            } catch (err) {
-              // A compose was requested but its base could not be resolved. Do
-              // NOT fall through to creating a rogue standalone overlay workspace
-              // — surface the reason (mirrors the Hub 422).
-              if (err instanceof ComposeBaseUnavailableError) {
-                const unresolved = err.dependencies.find(
-                  (d) => d.relation === "compose"
-                );
-                throw new TRPCError({
-                  code: "BAD_REQUEST",
-                  message:
-                    unresolved?.message ??
-                    "compose base not available — the base template must be installed on the pod first",
-                });
-              }
-              // Resolver failures (cycle, >1 compose dep, wrong-kind) → clean 400.
-              if (err instanceof DependencyResolutionError) {
-                throw new TRPCError({
-                  code: "BAD_REQUEST",
-                  message: `Dependency resolution failed: ${err.message}`,
-                });
-              }
-              // Resolved compose base vanished before load → 404 (as before).
-              if (err instanceof ComposeBaseNotFoundError) {
-                throw new TRPCError({
-                  code: "NOT_FOUND",
-                  message: "compose base workspace not found",
-                });
-              }
-              // A compose-overlay reconcile/assert failure → propagate (500),
-              // matching the pre-refactor path (which let it throw).
-              throw err;
-            }
-            if (core.status === "composed") {
-              // A compose overlay does not create a second workspace, but it
-              // still owns post-workspace layers such as playbooks. Apply them
-              // to the resolved base before returning; the shared applier is
-              // idempotent, so retries and already-installed overlays are safe.
-              // Build the body via the SAME converter the normal-create branch
-              // uses — the previous `as unknown as PackagePostWorkspaceBody` cast
-              // fed loop-style `definition.automations` into the graph-automation
-              // applier step, where each threw on an undefined `triggerType` and
-              // was silently swallowed (install-path parity bug, Phase 4 4.T1).
-              // A1: the compose-overlay branch swallows layer 2 exactly like
-              // `reconcileExisting` does, and returned an equally clean payload.
-              // Same shape, same non-fatal posture, now reported.
-              const composeLayers: InstallLayerReport[] = [];
-              let composeTrackTemplates: InstalledTrackTemplate[] = [];
-              try {
-                const composePost = await applyPackagePostWorkspace({
-                  workspaceId: core.composeTargetWorkspaceId,
-                  body: buildPostWorkspaceBodyFromDefinition(
-                    input.definition as CreateDefinitionPostWorkspaceSlice,
-                    core.composeTargetWorkspaceId
-                  ),
-                  userId: ctx.userId,
-                  agentUserId: (ctx as { agentUserId?: string }).agentUserId,
-                  scopes: [],
-                });
-                composeLayers.push(
-                  ...summarizePostWorkspaceLayers(composePost)
-                );
-                composeTrackTemplates = installedTrackTemplates(composePost);
-                // The overlay pack's version is recorded only once its layer
-                // 2 converged (`finishTemplateApply`) — never by compose.
-                await finishTemplateApply({
-                  workspaceId: core.composeTargetWorkspaceId,
-                  userId: ctx.userId,
-                  built: false,
-                  pendingPack: core.pendingPack,
-                  post: composePost,
-                });
-              } catch (err) {
-                composeLayers.push({
-                  layer: "post-workspace",
-                  status: "failed",
-                  message: err instanceof Error ? err.message : String(err),
-                });
-                logger.warn(
-                  {
-                    err,
-                    workspaceId: core.composeTargetWorkspaceId,
-                    packageSlug: input.packageSlug,
-                  },
-                  "compose overlay post-workspace layers failed (non-fatal)"
-                );
-              }
-              auditLog({
-                subjectType: "workspaces",
-                subjectId: core.composeTargetWorkspaceId,
-                action: "update",
-                phase: "completed",
-                userId: ctx.userId,
-                data: { templateSlug: input.packageSlug, composed: true },
-              });
-              return {
-                status: "composed" as const,
-                workspaceId: core.composeTargetWorkspaceId,
-                composed: true as const,
-                dependencies: core.dependencies,
-                // Uniform key, never a conditional spread — see the sibling
-                // branches. A spread is not a fresh object literal, so it
-                // defeats TypeScript's `prop?: undefined` normalization across
-                // the returned union, which is what made `composed` unreadable
-                // on the union for every consumer.
-                layers: composeLayers.length > 0 ? composeLayers : undefined,
-                trackTemplates: composeTrackTemplates,
-              };
-            }
-            // status "resolved" — no compose base. Fall through to the normal
-            // extends-resolve + create path below with the resolved graph.
-            resolvedDependencies = core.dependencies;
-          }
-
-          // Workspace composition (north star §10): resolve `definition.extends`
-          // into copied profiles/views BEFORE materialization. Cross-workspace
-          // reads inside the resolver are access-gated (member / pod_visible /
-          // pod_joinable / system) via validateWorkspaceAccess — a caller can
-          // only import from a workspace they can see. Best-effort: unreadable
-          // or missing sources are skipped, never fatal.
-          const { definition: composedDefinition, provenance: composedFrom } =
-            await resolveWorkspaceExtends(input.definition, ctx.userId);
-
-          // A PACK populated onto an existing space that already holds a
-          // DIFFERENT template identity (the Marketplace "Add to workspace",
-          // the profile-pack browser): the same rule as compose
-          // (`composeOntoBaseWorkspace`) — the target keeps its own
-          // packageSlug and version stamp, and the pack goes into its
-          // `installedPacks` ledger (version on convergence, by the
-          // finisher). An unidentified target still takes the slug as its
-          // identity (chat-first onboarding). W2/W3 absorb this branch into
-          // applyTemplate (mode compose).
-          const packOnto = await (async () => {
-            if (!input.workspaceId || !input.packageSlug) return null;
-            const target = await db.query.workspaces.findFirst({
-              where: eq(workspaces.id, input.workspaceId),
-              columns: { packageSlug: true, settings: true },
-            });
-            const identity =
-              readTemplateState(target?.settings, {
-                packageSlug: target?.packageSlug,
-              })?.slug ?? null;
-            return identity !== null && identity !== input.packageSlug
-              ? { slug: input.packageSlug, version: input.packageVersion }
-              : null;
-          })();
-
-          let result: Awaited<ReturnType<typeof createWorkspaceFromDefinition>>;
-          try {
-            result = await createWorkspaceFromDefinition({
-              definition: composedDefinition,
-              userId: ctx.userId,
-              // A pack never becomes the target's identity or stamp.
-              packageSlug: packOnto ? undefined : input.packageSlug,
-              packageVersion: packOnto ? undefined : input.packageVersion,
-              templateId: input.templateId,
-              templateName: input.templateName,
-              workspaceName: input.workspaceName,
-              createdBy: "user",
-              workspaceType: input.workspaceType,
-              linkedAgentId: input.linkedAgentId,
-              // When workspaceId is provided, populate the existing workspace
-              // instead of creating a new one (chat-first onboarding flow).
-              // "workspace" is in completedSteps to skip the CREATE step.
-              ...(input.workspaceId
-                ? {
-                    resumeFrom: {
-                      workspaceId: input.workspaceId,
-                      completedSteps: ["workspace"],
-                    },
-                  }
-                : {}),
-              onProgress: (step, pct, label) => {
-                emitChatEvent({
-                  event: "workspace:creation_progress",
-                  data: { step, pct, label, status: "progress" },
-                  userId: ctx.userId,
-                });
-              },
-            });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            // Extract step name from structured error message ("...at step 'X': ...")
-            const stepMatch = message.match(/at step '([^']+)'/);
-            const failedStep = stepMatch?.[1];
-            logger.error(
-              {
-                err,
-                userId: ctx.userId,
-                packageSlug: input.packageSlug,
-                failedStep,
-              },
-              "createFromDefinition failed"
-            );
-            // Emit error progress event so the frontend loading state can show
-            // what went wrong instead of spinning indefinitely.
-            emitChatEvent({
-              event: "workspace:creation_progress",
-              data: {
-                step: failedStep ?? "error",
-                pct: 0,
-                label: failedStep
-                  ? `Failed at step '${failedStep}': ${message}`
-                  : `Creation failed: ${message}`,
-                status: "error",
-              },
-              userId: ctx.userId,
-            });
-            // Stamp proposalId onto the failed workspace so the next retry can
-            // find it via the idempotency check and resume rather than creating
-            // a new workspace. Best-effort — a lookup failure here is non-fatal.
-            if (input.proposalId) {
-              try {
-                const failedWs = await db.query.workspaceMembers.findFirst({
-                  where: and(
-                    eq(workspaceMembers.userId, ctx.userId),
-                    drizzleSql`EXISTS (
-                      SELECT 1 FROM workspaces w
-                      WHERE w.id = ${workspaceMembers.workspaceId}
-                        AND w.name = ${input.workspaceName ?? ""}
-                        AND w.provisioning_status = 'failed'
-                        AND (w.provisioning_proposal_id IS NULL OR w.provisioning_proposal_id = '')
-                    )`
-                  ),
-                  with: { workspace: true },
-                });
-                if (failedWs?.workspace) {
-                  await db
-                    .update(workspaces)
-                    .set({
-                      settings: mergedSettings({
-                        proposalId: input.proposalId,
-                        ...(input.appId ? { appId: input.appId } : {}),
-                      }),
-                      provisioningProposalId: input.proposalId,
-                    })
-                    .where(eq(workspaces.id, failedWs.workspace.id));
-                }
-              } catch {
-                // non-fatal
-              }
-            }
-
-            throw new TRPCError({
-              code: "INTERNAL_SERVER_ERROR",
-              message: failedStep
-                ? `Workspace creation failed at step '${failedStep}': ${message}`
-                : `Workspace creation failed: ${message}`,
-            });
-          }
-
-          // Stamp caller-supplied proposalId/appId + composition provenance into
-          // settings. Best-effort: a failure here just means the next call may
-          // create a duplicate (proposalId), the workspace won't appear in
-          // app-filtered list queries (appId), or imported bricks won't carry a
-          // "from <source>" tag (composedFrom).
-          if (input.proposalId || input.appId || composedFrom.length > 0) {
-            try {
-              await db
-                .update(workspaces)
-                .set({
-                  settings: mergedSettings({
-                    ...(input.proposalId
-                      ? { proposalId: input.proposalId }
-                      : {}),
-                    ...(input.appId ? { appId: input.appId } : {}),
-                    ...(composedFrom.length > 0 ? { composedFrom } : {}),
-                  }),
-                  ...(input.proposalId
-                    ? { provisioningProposalId: input.proposalId }
-                    : {}),
-                })
-                .where(eq(workspaces.id, result.workspaceId));
-            } catch (err) {
-              logger.warn(
-                {
-                  err,
-                  workspaceId: result.workspaceId,
-                  proposalId: input.proposalId,
-                  appId: input.appId,
-                },
-                "Failed to stamp proposalId/appId/composedFrom into workspace settings (non-fatal)"
-              );
-            }
-          }
-
-          // Seed entity bodies through the canonical body door (EntityBodyService).
-          const entitiesWithContent = (input.definition.suggestedEntities ?? [])
-            .map((entity, idx) => ({ entity, entityId: result.entityIds[idx] }))
-            .filter(
-              (e): e is typeof e & { entity: { content: string } } =>
-                !!e.entity.content && !!e.entityId
-            );
-
-          if (entitiesWithContent.length > 0) {
-            const database = await getDb();
-            // Shared singleton, not a fresh hookless instance — see note above.
-            const evRepo = eventRepository;
-            const entityBodyService = new EntityBodyService(database, evRepo);
-            const entRepo = new EntityRepository(database, evRepo);
-
-            for (const { entity, entityId } of entitiesWithContent) {
-              try {
-                // B4 FIX: this loop used to materialize EVERY seed body into a
-                // document unconditionally (and never wrote a v1 snapshot). It
-                // now runs the SAME heuristic as every other writer — long-form
-                // → a versioned document (with a real v1 snapshot), short →
-                // inline properties.content. Provisioning write → `system`
-                // provenance.
-                const body = await entityBodyService.setBody({
-                  entityId,
-                  userId: ctx.userId,
-                  workspaceId: result.workspaceId,
-                  title: entity.title,
-                  provenance: {
-                    createdByKind: "system",
-                    createdByUserId: ctx.userId,
-                  },
-                  text: entity.content,
-                });
-                if (body.documentId) {
-                  // Link entity → document (single direction — no backlink needed)
-                  await entRepo.update(
-                    entityId,
-                    { documentId: body.documentId },
-                    ctx.userId
-                  );
-                } else if (body.inlineContent !== undefined) {
-                  // Short seed body stays inline (merged into properties).
-                  await entRepo.update(
-                    entityId,
-                    { properties: { content: body.inlineContent } },
-                    ctx.userId
-                  );
-                }
-              } catch (err) {
-                logger.warn(
-                  { err, entityId, title: entity.title },
-                  "Failed to seed body for entity (non-fatal)"
-                );
-              }
-            }
-          }
-
-          // ── Post-workspace layers (capabilities + the autonomy loop) ────────────
-          // ONE shared door with Hub `POST /packages/apply` — `applyPackagePostWorkspace`.
-          // The `{playbooks · automations}` sub-contract IS an autonomy loop, so it is
-          // passed as ONE `loops[]` entry (the shared door runs the SAME governed
-          // `createLoopFromDefinition` primitive) — preserving the playbook-trigger
-          // semantics — while `capabilities` (→ tools + skills + vault + capability-
-          // embedded automations/playbooks) install alongside. Before this the tRPC/
-          // browser door installed NO capabilities and hand-rolled the loop inline; now
-          // both doors converge on the one door. `definition.tools` is intentionally
-          // dropped: tools arrive through capabilities (the governed substrate) — the old
-          // inline `tools` TODO is retired here.
-          // The `{playbooks · automations}` sub-contract is built into the shared
-          // body by `buildPostWorkspaceBodyFromDefinition` — the ONE builder the
-          // compose-overlay branch uses too, so loop-style automations can never
-          // be misrouted into the graph-automation applier step.
-          const postBody = buildPostWorkspaceBodyFromDefinition(
+      // THE ONE template apply (APPLY-ONE-DOOR-PLAN, W3). It finds the space
+      // (key → pod-wide holder → legacy match), plans (create · resume ·
+      // re-sync · unchanged), builds or re-syncs layer 1, applies layer 2 from
+      // the same source and stamps only on convergence. This door adds only
+      // what is its own: the human governance above, `extends`, the progress
+      // events, `appId` / `composedFrom`, and the seed bodies. A `workspaceId`
+      // installs ONTO that space (compose: it keeps its own template identity,
+      // a pack is recorded in its ledger).
+      const { definition: composedDefinition, provenance: composedFrom } =
+        await resolveWorkspaceExtends(input.definition, ctx.userId);
+      const applied = await applyTemplateForTrpc({
+        userId: ctx.userId,
+        agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+        source: "trpc.createFromDefinition",
+        definition: composedDefinition as unknown as WorkspaceDefinitionInput,
+        layerTwoBody: (workspaceId) =>
+          trpcLayerTwoBody(
             input.definition as CreateDefinitionPostWorkspaceSlice,
-            result.workspaceId
-          );
-          const hasPostWork = Boolean(
-            postBody.capabilities?.length ||
-            postBody.loops?.length ||
-            postBody.automations?.length ||
-            postBody.actionPlacements?.length ||
-            postBody.rules?.length
-          );
-          // A1 parity: the reconcile-existing and compose-overlay branches
-          // above both summarize `applyPackagePostWorkspace`'s per-item result
-          // bag into `InstallLayerReport[]` through the ONE shared derivation
-          // (`summarizePostWorkspaceLayers`) so a partial failure is REPORTED,
-          // not just logged. This — the fresh-create branch, the most-travelled
-          // path — discarded the bag entirely and always returned `layers`
-          // undefined. Same shape, same derivation, now reported here too.
-          const layers: InstallLayerReport[] = [];
-          let trackTemplates: InstalledTrackTemplate[] = [];
-          let postBag: Record<string, unknown> = {};
-          if (hasPostWork) {
-            try {
-              const post = await applyPackagePostWorkspace({
-                workspaceId: result.workspaceId,
-                body: postBody,
-                userId: ctx.userId,
-                agentUserId: (ctx as { agentUserId?: string }).agentUserId,
-                scopes: [],
-              });
-              postBag = post;
-              layers.push(...summarizePostWorkspaceLayers(post));
-              trackTemplates = installedTrackTemplates(post);
-              logger.info(
-                { workspaceId: result.workspaceId, layers: Object.keys(post) },
-                "createFromDefinition: post-workspace layers applied (shared door)"
-              );
-            } catch (err) {
-              logger.error(
-                { err, workspaceId: result.workspaceId },
-                "Failed to apply declared post-workspace layers"
-              );
-              throw new TRPCError({
-                code: "INTERNAL_SERVER_ERROR",
-                message:
-                  "Workspace was created but its declared workflow setup could not be completed. Reconcile it before use.",
-              });
-            }
-          }
-          if (packOnto)
-            await recordInstalledPack(
-              result.workspaceId,
-              packOnto.slug,
-              ctx.userId
-            );
-          // The ONE finisher: stamps the version and marks the new space
-          // "active" only when its layer 2 landed (`{}` = the template has no
-          // living layers); otherwise records why — never an unearned stamp.
-          await finishTemplateApply({
-            workspaceId: result.workspaceId,
-            userId: ctx.userId,
-            built: true,
-            pendingVersionStamp: result.pendingVersionStamp,
-            ...(packOnto?.version
-              ? {
-                  pendingPack: {
-                    slug: packOnto.slug,
-                    version: packOnto.version,
-                  },
-                }
-              : {}),
-            post: hasPostWork ? postBag : {},
-          });
-
-          // Enqueue workspace-init for default whiteboard/commands
-          // (skips default views when packageSlug is set)
-          try {
-            const boss = getBoss();
-            await boss.send("workspace-init", {
-              workspaceId: result.workspaceId,
-              userId: ctx.userId,
-              packageSlug: input.packageSlug,
-            });
-          } catch (err) {
-            logger.warn(
-              { err, workspaceId: result.workspaceId },
-              "Failed to enqueue workspace-init (non-fatal)"
-            );
-          }
-
-          auditLog({
-            subjectType: "workspaces",
-            action: "create",
-            phase: "completed",
-            subjectId: result.workspaceId,
-            userId: ctx.userId,
-            data: {
-              id: result.workspaceId,
-              packageSlug: input.packageSlug,
-              createdBy: "user",
-            },
-          });
-
-          emitSideEffects({
-            subjectType: "workspace",
-            action: "create",
-            subjectId: result.workspaceId,
-            userId: ctx.userId,
-          });
-
-          // Materialize pod owner/admins into the new workspace when it is
-          // pod-visible — same gate + rationale as `workspaces.create`. The
-          // created workspace row is the authoritative visibility source (the
-          // definition's `workspaceVisibility` was stamped into `settings`).
-          // Best-effort/non-fatal.
-          try {
-            const createdWs = await db.query.workspaces.findFirst({
-              where: eq(workspaces.id, result.workspaceId),
-              columns: { settings: true },
-            });
-            if (isPodReadableWorkspace(createdWs?.settings)) {
-              await materializePodAdminsIntoWorkspace(result.workspaceId);
-            }
-          } catch (err) {
-            logger.warn(
-              { err, workspaceId: result.workspaceId },
-              "Failed to materialize pod admins into new pod-visible workspace (non-fatal)"
-            );
-          }
-
-          return {
-            status: "created" as const,
-            outcome: "created" as const,
-            workspaceId: result.workspaceId,
-            profileIds: result.profileIds,
-            viewIds: result.viewIds,
-            entityIds: result.entityIds,
-            // Surface any resolved `require`/non-workspace deps so the browser
-            // post-install confirmation can show what was installed alongside.
-            dependencies: resolvedDependencies,
-            // A1 parity — uniform key, never a conditional spread. See the
-            // sibling branches above (`reconcileExisting`, compose-overlay).
-            layers: layers.length > 0 ? layers : undefined,
-            // W3b: project-scope playbooks the client may OFFER to start on a
-            // project (never auto-started). `[]` = none made startable.
-            trackTemplates,
-          };
-        }
-      ); // close withWorkspaceProposalIdLock
+            workspaceId
+          ),
+        targetWorkspaceId: await installTarget(
+          input.workspaceId,
+          input.packageSlug
+        ),
+        identity: {
+          packageSlug: input.packageSlug,
+          packageVersion: input.packageVersion,
+          proposalId: input.proposalId,
+          workspaceName: input.workspaceName,
+          templateId: input.templateId,
+          templateName: input.templateName,
+          workspaceType: input.workspaceType,
+          linkedAgentId: input.linkedAgentId,
+          createdBy: "user",
+        },
+        settingsFill: {
+          ...(input.appId ? { appId: input.appId } : {}),
+        },
+        createdFill: composedFrom.length > 0 ? { composedFrom } : undefined,
+        seeds: input.definition.suggestedEntities,
+      });
+      return templateDoorReply(applied);
     }),
 
   /**
@@ -2083,51 +1073,62 @@ export const definitionEngineProcedures = {
         });
       }
 
-      const report = await reconcileWorkspaceFromDefinition({
-        validateFlow: unfilteredAiFanoutError,
-        workspaceId: input.workspaceId,
+      // A dry run previews the layer-1 diff: a read, not an apply.
+      if (input.dryRun)
+        return reconcileWorkspaceFromDefinition({
+          validateFlow: unfilteredAiFanoutError,
+          workspaceId: input.workspaceId,
+          userId: ctx.userId,
+          definition: input.definition as unknown as WorkspaceDefinitionInput,
+          dryRun: true,
+        });
+
+      // Re-sync THIS space against the caller's definition through the ONE
+      // apply (W3; fixes F: this door never reached the finisher, so nothing
+      // recorded what it did or whether layer 2 landed). The space's own
+      // template identity is passed, so the definition lands as its template
+      // (an overlay pack would have its shell stripped); no version is
+      // passed, so nothing is stamped. A layer-2 failure is recorded on the
+      // space and reported in `layers`, never thrown (decision 3).
+      const [target] = await db
+        .select({
+          settings: workspaces.settings,
+          packageSlug: workspaces.packageSlug,
+        })
+        .from(workspaces)
+        .where(eq(workspaces.id, input.workspaceId))
+        .limit(1);
+      if (!target)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      const applied = await applyTemplateForTrpc({
         userId: ctx.userId,
+        agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+        source: "trpc.reconcileFromDefinition",
         definition: input.definition as unknown as WorkspaceDefinitionInput,
-        dryRun: input.dryRun,
+        layerTwoBody: (workspaceId) =>
+          trpcLayerTwoBody(
+            input.definition as unknown as CreateDefinitionPostWorkspaceSlice,
+            workspaceId
+          ),
+        targetWorkspaceId: input.workspaceId,
+        identity: {
+          packageSlug:
+            readTemplateState(target.settings, {
+              packageSlug: target.packageSlug,
+            })?.slug ?? undefined,
+        },
       });
-      if (
-        !input.dryRun &&
-        (input.definition.capabilities?.length ||
-          input.definition.playbooks?.length ||
-          input.definition.flowAutomations?.length ||
-          input.definition.actionPlacements?.length ||
-          input.definition.rules?.length ||
-          input.definition.skills?.length)
-      ) {
-        try {
-          // Same builder as the create/compose branches — reconcile definitions
-          // carry LOOP-style playbooks (grants as {kind, ref}[]), so the raw
-          // cast fed them into the graph-shaped applier where grants silently
-          // resolved to nothing. One builder = install and reconcile stay in
-          // lockstep (same loop routing, same grant materialization).
-          await applyPackagePostWorkspace({
-            workspaceId: input.workspaceId,
-            body: buildPostWorkspaceBodyFromDefinition(
-              input.definition as unknown as CreateDefinitionPostWorkspaceSlice,
-              input.workspaceId
-            ),
-            userId: ctx.userId,
-            agentUserId: (ctx as { agentUserId?: string }).agentUserId,
-            scopes: [],
-          });
-        } catch (err) {
-          logger.error(
-            { err, workspaceId: input.workspaceId },
-            "reconcileFromDefinition post-workspace layers failed"
-          );
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Workflow reconciliation did not complete. Earlier additive layers may have applied; after resolving the error, retry safely to finish the idempotent reconciliation.",
-          });
-        }
-      }
-      return report;
+      if (!applied.compose)
+        throw new Error(
+          "reconcileFromDefinition: an apply onto a space did not compose"
+        );
+      const layers = templateLayerReports(applied);
+      return layers.length > 0
+        ? { ...applied.compose.report, layers }
+        : applied.compose.report;
     }),
 
   /**
@@ -2140,7 +1141,7 @@ export const definitionEngineProcedures = {
    * 4. Relations (batch create with auto-relationDef creation)
    *
    * Supports two modes:
-   * - "create": creates a new workspace (delegates to createFromDefinition)
+   * - "create": the ONE template apply (idempotent on `proposalId`)
    * - "update": populates/updates an existing workspace (skips workspace/profiles/views creation)
    *
    * Idempotent: entities and relations are upserted by their natural keys.
@@ -2483,107 +1484,49 @@ export const definitionEngineProcedures = {
         };
       }
 
-      // ── CREATE mode ─────────────────────────────────────────────────────
+      // ── CREATE mode — the ONE template apply (W3; fixes F: the idempotency
+      // key was ignored, so a retry built a second space). The apply finds
+      // the space (key → identity holder), resolves `dependencies` / composes
+      // an overlay onto its base, builds or re-syncs layer 1, runs any layer 2
+      // the definition declares and records the result.
       const database = await getDb();
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
       const eventRepo = eventRepository;
-
-      // Resolve template-composition dependencies + compose overlays through the
-      // SAME shared core the in-app `createFromDefinition` door drives, so a
-      // COMPOSED template (`dependencies[]`) applied via this devplane door
-      // resolves its deps instead of skipping composition. `deferCreate:true`
-      // keeps this door's own create for the no-compose case (whose entity tail
-      // below reads `createResult.entityIds`). Only runs when deps are declared —
-      // a plain definition skips it and creates byte-for-byte as before.
-      let composedTarget: string | null = null;
-      let composeSeeds: DefinitionSeedResult | undefined;
-      if (
-        (input.definition as { dependencies?: unknown[] }).dependencies?.length
-      ) {
-        let core: MaterializeCoreResult;
-        try {
-          core = await materializeWorkspaceCore({
-            definition: input.definition as unknown as WorkspaceDefinitionInput,
-            userId: ctx.userId,
-            deferCreate: true,
-          });
-        } catch (err) {
-          if (err instanceof ComposeBaseUnavailableError) {
-            const unresolved = err.dependencies.find(
-              (d) => d.relation === "compose"
-            );
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message:
-                unresolved?.message ??
-                "compose base not available — the base template must be installed on the pod first",
-            });
-          }
-          if (err instanceof DependencyResolutionError) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Dependency resolution failed: ${err.message}`,
-            });
-          }
-          if (err instanceof ComposeBaseNotFoundError) {
-            throw new TRPCError({
-              code: "NOT_FOUND",
-              message: "compose base workspace not found",
-            });
-          }
-          throw err;
-        }
-        if (core.status === "composed") {
-          composedTarget = core.composeTargetWorkspaceId;
-          // The compose door already adopted/created the seeds (W4b).
-          composeSeeds = core.reconcile.seeds;
-          // This door runs no layer 2: an overlay pack's version is not
-          // earned here (recorded "layer-2-not-run" by the finisher).
-          await finishTemplateApply({
-            workspaceId: composedTarget,
-            userId: ctx.userId,
-            built: false,
-            pendingPack: core.pendingPack,
-            post: null,
-          });
-        }
-      }
-
-      let workspaceId: string;
-      let createResult: Awaited<
-        ReturnType<typeof createWorkspaceFromDefinition>
-      > | null = null;
-      if (composedTarget) {
-        // Overlay layered onto its existing base — no new workspace.
-        workspaceId = composedTarget;
-      } else {
-        createResult = await createWorkspaceFromDefinition({
-          definition: input.definition as WorkspaceDefinitionInput,
-          userId: ctx.userId,
+      const applied = await applyTemplateForTrpc({
+        userId: ctx.userId,
+        agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+        source: "trpc.applyDefinition",
+        definition: input.definition as unknown as WorkspaceDefinitionInput,
+        layerTwoBody: (workspaceId) =>
+          trpcLayerTwoBody(
+            input.definition as unknown as CreateDefinitionPostWorkspaceSlice,
+            workspaceId
+          ),
+        identity: {
+          proposalId: input.proposalId,
           workspaceName: input.definition.workspaceName,
-          createdBy: "user",
           workspaceType: "personal",
-          onProgress: () => {},
-        });
-        workspaceId = createResult.workspaceId;
-        // Layer 1 only (no template identity): the finisher marks it active.
-        await finishTemplateApply({
-          workspaceId,
-          userId: ctx.userId,
-          built: true,
-          pendingVersionStamp: createResult.pendingVersionStamp,
-          post: null,
-        });
-      }
+          createdBy: "user",
+        },
+        settingsFill: input.appId ? { appId: input.appId } : undefined,
+      });
+      const workspaceId = applied.workspaceId;
+      const composedTarget =
+        applied.outcome === "composed" ? applied.workspaceId : null;
+      // The compose door already adopted/created the seeds (W4b).
+      const composeSeeds = applied.compose?.report.seeds;
+      // Built just now: the create core's entities, in the definition's order.
+      // A re-hit of an existing space (same key) seeds nothing again.
+      const built = applied.layerOne?.built;
 
       // After workspace is created/composed, apply entities and relations
       const relationRepo = new RelationRepository(database, eventRepo);
       const relDefRepo = new RelationDefRepository(database);
 
       // Entity IDs. On the create path they come back positionally from
-      // createFromDefinition. On the compose path the ONE compose door
+      // the create core. On the compose path the ONE compose door
       // (composeOntoBaseWorkspace) already landed the seeds + seeded edges
       // through the shared seed helper — adopting by (kind, title), never
       // duplicating (W4b: this branch used to create them again, unkeyed).
@@ -2596,7 +1539,7 @@ export const definitionEngineProcedures = {
         Object.assign(entityIds, composeSeeds?.entityIds ?? {});
         errors.push(...(composeSeeds?.errors ?? []));
       } else {
-        const createEntityIds = (createResult as any)?.entityIds ?? [];
+        const createEntityIds = built?.entityIds ?? [];
         for (
           let i = 0;
           i < allEntities.length && i < createEntityIds.length;
@@ -2658,7 +1601,9 @@ export const definitionEngineProcedures = {
         profilesCreated: 0,
         entitiesCreated: composedTarget
           ? (composeSeeds?.entitiesCreated ?? 0)
-          : allEntities.length,
+          : built
+            ? allEntities.length
+            : 0,
         entitiesSkipped: composeSeeds?.entitiesAdopted ?? 0,
         relationsCreated,
         relationsSkipped,

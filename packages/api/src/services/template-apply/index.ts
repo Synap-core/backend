@@ -42,7 +42,7 @@ import { resolveTarget } from "./resolve-target.js";
 
 export { planTemplateApply, type TemplateApplyAction } from "./plan.js";
 export { resolveTarget, findLegacyWorkspaceMatch } from "./resolve-target.js";
-export { applyLayerOne } from "./layer-one.js";
+export { applyLayerOne, type LayerOneResult } from "./layer-one.js";
 
 const logger = createLogger({ module: "template-apply" });
 
@@ -74,9 +74,10 @@ export interface ApplyTemplateInput {
    * The caller's layer-2 body. Defaults to `definition`. Replaced by the
    * catalog's own package when layer 1 re-synced against it (layer 2 must
    * come from the same source as layer 1, or it skips what the new version
-   * added).
+   * added). A function is called once the space is known (a body keyed by
+   * the space, e.g. the tRPC doors' loop).
    */
-  layerTwoBody?: PackagePostWorkspaceBody & Record<string, unknown>;
+  layerTwoBody?: LayerTwoBody | ((workspaceId: string) => LayerTwoBody);
   actor: {
     userId: string;
     /** The agent acting / proposing, if any. */
@@ -108,16 +109,23 @@ export interface ApplyTemplateInput {
     templateName?: string;
     workspaceType?: "personal" | "agent" | "project" | "operational";
     createdBy?: "user" | "provisioning" | "plugin";
+    linkedAgentId?: string;
   };
+  /** The create core's per-step progress (a door's realtime events). */
+  onProgress?: (step: string, pct: number, label: string) => void;
   /**
    * Runs once the space exists, before layer 2 (the doors' engagement-project
-   * step). May return the project the layers should stamp. Its errors are the
-   * door's: they propagate.
+   * step, the tRPC doors' seed bodies). May return the project the layers
+   * should stamp. Its errors are the door's: they propagate.
    */
   beforeLayerTwo?: (
-    workspaceId: string
+    workspaceId: string,
+    applied: { outcome: TemplateApplyOutcome; layerOne?: LayerOneResult }
   ) => Promise<{ projectId?: string } | void>;
 }
+
+/** A layer-2 body: the applier's shape, plus whatever else the package carries. */
+export type LayerTwoBody = PackagePostWorkspaceBody & Record<string, unknown>;
 
 export type TemplateApplyOutcome =
   "created" | "reconciled" | "unchanged" | "composed";
@@ -201,6 +209,8 @@ export async function applyTemplate(
       packageVersion: identity.packageVersion,
       workspaceType: identity.workspaceType,
       createdBy: identity.createdBy,
+      linkedAgentId: identity.linkedAgentId,
+      onProgress: input.onProgress,
     });
     workspaceId = layerOne.workspaceId;
     outcome = layerOne.outcome;
@@ -209,14 +219,15 @@ export async function applyTemplate(
   }
 
   const hook = input.beforeLayerTwo
-    ? await input.beforeLayerTwo(workspaceId)
+    ? await input.beforeLayerTwo(workspaceId, { outcome, layerOne })
     : undefined;
   const projectId = hook?.projectId;
 
   // ── Layer 2 ──────────────────────────────────────────────────────────────
   const callerBody = {
-    ...((input.layerTwoBody ?? definition) as PackagePostWorkspaceBody &
-      Record<string, unknown>),
+    ...(typeof input.layerTwoBody === "function"
+      ? input.layerTwoBody(workspaceId)
+      : ((input.layerTwoBody ?? definition) as LayerTwoBody)),
   };
   const meta = (callerBody._meta ?? {}) as { slug?: string; version?: string };
   callerBody._meta = {

@@ -9,9 +9,10 @@
  *   • `available` without `install` is `missing` (with the card), nothing gated;
  *   • an agent or app key's install is `proposed` (the governed gate filed it),
  *     and nothing is installed;
- *   • a person's install goes through `installFromCatalog`'s body with the
- *     CATALOG's definition (the caller sends none) and answers installed /
- *     installing;
+ *   • a person's install goes through `installFromCatalog`'s body (the ONE
+ *     template apply, W3) with the CATALOG's package (the caller sends none),
+ *     and answers from the standing read AFTER it: installed (with the stored
+ *     stamp / drift) or, when not installed yet, installing;
  *   • the Hub mirror is a transport: it reaches the same procedure with the
  *     acting agent, and a proposal answers 202.
  */
@@ -39,22 +40,14 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: (...a: unknown[]) => m.perm(...a),
 }));
-// The install door's create engine: record what it was handed.
-vi.mock("./workspaces/definition-engine.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("./workspaces/definition-engine.js")>();
-  const { protectedProcedure } = await import("../trpc.js");
-  const { z } = await import("zod");
-  return {
-    ...actual,
-    definitionEngineProcedures: {
-      ...actual.definitionEngineProcedures,
-      createFromDefinition: protectedProcedure
-        .input(z.any())
-        .mutation(({ input }) => m.create(input)),
-    },
-  };
-});
+vi.mock("../utils/tier-check.js", () => ({
+  assertPackageTierAccess: async () => undefined,
+}));
+// The install door's apply: record what it was handed.
+vi.mock("./workspaces/template-door.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./workspaces/template-door.js")>()),
+  applyTemplateForTrpc: (...a: unknown[]) => m.create(...a),
+}));
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { workspaceCatalogRouter } from "./workspaces.js";
@@ -85,7 +78,15 @@ beforeEach(() => {
     version: "v2",
   });
   m.perm.mockResolvedValue({ granted: true });
-  m.create.mockResolvedValue({ status: "created", workspaceId: "ws-new" });
+  m.create.mockResolvedValue({
+    workspaceId: "ws-new",
+    outcome: "created",
+    materializeStatus: "created",
+    dependencies: [],
+    layer2: { status: "skipped" },
+    finished: null,
+    warning: null,
+  });
 });
 
 describe("workspaces.ensureTemplate", () => {
@@ -173,26 +174,36 @@ describe("workspaces.ensureTemplate", () => {
     expect(m.create).not.toHaveBeenCalled();
   });
 
-  it("a person's install goes through the catalog install door and answers installed", async () => {
-    const res = await caller().ensureTemplate({ slug: "crm", install: true });
-    expect(res).toEqual({
+  it("a person's install goes through the catalog install door and answers the standing it left", async () => {
+    const installed = {
       status: "installed",
       workspaceId: "ws-new",
       version: "v2",
       drifted: false,
       lifecycle: "current",
       replacedBy: null,
-    });
+    };
+    m.standing
+      .mockResolvedValueOnce({ status: "available", template: CARD })
+      .mockResolvedValueOnce(installed);
+    const res = await caller().ensureTemplate({ slug: "crm", install: true });
+    expect(res).toEqual(installed);
     expect(m.create).toHaveBeenCalledTimes(1);
-    expect(m.create.mock.calls[0][0]).toMatchObject({
-      definition: CATALOG_DEF,
+    const applied = m.create.mock.calls[0][0];
+    expect(applied.definition).toMatchObject({
+      profiles: CATALOG_DEF.profiles,
+      _meta: { slug: "crm", version: "v2" },
+    });
+    expect(applied.identity).toMatchObject({
       packageSlug: "crm",
       packageVersion: "v2",
     });
+    // Layer 2 is the catalog package parsed through the Hub door's schema.
+    expect(applied.layerTwoBody).toMatchObject({ _meta: { slug: "crm" } });
   });
 
-  it("an install still provisioning answers `installing`", async () => {
-    m.create.mockResolvedValue({ status: "pending", workspaceId: "ws-new" });
+  it("an install whose layers are not finished yet answers `installing`, never an assumed version", async () => {
+    // The standing read after the apply does not see it installed yet.
     expect(
       await caller().ensureTemplate({ slug: "crm", install: true })
     ).toEqual({

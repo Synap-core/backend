@@ -135,9 +135,6 @@ describe("install-layers ↔ applier identifier parity (source scan)", () => {
 });
 
 // ─── W3b: installedTrackTemplates ────────────────────────────────────────────
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { installedTrackTemplates } from "./install-layers.js";
 
 describe("installedTrackTemplates — the startable methods an install produced", () => {
@@ -183,37 +180,55 @@ describe("installedTrackTemplates — the startable methods an install produced"
   });
 });
 
-describe("createFromDefinition feeds EVERY post-workspace bag to installedTrackTemplates", () => {
-  // Derived set: every `applyPackagePostWorkspace(` call inside the
-  // createFromDefinition procedure. A new branch that applies the bag without
-  // reporting its track templates would silently drop the install offer.
-  // Granularity: call COUNT inside the procedure, not bag identity — a branch
-  // that reads the wrong bag would still pass.
-  const src = readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../routers/workspaces/definition-engine.ts"
-    ),
-    "utf8"
-  );
-  const start = src.indexOf("createFromDefinition: protectedProcedure");
-  // The procedure ends where the NEXT procedure key of the same object begins.
-  const nextKey = /\n  [A-Za-z]+: [A-Za-z]*Procedure\b/g;
-  nextKey.lastIndex = start + 1;
-  const end = nextKey.exec(src)?.index ?? -1;
-  const body = src.slice(start, end);
+describe("the tRPC template doors offer every track template their layer 2 made startable", () => {
+  // Since W3 `createFromDefinition` / `installFromCatalog` / `applyDefinition`
+  // apply through the ONE template apply, and ONE reply mapping reads its
+  // layer-2 bag (`templateDoorReply`, routers/workspaces/template-door.ts).
+  // This used to count `applyPackagePostWorkspace(` vs
+  // `installedTrackTemplates(` inside the procedure body, one per branch; the
+  // branches are gone (`definition-engine.install-layers.tripwire.test.ts`
+  // pins that the engine applies no bag itself), so assert the mapping.
+  const base = {
+    workspaceId: "ws-1",
+    outcome: "created",
+    materializeStatus: "created",
+    dependencies: [],
+    finished: null,
+    warning: null,
+  };
+  const bag = {
+    playbooks: [
+      {
+        name: "Grant Process",
+        status: "created",
+        playbookId: "p1",
+        scope: "project",
+      },
+    ],
+  };
 
-  it("non-vacuity: the procedure body was found and applies bags", () => {
-    expect(start).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(start);
-    expect(
-      body.match(/applyPackagePostWorkspace\(/g)?.length ?? 0
-    ).toBeGreaterThanOrEqual(3);
+  it("an applied layer 2's project-scope playbooks reach the reply", async () => {
+    const { templateDoorReply } =
+      await import("../../routers/workspaces/template-door.js");
+    const reply = templateDoorReply({
+      ...base,
+      layer2: { status: "applied", post: bag },
+    } as never);
+    expect(reply.trackTemplates).toEqual(installedTrackTemplates(bag));
+    expect(reply.trackTemplates).toEqual([
+      { playbookId: "p1", name: "Grant Process" },
+    ]);
   });
 
-  it("one installedTrackTemplates( per applyPackagePostWorkspace(", () => {
-    const applies = body.match(/applyPackagePostWorkspace\(/g)?.length ?? 0;
-    const reads = body.match(/installedTrackTemplates\(/g)?.length ?? 0;
-    expect(reads).toBe(applies);
+  it("no layer 2 (skipped / failed) → [] (a failure is `layers`' fact)", async () => {
+    const { templateDoorReply } =
+      await import("../../routers/workspaces/template-door.js");
+    for (const layer2 of [
+      { status: "skipped" },
+      { status: "failed", error: new Error("x") },
+    ])
+      expect(
+        templateDoorReply({ ...base, layer2 } as never).trackTemplates
+      ).toEqual([]);
   });
 });

@@ -7,7 +7,8 @@
  *     no `proposalId` and no target `workspaceId` is refused (BAD_REQUEST)
  *     before anything is created — it would mint a second space on every call;
  *   - a freehand input is unchanged.
- * Same mocked harness as `workspaces.create-from-definition-layers.test.ts`.
+ * Same mocked harness as `workspaces.create-from-definition-layers.test.ts`:
+ * the assertions read what the door hands the apply's layer one.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -45,11 +46,35 @@ vi.mock("@synap/database", async (importOriginal) => {
         workspaceMembers: { findFirst: vi.fn() },
       },
     },
-    createWorkspaceFromDefinition: vi
-      .fn()
-      .mockResolvedValue(h.createdWorkspace),
   };
 });
+
+// Since W3 the door is a wrapper over the ONE template apply: its layer one
+// (lookup + plan + build) and the dependency step are stood in for — the
+// apply's own suites pin them (`template-apply.contract.pglite.test.ts`) —
+// so this asserts what THIS door hands the apply and makes of its answer.
+vi.mock("../services/template-apply/layer-one.js", () => ({
+  applyLayerOne: vi.fn(async () => ({
+    workspaceId: h.createdWorkspace.workspaceId,
+    created: true,
+    outcome: "created",
+    action: { kind: "create" },
+    built: {
+      profileIds: h.createdWorkspace.profileIds,
+      viewIds: h.createdWorkspace.viewIds,
+      entityIds: h.createdWorkspace.entityIds,
+    },
+  })),
+}));
+vi.mock("../services/workspace-materialization-service.js", async (orig) => ({
+  ...(await orig<
+    typeof import("../services/workspace-materialization-service.js")
+  >()),
+  materializeWorkspaceCore: vi.fn(async () => ({
+    status: "resolved",
+    dependencies: [],
+  })),
+}));
 
 vi.mock("../services/workspace-composition.js", () => ({
   resolveWorkspaceExtends: vi.fn(async (definition: unknown) => ({
@@ -102,7 +127,7 @@ vi.mock("../utils/tier-check.js", () => ({
 
 import { router } from "../trpc.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
-import { createWorkspaceFromDefinition } from "@synap/database";
+import { applyLayerOne } from "../services/template-apply/layer-one.js";
 import type { Context } from "../types/context.js";
 
 const testRouter = router({
@@ -138,7 +163,7 @@ describe("workspaces.createFromDefinition — template identity", () => {
         definition: { workspaceName: "Content OS", _meta: { version: "h" } },
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(createWorkspaceFromDefinition).not.toHaveBeenCalled();
+    expect(applyLayerOne).not.toHaveBeenCalled();
   });
 
   it("`_meta.slug` is adopted as the package slug of the create", async () => {
@@ -149,9 +174,9 @@ describe("workspaces.createFromDefinition — template identity", () => {
       },
       templateName: "Content OS",
     });
-    expect(
-      vi.mocked(createWorkspaceFromDefinition).mock.calls[0][0]
-    ).toMatchObject({ packageSlug: "content-os" });
+    expect(vi.mocked(applyLayerOne).mock.calls[0][0]).toMatchObject({
+      packageSlug: "content-os",
+    });
   });
 
   it("a freehand input (no template marker) is unchanged", async () => {
@@ -160,7 +185,7 @@ describe("workspaces.createFromDefinition — template identity", () => {
     });
     expect(r.outcome).toBe("created");
     expect(
-      vi.mocked(createWorkspaceFromDefinition).mock.calls[0][0].packageSlug
+      vi.mocked(applyLayerOne).mock.calls[0][0].packageSlug
     ).toBeUndefined();
   });
 });

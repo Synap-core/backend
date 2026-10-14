@@ -110,16 +110,17 @@ const CLASSIFIED: Record<string, { sites: number; why: string }> = {
   },
   // Stored-spread: read the STORED settings, spread them, add/remove a fixed
   // code key. They carry an existing policy over unchanged and cannot add one.
-  "packages/api/src/routers/workspaces/definition-engine.ts": {
-    sites: 3,
-    why: "{...stored, appId/proposalId/composedFrom}",
-  },
   "packages/api/src/services/package-apply-post-workspace.ts": {
     sites: 1,
     why: "{...stored, actionPlacements}",
   },
   // One template apply (W1/W2): the idempotency key and the template state
   // are written key-only (`settings || {…}` of code-literal keys).
+  // The tRPC template doors (W3): fills code-literal keys only where absent.
+  "packages/api/src/routers/workspaces/template-door.ts": {
+    sites: 1,
+    why: "{appId/composedFrom} || settings",
+  },
   "packages/api/src/services/template-apply/layer-one.ts": {
     sites: 1,
     why: "settings || {proposalId}",

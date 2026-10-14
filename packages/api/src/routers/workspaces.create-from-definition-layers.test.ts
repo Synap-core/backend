@@ -8,6 +8,10 @@
  * have every declared capability fail and still return a clean payload with
  * `layers` absent.
  *
+ * Since W3 the door wraps the ONE template apply: its layer one and the
+ * dependency step are stood in for; the real `applyTemplate` runs layer 2
+ * (mocked applier) and the door's reply mapping (`templateDoorReply`).
+ *
  * No live Postgres in this environment — DB + the heavy service doors are
  * mocked (same posture as `capabilities.create-verb-wiring.test.ts`); only
  * `applyPackagePostWorkspace`'s real per-item result-bag shape and the real
@@ -50,11 +54,35 @@ vi.mock("@synap/database", async (importOriginal) => {
         workspaceMembers: { findFirst: vi.fn() },
       },
     },
-    createWorkspaceFromDefinition: vi
-      .fn()
-      .mockResolvedValue(h.createdWorkspace),
   };
 });
+
+// Since W3 the door is a wrapper over the ONE template apply: its layer one
+// (lookup + plan + build) and the dependency step are stood in for — the
+// apply's own suites pin them (`template-apply.contract.pglite.test.ts`) —
+// so this asserts what THIS door hands the apply and makes of its answer.
+vi.mock("../services/template-apply/layer-one.js", () => ({
+  applyLayerOne: vi.fn(async () => ({
+    workspaceId: h.createdWorkspace.workspaceId,
+    created: true,
+    outcome: "created",
+    action: { kind: "create" },
+    built: {
+      profileIds: h.createdWorkspace.profileIds,
+      viewIds: h.createdWorkspace.viewIds,
+      entityIds: h.createdWorkspace.entityIds,
+    },
+  })),
+}));
+vi.mock("../services/workspace-materialization-service.js", async (orig) => ({
+  ...(await orig<
+    typeof import("../services/workspace-materialization-service.js")
+  >()),
+  materializeWorkspaceCore: vi.fn(async () => ({
+    status: "resolved",
+    dependencies: [],
+  })),
+}));
 
 vi.mock("../services/workspace-composition.js", () => ({
   resolveWorkspaceExtends: vi.fn(async (definition: unknown) => ({

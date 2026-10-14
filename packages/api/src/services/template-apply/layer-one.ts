@@ -59,6 +59,8 @@ export interface LayerOneInput {
   linkedAgentId?: string;
   /** Audit field — who/what triggered this creation. */
   createdBy?: "user" | "provisioning" | "plugin";
+  /** The create core's per-step progress (a door's realtime events). */
+  onProgress?: (step: string, pct: number, label: string) => void;
 }
 
 export interface LayerOneResult {
@@ -84,6 +86,11 @@ export interface LayerOneResult {
   packageDefinition?: ResolvedWorkspaceTemplate["packageDefinition"];
   /** The version layer 1 materialized / re-synced to — never stamped here. */
   pendingVersionStamp?: string;
+  /**
+   * Built just now (create / resume) only: what the create core made, in the
+   * definition's order — a door's seed step reads the entities positionally.
+   */
+  built?: { profileIds: string[]; viewIds: string[]; entityIds: string[] };
 }
 
 /**
@@ -155,6 +162,18 @@ async function resolveFresh(
   }
 }
 
+function builtOf(result: {
+  profileIds: string[];
+  viewIds: string[];
+  entityIds: string[];
+}): NonNullable<LayerOneResult["built"]> {
+  return {
+    profileIds: result.profileIds,
+    viewIds: result.viewIds,
+    entityIds: result.entityIds,
+  };
+}
+
 export async function applyLayerOne(
   input: LayerOneInput
 ): Promise<LayerOneResult> {
@@ -170,6 +189,7 @@ export async function applyLayerOne(
     workspaceType,
     linkedAgentId,
     createdBy = "user",
+    onProgress,
   } = input;
 
   return withWorkspaceProposalIdLock(userId, proposalId, async () => {
@@ -200,6 +220,7 @@ export async function applyLayerOne(
         workspaceType,
         linkedAgentId,
         createdBy,
+        onProgress,
       });
       if (proposalId) await stampKey(result.workspaceId, proposalId);
       try {
@@ -219,6 +240,7 @@ export async function applyLayerOne(
         created: true,
         outcome: "created",
         action: { kind: "create" },
+        built: builtOf(result),
         ...(result.pendingVersionStamp
           ? { pendingVersionStamp: result.pendingVersionStamp }
           : {}),
@@ -263,6 +285,7 @@ export async function applyLayerOne(
         workspaceType,
         linkedAgentId,
         createdBy,
+        onProgress,
         resumeFrom: { workspaceId, completedSteps: action.completedSteps },
       });
       return {
@@ -270,6 +293,7 @@ export async function applyLayerOne(
         created: true,
         outcome: "created",
         action,
+        built: builtOf(result),
         ...(result.pendingVersionStamp
           ? { pendingVersionStamp: result.pendingVersionStamp }
           : {}),

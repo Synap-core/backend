@@ -12,13 +12,15 @@
  * the pack in `installedPacks`; the browser filed that receipt itself, which a
  * settings save can no longer do (server-owned).
  *
- * Driven through the REAL procedure → REAL finisher → REAL
- * `recordInstalledPack` / `WorkspaceRepository` → PGlite. The create util is a
+ * Since W3 the door installs onto `workspaceId` through the ONE template
+ * apply (compose): driven through the REAL procedure → `applyTemplate` →
+ * REAL `composeOntoBaseWorkspace` (identity rule + pack ledger) → REAL
+ * finisher → the template-state writer → PGlite. The re-sync util is a
  * stand-in that does exactly what the real one does with identity
- * (`create-workspace-from-definition.ts`: `settings.packageSlug = packageSlug`
- * merged on resume, `pendingVersionStamp = packageVersion`), so the assertion
- * is on what this door hands it. Stubbed: extends resolution, side-effect bus,
- * audit, realtime, the job queue.
+ * (`reconcile-workspace-from-definition.ts`: `packageSlug` → the state's
+ * `slug`, through the ONE writer), so the assertion is on what compose hands
+ * it. Stubbed: extends resolution, side-effect bus, audit, realtime, the job
+ * queue, the dependency resolver (no dependencies).
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -47,33 +49,50 @@ vi.mock("@synap/database", async (importOriginal) => {
     db,
     getDb: async () => db,
     eventRepository: events,
-    // The identity behaviour of the real util, nothing else.
-    createWorkspaceFromDefinition: async (input: {
+    // The identity behaviour of the real re-sync util, nothing else.
+    reconcileWorkspaceFromDefinition: async (input: {
+      workspaceId: string;
       userId: string;
       packageSlug?: string;
-      packageVersion?: string;
-      resumeFrom?: { workspaceId: string };
     }) => {
-      const workspaceId = input.resumeFrom!.workspaceId;
-      if (input.packageSlug) {
-        await new actual.WorkspaceRepository(db, events as never).mergeSettings(
-          workspaceId,
-          { packageSlug: input.packageSlug },
-          input.userId
+      if (input.packageSlug)
+        await actual.writeTemplateState(
+          db as never,
+          input.workspaceId,
+          { slug: input.packageSlug },
+          { userId: input.userId }
         );
-      }
       return {
-        workspaceId,
-        profileIds: [],
-        viewIds: [],
-        entityIds: [],
-        ...(input.packageVersion
-          ? { pendingVersionStamp: input.packageVersion }
-          : {}),
+        workspaceId: input.workspaceId,
+        dryRun: false,
+        settings: { merged: [] },
+        profiles: {
+          added: [],
+          reused: [],
+          promoted: [],
+          deferred: [],
+          conflicts: [],
+        },
+        properties: { added: [], conflicts: [] },
+        views: { added: [] },
+        entityLinks: { added: [] },
       };
     },
   };
 });
+vi.mock(
+  "../services/package-dependency-resolver.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../services/package-dependency-resolver.js")
+    >()),
+    resolvePackageDependencies: async () => ({
+      installed: [],
+      composeRequested: false,
+      composeTargetWorkspaceId: undefined,
+    }),
+  })
+);
 vi.mock("../services/workspace-composition.js", () => ({
   resolveWorkspaceExtends: async (definition: unknown) => ({
     definition,

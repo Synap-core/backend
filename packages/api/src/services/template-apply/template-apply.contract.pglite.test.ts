@@ -3,11 +3,14 @@
  * the same six scenarios, driven through each REAL door on PGlite — the Hub
  * `POST /packages/apply` route, the `workspace/create` + `workspace/update`
  * approve executors, `market.install` (template), and `applyTemplate` itself —
+ * the tRPC `createFromDefinition` and `installFromCatalog` procedures (W3),
  * with the real lookup, plan, layer one, layer-2 applier (`playbooks.create`),
  * finisher and template-state writer. Faked (their own suites pin them): the
  * database package's create core and re-sync util (they read through the
- * package's own connection), the catalog resolve, the dependency resolver,
- * the permission gate (a person: allowed), the activator compile.
+ * package's own connection), the catalog resolve (empty, except for the
+ * slugs `installFromCatalog` publishes into `h.catalog`), the dependency
+ * resolver, the permission gate (a person: allowed), the tier gate, the
+ * realtime progress events, the activator compile.
  *
  *   (1) fresh create      — one space, its playbook, stamped, active
  *   (2) idempotent re-run — the same space, nothing duplicated, stamp kept
@@ -39,6 +42,8 @@ const h = vi.hoisted(() => ({
   resynced: [] as string[],
   /** Make layer 2 throw as a whole (a whole-layer failure). */
   failLayerTwo: false,
+  /** The pod catalog cache, by slug (what `installFromCatalog` resolves). */
+  catalog: new Map<string, Record<string, unknown>>(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -146,7 +151,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 vi.mock("../capabilities/resolve-workspace-template.js", () => ({
-  resolveWorkspaceTemplate: async () => null,
+  resolveWorkspaceTemplate: async (slug: string) => h.catalog.get(slug) ?? null,
+}));
+vi.mock("../../utils/tier-check.js", () => ({
+  assertPackageTierAccess: async () => undefined,
+}));
+vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
+  emitChatEvent: () => undefined,
 }));
 vi.mock("../package-dependency-resolver.js", async (importOriginal) => ({
   ...(await importOriginal<
@@ -211,6 +222,10 @@ import {
 import { registerWorkspaceExecutors } from "../../routers/proposals/executors/workspace.js";
 import { applyMarketInstall } from "../capabilities/marketplace-install.js";
 import { applyTemplate } from "./index.js";
+import { db as testDb } from "@synap/database";
+import { router } from "../../trpc.js";
+import { definitionEngineProcedures } from "../../routers/workspaces/definition-engine.js";
+import { workspaceCatalogRouter } from "../../routers/workspaces.js";
 
 const OWNER = randomUUID();
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
@@ -310,6 +325,35 @@ async function approve(
   } as unknown as ProposalExecutorArgs);
 }
 
+const trpcRouter = router({
+  createFromDefinition: definitionEngineProcedures.createFromDefinition,
+  reconcileFromDefinition: definitionEngineProcedures.reconcileFromDefinition,
+  applyDefinition: definitionEngineProcedures.applyDefinition,
+});
+const trpc = () =>
+  trpcRouter.createCaller({
+    db: testDb,
+    authenticated: true,
+    userId: OWNER,
+  } as never);
+const catalogTrpc = () =>
+  workspaceCatalogRouter.createCaller({
+    db: testDb,
+    authenticated: true,
+    userId: OWNER,
+  } as never);
+
+/** Publish a package into the (faked) pod catalog cache. */
+function publish(pkg: Pkg): void {
+  h.catalog.set(pkg.slug, {
+    source: "cache",
+    version: pkg.version,
+    dependencies: [],
+    packageDefinition: body(pkg),
+    workspaceDefinition: body(pkg),
+  });
+}
+
 async function caught(fn: () => Promise<DoorRun>): Promise<DoorRun> {
   try {
     return await fn();
@@ -379,6 +423,35 @@ const DOORS: Door[] = [
           targetWorkspaceId ?? null
         ),
       })),
+  },
+  {
+    name: "tRPC createFromDefinition",
+    file: "routers/workspaces/template-door.ts",
+    onto: true,
+    apply: (pkg, targetWorkspaceId) =>
+      caught(async () => ({
+        reply: await trpc().createFromDefinition({
+          definition: body(pkg) as never,
+          packageSlug: pkg.slug,
+          packageVersion: pkg.version,
+          workspaceId: targetWorkspaceId,
+        }),
+      })),
+  },
+  {
+    name: "tRPC installFromCatalog",
+    file: "routers/workspaces/template-door.ts",
+    onto: true,
+    apply: (pkg, targetWorkspaceId) =>
+      caught(async () => {
+        publish(pkg);
+        return {
+          reply: await catalogTrpc().installFromCatalog({
+            slug: pkg.slug,
+            workspaceId: targetWorkspaceId,
+          }),
+        };
+      }),
   },
   {
     name: "market.install (template)",
@@ -656,5 +729,140 @@ describe("/packages/preflight previews what /apply would do (same lookup, same p
     });
     // A preview writes nothing.
     expect((await theSpace(slug)).state?.state).toBe("failed");
+  });
+});
+
+// ── The tRPC doors with no template identity of their own (W3) ────────────
+//
+// `reconcileFromDefinition` (D16) re-syncs a given space against a caller
+// definition; `applyDefinition` create (D17) builds a space keyed only by its
+// `proposalId`. Neither carries a slug + version, so the six scenarios above
+// do not apply; these pin the two defects the wrap fixes (plan, defect F).
+
+describe("tRPC reconcileFromDefinition / applyDefinition run the ONE apply", () => {
+  async function seedTemplateSpace(slug: string, state: string) {
+    const id = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, settings) values ($1,$2,$3,$4,$5,$6::jsonb)`,
+      [
+        id,
+        `Space ${slug}`,
+        OWNER,
+        slug,
+        state,
+        JSON.stringify({
+          template: { slug, version: "r-1", state, at: "t0" },
+        }),
+      ]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+      [randomUUID(), id, OWNER]
+    );
+    return id;
+  }
+  const stateOf = async (id: string) => {
+    const { rows } = await q<{ settings: unknown; package_slug: string }>(
+      `select settings, package_slug from workspaces where id = $1`,
+      [id]
+    );
+    return {
+      packageSlug: rows[0]!.package_slug,
+      state: readTemplateState(rows[0]!.settings),
+    };
+  };
+
+  it("D16: the re-sync is recorded by the finisher (an unfinished record converges), keeps the space's identity and stamp", async () => {
+    const id = await seedTemplateSpace("recon-a", "layer-2-not-run");
+    h.resynced.length = 0;
+    await trpc().reconcileFromDefinition({
+      workspaceId: id,
+      definition: { playbooks: [PLAYBOOK("Recon play")] },
+    });
+    expect(h.resynced).toContain(id);
+    expect(await playbooksIn(id)).toContain("Recon play");
+    const { packageSlug, state } = await stateOf(id);
+    expect(packageSlug).toBe("recon-a");
+    expect(state).toMatchObject({
+      slug: "recon-a",
+      version: "r-1",
+      state: "active",
+    });
+    expect(state?.packs ?? []).toEqual([]);
+  });
+
+  it("D16: a layer-2 failure is recorded on the space and reported, never thrown", async () => {
+    const id = await seedTemplateSpace("recon-b", "active");
+    h.failLayerTwo = true;
+    let report: { layers?: Array<{ status: string }> } | undefined;
+    try {
+      report = (await trpc().reconcileFromDefinition({
+        workspaceId: id,
+        definition: { playbooks: [PLAYBOOK("Recon fail")] },
+      })) as typeof report;
+    } finally {
+      h.failLayerTwo = false;
+    }
+    expect(report?.layers?.some((l) => l.status === "failed")).toBe(true);
+    expect((await stateOf(id)).state).toMatchObject({
+      state: "failed",
+      failedLayer: 2,
+      version: "r-1",
+    });
+  });
+
+  it("installFromCatalog onto the space that holds the slug is its UPDATE (the browser banner): planned, a failed layer 2 reopened and landed, stamped", async () => {
+    const slug = "banner-update";
+    const v1: Pkg = { slug, version: "u-1", playbooks: ["Qualify"] };
+    publish(v1);
+    await catalogTrpc().installFromCatalog({ slug });
+    const { id } = await theSpace(slug);
+    // The space failed in layer 2 on a later version…
+    const v2: Pkg = { slug, version: "u-2", playbooks: ["Qualify", "Close"] };
+    publish(v2);
+    h.failLayerTwo = true;
+    try {
+      await catalogTrpc().installFromCatalog({ slug, workspaceId: id });
+    } finally {
+      h.failLayerTwo = false;
+    }
+    expect((await theSpace(slug)).state).toMatchObject({
+      state: "failed",
+      failedLayer: 2,
+    });
+    // …and the banner's Update (onto that same space) finishes it.
+    h.resynced.length = 0;
+    const reply = (await catalogTrpc().installFromCatalog({
+      slug,
+      workspaceId: id,
+    })) as { outcome: string; reconciled?: unknown };
+    const after = await theSpace(slug);
+    expect(after.id).toBe(id);
+    expect(h.resynced).toContain(id);
+    expect(reply.outcome).toBe("reconciled");
+    expect(reply.reconciled).toBeDefined();
+    expect(await playbooksIn(id)).toEqual(["Close", "Qualify"]);
+    expect(after.state).toMatchObject({ state: "active", version: "u-2" });
+  });
+
+  it("D17: applyDefinition create honours its idempotency key — the same space twice", async () => {
+    const key = `apply-def-${randomUUID().slice(0, 6)}`;
+    const def = { workspaceName: `Applied ${key}`, profiles: [] };
+    const first = await trpc().applyDefinition({
+      mode: "create",
+      proposalId: key,
+      definition: def,
+    });
+    const second = await trpc().applyDefinition({
+      mode: "create",
+      proposalId: key,
+      definition: def,
+    });
+    expect(second.workspaceId).toBe(first.workspaceId);
+    const { rows } = await q<{ id: string }>(
+      `select id from workspaces where provisioning_proposal_id = $1`,
+      [key]
+    );
+    expect(rows.map((r) => r.id)).toEqual([first.workspaceId]);
   });
 });

@@ -41,7 +41,9 @@ import {
   WorkspaceMemberRepository,
   drizzleSql,
   projectWorkspaceSettings,
+  type WorkspaceDefinitionInput,
 } from "@synap/database";
+import type { LayerTwoBody } from "../services/template-apply/index.js";
 import { cpCatalogCache } from "@synap/database/schema";
 import { resolveWorkspaceTemplate } from "../services/capabilities/resolve-workspace-template.js";
 import {
@@ -67,6 +69,12 @@ import {
 } from "../connectors/server-owned-settings.js";
 import { inviteProcedures } from "./workspaces/invites.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
+import {
+  applyTemplateForTrpc,
+  installTarget,
+  templateDoorReply,
+  type TemplateDoorReply,
+} from "./workspaces/template-door.js";
 import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
 import { briefProcedures } from "./workspaces/brief.js";
 import { listProjectsUsingWorkspace } from "../utils/project-workspace.js";
@@ -93,17 +101,21 @@ const coreProcedures = {
     .mutation(async ({ input, ctx }) => {
       const { randomUUID } = await import("crypto");
       const workspaceId = randomUUID();
+      // Server-owned keys (controlPlane, nango, the template identity and
+      // install state) are never client-writable. Every read below is of what
+      // is STORED: a template identity is set by the ONE template apply
+      // (`createFromDefinition` / `installFromCatalog` / the Hub apply), never
+      // by a settings blob — this door used to identity-check, tier-check and
+      // init a `packageSlug` it then stripped, leaving a space with no
+      // template and no default views.
+      const settings = stripServerOwnedSettings(input.settings || {});
 
-      // 0. Identity (0308): a name another ACTIVE space holds — or a template
-      // slug another space installed — is a typed 409 BEFORE governance, never
-      // a proposal that could only fail on approval. A typed name is never
-      // suffixed.
+      // 0. Identity (0308): a name another ACTIVE space holds is a typed 409
+      // BEFORE governance, never a proposal that could only fail on approval.
+      // A typed name is never suffixed.
       await assertWorkspaceIdentityFree(db, {
         name: input.name,
-        packageSlug:
-          typeof input.settings?.packageSlug === "string"
-            ? input.settings.packageSlug
-            : null,
+        packageSlug: null,
       });
 
       // 1. Permission check (no workspaceId yet → auto-granted for personal)
@@ -129,12 +141,6 @@ const coreProcedures = {
         };
       }
 
-      // 2. Tier check for package-based workspaces
-      const packageSlug = input.settings?.packageSlug as string | undefined;
-      if (packageSlug) {
-        await assertPackageTierAccess(ctx.userId, packageSlug);
-      }
-
       // 3. Direct DB operation
       const dbConn = await getDb();
       // Shared singleton — a fresh EventRepository has no registered hooks, so
@@ -148,8 +154,7 @@ const coreProcedures = {
           id: workspaceId,
           name: input.name,
           ownerId: ctx.userId,
-          // Server-owned keys (controlPlane, nango) are never client-writable.
-          settings: stripServerOwnedSettings(input.settings || {}),
+          settings,
         },
         ctx.userId
       );
@@ -170,7 +175,7 @@ const coreProcedures = {
       // private workspace is skipped (materializing there would widen its
       // reads). Best-effort: on failure the 0217 backfill / next trigger
       // reconciles, and the creator's owner row (above) already stands.
-      if (isPodReadableWorkspace(input.settings)) {
+      if (isPodReadableWorkspace(settings)) {
         try {
           await materializePodAdminsIntoWorkspace(workspaceId);
         } catch (err) {
@@ -206,13 +211,10 @@ const coreProcedures = {
       // 5. Enqueue workspace-init for default whiteboard/views/commands
       try {
         const boss = getBoss();
-        const templateName = input.settings?.templateName as string | undefined;
-        const packageSlug = input.settings?.packageSlug as string | undefined;
         await boss.send("workspace-init", {
           workspaceId,
           userId: ctx.userId,
-          templateName,
-          packageSlug,
+          templateName: settings.templateName as string | undefined,
         });
       } catch (err) {
         console.warn(
@@ -1348,18 +1350,20 @@ export const workspacesRouter = router({
 
 /**
  * The body of `installFromCatalog`, shared with `ensureTemplate` so both reach
- * the ONE install door. Resolves the FRESHEST definition cache-first via
- * `resolveWorkspaceTemplate` (the SAME resolver the Hub adopt / approve paths
- * use), then delegates to `createFromDefinition` — no forked provisioning
- * path. `createFromDefinition` re-runs the protected middleware + tier gate
- * against this same ctx, so an SDK caller gets identical governance. Defined
- * outside the router so it can call `workspacesRouter` without a
- * self-referencing initializer (which would infer the router as `any`).
+ * the ONE template apply (W3: directly — no longer through
+ * `createFromDefinition` via `createCaller`). Resolves the FRESHEST package
+ * cache-first via `resolveWorkspaceTemplate` (the SAME resolver the apply's
+ * own re-sync reads), parses it through the Hub door's schema (its defaults:
+ * statuses → active, exactly like `market.install`), and applies it: the
+ * catalog package is layer 1 AND layer 2, the slug is the identity, the
+ * version is stamped only on convergence. Governance: the caller's tRPC
+ * auth + the tier gate here (the human door; `ensureTemplate` gates an agent
+ * before it gets here).
  */
 export async function installTemplateFromCatalog(
-  ctx: Parameters<typeof workspacesRouter.createCaller>[0],
+  ctx: { userId: string; agentUserId?: string | null },
   input: { slug: string; workspaceId?: string; proposalId?: string }
-) {
+): Promise<TemplateDoorReply> {
   const resolved = await resolveWorkspaceTemplate(input.slug);
   if (!resolved) {
     throw new TRPCError({
@@ -1367,16 +1371,46 @@ export async function installTemplateFromCatalog(
       message: `Unknown workspace template: ${input.slug}`,
     });
   }
-  const caller = workspacesRouter.createCaller(ctx);
-  return caller.createFromDefinition({
-    definition: resolved.packageDefinition as unknown as Parameters<
-      typeof caller.createFromDefinition
-    >[0]["definition"],
-    packageSlug: input.slug,
-    packageVersion: resolved.version,
-    workspaceId: input.workspaceId,
-    proposalId: input.proposalId,
+  await assertPackageTierAccess(ctx.userId, input.slug);
+  const pkg = {
+    ...resolved.packageDefinition,
+    _meta: {
+      ...(resolved.packageDefinition._meta ?? {}),
+      slug: input.slug,
+      ...(resolved.version ? { version: resolved.version } : {}),
+    },
+  };
+  // Dynamic import: the Hub packages route pulls a large graph.
+  const { PackageApplySchema } =
+    await import("./hub-protocol/rest/packages.js");
+  const parsed = PackageApplySchema.safeParse(pkg);
+  if (!parsed.success) {
+    logger.error(
+      { slug: input.slug, issues: parsed.error.issues },
+      "installFromCatalog: catalog package failed validation"
+    );
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Template "${input.slug}" has an invalid definition. Nothing was applied.`,
+    });
+  }
+  const applied = await applyTemplateForTrpc({
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? undefined,
+    source: "trpc.installFromCatalog",
+    definition: pkg as unknown as WorkspaceDefinitionInput,
+    layerTwoBody: parsed.data as unknown as LayerTwoBody,
+    targetWorkspaceId: await installTarget(input.workspaceId, input.slug),
+    identity: {
+      packageSlug: input.slug,
+      packageVersion: resolved.version,
+      proposalId: input.proposalId,
+      workspaceName: (pkg as { workspaceName?: string }).workspaceName,
+      templateId: input.slug,
+      createdBy: "user",
+    },
   });
+  return templateDoorReply(applied);
 }
 
 /**
@@ -1384,13 +1418,11 @@ export async function installTemplateFromCatalog(
  * of WORKSPACE templates, for pod-connected SDK / embedded apps that hold a
  * catalog slug rather than a hand-built definition.
  *
- * Kept a SEPARATE router (merged into the `workspaces` namespace in `root.ts`)
- * purely so `installFromCatalog` can delegate to `workspacesRouter`'s own
- * `createFromDefinition` via `createCaller` — a reference to `workspacesRouter`
- * from INSIDE its own initializer would make TypeScript infer the whole router
- * as `any`. Splitting the caller-side procedure into this after-defined router
- * breaks that self-reference cycle while keeping the install on the ONE shared
- * create engine (no forked provisioning path).
+ * A SEPARATE router (merged into the `workspaces` namespace in `root.ts`).
+ * It was split out so `installFromCatalog` could call `workspacesRouter`'s
+ * own `createFromDefinition` through `createCaller`; it now calls the ONE
+ * template apply directly (W3), and stays split so the generated namespace
+ * does not move.
  */
 export const workspaceCatalogRouter = router({
   /**
@@ -1450,12 +1482,10 @@ export const workspaceCatalogRouter = router({
   /**
    * Install a WORKSPACE template BY SLUG — the slug-based counterpart to
    * `createFromDefinition` for callers (the SDK / an embedded app) that hold a
-   * catalog slug, not a hand-built definition. Resolves the FRESHEST definition
-   * cache-first via `resolveWorkspaceTemplate` (the SAME resolver the Hub adopt /
-   * approve paths use), then installs through the EXISTING shared engine by
-   * delegating to `createFromDefinition` — no forked provisioning path, same
-   * tier-gating, idempotency, post-workspace (capabilities/playbooks) layers and
-   * governance semantics as the in-app door.
+   * catalog slug, not a hand-built definition. Resolves the FRESHEST package
+   * cache-first and applies it through the ONE template apply
+   * (`installTemplateFromCatalog`): same lookup, plan, layers and stamp as
+   * every other door; the tier gate runs first.
    */
   installFromCatalog: protectedProcedure
     .input(
@@ -1543,16 +1573,11 @@ export const workspaceCatalogRouter = router({
       }
 
       const installed = await installTemplateFromCatalog(ctx, { slug });
-      if (installed.status === "pending") {
-        return { status: "installing", workspaceId: installed.workspaceId };
-      }
-      return {
-        status: "installed",
-        workspaceId: installed.workspaceId,
-        version: resolved.version ?? null,
-        drifted: false,
-        lifecycle: "current",
-        replacedBy: null,
-      };
+      // The answer is the ONE standing read of what the apply left — its
+      // stamp, drift and lifecycle — never a version this door assumes. Not
+      // "installed" yet (layer 2 unfinished) reads as installing.
+      const after = await readTemplateStanding(slug, ctx.userId);
+      if (after.status === "installed") return after;
+      return { status: "installing", workspaceId: installed.workspaceId };
     }),
 });
