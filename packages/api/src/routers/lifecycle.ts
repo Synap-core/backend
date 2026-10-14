@@ -687,8 +687,9 @@ export const lifecycleRouter = router({
    * HOME (object-first homes): every space the caller sees, with what it
    * PRODUCES — the template's `settings.intent`, else one inferred at read
    * time — and per produced kind its pipeline in one line, needs-you,
-   * being-worked and a headline thing. `projectId` narrows every count to
-   * the project. See `services/lifecycle/homes.ts`.
+   * being-worked and a headline thing. `projectId` lists only the project's
+   * spaces (the ones it uses + its home; NOT_FOUND when the caller cannot see
+   * the project) and narrows every count to it. See `services/lifecycle/homes.ts`.
    */
   home: podProcedure
     .input(z.object({ projectId: z.string().uuid().optional() }).default({}))

@@ -546,8 +546,28 @@ describe("lifecycle.home", () => {
     }
   });
 
+  /** A project of USER's: `home` = projects.workspace_id, `uses` = edges. */
+  async function project(o: {
+    home?: string | null;
+    uses?: string[];
+    owner?: string;
+  }): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, slug, status) values ($1,$2,$3,'P',$4,'active')`,
+      [id, o.owner ?? USER, o.home ?? null, `p-${id}`]
+    );
+    for (const ws of o.uses ?? []) {
+      await q(
+        `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_at) values (gen_random_uuid(),'project',$1,'workspace',$2,'uses',now())`,
+        [id, ws]
+      );
+    }
+    return id;
+  }
+
   it("projectId narrows every read it hands down", async () => {
-    const P = randomUUID();
+    const P = await project({ uses: [DEV] });
     await q(
       `insert into relations (id, user_id, source_entity_id, target_entity_id, type) values (gen_random_uuid(),$1,$2,$3,'belongs_to_project')`,
       [USER, T.neg, P]
@@ -559,6 +579,47 @@ describe("lifecycle.home", () => {
     const deal = home.spaces.find((s) => s.workspaceId === DEV)!.produces[0]!;
     expect(deal.total).toBe(1);
     expect(deal.live).toBe(1);
+  });
+
+  it("projectId lists only the project's spaces: the ones it uses + its home", async () => {
+    const all = (await caller().home()).spaces.map((s) => s.workspaceId);
+    expect(all).toEqual(expect.arrayContaining([DEV, MISC, LIB]));
+
+    const used = await project({ uses: [DEV] });
+    const spaces = (await caller().home({ projectId: used })).spaces;
+    expect(spaces.map((s) => s.workspaceId)).toEqual([DEV]);
+
+    // A home with no `uses` edge (an older project) still counts.
+    const homed = await project({ home: MISC, uses: [LIB] });
+    expect(
+      new Set(
+        (await caller().home({ projectId: homed })).spaces.map(
+          (s) => s.workspaceId
+        )
+      )
+    ).toEqual(new Set([MISC, LIB]));
+
+    // The needs-you read is asked for the project's spaces only.
+    h.countCalls.length = 0;
+    await caller().home({ projectId: used });
+    expect(
+      (h.countCalls[0]!.spaces as Array<{ workspaceId: string }>).map(
+        (s) => s.workspaceId
+      )
+    ).toEqual([DEV]);
+  });
+
+  it("a project in no space has no spaces; one the caller cannot see is NOT_FOUND", async () => {
+    const bare = await project({});
+    expect((await caller().home({ projectId: bare })).spaces).toEqual([]);
+
+    const theirs = await project({ owner: "user-2", uses: [DEV] });
+    await expect(caller().home({ projectId: theirs })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(
+      caller().home({ projectId: randomUUID() })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   it("being worked + headline: needs_you over being_worked over stuck over recent", async () => {

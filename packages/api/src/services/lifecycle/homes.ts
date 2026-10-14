@@ -42,6 +42,7 @@ import {
   entities,
   entityFacets,
   profiles,
+  projects,
   workspaces,
 } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -61,6 +62,9 @@ import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { projectLensWhere } from "../../utils/project-scope.js";
 import { resolveActorNames } from "../../utils/resolve-actor-names.js";
 import { rosterReadFor } from "../../access/session-visibility.js";
+import { AccessContext } from "../../access/context.js";
+import { scopedDb } from "../../access/scoped-db.js";
+import { listWorkspacesUsedByProjects } from "../../utils/project-workspace.js";
 import {
   countThingsByProfileAndStatus,
   groupThingsByStatus,
@@ -245,6 +249,34 @@ async function listHomeSpaces(userId: string): Promise<HomeSpaceRow[]> {
       name: r.name,
       settings: (r.settings as Record<string, unknown> | null) ?? null,
     }));
+}
+
+/**
+ * The spaces a project works in: the spaces it USES (`project --uses-->
+ * workspace`, the same read `projects.get` shows as its parts) plus its HOME
+ * (`projects.workspace_id`, which an older project may not have a `uses` edge
+ * for). The project is read through the access layer: one the caller cannot
+ * see is NOT_FOUND — never a home that reads as empty.
+ */
+async function projectSpaceIds(
+  ctx: HomesCtx,
+  projectId: string
+): Promise<Set<string>> {
+  const project = await scopedDb(AccessContext.from(ctx)).findFirst<{
+    id: string;
+    workspaceId: string | null;
+  }>(projects, {
+    where: eq(projects.id, projectId),
+    columns: { id: true, workspaceId: true },
+  });
+  if (!project) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+  }
+  const used = await listWorkspacesUsedByProjects(db, [projectId], ctx.userId);
+  return new Set([
+    ...(used.get(projectId) ?? []),
+    ...(project.workspaceId ? [project.workspaceId] : []),
+  ]);
 }
 
 /** The stored (template) intent, when well-formed. */
@@ -670,7 +702,15 @@ export async function readHome(
   input: { projectId?: string },
   readNeedsYou: NeedsYouByScopeRead
 ): Promise<HomeRead> {
-  const spaces = await listHomeSpaces(ctx.userId);
+  // Inside a project the home is the project's own spaces (its parts + its
+  // home), not every space narrowed to the project's counts.
+  const [allSpaces, inProject] = await Promise.all([
+    listHomeSpaces(ctx.userId),
+    input.projectId ? projectSpaceIds(ctx, input.projectId) : null,
+  ]);
+  const spaces = inProject
+    ? allSpaces.filter((s) => inProject.has(s.id))
+    : allSpaces;
   const stored = new Map(spaces.map((s) => [s.id, storedIntentOf(s.settings)]));
   const inferred = await inferProduces(
     ctx.userId,
