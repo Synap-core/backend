@@ -43,6 +43,9 @@ x-backend-env: &backend-env
   # so the .env switch eve wrote reached nothing.
   HUB_PROTOCOL_SUB_TOKENS: ${HUB_PROTOCOL_SUB_TOKENS:-true}
   HUB_PROTOCOL_EXTERNAL_USER_WORKSPACE_STRATEGY: ${HUB_PROTOCOL_EXTERNAL_USER_WORKSPACE_STRATEGY:-first}
+  # D4: `refuse` stops the IS's legacy is_internal X-Delegated-Operator-Id
+  # path once the IS sends per-turn pod-signed delegation tokens.
+  SYNAP_IS_LEGACY_DELEGATION: ${SYNAP_IS_LEGACY_DELEGATION:-accept}
   CHANNEL_GATEWAY_KEY: ${CHANNEL_GATEWAY_KEY:-}
   # Service credential encryption for optional managed service provisioning.
   # Rotating invalidates stored IS credentials.
@@ -975,6 +978,10 @@ services:
       # exact audience. Neither value is accepted from an HTTP request.
       POD_AGENT_ISSUER_URL: ${POD_AGENT_ISSUER_URL:-}
       POD_AGENT_AUDIENCE: ${POD_AGENT_AUDIENCE:-}
+      # D2: commands are PULLED from the issuer with the pod key. The pushed
+      # /api/pod-agent/* routes stay on during the transition; the owner sets
+      # 0 once the pod pulls (a CP `configure` can never set this key).
+      POD_AGENT_PUSH_ENABLED: ${POD_AGENT_PUSH_ENABLED:-1}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/deploy:rw

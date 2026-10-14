@@ -1,10 +1,16 @@
 #!/bin/sh
 #
-# Archive Pod — dump DB + volumes, upload to presigned S3 URL, callback to CP
+# Archive Pod — dump DB + volumes, age-encrypt, upload to presigned S3 URL, callback to CP
 #
-# Usage: archive-pod.sh <presigned-upload-url> <callback-url> <callback-jwt>
+# Usage: ARCHIVE_AGE_RECIPIENTS="age1… [age1…]" \
+#          archive-pod.sh <presigned-upload-url> <callback-url> <callback-jwt>
 #
-# Called by pod-agent when CP triggers the "archive" command.
+# Called by pod-agent when CP triggers the "archive" command. The archive
+# leaves this host ONLY age-encrypted (D15) to the recipients in the owner's
+# deploy/state/pod-agent-policy.json (`archiveRecipients`), which pod-agent
+# passes as ARCHIVE_AGE_RECIPIENTS. The Control Plane holds no private key:
+# only a recipient's identity can open the archive. No recipient, or no `age`
+# binary, refuses BEFORE any service is stopped.
 # The script is intentionally defensive — it always reaches the callback step
 # even if individual sub-steps fail, so the CP never gets stuck waiting.
 #
@@ -17,6 +23,7 @@ COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
 
 WORK="${ARCHIVE_WORK_DIR:-/tmp}"
 ARCHIVE="${WORK}/pod-archive.tar.gz"
+ARCHIVE_AGE="${ARCHIVE}.age"
 DB_DUMP="${WORK}/database.sql.gz"
 DB_RAW="${WORK}/database.sql"
 VOL_ARCHIVE="${WORK}/volumes.tar.gz"
@@ -42,8 +49,30 @@ report() {
 }
 
 cleanup() {
-  rm -f "$DB_DUMP" "$DB_RAW" "$VOL_ARCHIVE" "$ARCHIVE"
+  rm -f "$DB_DUMP" "$DB_RAW" "$VOL_ARCHIVE" "$ARCHIVE" "$ARCHIVE_AGE"
 }
+
+# ── Step 0: the archive must be encryptable, or nothing happens (D15) ──
+# Recipients are validated by pod-agent (age1… only); re-checked here so the
+# script never uploads plaintext even when run by hand.
+AGE_ARGS=""
+for r in ${ARCHIVE_AGE_RECIPIENTS:-}; do
+  case "$r" in
+    age1*) AGE_ARGS="$AGE_ARGS -r $r" ;;
+    *) log "ERROR: ARCHIVE_RECIPIENT_INVALID — not an age recipient"
+       report "failed" "\"ARCHIVE_RECIPIENT_INVALID\""; exit 1 ;;
+  esac
+done
+if [ -z "$AGE_ARGS" ]; then
+  log "ERROR: ARCHIVE_RECIPIENT_MISSING — no archiveRecipients in deploy/state/pod-agent-policy.json; nothing stopped, nothing uploaded"
+  report "failed" "\"ARCHIVE_RECIPIENT_MISSING\""
+  exit 1
+fi
+if ! command -v age >/dev/null 2>&1; then
+  log "ERROR: ARCHIVE_AGE_UNAVAILABLE — the age binary is not installed; nothing stopped, nothing uploaded"
+  report "failed" "\"ARCHIVE_AGE_UNAVAILABLE\""
+  exit 1
+fi
 
 # Always clean up and callback, even on failure
 trap 'cleanup; report "failed" "\"unexpected error\""; log "=== Archive aborted ==="' EXIT
@@ -123,16 +152,25 @@ ARCHIVE_SIZE=$(wc -c < "$ARCHIVE" 2>/dev/null | tr -d ' ')
 log "Final archive: ${ARCHIVE_SIZE} bytes"
 rm -f "$DB_DUMP" "$VOL_ARCHIVE"
 
+# ── Step 4b: Encrypt (D15) — the plaintext never leaves this host ──
+log "Encrypting archive with age..."
+# shellcheck disable=SC2086 # AGE_ARGS is "-r age1… -r age1…", validated above
+if ! age $AGE_ARGS -o "$ARCHIVE_AGE" "$ARCHIVE" || [ ! -s "$ARCHIVE_AGE" ]; then
+  dump_failed "archive encryption failed"
+fi
+rm -f "$ARCHIVE"
+log "Encrypted archive: $(wc -c < "$ARCHIVE_AGE" 2>/dev/null | tr -d ' ') bytes"
+
 # ── Step 5: Upload to S3 via presigned PUT URL ──
 if [ -n "$UPLOAD_URL" ]; then
   log "Uploading archive to S3..."
-  if wget -q --method=PUT --body-file="$ARCHIVE" \
-       --header="Content-Type: application/gzip" \
+  if wget -q --method=PUT --body-file="$ARCHIVE_AGE" \
+       --header="Content-Type: application/octet-stream" \
        -O /dev/null "$UPLOAD_URL" 2>&1; then
     UPLOAD_OK="true"
     log "Upload complete (wget)"
-  elif curl -sf -X PUT -T "$ARCHIVE" \
-       -H "Content-Type: application/gzip" \
+  elif curl -sf -X PUT -T "$ARCHIVE_AGE" \
+       -H "Content-Type: application/octet-stream" \
        "$UPLOAD_URL" 2>&1; then
     UPLOAD_OK="true"
     log "Upload complete (curl)"
@@ -146,7 +184,7 @@ else
 fi
 
 # ── Step 6: Cleanup archive file ──
-rm -f "$ARCHIVE"
+rm -f "$ARCHIVE" "$ARCHIVE_AGE"
 
 # ── Step 7: Stop all services (CP will delete the server) ──
 log "Stopping all services..."

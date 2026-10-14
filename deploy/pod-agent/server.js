@@ -8,6 +8,11 @@
  * Trust is opt-in: POD_AGENT_ISSUER_URL and POD_AGENT_AUDIENCE are exact,
  * canonical HTTPS values set by the Pod owner. The request never supplies a
  * JWKS URL, issuer, or audience, so an external service cannot self-authorize.
+ *
+ * Transport (D2): the agent PULLS its commands from the issuer (pull.js),
+ * authenticated by the pod's own key. The pushed routes below stay during the
+ * transition behind POD_AGENT_PUSH_ENABLED. Either way every command passes
+ * the owner's local policy (policy.js, D3) before it runs.
  */
 
 const http = require("http");
@@ -17,21 +22,39 @@ const fs = require("fs");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
 const {
+  assertPushable,
   commandErrorStatus,
   configureEnvEntries,
   createJwksKeyResolver,
+  decodeCommandTokenHeader,
+  isPushEnabled,
   parseImmutableEnvKeys,
   resolveCommandName,
   resolvePodAgentTrust,
   validateConfigurePayload,
-  validateSignedCommandClaims,
   validateUpdateTargetVersion,
+  verifyCommandToken,
 } = require("./trust");
 const { consumePodAgentReceipt } = require("./replay-receipts");
+const {
+  assertCommandAllowed,
+  policyFile,
+  readPodAgentPolicy,
+} = require("./policy");
+const {
+  loadPodIdentity,
+  podEnrollmentFile,
+  podKeyFile,
+  signPodJwt,
+} = require("./pod-identity");
+const { createCommandPuller } = require("./pull");
 
 const PORT = parseInt(process.env.POD_AGENT_PORT || "4002", 10);
 const DEPLOY_DIR = process.env.DEPLOY_DIR || "/deploy";
 const POD_AGENT_STATE_DIR = process.env.POD_AGENT_STATE_DIR || "/state";
+// D2: push (/api/pod-agent/command, host-log, docker-logs) is the transition
+// transport. Commands are PULLED from the CP; the owner turns push off.
+const PUSH_ENABLED = isPushEnabled();
 
 // How much of a command's stdout/stderr we forward in the result packet.
 // `logsSnippet` is intentionally bounded so an operational receiver can show
@@ -104,17 +127,6 @@ function fetchJson(url) {
   });
 }
 
-function decodeJwtHeader(token) {
-  const [encodedHeader] = token.split(".");
-  if (!encodedHeader) throw new Error("malformed JWT");
-  const header = JSON.parse(base64UrlDecode(encodedHeader));
-  if (header.alg !== "ES256") throw new Error("unsupported alg");
-  if (typeof header.kid !== "string" || header.kid.length === 0) {
-    throw new Error("missing kid");
-  }
-  return header;
-}
-
 // 24 h cache, refetched (rate-limited) on an unknown kid — see trust.js.
 const getPublicKey = createJwksKeyResolver({
   fetchJson,
@@ -124,36 +136,15 @@ const getPublicKey = createJwksKeyResolver({
 
 // ── JWT Verification ──
 
-function base64UrlDecode(s) {
-  return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
-}
-
-function verifyJWT(token, publicKey) {
-  const [h, p, s] = token.split(".");
-  if (!h || !p || !s) throw new Error("malformed JWT");
-  decodeJwtHeader(token);
-  const payload = JSON.parse(base64UrlDecode(p));
-  // ES256 JWT uses raw R||S signature — dsaEncoding: "ieee-p1363"
-  const ok = crypto.verify(
-    "SHA256",
-    Buffer.from(h + "." + p),
-    { key: publicKey, dsaEncoding: "ieee-p1363" },
-    base64UrlDecode(s)
-  );
-  if (!ok) throw new Error("bad signature");
-  validateSignedCommandClaims(payload, POD_AGENT_TRUST);
-  return payload;
-}
-
 async function verifyRequestToken(token) {
   if (!POD_AGENT_TRUST.configured) {
     throw new Error(
       POD_AGENT_TRUST.error || "pod-agent trust is not configured"
     );
   }
-  const { kid } = decodeJwtHeader(token);
+  const { kid } = decodeCommandTokenHeader(token);
   const publicKey = await getPublicKey(POD_AGENT_JWKS_URL, kid);
-  return verifyJWT(token, publicKey);
+  return verifyCommandToken(token, publicKey, POD_AGENT_TRUST);
 }
 
 const activeOps = new Set();
@@ -260,6 +251,108 @@ function validateCommandPayload(commandName, payload) {
   }
   if (commandName !== "configure") return;
   validateConfigurePayload(payload, readImmutableEnvKeys());
+}
+
+/**
+ * Every check a command passes before it runs, for push and pull alike: the
+ * owner's local policy (D3, archive recipients D15), then the payload.
+ * Returns the policy the command runs under. Throws typed errors.
+ */
+function prepareCommand(commandName, payload) {
+  const policy = readPodAgentPolicy(policyFile(DEPLOY_DIR));
+  assertCommandAllowed(policy, commandName);
+  validateCommandPayload(commandName, payload);
+  return policy;
+}
+
+/**
+ * Run a known, prepared command's script. Resolves (never rejects) with the
+ * outcome; the caller has already claimed `activeOps` for it.
+ */
+function startCommand(commandName, payload, policy) {
+  const cmd = COMMANDS[commandName];
+  const env =
+    commandName === "archive"
+      ? {
+          ...process.env,
+          // D15: archive-pod.sh age-encrypts to exactly these recipients.
+          ARCHIVE_AGE_RECIPIENTS: policy.archiveRecipients.join(" "),
+        }
+      : process.env;
+  return new Promise((resolve) => {
+    execFile(
+      "/bin/sh",
+      [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)],
+      { cwd: DEPLOY_DIR, timeout: cmd.timeout ?? 600_000, env },
+      (err, stdout, stderr) => {
+        activeOps.delete(commandName);
+        const output = (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
+        if (err)
+          log(
+            `${commandName} failed: ${err.message}\n${output.slice(0, 2000)}`
+          );
+        else log(`${commandName} done`);
+        resolve({ status: err ? "failed" : "completed", output, err });
+      }
+    );
+  });
+}
+
+/**
+ * The tail of one allowlisted host log file — the read behind both the pushed
+ * GET /host-log and a pulled `read-host-log` command.
+ */
+function readHostLog(fileParam) {
+  if (!HOST_LOG_ALLOWLIST.has(fileParam)) {
+    return {
+      httpStatus: 404,
+      body: {
+        error: "file not in allowlist",
+        allowlist: Array.from(HOST_LOG_ALLOWLIST),
+      },
+    };
+  }
+
+  // Resolve and re-verify the file stays inside HOST_LOG_DIR — defense in
+  // depth against a malformed allowlist entry or symlink escape.
+  const fullPath = path.resolve(HOST_LOG_DIR, fileParam);
+  if (
+    !fullPath.startsWith(HOST_LOG_DIR + path.sep) &&
+    fullPath !== path.resolve(HOST_LOG_DIR)
+  ) {
+    return { httpStatus: 400, body: { error: "path escape" } };
+  }
+
+  let content;
+  let size;
+  let truncated = false;
+  try {
+    const stat = fs.statSync(fullPath);
+    size = stat.size;
+    if (size > HOST_LOG_MAX_BYTES) {
+      const fd = fs.openSync(fullPath, "r");
+      const buf = Buffer.alloc(HOST_LOG_MAX_BYTES);
+      fs.readSync(fd, buf, 0, HOST_LOG_MAX_BYTES, size - HOST_LOG_MAX_BYTES);
+      fs.closeSync(fd);
+      content = buf.toString("utf8");
+      truncated = true;
+    } else {
+      content = fs.readFileSync(fullPath, "utf8");
+    }
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return {
+        httpStatus: 200,
+        body: { file: fileParam, exists: false, size: 0, content: "" },
+      };
+    }
+    return { httpStatus: 500, body: { error: err.message || "read failed" } };
+  }
+
+  return {
+    httpStatus: 200,
+    body: { file: fileParam, exists: true, size, truncated, content },
+  };
 }
 
 // ── HTTP Server ──
@@ -390,6 +483,7 @@ http
       req.method === "GET" &&
       (req.url || "").match(/^(?:\/api\/pod-agent)?\/host-log\?(.*)$/);
     if (hostLogMatch) {
+      if (!PUSH_ENABLED) return respond(res, 404, { error: "not found" });
       try {
         const auth = req.headers["authorization"] || "";
         if (!auth.startsWith("Bearer "))
@@ -399,6 +493,7 @@ http
             error: "pod-agent trust is not configured",
           });
         const payload = await verifyRequestToken(auth.slice(7));
+        assertPushable(payload);
         if (resolveCommandName(payload) !== "read-host-log") {
           return respond(res, 403, { error: "wrong command" });
         }
@@ -407,65 +502,8 @@ http
         }
 
         const params = new URLSearchParams(hostLogMatch[1]);
-        const fileParam = params.get("file") || "";
-        if (!HOST_LOG_ALLOWLIST.has(fileParam)) {
-          return respond(res, 404, {
-            error: "file not in allowlist",
-            allowlist: Array.from(HOST_LOG_ALLOWLIST),
-          });
-        }
-
-        // Resolve and re-verify the file stays inside HOST_LOG_DIR — defense in
-        // depth against a malformed allowlist entry or symlink escape.
-        const fullPath = path.resolve(HOST_LOG_DIR, fileParam);
-        if (
-          !fullPath.startsWith(HOST_LOG_DIR + path.sep) &&
-          fullPath !== path.resolve(HOST_LOG_DIR)
-        ) {
-          return respond(res, 400, { error: "path escape" });
-        }
-
-        let content;
-        let size;
-        let truncated = false;
-        try {
-          const stat = fs.statSync(fullPath);
-          size = stat.size;
-          if (size > HOST_LOG_MAX_BYTES) {
-            const fd = fs.openSync(fullPath, "r");
-            const buf = Buffer.alloc(HOST_LOG_MAX_BYTES);
-            fs.readSync(
-              fd,
-              buf,
-              0,
-              HOST_LOG_MAX_BYTES,
-              size - HOST_LOG_MAX_BYTES
-            );
-            fs.closeSync(fd);
-            content = buf.toString("utf8");
-            truncated = true;
-          } else {
-            content = fs.readFileSync(fullPath, "utf8");
-          }
-        } catch (err) {
-          if (err.code === "ENOENT") {
-            return respond(res, 200, {
-              file: fileParam,
-              exists: false,
-              size: 0,
-              content: "",
-            });
-          }
-          return respond(res, 500, { error: err.message || "read failed" });
-        }
-
-        return respond(res, 200, {
-          file: fileParam,
-          exists: true,
-          size,
-          truncated,
-          content,
-        });
+        const read = readHostLog(params.get("file") || "");
+        return respond(res, read.httpStatus, read.body);
       } catch (e) {
         log(`host-log rejected: ${e.message}`);
         if (e.code === "REPLAY_PROTECTION_UNAVAILABLE") {
@@ -492,6 +530,7 @@ http
       req.method === "GET" &&
       (req.url || "").match(/^(?:\/api\/pod-agent)?\/docker-logs(?:\?(.*))?$/);
     if (dockerLogsMatch) {
+      if (!PUSH_ENABLED) return respond(res, 404, { error: "not found" });
       try {
         const auth = req.headers["authorization"] || "";
         if (!auth.startsWith("Bearer "))
@@ -501,6 +540,7 @@ http
             error: "pod-agent trust is not configured",
           });
         const payload = await verifyRequestToken(auth.slice(7));
+        assertPushable(payload);
         if (resolveCommandName(payload) !== "read-docker-logs")
           return respond(res, 403, { error: "wrong command" });
         if (consumeSignedCommandReceipt(payload) === "replayed") {
@@ -606,6 +646,7 @@ http
     }
 
     if (
+      !PUSH_ENABLED ||
       req.method !== "POST" ||
       (req.url !== "/command" && req.url !== "/api/pod-agent/command")
     ) {
@@ -622,8 +663,9 @@ http
         });
 
       const payload = await verifyRequestToken(auth.slice(7));
+      assertPushable(payload);
       const commandName = resolveCommandName(payload);
-      validateCommandPayload(commandName, payload);
+      const policy = prepareCommand(commandName, payload);
 
       if (consumeSignedCommandReceipt(payload) === "replayed")
         return respond(res, 409, { error: "replay" });
@@ -634,24 +676,10 @@ http
         return respond(res, 429, { error: "busy" });
 
       activeOps.add(commandName);
-      const cmd = COMMANDS[commandName];
       log(`${commandName} accepted`);
 
-      execFile(
-        "/bin/sh",
-        [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)],
-        { cwd: DEPLOY_DIR, timeout: cmd.timeout ?? 600_000 },
-        (err, stdout, stderr) => {
-          activeOps.delete(commandName);
-          const status = err ? "failed" : "completed";
-          const output =
-            (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
-          if (err)
-            log(
-              `${commandName} failed: ${err.message}\n${output.slice(0, 2000)}`
-            );
-          else log(`${commandName} done`);
-
+      startCommand(commandName, payload, policy).then(
+        ({ status, output, err }) => {
           // Callback to the signed command's result receiver (Node.js https, not shell wget)
           if (payload.callbackUrl && payload.callbackJwt) {
             const packet = buildResultPacket(payload, commandName, status, err);
@@ -693,10 +721,85 @@ http
       log(`rejected: ${e.message}`);
       respond(res, commandErrorStatus(e), {
         error: e.message,
+        ...(e.code ? { code: e.code } : {}),
       });
     }
   })
   .listen(PORT, "0.0.0.0", () => log(`listening on ${PORT}`));
+
+// ── Pull transport (D2) ──
+//
+// A pulled command runs through the SAME dispatcher as a pushed one; only the
+// delivery differs. Its result goes back to the CP that served it.
+async function runPulledCommand(commandName, payload) {
+  if (commandName === "read-host-log") {
+    assertCommandAllowed(
+      readPodAgentPolicy(policyFile(DEPLOY_DIR)),
+      commandName
+    );
+    const read = readHostLog(String(payload.file || ""));
+    return read.httpStatus === 200
+      ? { status: "completed", data: read.body }
+      : {
+          status: "failed",
+          code: "HOST_LOG_UNREADABLE",
+          error: read.body.error,
+        };
+  }
+  const policy = prepareCommand(commandName, payload);
+  if (!COMMANDS[commandName]) {
+    return {
+      status: "failed",
+      code: "UNKNOWN_COMMAND",
+      error: `unknown command: ${commandName}`,
+    };
+  }
+  if (activeOps.has(commandName)) {
+    return { status: "failed", code: "POD_AGENT_BUSY", error: "busy" };
+  }
+  activeOps.add(commandName);
+  log(`${commandName} accepted (pull)`);
+  const { status, output, err } = await startCommand(
+    commandName,
+    payload,
+    policy
+  );
+  return {
+    status,
+    output,
+    ...(err ? { error: err.message } : {}),
+    ...(typeof payload.targetVersion === "string"
+      ? { version: payload.targetVersion }
+      : {}),
+  };
+}
+
+if (POD_AGENT_TRUST.configured) {
+  const puller = createCommandPuller({
+    cpUrl: POD_AGENT_TRUST.issuerUrl,
+    // Re-read per token: a rotated key file is picked up without a restart.
+    signPodToken: (purpose, claims) =>
+      signPodJwt(
+        loadPodIdentity(podKeyFile(DEPLOY_DIR)),
+        {
+          issuer: POD_AGENT_TRUST.audience,
+          audience: POD_AGENT_TRUST.issuerUrl,
+          purpose,
+        },
+        claims,
+        60
+      ),
+    // Only once the CP holds this pod's key (`synap register` / `pod-key enroll`).
+    isEnrolled: () => fs.existsSync(podEnrollmentFile(DEPLOY_DIR)),
+    verifyCommand: verifyRequestToken,
+    consumeReceipt: consumeSignedCommandReceipt,
+    resolveCommand: resolveCommandName,
+    runCommand: runPulledCommand,
+    log,
+  });
+  puller.start();
+  log(`pulling commands (push ${PUSH_ENABLED ? "enabled" : "disabled"})`);
+}
 
 process.on("SIGTERM", () => {
   log("shutting down");

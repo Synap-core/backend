@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("crypto");
+
 /**
  * The Pod agent deliberately knows nothing about a particular control plane.
  * Its only trust inputs are an operator-configured issuer and this Pod's local
@@ -78,7 +80,20 @@ function hasExactAudience(aud, expectedAudience) {
   );
 }
 
+/**
+ * A queued command the pod-agent PULLS from the CP (D2) is signed with
+ * `type: "pod-command"` and names its operation in `command`. That `type` is
+ * a token purpose, not the legacy command alias below.
+ */
+const POD_COMMAND_TYPE = "pod-command";
+
 function resolveCommandName(payload) {
+  if (payload && payload.type === POD_COMMAND_TYPE) {
+    if (typeof payload.command !== "string" || payload.command.length === 0) {
+      throw new Error("missing command claim");
+    }
+    return payload.command;
+  }
   const command =
     typeof payload.command === "string" && payload.command.length > 0
       ? payload.command
@@ -142,6 +157,76 @@ function validateSignedCommandClaims(
 }
 
 /**
+ * A pod-command token is delivered by pull only: one lifted from the queue
+ * must not be replayable at the push route (nor a pushed one reported as a
+ * queue entry — pull.js checks the reverse).
+ */
+function assertPushable(payload) {
+  if (payload && payload.type === POD_COMMAND_TYPE) {
+    const error = new Error("pod-command tokens are pulled, never pushed");
+    error.code = "COMMAND_NOT_PUSHABLE";
+    throw error;
+  }
+}
+
+/**
+ * Push (the CP calling /api/pod-agent/*) is the transition transport (D2).
+ * On unless POD_AGENT_PUSH_ENABLED is exactly "0" or "false"; the owner turns
+ * it off once the pod pulls, then the public route is removed.
+ */
+function isPushEnabled(environment = process.env) {
+  const raw = String(environment.POD_AGENT_PUSH_ENABLED ?? "")
+    .trim()
+    .toLowerCase();
+  return raw !== "0" && raw !== "false";
+}
+
+// ── ES256 compact JWS: the ONE signature check for every CP command ──
+
+function base64UrlDecode(s) {
+  return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+/** Header of a CP command token: ES256 with a kid, nothing else. */
+function decodeCommandTokenHeader(token) {
+  const [encodedHeader] = String(token).split(".");
+  if (!encodedHeader) throw new Error("malformed JWT");
+  const header = JSON.parse(base64UrlDecode(encodedHeader));
+  if (header.alg !== "ES256") throw new Error("unsupported alg");
+  if (typeof header.kid !== "string" || header.kid.length === 0) {
+    throw new Error("missing kid");
+  }
+  return header;
+}
+
+/**
+ * Verify a CP-signed command token against the issuer key its kid selected,
+ * then its claims (issuer, audience, lifetime, jti). Pushed and pulled
+ * commands both pass here. Returns the payload.
+ */
+function verifyCommandToken(
+  token,
+  publicKey,
+  trust,
+  nowSeconds = Math.floor(Date.now() / 1000)
+) {
+  const [h, p, s] = String(token).split(".");
+  if (!h || !p || !s) throw new Error("malformed JWT");
+  decodeCommandTokenHeader(token);
+  const payload = JSON.parse(base64UrlDecode(p));
+  // ES256 JWT uses raw R||S signature — dsaEncoding: "ieee-p1363"
+  const ok = crypto.verify(
+    "SHA256",
+    Buffer.from(h + "." + p),
+    { key: publicKey, dsaEncoding: "ieee-p1363" },
+    base64UrlDecode(s)
+  );
+  if (!ok) throw new Error("bad signature");
+  validateSignedCommandClaims(payload, trust, nowSeconds);
+  return payload;
+}
+
+/**
  * An `update` command must name the release it installs. A missing version
  * used to become `latest` — a mutable tag that silently changes meaning, so a
  * bare update command could install anything (update-door plan P0,
@@ -192,6 +277,8 @@ const CONFIGURE_NEVER_KEYS = Object.freeze([
   "POD_AGENT_ISSUER_URL",
   "CONTROL_PLANE_URL",
   "PROVISIONING_TOKEN",
+  // The CP must never re-open its own push door (D2): the owner closes it.
+  "POD_AGENT_PUSH_ENABLED",
 ]);
 // docker compose profile / service names.
 const COMPOSE_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
@@ -380,6 +467,8 @@ function createJwksKeyResolver({
 /** HTTP status for an error thrown while validating/accepting a command. */
 function commandErrorStatus(error) {
   if (error && error.code === "INVALID_COMMAND_PAYLOAD") return 400;
+  if (error && error.code === "POD_POLICY_REFUSED") return 403;
+  if (error && error.code === "ARCHIVE_RECIPIENT_MISSING") return 409;
   if (error && error.code === "REPLAY_PROTECTION_UNAVAILABLE") return 503;
   if (error && error.code === "CONFIG_SCHEMA_UNAVAILABLE") return 503;
   return 403;
@@ -388,9 +477,13 @@ function commandErrorStatus(error) {
 module.exports = {
   CONFIGURE_NEVER_KEYS,
   MAX_COMMAND_TOKEN_LIFETIME_SECONDS,
+  POD_COMMAND_TYPE,
+  assertPushable,
   commandErrorStatus,
+  isPushEnabled,
   configureEnvEntries,
   createJwksKeyResolver,
+  decodeCommandTokenHeader,
   parseImmutableEnvKeys,
   validateConfigurePayload,
   validateUpdateTargetVersion,
@@ -398,4 +491,5 @@ module.exports = {
   resolvePodAgentTrust,
   resolveCommandName,
   validateSignedCommandClaims,
+  verifyCommandToken,
 };

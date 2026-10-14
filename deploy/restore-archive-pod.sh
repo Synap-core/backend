@@ -4,12 +4,18 @@
 #
 # Usage: restore-archive-pod.sh <archive-url> <callback-url> <callback-jwt>
 #
+# An archive made since D15 is age-encrypted (archive-pod.sh). Its identity
+# never comes from the Control Plane: the operator places it on THIS host at
+# deploy/state/archive-identity.txt (ARCHIVE_AGE_IDENTITY_FILE overrides)
+# before the restore runs. Older plaintext archives still restore as before.
+#
 set -e
 
 ARCHIVE_URL="$1"
 CALLBACK_URL="$2"
 CALLBACK_JWT="$3"
 CD="$(dirname "$0")"
+AGE_IDENTITY_FILE="${ARCHIVE_AGE_IDENTITY_FILE:-$CD/state/archive-identity.txt}"
 COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [restore-archive] $*"; }
@@ -52,6 +58,17 @@ fatal() {
   report "failed" "\"$1\""
   exit 1
 }
+
+# Decrypt (D15): an age file starts with this exact header line.
+if [ "$(head -c 21 /tmp/pod-archive.tar.gz 2>/dev/null)" = "age-encryption.org/v1" ]; then
+  [ -s "$AGE_IDENTITY_FILE" ] \
+    || fatal "ARCHIVE_IDENTITY_MISSING — the archive is encrypted; place its age identity at deploy/state/archive-identity.txt and retry"
+  command -v age >/dev/null 2>&1 || fatal "ARCHIVE_AGE_UNAVAILABLE — the age binary is not installed"
+  age -d -i "$AGE_IDENTITY_FILE" -o /tmp/pod-archive.tar.gz.dec /tmp/pod-archive.tar.gz \
+    || { rm -f /tmp/pod-archive.tar.gz.dec; fatal "archive decryption failed (wrong identity?)"; }
+  mv -f /tmp/pod-archive.tar.gz.dec /tmp/pod-archive.tar.gz
+  log "Archive decrypted"
+fi
 
 # Extract
 TMPDIR=$(mktemp -d)
