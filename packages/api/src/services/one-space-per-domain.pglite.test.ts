@@ -146,10 +146,8 @@ beforeAll(async () => {
   await h.client!.exec(M0308);
 });
 
-import {
-  checkOneSpacePerDomain,
-  createWorkspaceFromDefinitionIdempotent,
-} from "./workspace-creation-service.js";
+import { checkOneSpacePerDomain } from "./workspace-creation-service.js";
+import { applyLayerOne } from "./template-apply/layer-one.js";
 import { ONE_SPACE_PER_DOMAIN_RULE } from "./one-space-per-domain.js";
 
 const uniq = () => randomUUID().slice(0, 8);
@@ -173,7 +171,7 @@ describe("one space per domain — template installs (PGlite)", () => {
   it("a re-install of the caller's own template space → create (the create reuses it)", async () => {
     const U = randomUUID();
     const slug = `studio-${uniq()}`;
-    await createWorkspaceFromDefinitionIdempotent({
+    await applyLayerOne({
       definition: {} as never,
       userId: U,
       packageSlug: slug,

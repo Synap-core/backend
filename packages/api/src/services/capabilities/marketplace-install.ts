@@ -10,8 +10,8 @@
  *   capability → `createCapabilityFromDefinition` — the SAME governed applier
  *                `/packages/apply` and the manual capability-apply flow use.
  *                Idempotent by definition (name+workspace natural key).
- *   template   → `createWorkspaceFromDefinitionIdempotent` (Phase-1 workspace
- *                door) — the templateKey flow P2.6 describes. Idempotent via
+ *   template   → `applyTemplate` (the one template apply) — the templateKey
+ *                flow P2.6 describes. Idempotent via
  *                its `packageSlug`/`proposalId` key (both set to the catalog
  *                slug here), so re-installing the same template for the same
  *                user converges to the existing workspace. That door builds

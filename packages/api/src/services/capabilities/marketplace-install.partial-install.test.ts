@@ -15,9 +15,6 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../workspace-creation-service.js", () => ({
-  createWorkspaceFromDefinitionIdempotent: vi.fn(),
-}));
 vi.mock("./create-from-definition.js", () => ({
   createCapabilityFromDefinition: vi.fn(),
   loadCapabilityTemplate: vi.fn(),

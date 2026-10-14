@@ -36,8 +36,8 @@ vi.mock("./compose-overlay.js", () => ({
   ComposeBaseNotFoundError: class extends Error {},
   ComposeOverlayError: class extends Error {},
 }));
-vi.mock("./workspace-creation-service.js", () => ({
-  createWorkspaceFromDefinitionIdempotent: createMock,
+vi.mock("./template-apply/layer-one.js", () => ({
+  applyLayerOne: createMock,
 }));
 vi.mock("./capabilities/resolve-workspace-template.js", () => ({
   resolveWorkspaceTemplate: resolveTplMock,

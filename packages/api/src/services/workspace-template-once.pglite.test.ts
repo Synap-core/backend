@@ -1,7 +1,7 @@
 /**
  * A TEMPLATE IS INSTALLED ONCE PER POD, and a NAME is held by one active
  * space (0308, founder 2026-10-06 — pod-wide, no user link) —
- * `createWorkspaceFromDefinitionIdempotent` on PGlite with the REAL 0308
+ * `applyLayerOne` on PGlite with the REAL 0308
  * indexes and the REAL `WorkspaceRepository` insert.
  *
  * Replaces the named-instance suite: `<slug>:<name>` second copies are
@@ -170,13 +170,13 @@ beforeAll(async () => {
   await h.client!.exec(M0308);
 });
 
-import { createWorkspaceFromDefinitionIdempotent } from "./workspace-creation-service.js";
+import { applyLayerOne } from "./template-apply/layer-one.js";
 import { WorkspaceIdentityConflictError } from "@synap/database";
 
 const uniq = () => randomUUID().slice(0, 8);
 
 function install(userId: string, slug: string, workspaceName: string) {
-  return createWorkspaceFromDefinitionIdempotent({
+  return applyLayerOne({
     definition: { workspaceName } as never,
     userId,
     packageSlug: slug,
@@ -279,14 +279,14 @@ describe("a template is installed once per pod (PGlite, real 0308 indexes)", () 
     const U = randomUUID();
     const name = `Scratch ${uniq()}`;
     const own = await seed({ name, owner: U });
-    const reuse = await createWorkspaceFromDefinitionIdempotent({
+    const reuse = await applyLayerOne({
       definition: { workspaceName: name } as never,
       userId: U,
       workspaceName: `  ${name.toUpperCase()} `,
     });
     expect(reuse).toMatchObject({ workspaceId: own, created: false });
     const e = await refusal(
-      createWorkspaceFromDefinitionIdempotent({
+      applyLayerOne({
         definition: {} as never,
         userId: randomUUID(),
         workspaceName: name,
@@ -353,7 +353,7 @@ describe("a template is installed once per pod (PGlite, real 0308 indexes)", () 
       );
     };
     try {
-      const r = await createWorkspaceFromDefinitionIdempotent({
+      const r = await applyLayerOne({
         definition: { workspaceName: `Adopt ${slug}` } as never,
         userId: U,
         packageSlug: slug,

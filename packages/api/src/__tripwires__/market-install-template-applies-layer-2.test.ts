@@ -8,13 +8,13 @@ import { fileURLToPath } from "url";
  *
  * A workspace package has two layers:
  *   1. profiles / views / bento / entity links — `createWorkspaceFromDefinition`
- *      (via `createWorkspaceFromDefinitionIdempotent`).
+ *      (via layer one of the one apply).
  *   2. capabilities / playbooks / automations / loops / cells / actionPlacements
  *      — `applyPackagePostWorkspace`.
  *
- * `createWorkspaceFromDefinitionIdempotent` builds layer 1 ONLY; its own doc
- * (`workspace-creation-service.ts`) states that a caller which also wants the
- * post-workspace layers MUST call `applyPackagePostWorkspace` itself. The
+ * Layer one builds layer 1 ONLY (`template-apply/layer-one.ts`, formerly the
+ * `createWorkspaceFromDefinitionIdempotent` wrapper, retired in W4); a caller which also wants
+ * the post-workspace layers MUST call `applyPackagePostWorkspace` itself. The
  * browser/Hub door (`hub-protocol/rest/packages.ts`) and the `workspace/create`
  * approve-executor both do. The `case "template"` branch of `applyMarketInstall`
  * — the AGENT door, reached by MCP/CLI `market.install` and by `capability.install`

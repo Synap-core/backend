@@ -13,8 +13,8 @@
  * space as current, `synap templates update` skipped it, and the missing
  * playbook / button never arrived (founder pod, 2026-10-12, CRM).
  *
- * So the create/resume core (`createWorkspaceFromDefinition`) and the re-hit
- * reconcile (`reconcileWorkspaceIfStale`) never stamp: they hand the version
+ * So the create/resume core (`createWorkspaceFromDefinition`) and the re-sync
+ * (`reconcileWorkspaceFromDefinition`, through layer one) never stamp: they hand the version
  * back as `pendingVersionStamp`, and every door hands it here with its layer-2
  * result. Marker invariant (backend-rules): a stamp only asserts what landed.
  *
@@ -142,11 +142,16 @@ export async function finishTemplateApply(
     await getDb(),
     workspaceId,
     (current) => {
+      const now = new Date().toISOString();
       if (current?.state === "failed") {
         failed = true;
-        return null;
+        // The space's own failure stands — only its own update clears it. An
+        // overlay pack layered onto it whose layer 2 just converged is still
+        // recorded: that is the pack's convergence, not the space's.
+        return converged && pendingPack
+          ? { packs: withPack(current.packs, pendingPack, now) }
+          : null;
       }
-      const now = new Date().toISOString();
       if (converged) {
         // A space another door is still building stays "building" unless
         // this apply built it.

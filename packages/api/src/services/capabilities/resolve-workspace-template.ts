@@ -63,7 +63,7 @@ export interface ResolvedWorkspaceTemplate {
   version?: string;
   dependencies: NonNullable<PackageDefinitionOutput["dependencies"]>;
   /**
-   * Ready for `createWorkspaceFromDefinitionIdempotent` /
+   * Ready for `applyLayerOne` /
    * `reconcileWorkspaceFromDefinition` — typed as the TEMPLATES package's own
    * `WorkspaceDefinitionInput` (structurally the create/reconcile input, cast
    * across the two package boundaries at the call site, same as the boot

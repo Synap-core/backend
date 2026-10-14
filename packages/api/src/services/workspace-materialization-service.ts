@@ -23,15 +23,10 @@
  *   - phase-2 (capabilities/automations/playbooks/loops, seed-docs, progress
  *     events, agent-enroll, project-link) which stays verbatim in each door.
  *
- * Create-path asymmetry (why `deferCreate` exists): the Hub door's no-compose
- * create IS `createWorkspaceFromDefinitionIdempotent` (returns `{workspaceId,
- * created}` — its phase-2 re-queries entities by workspaceId, so it needs no
- * more). The tRPC door's no-compose create is the RICHER
- * `createWorkspaceFromDefinition` (drives `onProgress` events, supports
- * `resumeFrom` chat-first onboarding, and returns `entityIds` its seed-docs
- * step consumes positionally). Those extra outputs can't come from the
- * idempotent wrapper, so the tRPC door passes `deferCreate: true` and performs
- * its own create — the service just resolves + (maybe) composes and hands back.
+ * `deferCreate`: the one template apply (`applyTemplate`, its only caller)
+ * passes it and runs layer one itself (`applyLayerOne`). The non-deferred
+ * create below has no caller left (W4); it is kept for the tests that drive
+ * this service directly until W6 removes it.
  */
 
 import {
@@ -46,9 +41,9 @@ import {
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import {
-  createWorkspaceFromDefinitionIdempotent,
-  type CreateWorkspaceFromDefinitionResult,
-} from "./workspace-creation-service.js";
+  applyLayerOne,
+  type LayerOneResult,
+} from "./template-apply/layer-one.js";
 import {
   resolvePackageDependencies,
   type PackageDependencyResolverDefinition,
@@ -156,7 +151,7 @@ export type MaterializeCoreResult =
       status: "created";
       workspaceId: string;
       dependencies: ResolvedPackageDependency[];
-      created: CreateWorkspaceFromDefinitionResult;
+      created: LayerOneResult;
     }
   | {
       status: "composed";
@@ -217,8 +212,8 @@ export interface MaterializeWorkspaceCoreInput {
   /**
    * When true, the no-compose path returns `{status:"resolved"}` WITHOUT
    * creating — the caller (tRPC) performs its own richer create. When false /
-   * omitted (Hub), the no-compose path creates via
-   * `createWorkspaceFromDefinitionIdempotent` and returns `{status:"created"}`.
+   * omitted, the no-compose path creates via `applyLayerOne` and returns
+   * `{status:"created"}`.
    */
   deferCreate?: boolean;
   /**
@@ -242,9 +237,9 @@ export interface MaterializeWorkspaceCoreInput {
    * Caller-supplied version for `packageSlug` (Hub: `_meta.version`, fetched
    * by the CLI from the authed CP `/mine` for private/uncached templates —
    * `resolveWorkspaceTemplate`'s cache-first lookup never sees a private
-   * slug). Forwarded verbatim into `createWorkspaceFromDefinitionIdempotent`,
-   * which treats it as a FALLBACK: the cache-resolved version still wins
-   * whenever it is present (see that function + `reconcileWorkspaceIfStale`).
+   * slug). Forwarded verbatim into `applyLayerOne`, which treats it as a
+   * FALLBACK on a re-hit: the cache-resolved version still wins whenever it is
+   * present.
    */
   packageVersion?: string;
   workspaceType?: "personal" | "agent" | "project" | "operational";
@@ -260,7 +255,7 @@ export interface MaterializeWorkspaceCoreInput {
  *   - `ComposeBaseUnavailableError`— a `compose` dep declared but base unresolved.
  *   - `ComposeBaseNotFoundError`   — resolved compose base vanished before load.
  *   - anything `reconcileWorkspaceFromDefinition` / `assertWorkspaceWrite` /
- *     `createWorkspaceFromDefinitionIdempotent` throw — propagated verbatim.
+ *     `applyLayerOne` throw — propagated verbatim.
  */
 export async function materializeWorkspaceCore(
   input: MaterializeWorkspaceCoreInput
@@ -386,7 +381,7 @@ export async function materializeWorkspaceCore(
     return { status: "resolved", dependencies };
   }
 
-  const created = await createWorkspaceFromDefinitionIdempotent({
+  const created = await applyLayerOne({
     definition,
     userId,
     proposalId: input.proposalId,

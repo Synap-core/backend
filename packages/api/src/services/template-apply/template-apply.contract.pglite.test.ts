@@ -991,3 +991,61 @@ describe("tRPC reconcileFromDefinition / applyDefinition run the ONE apply", () 
     expect(rows.map((r) => r.id)).toEqual([first.workspaceId]);
   });
 });
+
+// ── A pack onto a base that FAILED in layer 2 (W3 found-not-fixed #2) ──────
+
+describe("a pack composed onto a base whose layer 2 failed", () => {
+  it("records the pack once its layer 2 converged; the base keeps its own failure", async () => {
+    const base = "failed-base";
+    const baseId = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, settings) values ($1,$2,$3,$4,'failed',$5::jsonb)`,
+      [
+        baseId,
+        `Base ${base}`,
+        OWNER,
+        base,
+        JSON.stringify({
+          template: {
+            slug: base,
+            version: "b-1",
+            state: "failed",
+            failedLayer: 2,
+            at: "t0",
+          },
+        }),
+      ]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+      [randomUUID(), baseId, OWNER]
+    );
+    const pack: Pkg = {
+      slug: "pack-on-failed",
+      version: "p-1",
+      playbooks: ["Pack play"],
+    };
+    await applyTemplate({
+      definition: body(pack) as never,
+      actor: { userId: OWNER },
+      source: "contract",
+      targetWorkspaceId: baseId,
+      identity: { packageSlug: pack.slug, packageVersion: pack.version },
+    });
+    const { rows } = await q<{ settings: unknown }>(
+      `select settings from workspaces where id = $1`,
+      [baseId]
+    );
+    const state = readTemplateState(rows[0]!.settings);
+    expect(await playbooksIn(baseId)).toContain("Pack play");
+    expect(state).toMatchObject({
+      slug: base,
+      version: "b-1",
+      state: "failed",
+      failedLayer: 2,
+    });
+    expect(state?.packs?.find((p) => p.slug === pack.slug)?.version).toBe(
+      "p-1"
+    );
+  });
+});

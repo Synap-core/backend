@@ -1,9 +1,9 @@
 /**
  * resolveTarget — the ONE "is there already a space for this apply?" lookup
  * (APPLY-ONE-DOOR-PLAN §1). Every door that installs a template reaches it
- * through `applyTemplate` / `createWorkspaceFromDefinitionIdempotent`; the
- * per-door copies (tRPC by-proposal / by-package_slug, seedPlugin, adopt) are
- * retired onto it in W3/W4.
+ * through `applyTemplate` (or layer one, for a dependency); the tRPC copies
+ * (by-proposal / by-package_slug) were retired onto it in W3, and seedPlugin
+ * was removed (6a2427283). An adopt names its space and skips the lookup.
  *
  * Order (unchanged from the shared core it was lifted out of):
  *   1. key       — `provisioning_proposal_id = proposalId`, a space the caller

@@ -24,9 +24,6 @@ const { installCellMock } = vi.hoisted(() => ({
 vi.mock("../cells/install-cell-from-definition.js", () => ({
   installCellFromDefinition: installCellMock,
 }));
-vi.mock("../workspace-creation-service.js", () => ({
-  createWorkspaceFromDefinitionIdempotent: vi.fn(),
-}));
 vi.mock("./create-from-definition.js", () => ({
   createCapabilityFromDefinition: vi.fn(),
   loadCapabilityTemplate: vi.fn(),

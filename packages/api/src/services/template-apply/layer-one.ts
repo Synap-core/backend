@@ -6,9 +6,8 @@
  * ONE finisher (`finishTemplateApply`), which stamps it only once layer 2
  * converged.
  *
- * `applyTemplate` runs it for every standalone (non-compose) apply, and
- * `createWorkspaceFromDefinitionIdempotent` is a wrapper over it for the doors
- * that still drive layer 2 themselves (W3/W4) — so every door decides
+ * `applyTemplate` runs it for every standalone (non-compose) apply, and the
+ * dependency resolver for each workspace dependency — so every path decides
  * "create / resume / re-sync / skip" with the same lookup and the same plan.
  */
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";

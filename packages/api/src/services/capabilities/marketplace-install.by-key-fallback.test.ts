@@ -37,9 +37,6 @@ vi.mock("../template-apply-finisher.js", () => ({
   })),
 }));
 
-vi.mock("../workspace-creation-service.js", () => ({
-  createWorkspaceFromDefinitionIdempotent: createWorkspaceMock,
-}));
 // Layer one of the ONE apply (`applyTemplate`, W2) — the workspace applier the
 // fetched definition is handed to.
 vi.mock("../template-apply/layer-one.js", () => ({
