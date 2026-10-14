@@ -63,17 +63,34 @@ jobs:
       # The repo is `control-plane-api`; the DIRECTORY must be named
       # `synap-control-plane-api`, which is the name the tripwire resolves.
       #
-      # control-plane-api is PRIVATE, so this needs the CROSS_REPO_TOKEN repo
-      # secret (fine-grained PAT, Contents: read on Synap-core/control-plane-api).
-      # It was never set: every CI run since early August died here with
-      # "Input required and not supplied: token", so no quality step ran and no
-      # image was published. Say so plainly instead of that one-line error.
-      - name: Require CROSS_REPO_TOKEN
+      # control-plane-api is PRIVATE, so this needs a read token: the Synap
+      # release App's (scoped to control-plane-api + app-bases, contents: read;
+      # app-bases is read by the api-types freshness check below), else the
+      # CROSS_REPO_TOKEN repo secret (transition fallback; fine-grained PAT,
+      # Contents: read on Synap-core/control-plane-api) until the App is live
+      # (SECURITY-RELEASE-RUNBOOK.md §5). With neither, every run died at the
+      # checkout with "Input required and not supplied: token" and no quality
+      # step ran — say so plainly instead of that one-line error.
+      - name: Mint control-plane-api read token (GitHub App)
+        id: app-token
+        if: ${{ vars.SYNAP_RELEASE_APP_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          owner: Synap-core
+          repositories: |
+            control-plane-api
+            app-bases
+          permission-contents: read
+
+      - name: Require a control-plane-api read token
         env:
-          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          CROSS_REPO_TOKEN: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
         run: |
           if [ -z "$CROSS_REPO_TOKEN" ]; then
-            echo "::error::Repo secret CROSS_REPO_TOKEN is not set. Add a fine-grained PAT with Contents: read on Synap-core/control-plane-api (gh secret set CROSS_REPO_TOKEN -R Synap-core/backend). Without it the cross-repo parity tripwire cannot run, CI stays red and Publish Docker Images is skipped."
+            echo "::error::No token to read Synap-core/control-plane-api. Set the repo variable SYNAP_RELEASE_APP_ID and secret SYNAP_RELEASE_APP_KEY (SECURITY-RELEASE-RUNBOOK.md §5), or, until then, the CROSS_REPO_TOKEN secret (a fine-grained PAT with Contents: read on Synap-core/control-plane-api: gh secret set CROSS_REPO_TOKEN -R Synap-core/backend). Without one the cross-repo parity tripwire cannot run, CI stays red and Publish Docker Images is skipped."
             exit 1
           fi
 
@@ -81,7 +98,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Synap-core/control-plane-api
-          token: ${{ secrets.CROSS_REPO_TOKEN }}
+          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
           path: .cp-checkout
 
       - name: Place Control Plane API beside this checkout
@@ -200,7 +217,10 @@ jobs:
         run: node scripts/check-publish-freshness.mjs
         working-directory: packages/api-types
         env:
-          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          # Reads synap-app's package.json (Synap-core/app-bases, the repo's
+          # current name; the script's default is the old first-app).
+          SYNAP_APP_REPO: Synap-core/app-bases
+          CROSS_REPO_TOKEN: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
 
       - name: Start API server for smoke tests
         run: |

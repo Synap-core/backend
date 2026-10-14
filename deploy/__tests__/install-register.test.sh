@@ -28,6 +28,9 @@
 #   podkey    §8: the pod's own P-256 key is born on the host (0600, never sent),
 #             its PUBLIC JWK rides in the register body; no key → the code is
 #             not spent; `synap pod-key enroll` sends only the public JWK
+#   policy    D3: registration writes state/pod-agent-policy.json once, from the
+#             response's deploymentMode (managed / self-hosted, 0644); an existing
+#             owner file is never touched; a CP that predates the field → no file
 #   bootstrap install.sh: retired flags refused with the new spelling; bundle
 #             sha mismatch refused; happy path unpacks, links the CLI, execs
 #             `synap install --non-interactive --release <id> …`
@@ -143,10 +146,11 @@ exit 0
 D
 chmod +x "$TMP/bin/docker"
 
-cp_response() { # <oidc-json|null> <intelligence-json|null>
-  jq -n --arg cp "$BASE" --argjson oidc "$1" --argjson intel "$2" \
+cp_response() { # <oidc-json|null> <intelligence-json|null> [managed|self-hosted — omitted = a CP that predates deploymentMode]
+  jq -n --arg cp "$BASE" --argjson oidc "$1" --argjson intel "$2" --arg mode "${3:-}" \
     '{podId:"pod_123", controlPlaneUrl:"https://cp.synap.test", issuer:"https://cp.synap.test",
-      ownerAssertion:"eyJowner.assertion.jwt", oidc:$oidc, intelligence:$intel, catalogUrl:"https://cp.synap.test/catalog"}' \
+      ownerAssertion:"eyJowner.assertion.jwt", oidc:$oidc, intelligence:$intel, catalogUrl:"https://cp.synap.test/catalog"}
+     + (if $mode == "" then {} else {deploymentMode: $mode} end)' \
     > "$TMP/cp-response.json"
 }
 OIDC='{"assertion":"eyJoidc.push.jwt","clientId":"ignored"}'
@@ -336,6 +340,31 @@ run_install "${REG[@]}"; rc=$?
 calls="$(grep -v '^/pods/register$' "$TMP/calls.log" | tr '\n' ' ')"
 [ "$rc" = 0 ] && [ "$calls" = "/api/federation/bootstrap " ] && grep -q 'Synap sign-in stays off' "$S/out" && grep -q 'not included with this pod' "$S/out" \
   && ok "nulls: oidc + intelligence null → only the owner step, both named, success" || { bad "nulls: rc=$rc calls='$calls'"; show; }
+
+# ── policy: the pod-agent's owner-consent file is seeded from deploymentMode ──
+POLF="state/pod-agent-policy.json"
+mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+setup polmanaged; cp_response "$OIDC" "$INTEL" managed
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && [ "$(jq -c . "$DEPLOY/$POLF" 2>/dev/null)" = '{"mode":"managed","archiveRecipients":[]}' ] && [ "$(mode_of "$DEPLOY/$POLF")" = 644 ] \
+  && ok "policy: a managed registration writes mode=managed (0644)" || { bad "policy: managed rc=$rc file=$(cat "$DEPLOY/$POLF" 2>/dev/null)"; show; }
+setup polself; cp_response "$OIDC" "$INTEL" self-hosted
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && [ "$(jq -r .mode "$DEPLOY/$POLF" 2>/dev/null)" = self-hosted ] \
+  && ok "policy: a self-hosted registration writes mode=self-hosted" || { bad "policy: self-hosted rc=$rc"; show; }
+setup polkeep; cp_response "$OIDC" "$INTEL" managed
+mkdir -p "$DEPLOY/state"; printf '%s\n' '{"mode":"self-hosted","archiveRecipients":["age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"],"refuse":["configure"]}' > "$DEPLOY/$POLF"
+before="$(cat "$DEPLOY/$POLF")"
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$DEPLOY/$POLF")" = "$before" ] && grep -q 'kept as the owner left it' "$S/out" \
+  && ok "policy: an existing owner file is untouched even when the CP says managed" || { bad "policy: existing file changed: $(cat "$DEPLOY/$POLF")"; show; }
+setup polold; cp_response "$OIDC" "$INTEL"
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$DEPLOY/$POLF" ] && grep -q 'did not say whether this pod is managed' "$S/out" \
+  && ok "policy: a CP that predates deploymentMode → no file, named in the output, install succeeds" || { bad "policy: old CP rc=$rc"; show; }
+setup polbad; cp_response "$OIDC" "$INTEL" mangaged
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$DEPLOY/$POLF" ] && ok "policy: an unknown deploymentMode value writes nothing" || { bad "policy: bad mode rc=$rc"; show; }
 
 # ── install.sh: the bootstrapper ──────────────────────────────────────────────
 B="$TMP/boot"; mkdir -p "$B/bundle/deploy" "$B/bin" "$B/fake"

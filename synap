@@ -1748,6 +1748,8 @@ _reg_register_pod() {
         printf '   %s\n' "$errors" >&2
         return 1
     fi
+    # D3: record the owner-consent line the CP described (never over an owner's file).
+    _policy_seed_from_registration state/registration/response.json
     _reg_apply || {
         _reg_err "registration was accepted but not fully applied — re-run the same command to retry from state/registration/response.json"
         return 1
@@ -1883,6 +1885,112 @@ cmd_pod_key() {
             _podkey_ok "enrolled as pod $(jq -r .podId state/pod-identity-enrollment.json) (key $(jq -r .kid state/pod-identity-enrollment.json))" ;;
         *)
             echo "Usage: synap pod-key ensure | show | enroll --pod-id <id> --code <spr_…> [--control-plane <url>]"
+            exit 1 ;;
+    esac
+}
+
+# ============================================================================
+# POD-AGENT POLICY — the owner's consent line for Control Plane commands
+# (SECURITY-PLAN-R1 §2, decision D3; reader: deploy/pod-agent/policy.js)
+# ============================================================================
+# state/pod-agent-policy.json  {"mode": "managed"|"self-hosted", "archiveRecipients": ["age1…"]}
+# No file = self-hosted refusals (archive, restore-archive, configure), so a
+# managed pod needs `"mode":"managed"`. Registration writes the file ONCE, from
+# the Control Plane's `deploymentMode`, and never over an existing file (an
+# owner's edit wins). Everything after that is the owner's: `synap policy …`.
+# Written atomically (0644; owned by whoever runs this — root on a cloud-init
+# install). The backend only sees it through the read-only deploy mount, and
+# `configure` can only write .env keys, so the CP can never write it.
+SYNAP_POLICY_FILE="state/pod-agent-policy.json"
+# Same pattern as deploy/pod-agent/policy.js — a recipient the pod-agent would
+# reject must never be written (the whole file would then fail closed).
+SYNAP_AGE_RECIPIENT_RE='^age1[0-9a-z]{20,200}$'
+
+_policy_log()  { echo -e "${BLUE}[policy] $*${NC}"; }
+_policy_ok()   { echo -e "${GREEN}[policy] ✓ $*${NC}"; }
+_policy_warn() { echo -e "${YELLOW}[policy] ⚠️  $*${NC}" >&2; }
+_policy_err()  { echo -e "${RED}[policy] ❌ $*${NC}" >&2; }
+
+# <json> — atomic replace of the policy file.
+_policy_write() {
+    local tmp
+    mkdir -p state 2>/dev/null || true
+    tmp="$(mktemp "${SYNAP_POLICY_FILE}.XXXXXX")" || return 1
+    printf '%s\n' "$1" | jq '.' > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$SYNAP_POLICY_FILE" || { rm -f "$tmp"; return 1; }
+}
+
+# Prints the current policy object (the default when there is no file); fails
+# loudly on a file the pod-agent could not use — never edit around a typo.
+_policy_current() {
+    if [ ! -e "$SYNAP_POLICY_FILE" ] && [ ! -L "$SYNAP_POLICY_FILE" ]; then
+        echo '{"mode":"self-hosted","archiveRecipients":[]}'; return 0
+    fi
+    if ! jq -e 'type == "object" and ((.archiveRecipients // []) | type == "array")' "$SYNAP_POLICY_FILE" >/dev/null 2>&1; then
+        _policy_err "${SYNAP_POLICY_FILE} is not a valid policy file — fix or remove it first (the pod-agent treats it as self-hosted until then)"
+        return 1
+    fi
+    jq -c '.' "$SYNAP_POLICY_FILE"
+}
+
+# <response.json> — the registration's deploymentMode → a first policy file. Only
+# ever creates: an existing file (or a CP too old to say) is left alone.
+_policy_seed_from_registration() {
+    local mode
+    if [ -e "$SYNAP_POLICY_FILE" ] || [ -L "$SYNAP_POLICY_FILE" ]; then
+        _policy_log "${SYNAP_POLICY_FILE} already exists — kept as the owner left it"
+        return 0
+    fi
+    mode="$(jq -r '.deploymentMode // empty' "$1" 2>/dev/null)"
+    case "$mode" in
+        managed|self-hosted) ;;
+        "") _policy_warn "the Control Plane did not say whether this pod is managed — no policy file written (self-hosted refusals apply; a managed pod needs: ./synap policy set-mode managed)"; return 0 ;;
+        *)  _policy_warn "unknown deploymentMode from the Control Plane — no policy file written"; return 0 ;;
+    esac
+    _policy_write "$(jq -cn --arg mode "$mode" '{mode: $mode, archiveRecipients: []}')" \
+        && _policy_ok "wrote ${SYNAP_POLICY_FILE} (mode ${mode})" \
+        || _policy_warn "could not write ${SYNAP_POLICY_FILE} — set it with: ./synap policy set-mode ${mode}"
+}
+
+# synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
+cmd_policy() {
+    local deploy_dir
+    deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in a Synap installation directory${NC}"; exit 1
+    fi
+    cd "$deploy_dir"
+    local action="${1:-show}"; shift 2>/dev/null || true
+    local cur
+    case "$action" in
+        show)
+            cur="$(_policy_current)" || exit 1
+            if [ -e "$SYNAP_POLICY_FILE" ]; then echo "file: ${deploy_dir}/${SYNAP_POLICY_FILE}"
+            else echo "file: (none — ${deploy_dir}/${SYNAP_POLICY_FILE} is absent, so the default applies)"; fi
+            echo "$cur" | jq -r '"mode: \(.mode // "(missing)")",
+                "refuse: \(if has("refuse") then (.refuse | join(", ")) else (if .mode == "managed" then "(nothing)" else "archive, restore-archive, configure" end) + " (mode default)" end)",
+                "archiveRecipients: \((.archiveRecipients // []) | if length == 0 then "(none)" else join(", ") end)"' ;;
+        set-mode)
+            local mode="${1:-}"
+            case "$mode" in managed|self-hosted) ;; *) _policy_err "usage: synap policy set-mode <managed|self-hosted>"; exit 1 ;; esac
+            cur="$(_policy_current)" || exit 1
+            _policy_write "$(echo "$cur" | jq -c --arg m "$mode" '.mode = $m')" || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
+            _policy_ok "mode = ${mode}"
+            [ "$mode" = managed ] && _policy_log "the Control Plane may now order archive, restore-archive and configure on this pod" ;;
+        add-recipient|remove-recipient)
+            local r="${1:-}"
+            [[ "$r" =~ $SYNAP_AGE_RECIPIENT_RE ]] || { _policy_err "usage: synap policy ${action} <age1…>  (an age public key: age1 + lowercase letters and digits)"; exit 1; }
+            cur="$(_policy_current)" || exit 1
+            if [ "$action" = add-recipient ]; then
+                _policy_write "$(echo "$cur" | jq -c --arg r "$r" '.archiveRecipients = ((.archiveRecipients // []) | if index($r) then . else . + [$r] end)')" \
+                    || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
+                _policy_ok "archive recipient added"
+            else
+                _policy_write "$(echo "$cur" | jq -c --arg r "$r" '.archiveRecipients = ((.archiveRecipients // []) | map(select(. != $r)))')" \
+                    || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
+                _policy_ok "archive recipient removed (if it was listed)"
+            fi ;;
+        *)
+            echo "Usage: synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>"
             exit 1 ;;
     esac
 }
@@ -6156,6 +6264,7 @@ ${YELLOW}Management:${NC}
   synap doctor [--json]          Read-only health: env drift, compose projects, checkout, release, backups, pgdata
   synap federation <action>      External sign-in: status | connect-cloud | disable
   synap pod-key <action>         This pod's own identity key: ensure | show | enroll --pod-id <id> --code <spr_…>
+  synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
   synap clean [type]             Clean Docker resources (interactive if no type)
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
@@ -6323,6 +6432,10 @@ case "${1:-help}" in
     pod-key)
         shift
         cmd_pod_key "$@"
+        ;;
+    policy)
+        shift
+        cmd_policy "$@"
         ;;
     rebuild)
         shift
