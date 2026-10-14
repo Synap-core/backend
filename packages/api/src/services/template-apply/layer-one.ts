@@ -101,6 +101,12 @@ export interface LayerOneResult {
   /** The version layer 1 materialized / re-synced to — never stamped here. */
   pendingVersionStamp?: string;
   /**
+   * `"reconciled"` only: the profile slugs of the definition the re-sync ran
+   * against — what a pending template DATA change is matched on (the stamp
+   * hold, `applyTemplate`).
+   */
+  resyncedProfileSlugs?: string[];
+  /**
    * Built just now (create / resume) only: what the create core made, in the
    * definition's order — a door's seed step reads the entities positionally.
    */
@@ -380,14 +386,15 @@ export async function applyLayerOne(
     // resync — additive, never destructive. Leave "failed" first (the
     // finisher never overwrites it); a layer 2 that throws again re-marks it.
     if (action.reopen) await reopenFailedLayerTwo(workspaceId, userId, version);
+    const resyncDefinition = (resolved?.workspaceDefinition ??
+      definition) as WorkspaceDefinitionInput;
     let report: ReconcileReport;
     try {
       report = await reconcileWorkspaceFromDefinition({
         validateFlow: unfilteredAiFanoutError,
         workspaceId,
         userId,
-        definition: (resolved?.workspaceDefinition ??
-          definition) as WorkspaceDefinitionInput,
+        definition: resyncDefinition,
         // An adopted space keeps the capabilities it had before it was this
         // template's; a later update converges them to the template.
         ...(action.reason === "adopt" ? { mergeCapabilities: true } : {}),
@@ -425,6 +432,11 @@ export async function applyLayerOne(
       outcome: "reconciled",
       action,
       reconciled: report,
+      resyncedProfileSlugs: (
+        (resyncDefinition.profiles ?? []) as Array<{ slug?: unknown }>
+      )
+        .map((p) => p.slug)
+        .filter((slug): slug is string => typeof slug === "string" && !!slug),
       ...(resolved?.packageDefinition
         ? { packageDefinition: resolved.packageDefinition }
         : {}),

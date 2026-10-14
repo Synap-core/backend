@@ -48,6 +48,8 @@ const h = vi.hoisted(() => ({
   failLayerTwo: false,
   /** Make the layer-1 re-sync throw. */
   failResync: false,
+  /** What `pendingTemplateDataChanges` answers (the consentable data changes). */
+  pendingDataChanges: [] as Array<Record<string, unknown>>,
   /** When layer 2 throws, the next N template-state writes fail (a DB blip). */
   blipWritesAfterLayerTwo: 0,
   failNextWrites: 0,
@@ -96,7 +98,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         ...args
       );
     },
-    pendingTemplateDataChanges: async () => [],
+    pendingTemplateDataChanges: async () => h.pendingDataChanges,
     // The create/resume core, following its contract (pinned on the REAL core
     // by @synap/database `create-workspace-hands-back-stamp.pglite.test.ts`):
     // the space is left "pending", the version handed back, never written.
@@ -1306,5 +1308,50 @@ describe("a space left 'building' is moved on, never terminal", () => {
     expect(after.id).toBe(id);
     expect(after.state).toMatchObject({ state: "active", version: "l-1" });
     expect(await playbooksIn(id)).toEqual(["Qualify"]);
+  });
+});
+
+// ── The data-change hold on the apply path (review F8) ─────────────────────
+//
+// A re-sync whose template's profiles a pending, consentable data change
+// still touches must NOT be stamped by a door that does not gate consent (the
+// tRPC banner update): the person consents at `synap templates update`.
+
+describe("a pending template data change holds the stamp on every door", () => {
+  it("tRPC installFromCatalog (the banner update) re-syncs and lands layer 2, but holds the version and says why", async () => {
+    const slug = "data-change-held";
+    publish({ slug, version: "d-1", playbooks: ["Qualify"] });
+    await catalogTrpc().installFromCatalog({ slug });
+    const { id } = await theSpace(slug);
+    publish({ slug, version: "d-2", playbooks: ["Qualify", "Close"] });
+    h.pendingDataChanges = [
+      {
+        opKey: "lead-to-facet",
+        description: "Leads become a role on people",
+        affected: 3,
+        destructive: false,
+        counts: {},
+      },
+    ];
+    let reply: { warning?: string | null };
+    try {
+      reply = (await catalogTrpc().installFromCatalog({
+        slug,
+        workspaceId: id,
+      })) as typeof reply;
+    } finally {
+      h.pendingDataChanges = [];
+    }
+    expect(await playbooksIn(id)).toEqual(["Close", "Qualify"]);
+    const held = await theSpace(slug);
+    expect(held.state?.version).toBe("d-1");
+    expect(reply.warning).toMatch(/changes existing data/);
+    // Once nothing is pending (the person consented through the update
+    // door), the next apply earns the stamp.
+    await catalogTrpc().installFromCatalog({ slug, workspaceId: id });
+    expect((await theSpace(slug)).state).toMatchObject({
+      state: "active",
+      version: "d-2",
+    });
   });
 });
