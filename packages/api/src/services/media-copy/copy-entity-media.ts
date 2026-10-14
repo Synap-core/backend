@@ -45,6 +45,8 @@ import {
   drizzleSql,
   entities,
   profiles,
+  eventRepository,
+  EntityBodyService,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { EntityMediaCopy } from "@synap-core/types/presentation";
@@ -74,6 +76,11 @@ export interface CopyEntityMediaDeps {
   fetchImage?: (url: string) => Promise<ImageFetchResult>;
   store?: typeof storeDocumentFromBuffer;
   now?: () => Date;
+  /**
+   * Delete a stored document + its blobs (default: `EntityBodyService.deleteBody`).
+   * Used for a copy the run stored but could not record.
+   */
+  discard?: (documentId: string) => Promise<void>;
   /** Tell connected clients the entity changed (default: realtime bridge). */
   announce?: (entity: {
     id: string;
@@ -180,33 +187,75 @@ export async function runEntityMediaCopy(
     }
   }
 
-  await recordMediaCopyRun(row.id, { copied, failed, at: now().toISOString() });
-  if (copied.length > 0) {
+  // A stored blob the entity does not end up holding is an orphan nobody can
+  // list or reclaim: a failed record, a deleted entity, or a concurrent run
+  // that recorded the same sourceUrl first. Discard exactly those.
+  const discard =
+    deps.discard ??
+    ((documentId: string) =>
+      new EntityBodyService(db, eventRepository).deleteBody({ documentId }));
+  let kept: Set<string>;
+  try {
+    kept = await recordMediaCopyRun(row.id, {
+      copied,
+      failed,
+      at: now().toISOString(),
+    });
+  } catch (err) {
+    await discardAll(copied, new Set(), discard, row.id);
+    throw err;
+  }
+  await discardAll(copied, kept, discard, row.id);
+  if (copied.some((c) => kept.has(c.documentId))) {
     (deps.announce ?? announceMediaCopied)({
       id: row.id,
       userId: row.userId,
       workspaceId: row.workspaceId ?? null,
     });
   }
-  return { status: "copied", copied: copied.length, failed: failed.length };
+  return {
+    status: "copied",
+    copied: copied.filter((c) => kept.has(c.documentId)).length,
+    failed: failed.length,
+  };
+}
+
+async function discardAll(
+  copied: EntityMediaCopy[],
+  kept: Set<string>,
+  discard: (documentId: string) => Promise<void>,
+  entityId: string
+): Promise<void> {
+  for (const c of copied) {
+    if (kept.has(c.documentId)) continue;
+    try {
+      await discard(c.documentId);
+    } catch (err) {
+      logger.warn(
+        { err, entityId, documentId: c.documentId },
+        "entity-media-copy: discarding an unrecorded copy failed"
+      );
+    }
+  }
 }
 
 /**
  * Fold the run into the entity's systemData under a row lock. Only the `media`
  * and `mediaCopyFailures` keys are written (`jsonb_set`), so a concurrent
  * writer's other keys are never clobbered, and two runs never double-append.
+ * Returns the document ids of this run's copies the entity now holds.
  */
 async function recordMediaCopyRun(
   entityId: string,
   run: Parameters<typeof mergeMediaSystemData>[1]
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<Set<string>> {
+  return db.transaction(async (tx) => {
     const [current] = await tx
       .select({ systemData: entities.systemData })
       .from(entities)
       .where(eq(entities.id, entityId))
       .for("update");
-    if (!current) return;
+    if (!current) return new Set<string>();
     const next = mergeMediaSystemData(current.systemData, run);
     await tx
       .update(entities)
@@ -214,6 +263,10 @@ async function recordMediaCopyRun(
         systemData: drizzleSql`jsonb_set(jsonb_set(COALESCE(${entities.systemData}, '{}'::jsonb), '{media}', ${JSON.stringify(next.media)}::jsonb, true), '{mediaCopyFailures}', ${JSON.stringify(next.mediaCopyFailures)}::jsonb, true)`,
       })
       .where(eq(entities.id, entityId));
+    const held = new Set(next.media.map((m) => m.documentId));
+    return new Set(
+      run.copied.map((c) => c.documentId).filter((id) => held.has(id))
+    );
   });
 }
 

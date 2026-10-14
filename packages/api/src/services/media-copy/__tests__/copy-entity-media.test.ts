@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   row: undefined as Record<string, unknown> | undefined,
   locked: undefined as Record<string, unknown> | undefined,
   sets: [] as unknown[],
+  deleteBody: vi.fn(async (_p: { documentId: string }) => undefined),
 }));
 
 vi.mock("@synap/database", () => {
@@ -44,6 +45,10 @@ vi.mock("@synap/database", () => {
     }),
     entities: { systemData: "entities.system_data" },
     profiles: {},
+    eventRepository: {},
+    EntityBodyService: class {
+      deleteBody = state.deleteBody;
+    },
   };
 });
 vi.mock("../../../routers/file-upload.js", () => ({
@@ -91,6 +96,7 @@ beforeEach(() => {
   state.row = undefined;
   state.locked = undefined;
   state.sets = [];
+  state.deleteBody.mockClear();
   pipes.realtime.mockClear();
   pipes.sideEffects.mockClear();
   pipes.auditLog.mockClear();
@@ -275,6 +281,94 @@ describe("after a copy: clients refetch, the reactor never re-fires", () => {
       }
     );
     expect(pipes.realtime).not.toHaveBeenCalled();
+  });
+});
+
+describe("a stored copy the entity does not hold is discarded (no orphan blob)", () => {
+  const okImage = vi.fn(async () => ({
+    ok: true as const,
+    bytes: Buffer.from([1]),
+    mime: "image/png" as const,
+  }));
+  const storeAs = (documentId: string) =>
+    vi.fn(async () => ({ documentId })) as never;
+
+  it("a recorded copy is kept", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    const discard = vi.fn(async () => undefined);
+    const r = await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store: storeAs("doc-new"), discard }
+    );
+    expect(r).toMatchObject({ copied: 1 });
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it("a concurrent run recorded the same sourceUrl first: this run's blob is discarded", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = {
+      systemData: {
+        media: [
+          {
+            documentId: "doc-winner",
+            mime: "image/png",
+            bytes: 1,
+            sourceUrl: IMG,
+            copiedAt: "t",
+          },
+        ],
+      },
+    };
+    const discard = vi.fn(async () => undefined);
+    const r = await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store: storeAs("doc-loser"), discard }
+    );
+    expect(discard).toHaveBeenCalledWith("doc-loser");
+    expect(r).toMatchObject({ copied: 0 });
+    expect(pipes.realtime).not.toHaveBeenCalled();
+  });
+
+  it("the entity vanished before the record: the blob is discarded", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = undefined;
+    const discard = vi.fn(async () => undefined);
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store: storeAs("doc-x"), discard }
+    );
+    expect(discard).toHaveBeenCalledWith("doc-x");
+  });
+
+  it("a failed record discards the blob and still fails the run", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = { systemData: {} };
+    const discard = vi.fn(async () => undefined);
+    const realSets = state.sets;
+    state.sets = {
+      push: () => {
+        throw new Error("write failed");
+      },
+    } as never;
+    await expect(
+      runEntityMediaCopy(
+        { entityId: "e1" },
+        { fetchImage: okImage, store: storeAs("doc-y"), discard }
+      )
+    ).rejects.toThrow("write failed");
+    state.sets = realSets;
+    expect(discard).toHaveBeenCalledWith("doc-y");
+  });
+
+  it("the default discard is the body door's deleteBody", async () => {
+    state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
+    state.locked = undefined;
+    await runEntityMediaCopy(
+      { entityId: "e1" },
+      { fetchImage: okImage, store: storeAs("doc-z") }
+    );
+    expect(state.deleteBody).toHaveBeenCalledWith({ documentId: "doc-z" });
   });
 });
 

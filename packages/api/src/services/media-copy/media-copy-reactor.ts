@@ -27,6 +27,17 @@ const logger = createLogger({ module: "entity-media-copy-reactor" });
  */
 const DEBOUNCE_SECONDS = 10;
 
+/**
+ * The ONE singleton key of an entity's copy job — the reactor and the backfill
+ * both send under it. pg-boss dedupes per (key, slot) and the two senders use
+ * different slots (a debounce vs a day), so this does not make a second run
+ * impossible: the runner re-plans from the row (a copied URL is not owed
+ * again) and a run that loses a race discards the blob it stored.
+ */
+export function entityMediaCopySingletonKey(entityId: string): string {
+  return `entity-media-copy:${entityId}`;
+}
+
 export const entityMediaCopyReactor: Reactor = {
   id: "entity-media-copy",
   match: (payload) =>
@@ -38,7 +49,7 @@ export const entityMediaCopyReactor: Reactor = {
       ENTITY_MEDIA_COPY_QUEUE,
       { entityId: payload.subjectId } satisfies EntityMediaCopyQueueData,
       {
-        singletonKey: `entity-media-copy:${payload.subjectId}`,
+        singletonKey: entityMediaCopySingletonKey(payload.subjectId),
         singletonSeconds: DEBOUNCE_SECONDS,
         singletonNextSlot: true,
         retryLimit: 0,

@@ -73,6 +73,7 @@ import {
   planMediaCopy,
   presentationOf,
 } from "./media-plan.js";
+import { entityMediaCopySingletonKey } from "./media-copy-reactor.js";
 
 const logger = createLogger({ module: "media-copy-backfill" });
 
@@ -312,7 +313,7 @@ export async function backfillEntityMediaCopies(
         { entityId: row.id },
         {
           startAfter: new Date(nextStart),
-          singletonKey: `entity-media-copy-backfill:${row.id}`,
+          singletonKey: entityMediaCopySingletonKey(row.id),
           singletonSeconds: BACKFILL_SINGLETON_SECONDS,
           retryLimit: 0,
         }

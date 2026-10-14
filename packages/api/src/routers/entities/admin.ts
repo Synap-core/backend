@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import { archiveObjectChannels } from "../../services/comments/object-channel.js";
-import { ownedDocumentIds } from "../../utils/store-entity-source-blob.js";
+import { reclaimableDocumentIds } from "../../utils/entity-reclaimable-documents.js";
 import { podAdminProcedure } from "../../trpc.js";
 import {
   db,
@@ -166,6 +166,9 @@ export const adminProcs = {
           // Needed for the source-file half of the cascade — a provenance blob
           // lives in `properties.sourceFileDocumentId`, NOT in `document_id`.
           properties: entities.properties,
+          // …and the media-copy half (`systemData.media`), owner-locked.
+          userId: entities.userId,
+          systemData: entities.systemData,
         });
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
@@ -181,7 +184,10 @@ export const adminProcs = {
       // gone, so we pass the captured ids directly.
       {
         const bodyService = new EntityBodyService(database, eventRepository);
-        for (const documentId of ownedDocumentIds(deleted)) {
+        for (const documentId of await reclaimableDocumentIds(
+          database,
+          deleted
+        )) {
           await bodyService.deleteBody({ documentId });
         }
       }
@@ -229,6 +235,8 @@ export const adminProcs = {
           id: entities.id,
           documentId: entities.documentId,
           properties: entities.properties,
+          userId: entities.userId,
+          systemData: entities.systemData,
         });
       // B1: reclaim EVERY document row each hard-deleted entity owned (body AND
       // source-file provenance) + their storage objects. Reading only
@@ -240,7 +248,7 @@ export const adminProcs = {
       );
       const bodyService = new EntityBodyService(database, eventRepository);
       for (const row of deleted) {
-        for (const documentId of ownedDocumentIds(row)) {
+        for (const documentId of await reclaimableDocumentIds(database, row)) {
           await bodyService.deleteBody({ documentId }).catch(() => {});
         }
       }

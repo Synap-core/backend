@@ -219,7 +219,8 @@ describe("backfillEntityMediaCopies", () => {
       "2026-10-14T10:00:00.000Z",
       "2026-10-14T10:00:06.000Z",
     ]);
-    expect(calls[0]!.key).toBe(`entity-media-copy-backfill:${owesCover}`);
+    // The reactor's key: one pending copy job per entity, whoever sent it.
+    expect(calls[0]!.key).toBe(`entity-media-copy:${owesCover}`);
     expect(result).toMatchObject({ status: "completed", enqueued: 2 });
 
     const marker = await readBackfillMarker();
