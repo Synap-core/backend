@@ -101,10 +101,9 @@ function code(path: string): string {
 }
 
 const CORE_CALL =
-  /(?<!function\s)\b(createWorkspaceFromDefinition|createWorkspaceFromDefinitionIdempotent|materializeWorkspaceCore|applyLayerOne)\s*\(/;
+  /(?<!function\s)\b(createWorkspaceFromDefinition|materializeWorkspaceCore|applyLayerOne)\s*\(/;
 /** The plumbing that DEFINES / wraps the core — it hands the version back, never finishes. */
 const PLUMBING = new Set([
-  "services/workspace-creation-service.ts",
   "services/workspace-materialization-service.ts",
   // Layer one of `applyTemplate` (W2): resolveTarget → plan → build/re-sync.
   "services/template-apply/layer-one.ts",
