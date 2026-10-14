@@ -14,7 +14,12 @@ describe("materializeReportStatus", () => {
         status: "created",
         workspaceId: "ws-1",
         dependencies: [],
-        created: { workspaceId: "ws-1", created: true, outcome: "created" },
+        created: {
+          workspaceId: "ws-1",
+          created: true,
+          outcome: "created",
+          action: { kind: "create" },
+        },
       })
     ).toBe("created");
   });
@@ -27,7 +32,12 @@ describe("materializeReportStatus", () => {
           status: "created",
           workspaceId: "ws-1",
           dependencies: [],
-          created: { workspaceId: "ws-1", created: false, outcome },
+          created: {
+            workspaceId: "ws-1",
+            created: false,
+            outcome,
+            action: { kind: "unchanged", checked: true },
+          },
         })
       ).toBe("reused");
     }

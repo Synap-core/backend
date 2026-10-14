@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   },
   proposedName: "Qualify a lead",
   filedProposalId: "",
+  /** Spaces the layer-1 re-sync ran on. */
+  resynced: [] as string[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -110,6 +112,29 @@ vi.mock("@synap/database", async (importOriginal) => {
         ...(input.packageVersion
           ? { pendingVersionStamp: input.packageVersion }
           : {}),
+      };
+    },
+    // The re-sync core, following its contract (additive; a report back). The
+    // real one reads through the database package's own connection, which
+    // this harness does not have — it used to fail here, silently swallowed.
+    reconcileWorkspaceFromDefinition: async (input: {
+      workspaceId: string;
+    }) => {
+      h.resynced.push(input.workspaceId);
+      return {
+        workspaceId: input.workspaceId,
+        dryRun: false,
+        settings: { merged: [] },
+        profiles: {
+          added: [],
+          reused: [],
+          promoted: [],
+          deferred: [],
+          conflicts: [],
+        },
+        properties: { added: [], conflicts: [] },
+        views: { added: [] },
+        entityLinks: { added: [] },
       };
     },
     preflightWorkspaceFromDefinition: async () => ({
@@ -352,6 +377,8 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     // "unchanged" the early stamp would claim (that skips layer 2).
     expect(body.workspace).toMatchObject({ workspaceId: id });
     expect(body.workspace.outcome).not.toBe("unchanged");
+    // Layer 1 was re-synced onto THIS space.
+    expect(h.resynced).toContain(id);
     expect(body.versionStamped).toBe(true);
     expect(body.templateApply).toBeUndefined();
     const { settings } = await space();

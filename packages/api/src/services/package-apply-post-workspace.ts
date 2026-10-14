@@ -500,9 +500,11 @@ export interface ApplyPackagePostWorkspaceInput {
  * Record a LAYER-2 failure (`state: "failed"`, `failedLayer: 2`) after a
  * post-workspace layer throw, through the ONE template-state writer
  * (`writeTemplateState`) — mirroring core's `handleStepError`. Best-effort:
- * a write failure must never mask the real layer error.
+ * a write failure must never mask the real layer error. Exported for
+ * `applyTemplate`, which records a layer-2 failure that happens before this
+ * applier runs (an unparseable catalog body).
  */
-async function markPostWorkspaceProvisioningFailed(
+export async function markLayerTwoFailed(
   workspaceId: string,
   userId: string,
   cause: unknown
@@ -541,11 +543,9 @@ export async function applyPackagePostWorkspace(
   try {
     return await applyPackagePostWorkspaceInner(input);
   } catch (e) {
-    await markPostWorkspaceProvisioningFailed(
-      input.workspaceId,
-      input.userId,
-      e
-    ).catch(() => {});
+    await markLayerTwoFailed(input.workspaceId, input.userId, e).catch(
+      () => {}
+    );
     throw e;
   }
 }

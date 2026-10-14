@@ -1,23 +1,14 @@
 /**
  * Workspace Creation Service
  *
- * Shared idempotent wrapper around `createWorkspaceFromDefinition`. Used by
- * both the tRPC `workspaces.createFromDefinition` mutation and the Hub
- * Protocol REST `/workspaces/from-definition` endpoint so external callers
- * (Eve, Coder) get the same idempotency guarantees as the in-app path.
- *
- * Two idempotency keys are supported:
- *   1. `packageSlug` — historic key used by the tRPC path (see workspaces router).
- *   2. `proposalId`  — caller-supplied stable key used by Hub REST (Eve / Coder
- *      generate this from a template id like "builder-workspace-v1").
- *
- * If a workspace already exists for the user with the given key, return it
- * with `created: false`. Otherwise create a new workspace and return
- * `created: true`.
+ * The idempotent create (`createWorkspaceFromDefinitionIdempotent`, a wrapper
+ * over `template-apply/layer-one.ts`), the one-space-per-domain verdict, and —
+ * until W3 retires the tRPC door's copy — `reconcileWorkspaceIfStale`,
+ * `failedInLayerTwo` and `withoutStamp`, which `definition-engine.ts` still
+ * calls. The existing-space lookup lives in `template-apply/resolve-target.ts`.
  */
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import {
-  createWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
   db,
   drizzleSql,
@@ -28,20 +19,25 @@ import {
   isNull,
   or,
   findWorkspaceIdentityConflict,
-  WorkspaceIdentityConflictError,
   readTemplateState,
   isFailedInLayerTwo,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
 } from "@synap/database";
-import { getBoss } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import {
   resolveWorkspaceTemplate,
   type ResolvedWorkspaceTemplate,
 } from "./capabilities/resolve-workspace-template.js";
 import { oneSpacePerDomainGuidance } from "./one-space-per-domain.js";
+import {
+  applyLayerOne,
+  withWorkspaceProposalIdLock,
+  type LayerOneInput,
+  type LayerOneResult,
+} from "./template-apply/layer-one.js";
+import { findLegacyWorkspaceMatch } from "./template-apply/resolve-target.js";
 
 const logger = createLogger({ module: "workspace-creation-service" });
 
@@ -192,182 +188,12 @@ export async function reconcileWorkspaceIfStale(opts: {
   }
 }
 
-/**
- * Editor+ roles gate for legacy-identity ADOPTION — mirrors `WRITE_ROLES` in
- * `package-dependency-resolver.ts:178`. Adopting a pre-stamped workspace's
- * identity is itself a governed write (it mutates `provisioning_proposal_id`
- * + `settings`), so it gets the same floor a compose overlay write gets.
- *
- * DELIBERATELY kept at owner/admin/editor — NOT relaxed to "any visible
- * membership" the way `findWorkspaceBySubtype(..., requireWrite: false)`
- * (the dependency `require` path) is in `package-dependency-resolver.ts`.
- * That path is safe to relax because REUSE writes nothing to the matched
- * workspace — presence alone satisfies a `require` dependency. This path is
- * different: on a hit, `createWorkspaceFromDefinitionIdempotent` immediately
- * stamps `provisioning_proposal_id` + `settings.proposalId` onto the matched
- * row (see the adopt block below) and may also run
- * `reconcileWorkspaceFromDefinition` onto it. Both are writes, so a
- * viewer-only member must not be able to trigger them by re-running an
- * install — that would let a read-only membership silently mutate a
- * workspace's identity/content. The union fix above (both tiers feed one
- * role-filtered pool) closes the gap that used to make this floor miss
- * legitimate owner/editor matches; it does not widen who may adopt.
- */
-const ADOPT_WRITE_ROLES = new Set(["owner", "admin", "editor"]);
-
 /*
  * NAMED INSTANCES are retired (0308, founder 2026-10-06): a template is
  * installed ONCE per pod — `workspaces_active_package_slug_unique` makes a
  * second active copy impossible — so there is no `<slug>:<name>` key any more.
  * The doors that accepted an instance name answer 400.
  */
-
-interface LegacyWorkspaceMatch {
-  id: string;
-  settings: WorkspaceSettings | null;
-}
-
-/**
- * `settings || {proposalId}` — the idempotency key written into the stored
- * blob in the same statement, so a write never carries back a settings object
- * read before someone else (the reconcile) merged into it.
- */
-function withProposalId(proposalId: string) {
-  return drizzleSql`COALESCE(${workspaces.settings}, '{}'::jsonb) || jsonb_build_object('proposalId', ${proposalId}::text)`;
-}
-
-/**
- * Fallback identity match for workspaces installed BEFORE migration 0039
- * promoted `proposalId`/`packageSlug` to indexed columns. Those rows have
- * `provisioning_proposal_id = NULL`, so the primary predicate in step 1 below
- * misses them — and without this fallback, a reinstall DUPLICATES instead of
- * reconciling (the root cause this function fixes).
- *
- * Two tiers, UNIONED (both always run, deduped by workspace id) — NOT tried
- * in order with first-hit-wins, because that let tier 1 short-circuit tier 2:
- * if `package_slug = slug` found a row but that row was later dropped by the
- * `ADOPT_WRITE_ROLES` filter (e.g. a viewer-only membership on the packageSlug
- * row), tier 2 never even ran, so a role-eligible subtype match was missed and
- * the caller fell through to CREATE → duplicate workspace. Both tiers now feed
- * the same candidate pool, which the role filter + tie-break below is applied
- * to as one step:
- *   1. `workspaces.package_slug = slug` — the promoted column. Stamped OLDER
- *      than `provisioning_proposal_id` (dual-written from a later
- *      `settings.proposalId` follow-up merge), so it covers more legacy rows.
- *   2. `settings->>'workspaceSubtype' = slug` — every built-in template sets
- *      its subtype (24/24), so this covers rows the packageSlug tier misses.
- *
- * GUARDRAIL on tier 2: overlays deliberately set their subtype to their
- * BASE's slug (`package-dependency-resolver.ts:234-237` documents the
- * collision this caused before transitive compose was routed around this
- * function entirely — see that module's file-header comment). A naive
- * subtype match on an overlay's OWN slug would therefore silently adopt the
- * BASE workspace as if it were the overlay.
- *
- * This is safe here because `createWorkspaceFromDefinitionIdempotent` is
- * NEVER called for a compose-overlay package: `materializeWorkspaceCore`
- * intercepts a resolved `composeTargetWorkspaceId` and routes to
- * `composeOntoBaseWorkspace` before ever reaching this function, and the
- * resolver's own transitive-compose step (§4a) does the same for a nested
- * overlay. Every caller that reaches this fallback is therefore already a
- * top-level STANDALONE install, by construction — not by inference from the
- * input. If that invariant is ever violated, the `ADOPT_WRITE_ROLES` gate
- * below is a floor, not a full guarantee: when ambiguous, "no match" (fall
- * through to create) is the safe default, never a guess.
- *
- * Both tiers reuse the exact deterministic tie-break (prefer owned, then
- * most-recently-created) and write-role floor `findWorkspaceBySubtype` in
- * `package-dependency-resolver.ts` already established for the same
- * `workspaceSubtype` predicate — mirrored here rather than imported, since
- * that module imports `createWorkspaceFromDefinitionIdempotent` FROM this
- * file and importing back would create a circular dependency.
- */
-async function findLegacyWorkspaceMatch(
-  slug: string,
-  userId: string
-): Promise<LegacyWorkspaceMatch | null> {
-  // Archived spaces are out: they hold no identity (0308) and a reinstall
-  // must not resurrect one. A former NAMED instance (`<slug>:<name>` key) that
-  // is the template's only active space IS its install now, so it is adopted.
-  const live = isNull(workspaces.archivedAt);
-  const selectCols = {
-    id: workspaces.id,
-    ownerId: workspaces.ownerId,
-    createdAt: workspaces.createdAt,
-    settings: workspaces.settings,
-    role: workspaceMembers.role,
-  };
-
-  const bySlug = await db
-    .select(selectCols)
-    .from(workspaces)
-    .innerJoin(
-      workspaceMembers,
-      eq(workspaceMembers.workspaceId, workspaces.id)
-    )
-    .where(
-      and(
-        eq(workspaceMembers.userId, userId),
-        eq(workspaces.packageSlug, slug),
-        live
-      )
-    );
-
-  const bySubtype = await db
-    .select(selectCols)
-    .from(workspaces)
-    .innerJoin(
-      workspaceMembers,
-      eq(workspaceMembers.workspaceId, workspaces.id)
-    )
-    .where(
-      and(
-        eq(workspaceMembers.userId, userId),
-        drizzleSql`${workspaces.settings}->>'workspaceSubtype' = ${slug}`,
-        live
-      )
-    );
-
-  // UNION both tiers (deduped by workspace id) BEFORE the role filter below —
-  // previously tier 2 (subtype) only ran when tier 1 (packageSlug) found ZERO
-  // rows, so a packageSlug row that the role filter would later drop (e.g. a
-  // viewer-only membership) silently suppressed a legitimate, role-eligible
-  // subtype match instead of falling through to it. Running both and merging
-  // first means the role filter + tie-break below sees every candidate from
-  // either predicate, never just whichever tier happened to hit first.
-  const byId = new Map<string, (typeof bySlug)[number]>();
-  for (const r of [...bySlug, ...bySubtype]) byId.set(r.id, r);
-  const rows = [...byId.values()];
-
-  const matches = rows.filter((r) => ADOPT_WRITE_ROLES.has(r.role));
-  if (matches.length === 0) return null;
-
-  matches.sort((a, b) => {
-    const aOwner = a.ownerId === userId ? 1 : 0;
-    const bOwner = b.ownerId === userId ? 1 : 0;
-    if (aOwner !== bOwner) return bOwner - aOwner;
-    return b.createdAt.getTime() - a.createdAt.getTime();
-  });
-
-  if (matches.length > 1) {
-    logger.warn(
-      {
-        slug,
-        userId,
-        count: matches.length,
-        chosen: matches[0].id,
-        candidates: matches.map((w) => w.id),
-      },
-      "findLegacyWorkspaceMatch: multiple legacy workspaces match fallback identity — chose deterministically (owner, then most-recent)"
-    );
-  }
-
-  const chosen = matches[0];
-  return {
-    id: chosen.id,
-    settings: (chosen.settings ?? null) as WorkspaceSettings | null,
-  };
-}
 
 /**
  * ONE SPACE PER DOMAIN — the create-time verdict (rule text:
@@ -525,490 +351,23 @@ function pickExisting(
   return sorted[0];
 }
 
-export interface CreateWorkspaceFromDefinitionInput {
-  /** WorkspaceProposal-shaped definition (profiles, views, bento, etc.). */
-  definition: WorkspaceDefinitionInput;
-  /** Owning user — workspace becomes member-owned by this user. */
-  userId: string;
-  /**
-   * Stable caller-supplied idempotency key. If present and a workspace with
-   * this `proposalId` already exists for the user → return it untouched.
-   */
-  proposalId?: string;
-  /** Optional human-friendly workspace name override (defaults to definition.workspaceName). */
-  workspaceName?: string;
-  /** Optional template provenance — stored in settings, not used for idempotency. */
-  templateId?: string;
-  templateName?: string;
-  /** Optional CP package slug. Tracked separately from proposalId for the in-app path. */
-  packageSlug?: string;
-  packageVersion?: string;
-  workspaceType?: "personal" | "agent" | "project" | "operational";
-  linkedAgentId?: string;
-  /** Audit field — who/what triggered this creation. */
-  createdBy?: "user" | "provisioning" | "plugin";
-}
-
-export interface CreateWorkspaceFromDefinitionResult {
-  workspaceId: string;
-  /** True iff a new workspace was provisioned. False on idempotent re-hit. */
-  created: boolean;
-  /**
-   * Set on an idempotent re-hit (`created:false`) that was additively synced
-   * to a newer template via `reconcileWorkspaceIfStale` — W2b's version-aware
-   * re-install, shared by BOTH doors (see that function's doc).
-   */
-  reconciled?: ReconcileReport;
-  /**
-   * Explicit discriminator so a caller never has to infer intent from
-   * `created`/`reconciled` alone — the E4 fix: `created:true` used to be
-   * returned for BOTH a genuine new workspace AND (before this field existed)
-   * could be misread as covering a reused-but-stale one, since the two were
-   * distinguishable only by also checking `reconciled`.
-   *   - `"created"`    — a new workspace was materialized just now.
-   *   - `"reconciled"` — the workspace already existed and drifted from the
-   *     resolved template, so `reconcileWorkspaceIfStale` wrote additive
-   *     changes onto it (see `reconciled` for the report).
-   *   - `"unchanged"`  — the workspace already existed and was already
-   *     current (or no version comparison was possible) — no write happened.
-   */
-  outcome: "created" | "reconciled" | "unchanged";
-  /**
-   * `"reconciled"` re-hit only: the server-resolved template layer 1 ran
-   * against — the source a caller syncing layer 2 must use (see
-   * `ReconcileIfStaleResult.packageDefinition`).
-   */
-  packageDefinition?: ReconcileIfStaleResult["packageDefinition"];
-  /**
-   * The version this call materialized (create / resume) or reconciled to
-   * (re-hit) — NEVER stamped by it. The caller hands it to `finishTemplateApply`
-   * with its layer-2 result; on `"created"` the space is also left "pending"
-   * for the finisher to mark "active".
-   */
-  pendingVersionStamp?: string;
-}
-
 /**
- * Run `fn` while holding a per-(userId, proposalId) advisory lock. Used by
- * both the Hub REST and tRPC `createFromDefinition` paths to serialise
- * concurrent calls with the same idempotency key. The lock auto-releases on
- * session close, so a crashed handler can't deadlock future calls.
- *
- * If `proposalId` is missing, `fn` runs without locking — no idempotency to
- * protect.
+ * The idempotent create, for the doors that still drive layer 2 themselves
+ * (W3/W4 retire them onto `applyTemplate`). A wrapper over the ONE layer-one
+ * path (`template-apply/layer-one.ts`): the same lookup (`resolveTarget`) and
+ * the same plan (`planTemplateApply`) as every other door — create, resume,
+ * re-sync or skip, never the stamp (`pendingVersionStamp` is the finisher's).
  */
-export async function withWorkspaceProposalIdLock<T>(
-  userId: string,
-  proposalId: string | undefined,
-  fn: () => Promise<T>
-): Promise<T> {
-  if (!proposalId) return fn();
-  await db.execute(
-    drizzleSql`SELECT pg_advisory_lock(
-      hashtext('synap:workspace-from-definition:' || ${userId}),
-      hashtext(${proposalId})
-    )`
-  );
-  try {
-    return await fn();
-  } finally {
-    await db.execute(
-      drizzleSql`SELECT pg_advisory_unlock(
-        hashtext('synap:workspace-from-definition:' || ${userId}),
-        hashtext(${proposalId})
-      )`
-    );
-  }
-}
+export type CreateWorkspaceFromDefinitionInput = LayerOneInput;
+export type CreateWorkspaceFromDefinitionResult = LayerOneResult;
 
-/**
- * Idempotently create a workspace from a definition.
- *
- * Idempotency check (in order):
- *   1. If `proposalId` is provided, look for an existing workspace whose
- *      settings.proposalId matches AND the caller is a member.
- *
- * On hit → return existing { workspaceId, created: false }.
- * On miss → run `createWorkspaceFromDefinition` and stamp `proposalId` into
- * settings so subsequent calls hit.
- */
-export async function createWorkspaceFromDefinitionIdempotent(
+export function createWorkspaceFromDefinitionIdempotent(
   input: CreateWorkspaceFromDefinitionInput
 ): Promise<CreateWorkspaceFromDefinitionResult> {
-  const {
-    definition,
-    userId,
-    proposalId,
-    workspaceName,
-    templateId,
-    templateName,
-    packageSlug,
-    packageVersion,
-    workspaceType,
-    linkedAgentId,
-    createdBy = "user",
-  } = input;
-
-  // A re-hit's reconcile verdict → the result fields every re-hit branch
-  // returns (one projection, so the three branches below cannot drift).
-  const rehit = (
-    workspaceId: string,
-    r: ReconcileIfStaleResult
-  ): CreateWorkspaceFromDefinitionResult => ({
-    workspaceId,
-    created: false,
-    outcome: r.reconciled ? "reconciled" : "unchanged",
-    ...(r.reconciled && r.report ? { reconciled: r.report } : {}),
-    ...(r.packageDefinition ? { packageDefinition: r.packageDefinition } : {}),
-    ...(r.pendingVersionStamp
-      ? { pendingVersionStamp: r.pendingVersionStamp }
-      : {}),
-  });
-
-  // Recovery: a workspace whose last provisioning attempt FAILED must be
-  // RESUMED from its completed steps, not reconciled. `reconcileWorkspaceIfStale`
-  // short-circuits when the version stamp is unchanged, so a same-version CLI/Hub
-  // reinstall of a failed workspace is otherwise a complete no-op that never
-  // advances the stuck workspace. This mirrors the tRPC door's failed-status
-  // resume (routers/workspaces.ts) — it triggers on STATUS not version, so it
-  // bypasses the stale-version short-circuit with no version-stamp change.
-  // Resume is step-granular idempotent (steps enter completedSteps only after
-  // fully done). Returns a result to return directly, or null when the workspace
-  // is not in a failed state (fall through to the normal reconcile path).
-  // The version a create / resume materializes: the caller's explicit
-  // `packageVersion`, else the CP's freshest hash for `packageSlug` (W2a), so a
-  // Hub-door create records the same hash the tRPC door's passthrough does.
-  // Best-effort — a failed resolve never blocks the create. Handed back as
-  // `pendingVersionStamp`, never written here.
-  const versionToMaterialize = async (): Promise<string | undefined> => {
-    if (packageVersion || !packageSlug) return packageVersion;
-    try {
-      return (await resolveWorkspaceTemplate(packageSlug))?.version;
-    } catch {
-      return undefined;
-    }
-  };
-
-  const resumeIfFailed = async (
-    workspaceId: string,
-    settings: WorkspaceSettings | null | undefined
-  ): Promise<CreateWorkspaceFromDefinitionResult | null> => {
-    const state = readTemplateState(settings);
-    if (state?.state !== "failed") return null;
-    if (failedInLayerTwo(settings)) {
-      // Layer 1 is built: re-sync it (stamp ignored) and hand back a
-      // non-"unchanged" outcome so the caller re-runs layer 2 and the
-      // finisher stamps only what then converges.
-      const verdict = await reconcileWorkspaceIfStale({
-        workspaceId,
-        packageSlug,
-        currentSettings: withoutStamp(settings),
-        userId,
-        callerVersion: packageVersion,
-        callerDefinition: definition,
-      });
-      const pending =
-        verdict.pendingVersionStamp ?? (await versionToMaterialize());
-      const { reopenFailedLayerTwo } =
-        await import("./template-apply-finisher.js");
-      await reopenFailedLayerTwo(workspaceId, userId, pending);
-      logger.warn(
-        { userId, workspaceId, packageSlug, reconciled: verdict.reconciled },
-        "createFromDefinition (Hub): layer 2 failed last time — re-synced layer 1, layer 2 re-runs"
-      );
-      return {
-        workspaceId,
-        created: false,
-        outcome: verdict.reconciled ? "reconciled" : "created",
-        ...(verdict.reconciled && verdict.report
-          ? { reconciled: verdict.report }
-          : {}),
-        ...(verdict.packageDefinition
-          ? { packageDefinition: verdict.packageDefinition }
-          : {}),
-        ...(pending ? { pendingVersionStamp: pending } : {}),
-      };
-    }
-    logger.warn(
-      {
-        userId,
-        workspaceId,
-        proposalId,
-        packageSlug,
-        failedStep: state.failedStep,
-        completedSteps: state.completedSteps,
-      },
-      "createFromDefinition (Hub): resuming failed workspace from completed steps"
-    );
-    const resumeResult = await createWorkspaceFromDefinition({
-      definition,
-      userId,
-      packageSlug,
-      packageVersion: await versionToMaterialize(),
-      templateId,
-      templateName,
-      workspaceName,
-      workspaceType,
-      linkedAgentId,
-      createdBy,
-      resumeFrom: {
-        workspaceId,
-        completedSteps: state.completedSteps ?? [],
-      },
-    });
-    return {
-      workspaceId: resumeResult.workspaceId,
-      created: true,
-      outcome: "created",
-      ...(resumeResult.pendingVersionStamp
-        ? { pendingVersionStamp: resumeResult.pendingVersionStamp }
-        : {}),
-    };
-  };
-
-  // Serialise concurrent calls with the same (userId, proposalId) so a hung
-  // retry can't race the original and double-create. No-op when proposalId
-  // is missing.
-  return withWorkspaceProposalIdLock(userId, proposalId, async () => {
-    // ── 1. Idempotency by proposalId ────────────────────────────────────────────
-    if (proposalId) {
-      const existingMembership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.userId, userId),
-          // Match the JSONB proposalId via SQL — avoids loading every workspace
-          // row for the user. The composite (workspace_id, proposalId) check
-          // happens server-side; we then verify membership via the join.
-          drizzleSql`EXISTS (
-          SELECT 1 FROM workspaces w
-          WHERE w.id = ${workspaceMembers.workspaceId}
-            AND w.provisioning_proposal_id = ${proposalId}
-        )`
-        ),
-        with: { workspace: true },
-      });
-      if (existingMembership?.workspace) {
-        const ws = existingMembership.workspace;
-        const currentSettings = (ws.settings ??
-          null) as WorkspaceSettings | null;
-        // Failed prior attempt → resume from completed steps instead of
-        // reconciling (a same-version reconcile would short-circuit to no-op).
-        const resumed = await resumeIfFailed(ws.id, currentSettings);
-        if (resumed) return resumed;
-        // W2b: bring an already-present workspace up to the FRESHEST template
-        // (cache-first, hash-compared) instead of silently no-op-ing — this is
-        // the Hub-door gap the tRPC door already had a (now-shared) fix for.
-        const verdict = await reconcileWorkspaceIfStale({
-          workspaceId: ws.id,
-          packageSlug,
-          currentSettings,
-          userId,
-          callerVersion: packageVersion,
-          callerDefinition: definition,
-        });
-        logger.info(
-          {
-            userId,
-            proposalId,
-            workspaceId: ws.id,
-            reconciled: verdict.reconciled,
-          },
-          "createFromDefinition (Hub): returning existing workspace by proposalId"
-        );
-        return rehit(ws.id, verdict);
-      }
-    }
-
-    // ── 1a. Pod-wide identity (0308) ───────────────────────────────────────────
-    // A template is installed ONCE per pod and a name is held by ONE active
-    // space — whoever owns it. Step 1 only sees the caller's memberships;
-    // here the holder is found pod-wide, BEFORE the legacy fallback, so the
-    // real install outranks a caller-owned copy that merely shares the domain
-    // (a twin 0308 detached would otherwise be adopted and keyed). A caller who may WRITE it (owner /
-    // admin / editor) gets it back, exactly like a reinstall; anyone else gets
-    // the typed 409 naming it — never a second space.
-    //   - template install → matched by slug only. A different space that
-    //     merely shares the name is NOT adopted (that would graft a template
-    //     onto an unrelated space); the create below refuses it as a typed 409.
-    //   - freehand create  → matched by name.
-    const requestedName = (
-      workspaceName ?? (definition as { workspaceName?: string }).workspaceName
-    )?.trim();
-    const holder = await findWorkspaceIdentityConflict(db, {
-      packageSlug: packageSlug ?? null,
-      name: packageSlug ? null : (requestedName ?? null),
-    });
-    if (holder) {
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, holder.existingWorkspaceId),
-          eq(workspaceMembers.userId, userId)
-        ),
-        columns: { role: true },
-      });
-      if (!membership || !ADOPT_WRITE_ROLES.has(membership.role)) {
-        throw new WorkspaceIdentityConflictError(
-          holder.field,
-          holder.value,
-          holder.existingWorkspaceId
-        );
-      }
-      const held = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, holder.existingWorkspaceId),
-        columns: { settings: true },
-      });
-      const currentSettings = (held?.settings ??
-        null) as WorkspaceSettings | null;
-      const resumed = await resumeIfFailed(
-        holder.existingWorkspaceId,
-        currentSettings
-      );
-      if (resumed) return resumed;
-      const verdict: ReconcileIfStaleResult = packageSlug
-        ? await reconcileWorkspaceIfStale({
-            workspaceId: holder.existingWorkspaceId,
-            packageSlug,
-            currentSettings,
-            userId,
-            callerVersion: packageVersion,
-            callerDefinition: definition,
-          })
-        : { reconciled: false, checked: false };
-      logger.info(
-        {
-          userId,
-          field: holder.field,
-          workspaceId: holder.existingWorkspaceId,
-          reconciled: verdict.reconciled,
-        },
-        "createFromDefinition: returning the pod-wide identity holder"
-      );
-      return rehit(holder.existingWorkspaceId, verdict);
-    }
-
-    // ── 1b. Fallback match for PRE-version-stamping legacy workspaces ──────────
-    // Step 1 misses any workspace whose `provisioning_proposal_id` is NULL
-    // (installed before migration 0039's column promotion, or created via a
-    // door that never passed `proposalId`). Without this, such a workspace
-    // duplicates on every reinstall instead of reconciling. See
-    // `findLegacyWorkspaceMatch` for the two-tier predicate + overlay guardrail.
-    if (packageSlug) {
-      const fallback = await findLegacyWorkspaceMatch(packageSlug, userId);
-      if (fallback) {
-        const currentSettings = fallback.settings;
-        // Failed prior attempt → resume from completed steps instead of
-        // reconciling (a same-version reconcile would short-circuit to no-op).
-        const resumed = await resumeIfFailed(fallback.id, currentSettings);
-        if (resumed) return resumed;
-        const verdict = await reconcileWorkspaceIfStale({
-          workspaceId: fallback.id,
-          packageSlug,
-          currentSettings,
-          userId,
-          callerVersion: packageVersion,
-          callerDefinition: definition,
-        });
-
-        // Adopt the identity so the NEXT call hits the fast path (step 1)
-        // instead of re-running this fallback — mirrors the existing
-        // "stamp so next hit short-circuits" pattern used for packageVersion
-        // in `reconcileWorkspaceIfStale` above.
-        //
-        // Writes ONLY its key, atomically: `currentSettings` was read BEFORE
-        // `reconcileWorkspaceIfStale` merged its patch, so writing it back
-        // whole reverted the reconcile.
-        try {
-          await db
-            .update(workspaces)
-            .set({
-              provisioningProposalId: packageSlug,
-              settings: withProposalId(packageSlug),
-            })
-            .where(eq(workspaces.id, fallback.id));
-        } catch (err) {
-          logger.warn(
-            { err, workspaceId: fallback.id, packageSlug },
-            "createWorkspaceFromDefinitionIdempotent: failed to adopt legacy workspace identity (non-fatal)"
-          );
-        }
-
-        logger.info(
-          {
-            userId,
-            packageSlug,
-            workspaceId: fallback.id,
-            reconciled: verdict.reconciled,
-          },
-          "createFromDefinition: adopted legacy workspace via fallback identity match"
-        );
-
-        return rehit(fallback.id, verdict);
-      }
-    }
-
-    // ── 2. Create new workspace ────────────────────────────────────────────────
-    const result = await createWorkspaceFromDefinition({
-      definition,
-      userId,
-      packageSlug,
-      packageVersion: await versionToMaterialize(),
-      templateId,
-      templateName,
-      workspaceName,
-      workspaceType,
-      linkedAgentId,
-      createdBy,
-    });
-
-    // ── 3. Persist proposalId into settings so future calls are idempotent ─────
-    // Done as a follow-up merge instead of being passed through
-    // CreateFromDefinitionOptions to avoid widening that public type for a
-    // Hub-REST-only concern. The merge is best-effort: a transient failure
-    // here just means the next call will create a duplicate (acceptable for
-    // a setup endpoint).
-    if (proposalId) {
-      try {
-        // Key-only and atomic (never a read-then-write-back of the blob).
-        await db
-          .update(workspaces)
-          .set({
-            provisioningProposalId: proposalId,
-            settings: withProposalId(proposalId),
-          })
-          .where(eq(workspaces.id, result.workspaceId));
-      } catch (err) {
-        logger.warn(
-          { err, workspaceId: result.workspaceId, proposalId },
-          "Failed to stamp proposalId into workspace settings (non-fatal)"
-        );
-      }
-    }
-
-    // ── 4. Enqueue workspace-init for default whiteboard/commands ──────────────
-    // Mirrors the tRPC path so the Hub-created workspace has the same defaults.
-    try {
-      const boss = getBoss();
-      await boss.send("workspace-init", {
-        workspaceId: result.workspaceId,
-        userId,
-        packageSlug,
-      });
-    } catch (err) {
-      logger.warn(
-        { err, workspaceId: result.workspaceId },
-        "Failed to enqueue workspace-init from Hub path (non-fatal)"
-      );
-    }
-
-    return {
-      workspaceId: result.workspaceId,
-      created: true,
-      outcome: "created",
-      ...(result.pendingVersionStamp
-        ? { pendingVersionStamp: result.pendingVersionStamp }
-        : {}),
-    };
-  });
+  return applyLayerOne(input);
 }
+
+export { withWorkspaceProposalIdLock };
 
 /**
  * Allow-list of agentTypes that may call the Hub Protocol REST workspace
