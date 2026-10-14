@@ -271,6 +271,7 @@ export async function readAgentMatrix(p: {
         agentType: agent.agentType,
         hostUserId: agent.hostUserId,
         paused: !!agent.pausedAt,
+        ownedByViewer: agent.createdByUserId === p.userId,
         cells,
       };
     }),

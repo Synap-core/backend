@@ -57,12 +57,17 @@ import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   NEXT_RUNG_BATCH_MAX,
   fileNextRung,
+  fileRuleGrant,
   loadVisibleNextRungRow,
   projectNextRung,
   readNextRungs,
 } from "../services/proposals/next-rung.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
+import {
+  draftMatrixWiden,
+  loadAgentOwner,
+} from "../services/governance/widen-cell.js";
 import {
   activeRulePredicate,
   podOrWorkspaceScopePredicate,
@@ -724,6 +729,60 @@ export const governanceRulesRouter = router({
         }
       }
       return fileNextRung({ userId: ctx.userId, row, mayGrant });
+    }),
+  /**
+   * WIDEN one matrix cell's probe (agent routing W3): the narrowest `auto` rule
+   * for that agent × space × action × kind (`services/governance/widen-cell.ts`),
+   * filed through the trust ladder's back half (`fileRuleGrant`).
+   *
+   * WHO GRANTS (founder decision 8, 2026-10-14): the agent's OWNER (or a pod
+   * admin on an agent nobody owns) who passes `assertCanManageRule` writes the
+   * rule now (`created`). A pod admin on ANOTHER user's agent files a pending
+   * `settings.update` for that owner (`proposed`) — the admin's pod reach is
+   * never a direct grant on someone else's agent. Anyone else: FORBIDDEN.
+   * Humans only (Kratos `protectedProcedure`); an agent never widens itself.
+   */
+  widenCell: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().min(1),
+        workspaceId: z.string().uuid().nullable(),
+        action: z.string().regex(/^[A-Za-z_]+\.[A-Za-z_.]+$/),
+        profileSlug: z.string().min(1).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const owner = await loadAgentOwner(input.agentUserId);
+      const podAdmin = await isPodAdmin(ctx.userId);
+      const owns = owner === ctx.userId || (owner === null && podAdmin);
+      if (!owns && !podAdmin) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not own this agent — cannot widen what it may do",
+        });
+      }
+      const rule = await draftMatrixWiden(input, owner);
+      let mayGrant = false;
+      if (owns) {
+        try {
+          await assertCanManageRule(ctx.userId, {
+            scopeKind: rule.scopeKind,
+            workspaceId: rule.workspaceId ?? null,
+            principalKind: rule.principalKind,
+            agentUserId: rule.agentUserId ?? null,
+          });
+          mayGrant = true;
+        } catch (err) {
+          if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN")
+            throw err;
+        }
+      }
+      return fileRuleGrant({
+        userId: ctx.userId,
+        rule,
+        mayGrant,
+        fromProposalId: null,
+      });
     }),
   /**
    * Revoke a rule (soft — sets revokedAt). Gated identically to `create`:

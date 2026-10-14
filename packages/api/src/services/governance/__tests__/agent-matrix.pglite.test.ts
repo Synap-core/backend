@@ -177,6 +177,16 @@ describe("readAgentMatrix", () => {
     expect(ccGroup.computers.map((c) => [c.hostUserId, c.label])).toEqual([[COMPUTER, "Mac"]]);
   });
 
+  it("each row says whether the reader owns the agent (a widen on another's agent is a proposal)", async () => {
+    const m = await readAgentMatrix({ userId: OWNER, lens: "pod" });
+    const owned = Object.fromEntries(
+      m.groups
+        .flatMap((g) => g.computers.flatMap((c) => c.agents))
+        .map((a) => [a.agentUserId, a.ownedByViewer])
+    );
+    expect(owned).toEqual({ [CC]: true, [CODEX]: true, [THEIRS]: false });
+  });
+
   it("a group's cell is the sum of its members' splits", async () => {
     const m = await readAgentMatrix({ userId: OWNER, lens: "pod" });
     const cc = m.groups.find((g) => g.agentType === "claude-code")!;
