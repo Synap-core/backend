@@ -149,15 +149,9 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     replacedBy: "The `data` tab on the phone, and the desktop Data app",
     decisionDoc: V1_PLAN_DOC,
   },
-  {
-    id: "pipeline",
-    surface: "relay",
-    since: SINCE,
-    reason:
-      "Pipeline tab (classic shell only) deprecated: data browsing is a desktop job (Data app).",
-    replacedBy: "Desktop Data app",
-    decisionDoc: V1_PLAN_DOC,
-  },
+  // `pipeline` (relay classic-shell kanban) left this registry on 2026-10-14:
+  // its route, tab id and template slot were DELETED (projects as places), so
+  // there is nothing left to keep people off.
 ];
 
 export function deprecatedSurfacesFor(

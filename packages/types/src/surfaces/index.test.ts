@@ -7,7 +7,8 @@ import {
 
 describe("DEPRECATED_SURFACES", () => {
   it("is non-vacuous and every entry is fully shaped", () => {
-    expect(DEPRECATED_SURFACES.length).toBeGreaterThanOrEqual(9);
+    // 8 since relay `pipeline` was deleted (2026-10-14).
+    expect(DEPRECATED_SURFACES.length).toBeGreaterThanOrEqual(8);
     for (const s of DEPRECATED_SURFACES) {
       expect(s.id.length).toBeGreaterThan(0);
       expect(["browser", "relay"]).toContain(s.surface);
@@ -37,7 +38,7 @@ describe("DEPRECATED_SURFACES", () => {
   it("contains the specific relay ids the V1 plan marks DEPRECATE", () => {
     const relayIds = deprecatedSurfacesFor("relay").map((s) => s.id);
     expect(relayIds.sort()).toEqual(
-      ["feed", "gallery", "idea-studio", "pipeline", "rules"].sort()
+      ["feed", "gallery", "idea-studio", "rules"].sort()
     );
   });
 
