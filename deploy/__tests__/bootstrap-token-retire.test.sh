@@ -25,6 +25,7 @@ mkdir -p "$TMP/bin" "$TMP/deploy"
 cat > "$TMP/bin/curl" <<'C'
 #!/usr/bin/env bash
 # the pod's answer, chosen by $FAKE_STATUS: ready | needed | garbage
+echo "$*" >> "${FAKE_CURL_LOG:-/dev/null}"
 case "$*" in
   *setup/status*) case "$FAKE_STATUS" in
       ready) echo '{"needsSetup":false}' ;; needed) echo '{"needsSetup":true}' ;; *) exit 22 ;; esac ;;
@@ -86,6 +87,22 @@ fresh; FAKE_STATUS=ready run cmd_setup_admin --status; rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$TMP/out")" = ready ] && has_token && ok "status: --status still answers 'ready' and retires nothing" || bad "status: rc=$rc out=$(cat "$TMP/out")"
 fresh; FAKE_STATUS=garbage run cmd_setup_admin --status; rc=$?
 [ "$rc" = 2 ] && [ "$(cat "$TMP/out")" = unknown ] && ok "status: unreachable pod → 'unknown', exit 2 (unchanged contract)" || bad "status unknown: rc=$rc"
+
+# ── pod URL: the published port, not an assumed :4000 ────────────────────────
+cat > "$TMP/bin/docker" <<'DK'
+#!/usr/bin/env bash
+# `docker compose port backend 4000` as an Eve-style override publishes it
+[ "$*" = "compose port backend 4000" ] && { echo "127.0.0.1:14000"; exit 0; }
+exit 1
+DK
+chmod +x "$TMP/bin/docker"
+runport() { ( cd "$D" && unset SYNAP_POD_URL && PATH="$TMP/bin:$PATH" FAKE_STATUS=ready FAKE_CURL_LOG="$TMP/curl.log" \
+    bash -c '. "$1"; shift; "$@"' _ "$TMP/lib.sh" "$@" ) > "$TMP/out" 2>&1; }
+fresh; : > "$TMP/curl.log"; runport cmd_setup_admin --retire-token; rc=$?
+[ "$rc" = 0 ] && ! has_token && grep -q '127.0.0.1:14000/api/hub/setup/status' "$TMP/curl.log" \
+  && ok "pod url: no SYNAP_POD_URL → the published port (14000) is probed and the token retired" \
+  || bad "pod url: rc=$rc probed=$(cat "$TMP/curl.log")"
+rm -f "$TMP/bin/docker"
 
 # ── preseed / magic-link ──────────────────────────────────────────────────────
 fresh; FAKE_PRESEED=ok run cmd_setup_admin --email a@b.co --password pw; rc=$?

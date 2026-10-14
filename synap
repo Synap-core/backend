@@ -1222,8 +1222,18 @@ EOF
 # Pod URL for on-host CLI calls. Defaults to the loopback published by the
 # eve-managed compose override (127.0.0.1:4000). Operator can override via
 # SYNAP_POD_URL when running outside that setup (e.g. dev hosts).
+# The backend as seen from the host. An override (e.g. Eve's) can publish it on
+# another host port (127.0.0.1:14000), so ask compose for the published port
+# instead of assuming 4000 — a wrong guess made every owner probe answer
+# "unknown" and PROVISIONING_TOKEN was never retired. Call from the deploy dir.
 _synap_pod_url() {
-    echo "${SYNAP_POD_URL:-http://127.0.0.1:4000}"
+    if [ -n "${SYNAP_POD_URL:-}" ]; then echo "$SYNAP_POD_URL"; return 0; fi
+    local hp
+    hp=$(docker compose port backend 4000 2>/dev/null | tail -1)
+    case "$hp" in
+        *:[0-9]*) echo "http://127.0.0.1:${hp##*:}" ;;
+        *) echo "http://127.0.0.1:4000" ;;
+    esac
 }
 
 _synap_bootstrap_token() {
