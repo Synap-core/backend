@@ -8,6 +8,7 @@
  * can decrypt and forward them to the IS at request time.
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { router, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -17,11 +18,7 @@ import {
   aiProviders,
   workspaceMembers,
 } from "@synap/database/schema";
-import {
-  encryptServiceKey,
-  decryptServiceKey,
-  isEncryptedServiceKey,
-} from "@synap/database";
+import { encryptServiceKey, resolveServiceKey } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "ai-provider-credentials" });
@@ -30,10 +27,19 @@ function getUserId(ctx: unknown): string | undefined {
   return (ctx as { userId?: string }).userId;
 }
 
-function decrypt(encrypted: string): string {
-  return isEncryptedServiceKey(encrypted)
-    ? decryptServiceKey(encrypted)
-    : encrypted;
+function decrypt(row: { id: string; encryptedApiKey: string }): string {
+  return resolveServiceKey(row.encryptedApiKey, {
+    column: "ai_provider_credentials.encrypted_api_key",
+    rowId: row.id,
+  });
+}
+
+/** Encrypt a credential for its row (the row id is the AAD). */
+function sealCredential(apiKey: string, rowId: string): string {
+  return encryptServiceKey(apiKey, {
+    column: "ai_provider_credentials.encrypted_api_key",
+    rowId,
+  });
 }
 
 /** Strip the encrypted key from a credential row, exposing only its presence. */
@@ -77,7 +83,7 @@ export async function resolveProviderCredential(
         eq(aiProviderCredentials.enabled, true)
       ),
     });
-    if (userCred) return decrypt(userCred.encryptedApiKey);
+    if (userCred) return decrypt(userCred);
   }
 
   if (workspaceId) {
@@ -89,7 +95,7 @@ export async function resolveProviderCredential(
         eq(aiProviderCredentials.enabled, true)
       ),
     });
-    if (wsCred) return decrypt(wsCred.encryptedApiKey);
+    if (wsCred) return decrypt(wsCred);
   }
 
   return null;
@@ -120,6 +126,7 @@ export async function resolveProviderCredentialsBatch(
   if (userId) {
     const userCreds = await db
       .select({
+        id: aiProviderCredentials.id,
         providerId: aiProviderCredentials.providerId,
         encryptedApiKey: aiProviderCredentials.encryptedApiKey,
       })
@@ -133,7 +140,7 @@ export async function resolveProviderCredentialsBatch(
       );
     for (const c of userCreds) {
       result.set(c.providerId, {
-        key: decrypt(c.encryptedApiKey),
+        key: decrypt(c),
         source: "user",
       });
     }
@@ -145,6 +152,7 @@ export async function resolveProviderCredentialsBatch(
   if (workspaceId && needsWorkspace.length > 0) {
     const wsCreds = await db
       .select({
+        id: aiProviderCredentials.id,
         providerId: aiProviderCredentials.providerId,
         encryptedApiKey: aiProviderCredentials.encryptedApiKey,
       })
@@ -159,7 +167,7 @@ export async function resolveProviderCredentialsBatch(
       );
     for (const c of wsCreds) {
       result.set(c.providerId, {
-        key: decrypt(c.encryptedApiKey),
+        key: decrypt(c),
         source: "workspace",
       });
     }
@@ -248,7 +256,6 @@ export const aiProviderCredentialsRouter = router({
       await assertWorkspaceAdmin(userId, input.workspaceId);
       await assertProviderExists(input.providerId);
 
-      const encryptedApiKey = encryptServiceKey(input.apiKey);
       const now = new Date();
 
       const existing = await db.query.aiProviderCredentials.findFirst({
@@ -258,6 +265,9 @@ export const aiProviderCredentialsRouter = router({
           isNull(aiProviderCredentials.userId)
         ),
       });
+
+      const rowId = existing?.id ?? randomUUID();
+      const encryptedApiKey = sealCredential(input.apiKey, rowId);
 
       if (existing) {
         await db
@@ -275,6 +285,7 @@ export const aiProviderCredentialsRouter = router({
         );
       } else {
         await db.insert(aiProviderCredentials).values({
+          id: rowId,
           providerId: input.providerId,
           workspaceId: input.workspaceId as any,
           userId: null,
@@ -339,7 +350,6 @@ export const aiProviderCredentialsRouter = router({
       if (!userId) throw new TRPCError({ code: "UNAUTHORIZED" });
       await assertProviderExists(input.providerId);
 
-      const encryptedApiKey = encryptServiceKey(input.apiKey);
       const now = new Date();
 
       const existing = await db.query.aiProviderCredentials.findFirst({
@@ -348,6 +358,9 @@ export const aiProviderCredentialsRouter = router({
           eq(aiProviderCredentials.userId, userId)
         ),
       });
+
+      const rowId = existing?.id ?? randomUUID();
+      const encryptedApiKey = sealCredential(input.apiKey, rowId);
 
       if (existing) {
         await db
@@ -365,6 +378,7 @@ export const aiProviderCredentialsRouter = router({
         );
       } else {
         await db.insert(aiProviderCredentials).values({
+          id: rowId,
           providerId: input.providerId,
           workspaceId: (input.workspaceId as any) ?? null,
           userId,

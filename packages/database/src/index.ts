@@ -105,6 +105,45 @@ export * from "./utils/message-shape.js";
 export * from "./utils/config-settings.js";
 export * from "./utils/structure-context.js";
 
+// Field encryption at rest — the ONE envelope (@synap-core/field-crypto),
+// its cell registry, and the audit/re-encrypt sweep.
+export {
+  encryptField,
+  decryptField,
+  resolveField,
+  rebindField,
+  isEncryptedField,
+  podFieldCrypto,
+  podFieldCryptoFromEnv,
+  createPodFieldCrypto,
+  FieldCryptoError,
+  type FieldRef,
+  type PodFieldCrypto,
+  type PodFieldCryptoConfig,
+} from "./utils/field-crypto.js";
+export {
+  sealSyncPeerToken,
+  openSyncPeerToken,
+} from "./utils/sync-peer-token.js";
+export {
+  ENCRYPTED_COLUMNS,
+  LEGACY_KID,
+  PLAINTEXT_KID,
+  encryptedColumnName,
+  type EncryptedColumn,
+  type EncryptedColumnEntry,
+  type TextColumn,
+  type BlobColumn,
+} from "./utils/encrypted-columns.js";
+export {
+  auditEncryptedColumns,
+  reencryptColumns,
+  staleCount,
+  executorFor,
+  type ColumnAudit,
+  type ReencryptResult,
+} from "./utils/field-crypto-sweep.js";
+
 // Server-side vault encryption
 export {
   encryptServerSide,

@@ -85,13 +85,17 @@ async function addSecret(
   serviceId: string | null,
   config: Record<string, string>
 ) {
-  const blob = encryptConfig(config);
+  const id = randomUUID();
+  const blob = encryptConfig(config, {
+    column: "secrets.encrypted_data",
+    rowId: id,
+  });
   await h.client!.query(
     `insert into secrets
        (id, user_id, service_id, name, type, encryption_mode,
         encrypted_data, iv, auth_tag, created_at, updated_at)
      values ($1, $2, $3, 'x', 'api_key', 'server', $4, $5, $6, now(), now())`,
-    [randomUUID(), userId, serviceId, blob.encryptedData, blob.iv, blob.authTag]
+    [id, userId, serviceId, blob.encryptedData, blob.iv, blob.authTag]
   );
 }
 

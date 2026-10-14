@@ -79,6 +79,12 @@ export interface CatalogSyncStamp {
  */
 export interface FederationOidcClient {
   clientId: string;
+  /**
+   * Stored through the field-crypto door (registry cell
+   * `pod_settings.federation_oidc_client_secret`, bound to this row's id):
+   * read it with `resolveField`, never as-is. The installer's Kratos render
+   * reads it via `dist/scripts/field-crypto.js federation-oidc-client`.
+   */
   clientSecret: string;
   issuer: string;
   redirectUri: string;

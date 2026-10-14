@@ -18,10 +18,10 @@ async function seedHubProtocolKeys() {
     "🔑 Seeding Hub Protocol inbound keys from intelligence_services...\n"
   );
 
-  let rows: { service_id: string; name: string; api_key: string }[];
+  let rows: { id: string; service_id: string; name: string; api_key: string }[];
   try {
     rows = await sql<typeof rows>`
-      SELECT service_id, name, api_key
+      SELECT id, service_id, name, api_key
       FROM intelligence_services
       WHERE enabled = true
         AND api_key IS NOT NULL
@@ -59,7 +59,10 @@ async function seedHubProtocolKeys() {
   for (const row of rows) {
     let plainKey: string;
     try {
-      plainKey = resolveServiceKey(row.api_key);
+      plainKey = resolveServiceKey(row.api_key, {
+        column: "intelligence_services.api_key",
+        rowId: row.id,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(

@@ -627,6 +627,9 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
+      '@synap-core/field-crypto':
+        specifier: workspace:*
+        version: link:../field-crypto
       '@synap/governance-policy':
         specifier: workspace:*
         version: link:../governance-policy

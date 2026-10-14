@@ -1136,7 +1136,6 @@ export const devplaneRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const blob = encryptServerSide(input.apiKey);
       const secretName = `devplane_provider_${input.providerType}_${ctx.workspaceId}`;
 
       const existing = await db.query.secrets.findFirst({
@@ -1147,7 +1146,12 @@ export const devplaneRouter = router({
         columns: { id: true },
       });
 
-      let secretId: string;
+      // The row id is the AAD, so it is fixed before encrypting.
+      const secretId = existing?.id ?? crypto.randomUUID();
+      const blob = encryptServerSide(input.apiKey, {
+        column: "secrets.encrypted_data",
+        rowId: secretId,
+      });
       if (existing) {
         await db
           .update(secrets)
@@ -1158,9 +1162,7 @@ export const devplaneRouter = router({
             updatedAt: new Date(),
           })
           .where(eq(secrets.id, existing.id));
-        secretId = existing.id;
       } else {
-        secretId = crypto.randomUUID();
         await db.insert(secrets).values({
           id: secretId,
           userId: ctx.userId,
@@ -1231,7 +1233,6 @@ export const devplaneRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const blob = encryptServerSide(input.secretValue);
       const name =
         input.secretName ?? `devplane_${input.propertySlug}_${input.entityId}`;
 
@@ -1240,7 +1241,12 @@ export const devplaneRouter = router({
         columns: { id: true },
       });
 
-      let secretId: string;
+      // The row id is the AAD, so it is fixed before encrypting.
+      const secretId = existing?.id ?? crypto.randomUUID();
+      const blob = encryptServerSide(input.secretValue, {
+        column: "secrets.encrypted_data",
+        rowId: secretId,
+      });
       if (existing) {
         await db
           .update(secrets)
@@ -1251,9 +1257,7 @@ export const devplaneRouter = router({
             updatedAt: new Date(),
           })
           .where(eq(secrets.id, existing.id));
-        secretId = existing.id;
       } else {
-        secretId = crypto.randomUUID();
         await db.insert(secrets).values({
           id: secretId,
           userId: ctx.userId,

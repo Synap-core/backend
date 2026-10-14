@@ -12,6 +12,7 @@
  * grantAIAccess flow. No route here returns decrypted data to an agent.
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import {
@@ -633,11 +634,17 @@ export function registerVaultRoutes(app: HubHono): void {
         typeof body.value === "string"
           ? body.value
           : JSON.stringify(body.value);
-      const blob = encryptServerSide(plaintext);
+      // The row id is the AAD, so it is fixed before encrypting.
+      const secretId = randomUUID();
+      const blob = encryptServerSide(plaintext, {
+        column: "secrets.encrypted_data",
+        rowId: secretId,
+      });
 
       const [secret] = await db
         .insert(secrets)
         .values({
+          id: secretId,
           userId: acting.userId,
           workspaceId: acting.workspaceId,
           name: body.name,

@@ -22,6 +22,7 @@ import {
   or,
   and,
   advanceOutboundSyncCursorAfterPushSuccess,
+  openSyncPeerToken,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -197,13 +198,13 @@ async function pushBatchToPeers(batch: EventRecord[]): Promise<void> {
         eventsForPeer[eventsForPeer.length - 1]?.timestamp;
 
       try {
+        // Throws (into the catch below) when the stored token is unreadable.
+        const authToken = openSyncPeerToken(peer);
         const res = await fetch(`${peer.peerPodUrl}/api/sync/receive`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(peer.authToken
-              ? { Authorization: `Bearer ${peer.authToken}` }
-              : {}),
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
             "X-Sync-Mode": "realtime",
             "X-Sync-Generation": String(localState.generation),
             "X-Sync-Role": localState.role,

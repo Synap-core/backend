@@ -21,7 +21,9 @@
  * a field that quietly never arrives.
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { rebindField } from "@synap/database";
 import type { AiProviderModelEntry } from "@synap/database/schema";
 
 export const ModelEntrySchema = z.object({
@@ -107,9 +109,38 @@ export const AiProviderProposalPayload = ProviderUpsertSchema.omit({
   apiKey: true,
 }).extend({
   encryptedApiKey: z.string().nullish(),
+  /**
+   * The `ai_providers` row id `encryptedApiKey` was encrypted for (its AAD).
+   * Absent on proposals filed before the field-crypto keyring — their key is
+   * then the pre-keyring JSON, which is not row-bound.
+   */
+  keyRowId: z.string().nullish(),
   keepExistingKey: z.boolean().optional(),
 });
 
 export type AiProviderProposalPayloadInput = z.infer<
   typeof AiProviderProposalPayload
 >;
+
+/**
+ * The id an upsert of this payload writes to, and the stored key for it: a
+ * key encrypted at propose time for `keyRowId` is re-bound to the row it
+ * finally lands in (another write may have created the provider meanwhile).
+ * Shared by the REST door and the approve-executor so both write the same.
+ */
+export function providerKeyForRow(
+  payload: AiProviderProposalPayloadInput,
+  existing: { id: string; encryptedApiKey: string | null } | undefined
+): { rowId: string; encryptedApiKey: string | null } {
+  const rowId = existing?.id ?? payload.keyRowId ?? randomUUID();
+  const fresh = payload.encryptedApiKey
+    ? rebindField(payload.encryptedApiKey, {
+        column: "ai_providers.encrypted_api_key",
+        fromRowId: payload.keyRowId ?? rowId,
+        rowId,
+      })
+    : null;
+  // An omitted key must not blank an existing one: a new ciphertext wins;
+  // otherwise keep what is already stored.
+  return { rowId, encryptedApiKey: fresh ?? existing?.encryptedApiKey ?? null };
+}

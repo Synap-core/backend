@@ -32,6 +32,12 @@ import type { EventRepository } from "./event-repository.js";
 // ============================================================================
 
 export interface CreateSecretInput {
+  /**
+   * The row id, when the value was encrypted before the insert: a
+   * server-vault ciphertext is bound to its row (`{ column, rowId }` AAD), so
+   * the caller picks the id, encrypts with it, and inserts with it.
+   */
+  id?: string;
   name: string;
   type: SecretType;
   url?: string;
@@ -177,6 +183,7 @@ export class SecretsVaultRepository extends BaseRepository<
     const [secret] = await this.db
       .insert(secrets)
       .values({
+        ...(data.id ? { id: data.id } : {}),
         userId,
         workspaceId: data.workspaceId,
         name: data.name,
@@ -224,7 +231,8 @@ export class SecretsVaultRepository extends BaseRepository<
    * Store a server-side encrypted secret (encryptionMode = 'server').
    *
    * The caller is responsible for encrypting `encryptedData`/`iv`/`authTag`
-   * with the server key (see server-vault.ts). This method only inserts the
+   * with the server key (see server-vault.ts) under the row id it passes as
+   * `id` (the ciphertext is bound to it). This method only inserts the
    * already-encrypted blob — it never handles plaintext.
    *
    * Idempotent: if a server-side secret for this userId + serviceId already
@@ -232,6 +240,8 @@ export class SecretsVaultRepository extends BaseRepository<
    */
   async upsertServerSide(
     data: {
+      /** The id the blob was encrypted for (its AAD). */
+      id?: string;
       userId: string;
       serviceId: string;
       name: string;
@@ -260,6 +270,7 @@ export class SecretsVaultRepository extends BaseRepository<
     const [secret] = await this.db
       .insert(secrets)
       .values({
+        ...(data.id ? { id: data.id } : {}),
         userId: data.userId,
         name: data.name,
         type: data.type,

@@ -26,6 +26,10 @@ const m = vi.hoisted(() => ({
   resolve: vi.fn(),
   update: vi.fn(),
   insert: vi.fn(),
+  encryptField: vi.fn(
+    (_plain: string, ref: { column: string; rowId: string }) =>
+      `sealed:${ref.column}:${ref.rowId}`
+  ),
 }));
 
 vi.mock("@synap/database", () => ({
@@ -71,6 +75,7 @@ vi.mock("@synap/database", () => ({
     values,
   }),
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
+  encryptField: m.encryptField,
 }));
 
 vi.mock("node:https", () => ({ request: m.httpsRequest }));
@@ -218,6 +223,17 @@ describe("POST /federation/oidc-config — one issuer door (C2)", () => {
     const res = await push(assertion());
     expect(res.status).toBe(200);
     expect(m.update).toHaveBeenCalled();
+    // The client secret goes through the field-crypto door, bound to the
+    // pod_settings row — and never reaches the stored settings in clear.
+    expect(m.encryptField).toHaveBeenCalledWith("test-secret-client", {
+      column: "pod_settings.federation_oidc_client_secret",
+      rowId: "ps-1",
+    });
+    const written = JSON.stringify(m.update.mock.calls);
+    expect(written).toContain(
+      "sealed:pod_settings.federation_oidc_client_secret:ps-1"
+    );
+    expect(written).not.toContain("test-secret-client");
     expect(m.consumeReceipt).toHaveBeenCalledWith(
       expect.objectContaining({ issuerId: CP_ENTRY.id })
     );

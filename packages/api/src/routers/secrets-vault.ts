@@ -20,6 +20,7 @@
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   db,
@@ -492,11 +493,14 @@ export const secretsVaultRouter = router({
       //    decryptServerSide is the counterpart to encryptServerSide (server-vault.ts).
       let plaintext: string;
       try {
-        plaintext = decryptServerSide({
-          encryptedData: secret.encryptedData,
-          iv: secret.iv,
-          authTag: secret.authTag,
-        });
+        plaintext = decryptServerSide(
+          {
+            encryptedData: secret.encryptedData,
+            iv: secret.iv,
+            authTag: secret.authTag,
+          },
+          { column: "secrets.encrypted_data", rowId: secret.id }
+        );
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (_err) {
         throw new TRPCError({
@@ -569,7 +573,12 @@ export const secretsVaultRouter = router({
       // Server-only consolidation: encrypt the plaintext value with VAULT_SERVER_KEY.
       // The row is persisted with encryptionMode 'server' (the schema default), so
       // it is resolvable by the vault resolver and grantable to AI.
-      const blob = encryptServerSide(serializeSecretValue(input.value));
+      // The row id is the AAD, so it is fixed before encrypting.
+      const secretId = randomUUID();
+      const blob = encryptServerSide(serializeSecretValue(input.value), {
+        column: "secrets.encrypted_data",
+        rowId: secretId,
+      });
       // Watchtower cohorts, computed while the plaintext is in hand (BF-7/BF-8).
       const { hasTotp, passwordFingerprint } = deriveSecurityMetadata(
         input.value
@@ -577,6 +586,7 @@ export const secretsVaultRouter = router({
 
       const secret = await repo.create(
         {
+          id: secretId,
           name: input.name,
           type: input.type,
           url: input.url,
@@ -621,7 +631,10 @@ export const secretsVaultRouter = router({
       const encryptedFields =
         value !== undefined
           ? (() => {
-              const blob = encryptServerSide(serializeSecretValue(value));
+              const blob = encryptServerSide(serializeSecretValue(value), {
+                column: "secrets.encrypted_data",
+                rowId: id,
+              });
               // Recompute Watchtower cohorts from the rotated plaintext
               // (BF-7/BF-8) — a removed password/totp clears the stamp.
               const { hasTotp, passwordFingerprint } =

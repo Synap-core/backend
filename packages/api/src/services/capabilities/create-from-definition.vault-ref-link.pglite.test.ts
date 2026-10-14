@@ -193,11 +193,14 @@ describe("a vault:// param LINKS; a literal value CREATES", () => {
     // And the stored credential is still the REAL key, not "vault://…".
     const all = await db.select().from(schema.secrets);
     const stored = all.find((r) => r.id === created.secretId)!;
-    const plaintext = decryptServerSide({
-      encryptedData: stored.encryptedData,
-      iv: stored.iv,
-      authTag: stored.authTag,
-    });
+    const plaintext = decryptServerSide(
+      {
+        encryptedData: stored.encryptedData,
+        iv: stored.iv,
+        authTag: stored.authTag,
+      },
+      { column: "secrets.encrypted_data", rowId: stored.id }
+    );
     expect(plaintext).toBe("sk-live-REAL-KEY");
     expect(plaintext).not.toContain("vault://");
   });

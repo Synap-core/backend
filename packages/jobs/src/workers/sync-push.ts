@@ -22,6 +22,7 @@ import {
   and,
   drizzleSql,
   advanceOutboundSyncCursorAfterPushSuccess,
+  openSyncPeerToken,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -218,8 +219,10 @@ async function pushToPeer(
       "X-Sync-Generation": String(generationState.generation),
       "X-Sync-Role": generationState.role,
     };
-    if (peer.authToken) {
-      headers["Authorization"] = `Bearer ${peer.authToken}`;
+    // Throws when the stored token is unreadable: never call a peer unauthenticated.
+    const authToken = openSyncPeerToken(peer);
+    if (authToken) {
+      headers["Authorization"] = `Bearer ${authToken}`;
     }
 
     const response = await fetch(url, {

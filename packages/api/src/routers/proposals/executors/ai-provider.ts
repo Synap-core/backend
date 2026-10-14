@@ -6,6 +6,7 @@ import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import {
   AiProviderProposalPayload,
+  providerKeyForRow,
   type AiProviderProposalPayloadInput,
 } from "../../ai-providers.schema.js";
 import { pushProvidersToIS } from "../../../utils/push-providers-to-is.js";
@@ -41,15 +42,22 @@ export function registerAiProviderExecutors(): void {
   const applyUpsert = async (
     payload: AiProviderProposalPayloadInput
   ): Promise<void> => {
-    const { encryptedApiKey, keepExistingKey, ...rest } = payload;
+    const {
+      encryptedApiKey: _key,
+      keyRowId: _keyRow,
+      keepExistingKey,
+      ...rest
+    } = payload;
 
     const existing = await db.query.aiProviders.findFirst({
       where: eq(aiProviders.providerId, rest.providerId),
     });
 
-    // An omitted key must not blank an existing one. Explicit precedence:
-    // a new ciphertext wins; otherwise keep what is already stored.
-    const resolvedKey = encryptedApiKey ?? existing?.encryptedApiKey ?? null;
+    // An omitted key must not blank an existing one (see providerKeyForRow).
+    const { rowId, encryptedApiKey: resolvedKey } = providerKeyForRow(
+      payload,
+      existing
+    );
     void keepExistingKey;
 
     const now = new Date();
@@ -61,6 +69,7 @@ export function registerAiProviderExecutors(): void {
     } else {
       await db.insert(aiProviders).values({
         ...rest,
+        id: rowId,
         encryptedApiKey: resolvedKey,
         createdAt: now,
         updatedAt: now,

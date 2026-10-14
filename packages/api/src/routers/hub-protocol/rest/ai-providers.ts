@@ -12,6 +12,7 @@
  * POST   /ai-providers/sync       — re-push all providers to IS
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
   db,
@@ -22,11 +23,7 @@ import {
   getWorkspaceMembership,
 } from "@synap/database";
 import { aiProviders, aiProviderCredentials } from "@synap/database/schema";
-import {
-  encryptServiceKey,
-  decryptServiceKey,
-  isEncryptedServiceKey,
-} from "@synap/database";
+import { encryptServiceKey, resolveServiceKey } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { Context as HonoLikeContext } from "hono";
 import { hasScope, type HubHono } from "./_shared.js";
@@ -36,6 +33,7 @@ import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   ProviderUpsertSchema,
   AiProviderProposalPayload,
+  providerKeyForRow,
   type AiProviderProposalPayloadInput,
 } from "../../ai-providers.schema.js";
 import {
@@ -135,12 +133,22 @@ async function gateProviderWrite(
  * does not blank a working credential.
  */
 function toProposalPayload(
-  body: z.infer<typeof ProviderUpsertSchema>
+  body: z.infer<typeof ProviderUpsertSchema>,
+  existingId: string | undefined
 ): AiProviderProposalPayloadInput {
   const { apiKey, ...rest } = body;
+  // The key is bound to the row it is meant for: the existing provider, or
+  // the id a new one will be inserted with.
+  const keyRowId = existingId ?? randomUUID();
   return AiProviderProposalPayload.parse({
     ...rest,
-    encryptedApiKey: apiKey ? encryptServiceKey(apiKey) : null,
+    encryptedApiKey: apiKey
+      ? encryptServiceKey(apiKey, {
+          column: "ai_providers.encrypted_api_key",
+          rowId: keyRowId,
+        })
+      : null,
+    keyRowId,
     keepExistingKey: !apiKey,
   });
 }
@@ -148,11 +156,19 @@ function toProposalPayload(
 async function applyUpsert(
   payload: AiProviderProposalPayloadInput
 ): Promise<void> {
-  const { encryptedApiKey, keepExistingKey: _keep, ...rest } = payload;
+  const {
+    encryptedApiKey: _key,
+    keyRowId: _keyRow,
+    keepExistingKey: _keep,
+    ...rest
+  } = payload;
   const existing = await db.query.aiProviders.findFirst({
     where: eq(aiProviders.providerId, rest.providerId),
   });
-  const resolvedKey = encryptedApiKey ?? existing?.encryptedApiKey ?? null;
+  const { rowId, encryptedApiKey: resolvedKey } = providerKeyForRow(
+    payload,
+    existing
+  );
   const now = new Date();
   if (existing) {
     await db
@@ -162,6 +178,7 @@ async function applyUpsert(
   } else {
     await db.insert(aiProviders).values({
       ...rest,
+      id: rowId,
       encryptedApiKey: resolvedKey,
       createdAt: now,
       updatedAt: now,
@@ -285,10 +302,12 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     });
 
     const providers = rows.map((p) => {
-      const decryptedKey =
-        p.encryptedApiKey && isEncryptedServiceKey(p.encryptedApiKey)
-          ? decryptServiceKey(p.encryptedApiKey)
-          : (p.encryptedApiKey ?? undefined);
+      const decryptedKey = p.encryptedApiKey
+        ? resolveServiceKey(p.encryptedApiKey, {
+            column: "ai_providers.encrypted_api_key",
+            rowId: p.id,
+          })
+        : undefined;
       const override = overrides.get(p.providerId);
       const apiKey = override?.key ?? decryptedKey ?? null;
       const source = override?.source ?? "pod-wide";
@@ -318,7 +337,7 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     const existing = await db.query.aiProviders.findFirst({
       where: eq(aiProviders.providerId, body.providerId),
     });
-    const payload = toProposalPayload(body);
+    const payload = toProposalPayload(body, existing?.id);
 
     const gate = await gateProviderWrite(
       c,
@@ -492,7 +511,12 @@ export function registerAiProvidersRoutes(app: HubHono): void {
       return c.json({ error: `No such provider: ${body.providerId}` }, 404);
     }
 
-    const encryptedApiKey = encryptServiceKey(body.apiKey);
+    // Bound to the row it is written to (its id is the AAD).
+    const sealFor = (rowId: string) =>
+      encryptServiceKey(body.apiKey, {
+        column: "ai_provider_credentials.encrypted_api_key",
+        rowId,
+      });
     const now = new Date();
 
     // `?workspaceId=` → workspace-level override (owner/admin, checked by the gate)
@@ -509,18 +533,20 @@ export function registerAiProvidersRoutes(app: HubHono): void {
         await db
           .update(aiProviderCredentials)
           .set({
-            encryptedApiKey,
+            encryptedApiKey: sealFor(existing.id),
             enabled: body.enabled,
             priority: body.priority,
             updatedAt: now,
           })
           .where(eq(aiProviderCredentials.id, existing.id));
       } else {
+        const id = randomUUID();
         await db.insert(aiProviderCredentials).values({
+          id,
           providerId: body.providerId,
           workspaceId: workspaceId as any,
           userId: null,
-          encryptedApiKey,
+          encryptedApiKey: sealFor(id),
           enabled: body.enabled,
           priority: body.priority,
           createdBy: userId,
@@ -541,18 +567,20 @@ export function registerAiProvidersRoutes(app: HubHono): void {
         await db
           .update(aiProviderCredentials)
           .set({
-            encryptedApiKey,
+            encryptedApiKey: sealFor(existing.id),
             enabled: body.enabled,
             priority: body.priority,
             updatedAt: now,
           })
           .where(eq(aiProviderCredentials.id, existing.id));
       } else {
+        const id = randomUUID();
         await db.insert(aiProviderCredentials).values({
+          id,
           providerId: body.providerId,
           workspaceId: null,
           userId,
-          encryptedApiKey,
+          encryptedApiKey: sealFor(id),
           enabled: body.enabled,
           priority: body.priority,
           createdBy: userId,

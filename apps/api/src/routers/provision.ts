@@ -63,6 +63,9 @@ import { courierStatus } from "../courier-status.js";
 import { buildPodUpdatesStatus, readLastUpdate } from "../pod-updates/index.js";
 import { readPodUpdateSettingsRaw } from "./pod-updates-deps.js";
 
+/** The id (and serviceId) of the CP-provisioned intelligence service row. */
+const SYNAP_HUB_SERVICE_ID = "synap-hub";
+
 const logger = createLogger({ module: "provision" });
 const OPENCLAW_HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
 
@@ -217,10 +220,19 @@ provisionRouter.post("/register-intelligence", async (c) => {
   // encryption key env var is missing, rather than a generic DB/500 below.
   let encryptedKey: string;
   try {
-    encryptedKey = encryptServiceKey(serviceApiKey);
+    // Bound to the row it is written to: the fixed SYNAP_HUB_SERVICE_ID below.
+    encryptedKey = encryptServiceKey(serviceApiKey, {
+      column: "intelligence_services.api_key",
+      rowId: SYNAP_HUB_SERVICE_ID,
+    });
     // Round-trip validation: ensure the key can be decrypted before committing.
     // Catches format regressions at provision time instead of at first user message.
-    if (resolveServiceKey(encryptedKey) !== serviceApiKey) {
+    if (
+      resolveServiceKey(encryptedKey, {
+        column: "intelligence_services.api_key",
+        rowId: SYNAP_HUB_SERVICE_ID,
+      }) !== serviceApiKey
+    ) {
       throw new Error(
         "Encryption round-trip mismatch — key cannot be recovered"
       );
@@ -245,7 +257,7 @@ provisionRouter.post("/register-intelligence", async (c) => {
       return c.json({ error: "No workspace found on this pod" }, 404);
     }
 
-    const SERVICE_ID = "synap-hub";
+    const SERVICE_ID = SYNAP_HUB_SERVICE_ID;
     await db
       .insert(intelligenceServices)
       .values({
@@ -637,7 +649,7 @@ provisionRouter.post("/validate-credentials", async (c) => {
 
     const svc = await db.query.intelligenceServices.findFirst({
       where: eq(intelligenceServices.serviceId, intelligenceServiceId),
-      columns: { webhookUrl: true, status: true, apiKey: true },
+      columns: { id: true, webhookUrl: true, status: true, apiKey: true },
     });
 
     if (!svc) {
@@ -672,7 +684,10 @@ provisionRouter.post("/validate-credentials", async (c) => {
     let newStatus = svc.status;
     let httpStatus: number | null = null;
     try {
-      const isKey = resolveServiceKey(svc.apiKey as string);
+      const isKey = resolveServiceKey(svc.apiKey as string, {
+        column: "intelligence_services.api_key",
+        rowId: svc.id,
+      });
       const validateRes = await fetch(`${svc.webhookUrl}/api/validate`, {
         headers: { Authorization: `Bearer ${isKey}` },
         signal: AbortSignal.timeout(5000),
@@ -837,7 +852,10 @@ provisionRouter.get("/status", async (c) => {
       // Check if the stored key can be decrypted — catches missing/changed encryption key
       if (svc.apiKey) {
         try {
-          resolveServiceKey(svc.apiKey);
+          resolveServiceKey(svc.apiKey, {
+            column: "intelligence_services.api_key",
+            rowId: svc.id,
+          });
         } catch {
           connectionIssues.push("key_decrypt_failed");
         }
@@ -1124,7 +1142,10 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
     if (svc) {
       resolvedSource = "database";
       try {
-        const decrypted = resolveServiceKey(svc.apiKey);
+        const decrypted = resolveServiceKey(svc.apiKey, {
+          column: "intelligence_services.api_key",
+          rowId: svc.id,
+        });
         keyFingerprint = decrypted ? keyFingerprintOf(decrypted) : null;
       } catch {
         keyFingerprint = null;

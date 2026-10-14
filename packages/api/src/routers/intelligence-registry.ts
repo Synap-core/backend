@@ -39,7 +39,7 @@ import { verifyPermission } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { randomUUID, randomBytes } from "crypto";
-import { encryptServiceKey } from "../utils/service-key-crypto.js";
+import { encryptServiceKey } from "@synap/database";
 import { auditLog } from "../utils/audit-log.js";
 import { getServiceEntry } from "../utils/agent-services/index.js";
 import { attachAgentKeyGrant } from "../services/agent-identity-service.js";
@@ -148,16 +148,20 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
+      const id = generateId();
       const [service] = await db
         .insert(intelligenceServices)
         .values({
-          id: generateId(),
+          id,
           serviceId: input.serviceId,
           name: input.name,
           description: input.description,
           version: input.version,
           webhookUrl: input.webhookUrl,
-          apiKey: encryptServiceKey(input.apiKey),
+          apiKey: encryptServiceKey(input.apiKey, {
+            column: "intelligence_services.api_key",
+            rowId: id,
+          }),
           capabilities: input.capabilities,
           pricing: input.pricing || "free",
           providerType: input.providerType ?? "custom",
@@ -331,7 +335,10 @@ export const intelligenceRegistryRouter = router({
       const [updated] = await db
         .update(intelligenceServices)
         .set({
-          apiKey: encryptServiceKey(input.newApiKey),
+          apiKey: encryptServiceKey(input.newApiKey, {
+            column: "intelligence_services.api_key",
+            rowId: input.id,
+          }),
           updatedAt: new Date(),
         })
         .where(eq(intelligenceServices.id, input.id))
@@ -803,15 +810,20 @@ export const intelligenceRegistryRouter = router({
             database,
             new EventRepository(sql)
           );
-          const blob = encryptConfig({
-            SYNAP_POD_URL: podUrl,
-            SYNAP_HUB_API_KEY: plainKey,
-            SYNAP_WORKSPACE_ID: ctx.workspaceId ?? "pod-wide",
-            SYNAP_AGENT_USER_ID: agentId,
-            SYNAP_CONFIG_URL: configUrl,
-          });
+          const secretId = randomUUID();
+          const blob = encryptConfig(
+            {
+              SYNAP_POD_URL: podUrl,
+              SYNAP_HUB_API_KEY: plainKey,
+              SYNAP_WORKSPACE_ID: ctx.workspaceId ?? "pod-wide",
+              SYNAP_AGENT_USER_ID: agentId,
+              SYNAP_CONFIG_URL: configUrl,
+            },
+            { column: "secrets.encrypted_data", rowId: secretId }
+          );
           await vaultRepo.upsertServerSide(
             {
+              id: secretId,
               userId: agentId,
               serviceId,
               name: `${entry.displayName} — Service Config`,
@@ -1049,15 +1061,20 @@ export const intelligenceRegistryRouter = router({
             database,
             new EventRepository(sql)
           );
-          const blob = encryptConfig({
-            SYNAP_POD_URL: podUrl,
-            SYNAP_HUB_API_KEY: plainKey,
-            SYNAP_WORKSPACE_ID: ctx.workspaceId ?? "pod-wide",
-            SYNAP_AGENT_USER_ID: agentId,
-            SYNAP_CONFIG_URL: configUrl,
-          });
+          const secretId = randomUUID();
+          const blob = encryptConfig(
+            {
+              SYNAP_POD_URL: podUrl,
+              SYNAP_HUB_API_KEY: plainKey,
+              SYNAP_WORKSPACE_ID: ctx.workspaceId ?? "pod-wide",
+              SYNAP_AGENT_USER_ID: agentId,
+              SYNAP_CONFIG_URL: configUrl,
+            },
+            { column: "secrets.encrypted_data", rowId: secretId }
+          );
           await vaultRepo.upsertServerSide(
             {
+              id: secretId,
               userId: agentId,
               serviceId,
               name: `${entry.displayName} — Service Config`,
@@ -1180,11 +1197,14 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
-      const config = decryptConfig({
-        encryptedData: secret.encryptedData,
-        iv: secret.iv,
-        authTag: secret.authTag,
-      });
+      const config = decryptConfig(
+        {
+          encryptedData: secret.encryptedData,
+          iv: secret.iv,
+          authTag: secret.authTag,
+        },
+        { column: "secrets.encrypted_data", rowId: secret.id }
+      );
 
       if (!config) {
         throw new TRPCError({
@@ -1236,7 +1256,11 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
-      const blob = encryptConfig(input.config as Record<string, string>);
+      const secretId = randomUUID();
+      const blob = encryptConfig(input.config as Record<string, string>, {
+        column: "secrets.encrypted_data",
+        rowId: secretId,
+      });
       const database = await getDb();
       const vaultRepo = new SecretsVaultRepository(
         database,
@@ -1245,6 +1269,7 @@ export const intelligenceRegistryRouter = router({
 
       const secret = await vaultRepo.upsertServerSide(
         {
+          id: secretId,
           userId: agentUserId,
           serviceId: input.serviceId,
           name: `${input.serviceId} — Service Config`,

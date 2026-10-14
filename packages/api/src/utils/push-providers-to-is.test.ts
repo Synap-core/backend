@@ -10,8 +10,7 @@ vi.mock("@synap/database", () => ({
     query: { aiProviders: { findMany: vi.fn(async () => h.rows) } },
   },
   resolveDefaultIntelligenceEndpoint: vi.fn(async () => h.endpoint),
-  decryptServiceKey: (k: string) => k,
-  isEncryptedServiceKey: () => false,
+  resolveServiceKey: (k: string) => k,
 }));
 vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),

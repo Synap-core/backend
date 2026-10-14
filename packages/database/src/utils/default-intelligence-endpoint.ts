@@ -33,13 +33,18 @@ export async function resolveDefaultIntelligenceEndpoint(): Promise<Intelligence
         sql`${intelligenceServices.status} IN ('active', 'credential_error')`,
         eq(intelligenceServices.enabled, true)
       ),
-      columns: { webhookUrl: true, apiKey: true },
+      columns: { id: true, webhookUrl: true, apiKey: true },
     });
 
     if (svc?.webhookUrl) {
       return {
         endpoint: svc.webhookUrl,
-        apiKey: svc.apiKey ? resolveServiceKey(svc.apiKey) : "",
+        apiKey: svc.apiKey
+          ? resolveServiceKey(svc.apiKey, {
+              column: "intelligence_services.api_key",
+              rowId: svc.id,
+            })
+          : "",
       };
     }
   } catch {

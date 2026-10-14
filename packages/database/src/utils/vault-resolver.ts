@@ -14,6 +14,7 @@
  *   // { API_KEY: "sk-live-..." } instead of { API_KEY: "vault://abc-123" }
  */
 
+import { randomUUID } from "node:crypto";
 import { eq, and, sql as drizzleSql } from "drizzle-orm";
 import { getDb } from "../client-pg.js";
 import { secrets, vaultGrants } from "../schema/index.js";
@@ -55,10 +56,7 @@ export function parseVaultReference(
 
 /** Reason an agent/IS redemption was refused at the grant gate. */
 export type GrantDenialCode =
-  | "no_grant"
-  | "grant_expired"
-  | "grant_revoked"
-  | "grant_exhausted";
+  "no_grant" | "grant_expired" | "grant_revoked" | "grant_exhausted";
 
 /** Thrown by resolveVaultSecret when requireGrant is set and no active grant exists. */
 export class VaultGrantError extends Error {
@@ -396,11 +394,14 @@ export async function resolveVaultSecret(
 
   let plaintext: string;
   try {
-    plaintext = decryptServerSide({
-      encryptedData: secret.encryptedData!,
-      iv: secret.iv!,
-      authTag: secret.authTag!,
-    });
+    plaintext = decryptServerSide(
+      {
+        encryptedData: secret.encryptedData!,
+        iv: secret.iv!,
+        authTag: secret.authTag!,
+      },
+      { column: "secrets.encrypted_data", rowId: secret.id }
+    );
   } catch (err) {
     logger.error({ err, secretId }, "Failed to decrypt vault secret");
     return null;
@@ -565,11 +566,14 @@ export async function getServiceSecretResult(
   // throw) — so a null here means the row EXISTS and could not be read, almost
   // always a rotated or mismatched VAULT_SERVER_KEY. Loud, because "reconnect
   // it" is the wrong advice: reconnecting writes a second unreadable row.
-  const config = decryptConfig({
-    encryptedData: secret.encryptedData!,
-    iv: secret.iv!,
-    authTag: secret.authTag!,
-  });
+  const config = decryptConfig(
+    {
+      encryptedData: secret.encryptedData!,
+      iv: secret.iv!,
+      authTag: secret.authTag!,
+    },
+    { column: "secrets.encrypted_data", rowId: secret.id }
+  );
   if (!config) {
     const error =
       "decryption returned null — VAULT_SERVER_KEY may have rotated or the blob is corrupt";
@@ -608,12 +612,17 @@ export async function upsertServiceSecret(
   name: string,
   config: Record<string, string>
 ): Promise<string> {
-  const blob = encryptConfig(config);
   const db = await getDb();
 
   const existing = await db.query.secrets.findFirst({
     where: and(eq(secrets.userId, userId), eq(secrets.serviceId, serviceId)),
     columns: { id: true },
+  });
+  // The row id is the AAD, so it is fixed before the value is encrypted.
+  const rowId = existing?.id ?? randomUUID();
+  const blob = encryptConfig(config, {
+    column: "secrets.encrypted_data",
+    rowId,
   });
 
   if (existing) {
@@ -632,6 +641,7 @@ export async function upsertServiceSecret(
   const [row] = await db
     .insert(secrets)
     .values({
+      id: rowId,
       userId,
       name,
       type: "api_key",

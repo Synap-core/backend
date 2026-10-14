@@ -569,6 +569,8 @@ async function getActiveService(serviceId: string) {
  */
 /** Service record shape expected by createClient — non-null string fields after Drizzle nullable inference */
 interface ServiceRecord {
+  /** Row id — the AAD the stored `apiKey` is bound to. */
+  id: string;
   serviceId: string;
   webhookUrl: string;
   apiKey: string | null;
@@ -578,7 +580,10 @@ interface ServiceRecord {
 }
 
 function createClient(service: ServiceRecord): ResolvedService {
-  const apiKey = resolveServiceKey(service.apiKey ?? "");
+  const apiKey = resolveServiceKey(service.apiKey ?? "", {
+    column: "intelligence_services.api_key",
+    rowId: service.id,
+  });
 
   // Warn if health check timestamp is stale — the service may be unhealthy
   if (service.lastHealthCheck) {

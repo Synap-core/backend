@@ -11,6 +11,7 @@
  * present instead of reading from its own env.
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { ProviderUpsertSchema } from "./ai-providers.schema.js";
 import { router, podProcedure, podAdminProcedure } from "../trpc.js";
@@ -77,8 +78,13 @@ export const aiProvidersRouter = router({
       where: eq(aiProviders.providerId, input.providerId),
     });
 
+    // The row id is the AAD, so a new row's id is fixed before encrypting.
+    const rowId = existing?.id ?? randomUUID();
     const encryptedApiKey = apiKey
-      ? encryptServiceKey(apiKey)
+      ? encryptServiceKey(apiKey, {
+          column: "ai_providers.encrypted_api_key",
+          rowId,
+        })
       : (existing?.encryptedApiKey ?? null);
 
     const now = new Date();
@@ -92,6 +98,7 @@ export const aiProvidersRouter = router({
     } else {
       await db.insert(aiProviders).values({
         ...rest,
+        id: rowId,
         encryptedApiKey,
         createdAt: now,
         updatedAt: now,

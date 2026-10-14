@@ -40,6 +40,7 @@ import {
   materializeBatch,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
+  openSyncPeerToken,
 } from "@synap/database";
 import {
   intelligenceServices,
@@ -89,11 +90,38 @@ function isFocusSessionOrigin(
 // ============================================================================
 
 /**
+ * The peer (of `peers`) whose stored token equals `callerToken`, compared in
+ * constant time. A token is stored encrypted, so it is matched in the process,
+ * never by an SQL equality. A row whose token cannot be decrypted cannot
+ * match; it is logged (by id + code) so the broken peer is visible rather
+ * than silently refusing every call.
+ */
+function findPeerByToken<P extends { id: string; authToken: string | null }>(
+  peers: readonly P[],
+  callerToken: string
+): P | null {
+  for (const peer of peers) {
+    let token: string | null;
+    try {
+      token = openSyncPeerToken(peer);
+    } catch (err) {
+      logger.warn(
+        { peerId: peer.id, code: (err as { code?: string }).code ?? "ERROR" },
+        "Sync peer token could not be decrypted — this peer cannot authenticate"
+      );
+      continue;
+    }
+    if (token != null && safeTokenEqual(token, callerToken)) return peer;
+  }
+  return null;
+}
+
+/**
  * Authenticate a peer that is pushing events TO us.
  * Matches peers with direction "pull" or "bidirectional" (from their perspective
  * they push, from ours we receive / pull).
  */
-async function authenticateReceivePeer(
+export async function authenticateReceivePeer(
   authHeader: string | null
 ): Promise<{ peerId: string; workspaceIds: string[] | null } | null> {
   if (!authHeader) return null;
@@ -108,18 +136,18 @@ async function authenticateReceivePeer(
   // workers, used by an UNREACHABLE peer like the user's local pod behind NAT:
   // the local pod drives both push+pull from its side, and this pod just needs
   // to authenticate its inbound calls without trying to reach 127.0.0.1).
-  const peer = await db.query.syncPeers.findFirst({
+  const candidates = await db.query.syncPeers.findMany({
     where: and(
       or(
         eq(syncPeers.direction, "pull"),
         eq(syncPeers.direction, "bidirectional"),
         eq(syncPeers.direction, "inbound")
       ),
-      eq(syncPeers.enabled, true),
-      eq(syncPeers.authToken, token)
+      eq(syncPeers.enabled, true)
     ),
-    columns: { id: true, workspaceIds: true },
+    columns: { id: true, workspaceIds: true, authToken: true },
   });
+  const peer = findPeerByToken(candidates, token);
 
   if (!peer) return null;
   return { peerId: peer.id, workspaceIds: peer.workspaceIds };
@@ -130,7 +158,7 @@ async function authenticateReceivePeer(
  * Matches peers with direction "push" or "bidirectional" (from their perspective
  * they pull, from ours we push / serve).
  */
-async function authenticatePullPeer(
+export async function authenticatePullPeer(
   authHeader: string | null
 ): Promise<{ peerId: string; workspaceIds: string[] | null } | null> {
   if (!authHeader) return null;
@@ -144,18 +172,18 @@ async function authenticatePullPeer(
   // "bidirectional" — OR "inbound" (auth-only; see authenticateReceivePeer). An
   // inbound peer (the user's NAT'd local pod) pulls our events from its side; we
   // only authenticate the request and never try to reach it.
-  const peer = await db.query.syncPeers.findFirst({
+  const candidates = await db.query.syncPeers.findMany({
     where: and(
       or(
         eq(syncPeers.direction, "push"),
         eq(syncPeers.direction, "bidirectional"),
         eq(syncPeers.direction, "inbound")
       ),
-      eq(syncPeers.enabled, true),
-      eq(syncPeers.authToken, token)
+      eq(syncPeers.enabled, true)
     ),
-    columns: { id: true, workspaceIds: true },
+    columns: { id: true, workspaceIds: true, authToken: true },
   });
+  const peer = findPeerByToken(candidates, token);
 
   if (!peer) return null;
   return { peerId: peer.id, workspaceIds: peer.workspaceIds };
@@ -1805,10 +1833,7 @@ app.get("/health", async (c) => {
     const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i);
     const callerToken = tokenMatch?.[1]?.trim();
     const isAuthenticated =
-      callerToken &&
-      peers.some(
-        (p) => p.authToken != null && safeTokenEqual(p.authToken, callerToken)
-      );
+      !!callerToken && findPeerByToken(peers, callerToken) !== null;
 
     const states = await db.query.syncState.findMany();
     const stateMap = new Map(states.map((s) => [s.syncPeerId, s]));
@@ -1882,13 +1907,9 @@ app.get("/status", async (c) => {
     }
 
     const peers = await db.query.syncPeers.findMany({
-      columns: { authToken: true },
+      columns: { id: true, authToken: true },
     });
-    const isAuthenticated =
-      callerToken &&
-      peers.some(
-        (p) => p.authToken != null && safeTokenEqual(p.authToken, callerToken)
-      );
+    const isAuthenticated = findPeerByToken(peers, callerToken) !== null;
     if (!isAuthenticated) {
       return c.json({ error: "Unauthorized" }, 401);
     }

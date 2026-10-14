@@ -11,6 +11,7 @@
 
 import { z } from "zod";
 import { router, podAdminProcedure } from "../trpc.js";
+import { randomUUID } from "node:crypto";
 import {
   db,
   syncPeers,
@@ -19,6 +20,7 @@ import {
   eq,
   inArray,
   and,
+  sealSyncPeerToken,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -69,7 +71,10 @@ export async function upsertSyncPeer(
     await db
       .update(syncPeers)
       .set({
-        authToken: input.authToken ?? existing.authToken,
+        authToken:
+          input.authToken != null
+            ? sealSyncPeerToken(input.authToken, existing.id)
+            : existing.authToken,
         label: input.label !== undefined ? input.label : existing.label,
         workspaceIds:
           input.workspaceIds !== undefined
@@ -97,12 +102,18 @@ export async function upsertSyncPeer(
     return existing.id;
   }
 
+  // The row id is the token's AAD, so it is fixed before sealing.
+  const peerId = randomUUID();
   const [peer] = await db
     .insert(syncPeers)
     .values({
+      id: peerId,
       peerPodUrl: input.peerPodUrl,
       direction: input.direction,
-      authToken: input.authToken ?? null,
+      authToken:
+        input.authToken != null
+          ? sealSyncPeerToken(input.authToken, peerId)
+          : null,
       label: input.label ?? null,
       workspaceIds: input.workspaceIds ?? null,
       localRole: input.localRole ?? "unset",
@@ -260,7 +271,7 @@ export const syncManagementRouter = router({
         setValues.peerPodUrl = updates.peerPodUrl;
       if (updates.label !== undefined) setValues.label = updates.label;
       if (updates.authToken !== undefined)
-        setValues.authToken = updates.authToken;
+        setValues.authToken = sealSyncPeerToken(updates.authToken, id);
       if (updates.workspaceIds !== undefined)
         setValues.workspaceIds = updates.workspaceIds; // null clears filter, [] also clears (treated as "sync all")
       if (updates.localRole !== undefined)
@@ -274,7 +285,9 @@ export const syncManagementRouter = router({
         .returning();
 
       logger.info({ peerId: id }, "Sync peer updated");
-      return updated;
+      // Never echo the token (listPeers omits it too).
+      const { authToken: _token, ...peer } = updated;
+      return peer;
     }),
 
   /**

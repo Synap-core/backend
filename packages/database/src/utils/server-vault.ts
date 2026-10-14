@@ -1,95 +1,58 @@
 /**
- * Server-Side Vault Encryption
+ * Server-Side Vault Encryption — the door for server-mode vault secrets
+ * (`secrets.encrypted_data` + `iv` + `auth_tag`, `encryptionMode='server'`):
+ * service bootstrap credentials, connector tokens, user API keys that the
+ * server must be able to read. A thin, named wrapper over the pod's
+ * field-crypto core (`field-crypto.ts`, `@synap-core/field-crypto`): every
+ * call names its cell (`{ column: "secrets.encrypted_data", rowId }`, the AAD).
  *
- * Encrypts/decrypts secrets using a server-managed key (VAULT_SERVER_KEY env var)
- * rather than the user's master password. Used for service bootstrap credentials
- * (Hub Protocol API keys, pod URLs, workspace IDs) that need to be readable
- * by the server — for example, when an intelligence service calls
- * intelligenceRegistry.getServiceConfig to pull its own config on startup.
- *
- * Security model:
- *   - Key: 32-byte hex in VAULT_SERVER_KEY env var (AES-256)
- *   - Algorithm: AES-256-GCM (same as client-side vault)
- *   - IV: 12 random bytes per encryption (never reused)
- *   - Auth tag: 16 bytes, prevents tampering
- *   - Plaintext never logged or stored; only the ciphertext reaches the DB
- *
- * Generates VAULT_SERVER_KEY:
- *   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+ * With `SYNAP_FIELD_KEYS` set, `encryptedData` holds a `senc:1:<kid>:…`
+ * envelope and `iv`/`authTag` are empty strings. Until then the blob keeps the
+ * pre-keyring shape (base64 AES-256-GCM under VAULT_SERVER_KEY), which stays
+ * readable either way.
  */
 
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHmac,
-  randomBytes,
-} from "crypto";
+import { createHmac } from "node:crypto";
 import { createLogger } from "@synap-core/core";
+import {
+  parseVaultServerKey,
+  podFieldCrypto,
+  type FieldRef,
+  type ServerEncryptedBlob,
+} from "./field-crypto.js";
+import type { BlobColumn } from "./encrypted-columns.js";
+
+export type { ServerEncryptedBlob };
 
 const logger = createLogger({ module: "server-vault" });
 
-function getServerKey(): Buffer {
-  const hex = process.env.VAULT_SERVER_KEY;
-  if (!hex || hex.length !== 64) {
-    throw new Error(
-      "VAULT_SERVER_KEY env var is required and must be a 64-char hex string (32 bytes). " +
-        "Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
-    );
-  }
-  return Buffer.from(hex, "hex");
-}
+type VaultRef = FieldRef<BlobColumn>;
 
-export interface ServerEncryptedBlob {
-  encryptedData: string; // base64 ciphertext
-  iv: string; // base64 12-byte IV
-  authTag: string; // base64 16-byte GCM auth tag
-}
-
-/**
- * Encrypt a plaintext string with the server key.
- * Returns the same blob shape as the client-side vault (encryptedData, iv, authTag).
- */
-export function encryptServerSide(plaintext: string): ServerEncryptedBlob {
-  const key = getServerKey();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-
-  let encrypted = cipher.update(plaintext, "utf8", "base64");
-  encrypted += cipher.final("base64");
-  const authTag = cipher.getAuthTag().toString("base64");
-
-  return {
-    encryptedData: encrypted,
-    iv: iv.toString("base64"),
-    authTag,
-  };
-}
-
-/**
- * Decrypt a server-encrypted blob.
- * Throws if the key is wrong or the data has been tampered with (GCM auth tag mismatch).
- */
-export function decryptServerSide(blob: ServerEncryptedBlob): string {
-  const key = getServerKey();
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    key,
-    Buffer.from(blob.iv, "base64")
-  );
-  decipher.setAuthTag(Buffer.from(blob.authTag, "base64"));
-
-  let decrypted = decipher.update(blob.encryptedData, "base64", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
-}
-
-/**
- * Encrypt a JSON-serialisable config object.
- */
-export function encryptConfig(
-  config: Record<string, string>
+/** Encrypt a plaintext string for one server-mode vault row. */
+export function encryptServerSide(
+  plaintext: string,
+  ref: VaultRef
 ): ServerEncryptedBlob {
-  return encryptServerSide(JSON.stringify(config));
+  return podFieldCrypto().encryptBlob(plaintext, ref);
+}
+
+/**
+ * Decrypt a server-mode vault blob. Throws on a wrong key, a value copied from
+ * another row, or tampering.
+ */
+export function decryptServerSide(
+  blob: ServerEncryptedBlob,
+  ref: VaultRef
+): string {
+  return podFieldCrypto().decryptBlob(blob, ref);
+}
+
+/** Encrypt a JSON-serialisable config object for one vault row. */
+export function encryptConfig(
+  config: Record<string, string>,
+  ref: VaultRef
+): ServerEncryptedBlob {
+  return encryptServerSide(JSON.stringify(config), ref);
 }
 
 /**
@@ -97,12 +60,19 @@ export function encryptConfig(
  * Returns null (with a warning) if decryption fails — avoids crashing the provisioning flow.
  */
 export function decryptConfig(
-  blob: ServerEncryptedBlob
+  blob: ServerEncryptedBlob,
+  ref: VaultRef
 ): Record<string, string> | null {
   try {
-    return JSON.parse(decryptServerSide(blob)) as Record<string, string>;
+    return JSON.parse(decryptServerSide(blob, ref)) as Record<string, string>;
   } catch (err) {
-    logger.warn({ err }, "Failed to decrypt server-side config blob");
+    logger.warn(
+      {
+        rowId: ref.rowId,
+        code: (err as { code?: string }).code ?? "ERROR",
+      },
+      "Failed to decrypt server-side config blob"
+    );
     return null;
   }
 }
@@ -118,19 +88,30 @@ export function decryptConfig(
  * impossible without the server key. Normalization (trim + lowercase) collapses
  * trivial whitespace/casing variants so they still count as "reused".
  *
- * Computed at WRITE time where the plaintext is already in hand — never by
- * decrypting stored rows. Returns null for an empty/whitespace-only password.
+ * This is a MAC, not field encryption: it stays on VAULT_SERVER_KEY (the
+ * SYNAP_FIELD_KEYS ring rotates, a fingerprint must not), so that key cannot
+ * leave the pod's env until fingerprints get their own key. Throws when it is
+ * absent; returns null for an empty/whitespace-only password.
  */
 export function fingerprintPassword(password: string): string | null {
   const normalized = password.trim().toLowerCase();
   if (!normalized) return null;
-  return createHmac("sha256", getServerKey())
-    .update(normalized, "utf8")
-    .digest("hex");
+  const key = parseVaultServerKey(process.env.VAULT_SERVER_KEY);
+  if (!key) {
+    throw new Error(
+      "VAULT_SERVER_KEY env var is required and must be a 64-char hex string (32 bytes)"
+    );
+  }
+  return createHmac("sha256", key).update(normalized, "utf8").digest("hex");
 }
 
-/** True when VAULT_SERVER_KEY is configured and valid length. */
+/**
+ * True when the server vault can encrypt and decrypt: the SYNAP_FIELD_KEYS
+ * ring is set, or VAULT_SERVER_KEY is a valid 64-hex key.
+ */
 export function isServerVaultAvailable(): boolean {
-  const hex = process.env.VAULT_SERVER_KEY;
-  return !!hex && hex.length === 64;
+  return (
+    !!process.env.SYNAP_FIELD_KEYS?.trim() ||
+    parseVaultServerKey(process.env.VAULT_SERVER_KEY) !== null
+  );
 }

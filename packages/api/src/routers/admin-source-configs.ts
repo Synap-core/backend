@@ -21,6 +21,7 @@
  *   opaque subject resolves through the Pod's local identity-link table.
  */
 
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createLogger } from "@synap-core/core";
@@ -208,12 +209,18 @@ export async function writeInlineSourceConfigSecrets(
   const createdSecretIds: string[] = [];
 
   for (const entry of input.secrets) {
-    const blob = encryptServerSide(entry.value);
+    // The row id is the AAD, so it is fixed before encrypting.
+    const secretId = randomUUID();
+    const blob = encryptServerSide(entry.value, {
+      column: "secrets.encrypted_data",
+      rowId: secretId,
+    });
     // Direct insert (not upsert) — each inline field needs a distinct
     // vault value. The caller re-tags them after the config exists.
     const [secret] = await tx
       .insert(secrets)
       .values({
+        id: secretId,
         userId: input.userId,
         serviceId: "source:admin-provisioned",
         name: `source-config "${input.sourceName}" — ${entry.field}`,

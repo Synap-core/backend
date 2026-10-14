@@ -17,6 +17,7 @@
  * never break the list — callers swallow its errors).
  */
 
+import { randomUUID } from "node:crypto";
 import {
   db,
   and,
@@ -156,10 +157,15 @@ export async function syncNangoConnectionsToRegistry(
       // connectionId; at run time the selector keeps the tool's own nango:// ref
       // and pins THIS account via the hint (see external-dispatch). This works
       // against the live nango:// tools without needing a provider_integrations row.
-      const blob = encryptServerSide("");
+      const secretId = randomUUID();
+      const blob = encryptServerSide("", {
+        column: "secrets.encrypted_data",
+        rowId: secretId,
+      });
       const [created] = await db
         .insert(secrets)
         .values({
+          id: secretId,
           userId: actorUserId,
           workspaceId: null,
           name: `${providerConfigKey} · ${conn.connectionId.slice(-6)}`,

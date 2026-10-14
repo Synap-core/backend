@@ -16,18 +16,19 @@
 import { Hono } from "hono";
 import { authMiddleware } from "@synap/auth";
 import { refuseGuestSession } from "@synap/api";
-import { db, isEncryptedServiceKey, decryptServiceKey } from "@synap/database";
+import { db, resolveServiceKey } from "@synap/database";
 import { aiProviders, workspaceMembers } from "@synap/database/schema";
 import { asc, eq, and } from "drizzle-orm";
 import { resolveProviderCredentialsBatch } from "@synap/api";
 
 const providersRouter = new Hono();
 
-/** Decrypt a stored service key, passing through plaintext legacy values. */
-function decrypt(encrypted: string): string {
-  return isEncryptedServiceKey(encrypted)
-    ? decryptServiceKey(encrypted)
-    : encrypted;
+/** Decrypt a provider's stored key (plaintext legacy values per the flag). */
+function decrypt(row: { id: string; encryptedApiKey: string }): string {
+  return resolveServiceKey(row.encryptedApiKey, {
+    column: "ai_providers.encrypted_api_key",
+    rowId: row.id,
+  });
 }
 
 providersRouter.get(
@@ -92,7 +93,10 @@ providersRouter.get(
     const result = rows.map((p) => {
       const override = overrides.get(p.providerId) ?? null;
       const apiKey =
-        override ?? (p.encryptedApiKey ? decrypt(p.encryptedApiKey) : null);
+        override ??
+        (p.encryptedApiKey
+          ? decrypt({ id: p.id, encryptedApiKey: p.encryptedApiKey })
+          : null);
       return {
         providerId: p.providerId,
         name: p.name,

@@ -3,10 +3,8 @@
  */
 
 export * from "./trpc.js";
-export {
-  encryptServiceKey,
-  resolveServiceKey,
-} from "./utils/service-key-crypto.js";
+// The service-key door lives in @synap/database; re-exported for apps/api.
+export { encryptServiceKey, resolveServiceKey } from "@synap/database";
 export * from "./context.js";
 export { eventsRouter } from "./routers/events.js";
 export { captureRouter } from "./routers/capture.js";

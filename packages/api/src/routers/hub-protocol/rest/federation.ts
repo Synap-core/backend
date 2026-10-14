@@ -25,12 +25,14 @@
  * (same pattern as `catalog-sync-stamps.ts`).
  */
 
+import { randomUUID } from "node:crypto";
 import { z } from "@hono/zod-openapi";
 import {
   db,
   podSettings,
   drizzleSql,
   eq,
+  encryptField,
   type FederationOidcClient,
 } from "@synap/database";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -176,15 +178,6 @@ export function registerFederationRoutes(app: HubHono): void {
       return c.json({ error: "Assertion missing OIDC client fields" }, 400);
     }
 
-    const client: FederationOidcClient = {
-      clientId: payload.clientId,
-      clientSecret: payload.clientSecret,
-      issuer: payload.issuer,
-      redirectUri: payload.redirectUri,
-      updatedAt: new Date().toISOString(),
-    };
-    const clientObj = JSON.stringify(client);
-
     try {
       // Read-modify-write the singleton pod_settings row. `jsonb_set` sets only
       // the `federationOidcClient` key (creating it if missing), so sibling
@@ -194,6 +187,21 @@ export function registerFederationRoutes(app: HubHono): void {
         .from(podSettings)
         .orderBy(podSettings.createdAt)
         .limit(1);
+      // The secret is stored through the field-crypto door, bound to the
+      // pod_settings row (its id is the AAD, so a new row's id is fixed first).
+      const settingsId = existing?.id ?? randomUUID();
+
+      const client: FederationOidcClient = {
+        clientId: payload.clientId,
+        clientSecret: encryptField(payload.clientSecret, {
+          column: "pod_settings.federation_oidc_client_secret",
+          rowId: settingsId,
+        }),
+        issuer: payload.issuer,
+        redirectUri: payload.redirectUri,
+        updatedAt: new Date().toISOString(),
+      };
+      const clientObj = JSON.stringify(client);
 
       if (existing) {
         await db
@@ -209,9 +217,10 @@ export function registerFederationRoutes(app: HubHono): void {
           })
           .where(eq(podSettings.id, existing.id));
       } else {
-        await db
-          .insert(podSettings)
-          .values({ settings: { federationOidcClient: client } });
+        await db.insert(podSettings).values({
+          id: settingsId,
+          settings: { federationOidcClient: client },
+        });
       }
 
       logger.info(

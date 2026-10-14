@@ -57,8 +57,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         return { where: vi.fn(async () => []) };
       }),
     },
-    isEncryptedServiceKey: (k: string) => k === "ENC",
-    decryptServiceKey: () => "sk-or-v1-0123456789abcdefPLAINTEXT",
+    resolveServiceKey: (k: string) =>
+      k === "ENC" ? "sk-or-v1-0123456789abcdefPLAINTEXT" : k,
     encryptServiceKey: (k: string) => `ENCRYPTED::${k.length}`,
     getWorkspaceMembership: vi.fn(async () =>
       h.membershipRole ? { role: h.membershipRole } : null

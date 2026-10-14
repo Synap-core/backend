@@ -24,6 +24,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
 
+import { randomUUID } from "node:crypto";
 import {
   encryptServerSide,
   db,
@@ -1925,8 +1926,6 @@ export async function createVaultSecret(
     };
   }
 
-  const blob = encryptServerSide(v.value);
-
   // Idempotent: reuse an existing secret with the same name in scope, updating
   // its encrypted value (re-apply rotates the credential instead of duplicating).
   const [existing] = await db
@@ -1943,6 +1942,12 @@ export async function createVaultSecret(
       )
     )
     .limit(1);
+  // The row id is the AAD, so it is fixed before encrypting.
+  const secretId = existing?.id ?? randomUUID();
+  const blob = encryptServerSide(v.value, {
+    column: "secrets.encrypted_data",
+    rowId: secretId,
+  });
   if (existing) {
     // BUG-2 guard: NEVER overwrite a live credential with a blank value. A re-apply
     // that couldn't interpolate this secret's param yields `value === ""`; writing
@@ -1976,6 +1981,7 @@ export async function createVaultSecret(
   const [secret] = await db
     .insert(secrets)
     .values({
+      id: secretId,
       userId,
       workspaceId,
       // Shared pod key only on a POD-WIDE install; a workspace-scoped secret stays

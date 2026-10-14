@@ -194,10 +194,15 @@ beforeAll(async () => {
   });
 
   // A JSON secret created outside the door, legitimately read by field.
-  const blob = encryptServerSide(JSON.stringify({ value: "json-field" }));
+  const jsonId = randomUUID();
+  const blob = encryptServerSide(JSON.stringify({ value: "json-field" }), {
+    column: "secrets.encrypted_data",
+    rowId: jsonId,
+  });
   const [jsonSecret] = await db
     .insert(schema.secrets)
     .values({
+      id: jsonId,
       userId: owner,
       serviceId: "nango-connector",
       name: "json secret",

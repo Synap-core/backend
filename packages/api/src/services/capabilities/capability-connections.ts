@@ -15,6 +15,7 @@
  * (`secret.userId === actorUserId`, with a pod-admin fallback).
  */
 
+import { randomUUID } from "node:crypto";
 import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
 import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
 
@@ -412,11 +413,17 @@ export async function addCredential(
   // Reuse the SAME server-side encryption the vault route + template applier use.
   // A credential with no value of its own (Nango) still stores an (empty) blob so
   // the row shape is uniform — the credential lives on the linked provider connection.
-  const blob = encryptServerSide(value ?? "");
+  // The row id is the AAD, so it is fixed before encrypting.
+  const secretId = randomUUID();
+  const blob = encryptServerSide(value ?? "", {
+    column: "secrets.encrypted_data",
+    rowId: secretId,
+  });
 
   const [secret] = await db
     .insert(secrets)
     .values({
+      id: secretId,
       userId: actorUserId,
       workspaceId: null,
       name: label,
@@ -562,7 +569,10 @@ export async function updateCredential(
   if (input.isDefault !== undefined) patch.isDefault = input.isDefault;
   if (input.isPodWide !== undefined) patch.isPodWide = input.isPodWide;
   if (input.value !== undefined) {
-    const blob = encryptServerSide(input.value);
+    const blob = encryptServerSide(input.value, {
+      column: "secrets.encrypted_data",
+      rowId: credentialId,
+    });
     patch.encryptedData = blob.encryptedData;
     patch.iv = blob.iv;
     patch.authTag = blob.authTag;

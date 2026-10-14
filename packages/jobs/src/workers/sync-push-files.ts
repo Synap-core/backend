@@ -29,6 +29,7 @@ import {
   or,
   gt,
   drizzleSql,
+  openSyncPeerToken,
 } from "@synap/database";
 import { documents, documentVersions } from "@synap/database/schema";
 import { storage } from "@synap/storage";
@@ -153,8 +154,10 @@ async function pushFilesToPeer(peer: {
     "Content-Type": "application/json",
     "X-Source-Pod-Id": SOURCE_POD_ID,
   };
-  if (peer.authToken) {
-    headers["Authorization"] = `Bearer ${peer.authToken}`;
+  // Throws when the stored token is unreadable: never call a peer unauthenticated.
+  const authToken = openSyncPeerToken(peer);
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
   }
 
   for (const doc of docsToSync) {

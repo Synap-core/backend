@@ -16,8 +16,7 @@
 import {
   db,
   resolveDefaultIntelligenceEndpoint,
-  decryptServiceKey,
-  isEncryptedServiceKey,
+  resolveServiceKey,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -108,10 +107,12 @@ export async function pushProvidersToIS(): Promise<void> {
   });
 
   const providers = rows.map((p) => {
-    const decryptedKey =
-      p.encryptedApiKey && isEncryptedServiceKey(p.encryptedApiKey)
-        ? decryptServiceKey(p.encryptedApiKey)
-        : (p.encryptedApiKey ?? undefined);
+    const decryptedKey = p.encryptedApiKey
+      ? resolveServiceKey(p.encryptedApiKey, {
+          column: "ai_providers.encrypted_api_key",
+          rowId: p.id,
+        })
+      : undefined;
 
     return {
       id: p.providerId,

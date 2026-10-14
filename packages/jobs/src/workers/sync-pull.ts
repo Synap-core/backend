@@ -20,6 +20,7 @@ import {
   drizzleSql,
   materializeBatch,
   type SyncEvent,
+  openSyncPeerToken,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -109,8 +110,10 @@ async function pullFromPeer(peer: {
 
     const baseUrl = peer.peerPodUrl.replace(/\/+$/, "");
     const headers: Record<string, string> = {};
-    if (peer.authToken) {
-      headers["Authorization"] = `Bearer ${peer.authToken}`;
+    // Throws when the stored token is unreadable: never call a peer unauthenticated.
+    const authToken = openSyncPeerToken(peer);
+    if (authToken) {
+      headers["Authorization"] = `Bearer ${authToken}`;
     }
 
     let totalEventsPulled = 0;

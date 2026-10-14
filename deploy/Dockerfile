@@ -26,6 +26,7 @@ COPY packages/database/package.json      ./packages/database/
 COPY packages/events/package.json        ./packages/events/
 COPY packages/external-connect-client/package.json ./packages/external-connect-client/
 COPY packages/feed-service/package.json  ./packages/feed-service/
+COPY packages/field-crypto/package.json  ./packages/field-crypto/
 COPY packages/governance-policy/package.json ./packages/governance-policy/
 COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
 COPY packages/hub-rest-client/package.json ./packages/hub-rest-client/
