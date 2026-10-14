@@ -734,11 +734,15 @@ generate_kratos_config() {
                 # 2. Read the pushed client through the backend's field-crypto CLI
                 #    (decrypts the secret once SYNAP_FIELD_KEYS is set; same
                 #    `clientId|clientSecret|issuer` line, same trust as kratos.yml).
-                local _row
-                _row=$(docker compose exec -T backend node dist/scripts/field-crypto.js federation-oidc-client 2>/dev/null | head -1 || echo "")
+                #    Keep ONLY a line shaped `id|secret|https://issuer`: the backend's
+                #    config logger prints JSON lines to stdout before the answer, and
+                #    taking the first line once rendered a log line into kratos.yml
+                #    (Kratos crash-looped, perso pod 2026-10-14). No such line = disabled.
+                local _row _oidc_line='^[^{|[:space:]][^|]*\|[^|[:space:]]+\|https?://[^|[:space:]]+$'
+                _row=$(docker compose exec -T backend node dist/scripts/field-crypto.js federation-oidc-client 2>/dev/null | grep -E "$_oidc_line" | tail -1 || echo "")
                 # Older backend image (no field-crypto CLI): the secret is still plaintext in pod_settings.
                 [ -n "$_row" ] || _row=$(docker compose exec -T postgres psql -U synap -d synap -tAF '|' -c \
-                    "SELECT settings->'federationOidcClient'->>'clientId', settings->'federationOidcClient'->>'clientSecret', settings->'federationOidcClient'->>'issuer' FROM pod_settings WHERE settings ? 'federationOidcClient' LIMIT 1" 2>/dev/null | head -1 || echo "")
+                    "SELECT settings->'federationOidcClient'->>'clientId', settings->'federationOidcClient'->>'clientSecret', settings->'federationOidcClient'->>'issuer' FROM pod_settings WHERE settings ? 'federationOidcClient' LIMIT 1" 2>/dev/null | grep -E "$_oidc_line" | tail -1 || echo "")
                 case "$_row" in *'|senc:'*) _row="" ;; esac   # never render a ciphertext into Kratos
                 oidc_client_id=$(printf '%s' "$_row" | cut -d'|' -f1)
                 oidc_client_secret=$(printf '%s' "$_row" | cut -d'|' -f2)
@@ -3865,6 +3869,10 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
     fi
     cp -p state/update/env.before .env || status=rollback_failed
     _ue_restore_bundle || { _ue_err "could not restore the previous deploy files from state/update/pre-bundle.tar"; status=rollback_failed; }
+    if [ -f state/update/kratos.yml.before ]; then
+        cp -p state/update/kratos.yml.before ../kratos/kratos.yml || status=rollback_failed
+        docker compose up -d --force-recreate kratos >/dev/null 2>&1 || true
+    fi
     docker compose up -d --force-recreate --remove-orphans backend realtime || status=rollback_failed
     _ue_bring_up_rest || status=rollback_failed
     if ! _ue_backend_healthy; then
@@ -3950,6 +3958,7 @@ synap_update_engine() {
 
     # 4. snapshot + verified pre-update dump (Cloudron rule: no backup, no update)
     (umask 077 && cp -p .env state/update/env.before) || { _ue_err "cannot snapshot .env"; exit 1; }
+    rm -f state/update/kratos.yml.before   # a previous run's snapshot is never restored
     _run_pgdata_guard
     if [ "$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_layout)" = "ok" ]; then
         if [ -z "$(command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
@@ -3981,6 +3990,10 @@ synap_update_engine() {
     local domain
     domain="$(_ue_env_get DOMAIN)"; domain="${domain:-localhost}"
     backfill_federation_public_urls "$domain"
+    # kratos.yml is generated, not part of the release bundle: keep the running
+    # one so a rollback restores it (a bad render once outlived the rollback and
+    # left Kratos crash-looping on the previous release).
+    [ -f ../kratos/kratos.yml ] && cp -p ../kratos/kratos.yml state/update/kratos.yml.before
     generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed" 0
     COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed" 0
 
