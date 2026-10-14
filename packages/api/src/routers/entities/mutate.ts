@@ -61,7 +61,7 @@ import {
 import {
   entityWriteVisibleWhere,
   runSignalWrite,
-  mergeSystemData,
+  systemDataPatchSql,
   EntityRendererRefSchema,
   DEFAULT_ENTITY_BENTO_TEMPLATES,
 } from "./helpers.js";
@@ -1119,16 +1119,19 @@ export const mutateProcs = {
         bentoViewId = newViewId;
       }
 
-      // Write to systemData column (not properties) — clean separation from user fields
-      const updatedSystemData: Record<string, unknown> = {
-        ...currentSystemData,
-        viewMode: input.mode,
-        ...(bentoViewId ? { bentoViewId } : {}),
-      };
-
+      // Write to systemData column (not properties) — clean separation from
+      // user fields. Patched in SQL on the CURRENT row: a whole-object write of
+      // the copy read above would drop keys another writer (the media copy)
+      // stored since.
       await db
         .update(entities)
-        .set({ systemData: updatedSystemData, updatedAt: new Date() })
+        .set({
+          systemData: systemDataPatchSql({
+            viewMode: input.mode,
+            ...(bentoViewId ? { bentoViewId } : {}),
+          }),
+          updatedAt: new Date(),
+        })
         .where(eq(entities.id, input.entityId));
 
       return {
@@ -1220,15 +1223,15 @@ export const mutateProcs = {
       }
 
       // MERGE — `systemData` is a shared bag (viewMode, bentoViewId,
-      // onboardingScaffold, mergedInto, …). A wholesale `.set({ systemData })`
-      // would silently destroy every other key.
-      const nextSystemData = mergeSystemData(entity.systemData, {
-        renderer: input.ref,
-      });
-
+      // onboardingScaffold, mergedInto, media, …). Patched in SQL on the
+      // CURRENT row, so neither a wholesale write nor a stale read can destroy
+      // another key.
       await db
         .update(entities)
-        .set({ systemData: nextSystemData, updatedAt: new Date() })
+        .set({
+          systemData: systemDataPatchSql({ renderer: input.ref }),
+          updatedAt: new Date(),
+        })
         .where(eq(entities.id, input.entityId));
 
       logger.info(

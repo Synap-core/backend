@@ -69,6 +69,28 @@ export function mergeSystemData(
 }
 
 /**
+ * The SQL twin of {@link mergeSystemData}, for an UPDATE: the patch is applied
+ * to the row's CURRENT `system_data` inside the statement, not to a copy read
+ * earlier. A JS read-merge-write overwrites whatever another writer stored
+ * between the read and the write — the media copy records `media` under a row
+ * lock at any time — so a door that read `systemData`, then wrote the whole
+ * object back, silently dropped a just-recorded cover. Same semantics as the
+ * JS merge: `null`/`undefined` deletes the key; a non-object value is `{}`.
+ */
+export function systemDataPatchSql(patch: Record<string, unknown>) {
+  const set: Record<string, unknown> = {};
+  let expr = drizzleSql`(CASE WHEN jsonb_typeof(${entities.systemData}) = 'object' THEN ${entities.systemData} ELSE '{}'::jsonb END)`;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined) {
+      expr = drizzleSql`(${expr} - ${key}::text)`;
+    } else {
+      set[key] = value;
+    }
+  }
+  return drizzleSql`(${expr} || ${JSON.stringify(set)}::jsonb)`;
+}
+
+/**
  * SECURITY — the accepted shape for a PER-ENTITY renderer override.
  *
  * `RendererTarget` (`@synap-core/renderer-runtime`) has 7 variants, two of which
