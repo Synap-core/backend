@@ -108,8 +108,24 @@ export type UsedWorkspaceOutcome =
   | { workspaceId: string; status: "proposed"; proposalId: string }
   | { workspaceId: string; status: "failed"; error: string };
 
+/**
+ * The create hit a project the caller ALREADY has (exact-normalized name).
+ * Nothing was written — not the name, the look, the home nor the spaces.
+ * `existing: true` + the existing project's own `name` let a door say "You
+ * already have <name>" and open it, never treat it as a fresh project to set
+ * up (places review M2).
+ */
+export interface DedupedProjectOutcome {
+  status: "deduped";
+  existing: true;
+  projectId: string;
+  reusedProjectId: string;
+  /** The EXISTING project's name (it may differ from the typed one in case/spacing). */
+  name: string;
+}
+
 export type CreateProjectGovernedOutcome =
-  | { status: "deduped"; projectId: string; reusedProjectId: string }
+  | DedupedProjectOutcome
   | {
       status: "proposed";
       proposalId: string;
@@ -241,8 +257,10 @@ export async function createProjectGoverned(
     if (match.exact) {
       return {
         status: "deduped",
+        existing: true,
         projectId: match.exact.id,
         reusedProjectId: match.exact.id,
+        name: match.exact.name,
       };
     }
 
@@ -335,8 +353,10 @@ export async function createProjectGoverned(
   if (written.status === "deduped") {
     return {
       status: "deduped",
+      existing: true,
       projectId: written.projectId,
       reusedProjectId: written.projectId,
+      name: written.row.name,
     };
   }
 

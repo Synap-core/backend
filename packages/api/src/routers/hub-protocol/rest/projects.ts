@@ -856,8 +856,10 @@ export function registerProjectsRoutes(app: HubHono): void {
       return c.json(
         {
           status: "deduped",
+          existing: true,
           projectId: outcome.projectId,
           reusedProjectId: outcome.reusedProjectId,
+          name: outcome.name,
         },
         200
       );

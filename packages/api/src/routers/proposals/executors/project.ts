@@ -8,7 +8,9 @@ import {
   sql,
   eq,
   and,
+  inArray,
   drizzleSql,
+  workspaces,
   relations,
   projectMembers,
   focusSessions,
@@ -23,6 +25,43 @@ import { startTrack } from "../../../services/tracks/tracks-service.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
+
+/**
+ * One reviewer sentence per requested used space that did NOT link when an
+ * approved create replayed: failed (with the door's reason) or filed for
+ * review on its own. Named by the space's name when it can be read.
+ */
+async function usedSpaceRefusals(
+  used:
+    | ReadonlyArray<
+        | { workspaceId: string; status: "linked" }
+        | { workspaceId: string; status: "proposed"; proposalId: string }
+        | { workspaceId: string; status: "failed"; error: string }
+      >
+    | undefined
+): Promise<string[]> {
+  const missed = (used ?? []).filter((u) => u.status !== "linked");
+  if (missed.length === 0) return [];
+  const names = new Map(
+    (
+      await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(
+          inArray(
+            workspaces.id,
+            missed.map((u) => u.workspaceId)
+          )
+        )
+    ).map((w) => [w.id, w.name])
+  );
+  return missed.map((u) => {
+    const space = names.get(u.workspaceId) ?? u.workspaceId;
+    return u.status === "failed"
+      ? `The project was created, but the space "${space}" was not linked to it: ${u.error}`
+      : `The project was created; linking the space "${space}" was filed for review (proposal ${u.proposalId}).`;
+  });
+}
 
 /** Register the project/* approve executors. */
 export function registerProjectExecutors(): void {
@@ -90,41 +129,44 @@ export function registerProjectExecutors(): void {
         workspaceRole: membership?.role,
       } as unknown as Context);
       // The replay must APPLY, never re-propose — see `assertApplied`.
-      assertApplied(
-        await projectCaller.create({
-          name,
-          description: innerData.description as string | undefined,
-          status: innerData.status as
-            "active" | "archived" | "completed" | undefined,
-          phase: innerData.phase as string | undefined,
-          // `proposals.data` is JSONB, so a `Date` proposed by an agent comes
-          // back out of it as an ISO STRING — never a Date. It is handed over
-          // unconverted on purpose: `create`'s input is `z.coerce.date()`, which
-          // is the ONE place the parse happens, for the tRPC, REST and replay
-          // callers alike. Converting here would be a second, drifting parser.
-          targetDate: innerData.targetDate as Date | undefined,
-          subjectEntityId: innerData.subjectEntityId as string | undefined,
-          settings: innerData.settings as Record<string, unknown> | undefined,
-          metadata: innerData.metadata as Record<string, unknown> | undefined,
-          // The place's look and parts (2026-10-14). Read defensively like
-          // every field above: older proposals carry none of them.
-          ...(typeof innerData.colorSlot === "number"
-            ? { colorSlot: innerData.colorSlot }
-            : {}),
-          ...(typeof innerData.icon === "string"
-            ? { icon: innerData.icon }
-            : {}),
-          ...(typeof innerData.homeWorkspaceId === "string"
-            ? { homeWorkspaceId: innerData.homeWorkspaceId }
-            : {}),
-          ...(Array.isArray(innerData.usedWorkspaceIds)
-            ? {
-                usedWorkspaceIds: innerData.usedWorkspaceIds.filter(
-                  (id): id is string => typeof id === "string"
-                ),
-              }
-            : {}),
-        })
+      const created = await projectCaller.create({
+        name,
+        description: innerData.description as string | undefined,
+        status: innerData.status as
+          "active" | "archived" | "completed" | undefined,
+        phase: innerData.phase as string | undefined,
+        // `proposals.data` is JSONB, so a `Date` proposed by an agent comes
+        // back out of it as an ISO STRING — never a Date. It is handed over
+        // unconverted on purpose: `create`'s input is `z.coerce.date()`, which
+        // is the ONE place the parse happens, for the tRPC, REST and replay
+        // callers alike. Converting here would be a second, drifting parser.
+        targetDate: innerData.targetDate as Date | undefined,
+        subjectEntityId: innerData.subjectEntityId as string | undefined,
+        settings: innerData.settings as Record<string, unknown> | undefined,
+        metadata: innerData.metadata as Record<string, unknown> | undefined,
+        // The place's look and parts (2026-10-14). Read defensively like
+        // every field above: older proposals carry none of them.
+        ...(typeof innerData.colorSlot === "number"
+          ? { colorSlot: innerData.colorSlot }
+          : {}),
+        ...(typeof innerData.icon === "string" ? { icon: innerData.icon } : {}),
+        ...(typeof innerData.homeWorkspaceId === "string"
+          ? { homeWorkspaceId: innerData.homeWorkspaceId }
+          : {}),
+        ...(Array.isArray(innerData.usedWorkspaceIds)
+          ? {
+              usedWorkspaceIds: innerData.usedWorkspaceIds.filter(
+                (id): id is string => typeof id === "string"
+              ),
+            }
+          : {}),
+      });
+      assertApplied(created);
+      // The project exists either way; a used space that did not link is a
+      // PARTIAL application, reported on `refusals` (places review S9) —
+      // never dropped behind a clean "approved".
+      const refusals = await usedSpaceRefusals(
+        "usedWorkspaces" in created ? created.usedWorkspaces : undefined
       );
 
       await db
@@ -146,7 +188,11 @@ export function registerProjectExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return {
+        success: true,
+        ...(created.projectId ? { primaryId: created.projectId } : {}),
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 

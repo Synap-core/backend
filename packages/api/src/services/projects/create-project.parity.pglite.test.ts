@@ -516,6 +516,34 @@ describe("createProjectGoverned — the place's look and parts (projects as plac
     expect(sameIds(b)).toEqual(sameIds(a));
   });
 
+  it("a name you already have says so on every door (existing + its name) and writes nothing", async () => {
+    const first = await trpc().create({ name: "Orion" });
+    expect(first).toMatchObject({ status: "created" });
+    const before = await snapshot();
+    const id = (first as { projectId: string }).projectId;
+    const hit = {
+      status: "deduped",
+      existing: true,
+      projectId: id,
+      reusedProjectId: id,
+      name: "Orion",
+    };
+
+    // Human, both doors — the place's parts and look are NOT applied to it.
+    const again = { name: "orion", colorSlot: 2, usedWorkspaceIds: [WB] };
+    expect(await trpc().create(again)).toEqual(hit);
+    const viaRest = await restCreate(again);
+    expect(viaRest.status).toBe(200);
+    expect(viaRest.body).toEqual(hit);
+    // Agent (the guardrail's own exact-name reuse, before any evidence).
+    expect(await trpc(true).create({ name: "ORION" })).toEqual(hit);
+    expect((await restCreate({ name: "ORION" }, true)).body).toEqual(hit);
+
+    const after = await snapshot();
+    expect(after.projects).toEqual(before.projects);
+    expect(after.links).toEqual(before.links);
+  });
+
   it("an unreachable used space or home is refused BEFORE anything is written", async () => {
     await expect(
       trpc().create({ name: "Vega", usedWorkspaceIds: [WA, WZ] })
