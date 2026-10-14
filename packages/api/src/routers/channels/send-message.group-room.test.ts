@@ -8,16 +8,18 @@
  *    handle and went silent);
  *  - a handle naming no AI roster member routes nowhere (restraint default);
  *  - THE REACH RULE: an EXTERNAL roster member (reach dispatch/pull) never
- *    gets an IS turn under its name — not by @mention, not via the
- *    when_confident router (it is not a candidate, and a mention of it does
- *    not fall through to a house agent);
+ *    gets an IS turn under its name — a mention of it WAKES it its own way
+ *    (`wakeMentionedAgents`) and never falls through to a house agent;
+ *  - when_confident through THE route (no AI picker): the single house agent
+ *    answers; two or more ⇒ the person is asked (`offerRoomChoice`);
  *  - an anchored comment in a SILENT group room is still persisted with its
  *    anchor AND wakes the agent through the one door, naming the agent (the
  *    door refuses an un-named GROUP wake) — the group branch used to return
  *    before the anchored-comment trigger.
  *
  * Mocked as in `send-message.anchored-comment.test.ts` (IO edges, anchor gate,
- * planner, the auto-respond door). The roster query returns `m.roster`; the
+ * planner, the auto-respond door, the room follow-through). The route and the
+ * room rule are REAL. The roster query returns `m.roster`; the
  * routing verdict is observed through the TEAMMATE_ANSWERING presence event,
  * emitted after routing and before the (stubbed, throwing) IS stream.
  *
@@ -33,14 +35,15 @@ const m = vi.hoisted(() => ({
   trigger: vi.fn(async () => true),
   inserted: [] as Array<Record<string, unknown>>,
   channel: null as Record<string, unknown> | null,
-  roster: [] as Array<{ memberId: string; agentType: string | null }>,
+  roster: [] as Array<{
+    agentUserId: string;
+    name: string | null;
+    agentType: string | null;
+  }>,
+  wake: vi.fn(async (_p: { wake: unknown[] }) => undefined),
+  offer: vi.fn(async (_p: { candidates: Array<{ agentUserId: string }> }) => undefined),
   chatEvents: [] as Array<{ event: string; data: Record<string, unknown> }>,
   reach: {} as Record<string, "pod" | "dispatch" | "pull">,
-  route: vi.fn(
-    async (_req: {
-      members: Array<{ id: string }>;
-    }): Promise<{ teammateId: string | null }> => ({ teammateId: null })
-  ),
 }));
 
 vi.mock("../../trpc.js", async (importOriginal) => {
@@ -74,8 +77,6 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         channels: { findFirst: vi.fn(async () => m.channel) },
         focusSessions: { findFirst: vi.fn(async () => ({ id: "session-1" })) },
-        // The when_confident router's recent-context read (one door).
-        messages: { findMany: vi.fn(async () => []) },
       },
       select: vi.fn(() => chain()),
       insert: vi.fn(() => ({
@@ -141,11 +142,14 @@ vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
       sendMessage: async () => {
         throw new Error("stream not under test");
       },
-      routeTeammate: m.route,
     },
     agentUserId: "service-agent",
   })),
 }));
+vi.mock(
+  "../../services/agent-dispatch/room-follow-through.js",
+  () => ({ wakeMentionedAgents: m.wake, offerRoomChoice: m.offer })
+);
 vi.mock("../../utils/emit-message-observation.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../utils/emit-message-observation.js")
@@ -211,9 +215,10 @@ beforeEach(() => {
   m.capture.mockResolvedValue(null);
   m.inserted.length = 0;
   m.chatEvents.length = 0;
-  m.roster = [{ memberId: RESEARCHER, agentType: "researcher" }];
+  m.roster = [
+    { agentUserId: RESEARCHER, name: "Researcher", agentType: "researcher" },
+  ];
   m.reach = {};
-  m.route.mockResolvedValue({ teammateId: null });
   m.channel = {
     id: CHANNEL,
     userId: "user-1",
@@ -250,17 +255,22 @@ describe("chat.sendMessage — an EXTERNAL agent on the room roster", () => {
   // it NEVER gets an IS turn under its name.
   beforeEach(() => {
     m.roster = [
-      { memberId: RESEARCHER, agentType: "researcher" },
-      { memberId: CLAUDE_CODE, agentType: "claude-code" },
+      { agentUserId: RESEARCHER, name: "Researcher", agentType: "researcher" },
+      { agentUserId: CLAUDE_CODE, name: "Claude Code", agentType: "claude-code" },
     ];
     m.reach = { [CLAUDE_CODE]: "pull" };
   });
 
-  it("an @mention of the external agent runs no IS turn under its name", async () => {
+  it("an @mention of the external agent runs no IS turn under its name — it is woken", async () => {
     const out = await send({ content: "@claude-code can you pick this up" });
 
     expect(out).toEqual({ messageId: expect.any(String), channelId: CHANNEL });
     expect(answering()).toEqual([]);
+    expect(m.wake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wake: [{ agentUserId: CLAUDE_CODE, reach: "pull" }],
+      })
+    );
   });
 
   it("a dispatch-reach agent is excluded the same way", async () => {
@@ -271,33 +281,70 @@ describe("chat.sendMessage — an EXTERNAL agent on the room roster", () => {
     expect(answering()).toEqual([]);
   });
 
-  it("a house agent mentioned beside it still answers", async () => {
+  it("a house agent mentioned beside it still answers, and the external one is woken", async () => {
     await send({ content: "@claude-code and @researcher check this" });
 
     expect(answering()).toEqual([RESEARCHER]);
+    expect(m.wake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wake: [{ agentUserId: CLAUDE_CODE, reach: "pull" }],
+      })
+    );
   });
 
-  it("when_confident: the router never sees, nor can pick, the external agent", async () => {
+  it("when_confident, no mention: the single HOUSE agent answers, never the external one", async () => {
     m.channel = { ...m.channel, aiReactionMode: AiReactionMode.WHEN_CONFIDENT };
-    m.route.mockResolvedValue({ teammateId: CLAUDE_CODE });
 
     await send({ content: "anyone around to pick this up?" });
 
-    expect(m.route).toHaveBeenCalledTimes(1);
-    expect(m.route.mock.calls[0]![0].members.map((x) => x.id)).toEqual([
-      RESEARCHER,
-    ]);
-    expect(answering()).toEqual([]);
+    expect(answering()).toEqual([RESEARCHER]);
+    expect(m.offer).not.toHaveBeenCalled();
   });
 
-  it("when_confident: a mention of the external agent does not fall through to the router", async () => {
+  it("when_confident: a mention of the external agent never falls through to a house agent", async () => {
     m.channel = { ...m.channel, aiReactionMode: AiReactionMode.WHEN_CONFIDENT };
-    m.route.mockResolvedValue({ teammateId: RESEARCHER });
 
     await send({ content: "@claude-code can you pick this up" });
 
-    expect(m.route).not.toHaveBeenCalled();
     expect(answering()).toEqual([]);
+  });
+});
+
+describe("chat.sendMessage — several house agents, nobody named", () => {
+  const WRITER = "a1b2c3d4-0000-4000-8000-000000000003";
+  beforeEach(() => {
+    m.roster = [
+      { agentUserId: RESEARCHER, name: "Researcher", agentType: "researcher" },
+      { agentUserId: WRITER, name: "Writer", agentType: "writer" },
+    ];
+  });
+
+  it("when_confident: nobody answers and the person is asked who should", async () => {
+    m.channel = { ...m.channel, aiReactionMode: AiReactionMode.WHEN_CONFIDENT };
+
+    await send({ content: "what do you think?" });
+
+    expect(answering()).toEqual([]);
+    expect(m.offer).toHaveBeenCalledTimes(1);
+    expect(
+      m.offer.mock.calls[0]![0].candidates.map((c) => c.agentUserId)
+    ).toEqual([RESEARCHER, WRITER]);
+  });
+
+  it("only_mentioned: silence, and no question", async () => {
+    await send({ content: "what do you think?" });
+
+    expect(answering()).toEqual([]);
+    expect(m.offer).not.toHaveBeenCalled();
+  });
+
+  it("a mention picks one of them — no question", async () => {
+    m.channel = { ...m.channel, aiReactionMode: AiReactionMode.WHEN_CONFIDENT };
+
+    await send({ content: "@writer draft this" });
+
+    expect(answering()).toEqual([WRITER]);
+    expect(m.offer).not.toHaveBeenCalled();
   });
 });
 

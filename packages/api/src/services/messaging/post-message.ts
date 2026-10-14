@@ -29,6 +29,10 @@
  * path — a caller that needs at-most-once turn semantics passes a key.
  */
 
+import {
+  ROUTE_CHOICE_META_KEY,
+  type RouteChoiceMeta,
+} from "@synap-core/types/agents";
 import { randomUUID } from "crypto";
 import type { SlotAsk } from "@synap/playbooks";
 import { TRPCError } from "@trpc/server";
@@ -133,6 +137,13 @@ export interface PostChannelMessageParams {
     parentId?: string;
     anchor?: Record<string, unknown>;
   };
+  /**
+   * The room's "who should answer?" question (`@synap-core/types/agents`
+   * `RouteChoiceMeta`), persisted at `messages.metadata.routeChoice`.
+   * SERVER-INTERNAL — written only by `offerRoomChoice` from the route's own
+   * candidates, never passed from a wire.
+   */
+  routeChoice?: RouteChoiceMeta;
   /**
    * ⚠️ NOT written to `messages.sessionId`. That column FKs to `sessions` (the
    * channel-scoped conversation-memory session), whereas `X-Session-Id` carries
@@ -391,9 +402,12 @@ export async function postChannelMessage(
       // The kind is PERSISTED, not only routed: the answer loop has to find
       // "the agent's open question in this room" later. Agent posts only —
       // `kind` is ignored on a human's post.
-      ...(agentUserId || params.comment?.anchor
+      ...(agentUserId || params.comment?.anchor || params.routeChoice
         ? {
             metadata: {
+              ...(params.routeChoice
+                ? { [ROUTE_CHOICE_META_KEY]: params.routeChoice }
+                : {}),
               ...(agentUserId
                 ? {
                     [ROOM_POST_META_KEY]: roomPostMeta(

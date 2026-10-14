@@ -51,7 +51,8 @@ const logger = createLogger({ module: "agent-dispatch/wake" });
 export interface WakeExternalAgentInput {
   sessionId: string;
   agentUserId: string;
-  kind: "answer" | "decision";
+  /** `message`: the person @mentioned the agent in the session room. */
+  kind: "answer" | "decision" | "message";
   /** The person's words (an answer) or the decision's note. */
   text: string;
   /** The slot the answer is about (label or key). */
