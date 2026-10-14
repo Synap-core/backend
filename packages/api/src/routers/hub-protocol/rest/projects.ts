@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { isProjectIcon } from "@synap-core/types/projects";
 import {
   db,
   projects,
@@ -62,6 +63,13 @@ import {
   projectLensWhere,
 } from "../../../utils/project-scope.js";
 
+/** One emoji or `glyph:<lucide-name>` (`isProjectIcon`); `null` clears. */
+const ProjectIconSchema = z
+  .string()
+  .refine(isProjectIcon, "icon must be one emoji or glyph:<lucide-name>")
+  .nullable()
+  .optional();
+
 const CreateProjectSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().optional(),
@@ -78,6 +86,17 @@ const CreateProjectSchema = z.object({
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   workspaceId: z.string().uuid().optional(),
+  /** Identity-palette slot (1–12) — parity with tRPC `projects.create`. */
+  colorSlot: z.number().int().min(1).max(12).nullable().optional(),
+  /** One emoji or `glyph:<lucide-name>` (0328) — parity with tRPC. */
+  icon: ProjectIconSchema,
+  /**
+   * An explicitly chosen home: wins over `workspaceId`, must be writable, is
+   * stamped as a `uses` domain (parity with tRPC `projects.create`).
+   */
+  homeWorkspaceId: z.string().uuid().optional(),
+  /** The spaces the project uses — each linked through the governed door. */
+  usedWorkspaceIds: z.array(z.string().uuid()).max(50).optional(),
   /**
    * Agent gravity evidence: existing entity ids that would belong to this
    * project. Required (≥5, caller-visible) for AGENT-initiated creates; ignored
@@ -96,6 +115,8 @@ const UpdateProjectSchema = z.object({
   targetDate: z.coerce.date().nullable().optional(),
   /** Identity-palette slot (1–12). `null` clears it (parity with tRPC). */
   colorSlot: z.number().int().min(1).max(12).nullable().optional(),
+  /** The place's mark (0328). `null` clears it (parity with tRPC). */
+  icon: ProjectIconSchema,
   /** Rebind the subject entity; `null` unbinds (parity with tRPC). */
   subjectEntityId: z.string().uuid().nullable().optional(),
   /**
@@ -757,14 +778,32 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Create a project
   app.post("/projects", async (c) => {
     const userId = c.get("userId");
-    const body = CreateProjectSchema.parse(await c.req.json());
+    const parsedBody = CreateProjectSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsedBody.success) {
+      return c.json(
+        { error: `Invalid body: ${parsedBody.error.message}` },
+        400
+      );
+    }
+    const body = parsedBody.data;
     const agentUserId = c.get("agentUserId") as string | undefined;
     // Item 3 Part 3: positively pin a bound service key to its workspace.
     // A mismatching bound key throws FORBIDDEN → surface 403 (this handler has
-    // no outer try/catch, so map it here).
+    // no outer try/catch, so map it here). The explicit home and every used
+    // space are pinned the same way: a bound key cannot reach past its space.
     let workspaceId: string | null | undefined;
+    let homeWorkspaceId: string | undefined;
+    let usedWorkspaceIds: string[] | undefined;
     try {
       workspaceId = getConfinedWorkspace(c, body.workspaceId);
+      homeWorkspaceId = body.homeWorkspaceId
+        ? (getConfinedWorkspace(c, body.homeWorkspaceId) ?? undefined)
+        : undefined;
+      usedWorkspaceIds = body.usedWorkspaceIds?.map(
+        (id) => getConfinedWorkspace(c, id) as string
+      );
     } catch (err) {
       if ((err as { code?: unknown })?.code === "FORBIDDEN")
         return c.json(
@@ -793,6 +832,10 @@ export function registerProjectsRoutes(app: HubHono): void {
         subjectEntityId: body.subjectEntityId,
         settings: body.settings,
         metadata: body.metadata,
+        colorSlot: body.colorSlot,
+        icon: body.icon,
+        homeWorkspaceId,
+        usedWorkspaceIds,
         evidenceEntityIds: body.evidenceEntityIds,
       });
     } catch (err) {
@@ -829,12 +872,15 @@ export function registerProjectsRoutes(app: HubHono): void {
     }
 
     // Wire shape unchanged: the created row (callers read `id`), plus
-    // `subjectBound` only when a subject was requested.
+    // `subjectBound` / `usedWorkspaces` only when requested.
     return c.json(
       {
         ...outcome.row,
         ...(outcome.subjectBound !== undefined
           ? { subjectBound: outcome.subjectBound }
+          : {}),
+        ...(outcome.usedWorkspaces
+          ? { usedWorkspaces: outcome.usedWorkspaces }
           : {}),
       },
       201

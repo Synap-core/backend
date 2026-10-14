@@ -26,6 +26,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { isProjectIcon } from "@synap-core/types/projects";
 import {
   getDb,
   EventRepository,
@@ -59,6 +60,8 @@ export interface ProjectPatch {
   targetDate?: Date | null;
   /** Identity-palette slot (1–12). `null` clears it. */
   colorSlot?: number | null;
+  /** One emoji or `glyph:<lucide-name>` (0328). `null` clears it. */
+  icon?: string | null;
   /** `null` unbinds the subject; omitted = untouched. */
   subjectEntityId?: string | null;
   /** D6: move the project's HOME workspace. */
@@ -94,6 +97,15 @@ export async function updateProjectGoverned(
   const name =
     input.name !== undefined ? decodeHtmlEntities(input.name) : undefined;
 
+  // The doors' schemas check the icon too; this holds it for every caller
+  // (the `project/update` replay included).
+  if (input.icon != null && !isProjectIcon(input.icon)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "icon must be one emoji or glyph:<lucide-name>",
+    });
+  }
+
   // 1. Load first: the project's OWN workspace is the gate's subject.
   const target = await loadVisibleProject(db, id, userId);
   if (!target) {
@@ -118,6 +130,7 @@ export async function updateProjectGoverned(
     ...(input.phase !== undefined ? { phase: input.phase } : {}),
     ...(input.targetDate !== undefined ? { targetDate: input.targetDate } : {}),
     ...(input.colorSlot !== undefined ? { colorSlot: input.colorSlot } : {}),
+    ...(input.icon !== undefined ? { icon: input.icon } : {}),
     ...(input.subjectEntityId !== undefined
       ? { subjectEntityId: input.subjectEntityId }
       : {}),

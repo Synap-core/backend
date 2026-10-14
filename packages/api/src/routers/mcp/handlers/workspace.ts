@@ -523,6 +523,14 @@ export const workspaceHandlers: McpHandlerMap = {
       evidenceEntityIds: Array.isArray(args.evidenceEntityIds)
         ? (args.evidenceEntityIds as string[])
         : undefined,
+      // The place's look and parts — validated by the tRPC create's schema.
+      ...(typeof args.colorSlot === "number"
+        ? { colorSlot: args.colorSlot }
+        : {}),
+      ...(typeof args.icon === "string" ? { icon: args.icon } : {}),
+      ...(Array.isArray(args.usedWorkspaceIds)
+        ? { usedWorkspaceIds: args.usedWorkspaceIds as string[] }
+        : {}),
     });
     return ok(result);
   },

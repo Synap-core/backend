@@ -3488,6 +3488,24 @@ export const tools = {
               description:
                 "REQUIRED for agents: ≥5 existing, visible entity ids that would belong to this project (its gravity). Fewer/invalid ⇒ rejected with guidance to store as an entity or reuse an existing project.",
             },
+            usedWorkspaceIds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Optional: the spaces (workspace ids) this project runs through — its parts of the job. Each is linked like synap_project_use_workspace, once the project exists.",
+            },
+            colorSlot: {
+              type: "number",
+              minimum: 1,
+              maximum: 12,
+              description:
+                "Optional: the project's colour as an identity-palette slot 1–12 (never a hex).",
+            },
+            icon: {
+              type: "string",
+              description:
+                "Optional: the project's mark — ONE emoji (e.g. 🚀) or glyph:<lucide-name> (e.g. glyph:rocket).",
+            },
           },
           required: ["name"],
         },

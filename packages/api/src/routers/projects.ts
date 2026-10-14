@@ -24,6 +24,7 @@ import {
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { TRPCError } from "@trpc/server";
+import { isProjectIcon } from "@synap-core/types/projects";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -49,11 +50,8 @@ import { loadVisibleProject } from "../services/projects/load-visible-project.js
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
-  linkProjectToWorkspace,
-  unlinkProjectFromWorkspace,
 } from "../utils/project-workspace.js";
-import { checkLinkEndpointsVisible } from "./hub-protocol/rest/link-endpoint-visibility.js";
-import { stampAutoApprovedCreate } from "../services/proposals/stamp-materialized.js";
+import { setProjectWorkspaceMembershipGoverned } from "../services/projects/project-workspace-membership.js";
 
 // ─── Legacy project stages (READ-ONLY until the next wave) ─────────────────────
 
@@ -97,6 +95,16 @@ export function resolveProjectPhaseCategory(
     : undefined;
   return resolveStageCategory(match);
 }
+
+/**
+ * A project's icon on the wire: one emoji or `glyph:<lucide-name>`
+ * (`isProjectIcon`, the one parser); `null` clears it, omitted = untouched.
+ */
+const projectIconInput = z
+  .string()
+  .refine(isProjectIcon, "icon must be one emoji or glyph:<lucide-name>")
+  .nullable()
+  .optional();
 
 export const projectsRouter = router({
   /**
@@ -405,6 +413,22 @@ export const projectsRouter = router({
         subjectEntityId: z.string().uuid().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /** Identity-palette slot (1–12) — see `projects.update`. */
+        colorSlot: z.number().int().min(1).max(12).nullable().optional(),
+        /** The place's mark: one emoji or `glyph:<lucide-name>` (0328). */
+        icon: projectIconInput,
+        /**
+         * The project's HOME, chosen explicitly (else the active workspace,
+         * else pod-personal). Must be live and writable by the caller; stamped
+         * as a `uses` domain.
+         */
+        homeWorkspaceId: z.string().uuid().optional(),
+        /**
+         * The spaces the project uses ("parts of the job"). Each is linked
+         * through the governed `setWorkspaceMembership` rules; the result
+         * reports each one (`usedWorkspaces`).
+         */
+        usedWorkspaceIds: z.array(z.string().uuid()).max(50).optional(),
         /**
          * Agent gravity evidence: existing entity ids that would belong to this
          * project. Required (≥5, caller-visible) for AGENT-initiated creates;
@@ -436,6 +460,10 @@ export const projectsRouter = router({
         subjectEntityId: input.subjectEntityId,
         settings: input.settings,
         metadata: input.metadata,
+        colorSlot: input.colorSlot,
+        icon: input.icon,
+        homeWorkspaceId: input.homeWorkspaceId,
+        usedWorkspaceIds: input.usedWorkspaceIds,
         evidenceEntityIds: input.evidenceEntityIds,
       });
 
@@ -447,9 +475,17 @@ export const projectsRouter = router({
           proposalId: outcome.proposalId,
         };
       }
+      // The row without the repo's dedup signals (they ride separately).
+      const { deduped: _d, dedupCandidates: _c, ...project } = outcome.row;
       return {
         status: "created",
         projectId: outcome.projectId,
+        // The created project (home, colour, icon …) — a caller that enters
+        // the new place renders it without a second read.
+        project,
+        ...(outcome.usedWorkspaces
+          ? { usedWorkspaces: outcome.usedWorkspaces }
+          : {}),
         // Present ONLY when a subject was requested. `false` = the project was
         // created but the binding did not land (the entity became unreachable
         // between the pre-check and the write) — the caller should surface that
@@ -501,6 +537,8 @@ export const projectsRouter = router({
          * hex — see `projects.color_slot` (0271). `null` clears the choice.
          */
         colorSlot: z.number().int().min(1).max(12).nullable().optional(),
+        /** The place's mark (0328). `null` clears it. */
+        icon: projectIconInput,
         /**
          * Rebind the container's subject entity. `null` unbinds it (the project
          * falls back to its plain typed name). Omitted = untouched.
@@ -730,108 +768,19 @@ export const projectsRouter = router({
         member: z.boolean(),
       })
     )
-    .mutation(async ({ ctx, input }) => {
-      const db = await getDb();
-
-      // The PROJECT must be visible first — same floor as `get`, `automations`,
-      // `fileEntities`, etc. Without it, passing any project id could write a
-      // `uses` edge on a project the caller cannot see.
-      const project = await loadVisibleProject(db, input.projectId, ctx.userId);
-      if (!project) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
-      }
-
-      // Endpoint floor: the workspace must be visible to the caller BEFORE we
-      // ask governance to decide. Otherwise an agent could propose a link to a
-      // workspace the user cannot reach, and the approval would fail to land.
-      const endpointRefusal = await checkLinkEndpointsVisible(
-        {
-          fromType: "project",
-          fromId: input.projectId,
-          toType: "workspace",
-          toId: input.workspaceId,
-        },
-        ctx.userId,
-        input.workspaceId
-      );
-      if (endpointRefusal) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: endpointRefusal.error,
-        });
-      }
-
-      const perm = await checkPermissionOrPropose({
+    .mutation(async ({ ctx, input }) =>
+      // The ONE governed `uses` writer (`services/projects/
+      // project-workspace-membership.ts`), shared with `projects.create`'s
+      // `usedWorkspaceIds`.
+      setProjectWorkspaceMembershipGoverned({
         userId: ctx.userId,
         agentUserId: ctx.agentUserId ?? undefined,
-        workspaceId: undefined,
-        subjectType: "link",
-        action: input.member ? "create" : "delete",
-        reasoning: input.member
-          ? "Project uses workspace (INDEX, not ACL)"
-          : "Project no longer uses workspace",
-        data: {
-          title: input.member
-            ? "project --uses--> workspace"
-            : "remove project --uses--> workspace",
-          fromType: "project",
-          fromId: input.projectId,
-          toType: "workspace",
-          toId: input.workspaceId,
-          linkType: "uses",
-        },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
-      }
-
-      if (input.member) {
-        const result = await linkProjectToWorkspace(db, {
-          projectId: input.projectId,
-          workspaceId: input.workspaceId,
-          userId: ctx.userId,
-        });
-        if (!result.linked) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              result.reason === "workspace_not_found"
-                ? "Workspace not found"
-                : "Project not found",
-          });
-        }
-        // Stamp an undo record for the auto-approved case so the edge can be
-        // rolled back without losing provenance.
-        const stampId =
-          "granted" in perm ? perm.autoApprovedProposalId : undefined;
-        await stampAutoApprovedCreate({
-          receiptId: stampId,
-          record: result.linkId ? { linkIds: [result.linkId] } : {},
-          door: "projects.setWorkspaceMembership",
-        });
-        return { status: "updated" as const };
-      }
-
-      const removed = await unlinkProjectFromWorkspace(db, {
         projectId: input.projectId,
         workspaceId: input.workspaceId,
-        userId: ctx.userId,
-      });
-      if (!removed.unlinked) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
-      }
-      return { status: "updated" as const };
-    }),
+        member: input.member,
+        door: "projects.setWorkspaceMembership",
+      })
+    ),
 
   /**
    * Delete a project

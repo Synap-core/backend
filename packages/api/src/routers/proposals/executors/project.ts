@@ -106,6 +106,24 @@ export function registerProjectExecutors(): void {
           subjectEntityId: innerData.subjectEntityId as string | undefined,
           settings: innerData.settings as Record<string, unknown> | undefined,
           metadata: innerData.metadata as Record<string, unknown> | undefined,
+          // The place's look and parts (2026-10-14). Read defensively like
+          // every field above: older proposals carry none of them.
+          ...(typeof innerData.colorSlot === "number"
+            ? { colorSlot: innerData.colorSlot }
+            : {}),
+          ...(typeof innerData.icon === "string"
+            ? { icon: innerData.icon }
+            : {}),
+          ...(typeof innerData.homeWorkspaceId === "string"
+            ? { homeWorkspaceId: innerData.homeWorkspaceId }
+            : {}),
+          ...(Array.isArray(innerData.usedWorkspaceIds)
+            ? {
+                usedWorkspaceIds: innerData.usedWorkspaceIds.filter(
+                  (id): id is string => typeof id === "string"
+                ),
+              }
+            : {}),
         })
       );
 

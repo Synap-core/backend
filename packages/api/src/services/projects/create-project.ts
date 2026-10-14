@@ -20,10 +20,18 @@
  *   3. governance (`checkPermissionOrPropose`) with the FULL payload;
  *   4. insert → subject bind → audit → side effects. A repo-level dedup
  *      (exact-name reuse inside `ProjectRepository.create`) emits nothing.
+ *   5. the PLACE's parts (2026-10-14): an explicit home is stamped as a `uses`
+ *      domain, and each `usedWorkspaceIds` entry is linked through the ONE
+ *      governed `uses` writer (`setProjectWorkspaceMembershipGoverned`, the
+ *      same rules as `projects.setWorkspaceMembership`). Checked BEFORE step 1
+ *      (every used space must be reachable, so nothing is written for a
+ *      refused one) and reported per space after — never thrown, because the
+ *      project already exists.
  */
 
 import { TRPCError } from "@trpc/server";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { isProjectColorSlot, isProjectIcon } from "@synap-core/types/projects";
 import {
   entities,
   and,
@@ -46,6 +54,12 @@ import {
   isSubjectEntityVisible,
   setProjectSubject,
 } from "../../utils/project-subject.js";
+import { checkLinkEndpointVisible } from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
+import {
+  resolveProjectHomeChange,
+  stampProjectHomeUse,
+} from "./project-home.js";
+import { setProjectWorkspaceMembershipGoverned } from "./project-workspace-membership.js";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 type ProjectStatus = "active" | "archived" | "completed";
@@ -60,6 +74,19 @@ export interface CreateProjectGovernedInput {
   agentUserId?: string | null;
   /** The project's home. `null`/absent ⇒ a POD-PERSONAL project. */
   workspaceId?: string | null;
+  /**
+   * An EXPLICITLY chosen home (the setup page's "parts of the job"). Wins
+   * over `workspaceId`, must be live and writable by the caller (checked
+   * before the gate, same helper as `projects.update`), and is stamped as a
+   * `uses` domain once the project exists.
+   */
+  homeWorkspaceId?: string;
+  /** The spaces the project uses — each linked through the governed door. */
+  usedWorkspaceIds?: string[];
+  /** Identity-palette slot 1–12 (`isProjectColorSlot`). */
+  colorSlot?: number | null;
+  /** One emoji or `glyph:<lucide-name>` (`isProjectIcon`). */
+  icon?: string | null;
   /** Which door originated the create — provenance only. */
   door: "trpc" | "hub-rest" | "mcp";
   name: string;
@@ -74,6 +101,12 @@ export interface CreateProjectGovernedInput {
   source?: string;
   reasoning?: string;
 }
+
+/** What became of one requested used space, after the project was created. */
+export type UsedWorkspaceOutcome =
+  | { workspaceId: string; status: "linked" }
+  | { workspaceId: string; status: "proposed"; proposalId: string }
+  | { workspaceId: string; status: "failed"; error: string };
 
 export type CreateProjectGovernedOutcome =
   | { status: "deduped"; projectId: string; reusedProjectId: string }
@@ -90,6 +123,8 @@ export type CreateProjectGovernedOutcome =
       row: CreatedRow;
       /** Present ONLY when a subject was requested; `false` = bind did not land. */
       subjectBound?: boolean;
+      /** Present ONLY when used spaces were requested — one entry each. */
+      usedWorkspaces?: UsedWorkspaceOutcome[];
     };
 
 /**
@@ -143,10 +178,45 @@ export async function createProjectGoverned(
   const { userId } = input;
   const agentUserId = input.agentUserId ?? undefined;
   const isAgent = !!agentUserId;
-  const workspaceId = input.workspaceId ?? null;
   // Decode an agent's XML-escaped name once, here, for every door — see
   // `entities/create.ts` for the full rationale.
   const name = decodeHtmlEntities(input.name);
+
+  // 0. The place's look and parts — refused before anything is read or
+  // written. The doors' schemas check the same rules; this holds the line for
+  // every caller (the `project/create` replay, pack installs).
+  if (input.icon != null && !isProjectIcon(input.icon)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "icon must be one emoji or glyph:<lucide-name>",
+    });
+  }
+  if (input.colorSlot != null && !isProjectColorSlot(input.colorSlot)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "colorSlot must be an integer from 1 to 12",
+    });
+  }
+  // An explicit home must be live and writable (NOT_FOUND / FORBIDDEN).
+  const homeWorkspaceId = input.homeWorkspaceId
+    ? await resolveProjectHomeChange(db, userId, null, input.homeWorkspaceId)
+    : undefined;
+  const workspaceId = homeWorkspaceId ?? input.workspaceId ?? null;
+  const usedWorkspaceIds = [...new Set(input.usedWorkspaceIds ?? [])];
+  // Every used space must be reachable BEFORE anything is written — the same
+  // endpoint floor the membership door applies, so a refused space never
+  // leaves a half-made project behind.
+  for (const usedId of usedWorkspaceIds) {
+    const refusal = await checkLinkEndpointVisible(
+      "workspace",
+      usedId,
+      userId,
+      usedId
+    );
+    if (refusal) {
+      throw new TRPCError({ code: "FORBIDDEN", message: refusal.error });
+    }
+  }
 
   // 1. Subject — before anything is created.
   if (input.subjectEntityId) {
@@ -221,6 +291,10 @@ export async function createProjectGoverned(
         : {}),
       ...(input.settings !== undefined ? { settings: input.settings } : {}),
       ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+      ...(input.colorSlot !== undefined ? { colorSlot: input.colorSlot } : {}),
+      ...(input.icon !== undefined ? { icon: input.icon } : {}),
+      ...(homeWorkspaceId !== undefined ? { homeWorkspaceId } : {}),
+      ...(usedWorkspaceIds.length > 0 ? { usedWorkspaceIds } : {}),
       ...(isAgent && input.evidenceEntityIds
         ? { evidenceEntityIds: input.evidenceEntityIds }
         : {}),
@@ -251,9 +325,13 @@ export async function createProjectGoverned(
     targetDate: input.targetDate,
     settings: input.settings,
     metadata: input.metadata,
+    colorSlot: input.colorSlot,
+    icon: input.icon,
     evidenceEntityIds: input.evidenceEntityIds,
     subjectEntityId: input.subjectEntityId,
   });
+  // A deduped create is somebody's EXISTING project: never re-home it or add
+  // spaces to it from this payload (same rule as the subject bind).
   if (written.status === "deduped") {
     return {
       status: "deduped",
@@ -261,7 +339,45 @@ export async function createProjectGoverned(
       reusedProjectId: written.projectId,
     };
   }
-  return written;
+
+  // 5. The place's parts.
+  if (homeWorkspaceId) {
+    await stampProjectHomeUse(db, {
+      projectId: written.projectId,
+      homeWorkspaceId,
+      userId,
+    });
+  }
+  if (usedWorkspaceIds.length === 0) return written;
+  const usedWorkspaces: UsedWorkspaceOutcome[] = [];
+  for (const usedId of usedWorkspaceIds) {
+    try {
+      const linked = await setProjectWorkspaceMembershipGoverned({
+        userId,
+        agentUserId,
+        projectId: written.projectId,
+        workspaceId: usedId,
+        member: true,
+        door: `projects.create:${input.door}`,
+      });
+      usedWorkspaces.push(
+        linked.status === "proposed"
+          ? {
+              workspaceId: usedId,
+              status: "proposed",
+              proposalId: linked.proposalId,
+            }
+          : { workspaceId: usedId, status: "linked" }
+      );
+    } catch (err) {
+      usedWorkspaces.push({
+        workspaceId: usedId,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return { ...written, usedWorkspaces };
 }
 
 export interface WriteGovernedProjectInput {
@@ -276,6 +392,8 @@ export interface WriteGovernedProjectInput {
   targetDate?: Date | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  colorSlot?: number | null;
+  icon?: string | null;
   evidenceEntityIds?: string[];
   subjectEntityId?: string;
 }
@@ -310,6 +428,8 @@ export async function writeGovernedProject(
       status: input.status,
       phase: input.phase ?? null,
       targetDate: input.targetDate ?? null,
+      colorSlot: input.colorSlot ?? null,
+      icon: input.icon ?? null,
       settings: input.settings,
       metadata: input.metadata,
       userId,

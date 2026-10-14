@@ -92,6 +92,10 @@ import type {
 const U = randomUUID();
 const AGENT = randomUUID();
 const WA = randomUUID();
+/** U is an editor here — a writable home and a linkable used space. */
+const WB = randomUUID();
+/** U is NOT a member — unreachable as a home or a used space. */
+const WZ = randomUUID();
 const SUBJECT = randomUUID();
 
 const BASIC =
@@ -159,7 +163,7 @@ const PAYLOAD = {
 /** Everything a create leaves behind, with per-row noise normalised away. */
 async function snapshot() {
   const rows = await q<Record<string, unknown>>(
-    `select name, slug, description, status, phase, target_date, settings, metadata, user_id, workspace_id from projects`
+    `select name, slug, description, status, phase, target_date, color_slot, icon, settings, metadata, user_id, workspace_id from projects`
   );
   const projects = rows.rows.map((r) => {
     const meta = { ...(r.metadata as Record<string, unknown>) };
@@ -169,7 +173,7 @@ async function snapshot() {
     return { ...r, metadata: { ...meta, provenance: prov } };
   });
   const links = await q<Record<string, unknown>>(
-    `select from_type, to_type, to_id, link_type from links where from_type = 'project'`
+    `select from_type, to_type, to_id, link_type from links where from_type = 'project' order by to_type, to_id`
   );
   const norm = (a: Record<string, unknown>) => ({ ...a, subjectId: "<id>" });
   return {
@@ -218,6 +222,14 @@ beforeAll(async () => {
   await q(
     `insert into entities (id, user_id, workspace_id, title) values ($1,$2,$3,'Atlas Co')`,
     [SUBJECT, U, WA]
+  );
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'wb',$2,'{}'::jsonb), ($3,'wz',$2,'{}'::jsonb)`,
+    [WB, randomUUID(), WZ]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
+    [randomUUID(), WB, U]
   );
 }, 60_000);
 
@@ -425,5 +437,166 @@ describe("updateProjectGoverned — tRPC and Hub REST are one door (RV1 S5)", ()
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("createProjectGoverned — the place's look and parts (projects as places)", () => {
+  const PLACE = {
+    name: "Lyra",
+    colorSlot: 5,
+    icon: "👩‍🚀",
+    homeWorkspaceId: WB,
+    usedWorkspaceIds: [WA, WB],
+  };
+
+  it("lands colour, icon, home and used spaces IDENTICALLY through both doors", async () => {
+    const viaTrpc = await trpc().create(PLACE);
+    expect(viaTrpc).toMatchObject({
+      status: "created",
+      project: { colorSlot: 5, icon: "👩‍🚀", workspaceId: WB },
+      usedWorkspaces: [
+        { workspaceId: WA, status: "linked" },
+        { workspaceId: WB, status: "linked" },
+      ],
+    });
+    const a = await snapshot();
+
+    await reset();
+    const viaRest = await restCreate(PLACE);
+    expect(viaRest.status).toBe(201);
+    expect(viaRest.body).toMatchObject({
+      colorSlot: 5,
+      icon: "👩‍🚀",
+      workspaceId: WB,
+      usedWorkspaces: [
+        { workspaceId: WA, status: "linked" },
+        { workspaceId: WB, status: "linked" },
+      ],
+    });
+    const b = await snapshot();
+
+    // Non-vacuity: the row carries the look, and the home + each used space
+    // is ONE `uses` edge (the home stamp and the used link dedupe on WB).
+    expect(a.projects).toEqual([
+      expect.objectContaining({ color_slot: 5, icon: "👩‍🚀", workspace_id: WB }),
+    ]);
+    expect(a.links.map((l) => [l.to_type, l.to_id, l.link_type])).toEqual(
+      [
+        ["workspace", WA, "uses"],
+        ["workspace", WB, "uses"],
+      ].sort((x, y) => x[1]!.localeCompare(y[1]!))
+    );
+    // Governance saw the whole place on the create, then each link on its
+    // own door (the same rules as projects.setWorkspaceMembership).
+    expect(a.gate[0]).toMatchObject({
+      subjectType: "project",
+      action: "create",
+      workspaceId: WB,
+      data: expect.objectContaining({
+        colorSlot: 5,
+        icon: "👩‍🚀",
+        homeWorkspaceId: WB,
+        usedWorkspaceIds: [WA, WB],
+      }),
+    });
+    expect(
+      a.gate.slice(1).map((g) => [g.subjectType, g.action, g.workspaceId])
+    ).toEqual([
+      ["link", "create", undefined],
+      ["link", "create", undefined],
+    ]);
+    // The new project's id is the one per-run value in the link gates.
+    const sameIds = (x: typeof a) => ({
+      ...x,
+      gate: x.gate.map((g) => ({
+        ...g,
+        data: { ...(g.data as object), fromId: "<project>" },
+      })),
+    });
+    expect(sameIds(b)).toEqual(sameIds(a));
+  });
+
+  it("an unreachable used space or home is refused BEFORE anything is written", async () => {
+    await expect(
+      trpc().create({ name: "Vega", usedWorkspaceIds: [WA, WZ] })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      trpc().create({ name: "Vega", homeWorkspaceId: WZ })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const viaRest = await restCreate({ name: "Vega", usedWorkspaceIds: [WZ] });
+    expect(viaRest.status).toBe(403);
+    const after = await snapshot();
+    expect(after.projects).toEqual([]);
+    expect(after.links).toEqual([]);
+    expect(after.gate).toEqual([]);
+  });
+
+  it("a malformed icon is refused on both doors and by the service itself", async () => {
+    for (const icon of ["ab", "🚀🚀", "glyph:Rocket"]) {
+      await expect(
+        trpc().create({ name: "Deneb", icon })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect((await restCreate({ name: "Deneb", icon })).status).toBe(400);
+    }
+    // The service guard holds for a caller with no schema (a replay).
+    const { createProjectGoverned } = await import("./create-project.js");
+    await expect(
+      createProjectGoverned({
+        userId: U,
+        door: "trpc",
+        name: "Deneb",
+        icon: "ab",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect((await snapshot()).projects).toEqual([]);
+  });
+
+  it("an agent's create carries the place in its proposal and links nothing", async () => {
+    const evidence = Array.from({ length: 5 }, () => randomUUID());
+    for (const id of evidence) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, title) values ($1,$2,$3,'e')`,
+        [id, U, WA]
+      );
+    }
+    const res = await trpc(true).create({
+      ...PLACE,
+      name: "Altair",
+      evidenceEntityIds: evidence,
+    });
+    expect(res).toMatchObject({ status: "proposed" });
+    const after = await snapshot();
+    expect(after.projects).toEqual([]);
+    expect(after.links).toEqual([]);
+    expect(after.gate).toHaveLength(1);
+    expect(after.gate[0]!.data).toMatchObject({
+      colorSlot: 5,
+      icon: "👩‍🚀",
+      homeWorkspaceId: WB,
+      usedWorkspaceIds: [WA, WB],
+    });
+  });
+
+  it("projects.update sets and clears the icon on both doors; a bad one is a 400", async () => {
+    const p = await seedProject();
+    await trpc().update({ id: p, icon: "glyph:rocket" });
+    expect(
+      (
+        await q<{ icon: string | null }>(
+          `select icon from projects where id = $1`,
+          [p]
+        )
+      ).rows[0]!.icon
+    ).toBe("glyph:rocket");
+    expect((await restPatch(p, { icon: null })).status).toBe(200);
+    expect(
+      (
+        await q<{ icon: string | null }>(
+          `select icon from projects where id = $1`,
+          [p]
+        )
+      ).rows[0]!.icon
+    ).toBeNull();
+    expect((await restPatch(p, { icon: "nope" })).status).toBe(400);
   });
 });
