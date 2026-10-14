@@ -911,6 +911,21 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "Favicon", inputType: "url" },
       },
+      // External image URLs a capture producer handed over (a social post's
+      // slides, a page's og:image). Any kind may carry it; the media-copy job
+      // copies each into the pod (`systemData.media`) and renderers draw the
+      // pod copy, never this URL. Declared so it is typed and queryable.
+      {
+        slug: "media-urls",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Media URLs",
+          inputType: "tags",
+          itemValueType: "string",
+          helpText: "Source images, copied into the pod",
+        },
+      },
       {
         slug: "author",
         valueType: PropertyValueType.STRING,
