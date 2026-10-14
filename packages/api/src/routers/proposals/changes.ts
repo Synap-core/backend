@@ -56,6 +56,36 @@ const NON_ENTITY_INFRA_KEYS = new Set([
   "profileSlug",
 ]);
 
+/**
+ * Pod PLUMBING the producers stamp on a payload — governance bookkeeping, slot
+ * claims, provenance flags. Never a change a reviewer approves, so never a row.
+ * Backend-only on purpose: `NON_ENTITY_INFRA_KEYS` above is a byte-identical
+ * cross-repo twin and must not drift, so the keys the generic fallback newly
+ * meets (it now runs on EVERY payload, not only an otherwise-empty one) are
+ * stripped here. Any `_`-prefixed key (`_autoApprove`, `_meta`) is plumbing too.
+ */
+const PLUMBING_KEYS = new Set([
+  "authorshipMode",
+  "materialized",
+  "sessionSource",
+  "agentUserId",
+  "expectedLabel",
+  "expectedKey",
+  "policyReason",
+  "governanceReason",
+  // The proposal's own target — the card's header already names it.
+  "entityId",
+]);
+
+/** Keys the entity-shape walk above the fallback already turned into rows. */
+const ENTITY_SHAPE_KEYS = new Set([
+  "title",
+  "description",
+  "profileSlug",
+  "documentId",
+  "properties",
+]);
+
 export function buildProposalChanges(
   data: Record<string, unknown>,
   changeType: string,
@@ -251,39 +281,38 @@ export function buildProposalChanges(
   const promotedStages = readPromotedStages(data.stages);
   const promotesScope = typeof data.scope === "string" && data.scope !== "";
 
-  // Generic fallback: a non-entity proposal (e.g. a flat `property_def` payload of
-  // { slug, valueType, constraints, overlay, required, … }) matches none of the
-  // entity-shape keys above, so `changes` is still empty and the review card would
-  // render blank. Emit one change per non-infra top-level key (no "properties."
-  // prefix) so the payload renders. Entity/document/composite/session payloads
-  // always populate `changes` above, so this never fires for them — the entity
-  // path is preserved byte-for-byte.
-  if (changes.length === 0) {
-    for (const [key, value] of Object.entries(data)) {
-      if (NON_ENTITY_INFRA_KEYS.has(key)) continue;
-      if (value === undefined) continue;
-      // `metadata` is NOT in NON_ENTITY_INFRA_KEYS and must not be added to it:
-      // that Set is a byte-identical cross-repo duplicate of synap-app's
-      // `INFRA_KEYS`, and a one-sided edit forks it. Suppress the bag HERE, and
-      // only when the promoted `metadata.allowedHosts` row below will actually
-      // render it — otherwise a metadata-only payload with no hosts would lose
-      // its last visible key and the card would go blank, which is worse than
-      // opaque. When the promotion fires, this blob is a strict duplicate of it
-      // plus noise (marketSource baselines, run counters) — the exact thing the
-      // promotion exists to displace.
-      if (key === "metadata" && promotesAllowedHosts) continue;
-      // Promoted below as readable rows; the raw copy would be a duplicate.
-      if (key === "stages" && promotedStages) continue;
-      if (key === "scope" && promotesScope) continue;
-      changes.push({
-        path: key,
-        label: labelFromPath(key),
-        operation,
-        before: undefined,
-        after: value,
-        valueType: valueTypeOf(value),
-      });
-    }
+  // Generic fallback: one change per non-infra top-level key the entity-shape
+  // walk above did not cover (no "properties." prefix). It used to run ONLY
+  // when `changes` was still empty, so a payload with one entity-shape key
+  // (a session update renaming its title AND rewriting its criteria and
+  // expected outputs) showed the title and hid everything else. It now runs
+  // for every payload, skipping the keys already emitted and pod plumbing.
+  for (const [key, value] of Object.entries(data)) {
+    if (NON_ENTITY_INFRA_KEYS.has(key)) continue;
+    if (ENTITY_SHAPE_KEYS.has(key)) continue;
+    if (PLUMBING_KEYS.has(key) || key.startsWith("_")) continue;
+    if (value === undefined) continue;
+    // `metadata` is NOT in NON_ENTITY_INFRA_KEYS and must not be added to it:
+    // that Set is a byte-identical cross-repo duplicate of synap-app's
+    // `INFRA_KEYS`, and a one-sided edit forks it. Suppress the bag HERE, and
+    // only when the promoted `metadata.allowedHosts` row below will actually
+    // render it — otherwise a metadata-only payload with no hosts would lose
+    // its last visible key and the card would go blank, which is worse than
+    // opaque. When the promotion fires, this blob is a strict duplicate of it
+    // plus noise (marketSource baselines, run counters) — the exact thing the
+    // promotion exists to displace.
+    if (key === "metadata" && promotesAllowedHosts) continue;
+    // Promoted below as readable rows; the raw copy would be a duplicate.
+    if (key === "stages" && promotedStages) continue;
+    if (key === "scope" && promotesScope) continue;
+    changes.push({
+      path: key,
+      label: labelFromPath(key),
+      operation,
+      before: undefined,
+      after: value,
+      valueType: valueTypeOf(value),
+    });
   }
 
   // ── Egress: the ONE nested key promoted to its own change row ──────────────
