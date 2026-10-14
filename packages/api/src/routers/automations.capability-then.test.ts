@@ -62,7 +62,7 @@ describe("paramsFromVerbSchema (verb params → activate-gate shape)", () => {
       amount: { required: false, type: "nonsense" },
     });
     expect(params).toEqual([
-      { key: "account_id", label: "Account id", required: true },
+      { key: "account_id", label: "Account ID", required: true },
       { key: "amount", label: "Amount", required: false },
     ]);
   });
