@@ -39,6 +39,28 @@ export * from "./object-kinds.js";
 export * from "./tool-labels.js";
 
 /**
+ * Words a sentence-cased token must still spell the way people write them —
+ * the casing of a NAME (a product, a format), not of a sentence. Deliberately
+ * short: only words that reach people as property labels and read wrong
+ * otherwise ("Url", "Linkedin url"). `ai` / `os` are NOT here: the curated
+ * tables that need them (notification categories, routing rules) own those.
+ */
+const CASED_WORDS: Readonly<Record<string, string>> = {
+  url: "URL",
+  urls: "URLs",
+  id: "ID",
+  ids: "IDs",
+  api: "API",
+  pdf: "PDF",
+  csv: "CSV",
+  seo: "SEO",
+  linkedin: "LinkedIn",
+  github: "GitHub",
+  youtube: "YouTube",
+  tiktok: "TikTok",
+};
+
+/**
  * Turn a machine token into a human word: strip a dotted namespace, split
  * `snake_case`/`kebab-case`/`camelCase`, and sentence-case the result.
  *
@@ -59,7 +81,12 @@ export function humanizeToken(token: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .trim()
     .toLowerCase();
-  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "";
+  if (!words) return "";
+  const cased = words
+    .split(" ")
+    .map((w) => CASED_WORDS[w] ?? w)
+    .join(" ");
+  return cased.charAt(0).toUpperCase() + cased.slice(1);
 }
 
 /**

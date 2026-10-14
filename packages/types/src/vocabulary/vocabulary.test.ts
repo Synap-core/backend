@@ -116,7 +116,13 @@ describe("humanizeToken", () => {
     expect(humanizeToken("governance.widen_lane")).toBe("Widen lane");
     expect(humanizeToken("focus_session")).toBe("Focus session");
     expect(humanizeToken("capabilityKind")).toBe("Capability kind");
-    expect(humanizeToken("api-key")).toBe("Api key");
+    // A name keeps its own casing (CASED_WORDS): never "Api key" / "Url".
+    expect(humanizeToken("api-key")).toBe("API key");
+    expect(humanizeToken("url")).toBe("URL");
+    expect(humanizeToken("linkedinUrl")).toBe("LinkedIn URL");
+    expect(humanizeToken("profile_url")).toBe("Profile URL");
+    expect(humanizeToken("youtube-channel")).toBe("YouTube channel");
+    expect(humanizeToken("urlencoded")).toBe("Urlencoded");
   });
 });
 
