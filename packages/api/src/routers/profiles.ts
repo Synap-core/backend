@@ -34,6 +34,7 @@ import {
   getActingAgentUserId,
   resolveProfileForApply,
   RENDERER_SURFACES,
+  withCatalogPresentationStamp,
 } from "@synap/database";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -1232,7 +1233,9 @@ export const profilesRouter = router({
           : {}),
         displayName: input.displayName,
         parentProfileId: input.parentProfileId ?? undefined,
-        uiHints: input.uiHints,
+        // The catalog's presentation stamp is server-owned: a caller's full
+        // uiHints replacement that omits it keeps the stored one.
+        uiHints: withCatalogPresentationStamp(existing.uiHints, input.uiHints),
         defaultValues: input.defaultValues,
         scope: input.scope as ProfileScope | undefined,
         entityScope: input.entityScope,

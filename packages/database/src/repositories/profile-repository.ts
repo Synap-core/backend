@@ -977,6 +977,14 @@ export async function markProfileRetired(
  * the UPDATE only fires when the stored value IS DISTINCT FROM the declared one
  * (jsonb equality, key-order blind), and returns whether it wrote.
  *
+ * A person's edit is never overwritten. Every write also stamps the value it
+ * wrote at `ui_hints.presentationFromCatalog`; a later catalog value replaces
+ * the stored one only while the stored one still EQUALS that stamp (nobody
+ * changed it since). An edit through `profiles.update` diverges from the
+ * stamp and is left alone; a presentation with NO stamp was not written here
+ * (an edit, or a row older than the stamp) and is left alone too. The stamp
+ * asserts exactly what the comparator reads: the value this door wrote.
+ *
  * NOT a validator. `@synap/database` cannot import `@synap-core/types` (types
  * dev-depends on this package), so the ONE parser, `parseProfilePresentation`
  * (`@synap-core/types/presentation`), runs at the doors that accept a
@@ -997,22 +1005,52 @@ export async function setProfilePresentation(
   } = {}
 ): Promise<boolean> {
   const json = JSON.stringify(presentation);
+  const stored = drizzleSql`(${profiles.uiHints} -> 'presentation')`;
+  const stamp = drizzleSql`(${profiles.uiHints} -> ${PRESENTATION_FROM_CATALOG_KEY}::text)`;
   const rows = await db
     .update(profiles)
     .set({
-      uiHints: drizzleSql`coalesce(${profiles.uiHints}, '{}'::jsonb) || jsonb_build_object('presentation', ${json}::jsonb)`,
+      uiHints: drizzleSql`coalesce(${profiles.uiHints}, '{}'::jsonb) || jsonb_build_object('presentation', ${json}::jsonb, ${PRESENTATION_FROM_CATALOG_KEY}::text, ${json}::jsonb)`,
       updatedAt: new Date(),
     })
     .where(
       and(
         eq(profiles.id, profileId),
         opts.onlyIfAbsent
-          ? drizzleSql`(${profiles.uiHints} -> 'presentation') IS NULL`
-          : drizzleSql`${profiles.uiHints} -> 'presentation' IS DISTINCT FROM ${json}::jsonb`
+          ? drizzleSql`${stored} IS NULL`
+          : drizzleSql`${stored} IS DISTINCT FROM ${json}::jsonb AND (${stored} IS NULL OR ${stored} = ${stamp})`
       )
     )
     .returning({ id: profiles.id });
   return rows.length > 0;
+}
+
+/**
+ * `ui_hints` key holding the presentation the CATALOG last wrote (see
+ * `setProfilePresentation`). Server-owned: `profiles.update` carries it over
+ * when a caller's `uiHints` omits it.
+ */
+export const PRESENTATION_FROM_CATALOG_KEY = "presentationFromCatalog";
+
+/**
+ * A caller's full `uiHints` replacement, with the server-owned catalog stamp
+ * carried over from the stored row when the caller did not send it. Without
+ * this, a client that round-trips uiHints without the stamp would make the
+ * stored presentation read as "never written by the catalog" — and the
+ * catalog could no longer update an UNEDITED one.
+ */
+export function withCatalogPresentationStamp(
+  stored: unknown,
+  next: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!next || PRESENTATION_FROM_CATALOG_KEY in next) return next;
+  const stamp =
+    stored && typeof stored === "object"
+      ? (stored as Record<string, unknown>)[PRESENTATION_FROM_CATALOG_KEY]
+      : undefined;
+  return stamp === undefined
+    ? next
+    : { ...next, [PRESENTATION_FROM_CATALOG_KEY]: stamp };
 }
 
 /**

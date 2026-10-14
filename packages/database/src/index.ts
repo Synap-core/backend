@@ -355,6 +355,8 @@ export {
 export {
   markProfileRetired,
   setProfilePresentation,
+  PRESENTATION_FROM_CATALOG_KEY,
+  withCatalogPresentationStamp,
   declaredProfilePresentation,
 } from "./repositories/profile-repository.js";
 export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
