@@ -22,16 +22,12 @@ import {
   invites,
   getDb,
   eventRepository,
-  WorkspaceRepository,
   WorkspaceMemberRepository,
   drizzleSql,
   users,
-  createWorkspaceFromDefinition,
-  templateStateSettings,
   ensureTeamPersonForMember,
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
-  type WorkspaceDefinitionInput,
   notAnAppAgent,
   podCpAuthHeaders,
 } from "@synap/database";
@@ -42,7 +38,6 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
-import { getBoss } from "@synap/events";
 import { kratosAdmin } from "@synap/auth";
 import { config } from "@synap-core/core";
 import {
@@ -51,13 +46,6 @@ import {
   ensureProactiveFeedChannel,
   getAgentIdBySlug,
 } from "../../utils/personal-channel.js";
-import {
-  materializeWorkspaceCore,
-  type MaterializeCoreResult,
-  ComposeBaseUnavailableError,
-  DependencyResolutionError,
-  ComposeBaseNotFoundError,
-} from "../../services/workspace-materialization-service.js";
 import {
   logger,
   notifyCpInviteSync,
@@ -1254,230 +1242,6 @@ export const inviteProcedures = {
         removedFromWorkspaces: removed.length,
         totalWorkspaces: toRemove.length,
         errors,
-      };
-    }),
-
-  /**
-   * Seed a plugin workspace (provisioning-level auth via token header)
-   *
-   * Called by the control plane during pod provisioning to auto-create
-   * a workspace for an enabled plugin (e.g., agent-os).
-   */
-  seedPlugin: publicProcedure
-    .input(
-      z.object({
-        pluginId: z.string(),
-        definition: z.unknown().optional(),
-      })
-    )
-    .mutation(async ({ input, ctx }) => {
-      // Authenticate via provisioning token
-      const providedToken = ctx.req?.headers.get("X-Provisioning-Token");
-      const expectedToken = process.env.PROVISIONING_TOKEN;
-
-      if (!expectedToken || !providedToken || providedToken !== expectedToken) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Valid provisioning token required",
-        });
-      }
-
-      const systemUserId = "00000000-0000-0000-0000-000000000000";
-
-      // Idempotency: if a provisioned workspace with this pluginId already exists, return it.
-      // Prevents duplicate workspaces when provisioning retries or the CP re-calls seedPlugin.
-      const existingPluginWorkspace = await db
-        .select({ id: workspaces.id })
-        .from(workspaces)
-        .where(
-          and(
-            eq(workspaces.packageSlug, input.pluginId),
-            drizzleSql`${workspaces.settings}->>'createdBy' = 'provisioning'`
-          )
-        )
-        .limit(1)
-        .then((rows) => rows[0] ?? null);
-
-      if (existingPluginWorkspace) {
-        logger.info(
-          { workspaceId: existingPluginWorkspace.id, pluginId: input.pluginId },
-          "seedPlugin: returning existing provisioned workspace (idempotent)"
-        );
-        return {
-          status: "existing" as const,
-          workspaceId: existingPluginWorkspace.id,
-        };
-      }
-
-      // Generic path: use definition from control plane registry
-      if (input.definition) {
-        const definition = input.definition as WorkspaceDefinitionInput;
-
-        // Resolve template-composition dependencies + compose overlays through
-        // the SAME shared core the in-app `createFromDefinition` door drives, so
-        // a COMPOSED template (`dependencies[]` — e.g. openclaw's "the Arch"
-        // enterprise overlays) provisioned via this M2M door resolves its deps
-        // instead of materializing a rogue standalone. `deferCreate:true` keeps
-        // THIS door's own create + workspace-init enqueue for the no-compose
-        // case (the shared core never enqueues under `deferCreate`, so there is
-        // NO double-enqueue). Only runs when deps are declared — a plain plugin
-        // template skips it and behaves byte-for-byte as before.
-        if ((definition as { dependencies?: unknown[] }).dependencies?.length) {
-          let core: MaterializeCoreResult;
-          try {
-            core = await materializeWorkspaceCore({
-              definition,
-              userId: systemUserId,
-              // The package's own identity for the cycle guard.
-              selfSlug: input.pluginId,
-              deferCreate: true,
-            });
-          } catch (err) {
-            // A compose was requested but its base could not be resolved — do
-            // NOT fall through to creating a rogue standalone overlay.
-            if (err instanceof ComposeBaseUnavailableError) {
-              const unresolved = err.dependencies.find(
-                (d) => d.relation === "compose"
-              );
-              throw new TRPCError({
-                code: "BAD_REQUEST",
-                message:
-                  unresolved?.message ??
-                  "compose base not available — the base template must be installed on the pod first",
-              });
-            }
-            if (err instanceof DependencyResolutionError) {
-              throw new TRPCError({
-                code: "BAD_REQUEST",
-                message: `Dependency resolution failed: ${err.message}`,
-              });
-            }
-            if (err instanceof ComposeBaseNotFoundError) {
-              throw new TRPCError({
-                code: "NOT_FOUND",
-                message: "compose base workspace not found",
-              });
-            }
-            throw err;
-          }
-          if (core.status === "composed") {
-            // A compose overlay layered onto its existing base — no new
-            // workspace, so no workspace-init enqueue (the base already has its
-            // defaults). Return the base's id.
-            logger.info(
-              {
-                workspaceId: core.composeTargetWorkspaceId,
-                pluginId: input.pluginId,
-              },
-              "Plugin workspace composed onto base (provisioning)"
-            );
-            // No layer 2 here: an overlay pack's version is not earned.
-            const { finishTemplateApply } =
-              await import("../../services/template-apply-finisher.js");
-            await finishTemplateApply({
-              workspaceId: core.composeTargetWorkspaceId,
-              userId: systemUserId,
-              built: false,
-              pendingPack: core.pendingPack,
-              post: null,
-            });
-            return {
-              status: "created" as const,
-              workspaceId: core.composeTargetWorkspaceId,
-            };
-          }
-          // status "resolved" — deps installed, no compose base. Fall through to
-          // this door's own create + enqueue below.
-        }
-
-        const result = await createWorkspaceFromDefinition({
-          definition,
-          userId: systemUserId,
-          packageSlug: input.pluginId,
-          createdBy: "provisioning",
-        });
-        // Layer 1 only (no version passed): the finisher marks it active.
-        const { finishTemplateApply } =
-          await import("../../services/template-apply-finisher.js");
-        await finishTemplateApply({
-          workspaceId: result.workspaceId,
-          userId: systemUserId,
-          built: true,
-          pendingVersionStamp: result.pendingVersionStamp,
-          post: null,
-        });
-
-        // Enqueue workspace-init (whiteboard + commands, skips default views)
-        try {
-          const boss = getBoss();
-          await boss.send("workspace-init", {
-            workspaceId: result.workspaceId,
-            userId: systemUserId,
-            packageSlug: input.pluginId,
-          });
-        } catch (err) {
-          logger.warn(
-            { err, workspaceId: result.workspaceId },
-            "Failed to enqueue workspace-init (non-fatal)"
-          );
-        }
-
-        logger.info(
-          { workspaceId: result.workspaceId, pluginId: input.pluginId },
-          "Plugin workspace seeded via definition"
-        );
-
-        return {
-          status: "created" as const,
-          workspaceId: result.workspaceId,
-        };
-      }
-
-      // Legacy fallback: hardcoded zeroclaw config (backward compat)
-      if (input.pluginId !== "zeroclaw") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Unknown plugin: ${input.pluginId}. Pass a definition for generic plugins.`,
-        });
-      }
-
-      const { randomUUID } = await import("crypto");
-      const workspaceId = randomUUID();
-
-      const dbConn = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
-
-      await workspaceRepo.create(
-        {
-          id: workspaceId,
-          name: "Agent OS",
-          ownerId: systemUserId,
-          settings: {
-            layout: {
-              pinnedApps: ["home", "data", "views", "intelligence"],
-              defaultView: "home",
-            },
-            createdBy: "provisioning",
-            provisionedAt: new Date().toISOString(),
-            // Identity + "active" through the ONE template-state seed.
-            ...templateStateSettings({ slug: "zeroclaw", state: "active" }),
-          },
-        },
-        systemUserId
-      );
-
-      logger.info(
-        { workspaceId, pluginId: input.pluginId },
-        "Plugin workspace seeded (legacy)"
-      );
-
-      return {
-        status: "created" as const,
-        workspaceId,
       };
     }),
 

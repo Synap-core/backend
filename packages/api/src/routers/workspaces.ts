@@ -1336,7 +1336,6 @@ export const workspacesRouter = router({
   preflightFromDefinition: definitionEngineProcedures.preflightFromDefinition,
   createFromDefinition: definitionEngineProcedures.createFromDefinition,
   reconcileFromDefinition: definitionEngineProcedures.reconcileFromDefinition,
-  seedPlugin: inviteProcedures.seedPlugin,
   previewInvite: inviteProcedures.previewInvite,
   acceptInviteViaCp: inviteProcedures.acceptInviteViaCp,
   rejectInviteViaCp: inviteProcedures.rejectInviteViaCp,

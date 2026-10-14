@@ -571,6 +571,8 @@ generate_and_create_env() {
     # PROVISIONING_TOKEN authorizes agent-key minting via POST /v1/agents/provision.
     # Backend reads it from compose env; .env.example documents it as required.
     local PROVISIONING_TOKEN=$(openssl rand -hex 32)
+    # A freshly generated .env is a pod with no owner yet: the token is live again.
+    rm -f "$_BOOTSTRAP_TOKEN_MARKER"
     # Required by docker-compose.yml (VAULT_SERVER_KEY:?) — the secret-vault key;
     # plus the Hub keys the backend reads. Ported from the retired install.sh
     # generator so ONE generator writes every key a fresh pod needs.
@@ -1227,6 +1229,50 @@ _synap_bootstrap_token() {
     grep "^ADMIN_BOOTSTRAP_TOKEN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || true
 }
 
+# PROVISIONING_TOKEN is BOOTSTRAP-ONLY (SECURITY-PLAN-R1 §4 / D9): the pod
+# accepts it only while it has no owner and answers 403
+# PROVISIONING_TOKEN_RETIRED afterwards, so once the first owner exists the
+# secret has no job left. Retire it from deploy/.env, and leave a marker so the
+# update backfill below never writes a fresh one. Idempotent; never prints the
+# value. Callers run it only where the owner is KNOWN to exist (federated
+# bootstrap done, preseed admin created, `setup admin --retire-token` probed).
+# A running backend keeps the value in its environment until its next recreate;
+# harmless, the pod refuses it.
+_BOOTSTRAP_TOKEN_MARKER="state/bootstrap-token.retired"
+_bootstrap_token_retire() {
+    local had=""
+    grep -q "^PROVISIONING_TOKEN=" .env 2>/dev/null && had=1
+    SYNAP_ENV_FILE=.env envcfg_write_raw U PROVISIONING_TOKEN || return 1
+    mkdir -p state && : > "$_BOOTSTRAP_TOKEN_MARKER" || return 1
+    [ -z "$had" ] || echo -e "${GREEN}🔒 PROVISIONING_TOKEN retired from .env (the pod has an owner; it is bootstrap-only).${NC}"
+    return 0
+}
+
+# Early installs lacked the token; `synap update` backfills it, but never once
+# it was retired on purpose.
+_bootstrap_token_backfill() {
+    [ -f "$_BOOTSTRAP_TOKEN_MARKER" ] && return 0
+    if ! grep -q "^PROVISIONING_TOKEN=." .env; then
+        SYNAP_ENV_FILE=.env envcfg_write_raw S PROVISIONING_TOKEN "$(openssl rand -hex 32)"
+        echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
+    fi
+}
+
+# "needed" (no owner yet) | "ready" | "unknown" — the pod's own answer.
+_setup_needs_probe() {
+    local pod_url token body
+    pod_url=$(_synap_pod_url)
+    token=$(_synap_bootstrap_token || true)
+    local auth_header=()
+    if [ -n "$token" ]; then
+        auth_header=(-H "Authorization: Bearer ${token}")
+    fi
+    body=$(curl -fsS --max-time 6 "${auth_header[@]}" "${pod_url}/api/hub/setup/status" 2>/dev/null || echo "")
+    if echo "$body" | grep -q '"needsSetup":true'; then echo needed; return 0; fi
+    if echo "$body" | grep -q '"needsSetup":false'; then echo ready; return 0; fi
+    echo unknown
+}
+
 cmd_setup_admin() {
     local deploy_dir
     deploy_dir=$(get_deploy_dir)
@@ -1246,6 +1292,7 @@ cmd_setup_admin() {
             --password)      password="$2"; shift 2 ;;
             --status)        mode="status"; shift ;;
             --magic-link)    mode="magic-link"; shift ;;
+            --retire-token)  mode="retire-token"; shift ;;
             --help|-h)
                 cat <<EOF
 ${BLUE}Synap Setup Admin${NC}
@@ -1254,12 +1301,14 @@ ${YELLOW}Usage:${NC}
   synap setup admin --email <e> --password <p>     Create admin via container exec (preseed)
   synap setup admin --email <e> --magic-link       Mint a one-hour browser link
   synap setup admin --status                       Probe whether the pod still needs setup
+  synap setup admin --retire-token                 Drop the bootstrap-only PROVISIONING_TOKEN from .env once the pod has an owner
 
 ${YELLOW}Options:${NC}
   ${GREEN}--email <email>${NC}      Admin email (required for preseed and magic-link modes)
   ${GREEN}--password <secret>${NC}  Admin password (preseed mode — runs container script directly)
   ${GREEN}--magic-link${NC}         Mint a magic-link URL the operator opens in their browser
   ${GREEN}--status${NC}             Print 'needed' or 'ready' and exit (machine-readable)
+  ${GREEN}--retire-token${NC}       Remove PROVISIONING_TOKEN from .env (only when --status says 'ready')
 EOF
                 exit 0
                 ;;
@@ -1273,26 +1322,24 @@ EOF
     # Status probe — used by callers (eve doctor, eve auth provision) to
     # decide whether to prompt for admin setup.
     if [ "$mode" = "status" ]; then
-        local pod_url
-        pod_url=$(_synap_pod_url)
-        local token
-        token=$(_synap_bootstrap_token || true)
-        local auth_header=()
-        if [ -n "$token" ]; then
-            auth_header=(-H "Authorization: Bearer ${token}")
+        local state
+        state=$(_setup_needs_probe)
+        echo "$state"
+        [ "$state" = unknown ] && exit 2
+        exit 0
+    fi
+
+    # Retire the bootstrap token on a pod that already has an owner (existing
+    # installs; new ones retire it themselves). Refuses unless the pod says so.
+    if [ "$mode" = "retire-token" ]; then
+        local state
+        state=$(_setup_needs_probe)
+        if [ "$state" != ready ]; then
+            echo -e "${RED}Not retiring PROVISIONING_TOKEN: the pod reports '${state}' (it needs an owner first — sign in, then re-run).${NC}"
+            exit 1
         fi
-        local body
-        body=$(curl -fsS --max-time 6 "${auth_header[@]}" "${pod_url}/api/hub/setup/status" 2>/dev/null || echo "")
-        if echo "$body" | grep -q '"needsSetup":true'; then
-            echo "needed"
-            exit 0
-        fi
-        if echo "$body" | grep -q '"needsSetup":false'; then
-            echo "ready"
-            exit 0
-        fi
-        echo "unknown"
-        exit 2
+        _bootstrap_token_retire || { echo -e "${RED}Could not update .env.${NC}"; exit 1; }
+        exit 0
     fi
 
     # Preseed — direct container exec. Uses the existing helper.
@@ -1303,6 +1350,7 @@ EOF
         fi
         if run_preseed_admin_in_container "$email" "$password"; then
             echo -e "${GREEN}✅ First admin created.${NC}"
+            _bootstrap_token_retire || true
             exit 0
         else
             echo -e "${RED}❌ Preseed admin creation failed. Check 'docker compose logs backend'.${NC}"
@@ -1634,6 +1682,9 @@ _reg_apply() {
         _reg_step_mark owner
         _reg_ok "owner bootstrapped (${out%% *})"
     fi
+    # The pod has an owner now: the bootstrap-only token has no job left. Retired
+    # BEFORE step 4 so the backend recreate below drops it from its environment.
+    _bootstrap_token_retire || _reg_warn "could not retire PROVISIONING_TOKEN from .env — run: synap setup admin --retire-token"
     # 2. federated sign-in (OIDC client)
     if _reg_step_done oidc; then
         _reg_log "OIDC client: already stored"
@@ -2732,6 +2783,7 @@ EOF
         if run_preseed_admin_in_container "$ADMIN_EMAIL" "$ADMIN_PASSWORD"; then
             ADMIN_SEED_OK=true
             echo -e "${GREEN}✅ First admin created.${NC}"
+            _bootstrap_token_retire || true
             if [ "$ADMIN_PASSWORD_GENERATED" = "1" ]; then
                 echo -e "${YELLOW}Auto-generated admin password (save securely): ${NC}${ADMIN_PASSWORD}"
             fi
@@ -3931,10 +3983,7 @@ USAGE
         SYNAP_ENV_FILE=.env envcfg_write_raw S SYNAP_SERVICE_ENCRYPTION_KEY "$(openssl rand -hex 32)"
         echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
     fi
-    if ! grep -q "^PROVISIONING_TOKEN=." .env; then
-        SYNAP_ENV_FILE=.env envcfg_write_raw S PROVISIONING_TOKEN "$(openssl rand -hex 32)"
-        echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
-    fi
+    _bootstrap_token_backfill
 
     echo -e "${BLUE}🔄 Updating Synap (${mode}${ref:+: $ref})...${NC}"
     synap_update_engine "$mode" "$ref" "$force"
@@ -3951,6 +4000,7 @@ USAGE
         echo -e "${BLUE}👤 Ensuring admin provisioning is complete...${NC}"
         if run_preseed_admin_in_container "$update_admin_email" "$update_admin_password"; then
             echo -e "${GREEN}✅ Admin provisioning confirmed.${NC}"
+            _bootstrap_token_retire || true
         else
             echo -e "${YELLOW}⚠️  Admin provisioning failed (pod may still be starting). Run manually if needed:${NC}"
             echo "  ./synap setup admin --email ${update_admin_email} --password <password>"

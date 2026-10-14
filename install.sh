@@ -25,6 +25,10 @@
 # --edge, --register-token, --control-plane, --intelligence-url, …; see
 # `synap install --help`). Flags of the retired installer are mapped below, or
 # refused with their new spelling — never silently ignored.
+#
+# SYNAP_RELEASE_VERIFY=warn|enforce|off (default warn): the release manifest's
+# cosign signature (Synap CI, keyless) is checked before its bundle is trusted.
+# warn only reports a missing cosign/signature or a failed check; enforce refuses.
 # ==============================================================================
 
 set -euo pipefail
@@ -36,9 +40,10 @@ RELEASE_BASE_URL="${SYNAP_RELEASE_BASE_URL:-https://github.com/synap-core/backen
 
 die()  { echo "✗  $*" >&2; exit 1; }
 info() { echo "→  $*"; }
+warn() { echo "⚠  $*" >&2; }
 
 usage() {
-  sed -n '2,29p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+  sed -n '2,33p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
   exit 0
 }
 
@@ -116,11 +121,50 @@ sha256() {
   else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 
+# D12 — CI signs every release.json keyless (docker-publish.yml publish-release)
+# on the release AND on the channel pointer. This is the SAME rule `synap`
+# applies in `_ue_verify_manifest_sig` (update/install): the two identity
+# constants below are byte-for-byte copies of the ones in `synap`, pinned equal
+# by deploy/__tests__/install-manifest-signature.test.sh — change both or neither.
+# warn (default): a missing cosign, missing bundle or failed check WARNS and the
+# install goes on; enforce: any of them refuses; off: skip (a private mirror).
+SYNAP_RELEASE_SIGNER_RE='^https://github\.com/(?i:synap-core/backend)/\.github/workflows/docker-publish\.yml@refs/(heads/main|tags/v[0-9][0-9A-Za-z.+-]*)$'
+SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+
+verify_manifest_sig() { # <release> <manifest> — non-zero only under enforce
+  local mode="${SYNAP_RELEASE_VERIFY:-warn}" bundle="$2.sigstore.json" why="" out
+  case "$mode" in
+    warn|enforce) ;;
+    off) return 0 ;;
+    *) warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using warn"; mode=warn ;;
+  esac
+  rm -f "$bundle"
+  if ! command -v cosign >/dev/null 2>&1; then
+    why="cosign is not installed"
+  elif ! fetch "$(manifest_url "$1" release.json.sigstore.json)" "$bundle" 2>/dev/null; then
+    why="no signature (release.json.sigstore.json) is published for '$1'"
+  elif ! out="$(cosign verify-blob --bundle "$bundle" \
+          --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE" \
+          --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER" "$2" 2>&1)"; then
+    why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
+  else
+    info "release manifest signature verified (Synap CI, keyless)"
+    return 0
+  fi
+  if [ "$mode" = enforce ]; then
+    echo "✗  release manifest for '$1' refused: ${why} (SYNAP_RELEASE_VERIFY=enforce)" >&2
+    return 1
+  fi
+  warn "release manifest for '$1' is NOT signature-verified: ${why} — continuing (SYNAP_RELEASE_VERIFY=warn)"
+  return 0
+}
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 info "Resolving release '${RELEASE}'"
 fetch "$(manifest_url "$RELEASE")" "$WORK/release.json" \
   || die "could not fetch the release manifest $(manifest_url "$RELEASE")"
+verify_manifest_sig "$RELEASE" "$WORK/release.json" || exit 1
 ID="$(jq -r '.id // empty' "$WORK/release.json")"
 ASSET="$(jq -r '.bundle.asset // empty' "$WORK/release.json")"
 WANT="$(jq -r '.bundle.sha256 // empty' "$WORK/release.json")"

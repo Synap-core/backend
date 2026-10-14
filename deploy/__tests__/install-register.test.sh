@@ -126,6 +126,8 @@ case "$*" in
   "exec "*" node -e "*SYNAP_REG_POD*)
     # The CLI's real registration script, run on this host (env is inherited exactly as
     # `docker exec -e NAME` would pass it).
+    # (cwd is the deploy dir: remember the token the pod holds at the owner step.)
+    [ -f "$F/token-at-bootstrap" ] || grep '^PROVISIONING_TOKEN=' .env 2>/dev/null | cut -d= -f2- > "$F/token-at-bootstrap"
     shift; while [ "$1" != node ]; do shift; done; shift
     exec node "$@" ;;
   "exec "*" node -e "*) exit 0 ;;   # health / canary probes: the pod is healthy
@@ -201,6 +203,8 @@ run_install --non-interactive --release "$REL" --domain pod.example.org --email 
 [ "$(env_of POD_ADMIN_DOMAIN)" = "pod-admin.example.org" ] && [ -n "$(env_of VAULT_SERVER_KEY)" ] \
   && ok "plain: derived admin host + compose-required VAULT_SERVER_KEY" || bad "plain: POD_ADMIN_DOMAIN=$(env_of POD_ADMIN_DOMAIN)"
 [ ! -s "$TMP/calls.log" ] && [ -z "$(env_of CONTROL_PLANE_URL)" ] && ok "plain: no Control Plane contacted, no trust written" || bad "plain: CP contacted"
+[ -n "$(env_of PROVISIONING_TOKEN)" ] && [ ! -e "$DEPLOY/state/bootstrap-token.retired" ] \
+  && ok "plain: no owner yet → PROVISIONING_TOKEN stays (the magic-link door needs it)" || bad "plain: token retired before any owner exists"
 [ -s "$DEPLOY/state/pod-identity/pod-key.pem" ] && [ "$(jq -r .crv "$DEPLOY/state/pod-identity.pub.json")" = P-256 ] \
   && ok "plain: an unregistered pod gets its own identity key too" || bad "plain: no pod identity key"
 run_install --non-interactive --release "$REL"; rc=$?
@@ -245,9 +249,15 @@ grep -q 'PRIVATE KEY' "$TMP/req-pods_register.json" "$S/out" && bad "happy: priv
 order="$(grep -v '^/pods/register$' "$TMP/calls.log" | tr '\n' ' ')"
 [ "$order" = "/api/federation/bootstrap /api/hub/federation/oidc-config /api/provision/register-intelligence " ] \
   && ok "happy: owner → oidc → AI applied in order" || bad "happy: pod call order: $order"
-[ "$(req api_federation_bootstrap '.headers["x-pod-bootstrap-token"]')" = "$(env_of PROVISIONING_TOKEN)" ] && [ -n "$(env_of PROVISIONING_TOKEN)" ] \
+BT="$(cat "$FAKE/token-at-bootstrap" 2>/dev/null)"
+[ -n "$BT" ] && [ "$(req api_federation_bootstrap '.headers["x-pod-bootstrap-token"]')" = "$BT" ] \
   && [ "$(req api_federation_bootstrap '.body|fromjson|.assertion')" = "eyJowner.assertion.jwt" ] \
-  && ok "happy: bootstrap carries the pod's PROVISIONING_TOKEN + the owner assertion" || bad "happy: bootstrap request $(cat "$TMP/req-api_federation_bootstrap.json" 2>/dev/null)"
+  && ok "happy: bootstrap carries the pod's PROVISIONING_TOKEN + the owner assertion" || bad "happy: bootstrap request (token $([ -n "$BT" ] && echo held || echo missing), assertion $(req api_federation_bootstrap '.body|fromjson|.assertion'))"
+# D9: bootstrap-only — once the owner exists the token leaves .env (and stays out).
+[ -z "$(env_of PROVISIONING_TOKEN)" ] && ! grep -q '^PROVISIONING_TOKEN=' "$DEPLOY/.env" && [ -f "$DEPLOY/state/bootstrap-token.retired" ] \
+  && ok "happy: PROVISIONING_TOKEN retired from .env after the owner step (marker written)" || bad "happy: PROVISIONING_TOKEN still in .env / no marker"
+[ "$(env_of CONTROL_PLANE_URL)" = "https://cp.synap.test" ] && [ "$(grep -c '^PROVISIONING_TOKEN=' "$DEPLOY/.env")" = 0 ] \
+  && ok "happy: the rest of .env survived the retirement" || bad "happy: .env damaged by the retirement"
 [ "$(req api_hub_federation_oidc-config '.body|fromjson|.assertion')" = "eyJoidc.push.jwt" ] \
   && ok "happy: oidc-config got the signed assertion" || bad "happy: oidc request $(cat "$TMP/req-api_hub_federation_oidc-config.json" 2>/dev/null)"
 [ "$(req api_provision_register-intelligence '.headers.authorization')" = "Bearer eyJprovision.jwt" ] \

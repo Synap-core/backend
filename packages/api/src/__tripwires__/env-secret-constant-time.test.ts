@@ -27,10 +27,7 @@ const REPO = fileURLToPath(new URL("../../../../", import.meta.url));
  * must STILL be a hit (a fixed site must leave this list), so the list only
  * shrinks.
  */
-const PENDING: Record<string, string> = {
-  "packages/api/src/routers/workspaces/invites.ts":
-    "owned by SEC-P1 (invites.ts) this wave",
-};
+const PENDING: Record<string, string> = {};
 
 const SECRET_ENV = /^\w*(TOKEN|SECRET|KEY|PASSWORD)$/;
 
