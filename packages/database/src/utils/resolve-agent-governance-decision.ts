@@ -1890,3 +1890,6 @@ function reasonToRung(reason: string): string {
       return "default";
   }
 }
+
+// The read-through snapshot the matrix feeds this resolver (one ladder).
+export { createReadSnapshot, type ReadSnapshotStats } from "./read-snapshot.js";
