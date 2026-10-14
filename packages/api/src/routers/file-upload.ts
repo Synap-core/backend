@@ -815,8 +815,16 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
   try {
     // The read floor, not owner-or-member of the document's workspace: a
     // pod-wide document (no workspace) is also readable through an entity the
-    // caller can read that holds it (its file, or a media copy).
-    const document = await loadSignableDocument(userId, documentId);
+    // caller can read that holds it (its file, a media copy, or a media
+    // property its kind declares). `?entityId=` names that entity, so the door
+    // checks one row instead of searching for a holder.
+    const viaEntityId = c.req.query("entityId");
+    if (viaEntityId !== undefined && !UUID_RE.test(viaEntityId)) {
+      return c.json({ error: "entityId must be a uuid" }, 400);
+    }
+    const document = await loadSignableDocument(userId, documentId, {
+      viaEntityId,
+    });
     if (!document) {
       const exists = await db.query.documents.findFirst({
         where: eq(documents.id, documentId),

@@ -53,6 +53,11 @@ const D_FILE = randomUUID(); // E_SHARED's own document
 const D_MEDIA = randomUUID(); // E_SHARED's media copy
 const D_UNRELATED = randomUUID(); // OWNER's pod-wide doc nobody references
 const E_ATTACK = randomUUID(); // ATTACKER's entity pointing at OWNER's docs
+const KIND_ASSET = randomUUID(); // a kind declaring `asset-document-id` as its media
+const E_ASSET = randomUUID(); // OWNER's pod-wide asset, shared to WS_A, no documentId
+const D_ASSET = randomUUID(); // held ONLY through E_ASSET's declared property
+const E_ATTACK_ASSET = randomUUID(); // ATTACKER's asset declaring OWNER's doc
+const E_LEGACY = randomUUID(); // OWNER's shared entity with a key in its properties
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -133,6 +138,39 @@ beforeAll(async () => {
     `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, deleted_at) values ($1,$2,$3,$4,null,null)`,
     [randomUUID(), E_SHARED, ROLE, OWNER]
   );
+  await q(
+    `insert into documents (id, user_id, workspace_id, title, type, current_version, content_revision, storage_key, mime_type) values ($1,$2,null,'Asset','image',1,1,$3,'image/png')`,
+    [D_ASSET, OWNER, keyOf(D_ASSET)]
+  );
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, workspace_id, ui_hints) values ($1,'asset-kind','Asset','kind','pod',null,$2::jsonb)`,
+    [
+      KIND_ASSET,
+      JSON.stringify({
+        presentation: {
+          family: "media",
+          media: { source: { property: "asset-document-id" } },
+        },
+      }),
+    ]
+  );
+  for (const [id, owner, props] of [
+    [E_ASSET, OWNER, { "asset-document-id": D_ASSET }],
+    [E_ATTACK_ASSET, ATTACKER, { "asset-document-id": D_UNRELATED }],
+    // The earliest file shape: the key (and a mime claim) on the entity itself.
+    [E_LEGACY, OWNER, { storageKey: keyOf(D_UNRELATED), mimeType: "text/html" }],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, title, profile_id, properties) values ($1,$2,null,'Asset',$3,$4::jsonb)`,
+      [id, owner, KIND_ASSET, JSON.stringify(props)]
+    );
+    if (owner === OWNER) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, deleted_at) values ($1,$2,$3,$4,null,null)`,
+        [randomUUID(), id, ROLE, OWNER]
+      );
+    }
+  }
   // The attacker's own entity, readable to them, pointing at OWNER's documents
   // both as its file and as a "media copy".
   await q(
@@ -191,6 +229,56 @@ describe("file door read floor — documents", () => {
   });
 });
 
+describe("file door read floor — the entity hint (one row, declared media)", () => {
+  it("a member signs a document held only through the kind's DECLARED media property", async () => {
+    expect(
+      (await loadSignableDocument(MEMBER, D_ASSET, { viaEntityId: E_ASSET }))
+        ?.storageKey
+    ).toBe(keyOf(D_ASSET));
+  });
+
+  it("without the hint the declared property is invisible (the reverse lookup cannot see it)", async () => {
+    expect(await loadSignableDocument(MEMBER, D_ASSET)).toBeUndefined();
+  });
+
+  it("the hinted row also holds by its file and its media copies", async () => {
+    for (const d of [D_FILE, D_MEDIA]) {
+      expect(
+        (await loadSignableDocument(MEMBER, d, { viaEntityId: E_SHARED }))
+          ?.storageKey
+      ).toBe(keyOf(d));
+    }
+  });
+
+  it("negative: a hinted entity that does not hold the document signs nothing", async () => {
+    expect(
+      await loadSignableDocument(MEMBER, D_UNRELATED, { viaEntityId: E_SHARED })
+    ).toBeUndefined();
+    expect(
+      await loadSignableDocument(MEMBER, D_UNRELATED, { viaEntityId: E_ASSET })
+    ).toBeUndefined();
+    // The hint names the ONE row checked: another readable holder elsewhere
+    // (E_SHARED holds the media copy D_MEDIA) is not searched for.
+    expect(
+      await loadSignableDocument(MEMBER, D_MEDIA, { viaEntityId: E_ASSET })
+    ).toBeUndefined();
+  });
+
+  it("negative: a hinted entity the caller cannot read signs nothing", async () => {
+    expect(
+      await loadSignableDocument(OUTSIDER, D_ASSET, { viaEntityId: E_ASSET })
+    ).toBeUndefined();
+  });
+
+  it("owner lock: declaring another user's document on your own asset signs nothing", async () => {
+    expect(
+      await loadSignableDocument(ATTACKER, D_UNRELATED, {
+        viaEntityId: E_ATTACK_ASSET,
+      })
+    ).toBeUndefined();
+  });
+});
+
 describe("file door read floor — file entities", () => {
   it("a member who can read the pod-wide entity gets its file's key", async () => {
     expect(await loadSignableFileEntity(MEMBER, E_SHARED)).toEqual({
@@ -202,6 +290,19 @@ describe("file door read floor — file entities", () => {
 
   it("negative: a member who cannot read the entity gets nothing", async () => {
     expect(await loadSignableFileEntity(OUTSIDER, E_SHARED)).toBeUndefined();
+  });
+
+  it("a key written into the entity's properties is never signed, nor its mime claim served", async () => {
+    expect(await loadSignableFileEntity(MEMBER, E_LEGACY)).toEqual({
+      id: E_LEGACY,
+      storageKey: undefined,
+      mimeType: null,
+    });
+    expect(await loadSignableFileEntity(OWNER, E_LEGACY)).toEqual({
+      id: E_LEGACY,
+      storageKey: undefined,
+      mimeType: null,
+    });
   });
 
   it("owner lock: an entity linked to another user's document carries no key", async () => {

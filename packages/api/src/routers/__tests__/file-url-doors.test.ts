@@ -89,6 +89,31 @@ describe("GET /documents/:id/url", () => {
   });
 });
 
+describe("GET /documents/:id/url?entityId= (the holder hint)", () => {
+  const E = "6f1c2a3b-0000-4000-8000-000000000001";
+  it("hands the hinted entity to the read floor", async () => {
+    h.loadDoc.mockResolvedValue({ id: "d1", storageKey: "k1", mimeType: null });
+    await fileUploadApp.request(`/documents/d1/url?entityId=${E}`);
+    expect(h.loadDoc).toHaveBeenCalledWith(expect.any(String), "d1", {
+      viaEntityId: E,
+    });
+  });
+
+  it("no hint → the read floor's reverse lookup", async () => {
+    h.loadDoc.mockResolvedValue({ id: "d1", storageKey: "k1", mimeType: null });
+    await fileUploadApp.request("/documents/d1/url");
+    expect(h.loadDoc).toHaveBeenCalledWith(expect.any(String), "d1", {
+      viaEntityId: undefined,
+    });
+  });
+
+  it("a hint that is not a uuid is a 400, never a query", async () => {
+    const res = await fileUploadApp.request("/documents/d1/url?entityId=nope");
+    expect(res.status).toBe(400);
+    expect(h.loadDoc).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /:entityId/url", () => {
   it("answers the served mime type next to the signed URL", async () => {
     h.loadEntity.mockResolvedValue({
