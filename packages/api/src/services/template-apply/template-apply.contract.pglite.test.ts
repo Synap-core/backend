@@ -4,6 +4,8 @@
  * `POST /packages/apply` route, the `workspace/create` + `workspace/update`
  * approve executors, `market.install` (template), and `applyTemplate` itself —
  * the tRPC `createFromDefinition` and `installFromCatalog` procedures (W3),
+ * Hub `POST /workspaces/from-definition` and MCP `synap_create_workspace`
+ * (W4: layer 2 runs on the direct create too, founder decision 1),
  * with the real lookup, plan, layer one, layer-2 applier (`playbooks.create`),
  * finisher and template-state writer. Faked (their own suites pin them): the
  * database package's create core and re-sync util (they read through the
@@ -201,6 +203,7 @@ vi.mock("../../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
 }));
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => {} }));
+vi.mock("@synap/storage", () => ({ storage: {} }));
 vi.mock("../playbooks/playbook-activators.js", () => ({
   convergePlaybookActivatorsSafely: async () => undefined,
 }));
@@ -211,6 +214,9 @@ import { readTemplateState } from "@synap/database";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { pgliteTableDdl } from "../../__tests__/pglite-ddl.js";
 import { registerPackagesRoutes } from "../../routers/hub-protocol/rest/packages.js";
+import { registerWorkspacesRoutes } from "../../routers/hub-protocol/rest/workspaces.js";
+import { workspaceHandlers } from "../../routers/mcp/handlers/workspace.js";
+import type { McpToolContext } from "../../routers/mcp/handlers/shared.js";
 import type {
   HubHono,
   HubVariables,
@@ -264,6 +270,8 @@ interface DoorRun {
   threw?: unknown;
   reply?: unknown;
   status?: number;
+  /** The door's success code (Hub `/packages/apply` answers 201). */
+  okStatus?: number;
 }
 
 interface Door {
@@ -283,6 +291,17 @@ function hubApp(): HubHono {
     await next();
   });
   registerPackagesRoutes(app);
+  return app;
+}
+
+function hubWorkspacesApp(): HubHono {
+  const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+  app.use("/*", async (c, next) => {
+    c.set("userId", OWNER);
+    c.set("scopes", ["hub-protocol.write", "hub-protocol.read"]);
+    await next();
+  });
+  registerWorkspacesRoutes(app);
   return app;
 }
 
@@ -454,6 +473,42 @@ const DOORS: Door[] = [
       }),
   },
   {
+    name: "hub POST /workspaces/from-definition",
+    file: "routers/hub-protocol/rest/workspaces.ts",
+    onto: false,
+    apply: (pkg) =>
+      caught(async () => {
+        const res = await hubWorkspacesApp().request(
+          "/workspaces/from-definition",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body(pkg)),
+          }
+        );
+        return { status: res.status, okStatus: 200, reply: await res.json() };
+      }),
+  },
+  {
+    name: "MCP synap_create_workspace",
+    file: "routers/mcp/handlers/workspace.ts",
+    onto: false,
+    apply: (pkg) =>
+      caught(async () => {
+        const res = await workspaceHandlers.synap_create_workspace!({
+          toolName: "synap_create_workspace",
+          args: { name: body(pkg).workspaceName, definition: body(pkg) },
+          userId: OWNER,
+          agentUserId: null,
+          apiKeyScopes: ["mcp.read", "mcp.write"],
+        } as unknown as McpToolContext);
+        const reply = JSON.parse(
+          (res.content?.[0] as { text: string }).text
+        ) as Record<string, unknown>;
+        return reply.error ? { threw: reply.error, reply } : { reply };
+      }),
+  },
+  {
     name: "market.install (template)",
     file: "services/capabilities/marketplace-install.ts",
     onto: false,
@@ -510,7 +565,7 @@ async function playbooksIn(workspaceId: string): Promise<string[]> {
 function didNotBreach(run: DoorRun) {
   expect(run.threw, String(run.threw)).toBeUndefined();
   if (run.status !== undefined)
-    expect(run.status, JSON.stringify(run.reply)).toBe(201);
+    expect(run.status, JSON.stringify(run.reply)).toBe(run.okStatus ?? 201);
 }
 
 beforeAll(async () => {

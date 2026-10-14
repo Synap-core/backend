@@ -229,11 +229,11 @@ describe("template apply — one finisher writes the stamp and active", () => {
       (p) => !PLUMBING.has(rel(p)) && CORE_CALL.test(code(p))
     );
     // Non-vacuity: the derived set is the door list (2026-10-14: the ONE
-    // apply, Hub workspaces, MCP, dependency-resolver — Hub packages, the
-    // approve executor, marketplace-install and (W3) the tRPC
-    // definition-engine / installFromCatalog now wrap `applyTemplate`, below;
-    // invites' seedPlugin was retired in 6a2427283).
-    expect(doors.length).toBeGreaterThanOrEqual(4);
+    // apply and the dependency resolver — Hub packages, the approve executor,
+    // marketplace-install, (W3) the tRPC definition-engine /
+    // installFromCatalog and (W4) Hub workspaces + MCP create now wrap
+    // `applyTemplate`, below; invites' seedPlugin was retired in 6a2427283).
+    expect(doors.length).toBeGreaterThanOrEqual(2);
     expect(doors.map(rel)).toEqual(
       expect.arrayContaining([
         "services/template-apply/index.ts",
@@ -251,14 +251,16 @@ describe("template apply — one finisher writes the stamp and active", () => {
     const wrappers = apiFiles
       .filter((p) => rel(p) !== "services/template-apply/index.ts")
       .filter((p) => APPLY_CALL.test(code(p)));
-    // Non-vacuity: the W2 wrappers (D1/D2, D3/D4, D14) and the W3 tRPC
-    // one (D7, D8/D9, D16, D17).
+    // Non-vacuity: the W2 wrappers (D1/D2, D3/D4, D14), the W3 tRPC one
+    // (D7, D8/D9, D16, D17) and the W4 ones (D10 + D11, D12).
     expect(wrappers.map(rel)).toEqual(
       expect.arrayContaining([
         "routers/hub-protocol/rest/packages.ts",
         "routers/proposals/executors/workspace.ts",
         "services/capabilities/marketplace-install.ts",
         "routers/workspaces/template-door.ts",
+        "routers/hub-protocol/rest/workspaces.ts",
+        "routers/mcp/handlers/workspace.ts",
       ])
     );
     // A wrapper that also called the core would run a second, unfinished

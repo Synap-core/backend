@@ -26,16 +26,6 @@ const h = vi.hoisted(() => ({
   installError: null as unknown,
 }));
 
-// The ONE finisher (stamp + "active" on convergence) reads and writes the
-// workspace row; its behaviour is pinned on PGlite by
-// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
-vi.mock("../../../services/template-apply-finisher.js", () => ({
-  finishTemplateApply: vi.fn(async () => ({
-    state: "converged",
-    versionStamped: false,
-  })),
-}));
-
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   class FakeProfileRepository {
@@ -68,19 +58,32 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
   };
 });
 
+// The ONE template apply (layers, finisher) is pinned on PGlite by the
+// contract suite (`template-apply.contract.pglite.test.ts`), where this door
+// runs its six scenarios; here it stands in so the assertions are on what the
+// door hands it.
+vi.mock("../../../services/template-apply/index.js", () => ({
+  applyTemplate: async (input: Record<string, unknown>) => {
+    h.installCalls.push(input);
+    if (h.installError) throw h.installError;
+    return {
+      workspaceId: "ws-new",
+      outcome: "created",
+      materializeStatus: "created",
+      dependencies: [],
+      layer2: { status: "skipped" },
+      finished: null,
+      warning: null,
+    };
+  },
+}));
+
 vi.mock(
   "../../../services/workspace-creation-service.js",
   async (importOriginal) => {
     const actual = await importOriginal<Record<string, unknown>>();
     return {
       ...actual,
-      createWorkspaceFromDefinitionIdempotent: async (
-        input: Record<string, unknown>
-      ) => {
-        h.installCalls.push(input);
-        if (h.installError) throw h.installError;
-        return { workspaceId: "ws-new", created: true };
-      },
       // One-space-per-domain verdict is proven on PGlite
       // (one-space-per-domain.pglite.test.ts); this suite is about D6.
       checkOneSpacePerDomain: async () => h.verdict,
@@ -236,8 +239,7 @@ describe("POST /workspaces/from-definition — template identity (0308)", () => 
     h.gateResult = { granted: true };
     await post(appAs(), { ...noKey, _meta: { slug: "content-os" } });
     expect(h.installCalls[0]).toMatchObject({
-      packageSlug: "content-os",
-      proposalId: "content-os",
+      identity: { packageSlug: "content-os", proposalId: "content-os" },
     });
     expect(
       (h.gateCalls[0] as { data: Record<string, unknown> }).data

@@ -287,7 +287,12 @@ export const workspaceHandlers: McpHandlerMap = {
     const definition = (args.definition ?? {}) as object;
     // Template identity (0308): a catalog definition's `_meta.slug` IS its
     // identity — installed once per pod, reused on a re-run.
-    const metaSlug = (definition as { _meta?: { slug?: unknown } })._meta?.slug;
+    const meta = (
+      definition as { _meta?: { slug?: unknown; version?: unknown } }
+    )._meta;
+    const metaSlug = meta?.slug;
+    const metaVersion =
+      typeof meta?.version === "string" ? meta.version : undefined;
     const packageSlug =
       typeof metaSlug === "string" && metaSlug.trim()
         ? metaSlug.trim()
@@ -321,6 +326,7 @@ export const workspaceHandlers: McpHandlerMap = {
         workspaceName: name,
         proposalId: idempotencyKey,
         ...(packageSlug ? { packageSlug, templateId: packageSlug } : {}),
+        ...(metaVersion ? { packageVersion: metaVersion } : {}),
         createdBy: "provisioning",
         source: "mcp.synap_create_workspace",
       },
@@ -346,60 +352,49 @@ export const workspaceHandlers: McpHandlerMap = {
         ...(perm.deduped ? { deduped: true } : {}),
       });
     }
-    // Granted (operator authority) → same materialize door as approve
-    // (deps/compose aware). Do NOT use createWorkspaceFromDefinitionIdempotent
-    // alone — it diverges from packages.apply / workspace/create approve.
-    const { materializeWorkspaceCore, materializeReportStatus } =
-      await import("../../../services/workspace-materialization-service.js");
-    const core = await materializeWorkspaceCore({
+    // Granted (operator authority) → the ONE template apply, the same one the
+    // approve executor runs (founder decision 1, 2026-10-13): layer 1, layer 2,
+    // then the stamp — only on convergence. A layer-2 failure is recorded on
+    // the space and reported, never thrown: the space is usable.
+    const { applyTemplate } =
+      await import("../../../services/template-apply/index.js");
+    // Layer-1 refusals (identity held, dependency graph, compose base) throw,
+    // as they always did from this door.
+    const applied = await applyTemplate({
       definition: definition as Parameters<
-        typeof materializeWorkspaceCore
+        typeof applyTemplate
       >[0]["definition"],
-      userId,
-      agentUserId: agentUserId ?? undefined,
-      proposalId: idempotencyKey,
-      ...(packageSlug ? { packageSlug, templateId: packageSlug } : {}),
-      workspaceName: name,
-      createdBy: "provisioning",
+      actor: {
+        userId,
+        agentUserId: agentUserId ?? undefined,
+        scopes: apiKeyScopes,
+      },
+      source: "mcp.synap_create_workspace",
+      identity: {
+        ...(packageSlug ? { packageSlug, templateId: packageSlug } : {}),
+        packageVersion: metaVersion,
+        proposalId: idempotencyKey,
+        workspaceName: name,
+        createdBy: "provisioning",
+      },
     });
-    if (core.status === "resolved") {
-      return ok({
-        error:
-          "Workspace materialize returned resolved-without-create (unexpected)",
-      });
-    }
-    // This door runs layer 1 only: the finisher marks a newly built space
-    // active, and a template version it cannot earn here is recorded
-    // "layer-2-not-run" (health: drifted, `templates update` finishes it).
-    if (core.status === "created" || core.status === "composed") {
-      const { finishTemplateApply } =
-        await import("../../../services/template-apply-finisher.js");
-      await finishTemplateApply(
-        core.status === "created"
-          ? {
-              workspaceId: core.workspaceId,
-              userId,
-              built: core.created.outcome === "created",
-              pendingVersionStamp: core.created.pendingVersionStamp,
-              post: null,
-            }
-          : {
-              workspaceId: core.workspaceId,
-              userId,
-              built: false,
-              pendingVersionStamp: core.pendingVersionStamp,
-              pendingPack: core.pendingPack,
-              post: null,
-            }
-      );
-    }
-    const materializeStatus = materializeReportStatus(core);
+    const materializeStatus = applied.materializeStatus;
     return ok({
       // The outcome, never the branch: an idempotent re-hit is "reused".
       status: materializeStatus,
-      workspaceId: core.workspaceId,
+      workspaceId: applied.workspaceId,
       materializeStatus,
       created: materializeStatus === "created",
+      ...(applied.layer2.status === "failed"
+        ? {
+            layer2: {
+              status: "failed",
+              message:
+                "The space is in place, but applying its package layers failed. Run `synap templates update` to finish it.",
+            },
+          }
+        : {}),
+      ...(applied.warning ? { templateApplyWarning: applied.warning } : {}),
     });
   },
   synap_declare_workspace_source: async (

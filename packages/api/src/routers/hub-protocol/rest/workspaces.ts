@@ -22,6 +22,7 @@ import {
   isWorkspaceIdentityConflictError,
   nextFreeWorkspaceName,
   readTemplateState,
+  type WorkspaceDefinitionInput,
   type AgentMetadata,
 } from "@synap/database";
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
@@ -52,11 +53,16 @@ import {
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   checkOneSpacePerDomain,
-  createWorkspaceFromDefinitionIdempotent,
   isAgentTypeAllowedToCreateWorkspaces,
   WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
 } from "../../../services/workspace-creation-service.js";
-import { finishTemplateApply } from "../../../services/template-apply-finisher.js";
+import { applyTemplate } from "../../../services/template-apply/index.js";
+import {
+  ComposeBaseNotFoundError,
+  ComposeBaseUnavailableError,
+  ComposeOverlayError,
+  DependencyResolutionError,
+} from "../../../services/workspace-materialization-service.js";
 import { enrollAgentInWorkspace } from "../../../services/enroll-agent-in-workspace.js";
 import {
   buildDigestSummary,
@@ -154,6 +160,38 @@ const WorkspaceFromDefinitionBodySchema = z
     /** WorkspaceProposal fields — accepted with `passthrough()` for forward-compat. */
   })
   .passthrough();
+
+/**
+ * The typed layer-1 refusals of the one apply (dependency graph, compose
+ * base), answered with the codes `POST /packages/apply` uses for them.
+ */
+function templateApplyRefusal(err: unknown): {
+  status: ReturnType<typeof httpStatusForTrpcError> | 422;
+  body: Record<string, unknown>;
+} | null {
+  if (err instanceof ComposeBaseUnavailableError)
+    return {
+      status: 422,
+      body: {
+        error: "compose base not available",
+        dependencies: err.dependencies,
+      },
+    };
+  if (err instanceof DependencyResolutionError)
+    return {
+      status: 422,
+      body: { error: "Dependency resolution failed", detail: err.message },
+    };
+  if (
+    err instanceof ComposeBaseNotFoundError ||
+    err instanceof ComposeOverlayError
+  )
+    return {
+      status: httpStatusForTrpcError(err),
+      body: { error: "Compose overlay failed", detail: (err as Error).message },
+    };
+  return null;
+}
 
 const eveProviderRoutingPolicySchema = z.object({
   mode: z.enum(["local", "provider", "hybrid"]).optional(),
@@ -856,24 +894,23 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     try {
-      const result = await createWorkspaceFromDefinitionIdempotent({
-        definition: {} as Parameters<
-          typeof createWorkspaceFromDefinitionIdempotent
-        >[0]["definition"],
-        userId: agentUserId,
-        proposalId,
-        workspaceName: name,
-        workspaceType: "agent",
-        createdBy: "provisioning",
+      // Not a template (an empty definition): the one apply builds the space
+      // under its key, has no layer 2 to run, and the finisher marks it active.
+      const applied = await applyTemplate({
+        definition: {} as WorkspaceDefinitionInput,
+        actor: { userId: agentUserId },
+        source: "hub.workspaces.provision-agent",
+        identity: {
+          proposalId,
+          workspaceName: name,
+          workspaceType: "agent",
+          createdBy: "provisioning",
+        },
       });
-      // Layer 1 only, no template: the finisher marks a new space active.
-      await finishTemplateApply({
-        workspaceId: result.workspaceId,
-        userId: agentUserId,
-        built: result.outcome === "created",
-        pendingVersionStamp: result.pendingVersionStamp,
-        post: null,
-      });
+      const result = {
+        workspaceId: applied.workspaceId,
+        created: applied.materializeStatus === "created",
+      };
 
       // The wide preset an agent-owned workspace grants its agent. CONTRACT
       // PHASE (Governance Convergence): this is mirrored into `governance_rules`
@@ -1063,7 +1100,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     // `_meta.slug`; that slug IS its identity (installed once per pod). A
     // template input with neither a slug nor an explicit key has none — it
     // would mint a second space on every call — so it is refused.
-    const meta = (definition as { _meta?: { slug?: unknown } })._meta;
+    const meta = (
+      definition as { _meta?: { slug?: unknown; version?: unknown } }
+    )._meta;
     const packageSlug =
       typeof meta?.slug === "string" && meta.slug.trim()
         ? meta.slug.trim()
@@ -1126,6 +1165,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         workspaceType,
         proposalId: idempotencyKey,
         ...(packageSlug ? { packageSlug } : {}),
+        ...(typeof meta?.version === "string"
+          ? { packageVersion: meta.version }
+          : {}),
         createdBy: "provisioning",
         source: "hub.workspaces.from-definition",
       },
@@ -1145,41 +1187,52 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
 
     try {
-      const result = await createWorkspaceFromDefinitionIdempotent({
-        // The definition object accepts `passthrough()` fields — cast to the
-        // shape the database util expects. Validation happens inside
-        // createWorkspaceFromDefinition (validateDefinition).
-        definition: definition as Parameters<
-          typeof createWorkspaceFromDefinitionIdempotent
-        >[0]["definition"],
-        userId: ownerId,
-        proposalId: idempotencyKey,
-        packageSlug,
-        workspaceName,
-        templateId,
-        templateName,
-        workspaceType,
-        // Always "provisioning" — this endpoint is gated to agent users only,
-        // never humans. Audit trail must distinguish machine-provisioned rows.
-        createdBy: "provisioning",
-      });
-      // This door runs layer 1 only: the finisher marks a new space active,
-      // and a template version it cannot earn is recorded "layer-2-not-run".
-      await finishTemplateApply({
-        workspaceId: result.workspaceId,
-        userId: ownerId,
-        built: result.outcome === "created",
-        pendingVersionStamp: result.pendingVersionStamp,
-        post: null,
+      // The ONE template apply (founder decision 1, 2026-10-13): layer 1,
+      // then layer 2 exactly like the approved path, then the stamp — only on
+      // convergence. A layer-2 failure is recorded on the space and reported,
+      // never a 500: the space is usable.
+      const applied = await applyTemplate({
+        // The definition object accepts `passthrough()` fields; validation
+        // happens inside the create core (validateDefinition).
+        definition: definition as WorkspaceDefinitionInput,
+        actor: { userId: ownerId, agentUserId, scopes },
+        source: "hub.workspaces.from-definition",
+        identity: {
+          packageSlug,
+          packageVersion:
+            typeof meta?.version === "string" ? meta.version : undefined,
+          proposalId: idempotencyKey,
+          workspaceName,
+          templateId,
+          templateName,
+          workspaceType,
+          // Always "provisioning": audit must tell machine-provisioned rows.
+          createdBy: "provisioning",
+        },
       });
       return c.json(
         {
-          workspaceId: result.workspaceId,
-          created: result.created,
+          workspaceId: applied.workspaceId,
+          created: applied.materializeStatus === "created",
+          outcome: applied.outcome,
+          ...(applied.layer2.status === "failed"
+            ? {
+                layer2: {
+                  status: "failed",
+                  error:
+                    applied.layer2.error instanceof Error
+                      ? applied.layer2.error.message
+                      : String(applied.layer2.error),
+                },
+              }
+            : {}),
+          ...(applied.warning ? { templateApplyWarning: applied.warning } : {}),
         },
         200
       );
     } catch (err) {
+      const mapped = templateApplyRefusal(err);
+      if (mapped) return c.json(mapped.body, mapped.status);
       // Identity (0308): the name or template is held by an active space the
       // caller cannot write — a refusal the caller can act on, never a 500.
       if (isWorkspaceIdentityConflictError(err)) {

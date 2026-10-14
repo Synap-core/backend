@@ -14,16 +14,6 @@ const h = vi.hoisted(() => ({
   materializeArgs: null as null | Record<string, unknown>,
 }));
 
-// The ONE finisher (stamp + "active" on convergence) reads and writes the
-// workspace row; its behaviour is pinned on PGlite by
-// `rest/packages.finish-template-apply.pglite.test.ts`. Out of scope here.
-vi.mock("../../../services/template-apply-finisher.js", () => ({
-  finishTemplateApply: vi.fn(async () => ({
-    state: "converged",
-    versionStamped: false,
-  })),
-}));
-
 vi.mock("../../../services/workspace-creation-service.js", async (orig) => ({
   ...(await orig<
     typeof import("../../../services/workspace-creation-service.js")
@@ -39,28 +29,23 @@ vi.mock("../../../utils/permission-check.js", async (orig) => ({
   checkPermissionOrPropose: async () => ({ granted: true }),
 }));
 
-vi.mock(
-  "../../../services/workspace-materialization-service.js",
-  async (orig) => ({
-    ...(await orig<
-      typeof import("../../../services/workspace-materialization-service.js")
-    >()),
-    materializeWorkspaceCore: async (a: Record<string, unknown>) => (
-      h.materialized++,
-      (h.materializeArgs = a),
-      {
-        status: "created",
-        workspaceId: "ws-1",
-        dependencies: [],
-        created: {
-          workspaceId: "ws-1",
-          created: h.created,
-          outcome: h.created ? "created" : "unchanged",
-        },
-      }
-    ),
-  })
-);
+// The ONE template apply (layers, finisher) is pinned on PGlite by the
+// contract suite, where this door runs its six scenarios.
+vi.mock("../../../services/template-apply/index.js", () => ({
+  applyTemplate: async (a: Record<string, unknown>) => (
+    h.materialized++,
+    (h.materializeArgs = a),
+    {
+      workspaceId: "ws-1",
+      outcome: h.created ? "created" : "unchanged",
+      materializeStatus: h.created ? "created" : "reused",
+      dependencies: [],
+      layer2: { status: "skipped" },
+      finished: null,
+      warning: null,
+    }
+  ),
+}));
 
 import { workspaceHandlers } from "./workspace.js";
 import type { McpToolContext } from "./shared.js";
@@ -141,8 +126,7 @@ describe("synap_create_workspace — template identity (0308)", () => {
       idempotencyKey: "brand-library",
     });
     expect(h.materializeArgs).toMatchObject({
-      packageSlug: "brand-library",
-      proposalId: "brand-library",
+      identity: { packageSlug: "brand-library", proposalId: "brand-library" },
     });
   });
 });
