@@ -130,6 +130,13 @@ export interface ImportItemMetadata {
   card?: ImportItemCard;
   contentStatus: ImportContentStatus;
   stagedAt: string;
+  /**
+   * Staged by a Library door (`library.add`, `import.stage`) once the Library
+   * shipped: the light read reads it. Items staged BEFORE (the old import
+   * backlog) stay title-only until opened or Read now — the rollout never
+   * bulk-reads them or spends the person's AI budget on them.
+   */
+  lightRead?: true;
 }
 
 /** `documents.metadata.importCuration` — the person's decision and note on one item. */

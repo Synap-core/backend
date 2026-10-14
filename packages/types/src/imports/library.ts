@@ -169,7 +169,17 @@ export type LibraryCurateOp =
       itemId: string;
       groupId: string;
     }
-  | { op: "item.archive" | "item.unarchive"; itemIds: string[] };
+  | { op: "item.archive" | "item.unarchive"; itemIds: string[] }
+  /**
+   * Remove kept items. A soft delete the person can undo for
+   * `LIBRARY_LIMITS.deleteUndoDays` (`item.restore`); after that the pod
+   * purges the stored read text, the saved page HTML and the search row.
+   * Refused for an item a pending or applied bundle was built from.
+   */
+  | { op: "item.delete" | "item.restore"; itemIds: string[] }
+  /** The person opened / looked at the items: the auto-archive clock restarts. */
+  | { op: "item.seen"; itemIds: string[] }
+  | { op: "group.unarchive"; groupId: string };
 
 export const LIBRARY_CURATE_OPS = [
   "group.create",
@@ -184,6 +194,10 @@ export const LIBRARY_CURATE_OPS = [
   "suggestion.dismiss",
   "item.archive",
   "item.unarchive",
+  "item.delete",
+  "item.restore",
+  "item.seen",
+  "group.unarchive",
 ] as const satisfies ReadonlyArray<LibraryCurateOp["op"]>;
 
 // ── Requests and results ────────────────────────────────────────────────────
@@ -294,6 +308,8 @@ export const LIBRARY_LIMITS = {
   shareNoteMax: 2000,
   /** Days unseen before an item is quietly archived (pod default). */
   autoArchiveDays: 90,
+  /** Days a deleted item can be restored before its stored text, page and search row are purged. */
+  deleteUndoDays: 30,
 } as const;
 
 // ── Pure readers (shared by pod, browser and relay) ─────────────────────────
