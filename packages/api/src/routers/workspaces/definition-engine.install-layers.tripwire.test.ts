@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { templateDoorReply, templateLayerReports } from "./template-door.js";
 import type { TemplateApplyResult } from "../../services/template-apply/index.js";
+import { layerTwoFailedSentence } from "../../services/template-health.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The engine's code, comments blanked (a comment naming a call is not one). */
@@ -110,13 +111,18 @@ describe("the doors' reply carries the apply's layer verdict", () => {
       },
     }) as unknown as TemplateApplyResult;
 
-  it("a layer 2 that threw is a failed post-workspace entry, on the reply and the re-sync report", () => {
+  it("a layer 2 that threw is a failed post-workspace entry, on the reply and the re-sync report — with the pod's fixed sentence, never the raw cause (review U2)", () => {
     const reply = templateDoorReply(
-      result({ status: "failed", error: new Error("boom") })
+      result({ status: "failed", error: new Error("boom: db internals") })
     );
     expect(reply.layers).toEqual([
-      { layer: "post-workspace", status: "failed", message: "boom" },
+      {
+        layer: "post-workspace",
+        status: "failed",
+        message: layerTwoFailedSentence(),
+      },
     ]);
+    expect(JSON.stringify(reply)).not.toContain("db internals");
     expect(reply.reconciled?.layers).toEqual(reply.layers);
   });
 

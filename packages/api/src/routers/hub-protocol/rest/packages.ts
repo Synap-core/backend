@@ -61,6 +61,7 @@ import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import { packagePlaybookDefinitionSchema } from "../../../schemas/playbook-definition.js";
 import { appliedPackageVersion } from "../../../services/applied-package-version.js";
+import { layerTwoFailedSentence } from "../../../services/template-health.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
@@ -1101,9 +1102,11 @@ export function registerPackagesRoutes(app: HubHono): void {
           422
         );
       }
+      // A fixed sentence: the raw cause (DB / connector internals) is in the
+      // operator log (`applyTemplate`), never in the response.
       result.layer2 = {
         status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: layerTwoFailedSentence(body._meta?.slug),
       };
       // The engagement project could not be resolved (the step before
       // layer 2): its message is written for the caller.

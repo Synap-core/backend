@@ -688,7 +688,7 @@ export async function applyMarketInstall(
               {
                 layer: "post-workspace" as const,
                 status: "failed" as const,
-                message: `${projectRefusal}The space is in place, but applying its package layers failed. Run \`synap templates update ${input.slug}\` to finish it.`,
+                message: `${projectRefusal}${(await import("../template-health.js")).layerTwoFailedSentence(input.slug)}`,
               },
             ]
           : summarizePostWorkspaceLayers(postWorkspace);

@@ -396,8 +396,9 @@ export const workspaceHandlers: McpHandlerMap = {
         ? {
             layer2: {
               status: "failed",
-              message:
-                "The space is in place, but applying its package layers failed. Run `synap templates update` to finish it.",
+              message: (
+                await import("../../../services/template-health.js")
+              ).layerTwoFailedSentence(packageSlug),
             },
           }
         : {}),

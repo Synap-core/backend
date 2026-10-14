@@ -60,6 +60,7 @@ import { auditLog } from "../../utils/audit-log.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
 import { logger, isPodReadableWorkspace } from "./helpers.js";
+import { layerTwoFailedSentence } from "../../services/template-health.js";
 
 export interface TrpcTemplateApplyInput {
   userId: string;
@@ -332,16 +333,15 @@ export function templateLayerReports(
 ): InstallLayerReport[] {
   if (result.layer2.status === "applied")
     return summarizePostWorkspaceLayers(result.layer2.post);
-  if (result.layer2.status === "failed") {
-    const { error } = result.layer2;
+  if (result.layer2.status === "failed")
+    // The raw cause is in the operator log (`applyTemplate`), never here.
     return [
       {
         layer: "post-workspace",
         status: "failed",
-        message: error instanceof Error ? error.message : String(error),
+        message: layerTwoFailedSentence(),
       },
     ];
-  }
   return [];
 }
 

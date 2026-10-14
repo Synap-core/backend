@@ -1408,3 +1408,29 @@ describe("a caller's version label is never stamped", () => {
     expect(state?.version).toBe(appliedPackageVersion(def));
   });
 });
+
+// ── A layer-2 failure never leaks its raw cause to the caller (review U2) ────
+//
+// The raw error can carry DB / connector internals; the operator log has it.
+// The caller (a CLI line, a browser toast) gets the pod's fixed sentence.
+
+describe("a whole-layer-2 failure answers a fixed sentence, never the raw cause", () => {
+  it.each([
+    ["tRPC createFromDefinition", 3, (r: any) => r?.layers?.[0]?.message],
+    ["hub POST /packages/apply", 1, (r: any) => r?.layer2?.error],
+  ] as const)("%s", async (name, doorIndex, messageOf) => {
+    const door = DOORS.find((d) => d.name === name)!;
+    expect(DOORS.indexOf(door)).toBe(doorIndex);
+    const slug = `leak-${doorIndex}`;
+    h.failLayerTwo = true;
+    let run: DoorRun;
+    try {
+      run = await door.apply({ slug, version: "x-1", playbooks: ["Qualify"] });
+    } finally {
+      h.failLayerTwo = false;
+    }
+    didNotBreach(run);
+    expect(JSON.stringify(run.reply)).not.toContain("exploded");
+    expect(messageOf(run.reply)).toMatch(/applying its package layers failed/);
+  });
+});

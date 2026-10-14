@@ -486,6 +486,16 @@ export async function awaitingApprovalByWorkspace(
 }
 
 /**
+ * THE sentence a door answers when layer 2 as a whole failed (the space is in
+ * place). Fixed on purpose: the raw cause can carry DB / connector internals,
+ * so it goes to the operator log (`applyTemplate` logs it), never to the
+ * caller (a CLI line, a browser toast, an approve refusal).
+ */
+export function layerTwoFailedSentence(slug?: string | null): string {
+  return `The space is in place, but applying its package layers failed. Run \`synap templates update${slug ? ` ${slug}` : ""}\` to finish it.`;
+}
+
+/**
  * THE wording for why a space's last template apply did not finish — ONE
  * function, served by every reader (MCP `template_health`, Hub `GET
  * /workspaces` → `synap templates`, the `/packages/apply` response → `synap
