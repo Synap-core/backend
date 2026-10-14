@@ -123,6 +123,10 @@ import {
 import { buildProposalChanges } from "./changes.js";
 import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
+import {
+  resolveSessionBefore,
+  type ProposalSessionBefore,
+} from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
@@ -408,6 +412,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * subject. Only when the viewer may read the subject. See `status-move.ts`.
      */
     statusMove?: ProposalStatusMove;
+    /**
+     * A PENDING session update that rewrites criteria / expected outputs: the
+     * session's CURRENT ones, for a before → after on the session card. See
+     * `session-before.ts`.
+     */
+    before?: ProposalSessionBefore;
     capabilityCallLabel?: string;
     workspaceName?: string;
     channelName?: string;
@@ -1434,6 +1444,26 @@ export async function enrichProposalsForDisplay(
     })
   );
 
+  // SESSION BEFORE — the current criteria/outputs a pending session update
+  // rewrites, through the ONE session read rule (`session-before.ts`).
+  const sessionBeforeByRow = await resolveSessionBefore(
+    rows.map((row, idx) => {
+      const request = requests[idx]!;
+      return {
+        status: row.status,
+        targetType: row.targetType,
+        targetId: request.targetId,
+        payload:
+          request.data &&
+          typeof request.data === "object" &&
+          !Array.isArray(request.data)
+            ? (request.data as Record<string, unknown>)
+            : undefined,
+      };
+    }),
+    { userId, roster: opts.roster ?? false }
+  );
+
   return rows.map((row, idx) => {
     // Legacy "Run entity.delete" rows re-derive to the action on the object,
     // named through the SAME floored + lens-scoped entity map as every title.
@@ -1811,6 +1841,7 @@ export async function enrichProposalsForDisplay(
       ...(policyReason ? { policyReason } : {}),
       ...(objectRefsByRow[idx] ? { objectRefs: objectRefsByRow[idx] } : {}),
       ...(statusMoveByRow[idx] ? { statusMove: statusMoveByRow[idx] } : {}),
+      ...(sessionBeforeByRow[idx] ? { before: sessionBeforeByRow[idx] } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
         ? {
             capabilityCallLabel: nameResolvers.resolveCapabilityCallLabel(
