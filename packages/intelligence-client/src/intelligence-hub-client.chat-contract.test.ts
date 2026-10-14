@@ -27,7 +27,14 @@ describe("buildChatRequestBody", () => {
       },
     ],
     deepAnalysis: true,
-    workspaceSettings: { agentModelPreferences: { complex: "opus" } },
+    workspaceSettings: { proactiveAi: { nudgeDensity: "low" } },
+    agentOverrides: {
+      modelOverride: "openrouter/model-x",
+      promptAppend: null,
+      extraToolIds: [],
+      disabledToolIds: [],
+      maxStepsOverride: null,
+    },
     channelKind: "pm",
     focusSessionId: "focus-1",
     contextObjectType: "view",
@@ -54,7 +61,19 @@ describe("buildChatRequestBody", () => {
       focusSessionId: "focus-1",
       turnContext: { surface: "crm" },
       onboardingSkill: "onboard",
+      agentOverrides: { modelOverride: "openrouter/model-x" },
     });
+  });
+
+  it("forwards a null agentOverrides (looked, none) and omits an unknown one", () => {
+    // null and absent mean different things to the IS: null = no row, absent =
+    // read it yourself. Collapsing them would make a failed pod read look empty.
+    const none = buildChatRequestBody({ ...request, agentOverrides: null }, true);
+    expect(none).toHaveProperty("agentOverrides", null);
+    const { agentOverrides: _drop, ...unknown } = request;
+    expect(buildChatRequestBody(unknown, true)).not.toHaveProperty(
+      "agentOverrides"
+    );
   });
 
   it("forwards the turnContext session sibling verbatim to the IS body", () => {

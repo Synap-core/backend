@@ -765,7 +765,7 @@ openaiCompatApp.post(
       if (knownTier === "complex") {
         // deepAnalysis flag routes to Opus tier
       }
-      // For non-auto tiers, pass tier preference via workspace settings
+      // For non-auto tiers, pass the tier as an explicit `tierOverride`
     } else {
       // Pass-through model: forward as explicit modelId
       agentConfig.modelId = requestedModel;
@@ -793,10 +793,10 @@ openaiCompatApp.post(
       isBody.deepAnalysis = true;
     }
 
+    // An explicit synap/<tier> alias is a per-request choice: the IS honours
+    // `tierOverride` above any stored per-agent model.
     if (knownTier && knownTier !== "auto") {
-      isBody.workspaceSettings = {
-        agentModelPreferences: { defaultTier: knownTier },
-      };
+      isBody.tierOverride = knownTier;
     }
 
     if (Object.keys(agentConfig).length > 0) {

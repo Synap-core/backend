@@ -23,6 +23,7 @@
  */
 
 import { isDelegationHeaders } from "@synap/database/is-delegation";
+import type { AgentTurnOverrides } from "@synap/database";
 
 import { drainISChatStream } from "./is-chat-stream.js";
 import type { DrainISChatStreamResult } from "./is-chat-stream.js";
@@ -58,6 +59,8 @@ export interface HeadlessChatRequest {
   priority?: "interactive" | "background";
   /** Optional customer email for IS LLM tier resolution (owner/pricing). */
   customerEmail?: string;
+  /** The pod's `agent_configs` row for this turn — see `IntelligenceHubRequest.agentOverrides`. */
+  agentOverrides?: AgentTurnOverrides | null;
   /**
    * When true, collect `step` frames into the result (for metadata.aiSteps).
    * Default false — session-recap and other text-only callers stay unchanged.
@@ -93,6 +96,9 @@ export async function requestHeadlessChatText(
     focusSessionId: payload.focusSessionId,
     agentUserId: payload.agentUserId,
     ...(payload.turnContext ? { turnContext: payload.turnContext } : {}),
+    ...(payload.agentOverrides !== undefined
+      ? { agentOverrides: payload.agentOverrides }
+      : {}),
     // REQUIRED: without stream:true the IS chat-stream takes its non-streaming
     // branch (plain JSON), so the SSE reader finds no frames and the reply is
     // dropped as empty. With stream:true the IS emits SSE (content deltas + the

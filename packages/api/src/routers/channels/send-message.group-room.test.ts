@@ -45,6 +45,8 @@ const m = vi.hoisted(() => ({
   offer: vi.fn(async (_p: { candidates: Array<{ agentUserId: string }> }) => undefined),
   chatEvents: [] as Array<{ event: string; data: Record<string, unknown> }>,
   reach: {} as Record<string, "pod" | "dispatch" | "pull">,
+  overrides: vi.fn(async (_k: unknown): Promise<unknown> => null),
+  streamRequests: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("../../trpc.js", async (importOriginal) => {
@@ -74,6 +76,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    agentOverridesForTurn: m.overrides,
     db: {
       query: {
         channels: { findFirst: vi.fn(async () => m.channel) },
@@ -137,7 +140,8 @@ vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
     // The stream is out of scope: routing is decided (and announced) before
     // it starts, so a client that throws ends the turn right after.
     client: {
-      sendMessageStream: () => {
+      sendMessageStream: (req: Record<string, unknown>) => {
+        m.streamRequests.push(req);
         throw new Error("stream not under test");
       },
       sendMessage: async () => {
@@ -224,6 +228,8 @@ beforeEach(() => {
   m.capture.mockResolvedValue(null);
   m.inserted.length = 0;
   m.chatEvents.length = 0;
+  m.streamRequests.length = 0;
+  m.overrides.mockResolvedValue(null);
   m.roster = [
     { agentUserId: RESEARCHER, name: "Researcher", agentType: "researcher" },
   ];
@@ -256,6 +262,41 @@ describe("chat.sendMessage — GROUP session room mentions", () => {
     expect(out).toEqual({ messageId: expect.any(String), channelId: CHANNEL });
     expect(answering()).toEqual([]);
     expect(m.trigger).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat.sendMessage — the agent's own config rides the IS turn", () => {
+  const WS = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const row = {
+    modelOverride: "openrouter/model-x",
+    promptAppend: "Cite sources.",
+    extraToolIds: [],
+    disabledToolIds: [],
+    maxStepsOverride: null,
+  };
+
+  it("reads agent_configs for (user, workspace, routed agentType) and forwards it", async () => {
+    m.overrides.mockResolvedValue(row);
+    await send({ content: "@researcher check this", workspaceId: WS });
+
+    expect(m.overrides).toHaveBeenCalledWith({
+      userId: "user-1",
+      workspaceId: WS,
+      agentType: "researcher",
+    });
+    expect(m.streamRequests).toHaveLength(1);
+    expect(m.streamRequests[0]).toMatchObject({ agentOverrides: row });
+    // The retired shape never rides along.
+    expect(m.streamRequests[0]).not.toHaveProperty("workspaceSettings");
+  });
+
+  it("forwards null (looked, none) and omits a failed read", async () => {
+    await send({ content: "@researcher check this", workspaceId: WS });
+    expect(m.streamRequests[0]).toHaveProperty("agentOverrides", null);
+
+    m.overrides.mockResolvedValue(undefined);
+    await send({ content: "@researcher again", workspaceId: WS });
+    expect(m.streamRequests[1]).not.toHaveProperty("agentOverrides");
   });
 });
 

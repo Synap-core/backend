@@ -24,6 +24,7 @@ import {
   type StructureProgressEvent,
 } from "@synap-core/types/capture";
 import { isDelegationHeaders } from "@synap/database/is-delegation";
+import type { AgentTurnOverrides } from "@synap/database";
 
 import { iterateISChatStream, iterateSSEDataFrames } from "./is-chat-stream.js";
 
@@ -125,8 +126,14 @@ export interface IntelligenceHubRequest {
   requestId?: string;
   /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
   deepAnalysis?: boolean;
-  /** Workspace settings JSONB — forwarded to IS for agentModelPreferences tier overrides */
+  /** Workspace settings JSONB (e.g. `proactiveAi`) the IS may read for this turn. */
   workspaceSettings?: Record<string, unknown>;
+  /**
+   * The pod's `agent_configs` row for this turn (model, prompt append, tools,
+   * max steps). `null` = the pod looked and there is none; omitted = the pod did
+   * not look or the read failed, and the IS reads it from the pod itself.
+   */
+  agentOverrides?: AgentTurnOverrides | null;
   /** Entity context: channel is scoped to this entity (thread + contextObjectType='entity') */
   contextObjectType?: string;
   contextObjectId?: string;
@@ -264,6 +271,9 @@ export function buildChatRequestBody(
     mcpServers: request.mcpServers,
     deepAnalysis: request.deepAnalysis,
     workspaceSettings: request.workspaceSettings,
+    ...(request.agentOverrides !== undefined
+      ? { agentOverrides: request.agentOverrides }
+      : {}),
     channelKind: request.channelKind,
     focusSessionId: request.focusSessionId,
     contextObjectType: request.contextEntityId

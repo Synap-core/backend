@@ -50,6 +50,7 @@ import {
   and,
   drizzleSql,
   persistAssistantReply,
+  agentOverridesForTurn,
 } from "@synap/database";
 import {
   channels,
@@ -1026,7 +1027,6 @@ export const sendMessageProcedure = protectedProcedure
       string,
       unknown
     >;
-    let workspaceSettingsForIS: Record<string, unknown> | undefined;
     if (workspaceId) {
       try {
         const [wsRow] = await db
@@ -1035,10 +1035,7 @@ export const sendMessageProcedure = protectedProcedure
           .where(eq(workspaces.id, workspaceId))
           .limit(1);
         const wsSettings = wsRow?.settings as
-          | {
-              agentPersonality?: string;
-              agentModelPreferences?: Record<string, unknown>;
-            }
+          | { agentPersonality?: string }
           | undefined;
         const wsPersonality = wsSettings?.agentPersonality;
         if (wsPersonality && !effectiveAgentConfig.personality) {
@@ -1047,16 +1044,15 @@ export const sendMessageProcedure = protectedProcedure
             personality: wsPersonality,
           };
         }
-        // Forward agentModelPreferences so IS can apply tier overrides
-        if (wsSettings?.agentModelPreferences) {
-          workspaceSettingsForIS = {
-            agentModelPreferences: wsSettings.agentModelPreferences,
-          };
-        }
       } catch {
-        // Non-critical — skip personality and model prefs if fetch fails
+        // Non-critical — skip personality if fetch fails
       }
     }
+    const agentOverrides = await agentOverridesForTurn({
+      userId,
+      workspaceId,
+      agentType: effectiveAgentType,
+    });
 
     let receivedStreamOutput = false;
     let turnCancelled = false;
@@ -1088,7 +1084,7 @@ export const sendMessageProcedure = protectedProcedure
       agentUserId: agentUserId ?? resolvedService.agentUserId,
       mcpServers: mcpServersList,
       deepAnalysis: input.deepAnalysis,
-      workspaceSettings: workspaceSettingsForIS,
+      ...(agentOverrides !== undefined ? { agentOverrides } : {}),
       contextObjectType: channel.contextObjectType ?? undefined,
       contextObjectId: channel.contextObjectId ?? undefined,
       ...getPodCallback(),

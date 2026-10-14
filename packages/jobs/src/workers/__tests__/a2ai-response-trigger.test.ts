@@ -37,6 +37,7 @@ type TurnRow = {
 const mocks = vi.hoisted(() => ({
   requestHeadlessChatText: vi.fn(),
   persistAssistantReply: vi.fn(),
+  agentOverridesForTurn: vi.fn(),
   insertReturning: [] as TurnRow[],
   selectReturning: [] as unknown[],
   messageLookup: undefined as { id: string } | undefined,
@@ -91,6 +92,8 @@ vi.mock("@synap/database", () => ({
   gte: () => ({}),
   persistAssistantReply: (...args: unknown[]) =>
     mocks.persistAssistantReply(...args),
+  agentOverridesForTurn: (...args: unknown[]) =>
+    mocks.agentOverridesForTurn(...args),
   db: {
     insert: () => ({
       values: () => ({
@@ -178,6 +181,7 @@ beforeEach(() => {
   mocks.messageLookup = undefined;
   mocks.updateSets.length = 0;
   mocks.notificationInserts.length = 0;
+  mocks.agentOverridesForTurn.mockResolvedValue(null);
   mocks.persistAssistantReply.mockResolvedValue({
     assistantId: assistantMessageId,
     previousHash: "p",
@@ -225,6 +229,58 @@ describe("handleA2AIResponseTrigger", () => {
       "http://is.local",
       "key",
       expect.objectContaining({ turnContext })
+    );
+  });
+
+  it("forwards the turn's agent_configs row (model per agent) to the IS", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "ok",
+      error: null,
+      steps: [],
+    });
+    const agentOverrides = {
+      modelOverride: "openrouter/model-x",
+      promptAppend: null,
+      extraToolIds: [],
+      disabledToolIds: [],
+      maxStepsOverride: null,
+    };
+    mocks.agentOverridesForTurn.mockResolvedValue(agentOverrides);
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    expect(mocks.agentOverridesForTurn).toHaveBeenCalledWith({
+      userId,
+      workspaceId: "ws-1",
+      agentType: "meta",
+    });
+    expect(mocks.requestHeadlessChatText).toHaveBeenCalledWith(
+      "http://is.local",
+      "key",
+      expect.objectContaining({ agentOverrides })
+    );
+  });
+
+  it("sends null when there is no row, and nothing when the read failed", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "ok",
+      error: null,
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob());
+    expect(mocks.requestHeadlessChatText.mock.calls[0]![2]).toHaveProperty(
+      "agentOverrides",
+      null
+    );
+
+    mocks.requestHeadlessChatText.mockClear();
+    mocks.insertReturning = [runningTurn()];
+    mocks.agentOverridesForTurn.mockResolvedValue(undefined);
+    await handleA2AIResponseTrigger(baseJob());
+    expect(mocks.requestHeadlessChatText.mock.calls[0]![2]).not.toHaveProperty(
+      "agentOverrides"
     );
   });
 

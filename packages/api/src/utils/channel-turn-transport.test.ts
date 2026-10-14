@@ -9,7 +9,7 @@ describe("channel turn transport parity", () => {
       deepAnalysis: true,
       forcedSkillName: "onboard",
       turnContext: { entries: [{ key: "surface", value: "crm" }] },
-      workspaceSettings: { agentModelPreferences: { quality: "high" } },
+      agentOverrides: null,
     };
     const controller = new AbortController();
     const streamRequest = withTurnStreamSignal(baseRequest, controller.signal);
