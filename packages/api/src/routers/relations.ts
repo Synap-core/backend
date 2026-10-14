@@ -340,19 +340,6 @@ function focusSessionConnectionVisibilityWhere(workspaceId?: string | null) {
 export { IMPACT_RELATION_TYPES } from "../utils/relation-types.js";
 
 /**
- * Build a human-readable label from a relation's endpoints so a proposal inbox
- * card shows e.g. "Create relation" with entity context, not a bare action name.
- * Paralleling the `POST /links` title pattern.
- */
-function buildRelationTitle(
-  sourceId: string,
-  targetId: string,
-  type: string
-): string {
-  return `${sourceId.slice(0, 8)} --${type}--> ${targetId.slice(0, 8)}`;
-}
-
-/**
  * EVERY member of `EXPOSURE_RELATION_TYPES` is rejected by the generic relation
  * doors — not just `visible_to`. Both members widen the access floor IDENTICALLY
  * through `exposureMemberWhere`, so minting either edge GRANTS access, and
@@ -1054,11 +1041,9 @@ export const relationsRouter = router({
         sessionId: ctx.sessionId ?? undefined,
         data: {
           id,
-          title: buildRelationTitle(
-            input.sourceEntityId,
-            input.targetEntityId,
-            input.type
-          ),
+          // No `title`: an edge has no name of its own. The read names it by
+          // its endpoints (`sourceLabel`/`targetLabel`, `objectRefs`); the old
+          // "<id8> --type--> <id8>" string reached the card as raw ids.
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,

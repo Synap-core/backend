@@ -92,6 +92,25 @@ export function selectArchiveCandidates(
   );
 }
 
+/**
+ * The archive proposal's stored data. The librarian's sentence is the POD's
+ * words about why it filed, so it is `policyReason` — never `reason`, which a
+ * card reads as the proposer's own "why" (there is no proposer: the system
+ * filed it for the owner).
+ */
+export function buildArchiveProposalData(
+  project: Pick<ArchiveCandidateProject, "id" | "name">,
+  ageDays: number
+): Record<string, unknown> {
+  return {
+    id: project.id,
+    name: project.name,
+    policyReason: `This project has had no entities filed into it and no members for ${ageDays} days. Archiving keeps it as a record without cluttering the active list. Nothing is deleted — approve to archive, or reject to keep it active.`,
+    ageDays,
+    changeType: "archive",
+  };
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 /**
@@ -201,13 +220,7 @@ export async function handleLibrarianArchiver(): Promise<void> {
         targetType: "project",
         targetId: project.id,
         proposalType: "archive",
-        data: {
-          id: project.id,
-          name: project.name,
-          reason: `This project has had no entities filed into it and no members for ${ageDays} days. Archiving keeps it as a record without cluttering the active list. Nothing is deleted — approve to archive, or reject to keep it active.`,
-          ageDays,
-          changeType: "archive",
-        },
+        data: buildArchiveProposalData(project, ageDays),
         // The project owner is who should review; system is the producer.
         createdBy: project.userId,
         proposedByUserId: null,

@@ -37,6 +37,7 @@ vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 import {
   isArchiveEligible,
   selectArchiveCandidates,
+  buildArchiveProposalData,
   ARCHIVE_MIN_AGE_DAYS,
   type ArchiveCandidateProject,
 } from "../librarian-archiver.js";
@@ -137,5 +138,17 @@ describe("selectArchiveCandidates", () => {
       opts
     );
     expect(selected.map((p) => p.id)).toEqual(["eligible"]);
+  });
+});
+
+describe("buildArchiveProposalData", () => {
+  // The pod's sentence is `policyReason` (the read surfaces it as the policy
+  // line), never `reason`, which a card reads as the proposer's own why.
+  // Limitation: pins the builder, not that the handler calls it.
+  it("stores the librarian's sentence as policyReason, not reason", () => {
+    const data = buildArchiveProposalData({ id: "p1", name: "Old" }, 42);
+    expect(data).not.toHaveProperty("reason");
+    expect(data.policyReason).toMatch(/no members for 42 days/);
+    expect(data).toMatchObject({ id: "p1", name: "Old", ageDays: 42, changeType: "archive" });
   });
 });

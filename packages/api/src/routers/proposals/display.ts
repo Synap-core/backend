@@ -1418,7 +1418,7 @@ export async function enrichProposalsForDisplay(
       (request.targetType === "document"
         ? documentTitleById.get(request.targetId)
         : undefined) ??
-      displayLabelFromRecord(payload) ??
+      payloadObjectLabel(payload) ??
       // The row's own target (the request's `targetType` union has no
       // "playbook"); the id is the one `referencedNameIds` batch-joined.
       (row.targetType === "playbook"
@@ -2476,7 +2476,10 @@ export function proposalDisplaySummary(params: {
     }),
     compositeLabel?.extraCount ?? 0
   );
-  const storedSummary = request.summary;
+  const storedSummary =
+    request.summary && !SYNTHETIC_RELATION_TITLE.test(request.summary)
+      ? request.summary
+      : undefined;
   return storedSummary &&
     // Only ever REPLACED by something strictly richer: the stored string must
     // name no object AND the derivation must name one.
@@ -2494,6 +2497,23 @@ export function proposalDisplaySummary(params: {
 }
 
 /**
+ * The "<id8> --type--> <id8>" string `relations.create` stored as a relation
+ * proposal's `title` (and so its summary) until 2026-10-14. It names nothing —
+ * two raw id prefixes — and a stored row keeps it for life, so the read treats
+ * it as absent: the edge is named by its endpoints (`sourceLabel` /
+ * `targetLabel`, `objectRefs`), never by ids.
+ */
+const SYNTHETIC_RELATION_TITLE = /\b[0-9a-f]{8} --[\w.-]+--> [0-9a-f]{8}\b/;
+
+/** The payload's own label (`title`/`name`/…), unless it is the synthetic edge id string. */
+function payloadObjectLabel(
+  payload: Record<string, unknown> | undefined
+): string | undefined {
+  const label = displayLabelFromRecord(payload);
+  return label && !SYNTHETIC_RELATION_TITLE.test(label) ? label : undefined;
+}
+
+/**
  * The target name a proposal's OWN payload carries — no join. What a door that
  * does not batch-join entities/documents (the object graph) can name.
  */
@@ -2507,7 +2527,7 @@ export function proposalPayloadTargetName(
   return (
     request.targetName ??
     titleFieldOverrideValue(request.targetType, payload) ??
-    displayLabelFromRecord(payload)
+    payloadObjectLabel(payload)
   );
 }
 
