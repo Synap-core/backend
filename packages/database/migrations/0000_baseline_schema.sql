@@ -58,6 +58,9 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_via" text;
 -- 0320: the computer an agent runs on (MACHINE-IDENTITY-PLAN). FK + the
 -- (person, type, computer) unique index live in 0320.
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_user_id" text;
+-- 0329: agent pause (agent routing W1b).
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_at" timestamp with time zone;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_by" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();

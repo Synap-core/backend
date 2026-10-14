@@ -65,6 +65,18 @@ const H1 = randomUUID();
 const H2 = randomUUID();
 /** The teammate's house agent. */
 const H_THEIRS = randomUUID();
+/** Owner's bound agents used only by the assignment rows. */
+const D_PB = randomUUID();
+const D_WS = randomUUID();
+/** Owner's bound agent a person paused. */
+const D_PAUSED = randomUUID();
+/** Assignment targets. */
+const PLAYBOOK = randomUUID();
+const PROFILE = randomUUID();
+const PROJECT = randomUUID();
+const WORKSPACE = randomUUID();
+/** A second owner with several bound agents, for the assignment rows. */
+const OWNER2 = randomUUID();
 
 beforeAll(async () => {
   for (const t of [users, apiKeys, links]) {
@@ -87,16 +99,33 @@ beforeAll(async () => {
   await agent(H1, OWNER, "meta");
   await agent(H2, OWNER, "researcher");
   await agent(H_THEIRS, TEAMMATE, "meta");
+  await q(`insert into users (id, email, user_type) values ($1, 'o2@x.test', 'human')`, [OWNER2]);
+  await agent(D_PB, OWNER2, "claude-code");
+  await agent(D_WS, OWNER2, "codex");
+  await agent(D_PAUSED, OWNER2, "devin");
+  await q(`update users set agent_paused_at = now(), agent_paused_by = $2 where id = $1`, [D_PAUSED, OWNER2]);
   for (const [id, at] of [
     [D1, "2026-10-01T00:00:00Z"],
     [D2, "2026-10-02T00:00:00Z"],
     [D_THEIRS, "2026-10-03T00:00:00Z"],
+    [D_PB, "2026-10-04T00:00:00Z"],
+    [D_WS, "2026-10-05T00:00:00Z"],
+    [D_PAUSED, "2026-10-06T00:00:00Z"],
   ] as const) {
     await q(
       `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_at) values ($1, 'participant', $2, 'tool', $3, 'dispatched_via', $4)`,
       [randomUUID(), id, randomUUID(), at]
     );
   }
+  const assign = (agentId: string, toType: string, toId: string) =>
+    q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type) values ($1, 'participant', $2, $3, $4, 'assigned_to')`,
+      [randomUUID(), agentId, toType, toId]
+    );
+  await assign(D_PB, "playbook", PLAYBOOK);
+  await assign(D_WS, "workspace", WORKSPACE);
+  await assign(D_PAUSED, "profile", PROFILE);
+  await assign(P_MINE, "project", PROJECT);
   await q(
     `insert into api_keys (id, user_id, key_type, linked_user_id) values ($1, $2, 'hub_inbound', $3), ($4, $5, 'hub_inbound', $6)`,
     [randomUUID(), P_MINE, OWNER, randomUUID(), P_THEIRS, TEAMMATE]
@@ -133,6 +162,15 @@ describe("route — one row per rung", () => {
         pool: "owned",
       });
       expect(routedTo(r)).toEqual({ id: D2, via: "roster", reach: "dispatch" });
+    },
+    assigned: async () => {
+      const r = await route({
+        ownerId: OWNER2,
+        accept: ["dispatch"],
+        targets: { workspace: WORKSPACE },
+        pool: "owned",
+      });
+      expect(routedTo(r)).toEqual({ id: D_WS, via: "assigned", reach: "dispatch" });
     },
     single: async () => {
       const r = await route({
@@ -273,5 +311,61 @@ describe("route — discriminating rows", () => {
       pool: "owned",
     });
     expect(r).toMatchObject({ kind: "refused", reason: "not_owned" });
+  });
+});
+
+describe("route — assignment and pause (W1b)", () => {
+  it("the most specific target wins: playbook over workspace", async () => {
+    const r = await route({
+      ownerId: OWNER2,
+      accept: ["dispatch"],
+      targets: { playbook: PLAYBOOK, workspace: WORKSPACE },
+      pool: "owned",
+    });
+    expect(routedTo(r)).toEqual({ id: D_PB, via: "assigned", reach: "dispatch" });
+  });
+
+  it("the roster outranks an assignment", async () => {
+    const r = await route({
+      ownerId: OWNER2,
+      accept: ["dispatch"],
+      roster: [D_WS],
+      targets: { playbook: PLAYBOOK },
+      pool: "owned",
+    });
+    expect(routedTo(r)).toEqual({ id: D_WS, via: "roster", reach: "dispatch" });
+  });
+
+  it("a paused assignee is skipped — the next target's agent takes it", async () => {
+    const r = await route({
+      ownerId: OWNER2,
+      accept: ["dispatch"],
+      targets: { profile: PROFILE, workspace: WORKSPACE },
+      pool: "owned",
+    });
+    expect(routedTo(r)).toEqual({ id: D_WS, via: "assigned", reach: "dispatch" });
+  });
+
+  it("an assignee of the wrong reach is skipped", async () => {
+    // P_MINE (pull) is assigned to the project; a dispatch run passes it by.
+    const r = await route({
+      ownerId: OWNER,
+      accept: ["dispatch"],
+      targets: { project: PROJECT },
+      pool: "owned",
+    });
+    expect(r).toEqual({ kind: "choose", candidates: [D1, D2] });
+  });
+
+  it("a paused agent is never 'the single one', and is refused by name", async () => {
+    const pool = await route({ ownerId: OWNER2, accept: ["dispatch"], pool: "owned" });
+    expect(pool).toEqual({ kind: "choose", candidates: [D_PB, D_WS] });
+    const named = await route({
+      ownerId: OWNER2,
+      accept: ["dispatch"],
+      selector: { agentUserId: D_PAUSED },
+      pool: "owned",
+    });
+    expect(named).toMatchObject({ kind: "refused", reason: "paused" });
   });
 });

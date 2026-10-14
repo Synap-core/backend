@@ -1464,7 +1464,9 @@ export type LinkEndpointType =
   // system-written by `stampMaterialized` only.
   | "document"
   // A `project_tracks` row — a method running inside a project.
-  | "track";
+  | "track"
+  // A `profiles` row (a kind or role) — target of `assigned_to`.
+  | "profile";
 
 // `governance_rule` was removed here in lock-step with the @synap/database
 // union — it had no producer and no reader. See the note in
@@ -1511,7 +1513,9 @@ export type LinkType =
   | "uses"
   // participant(agentUserId) --dispatched_via--> tool. The external agent's
   // BINDING (tools.config.agentBinding). Human-written only (agentUsers.setBinding).
-  | "dispatched_via";
+  | "dispatched_via"
+  // participant(agent) --assigned_to--> playbook|profile|project|workspace.
+  | "assigned_to";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

@@ -24,6 +24,7 @@
  *   participant|channel --member_of-->         session      (room participants)
  *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
+ *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -92,7 +93,10 @@ export type LinkEndpointType =
   // read from FK columns by the object graph; as a links endpoint it can carry
   // dependency / provenance edges like any other unit of work. Visible exactly
   // when its parent project is (`link-endpoint-visibility.ts`).
-  | "track";
+  | "track"
+  // A `profiles` row — a KIND (or role). Target of `participant(agent)
+  // --assigned_to--> profile`: an agent assigned to work on that kind.
+  | "profile";
 
 // ── `governance_rule` was HERE and was removed, deliberately ────────────────
 // It was added so an intent-rule could hold an edge to the governance rule it
@@ -212,7 +216,17 @@ export type LinkType =
    * The Hub REST links door lists it (the type-SSOT tripwire requires every
    * produced type there) and refuses it explicitly.
    */
-  | "dispatched_via";
+  | "dispatched_via"
+  /**
+   * participant(agentUserId) --assigned_to--> playbook | profile | project |
+   * workspace (0329). The agent that takes that target's work when nobody
+   * named one: THE route (`services/agent-dispatch/route.ts`) reads it as the
+   * rung after the roster, most specific target first (playbook > profile >
+   * project > workspace). ONE agent per target (unique index). HUMAN-WRITTEN
+   * ONLY, through `agentUsers.setAssignment` — an agent that could write it
+   * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
+   */
+  | "assigned_to";
 
 export const links = pgTable(
   "links",

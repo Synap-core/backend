@@ -980,6 +980,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0320_machine_identity.sql",
   },
   {
+    table: "users",
+    column: "agent_paused_at",
+    addedBy: "0329_agent_assignment_and_pause.sql",
+  },
+  {
+    table: "users",
+    column: "agent_paused_by",
+    addedBy: "0329_agent_assignment_and_pause.sql",
+  },
+  {
     table: "governance_rules",
     column: "principal_class",
     addedBy: "0320_machine_identity.sql",

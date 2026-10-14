@@ -627,6 +627,9 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   // participant(agent) --dispatched_via--> tool: how the pod hands that agent
   // work. From the tool's side the row is the agent it dispatches.
   dispatched_via: { outgoing: "Dispatched through", incoming: "Dispatches" },
+  // participant(agent) --assigned_to--> playbook|profile|project|workspace:
+  // the agent that takes that work by default.
+  assigned_to: { outgoing: "Assigned to", incoming: "Assigned agent" },
 };
 
 export function resolveLineageEdgeLabel(

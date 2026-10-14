@@ -45,6 +45,7 @@ import {
   agents,
   skills,
   projectTracks,
+  profiles,
 } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
@@ -58,6 +59,7 @@ import {
   userVisibleWhere,
 } from "../../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
+import { visibleProfileWhere } from "../../../services/diagnose/schema-contract.js";
 import { ownAdjunctFilter } from "../../../services/agent-identity-service.js";
 
 export interface LinkEndpointRefusal {
@@ -244,6 +246,10 @@ async function endpointVisible(
     // the `agents.get` floor, through the one owner door `ownAdjunctFilter`.
     case "agent":
       return rowVisible(agents, agents.id, id, visibleAgentsWhere(userId));
+    // A KIND (`profiles` row): the profile-row floor — system/shared pod-wide,
+    // workspace rows in visible workspaces, user rows the caller's own.
+    case "profile":
+      return rowVisible(profiles, profiles.id, id, visibleProfileWhere(userId));
     // `participant` (a users-table id) has no "users visible to me" predicate
     // anywhere in the codebase, and `source` has no table at all. Refused
     // rather than allowed by default.

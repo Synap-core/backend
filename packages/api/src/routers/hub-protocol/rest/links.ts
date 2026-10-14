@@ -65,6 +65,7 @@ const LINK_ENDPOINT_TYPES = [
   "workspace",
   "document",
   "track",
+  "profile",
 ] as const;
 
 /**
@@ -136,12 +137,18 @@ const LINK_TYPES = [
   // `agentUsers.setBinding`. An agent writing it could re-point its own
   // dispatch at a tool of its choosing.
   "dispatched_via",
+  // participant(agent) --assigned_to--> playbook|profile|project|workspace.
+  // REFUSED below like dispatched_via: only a person assigns an agent, through
+  // `agentUsers.setAssignment` — an agent writing it could staff itself.
+  "assigned_to",
 ] as const;
 
 /** Link types this door names but never writes — each has its own human door. */
 const HUMAN_DOOR_LINK_TYPES: Readonly<Record<string, string>> = {
   dispatched_via:
     "dispatched_via links bind an agent to the tool the pod dispatches it through; a person sets them with agentUsers.setBinding, never through this door",
+  assigned_to:
+    "assigned_to links say which agent takes a playbook's, kind's, project's or space's work; a person sets them with agentUsers.setAssignment, never through this door",
 };
 
 /**

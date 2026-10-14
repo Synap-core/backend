@@ -15,8 +15,12 @@
  *                for another one.
  *   2. roster    an agent already on the work (session roster, room members)
  *                that has an accepted reach and passes the floor.
- *   3. single    exactly one eligible agent in the pool.
- *   4. choose    zero or several: the PERSON picks (founder decision,
+ *   3. assigned  the agent a person ASSIGNED to what the work is about
+ *                (`participant --assigned_to--> …`, 0329), most specific target
+ *                first: playbook > profile > project > workspace (founder
+ *                decision 2026-10-14). Not read for a room.
+ *   4. single    exactly one eligible agent in the pool.
+ *   5. choose    zero or several: the PERSON picks (founder decision,
  *                2026-10-13: when several agents fit, ask the person — never
  *                an AI picker).
  *
@@ -30,12 +34,25 @@
  *   pod       the person owns it (lineage), or — in a room — it is a member
  *             (the room is the grant).
  *
+ * ── Paused ──
+ * A PAUSED agent (`users.agent_paused_at`) is skipped by every rung that picks
+ * for the person, and refused when named. Pausing never revokes its keys.
+ *
  * ── The brand ──
  * `Routed` can only be built here. A function that hands work to an agent
  * takes a `Routed`, so a door that skips `route()` does not compile.
  */
 
 import type { AgentReach } from "@synap-core/types/agents";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  links,
+  users,
+} from "@synap/database";
 import {
   listDispatchableAgentIds,
   ownedAgentIds,
@@ -47,7 +64,16 @@ import { agentsOperatedBy } from "../agent-presence.js";
 export type AgentSelector = { agentUserId: string };
 
 /** Which rung decided. */
-export type RouteVia = "selector" | "roster" | "single";
+export type RouteVia = "selector" | "roster" | "assigned" | "single";
+
+/** What an agent can be assigned to, most specific first (the precedence). */
+export const ASSIGNMENT_TARGETS = [
+  "playbook",
+  "profile",
+  "project",
+  "workspace",
+] as const;
+export type AssignmentTarget = (typeof ASSIGNMENT_TARGETS)[number];
 
 declare const ROUTED: unique symbol;
 
@@ -66,9 +92,10 @@ export interface Routed {
  *                named for an IS turn, a pull agent named for a dispatch run);
  *   not_owned    not the person's agent (dispatch / pod) or does not act for
  *                them (pull);
- *   not_member   the pool is a room and the agent is not in it.
+ *   not_member   the pool is a room and the agent is not in it;
+ *   paused       a person paused it.
  */
-export type RouteRefusal = "wrong_reach" | "not_owned" | "not_member";
+export type RouteRefusal = "wrong_reach" | "not_owned" | "not_member" | "paused";
 
 export type RouteResult =
   | Routed
@@ -92,8 +119,10 @@ export interface RouteWork {
   selector?: AgentSelector | null;
   /** The agents already on the work, in order (session roster, room AI members). */
   roster?: readonly string[];
+  /** What the work is about — the assignment rung reads these. */
+  targets?: Partial<Record<AssignmentTarget, string | null>>;
   /**
-   * Where rungs 3–4 look:
+   * Where the later rungs look:
    *   owned   the person's own agents of an accepted reach (a run, a hand-off);
    *   roster  the roster only (a room — nobody outside it answers).
    */
@@ -128,13 +157,77 @@ async function passFloor(
   return out;
 }
 
+/** Which of `ids` a person paused. */
+async function pausedAmong(ids: readonly string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(inArray(users.id, [...new Set(ids)]), isNotNull(users.agentPausedAt)));
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * The agents that may take the work among `ids`, in order: an accepted reach,
+ * past the floor, not paused.
+ */
+async function admit(
+  work: RouteWork,
+  ids: readonly string[],
+  roomMembers: ReadonlySet<string> | null
+): Promise<{ ok: string[]; reach: Map<string, AgentReach> }> {
+  const reach = await resolveAgentReachMany(ids);
+  const accepted = ids.filter((id) => work.accept.includes(reach.get(id)!));
+  const [floor, paused] = await Promise.all([
+    passFloor(work.ownerId, accepted, reach, roomMembers),
+    pausedAmong(accepted),
+  ]);
+  return {
+    ok: accepted.filter((id) => floor.has(id) && !paused.has(id)),
+    reach,
+  };
+}
+
+/** The assigned agents for the work's targets, most specific target first. */
+async function assignedFor(
+  targets: RouteWork["targets"]
+): Promise<string[]> {
+  const pairs = ASSIGNMENT_TARGETS.flatMap((t) =>
+    targets?.[t] ? [{ type: t, id: targets[t]! }] : []
+  );
+  if (pairs.length === 0) return [];
+  const rows = await db
+    .select({ fromId: links.fromId, toType: links.toType, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "assigned_to"),
+        eq(links.fromType, "participant"),
+        inArray(
+          links.toId,
+          pairs.map((p) => p.id)
+        )
+      )
+    );
+  const out: string[] = [];
+  for (const p of pairs) {
+    for (const r of rows) {
+      if (r.toType === p.type && r.toId === p.id && !out.includes(r.fromId)) {
+        out.push(r.fromId);
+      }
+    }
+  }
+  return out;
+}
+
 /** The person's own agents of an accepted reach, oldest first. */
 async function ownedPool(
   ownerId: string,
   accept: readonly AgentReach[]
 ): Promise<string[]> {
   // Only dispatch agents are listed pod-wide today: a pull agent or a house
-  // agent is never picked for someone's work without being named or rostered.
+  // agent is never picked for someone's work without being named, rostered or
+  // assigned.
   return accept.includes("dispatch")
     ? await listDispatchableAgentIds(ownerId)
     : [];
@@ -149,54 +242,44 @@ export async function route(work: RouteWork): Promise<RouteResult> {
     const id = work.selector.agentUserId;
     const reach = await resolveAgentReachMany([id]);
     const r = reach.get(id)!;
-    if (!work.accept.includes(r)) {
-      return { kind: "refused", reason: "wrong_reach", agentUserId: id, reach: r };
-    }
-    if (roomMembers && !roomMembers.has(id)) {
-      return { kind: "refused", reason: "not_member", agentUserId: id, reach: r };
-    }
+    const refuse = (reason: RouteRefusal): RouteResult => ({
+      kind: "refused",
+      reason,
+      agentUserId: id,
+      reach: r,
+    });
+    if (!work.accept.includes(r)) return refuse("wrong_reach");
+    if (roomMembers && !roomMembers.has(id)) return refuse("not_member");
     const floor = await passFloor(work.ownerId, [id], reach, roomMembers);
-    if (!floor.has(id)) {
-      return { kind: "refused", reason: "not_owned", agentUserId: id, reach: r };
-    }
+    if (!floor.has(id)) return refuse("not_owned");
+    if ((await pausedAmong([id])).has(id)) return refuse("paused");
     return routed(id, r, "selector");
   }
 
-  // 2. roster — the first eligible member.
-  const rosterReach = await resolveAgentReachMany(roster);
-  const eligible = (ids: readonly string[], reach: ReadonlyMap<string, AgentReach>) =>
-    ids.filter((id) => work.accept.includes(reach.get(id)!));
-  const rosterFloor = await passFloor(
-    work.ownerId,
-    eligible(roster, rosterReach),
-    rosterReach,
-    roomMembers
-  );
-  const rosterEligible = roster.filter((id) => rosterFloor.has(id));
-  if (work.pool === "owned" && rosterEligible.length > 0) {
-    const id = rosterEligible[0]!;
-    return routed(id, rosterReach.get(id)!, "roster");
+  // 2. roster — the first eligible member (a room never takes the first: it
+  // falls to single / choose below).
+  const onRoster = await admit(work, roster, roomMembers);
+  if (work.pool === "roster") {
+    const [only] = onRoster.ok;
+    return onRoster.ok.length === 1 && only
+      ? routed(only, onRoster.reach.get(only)!, "single")
+      : { kind: "choose", candidates: onRoster.ok };
+  }
+  if (onRoster.ok[0]) {
+    return routed(onRoster.ok[0], onRoster.reach.get(onRoster.ok[0])!, "roster");
   }
 
-  // 3–4. single, else the person chooses.
-  let candidates = rosterEligible;
-  if (work.pool === "owned") {
-    const pool = await ownedPool(work.ownerId, work.accept);
-    const poolReach = await resolveAgentReachMany(pool);
-    const floor = await passFloor(
-      work.ownerId,
-      eligible(pool, poolReach),
-      poolReach,
-      null
-    );
-    candidates = pool.filter((id) => floor.has(id));
-    if (candidates.length === 1) {
-      return routed(candidates[0]!, poolReach.get(candidates[0]!)!, "single");
-    }
-    return { kind: "choose", candidates };
+  // 3. assigned — the most specific target's agent that may take it.
+  const assigned = await admit(work, await assignedFor(work.targets), null);
+  if (assigned.ok[0]) {
+    return routed(assigned.ok[0], assigned.reach.get(assigned.ok[0])!, "assigned");
   }
-  if (candidates.length === 1) {
-    return routed(candidates[0]!, rosterReach.get(candidates[0]!)!, "single");
+
+  // 4–5. single, else the person chooses.
+  const pool = await admit(work, await ownedPool(work.ownerId, work.accept), null);
+  const [only] = pool.ok;
+  if (pool.ok.length === 1 && only) {
+    return routed(only, pool.reach.get(only)!, "single");
   }
-  return { kind: "choose", candidates };
+  return { kind: "choose", candidates: pool.ok };
 }
