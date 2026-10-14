@@ -9,11 +9,15 @@
  * that IS the captured page (a property equals the source URL), or the single
  * entity when the plan has just one. The URL goes into the declared property
  * when that is empty; otherwise it is appended to `media-urls`, never
- * overwriting a value the plan already carries.
+ * overwriting a value the plan already carries. A LINK kind always appends:
+ * its declared property is the page itself (`url`), never an image of it.
  */
 
 import type { ProfilePresentation } from "@synap-core/types/presentation";
-import { CAPTURED_MEDIA_URLS_PROPERTY } from "./media-plan.js";
+import {
+  CAPTURED_MEDIA_URLS_PROPERTY,
+  declaredMediaProperty,
+} from "./media-plan.js";
 
 export interface CaptureProposedEntity {
   profileSlug?: string;
@@ -33,12 +37,14 @@ export function foldCapturedImage<T extends CaptureProposedEntity>(
 
   return entities.map((entity) => {
     if (!targets.includes(entity) || !entity.profileSlug) return entity;
-    const source = presentationFor(entity.profileSlug)?.media?.source;
+    const presentation = presentationFor(entity.profileSlug);
+    const source = presentation?.media?.source;
     if (!source || !("property" in source)) return entity;
+    const target = declaredMediaProperty(presentation);
     const props = { ...(entity.properties ?? {}) };
-    const declared = props[source.property];
-    if (declared === undefined || declared === null || declared === "") {
-      props[source.property] = imageUrl;
+    const declared = target ? props[target] : undefined;
+    if (target && (declared === undefined || declared === null || declared === "")) {
+      props[target] = imageUrl;
     } else if (declared !== imageUrl) {
       const prior = props[CAPTURED_MEDIA_URLS_PROPERTY];
       const list = Array.isArray(prior)

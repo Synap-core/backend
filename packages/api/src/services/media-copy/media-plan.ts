@@ -11,6 +11,9 @@
  *      or the desktop web clip). Read for every kind: a producer put them there
  *      on purpose.
  * A profile with no presentation declaration contributes nothing from (1).
+ * Neither does a LINK-family kind: its declared property (bookmark `url`) names
+ * the page it links to, not an image of it — fetching it would request every
+ * linked page from its site only to refuse it. Its picture arrives via (2).
  */
 
 import {
@@ -42,6 +45,18 @@ export function presentationOf(uiHints: unknown): ProfilePresentation | null {
   return parsed.ok ? parsed.value : null;
 }
 
+/**
+ * The property that holds this kind's own media URL, or null. A link's
+ * declared property is its REFERENT (the page), never an image of it.
+ */
+export function declaredMediaProperty(
+  presentation: ProfilePresentation | null | undefined
+): string | null {
+  const source = presentation?.media?.source;
+  if (!source || !("property" in source)) return null;
+  return presentation?.family === "link" ? null : source.property;
+}
+
 /** One recorded failure, on `systemData.mediaCopyFailures` (visible on reads). */
 export interface MediaCopyFailure {
   sourceUrl: string;
@@ -68,9 +83,8 @@ export function collectMediaSourceUrls(
 ): string[] {
   const props = properties ?? {};
   const out: string[] = [];
-  const source = presentation?.media?.source;
-  if (source && "property" in source)
-    out.push(...httpUrls(props[source.property]));
+  const declared = declaredMediaProperty(presentation);
+  if (declared) out.push(...httpUrls(props[declared]));
   out.push(...httpUrls(props[CAPTURED_MEDIA_URLS_PROPERTY]));
   return [...new Set(out)].slice(0, MAX_MEDIA_URLS_PER_ENTITY);
 }

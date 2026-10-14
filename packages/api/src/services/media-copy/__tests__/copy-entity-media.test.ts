@@ -55,6 +55,7 @@ import { entityMediaCopyReactor } from "../media-copy-reactor.js";
 
 const IMG = "https://cdn.test/a.png";
 const PAGE = "https://cdn.test/page";
+const BROKEN = "https://cdn.test/not-an-image";
 
 function entityRow(over: Record<string, unknown> = {}) {
   return {
@@ -78,8 +79,10 @@ beforeEach(() => {
 });
 
 describe("runEntityMediaCopy", () => {
-  it("copies an image, records it on systemData.media, records the page as not_image", async () => {
-    state.row = entityRow();
+  it("copies an image, records a refusal, and never fetches a link's page", async () => {
+    state.row = entityRow({
+      properties: { url: PAGE, "media-urls": [IMG, BROKEN] },
+    });
     state.locked = { systemData: { other: "kept" } };
     const fetchImage = vi.fn(async (url: string) =>
       url === IMG
@@ -100,7 +103,8 @@ describe("runEntityMediaCopy", () => {
     );
 
     expect(result).toEqual({ status: "copied", copied: 1, failed: 1 });
-    expect(fetchImage.mock.calls.map((c) => c[0])).toEqual([PAGE, IMG]);
+    // The link's declared `url` is the page it links to: never requested.
+    expect(fetchImage.mock.calls.map((c) => c[0])).toEqual([IMG, BROKEN]);
     expect(store).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "u1",
@@ -134,7 +138,7 @@ describe("runEntityMediaCopy", () => {
     ]);
     expect(JSON.parse(failures)).toEqual([
       {
-        sourceUrl: PAGE,
+        sourceUrl: BROKEN,
         reason: "not_image",
         attempts: 1,
         lastAttemptAt: "2026-10-13T10:00:00.000Z",

@@ -10,7 +10,11 @@ import {
 import { foldCapturedImage } from "../capture-media.js";
 
 const declared = presentationOf({
-  presentation: { family: "link", media: { source: { property: "image" } } },
+  presentation: { family: "record", media: { source: { property: "image" } } },
+});
+/** The real link shape (catalog bookmark/article): the declared property IS the page. */
+const linkDeclared = presentationOf({
+  presentation: { family: "link", media: { source: { property: "url" } } },
 });
 
 const copy = (
@@ -64,6 +68,32 @@ describe("collectMediaSourceUrls", () => {
         declared
       )
     ).toEqual([]);
+  });
+});
+
+describe("link family: the declared property is the page, never fetched", () => {
+  it("collects only media-urls for a link kind", () => {
+    expect(
+      collectMediaSourceUrls(
+        {
+          url: "https://blog.test/post",
+          [CAPTURED_MEDIA_URLS_PROPERTY]: ["https://blog.test/og.jpg"],
+        },
+        linkDeclared
+      )
+    ).toEqual(["https://blog.test/og.jpg"]);
+  });
+
+  it("the capture fold never writes the og:image into a link's url", () => {
+    const [one] = foldCapturedImage(
+      [{ profileSlug: "bookmark", properties: { title: "Post" } }],
+      { imageUrl: "https://blog.test/og.jpg", sourceUrl: "https://blog.test/post" },
+      () => linkDeclared
+    );
+    expect(one!.properties).toEqual({
+      title: "Post",
+      [CAPTURED_MEDIA_URLS_PROPERTY]: ["https://blog.test/og.jpg"],
+    });
   });
 });
 
