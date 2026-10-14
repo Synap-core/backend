@@ -39,15 +39,58 @@ type EntityMediaCopyRunner = (
 ) => Promise<unknown>;
 
 let entityMediaCopyRunner: EntityMediaCopyRunner | null = null;
+let announceRunner: (() => void) | null = null;
+let runnerRegistered = new Promise<void>((resolve) => {
+  announceRunner = resolve;
+});
+
+/**
+ * How long a job that starts before the runner is registered waits for it.
+ * apps/api starts the workers before it fills the IoC slots, so a job already
+ * queued (a backfill slot, a retry) can be picked up in that gap; the wait
+ * covers the gap instead of completing the job as a silent no-op.
+ */
+export const RUNNER_REGISTRATION_WAIT_MS = 60_000;
 
 export function registerEntityMediaCopyRunner(fn: EntityMediaCopyRunner): void {
   entityMediaCopyRunner = fn;
+  announceRunner?.();
 }
 
-export async function handleEntityMediaCopy(job: PgBoss.Job): Promise<void> {
-  if (!entityMediaCopyRunner) {
-    logger.warn("entity-media-copy runner not registered — skipping job");
-    return;
+/** Test seam: forget the registered runner. */
+export function resetEntityMediaCopyRunnerForTests(): void {
+  entityMediaCopyRunner = null;
+  runnerRegistered = new Promise<void>((resolve) => {
+    announceRunner = resolve;
+  });
+}
+
+async function awaitRunner(
+  waitMs: number
+): Promise<EntityMediaCopyRunner | null> {
+  if (entityMediaCopyRunner) return entityMediaCopyRunner;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    runnerRegistered,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, waitMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  return entityMediaCopyRunner;
+}
+
+export async function handleEntityMediaCopy(
+  job: PgBoss.Job,
+  opts: { waitMs?: number } = {}
+): Promise<void> {
+  const runner = await awaitRunner(opts.waitMs ?? RUNNER_REGISTRATION_WAIT_MS);
+  if (!runner) {
+    // Never complete the job as if it ran: pg-boss records the throw as a
+    // failed job (visible), where a return would read as done.
+    throw new Error(
+      "entity-media-copy runner not registered — the job did not run"
+    );
   }
   const data = job.data as EntityMediaCopyQueueData;
   if (!data?.entityId) {
@@ -58,7 +101,7 @@ export async function handleEntityMediaCopy(job: PgBoss.Job): Promise<void> {
     return;
   }
   try {
-    const result = await entityMediaCopyRunner(data);
+    const result = await runner(data);
     logger.info({ entityId: data.entityId, result }, "entity-media-copy done");
   } catch (err) {
     logger.warn(
