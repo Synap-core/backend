@@ -141,7 +141,17 @@ interface SetBodyCommon {
 
 export type SetBodyParams =
   | (SetBodyCommon & { text: string })
-  | (SetBodyCommon & { bytes: Buffer; mimeType: string; filename: string })
+  | (SetBodyCommon & {
+      bytes: Buffer;
+      mimeType: string;
+      filename: string;
+      /**
+       * Extra `documents.metadata` keys, merged OVER the defaults — a caller
+       * that stores a blob for a reason other than an upload says so (e.g.
+       * `uploadKind: "media-copy"`), so list doors can tell it apart.
+       */
+      metadata?: Record<string, unknown>;
+    })
   | (SetBodyCommon & { url: string })
   | (SetBodyCommon & { storedObject: StoredObjectBody });
 
@@ -267,6 +277,7 @@ export class EntityBodyService {
       bytes: Buffer;
       mimeType: string;
       filename: string;
+      metadata?: Record<string, unknown>;
     }
   ): Promise<SetBodyResult> {
     const {
@@ -321,6 +332,7 @@ export class EntityBodyService {
         metadata: {
           originalFileName: filename,
           uploadKind: "file-upload",
+          ...params.metadata,
         },
         userId,
         workspaceId: workspaceId ?? undefined,

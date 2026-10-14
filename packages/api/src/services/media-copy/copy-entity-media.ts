@@ -21,8 +21,11 @@
  *            `systemData.mediaCopyFailures[]`, written under a row lock with
  *            `jsonb_set` on those two keys only — every other key is kept.
  *
- * The write is a direct row update, not `entities.update`: it emits no event,
- * so the copy can never re-trigger itself.
+ * The ENTITY write is a direct row update, not `entities.update`: it emits no
+ * entity event, so the copy can never re-trigger itself. The stored copy's
+ * `documents` row does emit `document.create.completed` (the fact bus peer
+ * sync replicates from) and is marked as a media copy so document lists leave
+ * it out (`media-copy-documents.ts`).
  *
  * announce → after a run that COPIED something, ONE realtime `entity:updated`
  *            push (`emitHubRealtimeEvent`, the bridge door for direct writes)
@@ -202,6 +205,8 @@ export async function runEntityMediaCopy(
         title: row.title ? `${row.title} — image` : undefined,
         // Nobody uploaded this: the pod copied it in the background.
         storedBySystem: true,
+        // The entity's picture, not a filed document: lists leave it out.
+        mediaCopyOf: row.id,
       });
       copied.push({
         documentId: stored.documentId,

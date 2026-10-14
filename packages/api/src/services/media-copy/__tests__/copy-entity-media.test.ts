@@ -162,8 +162,10 @@ describe("runEntityMediaCopy", () => {
         workspaceId: "w1",
         mimeType: "image/png",
         filename: "a.png",
-        // A background copy is the pod's, never a human upload.
+        // A background copy is the pod's, never a human upload — and it is
+        // marked as this entity's picture, so document lists leave it out.
         storedBySystem: true,
+        mediaCopyOf: "e1",
       })
     );
     const set = state.sets[0] as {
@@ -248,7 +250,7 @@ describe("after a copy: clients refetch, the reactor never re-fires", () => {
     mime: "image/png" as const,
   }));
 
-  it("announces ONE realtime entity:updated and nothing through the event store or the fan-out", async () => {
+  it("announces ONE realtime entity:updated; the ENTITY write reaches neither the event log nor the fan-out", async () => {
     state.row = entityRow({ properties: { "media-urls": [IMG] }, uiHints: {} });
     state.locked = { systemData: {} };
     const store = vi.fn(async () => ({ documentId: "doc-1" })) as never;
@@ -266,8 +268,10 @@ describe("after a copy: clients refetch, the reactor never re-fires", () => {
       data: { entityId: "e1", workspaceId: "w1" },
     });
     // The loop: the media-copy reactor listens on the side-effect fan-out for
-    // entity.update. Nothing the copy does may reach it — nor the event log
-    // (whose `.completed` rows feed automations and the timeline).
+    // entity.update. Nothing the copy does may reach it — nor an entity event
+    // (whose `.completed` rows feed automations and the timeline). The stored
+    // copy's own `document.create.completed` is NOT covered here (the store is
+    // injected): it is emitted on purpose, see media-copy-documents.ts.
     const reachedReactor = pipes.sideEffects.mock.calls.some(([payload]) =>
       entityMediaCopyReactor.match!(payload as never)
     );

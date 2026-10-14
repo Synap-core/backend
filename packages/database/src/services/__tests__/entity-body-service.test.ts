@@ -235,6 +235,24 @@ describe("EntityBodyService", () => {
       expect(arg.preUploadedVersion.versionId).toBeDefined();
       expect(arg.content).toBeUndefined();
     });
+
+    it("caller metadata is merged OVER the defaults (a media copy says so)", async () => {
+      await svc.setBody({
+        entityId: "e-1",
+        userId: "user-1",
+        workspaceId: null,
+        provenance: HUMAN,
+        bytes: Buffer.from("PNGDATA"),
+        mimeType: "image/png",
+        filename: "pic.png",
+        metadata: { uploadKind: "media-copy", mediaCopyOf: "e-9" },
+      });
+      expect((createSpy.mock.calls[0]![0] as any).metadata).toEqual({
+        originalFileName: "pic.png",
+        uploadKind: "media-copy",
+        mediaCopyOf: "e-9",
+      });
+    });
   });
 
   // --- url mode: external reference, NO storage upload ----------------------

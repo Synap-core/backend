@@ -28,6 +28,7 @@ import {
 import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
 import { refuseGuestSession } from "../access/guest-containment.js";
+import { MEDIA_COPY_UPLOAD_KIND } from "../services/media-copy/media-copy-documents.js";
 import { TRPCError } from "@trpc/server";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -277,6 +278,13 @@ export async function storeDocumentFromBuffer(params: {
    * `system`, still owned by `userId`. Never `human`: no person uploaded it.
    */
   storedBySystem?: boolean;
+  /**
+   * The entity this blob is a pod-held MEDIA COPY of (its cover/avatar copied
+   * from an external URL). Marks the row `uploadKind: "media-copy"` +
+   * `mediaCopyOf`, so document lists (Files, mentions) leave it out: it is the
+   * entity's picture, not a document anyone filed.
+   */
+  mediaCopyOf?: string;
 }): Promise<StoredDocument> {
   const { userId, workspaceId, buffer, mimeType, filename } = params;
 
@@ -300,6 +308,14 @@ export async function storeDocumentFromBuffer(params: {
     filename,
     mimeType,
     bytes: buffer,
+    ...(params.mediaCopyOf
+      ? {
+          metadata: {
+            uploadKind: MEDIA_COPY_UPLOAD_KIND,
+            mediaCopyOf: params.mediaCopyOf,
+          },
+        }
+      : {}),
     // Honest provenance: an agent-key upload (the general `/files` door) is
     // attributed to the agent, a Kratos-session upload stays human. Never
     // falsify an agent write as human (the sibling entity is attributed to the

@@ -85,3 +85,25 @@ describe("storeDocumentFromBuffer provenance", () => {
     });
   });
 });
+
+describe("storeDocumentFromBuffer — a media copy is marked as one", () => {
+  const metadataOf = () =>
+    (h.setBody.mock.calls[0]![0] as { metadata?: unknown }).metadata;
+
+  it("names the entity it is a picture of, so lists can leave it out", async () => {
+    await storeDocumentFromBuffer({
+      ...base,
+      storedBySystem: true,
+      mediaCopyOf: "entity-7",
+    });
+    expect(metadataOf()).toEqual({
+      uploadKind: "media-copy",
+      mediaCopyOf: "entity-7",
+    });
+  });
+
+  it("an upload carries no media-copy mark", async () => {
+    await storeDocumentFromBuffer(base);
+    expect(metadataOf()).toBeUndefined();
+  });
+});

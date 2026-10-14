@@ -42,6 +42,7 @@ import {
   notLibraryItemWhere,
 } from "@synap/database";
 
+import { notMediaCopyDocumentWhere } from "../services/media-copy/media-copy-documents.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { resolveActorNames } from "../utils/resolve-actor-names.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -767,6 +768,8 @@ export const documentsRouter = router({
       // the Library, before and after its group is built.
       conditions.push(notStagedImportItemWhere(documents.metadata));
       conditions.push(notLibraryItemWhere(documents.metadata));
+      // A media copy is an entity's picture, not a filed document.
+      conditions.push(notMediaCopyDocumentWhere(documents.metadata));
       if (input.type) {
         conditions.push(eq(documents.type, input.type));
       }
@@ -813,7 +816,8 @@ export const documentsRouter = router({
         isNull(documents.deletedAt),
         isNotNull(documents.storageKey),
         notStagedImportItemWhere(documents.metadata),
-        notLibraryItemWhere(documents.metadata)
+        notLibraryItemWhere(documents.metadata),
+        notMediaCopyDocumentWhere(documents.metadata)
       );
 
       const markdownish = or(
