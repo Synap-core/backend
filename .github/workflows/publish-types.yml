@@ -29,6 +29,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # D16: a publish from main waits for the `production` environment's
+    # required reviewer; a manual run on another branch uses no environment.
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
     # Least privilege. `contents: write` is required because this workflow pushes
     # the version-bump commit back to main at the end (`contents: read` made that
     # final `git push` 403 AFTER npm had already accepted the version, so the

@@ -46,7 +46,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/synap/synap.git",
+    "url": "git+https://github.com/Synap-core/backend.git",
     "directory": "packages/api-types"
   },
   "keywords": [
