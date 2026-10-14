@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  GOVERNANCE_RUNGS,
+  RULE_WIDENABLE_RUNGS,
+  canWidenAnswer,
   cellOfAnswers,
   collapseCells,
   markOfSplit,
@@ -46,3 +49,34 @@ describe("agent matrix rules", () => {
     expect(markOfSplit({ auto: 0, ask: 0, off: 0 })).toBe("off");
   });
 });
+
+describe("which answers a rule can widen", () => {
+  const ask = (rung: string) => ({ verdict: "ask" as const, rung });
+  const probe = (action: string, profileSlug: string | null = "note") => ({
+    action,
+    profileSlug,
+  });
+
+  it("offers Widen only on an ask decided below the rules store", () => {
+    expect(canWidenAnswer(ask("default"), probe("entity.create"))).toBe(true);
+    expect(canWidenAnswer(ask("writes-require-proposal"), probe("entity.update"))).toBe(true);
+    // Above rung 2.8: no rule reaches it.
+    expect(canWidenAnswer(ask("destructive-actions-hard-floor"), probe("entity.delete"))).toBe(false);
+    expect(canWidenAnswer(ask("untrusted-origin"), probe("entity.create"))).toBe(false);
+    // A propose RULE is revoked, never stacked on.
+    expect(canWidenAnswer(ask("governance-rule"), probe("entity.create"))).toBe(false);
+    // Nothing to widen when it already acts or is off.
+    expect(canWidenAnswer({ verdict: "auto", rung: "default" }, probe("entity.create"))).toBe(false);
+    expect(canWidenAnswer({ verdict: "off", rung: "default" }, probe("entity.create"))).toBe(false);
+  });
+
+  it("an entity write with no kind is never widened (it would cover every kind)", () => {
+    expect(canWidenAnswer(ask("default"), probe("entity.create", null))).toBe(false);
+    expect(canWidenAnswer(ask("default"), probe("document.update", null))).toBe(true);
+  });
+
+  it("every widenable rung is a rung the contract lists", () => {
+    for (const r of RULE_WIDENABLE_RUNGS) expect(GOVERNANCE_RUNGS).toContain(r);
+  });
+});
+

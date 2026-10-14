@@ -26,6 +26,7 @@
 import { OBJECT_KINDS, OBJECT_KIND_ALIASES } from "./object-kinds.js";
 import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
+import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 
 /**
@@ -1954,6 +1955,68 @@ export function resolveNextRungOutcomeLabel(
   return (
     (NEXT_RUNG_OUTCOME_LABELS as Readonly<Record<string, string>>)[outcome] ??
     humanizeToken(outcome)
+  );
+}
+
+/**
+ * What an agent × work MATRIX cell's mark says (`@synap-core/types/agent-matrix`):
+ * the words beside ✓ / ? / — / ◐, and a screen reader's whole answer. Keyed by
+ * `MatrixMark`, so a new mark is a BUILD error here until it is named.
+ */
+export const MATRIX_MARK_LABELS: Readonly<Record<MatrixMark, string>> = {
+  auto: "Acts",
+  ask: "Asks first",
+  off: "Off",
+  mixed: "Mixed",
+};
+
+/** A matrix mark's words; an unknown mark humanizes rather than leaks. */
+export function resolveMatrixMarkLabel(
+  mark: MatrixMark | (string & {})
+): string {
+  return (
+    (MATRIX_MARK_LABELS as Readonly<Record<string, string>>)[mark] ??
+    humanizeToken(mark)
+  );
+}
+
+/**
+ * WHAT DECIDED an agent's write — the governance ladder's rung, as the matrix's
+ * why-drawer names it ("Decided by: A rule"). Keyed by `GovernanceRung`, so a
+ * rung added to `GOVERNANCE_RUNGS` is a BUILD error here until it is named.
+ * The resolver's `reason` sentence is the detail under it; this is the name.
+ */
+export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> = {
+  "governance-rule": "A rule",
+  "default-auto-approve": "The everyday default",
+  "workspace-auto-approve-for": "The space's always-allow list",
+  default: "The ask-first default",
+  "not-agent": "Not an agent",
+  "cbac-capability-allowlist": "Not in its tool list",
+  "admin-actions": "Admin actions always ask",
+  "force-propose": "A change of scope or identity",
+  "criteria-change": "Changing its own criteria",
+  "pod-admin-schema-change": "A pod-wide schema change",
+  "agent-schema-definition": "Defining a new kind",
+  "agent-structure-write": "Changing how the pod works",
+  "destructive-actions-hard-floor": "Destructive actions always ask",
+  "user-observation-inference": "An inference about a person",
+  "per-capability-governance": "The tool's own setting",
+  "agent-owned-workspace-destructive": "Destructive in an agent's space",
+  "writes-require-proposal": "Set to ask for every write",
+  "per-channel-capability-gate": "The channel's setting",
+  "untrusted-origin": "An untrusted source",
+  "daily-write-ceiling": "Its daily limit",
+};
+
+/** A rung's words; an unknown rung humanizes rather than leaks. */
+export function resolveGovernanceRungLabel(
+  rung: GovernanceRung | (string & {}) | null | undefined
+): string {
+  if (!rung) return "";
+  return (
+    (GOVERNANCE_RUNG_LABELS as Readonly<Record<string, string>>)[rung] ??
+    humanizeToken(rung)
   );
 }
 

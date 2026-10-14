@@ -16,12 +16,28 @@
  * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
  */
 
+import { PROFILED_SUBJECTS } from "../trust-ladder/index.js";
+import type { UnitTone } from "../units/state.js";
+
 /** What one probe would do: act, ask a person, or not at all. */
 export type MatrixVerdict = "auto" | "ask" | "off";
 /** A cell's mark: one verdict, or `mixed` when its probes / members disagree. */
 export type MatrixMark = MatrixVerdict | "mixed";
 
 export const MATRIX_VERDICTS = ["auto", "ask", "off"] as const satisfies ReadonlyArray<MatrixVerdict>;
+
+/**
+ * Each mark as a MARK (ui-composition §1) — the glyph the founder chose and a
+ * tone token (`@synap-core/types/units`), the same on every surface that draws
+ * the matrix. The words are the vocabulary's (`resolveMatrixMarkLabel`), never
+ * here. Keyed by `MatrixMark`: a new mark stops the build until it has one.
+ */
+export const MATRIX_MARKS = {
+  auto: { glyph: "✓", tone: "success" },
+  ask: { glyph: "?", tone: "warning" },
+  off: { glyph: "—", tone: "textMuted" },
+  mixed: { glyph: "◐", tone: "info" },
+} as const satisfies Record<MatrixMark, { glyph: string; tone: UnitTone }>;
 
 /** The resolver's outcome → the matrix verdict (one mapping). */
 export function matrixVerdictOf(outcome: "auto" | "propose" | "deny"): MatrixVerdict {
@@ -60,6 +76,67 @@ export interface MatrixColumn {
   probes: MatrixProbe[];
 }
 
+/**
+ * Every rung token the dry-run names as "what decided"
+ * (`dryRunAgentGovernanceDecision`, `@synap/database`). The vocabulary keys
+ * its words by this list, so a new rung is a BUILD error there until it is
+ * named; a tripwire in `@synap/api` derives the producer's literals and fails
+ * when one is missing here.
+ */
+export const GOVERNANCE_RUNGS = [
+  "governance-rule",
+  "default-auto-approve",
+  "workspace-auto-approve-for",
+  "default",
+  "not-agent",
+  "cbac-capability-allowlist",
+  "admin-actions",
+  "force-propose",
+  "criteria-change",
+  "pod-admin-schema-change",
+  "agent-schema-definition",
+  "agent-structure-write",
+  "destructive-actions-hard-floor",
+  "user-observation-inference",
+  "per-capability-governance",
+  "agent-owned-workspace-destructive",
+  "writes-require-proposal",
+  "per-channel-capability-gate",
+  "untrusted-origin",
+  "daily-write-ceiling",
+] as const;
+export type GovernanceRung = (typeof GOVERNANCE_RUNGS)[number];
+
+/**
+ * The rungs a new `auto` rule can change: those decided BELOW the rules store
+ * (rung 2.8 of `decideAgentPolicy` — 5 "writes require proposal", 9 the
+ * ask-first default). Everything above it (the floors, an untrusted source,
+ * the daily limit, kind / tool / channel gates) no rule reaches, so the
+ * why-drawer names the reason instead of offering Widen. A `propose` RULE is
+ * not here either: the person revokes it, never stacks an `auto` rule on it.
+ */
+export const RULE_WIDENABLE_RUNGS = [
+  "default",
+  "writes-require-proposal",
+] as const satisfies ReadonlyArray<GovernanceRung>;
+
+/**
+ * May this probe's answer be widened by a rule? It asks today, a rule can
+ * reach the rung that decided, and — like the trust ladder — an entity write
+ * names its kind (a rule without one would cover every kind). The SERVER
+ * re-asks the resolver and also refuses floors and irreversible writes
+ * (`governanceRules.widenCell`); this only decides whether to offer.
+ */
+export function canWidenAnswer(
+  answer: Pick<MatrixProbeAnswer, "verdict" | "rung">,
+  probe: Pick<MatrixProbe, "action" | "profileSlug">
+): boolean {
+  if (answer.verdict !== "ask") return false;
+  if (!(RULE_WIDENABLE_RUNGS as readonly string[]).includes(answer.rung)) return false;
+  const subject = probe.action.slice(0, probe.action.indexOf("."));
+  return !PROFILED_SUBJECTS.includes(subject) || !!probe.profileSlug;
+}
+
 /** One probe's answer — what the why-drawer reads. */
 export interface MatrixProbeAnswer {
   probeKey: string;
@@ -90,6 +167,12 @@ export interface MatrixAgentRow {
   agentType: string | null;
   hostUserId: string | null;
   paused: boolean;
+  /**
+   * The reader owns this agent. Widening an agent you own writes the rule;
+   * widening anyone else's files a proposal to its owner (founder decision 8,
+   * 2026-10-14), so a surface says which before the click.
+   */
+  ownedByViewer: boolean;
   cells: Record<string, MatrixCell>;
 }
 
