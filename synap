@@ -1166,17 +1166,79 @@ EOF
     echo -e "${GREEN}✓ Generated kratos.yml for domain: ${domain}${NC}"
 }
 
-# Wait until Kratos accepts traffic (used before first-admin seed).
+# Wait until Kratos accepts traffic (first-admin seed, update rollback).
 wait_for_kratos_ready() {
     local i=0
-    while [ "$i" -lt 45 ]; do
+    while [ "$i" -lt "${SYNAP_KRATOS_READY_TRIES:-45}" ]; do
         if docker compose exec -T kratos wget --spider -q http://127.0.0.1:4433/health/ready 2>/dev/null; then
             return 0
         fi
         i=$((i + 1))
-        sleep 2
+        sleep "${SYNAP_KRATOS_READY_INTERVAL:-2}"
     done
     return 1
+}
+
+# kratos_config_errors <kratos.yml> — one problem per line, nothing = looks valid.
+# Used by `synap doctor` and by the update rollback (which falls back to the last
+# verified kratos.yml.good when the pre-update file is itself broken).
+# Hosts have no YAML parser, so this is a STRUCTURAL check of the shape
+# generate_kratos_config renders, not a full parse: every content line is a
+# `key:` or a `- item`, no tab indentation, and every OIDC provider has
+# issuer_url/client_id/client_secret as plain strings with an https issuer (a
+# JSON log line rendered into those fields crash-looped Kratos on 2026-10-14).
+# It cannot see a wrong-but-well-shaped value, or a bad indent level.
+kratos_config_errors() {
+    [ -s "$1" ] || { echo "kratos.yml is missing or empty ($1)"; return 0; }
+    awk -v q="'" '
+    function ind(s) { match(s, /^ */); return RLENGTH }
+    function val(s) { sub(/^ *(- )?[^:]*:[ ]*/, "", s); sub(/[ ]+#.*$/, "", s); return s }
+    function unq(x) {
+        if (length(x) >= 2 && ((substr(x, 1, 1) == "\"" && substr(x, length(x)) == "\"") || (substr(x, 1, 1) == q && substr(x, length(x)) == q)))
+            return substr(x, 2, length(x) - 2)
+        return x
+    }
+    function plain(x,   c) {
+        if (x == "" || x ~ /^(~|null|Null|NULL)$/) return 0
+        c = substr(x, 1, 1)
+        if (c == "{" || c == "[" || c == "|" || c == ">" || c == "&" || c == "*" || c == "!" || c == "%" || c == "@" || c == "`") return 0
+        if ((c == "\"" || c == q) && unq(x) == x) return 0   # an unclosed quote
+        return 1
+    }
+    function close_provider(   k) {
+        if (!inprov) return
+        for (k in need) if (!(k in got)) printf "oidc provider %s: %s is missing\n", pid, k
+        for (k in got) if (!plain(got[k])) printf "oidc provider %s: %s is not a plain string\n", pid, k
+        if (("issuer_url" in got) && unq(got["issuer_url"]) !~ /^https:\/\/[^ ]+$/) printf "oidc provider %s: issuer_url is not an https URL\n", pid
+        for (k in got) delete got[k]
+        inprov = 0
+    }
+    function close_oidc() {
+        if (oidc >= 0 && oidc_on && !oidc_prov) print "oidc sign-in is enabled with no provider"
+        oidc = -1; oidc_on = 0; oidc_prov = 0
+    }
+    BEGIN { need["issuer_url"]; need["client_id"]; need["client_secret"]; provs = -1; item = -1; oidc = -1 }
+    /^[ \t]*(#|$)/ { next }
+    {
+        lines++
+        if ($0 ~ /^ *\t/) { printf "line %d: tab in the indentation\n", NR; next }
+        if ($0 !~ /^ *-( |$)/ && $0 !~ /^ *[A-Za-z0-9_.\/-]+:( |$)/) { printf "line %d: not a YAML key or list item: %.60s\n", NR, $0; next }
+        i = ind($0)
+        if (provs >= 0 && i <= provs) { close_provider(); provs = -1; item = -1 }
+        if (oidc >= 0 && i <= oidc) close_oidc()
+        if ($0 ~ /^ *oidc:[ ]*$/) { oidc = i; next }
+        if (oidc >= 0 && $0 ~ /^ *enabled:[ ]*true[ ]*$/) oidc_on = 1
+        if ($0 ~ /^ *providers:[ ]*$/) { provs = i; if (oidc >= 0) oidc_prov = 1; next }
+        if (provs < 0) next
+        if ($0 ~ /^ *- / && (item < 0 || i == item)) { close_provider(); item = i; inprov = 1; pid = "?" }
+        if (!inprov) next
+        k = $0; sub(/^ *(- )?/, "", k)
+        if (k !~ /^[a-z_]+:/) next
+        sub(/:.*/, "", k)
+        if (k in need) got[k] = val($0)
+        if (k == "id") pid = unq(val($0))
+    }
+    END { close_provider(); close_oidc(); if (!lines) print "kratos.yml has no content" }' "$1"
 }
 
 # Create first admin via script bundled in backend image (dist/scripts/create-admin-cli.js).
@@ -3769,6 +3831,54 @@ _ue_verify() { # <manifest> <services...>
     for svc in "$@"; do
         grep -qx "$svc" <<<"$running" || { _ue_err "verify: service ${svc} is not running"; return 1; }
     done
+    _ue_services_healthy
+}
+
+# "<service> <health> <startPeriodNs>" per running/restarting container of this
+# project (an exited one keeps its last health, so it is not judged here — the
+# "is running" check covers it); health is Docker's own verdict
+# (.State.Health.Status), `none` without a healthcheck.
+_ue_health_states() {
+    local ids
+    ids="$(docker compose ps -q 2>/dev/null)"
+    [ -n "$ids" ] || return 0
+    # shellcheck disable=SC2086 # one id per word
+    docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{if .Config.Healthcheck}}{{.Config.Healthcheck.StartPeriod}}{{else}}0{{end}}' $ids 2>/dev/null || true
+}
+
+# Every service with a healthcheck must reach `healthy` (Docker restarts only on
+# exit: a crash-looping or unhealthy Kratos still counts as "running"). Waits up
+# to SYNAP_UPDATE_HEALTHY_WAIT s while a service is `starting`. Not a failure:
+# a service that was already unhealthy before the update (UE_UNHEALTHY_BEFORE —
+# rolling back cannot fix it; `synap doctor` reports it) and one whose own
+# start_period is longer than the wait (postgres-backup: 30m) while it is still
+# `starting`. Both are warned about.
+_ue_services_healthy() {
+    local wait="${SYNAP_UPDATE_HEALTHY_WAIT:-180}" deadline svc st sp bad pending slow
+    deadline=$(( $(date +%s) + wait ))
+    while :; do
+        bad=""; pending=""; slow=""
+        while read -r svc st sp; do
+            [ -n "$svc" ] || continue
+            case "$st" in
+                healthy|none) ;;
+                unhealthy)
+                    if grep -qx "$svc" <<<"${UE_UNHEALTHY_BEFORE:-}"; then slow="${slow} ${svc}(unhealthy before the update)"
+                    else bad="${bad} ${svc}"; fi ;;
+                *)
+                    if [ "${sp:-0}" -gt $(( wait * 1000000000 )) ] 2>/dev/null; then slow="${slow} ${svc}(${st})"
+                    else pending="${pending} ${svc}"; fi ;;
+            esac
+        done < <(_ue_health_states)
+        [ -z "$bad" ] && [ -z "$pending" ] && break
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            _ue_err "verify: not healthy after ${wait}s:${bad:+ unhealthy:${bad}}${pending:+ still starting:${pending}} — inspect: docker compose ps; docker compose logs <service>"
+            return 1
+        fi
+        sleep "${SYNAP_UPDATE_HEALTHY_INTERVAL:-5}"
+    done
+    [ -z "$slow" ] || _ue_warn "verify: not judged healthy, not blocking the update:${slow}"
+    return 0
 }
 
 # Keep the images of the current and previous release (Kamal-style local
@@ -3840,7 +3950,13 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
     cp -p state/update/env.before .env || status=rollback_failed
     _ue_restore_bundle || { _ue_err "could not restore the previous deploy files from state/update/pre-bundle.tar"; status=rollback_failed; }
     if [ -f state/update/kratos.yml.before ]; then
-        cp -p state/update/kratos.yml.before ../kratos/kratos.yml || status=rollback_failed
+        local kcfg=state/update/kratos.yml.before kerr
+        kerr="$(kratos_config_errors "$kcfg")"
+        if [ -n "$kerr" ] && [ -s ../kratos/kratos.yml.good ] && [ -z "$(kratos_config_errors ../kratos/kratos.yml.good)" ]; then
+            _ue_warn "the pre-update kratos.yml is itself broken ($(head -1 <<<"$kerr")) — restoring the last verified one, ../kratos/kratos.yml.good"
+            kcfg=../kratos/kratos.yml.good
+        fi
+        cp -p "$kcfg" ../kratos/kratos.yml || status=rollback_failed
         docker compose up -d --force-recreate kratos >/dev/null 2>&1 || true
     fi
     docker compose up -d --force-recreate --remove-orphans backend realtime || status=rollback_failed
@@ -3848,6 +3964,13 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
     if ! _ue_backend_healthy; then
         _ue_err "the previous release is not healthy either — inspect: docker compose logs backend"
         status=rollback_failed
+    fi
+    # Sign-in is part of "serving again": a backend answering /health while
+    # Kratos crash-loops is a pod nobody can log into.
+    if ! wait_for_kratos_ready; then
+        _ue_err "Kratos (sign-in) is not ready after the rollback — inspect: docker compose logs kratos; synap doctor"
+        status=rollback_failed
+        reason="${reason}; after the rollback Kratos (sign-in) is not ready"
     fi
     _ue_record "$status" "$UE_FROM" "$UE_TO" "$reason" "$db" "$UE_BACKUP"
     if [ "$status" = rolled_back ]; then
@@ -3944,6 +4067,8 @@ synap_update_engine() {
         _ue_warn "no postgres data yet (fresh pod) — no pre-update dump to take"
     fi
     level_before="$(_ue_migration_level)"
+    # Services already unhealthy now are not the release's doing (verify warns, never rolls back for them).
+    UE_UNHEALTHY_BEFORE="$(_ue_health_states | awk '$2 == "unhealthy" {print $1}')"
 
     # 5. from here on every failure rolls back
     trap '_ue_rollback "interrupted" "$([ "$(_ue_migration_level)" != "$level_before" ] && echo 1 || echo 0)"' INT TERM HUP
@@ -3996,6 +4121,13 @@ synap_update_engine() {
         '. + {appliedAt:$at, preUpdateBackup:$backup, edge:$edge}' "$m" > state/current-release.json.tmp \
         && mv -f state/current-release.json.tmp state/current-release.json
     _ue_prune_images
+    # Last known-good kratos.yml (Kratos was just verified healthy on it): the
+    # rollback falls back to it when the pre-update snapshot is itself broken.
+    # Never removed by a later run.
+    if [ -s ../kratos/kratos.yml ] && [ -z "$(kratos_config_errors ../kratos/kratos.yml)" ]; then
+        cp -p ../kratos/kratos.yml ../kratos/kratos.yml.good.tmp && mv -f ../kratos/kratos.yml.good.tmp ../kratos/kratos.yml.good \
+            || _ue_warn "could not keep ../kratos/kratos.yml.good (the last verified Kratos config)"
+    fi
     _ue_record succeeded "$UE_FROM" "$UE_TO" "" false "$UE_BACKUP"
     _ue_ok "Release ${UE_TO} is live (verified: buildStamp + migration level)."
     set -e
@@ -4714,6 +4846,9 @@ cmd_apply() {
 #   backup    off-host repository configured + initialised, no alarms, fresh dump
 #   pgdata    postgres cluster lives on its volume (pgdata guard layout)
 #   disk      ≥ 15% free where the pod writes
+#   lock      update-lock holder + age (> SYNAP_DOCTOR_LOCK_MAX_HOURS=2 h), stale mkdir lock
+#   containers  Docker health (unhealthy / crash-looping) + restart counts
+#   kratos    ../kratos/kratos.yml well-formed, OIDC providers = strings + https issuer
 #   url       PUBLIC_URL/health answers
 cmd_doctor() {
     local json=0
@@ -4866,6 +5001,79 @@ cmd_doctor() {
     pct="$(df -Pk "$deploy_dir" 2>/dev/null | awk 'NR==2 { gsub(/%/, "", $5); print 100 - $5 }')"
     if [ -n "$pct" ] && [ "$pct" -lt "${SYNAP_DOCTOR_MIN_FREE_PCT:-15}" ]; then _dr disk warn "only ${pct}% free on ${deploy_dir} (updates keep 2 releases of images + dumps)"
     elif [ -n "$pct" ]; then _dr disk ok "${pct}% free"; fi
+
+    # ── lock ── who holds the update lock, for how long (a hung `synap update`
+    # once held it 33 days: every later update failed fast against it).
+    # flock: /proc/locks names the kernel's real holder — the owner text in the
+    # file is only the LAST holder's, kept after it exits. mkdir fallback: the
+    # owner pid's liveness. Reading only; the lock is never taken here.
+    local lk ltext lpid lsince lheld="" lage="" lmax="${SYNAP_DOCTOR_LOCK_MAX_HOURS:-2}" lino
+    if [ -d state/update.lock.d ]; then lk=state/update.lock.d/owner
+    elif [ -f state/update.lock ]; then lk=state/update.lock
+    else lk=""; fi
+    if [ -z "$lk" ]; then
+        _dr lock ok "no update lock (no operation has run)"
+    else
+        ltext="$(head -1 "$lk" 2>/dev/null)"
+        lpid="$(sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p' <<<"$ltext")"
+        lsince="$(sed -n 's/.* since=\([0-9TZ:-]*\).*/\1/p' <<<"$ltext")"
+        if [ -n "$lsince" ]; then
+            lage="$(date -u -d "$lsince" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$lsince" +%s 2>/dev/null)"
+            [ -n "$lage" ] && lage=$(( ( $(date +%s) - lage ) / 60 ))
+        fi
+        if [ "$lk" = state/update.lock ] && [ -r "${SYNAP_PROC_LOCKS:-/proc/locks}" ]; then
+            lino="$(stat -c %i "$lk" 2>/dev/null || stat -f %i "$lk" 2>/dev/null)"
+            lheld="$(awk -v ino="$lino" '$2 == "FLOCK" { n = split($6, a, ":"); if (a[n] == ino) { print $5; exit } }' "${SYNAP_PROC_LOCKS:-/proc/locks}")"
+        elif [ -n "$lpid" ] && { kill -0 "$lpid" 2>/dev/null || ps -p "$lpid" >/dev/null 2>&1; }; then
+            lheld="$lpid"
+        fi
+        if [ -n "$lheld" ]; then
+            if [ -n "$lage" ] && [ "$lage" -ge $(( lmax * 60 )) ]; then
+                _dr lock warn "update lock held for $(( lage / 60 ))h$(( lage % 60 ))m by pid ${lheld} (${ltext:-no owner text}) — a hung operation? Check: ps -p ${lheld} -o pid,etime,args. An update rolls back on SIGTERM: kill ${lheld}"
+            else
+                _dr lock info "an operation is running: ${ltext:-pid ${lheld}}${lage:+ (${lage}m)}"
+            fi
+            [ -n "$lpid" ] && [ "$lpid" != "$lheld" ] && _dr lock warn "the lock is held by pid ${lheld} but its owner text names pid ${lpid} (written from another PID namespace, e.g. a container?)"
+        elif [ "$lk" = state/update.lock.d/owner ]; then
+            _dr lock warn "stale mkdir update lock: holder ${ltext:-<no owner>} is gone (the next operation removes it; or: rm -rf ${deploy_dir}/state/update.lock.d)"
+        else
+            _dr lock ok "free (last holder: ${ltext:-unknown})"
+        fi
+    fi
+
+    # ── containers ── Docker's own health verdict + restart counts. Docker acts
+    # only on EXIT: an `unhealthy` container keeps running, so this is the one
+    # place a crash-looping or unhealthy service shows up.
+    local cids crow csvc cstate chealth crest cn=0 cbad=0 crestarts=""
+    cids="$(command docker compose ps -a -q 2>/dev/null | tr '\n' ' ')"
+    if [ -z "${cids// /}" ]; then
+        _dr containers info "no containers for project ${COMPOSE_PROJECT_NAME:-?}"
+    else
+        while IFS='|' read -r csvc cstate chealth crest; do
+            [ -n "$csvc" ] || continue
+            cn=$((cn + 1))
+            [ "${crest:-0}" -gt 0 ] 2>/dev/null && crestarts="${crestarts:+$crestarts, }${csvc}=${crest}"
+            if [ "$cstate" = restarting ]; then
+                _dr containers error "${csvc} is crash-looping (restarting, ${crest} restarts) — docker compose logs --tail 50 ${csvc}"; cbad=1
+            elif [ "$cstate" = running ] && [ "$chealth" = unhealthy ]; then
+                _dr containers error "${csvc} is unhealthy (${crest} restarts) — docker inspect --format '{{json .State.Health}}' \$(docker compose ps -q ${csvc})"; cbad=1
+            elif [ "$cstate" = running ] && [ "${crest:-0}" -ge "${SYNAP_DOCTOR_MAX_RESTARTS:-5}" ] 2>/dev/null; then
+                _dr containers warn "${csvc} has restarted ${crest} times — docker compose logs --tail 50 ${csvc}"; cbad=1
+            fi
+        done < <(command docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.RestartCount}}' $cids 2>/dev/null)
+        [ "$cbad" = 0 ] && _dr containers ok "${cn} container(s), none unhealthy or crash-looping"
+        [ -n "$crestarts" ] && _dr containers info "restart counts: ${crestarts}"
+    fi
+
+    # ── kratos ── the config Kratos boots from (generated, not in the release
+    # bundle); kratos.yml.good = the last one an update verified.
+    local kerrs
+    kerrs="$(kratos_config_errors ../kratos/kratos.yml)"
+    if [ -z "$kerrs" ]; then
+        _dr kratos ok "kratos.yml is well-formed$([ -s ../kratos/kratos.yml.good ] && echo '; last verified copy: kratos.yml.good')"
+    else
+        while IFS= read -r line; do [ -n "$line" ] && _dr kratos error "kratos.yml: ${line}"; done <<< "$kerrs"
+    fi
 
     # ── url ──
     local pu

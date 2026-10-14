@@ -9,6 +9,11 @@
 # in-layer postgres). Asserts every check fires on its own fixture, stays
 # quiet on the healthy one, and that doctor never ran a mutating command.
 #
+# Heal checks (W6-HEAL N4): the update-lock holder + age (a fake /proc/locks
+# via SYNAP_PROC_LOCKS, so it is deterministic on Linux and macOS), Docker's
+# health verdict + restart counts per container, and the kratos.yml shape
+# (kratos_config_errors; its own table is in kratos-config-check.test.sh).
+#
 # Not covered: the HTTP probe of PUBLIC_URL (SYNAP_DOCTOR_PROBE=0 here — it
 # needs a network). Disk uses the host's real df with the threshold forced
 # (SYNAP_DOCTOR_MIN_FREE_PCT) — 0 elsewhere so a full dev disk cannot redden it.
@@ -46,6 +51,34 @@ E
   jq -n --arg sha "$SHA" '{schema:1,id:"main-bbbbbbb",gitSha:$sha,images:{SYNAP_IMAGE_BACKEND:"ghcr.io/synap-core/backend@sha256:new"}}' > "$DEPLOY/state/current-release.json"
   rm -rf "$DEPLOY/backups/postgres"; mkdir -p "$DEPLOY/backups/postgres/20261004T100000Z-auto"
   rm -f "$DEPLOY/docker-compose.override.yml"
+  rm -rf "$DEPLOY/state/update.lock" "$DEPLOY/state/update.lock.d"
+  mkdir -p "$REPO/kratos"
+  cat > "$REPO/kratos/kratos.yml" <<'K'
+version: v1.3.1
+serve:
+  public:
+    base_url: https://pod.example.com/.ory/kratos/public/
+selfservice:
+  methods:
+    password:
+      enabled: true
+      config: {}
+    oidc:
+      enabled: true
+      config:
+        providers:
+          - id: cp
+            provider: generic
+            issuer_url: https://api.synap.live
+            client_id: pod:example.com
+            client_secret: s3cret
+            scope:
+              - openid
+K
+  export FAKE_CONTAINERS="backend|running|healthy|0
+kratos|running|healthy|0
+postgres|running|healthy|0
+backend-migrate|exited|none|0"
 }
 
 # Fake docker: FAKE_POD=healthy|drifted
@@ -69,6 +102,8 @@ case "$*" in
   "compose ps -a -q postgres") echo pgcid ;;
   *"{{range .Config.Env}}"*) echo PGDATA=/home/postgres/pgdata/data ;;
   *"{{range .Mounts}}"*) [ "$FAKE_POD" = drifted ] && echo /var/lib/other || echo /home/postgres/pgdata ;;
+  "compose ps -a -q") [ -n "$FAKE_CONTAINERS" ] && echo "$FAKE_CONTAINERS" | awk -F'|' '{print "cid-" $1}' ;;
+  "inspect -f {{index .Config.Labels"*) echo "$FAKE_CONTAINERS" ;;
 esac
 exit 0
 D
@@ -78,7 +113,7 @@ export FAKE_LOG="$TMP/log" FAKE_DEPLOY="$DEPLOY" FAKE_STAMP="$SHA"
 doctor() { # <healthy|drifted> [args]
   local pod="$1"; shift
   : > "$FAKE_LOG"
-  ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_DOCTOR_PROBE=0 SYNAP_DOCTOR_MIN_FREE_PCT="${MIN_FREE:-0}" FAKE_POD="$pod" bash "$REPO/synap" doctor "$@" ) >"$TMP/out" 2>"$TMP/err"
+  ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_DOCTOR_PROBE=0 SYNAP_PROC_LOCKS="${PROC_LOCKS:-$TMP/no-proc-locks}" SYNAP_DOCTOR_MIN_FREE_PCT="${MIN_FREE:-0}" FAKE_POD="$pod" bash "$REPO/synap" doctor "$@" ) >"$TMP/out" 2>"$TMP/err"
 }
 finding() { jq -e --arg c "$1" --arg re "$2" '[.findings[] | select(.check == $c and (.message | test($re)))] | length > 0' "$TMP/out" >/dev/null 2>&1; }
 state_sum() { (cd "$DEPLOY" && find . -type f ! -path './state/update.lock*' -exec cksum {} + | sort; cd "$REPO" && git status --porcelain) | cksum; }
@@ -90,10 +125,10 @@ doctor healthy; rc=$?
 grep -q "No findings" "$TMP/out" && ok "healthy pod: 'No findings'" || bad "healthy text: $(cat "$TMP/out")"
 doctor healthy --json; rc=$?
 [ "$rc" = 0 ] && [ "$(jq -r .ok "$TMP/out")" = true ] && [ "$(jq '.findings|length' "$TMP/out")" = 0 ] && ok "healthy --json: ok:true, 0 findings" || bad "healthy json (rc=$rc): $(cat "$TMP/out" "$TMP/err")"
-for c in env project checkout release override backup pgdata; do
+for c in env project checkout release override backup pgdata lock containers kratos; do
   jq -e --arg c "$c" '[.checks[] | select(.check == $c and .severity == "ok")] | length > 0' "$TMP/out" >/dev/null && : || bad "healthy: check '$c' did not report ok"
 done
-ok "healthy: env, project, checkout, release, override, backup, pgdata all report ok"
+ok "healthy: env, project, checkout, release, override, backup, pgdata, lock, containers, kratos all report ok"
 
 # ── 2. the drifted pod: every check fires ────────────────────────────────────
 healthy_env
@@ -150,4 +185,55 @@ doctor healthy --json
 finding override "SYNAP_EDGE is not pinned" && ok "Eve override without SYNAP_EDGE is a finding" || bad "eve override: $(jq -c .findings "$TMP/out")"
 echo "SYNAP_EDGE=traefik" >> "$DEPLOY/.env"
 doctor healthy --json; [ $? = 0 ] && ok "…and pinned SYNAP_EDGE=traefik clears it" || bad "edge pin not honoured: $(jq -c .findings "$TMP/out")"
+# ── 8. update lock: holder + age (W6-HEAL N4) ─────────────────────────────────
+iso_ago() { local t=$(( $(date +%s) - $1 )); date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$t" +%Y-%m-%dT%H:%M:%SZ; }
+ino_of() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
+healthy_env; echo "update pid=4242 since=$(iso_ago 10800)" > "$DEPLOY/state/update.lock"
+printf '1: FLOCK  ADVISORY  WRITE 4242 fd:01:%s 0 EOF\n' "$(ino_of "$DEPLOY/state/update.lock")" > "$TMP/locks"
+PROC_LOCKS="$TMP/locks" doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding lock "held for 3h0m by pid 4242" && ok "a flock held 3 h (per /proc/locks) is a finding with the holder pid" || bad "lock age: rc=$rc $(jq -c .findings "$TMP/out")"
+finding lock "another PID namespace" && bad "same pid flagged as a namespace mismatch" || ok "holder pid = owner text pid: no namespace finding"
+printf '1: FLOCK  ADVISORY  WRITE 777 fd:01:%s 0 EOF\n' "$(ino_of "$DEPLOY/state/update.lock")" > "$TMP/locks"
+PROC_LOCKS="$TMP/locks" doctor healthy --json
+finding lock "held by pid 777 but its owner text names pid 4242" && ok "a holder the owner text does not name is reported (PID namespace)" || bad "namespace: $(jq -c .findings "$TMP/out")"
+printf '1: FLOCK  ADVISORY  WRITE 4242 fd:01:999999999 0 EOF\n' > "$TMP/locks"
+PROC_LOCKS="$TMP/locks" doctor healthy --json; rc=$?
+[ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "lock" and .severity == "ok" and (.message | test("free \\(last holder: update pid=4242")))] | length == 1' "$TMP/out" >/dev/null \
+  && ok "an old owner text with no kernel holder is 'free', not a finding" || bad "free lock: rc=$rc $(jq -c '[.checks[]|select(.check=="lock")]' "$TMP/out")"
+echo "update pid=4242 since=$(iso_ago 600)" > "$DEPLOY/state/update.lock"
+printf '1: FLOCK  ADVISORY  WRITE 4242 fd:01:%s 0 EOF\n' "$(ino_of "$DEPLOY/state/update.lock")" > "$TMP/locks"
+PROC_LOCKS="$TMP/locks" doctor healthy --json; rc=$?
+[ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "lock" and .severity == "info" and (.message | test("operation is running")))] | length == 1' "$TMP/out" >/dev/null \
+  && ok "a 10-minute holder is info, not a finding" || bad "fresh holder: rc=$rc $(jq -c '[.checks[]|select(.check=="lock")]' "$TMP/out")"
+healthy_env; sh -c 'exit 0' & dead=$!; wait "$dead"
+mkdir -p "$DEPLOY/state/update.lock.d"; echo "update pid=$dead since=$(iso_ago 60)" > "$DEPLOY/state/update.lock.d/owner"
+doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding lock "stale mkdir update lock" && ok "a mkdir lock whose holder pid is dead is a finding" || bad "stale mkdir: rc=$rc $(jq -c .findings "$TMP/out")"
+[ -d "$DEPLOY/state/update.lock.d" ] && ok "…and doctor left it in place (read-only)" || bad "doctor removed the stale lock"
+sleep 30 & live=$!
+echo "update pid=$live since=$(iso_ago 60)" > "$DEPLOY/state/update.lock.d/owner"
+doctor healthy --json; rc=$?
+[ "$rc" = 0 ] && ! finding lock "." && ok "a live mkdir holder (no /proc/locks) is not a finding" || bad "live mkdir: rc=$rc $(jq -c .findings "$TMP/out")"
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+
+# ── 9. containers: Docker health + restart counts ─────────────────────────────
+healthy_env; FAKE_CONTAINERS="backend|running|healthy|0
+kratos|restarting|starting|14
+pod-admin|running|unhealthy|2
+realtime|running|healthy|6" doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding containers "kratos is crash-looping \\(restarting, 14 restarts\\)" && ok "a restarting container is a crash-loop finding" || bad "crash-loop: rc=$rc $(jq -c .findings "$TMP/out")"
+finding containers "pod-admin is unhealthy \\(2 restarts\\)" && ok "an unhealthy running container is a finding" || bad "unhealthy: $(jq -c .findings "$TMP/out")"
+finding containers "realtime has restarted 6 times" && ok "≥ 5 restarts is a finding" || bad "restarts: $(jq -c .findings "$TMP/out")"
+jq -e '[.checks[] | select(.check == "containers" and (.message | test("restart counts: kratos=14, pod-admin=2, realtime=6")))] | length == 1' "$TMP/out" >/dev/null \
+  && ok "restart counts are listed" || bad "restart counts: $(jq -c '[.checks[]|select(.check=="containers")]' "$TMP/out")"
+
+# ── 10. kratos.yml: the rendered-log-line incident is a finding ────────────────
+healthy_env; sed -i.x 's|client_id: pod:example.com|client_id: {"level":30,"msg":"loaded config"}|' "$REPO/kratos/kratos.yml" && rm -f "$REPO/kratos/kratos.yml.x"
+doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding kratos "client_id is not a plain string" && ok "a JSON log line rendered into client_id is a kratos finding" || bad "kratos: rc=$rc $(jq -c .findings "$TMP/out")"
+healthy_env; rm -f "$REPO/kratos/kratos.yml"
+doctor healthy --json
+finding kratos "missing or empty" && ok "a missing kratos.yml is a finding" || bad "kratos missing: $(jq -c .findings "$TMP/out")"
+grep -E "compose (.* )?(up|run|create|down|rm|stop|start|restart|pull|build)( |$)|^(rm|stop|kill|pull|tag|rmi|run|volume|system|image prune|network rm)" "$FAKE_LOG" \
+  && bad "the heal checks ran a mutating docker command" || ok "the heal checks ran no mutating docker command"
 exit $fail

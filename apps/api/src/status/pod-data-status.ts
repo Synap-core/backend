@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "@synap-core/core";
 import type { BackupStatus, BackupRunSummary } from "@synap/database";
+import type { AuthHealth } from "./pod-auth-status.js";
 
 /** Where a public route's error detail goes instead of its response body. */
 export type ErrorLog = (err: unknown, msg: string) => void;
@@ -148,7 +149,13 @@ export function cachedDataHealth(
   };
 }
 
-/** Liveness stays "ok" unless the DATA is gone; HTTP stays 200 either way. */
-export function healthStatusFor(data: DataHealth): "ok" | "degraded" {
-  return data.status === "empty" ? "degraded" : "ok";
+/**
+ * Liveness stays "ok" unless the DATA is gone or sign-in (Kratos) is not ready;
+ * HTTP stays 200 either way. An `unknown` auth (no Kratos to ask) is not degraded.
+ */
+export function healthStatusFor(
+  data: DataHealth,
+  auth?: Pick<AuthHealth, "status">
+): "ok" | "degraded" {
+  return data.status === "empty" || auth?.status === "not_ready" ? "degraded" : "ok";
 }

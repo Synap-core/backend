@@ -151,11 +151,13 @@ describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
     expect(i, `${route} registered`).toBeGreaterThan(-1);
     return src.slice(i, src.indexOf("\n});", i) + 4);
   };
-  it("/health awaits the data check, derives status from it, returns it", () => {
+  it("/health awaits the data + auth checks, derives status from both, returns both", () => {
     const b = block("/health");
-    expect(b).toContain("await podDataHealth()");
-    expect(b).toContain("status: healthStatusFor(data)");
+    expect(b).toContain("await Promise.all([podDataHealth(), podAuthHealth()])");
+    expect(b).toContain("status: healthStatusFor(data, authHealth)");
     expect(b).toMatch(/\n\s+data,\n/);
+    expect(b).toMatch(/\n\s+authHealth,\n/);
+    expect(b).toContain('auth: "ory-stack"'); // the stack name keeps its type
     expect(b).not.toMatch(/c\.json\([^)]*,\s*5\d\d\)/); // never a 5xx for data
   });
   it("/status/backup goes through backupStatusBody + readBackupStatus", () => {

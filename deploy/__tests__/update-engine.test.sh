@@ -19,6 +19,10 @@
 #   source      --from-source                    → synap-dev/* only, never ghcr
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
 #   eve-unpinned / port80 / skip-edge             → edge refusals + eve pin
+#   kprefer/kgood  rollback kratos.yml: valid .before wins; a broken one → kratos.yml.good (W6-HEAL N5)
+#   kratosdown  rollback, Kratos never ready     → rollback_failed (N1)
+#   unhealthy/starting  Docker health not healthy after the swap → rollback (N2);
+#   slowstart/unhealthybefore  long start_period / already unhealthy → warned, not rolled back
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -78,6 +82,7 @@ case "$*" in
   "compose ps -q backend"*) echo be1; exit 0 ;;
   "compose ps -q pod-admin"*) echo pa1; exit 0 ;;
   "compose ps"*postgres*) echo pg1; exit 0 ;;
+  "compose ps -q") [ -n "${FAKE_HEALTH:-}" ] && printf '%s\n' c-backend c-kratos c-postgres-backup; exit 0 ;;
   "compose ps"*) exit 0 ;;
   "compose run --rm backend-migrate"*)
     if [ -n "${FAKE_HUP_AT_MIGRATE:-}" ]; then echo "$FAKE_NEW_LEVEL" > "$F/level"; kill -HUP "$PPID"; exit 0; fi
@@ -90,6 +95,7 @@ case "$*" in
     case " $* " in *" caddy "*) [ -n "${FAKE_CADDY_FAIL:-}" ] && { echo "Bind for 0.0.0.0:80 failed: port is already allocated" >&2; exit 1; }; echo up > "$F/caddy_up";; esac
     exit 0 ;;
   "compose exec -T postgres psql"*) cat >/dev/null 2>&1; echo 1; exit 0 ;;
+  "compose exec -T kratos wget"*) [ -n "${FAKE_KRATOS_DOWN:-}" ] && exit 1; exit 0 ;;
   "compose"*) exit 0 ;;
   "exec synap-backend-canary node -e"*)
     [ -n "${FAKE_CANARY_BAD:-}" ] && is_new "$(cat "$F/canary_image")" && exit 1; exit 0 ;;
@@ -108,6 +114,16 @@ case "$*" in
   "exec -i pg1 pg_restore"*)
     if [ -n "${FAKE_PG_RESTORE_FAIL:-}" ]; then cat >/dev/null; echo "pg_restore: error: could not execute query" >&2; exit 1; fi
     sed -n 's/^LEVEL //p' > "$F/level"; echo RESTORED >> "$F/restores"; exit 0 ;;
+  "inspect -f {{index .Config.Labels"*)
+    # FAKE_HEALTH="<svc>=<health>[:<startPeriodNs>] ..." while the NEW release
+    # runs (FAKE_HEALTH_ALWAYS=1: before the update too); healthy otherwise.
+    for svc in backend kratos postgres-backup; do
+      st=healthy; sp=0
+      if [ -n "${FAKE_HEALTH_ALWAYS:-}" ] || is_new "$(cat "$F/backend_image")"; then
+        for kv in $FAKE_HEALTH; do [ "${kv%%=*}" = "$svc" ] && { v="${kv#*=}"; st="${v%%:*}"; [ "$v" != "$st" ] && sp="${v#*:}"; }; done
+      fi
+      echo "$svc $st $sp"
+    done; exit 0 ;;
   "inspect -f {{.State.Running}} pg1") echo true; exit 0 ;;
   "inspect -f {{range .Config.Env}}"*) echo "PGDATA=/home/postgres/pgdata/data"; exit 0 ;;
   "inspect -f {{range .Mounts}}"*) echo "/home/postgres/pgdata"; exit 0 ;;
@@ -179,6 +195,7 @@ publish() { # <id> <last-migration> [with-bundle]
 run_update() { # <args...>
   ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_UPDATE_MIN_FREE_SOURCE_MB=1 SYNAP_ASSUME_YES=1 \
+    SYNAP_UPDATE_HEALTHY_WAIT=0 SYNAP_UPDATE_HEALTHY_INTERVAL=0 SYNAP_KRATOS_READY_TRIES=2 SYNAP_KRATOS_READY_INTERVAL=0 \
     SYNAP_UPDATE_NOTIFY_CMD="cat >> '$S/notified'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
 }
 cur_id()  { jq -r .id "$DEPLOY/state/current-release.json" 2>/dev/null; }
@@ -190,6 +207,7 @@ show()    { echo "      --- tail of output ---"; tail -15 "$S/out" | sed 's/^/  
 
 # ── 1. happy path: adopted legacy pod → R2 with a deploy bundle ───────────────
 setup happy legacy; publish "$R2" 0012_new.sql bundle
+mkdir -p "$REPO/kratos"   # generate_kratos_config renders only into an existing dir
 run_update --release "$R2"; rc=$?
 [ "$rc" = 0 ] && ok "happy: update to $R2 succeeded" || { bad "happy: rc=$rc"; show; }
 [ "$(cur_id)" = "$R2" ] && ok "happy: current-release is $R2" || bad "happy: current-release=$(cur_id)"
@@ -208,6 +226,8 @@ grep -q "pull .*@sha256:$NEW_DIGEST" "$FAKE/log" && ! grep -qE "^pull [^@]*$" "$
 [ "$(last status)" = succeeded ] && notified succeeded && ok "happy: success recorded + notified" || bad "happy: record=$(last status)"
 grep -q '^SYNAP_EVENT {' "$S/out" && ok "happy: SYNAP_EVENT line emitted" || bad "happy: no SYNAP_EVENT line"
 [ "$(restores)" = 0 ] && ok "happy: no DB restore" || bad "happy: DB restored on success"
+[ -s "$REPO/kratos/kratos.yml.good" ] && cmp -s "$REPO/kratos/kratos.yml" "$REPO/kratos/kratos.yml.good" \
+  && ok "happy: the verified kratos.yml is kept as kratos.yml.good" || bad "happy: no kratos.yml.good after a verified update"
 
 # second run on the same release is a no-op
 : > "$FAKE/log"; run_update --release "$R2"
@@ -273,6 +293,55 @@ FAKE_PROD_BAD=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && cmp -s "$REPO/kratos/kratos.yml" "$S/kratos.orig" \
   && ok "kratos: rollback restores the running kratos.yml" \
   || { bad "kratos: rc=$rc status=$(last status) sentinel=$(grep -c running-config-sentinel "$REPO/kratos/kratos.yml" 2>/dev/null)"; show; }
+
+# ── 4c. a valid pre-update kratos.yml is preferred over kratos.yml.good ──────
+setup kprefer r1; publish "$R2" 0012_new.sql
+mkdir -p "$REPO/kratos"; printf 'version: v1.3.1\n# running-config-sentinel\n' > "$REPO/kratos/kratos.yml"
+printf 'version: v1.3.1\n# good-config-sentinel\n' > "$REPO/kratos/kratos.yml.good"
+cp "$REPO/kratos/kratos.yml" "$S/kratos.orig"; cp "$REPO/kratos/kratos.yml.good" "$S/kratos.good"
+FAKE_PROD_BAD=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && cmp -s "$REPO/kratos/kratos.yml" "$S/kratos.orig" && cmp -s "$REPO/kratos/kratos.yml.good" "$S/kratos.good" \
+  && ok "kprefer: a valid pre-update kratos.yml wins over .good; .good untouched" || { bad "kprefer: rc=$rc kratos=$(tail -1 "$REPO/kratos/kratos.yml")"; show; }
+
+# ── 4d. the pre-update kratos.yml is itself broken → kratos.yml.good (N5) ────
+setup kgood r1; publish "$R2" 0012_new.sql
+mkdir -p "$REPO/kratos"
+printf 'version: v1.3.1\n{"level":30,"msg":"config loaded"}\n' > "$REPO/kratos/kratos.yml"
+printf 'version: v1.3.1\n# good-config-sentinel\n' > "$REPO/kratos/kratos.yml.good"; cp "$REPO/kratos/kratos.yml.good" "$S/kratos.good"
+FAKE_PROD_BAD=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && cmp -s "$REPO/kratos/kratos.yml" "$S/kratos.good" \
+  && ok "kgood: a broken pre-update kratos.yml is replaced by the last verified kratos.yml.good" \
+  || { bad "kgood: rc=$rc status=$(last status) kratos=$(head -2 "$REPO/kratos/kratos.yml" | tail -1)"; show; }
+grep -q "pre-update kratos.yml is itself broken" "$S/out" && ok "kgood: the operator is told why" || bad "kgood: no warning"
+[ -s "$REPO/kratos/kratos.yml.good" ] && ok "kgood: kratos.yml.good survives the run" || bad "kgood: kratos.yml.good was removed"
+
+# ── 4e. rollback, but Kratos never becomes ready → rollback_failed (N1) ──────
+setup kratosdown r1; publish "$R2" 0012_new.sql
+FAKE_PROD_BAD=1 FAKE_KRATOS_DOWN=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rollback_failed ] && notified rollback_failed \
+  && [[ "$(last reason)" == *"Kratos (sign-in) is not ready"* ]] && grep -q "ROLLBACK INCOMPLETE" "$S/out" \
+  && ok "kratosdown: Kratos not ready after the rollback records rollback_failed, with the reason" \
+  || { bad "kratosdown: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+[ "$(grep -c 'compose exec -T kratos wget' "$FAKE/log")" = 2 ] && ok "kratosdown: readiness polled SYNAP_KRATOS_READY_TRIES times" || bad "kratosdown: polls=$(grep -c 'compose exec -T kratos wget' "$FAKE/log")"
+
+# ── 4f. a service Docker marks unhealthy after the swap → rollback (N2) ──────
+setup unhealthy r1; publish "$R2" 0011_old.sql
+FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_HEALTH="kratos=unhealthy" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(last reason)" = "post-update verification failed" ] \
+  && grep -q "unhealthy: kratos" "$S/out" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "unhealthy: a service running but unhealthy after the swap rolls back" || { bad "unhealthy: rc=$rc record=$(last status)/$(last reason)"; show; }
+setup starting r1; publish "$R2" 0011_old.sql
+FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_HEALTH="kratos=starting" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && grep -q "still starting: kratos" "$S/out" && [ "$(last status)" = rolled_back ] \
+  && ok "starting: never healthy within the wait (crash-loop shape) rolls back" || { bad "starting: rc=$rc"; show; }
+setup slowstart r1; publish "$R2" 0011_old.sql
+FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_HEALTH="postgres-backup=starting:1800000000000" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && grep -q "not judged healthy, not blocking the update: postgres-backup(starting)" "$S/out" \
+  && ok "slowstart: a start_period longer than the wait (postgres-backup 30m) is warned, not rolled back" || { bad "slowstart: rc=$rc"; show; }
+setup unhealthybefore r1; publish "$R2" 0011_old.sql
+FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_HEALTH="postgres-backup=unhealthy" FAKE_HEALTH_ALWAYS=1 run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && grep -q "postgres-backup(unhealthy before the update)" "$S/out" \
+  && ok "unhealthybefore: a service already unhealthy before the update is warned, not rolled back" || { bad "unhealthybefore: rc=$rc"; show; }
 
 # ── 4b. healthy, but not the release's build (buildStamp mismatch) → rollback ─
 setup verify r1; publish "$R2" 0011_old.sql

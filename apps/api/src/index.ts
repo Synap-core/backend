@@ -106,6 +106,7 @@ import {
   cachedDataHealth,
   healthStatusFor,
 } from "./status/pod-data-status.js";
+import { cachedAuthHealth } from "./status/pod-auth-status.js";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -313,11 +314,22 @@ const podDataHealth = cachedDataHealth({
   },
 });
 
+// Sign-in readiness for /health — see status/pod-auth-status.ts (body field, never a non-200).
+const podAuthHealth = cachedAuthHealth({
+  kratosPublicUrl:
+    process.env.LOCAL_MODE === "true"
+      ? null
+      : process.env.KRATOS_PUBLIC_URL || "http://localhost:4433",
+});
+
 // Health check (public, no auth). HTTP 200 whenever the process serves.
 app.get("/health", async (c) => {
-  const data = await podDataHealth();
+  const [data, authHealth] = await Promise.all([
+    podDataHealth(),
+    podAuthHealth(),
+  ]);
   return c.json({
-    status: healthStatusFor(data),
+    status: healthStatusFor(data, authHealth),
     timestamp: new Date().toISOString(),
     version: "0.2.0-saas",
     // Published `@synap-core/api-types` version this pod's router was built
@@ -345,6 +357,9 @@ app.get("/health", async (c) => {
     // "empty" = this pod had users (deploy/state/postgres-initialized) and
     // now has none: top-level status reads "degraded".
     data,
+    // Kratos /health/ready: "not_ready" also reads "degraded" (the CP health
+    // check counts it as a failed check). `auth` above stays the stack name.
+    authHealth,
   });
 });
 
