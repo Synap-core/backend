@@ -328,6 +328,10 @@ export {
   type RunFirefliesBackfillResult,
 } from "./services/fireflies/run-fireflies-backfill.js";
 export { runInboundAttachmentIngest } from "./services/connectors/ingest-inbound-attachments.js";
+// Entity media copy (D2): the reactor (registered at boot) enqueues; the runner
+// fills the jobs IoC slot and copies an entity's external images into the pod.
+export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";
+export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy-reactor.js";
 export {
   runEventSync,
   type RunEventSyncResult,

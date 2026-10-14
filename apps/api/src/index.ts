@@ -60,6 +60,7 @@ import {
   registerSessionCriteriaUnmetReactor,
   registerClosingReportReactor,
   registerDocumentDiagnosticsReactor,
+  registerEntityMediaCopyReactor,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -1812,6 +1813,9 @@ try {
       // Any content save (a person's autosave, a restore, an approval): re-check
       // which embeds will not render, stamped with the revision it checked.
       registerDocumentDiagnosticsReactor();
+      // Any entity create/update (applied, never proposed): copy the external
+      // images it names into the pod (decision D2) — off the request path.
+      registerEntityMediaCopyReactor();
 
       if (config.server.localMode) {
         // Local mode: pg-boss is disabled (untested on PGlite and would
@@ -1913,6 +1917,8 @@ try {
               await import("@synap/jobs/workers/session-recall-worker.js");
             const { registerInboundAttachmentIngestRunner } =
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
+            const { registerEntityMediaCopyRunner } =
+              await import("@synap/jobs/workers/entity-media-copy-worker.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerConnectionSyncRunner } =
@@ -1994,6 +2000,11 @@ try {
             // file door → link to channel + message (IoC across the api↔jobs dep).
             registerInboundAttachmentIngestRunner((input) =>
               api.runInboundAttachmentIngest(input)
+            );
+            // Entity media copy: the reactor enqueues after an entity write;
+            // the api-side runner fetches + stores + records systemData.media.
+            registerEntityMediaCopyRunner((input) =>
+              api.runEntityMediaCopy(input)
             );
             // The Discord mirror pass. Google Calendar events reach it as Synap
             // `event` entities landed by the connection sync — never straight

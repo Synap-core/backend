@@ -238,6 +238,15 @@ export const workerRegistry: WorkerMetadata[] = [
     triggers: ["entity.create.validated", "entity.update.validated"],
     category: "ai",
   },
+  {
+    id: "entity-media-copy",
+    name: "Entity Media Copy",
+    description:
+      "On-demand (enqueued by the entity-media-copy reactor after an entity is created or updated — never at proposal time). Copies the external images the entity names (its profile's declared media property, or capture-provided media-urls) into the pod: SSRF-guarded streamed fetch (≤25 MB, png/jpeg/gif/webp by magic bytes), stored as a documents row with no second entity, recorded on systemData.media (deduped by sourceUrl); refusals land on systemData.mediaCopyFailures.",
+    triggers: ["queue:entity-media-copy"],
+    outputs: [],
+    category: "shared",
+  },
 
   // ============================================================================
   // Shared Workers (cross-cutting concerns)

@@ -127,6 +127,10 @@ import {
   INBOUND_ATTACHMENT_QUEUE,
 } from "./inbound-attachment-worker.js";
 import {
+  handleEntityMediaCopy,
+  ENTITY_MEDIA_COPY_QUEUE,
+} from "./entity-media-copy-worker.js";
+import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
@@ -339,6 +343,9 @@ const ALL_QUEUES = [
   FIREFLIES_INGEST_QUEUE,
   FIREFLIES_BACKFILL_CRON_QUEUE,
   INBOUND_ATTACHMENT_QUEUE,
+  // Entity media copy (on-demand, D2): enqueued by the api-side reactor on an
+  // entity create/update; copies its external images into the pod.
+  ENTITY_MEDIA_COPY_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
@@ -829,6 +836,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleInboundAttachmentIngest(job)
   );
   logger.info("Registered worker: inbound-attachment-ingest");
+
+  // Entity media copy (on-demand) — the entity-media-copy reactor enqueues one
+  // debounced job per entity create/update; the api-side runner (IoC slot)
+  // copies the entity's external images into the pod (systemData.media).
+  await boss.work(ENTITY_MEDIA_COPY_QUEUE, async ([job]: any[]) =>
+    handleEntityMediaCopy(job)
+  );
+  logger.info("Registered worker: entity-media-copy");
 
   // Event sync (cron: every 6h) — invokes the api-side event-sync runner in-process
   // (IoC slot) to mirror upcoming events + Stellar deadlines + Google Calendar into

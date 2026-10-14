@@ -33,6 +33,9 @@ import {
 } from "../services/intake/capture-filed-part.js";
 import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
 import { readInstalledPublicUrl } from "../services/capabilities/read-public-url.js";
+import type { ProfilePresentation } from "@synap-core/types/presentation";
+import { presentationOf } from "../services/media-copy/media-plan.js";
+import { foldCapturedImage } from "../services/media-copy/capture-media.js";
 import {
   captureClarificationAnswered,
   claimCaptureQuestion,
@@ -2445,6 +2448,27 @@ const captureBaseRouter = router({
         },
         "Structure capture: proposals ready"
       );
+
+      // A lone-URL capture's reader found an image (og:image / oEmbed
+      // thumbnail): keep it on the proposed entity that IS the page, where
+      // its kind's presentation declares media, so the media-copy job copies
+      // it into the pod once the entity exists (decision D2). Kinds with no
+      // presentation are untouched.
+      const urlRead = await publicUrlReader;
+      if (urlRead?.status === "enriched" && urlRead.imageUrl) {
+        const presentationBySlug = new Map<string, ProfilePresentation>();
+        for (const p of linkableProfiles) {
+          const parsed = presentationOf(p.uiHints);
+          if (parsed && !presentationBySlug.has(p.slug)) {
+            presentationBySlug.set(p.slug, parsed);
+          }
+        }
+        structureResult.entities = foldCapturedImage(
+          structureResult.entities,
+          { imageUrl: urlRead.imageUrl, sourceUrl: urlRead.sourceUrl },
+          (slug) => presentationBySlug.get(slug) ?? null
+        );
+      }
 
       const structured = await finishIntake(
         {
