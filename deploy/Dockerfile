@@ -9,6 +9,11 @@ FROM base AS builder
 
 # Build tools for native addons
 RUN apk add --no-cache python3 make g++
+# node-gyp builds native addons (node-pty) against the headers the node image
+# already ships in /usr/local/include/node. Without this it downloads them from
+# unofficial-builds.nodejs.org (musl), which hangs on hosts whose IPv6 route is
+# broken (ETIMEDOUT, perso pod 2026-10-14) and fails the whole build.
+ENV npm_config_nodedir=/usr/local
 
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 # Copy workspace config and all package.json files BEFORE source code.
