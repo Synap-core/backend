@@ -139,7 +139,16 @@ export const LIBRARY_BUILT_WITHOUT_PROPOSAL = "applied";
  * aliases (`d.metadata`, `g.id::text`) uses the same rule.
  */
 export function builtForGroupSql(metadata: SQL, groupId: SQL): SQL {
-  const by = drizzleSql`(${metadata} -> 'importCuration' -> 'builtBy' ->> (${groupId}))`;
+  return countingBundleSql(
+    drizzleSql`(${metadata} -> 'importCuration' -> 'builtBy' ->> (${groupId}))`
+  );
+}
+
+/**
+ * A `builtBy` value still counts: "applied" (no proposal row), or a bundle
+ * proposal that is pending / approved / auto-approved.
+ */
+export function countingBundleSql(by: SQL): SQL {
   return drizzleSql`(CASE
     WHEN ${by} IS NULL THEN false
     WHEN ${by} = ${LIBRARY_BUILT_WITHOUT_PROPOSAL} THEN true
@@ -149,6 +158,14 @@ export function builtForGroupSql(metadata: SQL, groupId: SQL): SQL {
                       AND bp.status = ANY(${`{${LIBRARY_BUILT_PROPOSAL_STATUSES.join(",")}}`}::text[]))
     ELSE false END)`;
 }
+
+/**
+ * The item is the raw of a bundle that still counts (any group, or Read now):
+ * deleting it would pull the source out from under a filed proposal.
+ */
+export const citedByBundleSql = drizzleSql<boolean>`EXISTS (
+  SELECT 1 FROM jsonb_each_text(COALESCE(${documents.metadata} -> 'importCuration' -> 'builtBy', '{}'::jsonb)) AS cb(gid, by)
+  WHERE ${countingBundleSql(drizzleSql`cb.by`)})`;
 
 /** A kept member of group G that no counting Build has read: what a rebuild reads. */
 export function waitingInGroupSql(metadata: SQL, groupId: SQL): SQL {
@@ -160,6 +177,13 @@ export function waitingInGroupSql(metadata: SQL, groupId: SQL): SQL {
 export const waitingGroupIdsSql = drizzleSql<unknown>`(SELECT COALESCE(jsonb_agg(wg.id), '[]'::jsonb)
   FROM jsonb_array_elements_text(COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb)) AS wg(id)
   WHERE ${waitingInGroupSql(drizzleSql`${documents.metadata}`, drizzleSql`wg.id`)})`;
+
+/**
+ * Kept through a Library door (`importItem.lightRead`, the rollout marker), or
+ * already in the light-read pipeline (`importRead` exists — opened, Read now,
+ * or read before). The sweep reads only these.
+ */
+export const lightReadEligibleSql = drizzleSql`((${documents.metadata} #>> '{importItem,lightRead}') = 'true' OR ${documents.metadata} ? 'importRead')`;
 
 export function inGroupSql(groupId: string): SQL {
   return drizzleSql`COALESCE(${documents.metadata} -> 'importCuration' -> 'groupIds', '[]'::jsonb) ? ${groupId}`;

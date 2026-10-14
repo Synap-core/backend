@@ -111,6 +111,8 @@ async function stageItem(over: {
     title: over.item.title ?? `Item ${seq}`,
     contentStatus: over.item.contentStatus ?? "readable",
     stagedAt: NOW.toISOString(),
+    // Kept through a Library door (the rollout marker the sweep reads).
+    lightRead: true,
     ...over.item,
   } as ImportItemMetadata;
   const { rows } = await q<{ id: string }>(
@@ -460,6 +462,27 @@ describe("sweep", () => {
   });
 });
 
+describe("rollout: the sweep never bulk-reads the old import backlog", () => {
+  it("an item staged before the Library shipped (no marker) is left title-only; a kept one is read", async () => {
+    const backlog = await stageItem({
+      item: { source: { kind: "text" }, lightRead: undefined },
+      body: "x",
+      ageMinutes: 30,
+    });
+    const kept = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "x",
+      ageMinutes: 30,
+    });
+    const sent: string[] = [];
+    const send = async (_q: string, data: { itemId: string }) =>
+      void sent.push(data.itemId);
+    await sweepLibraryLightReads({ database: db as never, send, perDay: 5 });
+    expect(sent).toContain(kept);
+    expect(sent).not.toContain(backlog);
+  });
+});
+
 describe("the sweep never starves", () => {
   it("one person's pile of held items cannot fill the batch for everyone else", async () => {
     const { LIGHT_READ_SWEEP_BATCH } = await import("../light-read-queue.js");
@@ -477,7 +500,7 @@ describe("the sweep never starves", () => {
     await q(
       `insert into documents (user_id, title, type, metadata, created_at)
        select $1, 'held', 'text',
-         '{"importItem":{"version":1,"title":"held","source":{"kind":"text"},"contentStatus":"readable","stagedAt":"x"},"importRead":{"status":"over_budget","suggestedActions":[]}}'::jsonb,
+         '{"importItem":{"version":1,"title":"held","source":{"kind":"text"},"contentStatus":"readable","stagedAt":"x","lightRead":true},"importRead":{"status":"over_budget","suggestedActions":[]}}'::jsonb,
          now() - interval '3000 minutes' - (g || ' seconds')::interval
        from generate_series(1, $2) g`,
       [OTHER, LIGHT_READ_SWEEP_BATCH + 5]

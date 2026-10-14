@@ -37,7 +37,11 @@ import {
   BUILD_CLAIM_TTL_MS,
   type ImportBuildDeps,
 } from "../imports/build.js";
-import { loadImportSession } from "../imports/session.js";
+import {
+  loadImportSession,
+  type ImportSessionRow,
+} from "../imports/session.js";
+import { ensureLibraryRun } from "./add.js";
 import { toItemView, type ImportItemRow } from "../imports/read-model.js";
 import {
   asImportGroup,
@@ -58,6 +62,9 @@ import {
 } from "./read-model.js";
 
 const logger = createLogger({ module: "library/build" });
+
+/** The `builtBy` key (and synthetic group key) of a Read now bundle. */
+const READ_NOW_BUILD_KEY = "read-now";
 
 const refused = (reason: string): ImportBuildResult => ({
   status: "refused",
@@ -101,16 +108,19 @@ async function markItemsBuiltAt(
   userId: string,
   ids: readonly string[],
   at: string,
-  forGroup?: { groupId: string; proposalId?: string }
+  forGroup: { groupId: string; proposalId?: string },
+  /** The person asked for it (Read now): the auto-archive clock restarts. */
+  seen = false
 ) {
   if (ids.length === 0) return;
   const stamped = drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,builtAt}', ${JSON.stringify(at)}::jsonb, true)`;
+  const withSeen = seen
+    ? drizzleSql`jsonb_set(${stamped}, '{importCuration,seenAt}', ${JSON.stringify(at)}::jsonb, true)`
+    : stamped;
   await database
     .update(documents)
     .set({
-      metadata: forGroup
-        ? drizzleSql`jsonb_set(${stamped}, '{importCuration,builtBy}', COALESCE(${documents.metadata} -> 'importCuration' -> 'builtBy', '{}'::jsonb) || ${JSON.stringify({ [forGroup.groupId]: forGroup.proposalId ?? LIBRARY_BUILT_WITHOUT_PROPOSAL })}::jsonb, true)`
-        : stamped,
+      metadata: drizzleSql`jsonb_set(${withSeen}, '{importCuration,builtBy}', COALESCE(${documents.metadata} -> 'importCuration' -> 'builtBy', '{}'::jsonb) || ${JSON.stringify({ [forGroup.groupId]: forGroup.proposalId ?? LIBRARY_BUILT_WITHOUT_PROPOSAL })}::jsonb, true)`,
     })
     .where(
       and(
@@ -165,6 +175,29 @@ async function releaseLibraryGroup(
     );
 }
 
+/**
+ * The run a Build files in — the unit of undo. The item's own run while it is
+ * open; once it closed (a Library run is closed after its day), today's open
+ * Library run in the same lens (`ensureLibraryRun`, which re-checks the
+ * space's write gate).
+ */
+async function openRunFor(
+  database: LibraryDb,
+  userId: string,
+  runId: string
+): Promise<ImportSessionRow> {
+  const run = await loadImportSession({ database, userId, sessionId: runId });
+  if (run.status === "active") return run;
+  return ensureLibraryRun({
+    database,
+    userId,
+    device: null,
+    workspaceId: run.workspaceId,
+    projectId: run.projectId,
+    incoming: 0,
+  });
+}
+
 /** `library.build` — first build, or a rebuild over the items new since built. */
 export async function buildLibraryGroup(args: {
   database?: LibraryDb;
@@ -201,11 +234,7 @@ export async function buildLibraryGroup(args: {
     // The newest member's run: still the person's, and the unit of undo.
     const runId = runOf(rows[rows.length - 1]!);
     if (!runId) return refused("no_run");
-    const run = await loadImportSession({
-      database,
-      userId: args.userId,
-      sessionId: runId,
-    });
+    const run = await openRunFor(database, args.userId, runId);
     const group = asImportGroup(groupRow);
     const workspaceId = groupRow.workspaceId ?? run.workspaceId;
     const priorProposalIds = Array.isArray(groupRow.buildProposalIds)
@@ -327,17 +356,13 @@ export async function readNowLibraryItem(args: {
   }
   const runId = runOf(row);
   if (!runId) return refused("no_run");
-  const run = await loadImportSession({
-    database,
-    userId: args.userId,
-    sessionId: runId,
-  });
+  const run = await openRunFor(database, args.userId, runId);
   const view = toItemView(row);
   if (!view) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Item not found" });
   }
   const group: ImportGroup = {
-    key: "read-now",
+    key: READ_NOW_BUILD_KEY,
     name: view.title,
     origin: "user",
     outputs: ["things"],
@@ -360,11 +385,20 @@ export async function readNowLibraryItem(args: {
     withoutContainer: true,
   });
   if (built.result.status !== "refused") {
+    // Read now's bundle cites the item too (`builtBy["read-now"]`): it cannot
+    // be deleted from under it, and a rejected Read now leaves it uncited.
     await markItemsBuiltAt(
       database,
       args.userId,
       built.builtIds,
-      new Date().toISOString()
+      new Date().toISOString(),
+      {
+        groupId: READ_NOW_BUILD_KEY,
+        ...(built.result.proposalId
+          ? { proposalId: built.result.proposalId }
+          : {}),
+      },
+      true
     );
   }
   return built.result;

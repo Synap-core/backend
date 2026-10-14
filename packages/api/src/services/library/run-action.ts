@@ -22,6 +22,7 @@
  * a tap while the first is still filing is refused (`IN_FLIGHT`).
  */
 
+import { createLogger } from "@synap-core/core";
 import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import type { db as DbType } from "@synap/database";
 import {
@@ -34,6 +35,8 @@ import type {
   SubmitCaptureGraphInput,
   SubmitCaptureGraphResult,
 } from "../capture-agent/submit-capture-graph.js";
+
+const logger = createLogger({ module: "library/run-action" });
 
 /** A claim older than this is a filing that died; the chip may be run again. */
 export const ACTION_CLAIM_STALE_MS = 2 * 60_000;
@@ -55,7 +58,7 @@ type StoredAction = LibraryAction & { claimedAt?: string };
 
 export type LibraryActionEntity = SubmitCaptureGraphInput["entities"][number];
 
-function s(v: unknown): string | undefined {
+function textOf(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
@@ -68,12 +71,12 @@ export function libraryActionEntity(
   const from = `From your Library: ${item.title}`;
   switch (action.kind) {
     case "date": {
-      const date = s(v.date)!;
-      const time = s(v.time);
+      const date = textOf(v.date)!;
+      const time = textOf(v.time);
       return {
         ref: "a0",
         profileSlug: "event",
-        title: s(v.title) ?? item.title,
+        title: textOf(v.title) ?? item.title,
         description: from,
         properties: {
           startDate: time ? `${date}T${time}:00` : date,
@@ -83,9 +86,9 @@ export function libraryActionEntity(
     }
     case "receipt": {
       const amount = typeof v.amount === "number" ? v.amount : undefined;
-      const currency = s(v.currency);
-      const merchant = s(v.merchant);
-      const date = s(v.date);
+      const currency = textOf(v.currency);
+      const merchant = textOf(v.merchant);
+      const date = textOf(v.date);
       const money =
         amount !== undefined
           ? `${amount.toFixed(2)}${currency ? ` ${currency}` : ""}`
@@ -104,12 +107,12 @@ export function libraryActionEntity(
       };
     }
     case "contact": {
-      const email = s(v.email);
-      const phone = s(v.phone);
+      const email = textOf(v.email);
+      const phone = textOf(v.phone);
       return {
         ref: "a0",
         profileSlug: "person",
-        title: s(v.name) ?? email ?? phone ?? item.title,
+        title: textOf(v.name) ?? email ?? phone ?? item.title,
         description: from,
         properties: {
           ...(email ? { email } : {}),
@@ -118,11 +121,11 @@ export function libraryActionEntity(
       };
     }
     case "task": {
-      const due = s(v.dueDate);
+      const due = textOf(v.dueDate);
       return {
         ref: "a0",
         profileSlug: "task",
-        title: s(v.title) ?? item.title,
+        title: textOf(v.title) ?? item.title,
         description: from,
         properties: due ? { dueDate: due } : {},
       };
@@ -258,6 +261,8 @@ export async function runLibraryAction(args: {
   const submit =
     args.submit ??
     (async (input: SubmitCaptureGraphInput) => {
+      // Loaded lazily, as every Library service loads the capture graph door:
+      // it pulls the whole write stack into whatever imports this module.
       const { submitCaptureGraph } =
         await import("../capture-agent/submit-capture-graph.js");
       return submitCaptureGraph(input);
@@ -279,7 +284,13 @@ export async function runLibraryAction(args: {
     await withAction(args.database, ids, (action) => {
       const { claimedAt: _released, ...rest } = action;
       return { next: rest, result: undefined };
-    }).catch(() => undefined);
+    }).catch((releaseErr) =>
+      // Said, not hidden: the claim expires after ACTION_CLAIM_STALE_MS.
+      logger.error(
+        { err: releaseErr, itemId: args.itemId, actionId: args.actionId },
+        "library chip: claim NOT released — the chip unlocks when it expires"
+      )
+    );
     throw err;
   }
   if (!filed.proposalId) {
@@ -296,5 +307,18 @@ export async function runLibraryAction(args: {
     // stands (it is the person's to review); only the chip mark is lost.
     if (!(err instanceof LibraryActionError)) throw err;
   }
+  // Running a chip is handling the item: the auto-archive clock restarts.
+  await args.database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(${documents.metadata}, '{importCuration,seenAt}', to_jsonb(now()::text), true)`,
+    })
+    .where(
+      and(
+        eq(documents.id, args.itemId),
+        eq(documents.userId, args.userId),
+        drizzleSql`${documents.metadata} ? 'importCuration'`
+      )
+    );
   return { proposalId, status: filed.applied ? "applied" : "proposed" };
 }

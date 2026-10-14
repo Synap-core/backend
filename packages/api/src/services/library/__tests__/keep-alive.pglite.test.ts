@@ -100,9 +100,9 @@ beforeAll(async () => {
 }, 120_000);
 
 describe("library keep-alive", () => {
-  it("reads the pod setting with defaults (ON, 90 days) and refuses malformed values", () => {
+  it("reads the pod setting with defaults (OFF — opt-in, 90 days) and refuses malformed values", () => {
     expect(readLibraryKeepAlive(null)).toEqual({
-      enabled: true,
+      enabled: false,
       archiveAfterDays: 90,
     });
     expect(
@@ -214,6 +214,17 @@ describe("library keep-alive", () => {
       },
     });
 
+    // Keep-alive is opt-in: this pod turned it on.
+    await client.query(`delete from pod_settings`);
+    await client.query(
+      `insert into pod_settings (id, settings) values ($1, $2::jsonb)`,
+      [
+        randomUUID(),
+        JSON.stringify({
+          libraryKeepAlive: { enabled: true, archiveAfterDays: 90 },
+        }),
+      ]
+    );
     const notify = vi.fn(async () => randomUUID());
     const result = await runLibraryKeepAlive({ database, now: NOW, notify });
 
@@ -278,6 +289,7 @@ describe("library keep-alive", () => {
   });
 
   it("the pod setting turns the suggestions off and the archive off at 0", async () => {
+    await client.query(`delete from pod_settings`);
     await client.query(
       `insert into pod_settings (id, settings) values ($1, $2::jsonb)`,
       [
@@ -293,5 +305,56 @@ describe("library keep-alive", () => {
     expect(result).toMatchObject({ archived: 0, suggested: 0, resurfaced: 0 });
     expect(notify).not.toHaveBeenCalled();
     expect((await curationOf(stale)).archivedAt).toBeUndefined();
+  });
+
+  it("with NO setting it does nothing but purge: no archive, no notification", async () => {
+    await client.query(`delete from pod_settings`);
+    const stale = await item({ user: B, title: "Very old", keptDaysAgo: 500 });
+    const notify = vi.fn(async () => randomUUID());
+    const result = await runLibraryKeepAlive({ database, now: NOW, notify });
+    expect(result).toMatchObject({ archived: 0, suggested: 0, resurfaced: 0 });
+    expect(notify).not.toHaveBeenCalled();
+    expect((await curationOf(stale)).archivedAt).toBeUndefined();
+  });
+
+  it("purges the stored text and page of items deleted past the undo window — once", async () => {
+    const { purgeDeletedLibraryItems } = await import("../keep-alive.js");
+    const longGone = await item({
+      user: B,
+      title: "Gone",
+      keptDaysAgo: 60,
+      read: { status: "read", textKey: "x" },
+    });
+    const recent = await item({ user: B, title: "Undo me", keptDaysAgo: 60 });
+    await client.query(
+      `update documents set deleted_at = $2::timestamptz where id = $1`,
+      [longGone, daysAgo(31)]
+    );
+    await client.query(
+      `update documents set deleted_at = $2::timestamptz where id = $1`,
+      [recent, daysAgo(2)]
+    );
+    const removed: string[] = [];
+    const remove = async (key: string) => void removed.push(key);
+    expect(await purgeDeletedLibraryItems({ database, now: NOW, remove })).toBe(
+      1
+    );
+    expect(removed.sort()).toEqual(
+      [
+        `library-page/${B}/${longGone}.html`,
+        `library-read/${B}/${longGone}.txt`,
+      ].sort()
+    );
+    const { rows } = await client.query<{ metadata: Record<string, any> }>(
+      `select metadata from documents where id = $1`,
+      [longGone]
+    );
+    expect(rows[0]!.metadata.importCuration.purgedAt).toBe(NOW.toISOString());
+    expect(rows[0]!.metadata.importRead).toBeUndefined();
+    removed.length = 0;
+    expect(await purgeDeletedLibraryItems({ database, now: NOW, remove })).toBe(
+      0
+    );
+    expect(removed).toEqual([]);
   });
 });

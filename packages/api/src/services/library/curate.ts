@@ -1,7 +1,11 @@
 /**
  * Library CURATE — the person's edits to their Library: groups (create,
- * rename, note, outputs, merge, archive), membership, decisions, item notes,
- * AI suggestions accepted or dismissed, archive marks.
+ * rename, note, outputs, merge, archive / unarchive), membership, decisions,
+ * item notes, AI suggestions accepted or dismissed, archive marks, "seen",
+ * and delete / restore (a soft delete, undoable for `deleteUndoDays`).
+ *
+ * The name / note / merge / group-cap RULES are shared with the per-import
+ * engine (`imports/curate-rules.ts`) so the two cannot drift.
  *
  * `applyLibraryCurateOps` is PURE: it applies the ops in order to an
  * in-memory state and returns what changed — or throws
@@ -10,6 +14,14 @@
  * writes every change in ONE transaction.
  */
 
+import {
+  CurateOpError,
+  assertRoomForGroup,
+  groupName,
+  groupNote,
+  itemNote,
+  mergeGroupSettings,
+} from "../imports/curate-rules.js";
 import { TRPCError } from "@trpc/server";
 import {
   db as defaultDb,
@@ -17,11 +29,12 @@ import {
   libraryGroups,
   and,
   eq,
+  inArray,
   drizzleSql,
   type LibraryGroupRow,
 } from "@synap/database";
 import {
-  IMPORT_LIMITS,
+  LIBRARY_LIMITS,
   importGroupKey,
   type ImportGroupOutput,
   type LibraryCurateOp,
@@ -30,11 +43,12 @@ import {
 import {
   inGroupSql,
   libraryItemsWhere,
-  loadLibraryItemRows,
+  citedByBundleSql,
   readLibraryCuration,
   type LibraryDb,
   type LibraryItemCurationMeta,
 } from "./read-model.js";
+import { enqueueLibrarySearch } from "./search-index.js";
 import {
   groupViews,
   insertLibraryGroup,
@@ -42,12 +56,10 @@ import {
   readOutputs,
 } from "./groups.js";
 
-export class LibraryCurateError extends Error {
-  constructor(
-    readonly opIndex: number,
-    message: string
-  ) {
-    super(`Edit #${opIndex + 1}: ${message}`);
+/** A bad Library edit (the shared {@link CurateOpError}). */
+export class LibraryCurateError extends CurateOpError {
+  constructor(opIndex: number, message: string) {
+    super(opIndex, message);
     this.name = "LibraryCurateError";
   }
 }
@@ -63,9 +75,17 @@ export interface CurateGroup {
   isNew: boolean;
 }
 
+/** An item as curate sees it: its curation, plus whether it is deleted / cited. */
+export interface CurateItem extends LibraryItemCurationMeta {
+  /** Soft-deleted (restorable): only `item.restore` reaches it. */
+  deleted?: boolean;
+  /** The raw of a bundle that still counts: it cannot be deleted. */
+  cited?: boolean;
+}
+
 export interface LibraryCurateState {
   groups: Map<string, CurateGroup>;
-  items: Map<string, LibraryItemCurationMeta>;
+  items: Map<string, CurateItem>;
 }
 
 export interface LibraryCurateChange {
@@ -73,6 +93,9 @@ export interface LibraryCurateChange {
   changedGroupIds: Set<string>;
   changedItemIds: Set<string>;
   createdGroupIds: string[];
+  /** Items this batch deleted / restored (their row's `deleted_at` changes). */
+  deletedItemIds: Set<string>;
+  restoredItemIds: Set<string>;
 }
 
 const uniq = (xs: readonly string[]) => [...new Set(xs)];
@@ -105,7 +128,8 @@ export function applyLibraryCurateOps(
   const changedGroupIds = new Set<string>();
   const changedItemIds = new Set<string>();
   const createdGroupIds: string[] = [];
-  const L = IMPORT_LIMITS;
+  const deletedItemIds = new Set<string>();
+  const restoredItemIds = new Set<string>();
 
   ops.forEach((op, i) => {
     const fail = (message: string): never => {
@@ -116,8 +140,15 @@ export function applyLibraryCurateOps(
       if (g.archived && !allowArchived) fail(`group "${g.name}" is archived`);
       return g;
     };
-    const item = (id: string) => state.items.get(id) ?? fail(`no item "${id}"`);
-    const touchItem = (id: string, next: LibraryItemCurationMeta) => {
+    const anyItem = (id: string) =>
+      state.items.get(id) ?? fail(`no item "${id}"`);
+    // A deleted item is reachable only by `item.restore`.
+    const item = (id: string) => {
+      const c = anyItem(id);
+      if (c.deleted) fail(`no item "${id}"`);
+      return c;
+    };
+    const touchItem = (id: string, next: CurateItem) => {
       state.items.set(id, next);
       changedItemIds.add(id);
     };
@@ -125,18 +156,9 @@ export function applyLibraryCurateOps(
       state.groups.set(g.id, g);
       changedGroupIds.add(g.id);
     };
-    const name = (raw: string) => {
-      const n = raw.replace(/\s+/g, " ").trim();
-      if (!n) fail("a group needs a name");
-      if (n.length > L.groupNameMax)
-        fail(`a group name is at most ${L.groupNameMax} characters`);
-      return n;
-    };
-    const note = (raw: string) => {
-      if (raw.length > L.groupNoteMax)
-        fail(`a group note is at most ${L.groupNoteMax} characters`);
-      return raw.trim() || null;
-    };
+    const name = (raw: string) => groupName(raw, fail);
+    const note = (raw: string) => groupNote(raw, fail) ?? null;
+    // The person handled it: the auto-archive clock restarts (`seenAt`).
     const addTo = (itemId: string, groupId: string) => {
       const c = item(itemId);
       if (c.groupIds!.includes(groupId)) return;
@@ -144,6 +166,7 @@ export function applyLibraryCurateOps(
         ...c,
         groupIds: [...c.groupIds!, groupId],
         suggestedGroupIds: c.suggestedGroupIds!.filter((g) => g !== groupId),
+        seenAt: now,
       });
     };
     // An archived group is no longer something to suggest: drop it from every
@@ -163,11 +186,16 @@ export function applyLibraryCurateOps(
       touchItem(itemId, {
         ...c,
         groupIds: c.groupIds!.filter((g) => g !== groupId),
+        seenAt: now,
       });
     };
 
     switch (op.op) {
       case "group.create": {
+        assertRoomForGroup(
+          [...state.groups.values()].filter((g) => !g.archived).length,
+          fail
+        );
         const n = name(op.name);
         const id = `new:${createdGroupIds.length}`;
         const key = importGroupKey(
@@ -203,10 +231,28 @@ export function applyLibraryCurateOps(
         pruneSuggestion(g.id);
         break;
       }
+      case "group.unarchive": {
+        const g = group(op.groupId, true);
+        if (g.archived) {
+          assertRoomForGroup(
+            [...state.groups.values()].filter((x) => !x.archived).length,
+            fail
+          );
+          touchGroup({ ...g, archived: false });
+        }
+        break;
+      }
       case "group.merge": {
         if (op.fromId === op.intoId) fail("a group cannot merge into itself");
         const from = group(op.fromId);
         const into = group(op.intoId);
+        // The merged group's note still steers Build: both notes are kept.
+        const merged = mergeGroupSettings(into, from);
+        touchGroup({
+          ...into,
+          note: merged.note ?? null,
+          outputs: merged.outputs,
+        });
         for (const [id, c] of state.items) {
           if (!c.groupIds!.includes(from.id)) continue;
           touchItem(id, {
@@ -235,13 +281,12 @@ export function applyLibraryCurateOps(
         break;
       }
       case "item.note": {
-        if (op.note.length > L.itemNoteMax)
-          fail(`an item note is at most ${L.itemNoteMax} characters`);
+        const text = itemNote(op.note, fail);
         const c = item(op.itemId);
         const { note: _old, ...rest } = c;
         touchItem(
           op.itemId,
-          op.note.trim() ? { ...rest, note: op.note.trim() } : rest
+          text ? { ...rest, note: text, seenAt: now } : { ...rest, seenAt: now }
         );
         break;
       }
@@ -280,13 +325,49 @@ export function applyLibraryCurateOps(
         }
         break;
       }
+      case "item.seen": {
+        for (const itemId of uniq(op.itemIds)) {
+          touchItem(itemId, { ...item(itemId), seenAt: now });
+        }
+        break;
+      }
+      case "item.delete": {
+        for (const itemId of uniq(op.itemIds)) {
+          const c = item(itemId);
+          if (c.cited)
+            fail(
+              "this item is the source of something you built — undo that first"
+            );
+          touchItem(itemId, { ...c, deleted: true });
+          deletedItemIds.add(itemId);
+          restoredItemIds.delete(itemId);
+        }
+        break;
+      }
+      case "item.restore": {
+        for (const itemId of uniq(op.itemIds)) {
+          const c = anyItem(itemId);
+          if (!c.deleted) continue;
+          touchItem(itemId, { ...c, deleted: false, seenAt: now });
+          restoredItemIds.add(itemId);
+          deletedItemIds.delete(itemId);
+        }
+        break;
+      }
       default: {
         const never: never = op;
         fail(`unknown edit ${(never as { op: string }).op}`);
       }
     }
   });
-  return { state, changedGroupIds, changedItemIds, createdGroupIds };
+  return {
+    state,
+    changedGroupIds,
+    changedItemIds,
+    createdGroupIds,
+    deletedItemIds,
+    restoredItemIds,
+  };
 }
 
 function itemIdsOf(ops: readonly LibraryCurateOp[]): string[] {
@@ -358,14 +439,37 @@ export async function curateLibrary(args: {
         );
       for (const m of suggesting) ids.add(m.id);
     }
-    const rows = await loadLibraryItemRows({
-      database: t,
-      userId: args.userId,
-      ids: [...ids],
-      forUpdate: true,
-    });
-    const items = new Map(
-      rows.map((r) => [r.id, readLibraryCuration(r.metadata)])
+    // Live items, plus deleted ones still inside the undo window (only
+    // `item.restore` can reach those), locked; with whether a bundle that
+    // still counts was built from each.
+    const rows = ids.size
+      ? await t
+          .select({
+            id: documents.id,
+            metadata: documents.metadata,
+            deleted: drizzleSql<boolean>`${documents.deletedAt} IS NOT NULL`,
+            cited: citedByBundleSql,
+          })
+          .from(documents)
+          .where(
+            and(
+              eq(documents.userId, args.userId),
+              drizzleSql`${documents.metadata} ? 'importItem'`,
+              inArray(documents.id, [...ids]),
+              drizzleSql`(${documents.deletedAt} IS NULL OR ${documents.deletedAt} > now() - make_interval(days => ${LIBRARY_LIMITS.deleteUndoDays}))`
+            )
+          )
+          .for("update")
+      : [];
+    const items = new Map<string, CurateItem>(
+      rows.map((r) => [
+        r.id,
+        {
+          ...readLibraryCuration(r.metadata),
+          deleted: r.deleted,
+          cited: r.cited,
+        },
+      ])
     );
 
     let change: LibraryCurateChange;
@@ -413,7 +517,7 @@ export async function curateLibrary(args: {
         );
     }
     for (const id of change.changedItemIds) {
-      const c = change.state.items.get(id)!;
+      const { deleted: _d, cited: _c, ...c } = change.state.items.get(id)!;
       const next = {
         ...c,
         groupIds: uniq((c.groupIds ?? []).map(resolve)),
@@ -425,10 +529,23 @@ export async function curateLibrary(args: {
           // must not leave the old value behind the merge.
           metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importCuration}', (COALESCE(${documents.metadata} -> 'importCuration', '{}'::jsonb) - 'note' - 'archivedAt') || ${JSON.stringify(next)}::jsonb, true)`,
           updatedAt: now,
+          ...(change.deletedItemIds.has(id)
+            ? { deletedAt: now }
+            : change.restoredItemIds.has(id)
+              ? { deletedAt: null }
+              : {}),
         })
-        .where(and(libraryItemsWhere(args.userId), eq(documents.id, id)));
+        .where(
+          and(
+            eq(documents.userId, args.userId),
+            drizzleSql`${documents.metadata} ? 'importItem'`,
+            eq(documents.id, id)
+          )
+        );
     }
     return {
+      deletedItemIds: [...change.deletedItemIds],
+      restoredItemIds: [...change.restoredItemIds],
       createdGroupIds: change.createdGroupIds.map(resolve),
       changedGroupIds: [...change.changedGroupIds].map(resolve),
       changedItemIds: [...change.changedItemIds],
@@ -445,6 +562,23 @@ export async function curateLibrary(args: {
         ids: touched,
       })
     : [];
+  // A deleted item leaves search now (its stored text and page are purged
+  // after the undo window by the keep-alive pass); a restored one comes back.
+  await enqueueLibrarySearch("delete", written.deletedItemIds);
+  await enqueueLibrarySearch("upsert", written.restoredItemIds);
+  // Opening an item is when an item kept before the Library shipped gets its
+  // light read (the sweep never bulk-reads that backlog). Idempotent: a final
+  // read is kept.
+  const seen = args.ops.flatMap((op) =>
+    op.op === "item.seen" ? op.itemIds : []
+  );
+  if (seen.length > 0) {
+    const { enqueueLibraryLightRead } = await import("./light-read-queue.js");
+    await enqueueLibraryLightRead(
+      [...new Set(seen)].map((itemId) => ({ userId: args.userId, itemId }))
+    );
+  }
   const { views } = await groupViews({ database, userId: args.userId, rows });
-  return { ...written, groups: views };
+  const { deletedItemIds: _del, restoredItemIds: _res, ...result } = written;
+  return { ...result, groups: views };
 }

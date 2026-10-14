@@ -9,6 +9,7 @@
  * The queue name is owned by `@synap/jobs` (`library-light-read-worker.ts`).
  */
 
+import { isArchivedSql, lightReadEligibleSql } from "./read-model.js";
 import { createLogger } from "@synap-core/core";
 import {
   documents,
@@ -150,7 +151,11 @@ export async function sweepLibraryLightReads(
   const base = and(
     isNull(documents.deletedAt),
     drizzleSql`${documents.metadata} ? 'importItem'`,
-    drizzleSql`(${documents.metadata} #>> '{importCuration,archivedAt}') IS NULL`,
+    drizzleSql`NOT ${isArchivedSql}`,
+    // ROLLOUT: only items kept through a Library door (or already in the read
+    // pipeline). The backlog of old import items is never bulk-read — it stays
+    // title-only until the person opens it (`item.seen`) or asks Read now.
+    lightReadEligibleSql,
     // Leave a fresh save to the enqueue that came with it.
     drizzleSql`${documents.createdAt} < now() - interval '2 minutes'`
   );

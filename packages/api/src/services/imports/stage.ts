@@ -355,6 +355,8 @@ async function stageOne(args: {
     ...(card ? { card } : {}),
     contentStatus: importContentStatusFor(source),
     stagedAt: new Date().toISOString(),
+    // Staged by a Library door: the light read reads it (rollout marker).
+    lightRead: true,
   };
   const staged = await stageIntakeSource({
     database,
@@ -502,6 +504,8 @@ async function adoptOne(args: {
       source,
       contentStatus: "file",
       stagedAt: new Date().toISOString(),
+      // Staged by a Library door: the light read reads it (rollout marker).
+      lightRead: true,
     };
     await tx
       .update(documents)

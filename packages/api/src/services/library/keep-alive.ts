@@ -20,12 +20,19 @@
  *      week (or that were kept into it), at most once a week per project
  *      (`library.resurface`).
  *
- * One pod setting (`pod_settings.settings.libraryKeepAlive`), default ON:
- * `enabled: false` stops 2 and 3; `archiveAfterDays: 0` stops 1.
+ * One pod setting (`pod_settings.settings.libraryKeepAlive`), default OFF
+ * (opt-in): `enabled` turns on 1, 2 and 3; `archiveAfterDays: 0` stops 1.
+ *
+ * ALWAYS (not a keep-alive feature, a promise): an item deleted more than
+ * `deleteUndoDays` ago has its stored read text and saved page HTML purged.
  *
  * The AI's capture door is untouched; this reads the person's own Library only.
  */
 
+import { LIBRARY_LIMITS } from "@synap-core/types/imports";
+import { libraryReadTextKey } from "@synap/database";
+import { libraryPageHtmlKey } from "./page-html.js";
+import { rowsOf } from "../../utils/execute-rows.js";
 import { waitingInGroupSql } from "./read-model.js";
 import { db as defaultDb, podSettings, drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -36,14 +43,19 @@ const logger = createLogger({ module: "library/keep-alive" });
 export const LIBRARY_KEEP_ALIVE_SETTING = "libraryKeepAlive" as const;
 
 export interface LibraryKeepAliveSettings {
-  /** Weekly "Build one group" + resurfacing. Default true (quiet: in-app only). */
+  /** Quiet archive, weekly "Build one group" and resurfacing. Default false (opt-in). */
   enabled: boolean;
   /** Days unseen before an ungrouped, unbuilt item is archived. 0 = never. */
   archiveAfterDays: number;
 }
 
+/**
+ * OFF until the person (a pod admin) turns it on: quiet archive, weekly
+ * "Build one group" and resurfacing are all opt-in. The founder's plan: off
+ * until dogfooded. Purging items deleted past the undo window always runs.
+ */
 export const LIBRARY_KEEP_ALIVE_DEFAULTS: LibraryKeepAliveSettings = {
-  enabled: true,
+  enabled: false,
   archiveAfterDays: 90,
 };
 
@@ -91,11 +103,6 @@ export async function loadLibraryKeepAlive(
   );
 }
 
-type Rows<T> = { rows?: T[] } | T[];
-function rowsOf<T>(result: Rows<T>): T[] {
-  return Array.isArray(result) ? result : (result.rows ?? []);
-}
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 1 — archive ungrouped, unbuilt items unseen for `days`. Returns how many. */
@@ -127,7 +134,83 @@ export async function archiveUnseenLibraryItems(args: {
       LIMIT ${ARCHIVE_BATCH_MAX}
     )
     RETURNING id`);
-  return rowsOf<{ id: string }>(result as Rows<{ id: string }>).length;
+  return rowsOf<{ id: string }>(result).length;
+}
+
+/** Items purged in one pass at most (the next pass continues). */
+const PURGE_BATCH_MAX = 500;
+
+/**
+ * Items deleted more than `deleteUndoDays` ago: their stored read text and
+ * saved page HTML are removed (the search row left at delete time), and the
+ * item is stamped `importCuration.purgedAt` so it is never purged twice. A
+ * storage object already gone is not a failure; any other failure leaves the
+ * item for the next pass (said in the log).
+ */
+export async function purgeDeletedLibraryItems(args: {
+  database?: typeof defaultDb;
+  now?: Date;
+  remove?: (key: string) => Promise<void>;
+}): Promise<number> {
+  const database = args.database ?? defaultDb;
+  const now = args.now ?? new Date();
+  const cutoff = new Date(
+    now.getTime() - LIBRARY_LIMITS.deleteUndoDays * DAY_MS
+  ).toISOString();
+  const due = rowsOf<{ id: string; userId: string }>(
+    await database.execute(drizzleSql`
+      SELECT id, user_id AS "userId" FROM documents
+      WHERE deleted_at IS NOT NULL AND deleted_at < ${cutoff}::timestamptz
+        AND metadata ? 'importItem'
+        AND (metadata #>> '{importCuration,purgedAt}') IS NULL
+      ORDER BY deleted_at
+      LIMIT ${PURGE_BATCH_MAX}`)
+  );
+  const remove =
+    args.remove ??
+    (async (key: string) => {
+      const { storage } = await import("@synap/storage");
+      await storage.delete(key);
+    });
+  let purged = 0;
+  for (const d of due) {
+    try {
+      for (const key of [
+        libraryReadTextKey(d.userId, d.id),
+        libraryPageHtmlKey(d.userId, d.id),
+      ]) {
+        await remove(key).catch((err: unknown) => {
+          if (!isMissingObject(err)) throw err;
+        });
+      }
+      await database.execute(drizzleSql`
+        UPDATE documents SET metadata = jsonb_set(
+          (metadata - 'importRead' - 'importPage'), '{importCuration,purgedAt}',
+          ${JSON.stringify(now.toISOString())}::jsonb, true)
+        WHERE id = ${d.id}::uuid`);
+      purged++;
+    } catch (err) {
+      logger.error(
+        { err, itemId: d.id },
+        "library purge: stored text / page NOT removed — retried next pass"
+      );
+    }
+  }
+  return purged;
+}
+
+function isMissingObject(err: unknown): boolean {
+  const e = err as {
+    name?: string;
+    Code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+  return (
+    e?.name === "NoSuchKey" ||
+    e?.name === "NotFound" ||
+    e?.Code === "NoSuchKey" ||
+    e?.$metadata?.httpStatusCode === 404
+  );
 }
 
 export interface WaitingGroup {
@@ -157,9 +240,10 @@ export async function longestWaitingGroups(
     WHERE g.archived_at IS NULL AND g.building_at IS NULL
     GROUP BY g.id
     ORDER BY g.user_id, min(d.created_at) ASC`);
-  return rowsOf<WaitingGroup & { oldest: Date | string }>(
-    result as Rows<WaitingGroup & { oldest: Date | string }>
-  ).map((r) => ({ ...r, oldest: new Date(r.oldest) }));
+  return rowsOf<WaitingGroup & { oldest: Date | string }>(result).map((r) => ({
+    ...r,
+    oldest: new Date(r.oldest),
+  }));
 }
 
 export interface ResurfaceCandidate {
@@ -214,11 +298,13 @@ export async function resurfaceCandidates(args: {
     FROM matches
     GROUP BY user_id, project_id, name, workspace_id
     ORDER BY user_id, count(*) DESC`);
-  return rowsOf<ResurfaceCandidate>(result as Rows<ResurfaceCandidate>);
+  return rowsOf<ResurfaceCandidate>(result);
 }
 
 export interface LibraryKeepAliveResult {
   settings: LibraryKeepAliveSettings;
+  /** Deleted items whose stored text / page were purged (always runs). */
+  purged: number;
   archived: number;
   suggested: number;
   resurfaced: number;
@@ -240,11 +326,14 @@ export async function runLibraryKeepAlive(args?: {
     args?.notify ?? ((input) => NotificationService.create(input));
   const settings = await loadLibraryKeepAlive(database);
 
-  const archived = await archiveUnseenLibraryItems({
-    database,
-    days: settings.archiveAfterDays,
-    now,
-  });
+  const purged = await purgeDeletedLibraryItems({ database, now });
+  const archived = settings.enabled
+    ? await archiveUnseenLibraryItems({
+        database,
+        days: settings.archiveAfterDays,
+        now,
+      })
+    : 0;
 
   let suggested = 0;
   let resurfaced = 0;
@@ -293,7 +382,7 @@ export async function runLibraryKeepAlive(args?: {
       if (id) resurfaced++;
     }
   }
-  const result = { settings, archived, suggested, resurfaced };
+  const result = { settings, purged, archived, suggested, resurfaced };
   logger.info(result, "library keep-alive pass");
   return result;
 }

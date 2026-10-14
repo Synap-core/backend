@@ -17,6 +17,8 @@
  * reaches this: nothing an agent sends lands in the Library.
  */
 
+import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { enqueueLibrarySearch } from "./search-index.js";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import {
@@ -32,7 +34,6 @@ import {
 } from "@synap/database";
 import {
   IMPORT_LIMITS,
-  LIBRARY_LIMITS,
   type LibraryAddRequest,
   type LibraryAddResult,
 } from "@synap-core/types/imports";
@@ -47,6 +48,11 @@ import { stageIntakeSource } from "../intake/stage-intake-source.js";
 import { libraryItemsWhere, type LibraryDb } from "./read-model.js";
 
 const logger = createLogger({ module: "library/add" });
+
+/** Open runs of one (device, day, lens) looked at before opening another. */
+const LIBRARY_RUN_CANDIDATES = 5;
+/** A share note's first line, as its title. */
+const SHARE_NOTE_TITLE_MAX = 80;
 
 /** `focus_sessions.metadata.libraryRun` — marks an import run the Library door opened. */
 export const LIBRARY_RUN_KEY = "libraryRun";
@@ -88,6 +94,13 @@ export async function ensureLibraryRun(args: {
   now?: Date;
 }): Promise<ImportSessionRow> {
   const database = args.database ?? defaultDb;
+  // The run's space is where items are stored and bundles filed: checked on
+  // EVERY keep, not only when the run is opened — access removed during the
+  // day must stop the next keep, not the next day's.
+  await assertWorkspaceWrite(database, args.userId, {
+    workspaceId: args.workspaceId,
+    ownerId: args.userId,
+  });
   const day = (args.now ?? new Date()).toISOString().slice(0, 10);
   const marker = {
     device: args.device ?? "",
@@ -107,7 +120,7 @@ export async function ensureLibraryRun(args: {
     )
     // SESSION-KIND-LENS-EXEMPT: Library runs only (the `libraryRun` key) — one population.
     .orderBy(desc(focusSessions.createdAt))
-    .limit(5);
+    .limit(LIBRARY_RUN_CANDIDATES);
   for (const c of candidates) {
     const [row] = await database
       .select({ n: drizzleSql<number>`count(*)::int` })
@@ -223,7 +236,7 @@ export async function keepShareNote(args: {
     sessionId: null,
     door: LIBRARY_NOTE_DOOR,
     kind: "text",
-    title: firstLine.slice(0, 80) || "Note",
+    title: firstLine.slice(0, SHARE_NOTE_TITLE_MAX) || "Note",
     text,
     extraMetadata: { libraryNoteFor: [...args.itemIds] },
   });
@@ -244,19 +257,10 @@ export async function addToLibrary(args: {
   ) => Promise<{ proposalId?: string; refused?: string }>;
 }): Promise<LibraryAddResult> {
   const database = args.database ?? defaultDb;
+  // Batch size, note length and "Read now = one item" are the doors' Zod
+  // (`LibraryAddInputSchema`, shared by tRPC and Hub REST) — checked BEFORE
+  // anything is staged.
   const req = args.request;
-  if (req.items.length === 0 || req.items.length > LIBRARY_LIMITS.addBatchMax) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Keep between 1 and ${LIBRARY_LIMITS.addBatchMax} items at once.`,
-    });
-  }
-  if (req.readNow && req.items.length !== 1) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Read now applies to one item at a time.",
-    });
-  }
   const workspaceId = req.workspaceId ?? args.workspaceId ?? null;
   const run = await ensureLibraryRun({
     database,
@@ -274,19 +278,19 @@ export async function addToLibrary(args: {
     deps: { ...(args.deps ?? {}), dedupScope: "library" },
   });
   const itemIds = outcome.staged.map((s) => s.itemId);
-  // A re-kept item that had been archived comes back.
+  // Keeping it (again) is handling it: the auto-archive clock restarts, and a
+  // re-kept item that had been archived comes back.
   if (itemIds.length > 0) {
     await database
       .update(documents)
       .set({
-        metadata: drizzleSql`(${documents.metadata} #- '{importCuration,archivedAt}')`,
+        metadata: drizzleSql`jsonb_set(${documents.metadata} #- '{importCuration,archivedAt}', '{importCuration,seenAt}', to_jsonb(now()::text), true)`,
       })
       .where(
         and(
-          eq(documents.userId, args.userId),
-          isNull(documents.deletedAt),
+          libraryItemsWhere(args.userId),
           inArray(documents.id, itemIds),
-          drizzleSql`(${documents.metadata} #>> '{importCuration,archivedAt}') IS NOT NULL`
+          drizzleSql`${documents.metadata} ? 'importCuration'`
         )
       );
   }
@@ -305,12 +309,6 @@ export async function addToLibrary(args: {
       itemIds,
     });
   } else if (req.note?.trim()) {
-    if (req.note.length > LIBRARY_LIMITS.shareNoteMax) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `A note is at most ${LIBRARY_LIMITS.shareNoteMax} characters.`,
-      });
-    }
     result.captureNoteId = await keepShareNote({
       database,
       userId: args.userId,
@@ -319,6 +317,9 @@ export async function addToLibrary(args: {
       itemIds,
     });
   }
+  // What is new to the Library is read lightly and findable at once —
+  // here, so no door can forget it.
+  await startKeptItemReads(args.userId, result);
   if (req.readNow && itemIds[0] && args.readNow) {
     try {
       const built = await args.readNow(itemIds[0]);
@@ -342,7 +343,7 @@ export async function addToLibrary(args: {
  * and left to the hourly sweep / the next full reindex — the item is kept and
  * reads "Not read yet", never lost.
  */
-export async function startKeptItemReads(
+async function startKeptItemReads(
   userId: string,
   result: Pick<LibraryAddResult, "staged">
 ): Promise<void> {
@@ -352,21 +353,5 @@ export async function startKeptItemReads(
   if (fresh.length === 0) return;
   const { enqueueLibraryLightRead } = await import("./light-read-queue.js");
   await enqueueLibraryLightRead(fresh.map((itemId) => ({ userId, itemId })));
-  try {
-    const { getBoss } = await import("@synap/jobs");
-    const boss = getBoss();
-    for (const documentId of fresh) {
-      await boss.send("search-index", {
-        collection: "documents",
-        operation: "upsert",
-        documentId,
-        timestamp: Date.now(),
-      });
-    }
-  } catch (err) {
-    logger.warn(
-      { err, count: fresh.length },
-      "library add: search-index enqueue FAILED — findable after the next reindex"
-    );
-  }
+  await enqueueLibrarySearch("upsert", fresh);
 }

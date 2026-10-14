@@ -11,10 +11,17 @@
  * together, or not at all.
  */
 
+import {
+  CurateOpError,
+  assertRoomForGroup,
+  groupName,
+  groupNote,
+  itemNote,
+  mergeGroupSettings,
+} from "./curate-rules.js";
 import { TRPCError } from "@trpc/server";
 import { db as defaultDb, documents, drizzleSql } from "@synap/database";
 import {
-  IMPORT_LIMITS,
   importGroupKey,
   type ImportCurateOp,
   type ImportGroup,
@@ -34,12 +41,10 @@ import {
   type ImportDb,
 } from "./session.js";
 
-export class ImportCurateError extends Error {
-  constructor(
-    readonly opIndex: number,
-    message: string
-  ) {
-    super(`Edit #${opIndex + 1}: ${message}`);
+/** A bad import edit (the shared {@link CurateOpError}). */
+export class ImportCurateError extends CurateOpError {
+  constructor(opIndex: number, message: string) {
+    super(opIndex, message);
     this.name = "ImportCurateError";
   }
 }
@@ -98,7 +103,6 @@ export function applyImportCurateOps(
 ): CurateResult {
   const state = cloneState(input);
   const changed = new Set<string>();
-  const L = IMPORT_LIMITS;
 
   ops.forEach((op, i) => {
     const fail = (message: string): never => {
@@ -111,21 +115,12 @@ export function applyImportCurateOps(
       state.items.set(id, next);
       changed.add(id);
     };
-    const name = (raw: string) => {
-      const n = raw.replace(/\s+/g, " ").trim();
-      if (!n) fail("a group needs a name");
-      if (n.length > L.groupNameMax)
-        fail(`a group name is at most ${L.groupNameMax} characters`);
-      return n;
-    };
+    const name = (raw: string) => groupName(raw, fail);
 
     switch (op.op) {
       case "setGroupNote": {
         const g = group(op.groupKey);
-        if (op.note.length > L.groupNoteMax) {
-          fail(`a group note is at most ${L.groupNoteMax} characters`);
-        }
-        const note = op.note.trim();
+        const note = groupNote(op.note, fail);
         if (note) g.note = note;
         else delete g.note;
         return;
@@ -140,9 +135,7 @@ export function applyImportCurateOps(
         return;
       }
       case "createGroup": {
-        if (state.groups.length >= L.groupsMax) {
-          fail(`an import holds at most ${L.groupsMax} groups`);
-        }
+        assertRoomForGroup(state.groups.length, fail);
         const n = name(op.name);
         const key = importGroupKey(
           n,
@@ -168,8 +161,10 @@ export function applyImportCurateOps(
         if (op.fromKey === op.intoKey) fail("a group cannot merge into itself");
         const from = group(op.fromKey);
         const into = group(op.intoKey);
-        if (!into.note && from.note) into.note = from.note;
-        into.outputs = [...new Set([...into.outputs, ...from.outputs])];
+        const merged = mergeGroupSettings(into, from);
+        if (merged.note) into.note = merged.note;
+        else delete into.note;
+        into.outputs = merged.outputs;
         state.groups = state.groups.filter((g) => g.key !== from.key);
         for (const [id, c] of state.items) {
           if (!c.groupKeys.includes(from.key)) continue;
@@ -211,10 +206,7 @@ export function applyImportCurateOps(
       }
       case "setItemNote": {
         const c = item(op.itemId);
-        if (op.note.length > L.itemNoteMax) {
-          fail(`an item note is at most ${L.itemNoteMax} characters`);
-        }
-        const note = op.note.trim();
+        const note = itemNote(op.note, fail);
         const { note: _old, ...rest } = c;
         touch(op.itemId, note ? { ...rest, note } : rest);
         return;

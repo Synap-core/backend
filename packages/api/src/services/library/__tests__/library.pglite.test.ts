@@ -29,11 +29,24 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   objects: new Map<string, Buffer>(),
+  /** Spaces the person can no longer write (the write floor's contract). */
+  deniedSpaces: new Set<string>(),
 }));
 
-vi.mock("../../../utils/workspace-write-access.js", () => ({
-  assertWorkspaceWrite: async () => undefined,
-}));
+vi.mock("../../../utils/workspace-write-access.js", async () => {
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    assertWorkspaceWrite: async (
+      _db: unknown,
+      _userId: string,
+      row: { workspaceId: string | null }
+    ) => {
+      if (row.workspaceId && h.deniedSpaces.has(row.workspaceId)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "not a member" });
+      }
+    },
+  };
+});
 
 vi.mock("@synap/storage", () => ({
   storage: {
@@ -257,22 +270,6 @@ describe("add", () => {
     expect(await myCaptureIds()).toEqual([r.captureNoteId]);
     const page = await listLibraryItems({ userId: USER, input: {} });
     expect(page.items[0]!.captureNoteId).toBe(r.captureNoteId);
-  });
-
-  it("Read now is one item at a time", async () => {
-    await expect(
-      addToLibrary({
-        userId: USER,
-        request: {
-          items: [
-            { kind: "url", url: "https://example.com/1" },
-            { kind: "url", url: "https://example.com/2" },
-          ],
-          readNow: true,
-        },
-        deps: { readUrl },
-      })
-    ).rejects.toThrow(/one item at a time/);
   });
 
   it("a Read now that fails keeps the item and SAYS it failed", async () => {
@@ -1147,5 +1144,168 @@ describe("adoption is not a scan on every read", () => {
         .map((g) => g.name)
         .sort()
     ).toEqual(["First", "Sneaky one"]);
+  });
+});
+
+describe("lifecycle (review 40/42/43)", () => {
+  it("a reused run re-checks the space's write gate: access removed mid-day stops the next keep", async () => {
+    const WS = "00000000-0000-4000-8000-0000000000bb";
+    const keepIn = () =>
+      addToLibrary({
+        userId: USER,
+        request: {
+          items: [{ kind: "url", url: `https://example.com/${Math.random()}` }],
+          workspaceId: WS,
+        },
+        deps: { readUrl },
+      });
+    const first = await keepIn();
+    h.deniedSpaces.add(WS);
+    try {
+      await expect(keepIn()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      h.deniedSpaces.delete(WS);
+    }
+    const again = await keepIn();
+    expect(again.runId).toBe(first.runId);
+  });
+
+  it("delete hides an item, restore brings it back; an item a bundle was built from cannot be deleted", async () => {
+    const r = await keep([
+      "https://example.com/del",
+      "https://example.com/cited",
+    ]);
+    const [del, cited] = r.staged.map((s) => s.itemId) as [string, string];
+    const g = await newGroup("Cited", [cited]);
+    await buildLibraryGroup({
+      userId: USER,
+      groupId: g,
+      depsFor: () => buildDeps([]),
+    });
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "item.delete", itemIds: [del] }],
+    });
+    const ids = async () =>
+      (await listLibraryItems({ userId: USER, input: {} })).items
+        .map((i) => i.id)
+        .sort();
+    expect(await ids()).toEqual([cited]);
+    expect(
+      (await searchLibrary({ userId: USER, q: "del", limit: 10 })).items
+    ).toEqual([]);
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "item.restore", itemIds: [del] }],
+    });
+    expect(await ids()).toEqual([cited, del].sort());
+    await expect(
+      curateLibrary({
+        userId: USER,
+        ops: [{ op: "item.delete", itemIds: [cited] }],
+      })
+    ).rejects.toThrow(/source of something you built/);
+    // Past the undo window a deleted item is gone for good.
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "item.delete", itemIds: [del] }],
+    });
+    await q(
+      `update documents set deleted_at = now() - interval '31 days' where id = $1`,
+      [del]
+    );
+    await expect(
+      curateLibrary({
+        userId: USER,
+        ops: [{ op: "item.restore", itemIds: [del] }],
+      })
+    ).rejects.toThrow(/no item/);
+  });
+
+  it("seen, note, grouping and re-keep restart the auto-archive clock; group.unarchive brings a group back", async () => {
+    const r = await keep(["https://example.com/clock"]);
+    const id = r.staged[0]!.itemId;
+    const seenAt = async () => {
+      const { rows } = await q<{ s: string | null }>(
+        `select metadata #>> '{importCuration,seenAt}' as s from documents where id = $1`,
+        [id]
+      );
+      return rows[0]!.s;
+    };
+    const reset = () =>
+      q(
+        `update documents set metadata = metadata #- '{importCuration,seenAt}' where id = $1`,
+        [id]
+      );
+    for (const ops of [
+      [{ op: "item.seen", itemIds: [id] }],
+      [{ op: "item.note", itemId: id, note: "later" }],
+    ] as const) {
+      await reset();
+      await curateLibrary({ userId: USER, ops: ops as never });
+      expect(await seenAt()).toBeTruthy();
+    }
+    await reset();
+    const g = await newGroup("Clock", [id]);
+    expect(await seenAt()).toBeTruthy();
+    await reset();
+    await keep(["https://example.com/clock"]);
+    expect(await seenAt()).toBeTruthy();
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.archive", groupId: g }],
+    });
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.unarchive", groupId: g }],
+    });
+    expect(
+      (await loadLibraryGroup({ userId: USER, groupId: g })).archivedAt
+    ).toBeNull();
+  });
+
+  it("a merge keeps BOTH notes and both outputs; group.create respects the group cap", async () => {
+    const a = await newGroup("A", [], "keep the recipes");
+    const b = await newGroup("B", [], "only vegetarian");
+    await curateLibrary({
+      userId: USER,
+      ops: [
+        { op: "group.update", groupId: b, outputs: ["things", "list"] },
+        { op: "group.merge", fromId: b, intoId: a },
+      ],
+    });
+    const into = await loadLibraryGroup({ userId: USER, groupId: a });
+    expect(into.note).toBe("keep the recipes\n\nonly vegetarian");
+    expect(into.outputs).toEqual(["things", "list"]);
+    const { IMPORT_LIMITS } = await import("@synap-core/types/imports");
+    await expect(
+      curateLibrary({
+        userId: USER,
+        ops: Array.from({ length: IMPORT_LIMITS.groupsMax }, (_, i) => ({
+          op: "group.create" as const,
+          name: `G${i}`,
+        })),
+      })
+    ).rejects.toThrow(/at most 40 groups/);
+  });
+});
+
+describe("a Library run is not a batch to discard", () => {
+  it("discardImport refuses a Library run and leaves its items kept", async () => {
+    const { discardImport } = await import("../../imports/discard.js");
+    const r = await keep([
+      "https://example.com/kept-1",
+      "https://example.com/kept-2",
+    ]);
+    await expect(
+      discardImport({
+        userId: USER,
+        sessionId: r.runId,
+        closeSession: async () => undefined,
+      })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(
+      (await listLibraryItems({ userId: USER, input: {} })).items
+    ).toHaveLength(2);
   });
 });
