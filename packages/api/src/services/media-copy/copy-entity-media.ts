@@ -159,6 +159,8 @@ export async function runEntityMediaCopy(
         mimeType: got.mime,
         filename: filenameFor(sourceUrl, got.mime),
         title: row.title ? `${row.title} — image` : undefined,
+        // Nobody uploaded this: the pod copied it in the background.
+        storedBySystem: true,
       });
       copied.push({
         documentId: stored.documentId,

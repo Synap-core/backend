@@ -129,6 +129,8 @@ describe("runEntityMediaCopy", () => {
         workspaceId: "w1",
         mimeType: "image/png",
         filename: "a.png",
+        // A background copy is the pod's, never a human upload.
+        storedBySystem: true,
       })
     );
     const set = state.sets[0] as {

@@ -271,6 +271,12 @@ export async function storeDocumentFromBuffer(params: {
    * — NEVER falsified as `human`. Omit for a genuine human upload (Kratos).
    */
   actorAgentUserId?: string;
+  /**
+   * The pod itself stored this blob — a background job nobody asked for in
+   * the moment (the media copy of an entity's external image). Provenance is
+   * `system`, still owned by `userId`. Never `human`: no person uploaded it.
+   */
+  storedBySystem?: boolean;
 }): Promise<StoredDocument> {
   const { userId, workspaceId, buffer, mimeType, filename } = params;
 
@@ -300,7 +306,9 @@ export async function storeDocumentFromBuffer(params: {
     // agent too — the document row must agree).
     provenance: params.actorAgentUserId
       ? { createdByKind: "ai_agent", createdByUserId: params.actorAgentUserId }
-      : { createdByKind: "human", createdByUserId: userId },
+      : params.storedBySystem
+        ? { createdByKind: "system", createdByUserId: userId }
+        : { createdByKind: "human", createdByUserId: userId },
   });
 
   // Re-read the inserted row so the return keeps the FULL `documents` record its
