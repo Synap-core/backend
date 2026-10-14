@@ -124,11 +124,49 @@ describe("convention: every executor file marks APPROVED", () => {
     expect(registering).toContain("ai-provider.ts");
   });
 
-  it.each(registering)("%s sets status: ProposalStatus.APPROVED", (f) => {
-    const src = readFileSync(join(dir, f), "utf8").replace(
-      /\/\*[\s\S]*?\*\/|\/\/.*$/gm,
-      ""
+  const stripComments = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+  const SETS_APPROVED = /status:\s*ProposalStatus\.APPROVED/;
+
+  /**
+   * An executor may delegate the flip to a `mark…Approved` helper (routers/**
+   * may not touch `proposals` raw, so a new executor keeps the write in a
+   * service). Accepted only when the executor CALLS a helper it imports from a
+   * relative module that DEFINES that helper and itself sets APPROVED.
+   * Granularity is the module, not the function body.
+   */
+  function delegatesApproval(src: string): boolean {
+    const imports = src.matchAll(
+      /import\s*\{([^}]*)\}\s*from\s*"(\.[^"]+)\.js"/g
     );
-    expect(src).toMatch(/status:\s*ProposalStatus\.APPROVED/);
+    for (const [, names, rel] of imports) {
+      for (const name of names!.split(",").map((n) => n.trim())) {
+        if (!/^mark\w*Approved$/.test(name)) continue;
+        if (!new RegExp(`\\b${name}\\(`).test(src)) continue;
+        const target = stripComments(
+          readFileSync(join(dir, `${rel}.ts`), "utf8")
+        );
+        if (
+          new RegExp(`export async function ${name}\\b`).test(target) &&
+          SETS_APPROVED.test(target)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  it("the delegation check can see a literal helper (self-check)", () => {
+    const src = stripComments(
+      readFileSync(join(dir, "trusted-issuer.ts"), "utf8")
+    );
+    expect(SETS_APPROVED.test(src)).toBe(false);
+    expect(delegatesApproval(src)).toBe(true);
+  });
+
+  it.each(registering)("%s sets status: ProposalStatus.APPROVED", (f) => {
+    const src = stripComments(readFileSync(join(dir, f), "utf8"));
+    expect(SETS_APPROVED.test(src) || delegatesApproval(src), f).toBe(true);
   });
 });
