@@ -7,6 +7,10 @@
  * - execute:    Batch entity + relation creation (AI pipeline step 2)
  */
 
+import {
+  deprecatedCapturePaths,
+  recordDeprecatedIntakePaths,
+} from "../services/intake/deprecated-intake-path.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { deriveGatePairFromOperations } from "@synap/governance-policy";
@@ -764,6 +768,11 @@ const captureBaseRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      // A person's link sent to Capture is a deprecated intake path: measured.
+      await recordDeprecatedIntakePaths(
+        { userId, agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+        deprecatedCapturePaths("thought", input)
+      );
       // Pod-wide allowed (twin of capture.structure): no workspace is required.
       // Pin flags use resolveKindWritePin — pod kinds stay unpinned; process
       // kinds pin to ambient when present. Never blanket workspaceScoped.
@@ -1277,6 +1286,12 @@ const captureBaseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
+      // A person's link / file / page sent to Capture is a deprecated intake
+      // path (the agent door is not): measured for the L6 removal criterion.
+      await recordDeprecatedIntakePaths(
+        { userId, agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+        deprecatedCapturePaths("structure", input)
+      );
 
       // Text is optional now (a `file` may carry the payload instead); guard
       // every `input.text` use. The item-fallback below needs SOME text, so use
