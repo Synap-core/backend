@@ -122,6 +122,7 @@ import {
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
 import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
+import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
@@ -401,6 +402,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * absent = unknown. See `object-refs.ts`.
      */
     objectRefs?: Record<string, ProposalObjectRef>;
+    /**
+     * A lifecycle move (`entity.transition`) read on the object: the status
+     * property, from/to with the kind's own labels and categories, and the
+     * subject. Only when the viewer may read the subject. See `status-move.ts`.
+     */
+    statusMove?: ProposalStatusMove;
     capabilityCallLabel?: string;
     workspaceName?: string;
     channelName?: string;
@@ -1395,6 +1402,38 @@ export async function enrichProposalsForDisplay(
     { userId, roster: opts.roster ?? false }
   );
 
+  // STATUS MOVES — a lifecycle move named by the kind's own options, for a
+  // subject the viewer may read under the row's lens (same lens as
+  // `resolveEntityTitle`).
+  const statusMoveByRow = await resolveStatusMoves(
+    rows.map((row, idx) => {
+      const request = requests[idx]!;
+      const payload =
+        request.data &&
+        typeof request.data === "object" &&
+        !Array.isArray(request.data)
+          ? (request.data as Record<string, unknown>)
+          : undefined;
+      const meta = entityById.get(
+        stringProp(payload, "entityId") ?? request.targetId
+      );
+      const readable =
+        !!meta &&
+        (meta.workspaceId === null ||
+          meta.workspaceId === (row.workspaceId ?? null));
+      return {
+        proposalType: row.proposalType,
+        envelope: row.data,
+        payload,
+        targetId: request.targetId,
+        workspaceId: row.workspaceId ?? null,
+        ...(readable
+          ? { subject: { name: meta.title ?? meta.preview ?? null } }
+          : {}),
+      };
+    })
+  );
+
   return rows.map((row, idx) => {
     // Legacy "Run entity.delete" rows re-derive to the action on the object,
     // named through the SAME floored + lens-scoped entity map as every title.
@@ -1771,6 +1810,7 @@ export async function enrichProposalsForDisplay(
         : {}),
       ...(policyReason ? { policyReason } : {}),
       ...(objectRefsByRow[idx] ? { objectRefs: objectRefsByRow[idx] } : {}),
+      ...(statusMoveByRow[idx] ? { statusMove: statusMoveByRow[idx] } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
         ? {
             capabilityCallLabel: nameResolvers.resolveCapabilityCallLabel(
