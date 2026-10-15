@@ -298,7 +298,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // Re-running an approval that already failed (`approval_failed`). The write
   // was approved once, so "Approve" is the wrong word on that button — and for a
   // transient provider outage it is the reviewer's ONLY recovery.
-  retry: { imperative: "Retry", past: "Retried" },
+  // ONE retry verb: the button says "Try again", like every failed read and
+  // act in the kit (SpatialErrorState, LoadFailed). History keeps "Retried":
+  // "Tried again the sync" is not a sentence.
+  retry: { imperative: "Try again", past: "Retried" },
+  // Re-CHECKING what could not be read (a connection the pod failed to read):
+  // nothing is redone, the pod is asked again — so not "Try again".
+  check_again: { imperative: "Check again", past: "Checked again" },
   // AI availability CTAs (`@synap-core/types/ai-availability`) — the CP's
   // `PodBillingAction` vocabulary. `ask_admin` is the member's verb whenever
   // they cannot pay; `upgrade` also covers renewing a plan that has no AI.
