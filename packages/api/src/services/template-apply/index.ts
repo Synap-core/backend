@@ -541,23 +541,30 @@ export async function applyTemplate(
  * An unfinished apply always says something: when the read fails, or finds
  * nothing recorded (the record write itself failed), a fixed sentence from
  * what this apply knows stands in. Only an awaiting-approval apply whose
- * proposals were all decided has nothing left to say.
+ * proposals were all decided — READ, and found decided — has nothing left to
+ * say; a failed read is never that answer.
  */
-async function unfinishedWarning(
+export async function unfinishedWarning(
   workspaceId: string,
-  finished: FinishTemplateApplyResult,
+  finished: Pick<FinishTemplateApplyResult, "state">,
   slug: string | undefined
 ): Promise<string | null> {
   let read: string | null = null;
+  let readFailed = false;
   try {
     read = await templateApplyWarningFor(workspaceId);
   } catch (err) {
+    readFailed = true;
     logger.warn(
       { err, workspaceId },
       "template apply: unfinished, and its warning could not be read"
     );
   }
-  if (read || finished.state === "awaiting-approval") return read;
+  if (read) return read;
+  if (finished.state === "awaiting-approval")
+    return readFailed
+      ? "Waiting for approval of the proposals this update filed."
+      : null;
   return slug
     ? `Not finished: run \`synap templates update ${slug}\` to finish ${slug}.`
     : "Not finished: the template apply did not complete.";
