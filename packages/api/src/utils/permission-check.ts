@@ -3563,6 +3563,22 @@ export async function countPendingAgentProposals(
 }
 
 /**
+ * The ONE sentence for an agent at its proposal limit — the refusal
+ * `createProposal` returns, and the hand-off preview (`readAgentsForHandoff`)
+ * that predicts it. `raise` is the cap-raise request the refusal filed, if any.
+ */
+export function agentProposalLimitLine(
+  cap: number,
+  raise: { proposedLimit: number; link: string } | null
+): string {
+  const planDoorHint =
+    " If you are building STRUCTURE, file it as ONE plan instead of N proposals: a single `synap_capture` call takes projects[]/sessions[]/documents[]/links[]/entities[]/skills[]/automations[]/rules[] together and costs one slot.";
+  return raise
+    ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${raise.proposedLimit} is waiting for your review: ${raise.link} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.${planDoorHint}`
+    : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.${planDoorHint}`;
+}
+
+/**
  * Resolve the effective cap on how many proposals this agent may have
  * simultaneously PENDING. An explicit user-editable ceiling wins — a
  * `governance_ceilings` row (axis `pending_proposal_cap`) for this agent (or
@@ -3580,22 +3596,6 @@ export async function countPendingAgentProposals(
  * holding the 3x cap earned from old history. Scoring the same window makes
  * the two agree and lets trust be earned back / lost based on recent conduct.
  */
-/**
- * The ONE sentence for an agent at its proposal limit — the refusal
- * `createProposal` returns, and the hand-off preview (`readAgentsForHandoff`)
- * that predicts it. `raise` is the cap-raise request the refusal filed, if any.
- */
-export function agentProposalLimitLine(
-  cap: number,
-  raise: { proposedLimit: number; link: string } | null
-): string {
-  const planDoorHint =
-    " If you are building STRUCTURE, file it as ONE plan instead of N proposals: a single `synap_capture` call takes projects[]/sessions[]/documents[]/links[]/entities[]/skills[]/automations[]/rules[] together and costs one slot.";
-  return raise
-    ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${raise.proposedLimit} is waiting for your review: ${raise.link} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.${planDoorHint}`
-    : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.${planDoorHint}`;
-}
-
 export async function agentProposalCap(agentUserId: string): Promise<number> {
   const explicit = await resolvePendingProposalCap({ db, agentUserId });
   if (explicit != null) return explicit;
