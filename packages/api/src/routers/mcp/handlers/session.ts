@@ -21,6 +21,7 @@ import type { TerminalSessionStatus } from "../../../services/focus-sessions/ses
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { waitForSessionAnswers } from "../../../services/focus-sessions/wait-for-answers.js";
+import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
@@ -661,6 +662,13 @@ export const sessionHandlers: McpHandlerMap = {
           }
         : {}),
     });
+  },
+  synap_list_agents: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // The roster for the PERSON the key acts for: whose work it is decides
+    // which agents may take it (the route's floor), not the calling agent.
+    return ok(await readAgentsForHandoff(userId));
   },
   synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;

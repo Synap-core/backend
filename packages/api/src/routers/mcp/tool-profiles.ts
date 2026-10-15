@@ -81,6 +81,7 @@ export const TOOL_GROUPS = {
   sessions: [
     "synap_get_session",
     "synap_list_sessions",
+    "synap_list_agents",
     "synap_evaluate_session",
     "synap_revert_session",
     "synap_rerun_session",

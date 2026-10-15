@@ -210,6 +210,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__link_entities",
     raycast: "create-relation",
   },
+  synap_list_agents: {
+    "pod-mcp": "synap_list_agents",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_list_automations: {
     "pod-mcp": "synap_list_automations",
     "cp-connector": "pod__list_automations",
