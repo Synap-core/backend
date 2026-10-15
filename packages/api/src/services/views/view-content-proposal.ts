@@ -6,14 +6,7 @@
  * touches — the same split as `services/trusted-issuers/scope-request-proposal.ts`.
  */
 
-import {
-  db,
-  and,
-  eq,
-  proposals,
-  ProposalStatus,
-  views,
-} from "@synap/database";
+import { db, and, eq, proposals, ProposalStatus, views } from "@synap/database";
 
 /** The view an approved content update targets — its workspace comes from HERE. */
 export async function loadViewContentTarget(
