@@ -44,10 +44,28 @@ function row(
   };
 }
 
-const cc: ActivityActor = { kind: "agent", id: "agent-cc", name: "Claude Code" };
-const codex: ActivityActor = { kind: "agent", id: "agent-codex", name: "Codex" };
-const me: ActivityActor = { kind: "human", id: "u1", name: "Me", isViewer: true };
-const peer: ActivityActor = { kind: "human", id: "u2", name: "Peer", isViewer: false };
+const cc: ActivityActor = {
+  kind: "agent",
+  id: "agent-cc",
+  name: "Claude Code",
+};
+const codex: ActivityActor = {
+  kind: "agent",
+  id: "agent-codex",
+  name: "Codex",
+};
+const me: ActivityActor = {
+  kind: "human",
+  id: "u1",
+  name: "Me",
+  isViewer: true,
+};
+const peer: ActivityActor = {
+  kind: "human",
+  id: "u2",
+  name: "Peer",
+  isViewer: false,
+};
 const rule: ActivityActor = { kind: "system", id: "auto-1", name: "Enrich" };
 
 describe("outcome view — a mark, never a colour", () => {
@@ -119,8 +137,12 @@ describe("actor filter", () => {
     expect(matchesActivityActor(rule, "agents")).toBe(false);
     expect(matchesActivityActor(me, "me")).toBe(true);
     expect(matchesActivityActor(peer, "me")).toBe(false);
-    expect(matchesActivityActor(cc, activityAgentFilter("agent-cc"))).toBe(true);
-    expect(matchesActivityActor(codex, activityAgentFilter("agent-cc"))).toBe(false);
+    expect(matchesActivityActor(cc, activityAgentFilter("agent-cc"))).toBe(
+      true
+    );
+    expect(matchesActivityActor(codex, activityAgentFilter("agent-cc"))).toBe(
+      false
+    );
   });
 });
 
@@ -145,7 +167,11 @@ describe("selectAgentsToday — THE Home selection", () => {
     row("c", "2026-09-28T12:00:00.000Z", cc),
     row("d", "2026-09-28T13:00:00.000Z", me),
     row("e", "2026-09-27T23:00:00.000Z", cc),
-    row("f", "2026-09-28T10:00:00.000Z", { kind: "agent", id: null, name: "Codex" }),
+    row("f", "2026-09-28T10:00:00.000Z", {
+      kind: "agent",
+      id: null,
+      name: "Codex",
+    }),
   ];
 
   it("counts per agent, newest act, most recent agent first; humans and pre-since rows ignored", () => {
@@ -164,7 +190,10 @@ describe("selectAgentsToday — THE Home selection", () => {
   });
 
   it("caps and reports the rest", () => {
-    const sel = selectAgentsToday({ items, nextCursor: null }, { since, limit: 1 });
+    const sel = selectAgentsToday(
+      { items, nextCursor: null },
+      { since, limit: 1 }
+    );
     expect(sel.agents).toHaveLength(1);
     expect(sel.hiddenAgents).toBe(2);
   });
@@ -202,11 +231,17 @@ describe("activityObjectTitle — a question is someone's sentence, not an objec
   });
 
   it("a question another act answered stays whole, quoted", () => {
-    expect(line("reject", "Approve the spec?")).toBe("Rejected “Approve the spec?”");
+    expect(line("reject", "Approve the spec?")).toBe(
+      "Rejected “Approve the spec?”"
+    );
   });
 
   it("titles that are not questions keep today's rule", () => {
-    expect(line("create", "Create Lumen Atelier")).toBe("Created Lumen Atelier");
-    expect(line("create", "Plan the UI refactor")).toBe("Created Plan the UI refactor");
+    expect(line("create", "Create Lumen Atelier")).toBe(
+      "Created Lumen Atelier"
+    );
+    expect(line("create", "Plan the UI refactor")).toBe(
+      "Created Plan the UI refactor"
+    );
   });
 });
