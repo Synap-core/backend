@@ -12,7 +12,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { packageSlugFromCellTypeKey, INSTALLED_KINDS } from "./installed.js";
+import {
+  packageSlugFromCellTypeKey,
+  INSTALLED_KINDS,
+  unstampedNote,
+} from "./installed.js";
 import { packageCellTypeKey } from "../../../services/cells/install-cell-from-definition.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -102,7 +106,9 @@ describe("install-health projection tripwires", () => {
     ).toEqual({
       provisioningStatus: "failed",
       failedStep: "post-workspace",
-      failedStepError: "boom",
+      // A fixed sentence, never the stored raw cause (review2 O5).
+      failedStepError:
+        "The last update of crm failed. Run `synap templates update crm` to resume.",
     });
   });
 
@@ -112,6 +118,44 @@ describe("install-health projection tripwires", () => {
     // re-create the exact class of lie this endpoint exists to remove.
     const src = read("./installed.ts");
     expect(/drift:\s*(false|[^,\n]*\?\?\s*false)/.test(src)).toBe(false);
+  });
+});
+
+describe("unstampedNote — the next step is the pod's one sentence", () => {
+  it("a space waiting on approval is told to approve, never to run the update first (review2 O9)", async () => {
+    const { readTemplateState } = await import("@synap/database");
+    const { templateApplyWarning } =
+      await import("../../../services/template-health.js");
+    const settings = {
+      template: {
+        slug: "crm",
+        version: null,
+        state: "awaiting-approval",
+        proposals: ["p1"],
+        at: new Date().toISOString(),
+      },
+    };
+    const warning = templateApplyWarning("crm", settings, ["p1"]);
+    const note = unstampedNote(readTemplateState(settings), warning);
+    expect(note).toContain("Waiting on your approval of 1 proposal (p1)");
+    expect(note).not.toMatch(/`synap templates update` finishes it/);
+  });
+
+  it("nothing pending: building and never-stamped keep their own notes", async () => {
+    const { readTemplateState } = await import("@synap/database");
+    expect(
+      unstampedNote(
+        readTemplateState({
+          template: {
+            slug: "crm",
+            state: "building",
+            at: new Date().toISOString(),
+          },
+        }),
+        null
+      )
+    ).toMatch(/^still being built/);
+    expect(unstampedNote(null, null)).toMatch(/never version-stamped/);
   });
 });
 

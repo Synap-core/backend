@@ -228,8 +228,12 @@ async function markApproved(
 
 /**
  * What the reviewer is told when the approved apply did not finish: layer 2
- * failed (recorded on the space; `synap templates update` finishes it), or it
- * did not converge (the version is not stamped, so the next update re-applies).
+ * failed (recorded on the space; `synap templates update` finishes it), or
+ * anything else unfinished — partial, it filed more proposals, or its stamp is
+ * held for a data change — as the pod's ONE sentence (`applied.warning`, what
+ * every other apply door forwards as `templateApplyWarning`). A clean approval
+ * is only ever voiced for an update that converged (review2 O2: relay read
+ * `refusals: []` as "Approved" while the space stayed unfinished).
  */
 function layerTwoRefusals(
   applied: TemplateApplyResult,
@@ -257,7 +261,7 @@ function layerTwoRefusals(
       "template apply approved, but its package layers did not all land — version not stamped, so the next update re-applies"
     );
   }
-  return [];
+  return applied.warning ? [applied.warning] : [];
 }
 
 /** Register the workspace/* approve executors. */

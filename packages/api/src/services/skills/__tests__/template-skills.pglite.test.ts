@@ -52,7 +52,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { cpCatalogCache, skills, workspaces } from "@synap/database/schema";
+import {
+  cpCatalogCache,
+  proposals,
+  skills,
+  workspaces,
+} from "@synap/database/schema";
 import {
   alwaysSkillBudgetWarningsOnEdit,
   applyTemplateSkills,
@@ -144,6 +149,8 @@ async function setBriefRaw(value: unknown): Promise<void> {
 beforeAll(async () => {
   await h.client!.exec(ddlFor(skills));
   await h.client!.exec(ddlFor(workspaces));
+  // Template health reads the pending update proposals of every space.
+  await h.client!.exec(ddlFor(proposals));
   await h.client!.query(
     `insert into workspaces (id, name, owner_id, settings) values ($1,$2,$3,'{}'::jsonb)`,
     [WS, "Probe space", "user-1"]

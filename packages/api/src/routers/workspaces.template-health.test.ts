@@ -63,7 +63,8 @@ describe("workspaces.templateHealth", () => {
     ).toBe("query");
     const reply = await caller().templateHealth();
     expect(m.ids).toHaveBeenCalledWith("user-1");
-    expect(m.health).toHaveBeenCalledWith(["ws-crm", "ws-brand"]);
+    // The reader rides along: it decides `pendingDataChanges.needsPodAdmin`.
+    expect(m.health).toHaveBeenCalledWith(["ws-crm", "ws-brand"], "user-1");
     expect(reply).toEqual({
       workspaces: [NOT_FINISHED, CURRENT],
       driftedCount: 1,

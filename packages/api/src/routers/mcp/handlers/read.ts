@@ -397,7 +397,7 @@ export const readHandlers: McpHandlerMap = {
     // uses), then let the service report health only for what it's handed —
     // it never widens the lens, so a foreign workspace can't leak.
     const wsIds = await getUserAccessibleWorkspaceIds(userId);
-    const all = await listWorkspaceTemplateHealth(wsIds);
+    const all = await listWorkspaceTemplateHealth(wsIds, userId);
     const rows = args.driftedOnly ? all.filter((w) => w.drifted) : all;
     return ok({
       workspaces: rows,

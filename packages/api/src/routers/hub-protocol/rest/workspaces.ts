@@ -34,12 +34,12 @@ import { AccessContext } from "../../../access/index.js";
 import { readWorkspaceEntityStats } from "../../../services/workspace-stats.js";
 import {
   templateHealthFor,
-  awaitingApprovalByWorkspace,
-  templateApplyWarning,
+  templateStepsByWorkspace,
   overlayHealthFor,
   templateSlugsOf,
   resolveTemplateCatalog,
   templateInstallWire,
+  templateStateWire,
 } from "../../../services/template-health.js";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -607,9 +607,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         active.map((w) => w.id),
         userId
       );
-      // The proposals each space's last template apply still waits on — read
-      // LIVE through the one health helper (never the stored array alone).
-      const waitingByWs = await awaitingApprovalByWorkspace(active);
+      // Where each space stands with its last template apply — the SAME step
+      // fields (state, sentence, live pending ids, held data changes, an
+      // agent's pending update) MCP and tRPC serve, from the one helper.
+      const stepsByWs = await templateStepsByWorkspace(active, userId);
       const list = active.map((workspace) => {
         const settings = (workspace.settings ?? {}) as Record<string, unknown>;
         const membership = membershipByWorkspace.get(workspace.id);
@@ -660,17 +661,11 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           replacedBy: health.replacedBy,
           retiredReason: health.retiredReason,
           lifecycleWarning: health.lifecycleWarning,
-          // The update is held until the person approves these (live pending
-          // ids, `[]` once they are decided — plain drift then), and WHY the
-          // last apply did not finish, in the pod's ONE wording.
-          awaitingApproval: waitingByWs.get(workspace.id) ?? [],
-          applyWarning: pkgSlug
-            ? templateApplyWarning(
-                pkgSlug,
-                settings,
-                waitingByWs.get(workspace.id) ?? []
-              )
-            : null,
+          // The step: `state` (health's reading), WHY the last apply did not
+          // finish in the pod's ONE wording, the proposals it waits on (live),
+          // the data changes it is held for, an agent's pending update, and
+          // `stepWarnings` (a read that could not be checked).
+          ...stepsByWs.get(workspace.id)!,
           // Each overlay composed onto this space (`installedPacks`), with its
           // own standing through the same authority — a retired overlay is
           // otherwise invisible here.
@@ -702,8 +697,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           // plan's `failed-layer-2` re-sync).
           ...templateInstallWire(templateState),
           // The whole state object (additive): where the last apply stands,
-          // its layer, the stamp and the packs — one shape for every client.
-          templateState,
+          // its layer, the stamp and the packs — without the raw cause.
+          templateState: templateStateWire(templateState),
         };
       });
       return c.json({ workspaces: list, podEntityCount });

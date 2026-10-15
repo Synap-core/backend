@@ -1375,6 +1375,10 @@ export const workspaceCatalogRouter = router({
    * client draws "update available / not finished / waiting on approval"
    * from this, never from its own version compare (review U1: the browser
    * forked the drift rule and could not see an unfinished space).
+   *
+   * `driftedOnly` / `driftedCount` / `total` mirror the MCP `template_health`
+   * reply on purpose (one shape for both reads of the same rows); the
+   * browser reads only `.workspaces` today.
    */
   templateHealth: protectedProcedure
     .input(
@@ -1394,7 +1398,8 @@ export const workspaceCatalogRouter = router({
       // `/workspaces` projection and MCP use); the service never widens the
       // lens it is handed.
       const all = await listWorkspaceTemplateHealth(
-        await getUserWorkspaceIds(ctx.userId)
+        await getUserWorkspaceIds(ctx.userId),
+        ctx.userId
       );
       return {
         workspaces: input?.driftedOnly ? all.filter((w) => w.drifted) : all,

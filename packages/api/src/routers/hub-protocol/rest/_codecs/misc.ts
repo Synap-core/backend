@@ -708,7 +708,9 @@ export const ListWorkspacesResponseSchema = z
           .string()
           .nullable()
           .optional()
-          .describe("Operator-facing failure detail (truncated to 500 chars)."),
+          .describe(
+            "A fixed sentence for a failed apply (the raw cause stays in the operator log)."
+          ),
       })
     ),
     podEntityCount: z

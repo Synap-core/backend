@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   templates: new Map<string, Record<string, unknown>>(),
   gateCalls: [] as Array<Record<string, unknown>>,
   freshSlugs: new Set<string>(),
+  /** What `pendingTemplateDataChanges` answers (the data-change hold). */
+  pendingDataChanges: [] as unknown[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -74,7 +76,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       entityLinks: { unresolved: [] },
       views: { wouldOrphan: [] },
     }),
-    pendingTemplateDataChanges: async () => [],
+    pendingTemplateDataChanges: async () => h.pendingDataChanges,
     // A FRESH create's layer-1 engine runs on the database package's own
     // client (not this PGlite): stand it in with the row it would write,
     // following its contract (left "pending", the version handed back). A
@@ -410,6 +412,39 @@ describe("an agent's template update of an installed space", () => {
     // Still the old stamp: the next `market update` sees the drift and retries.
     expect(await stampOf(ws)).toBe("h-v1");
     expect(result.versionStamped).toBe(false);
+    // …and the reviewer is TOLD, in the pod's one sentence — never a clean
+    // approval for an update that did not finish (review2 O2).
+    expect(result.refusals).toEqual([
+      "Not finished: part of builder-broken did not apply. Run `synap templates update builder-broken` to retry.",
+    ]);
+  });
+
+  it("an approved update whose stamp is held for a data change tells the reviewer it waits on them", async () => {
+    const slug = "builder-held";
+    h.templates.set(slug, templateV2(slug, ADDED));
+    const ws = await installedSpace(slug);
+    // Filed while nothing was pending (the door 409s an agent otherwise)…
+    const { row } = await agentUpdate(slug);
+    // …approved once a consentable data change touches the template.
+    h.pendingDataChanges = [
+      {
+        opKey: "w3a.seed.item",
+        description: "Add the kind item.",
+        affected: 2,
+        destructive: false,
+        counts: {},
+      },
+    ];
+    try {
+      const result = (await approve(row)) as unknown as Record<string, unknown>;
+      expect(result).toMatchObject({ success: true, primaryId: ws });
+      expect(await stampOf(ws)).toBe("h-v1");
+      expect(result.refusals).toEqual([
+        expect.stringMatching(/changes existing data, and waits for you/),
+      ]);
+    } finally {
+      h.pendingDataChanges = [];
+    }
   });
 });
 

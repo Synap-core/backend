@@ -55,6 +55,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   cpCatalogCache,
   podSettings,
+  proposals,
   skills,
   workspaces,
 } from "@synap/database/schema";
@@ -172,7 +173,7 @@ async function healthOf(id: string) {
 }
 
 beforeAll(async () => {
-  for (const t of [skills, workspaces, cpCatalogCache, podSettings])
+  for (const t of [skills, workspaces, cpCatalogCache, podSettings, proposals])
     await h.client!.exec(ddlFor(t));
   await seedWorkspace(WS_CURRENT, "Ecosystem", {
     packageSlug: "ecosystem",

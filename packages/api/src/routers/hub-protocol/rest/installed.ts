@@ -82,6 +82,8 @@ import {
   templateSlugsOf,
   resolveTemplateCatalog,
   templateInstallWire,
+  templateStateWire,
+  templateStepsByWorkspace,
   type TemplateLifecycle,
   type OverlayTemplateHealth,
 } from "../../../services/template-health.js";
@@ -173,7 +175,7 @@ export interface InstalledRow {
    * Workspace rows only: the ONE template state (`readTemplateState`) — where
    * the last apply stands, its layer, the stamp, the packs. Additive.
    */
-  templateState?: TemplateState | null;
+  templateState?: Omit<TemplateState, "error"> | null;
   /**
    * Free-text note about WHY a field above is what it is — e.g. why drift is
    * unknown for this row. Never a status; always explanatory.
@@ -277,20 +279,19 @@ const ListInstalledResponseSchema = zOpenapi
  * Why an attached workspace row carries no version stamp. "Never stamped" is
  * true only when nothing is pending: a space still being built, or whose last
  * apply did not finish, is unstamped BECAUSE the stamp is earned only on
- * convergence — and it reads drifted, so `synap templates update` finishes it.
+ * convergence. Its next step is the pod's ONE sentence (`applyWarning`, from
+ * `templateApplyWarning`), never a local one: a space waiting on approval is
+ * told to approve first, not to run `synap templates update` (review2 O9).
  */
-export function unstampedNote(state: TemplateState | null): string {
-  switch (state?.state) {
-    case "building":
-      return "still being built — the version is stamped once its template converges";
-    case "failed":
-    case "awaiting-approval":
-    case "partial":
-    case "layer-2-not-run":
-      return `the last template apply did not finish (${state.state}) — the version is stamped once it converges; \`synap templates update\` finishes it`;
-    default:
-      return "attached to a package but never version-stamped — drift cannot be computed";
-  }
+export function unstampedNote(
+  state: TemplateState | null,
+  applyWarning: string | null
+): string {
+  if (applyWarning)
+    return `the version is stamped once the last template apply converges. ${applyWarning}`;
+  if (state?.state === "building")
+    return "still being built — the version is stamped once its template converges";
+  return "attached to a package but never version-stamped — drift cannot be computed";
 }
 
 /**
@@ -392,6 +393,7 @@ export function registerInstalledRoutes(app: HubHono): void {
         const templateCatalog = await resolveTemplateCatalog(
           active.flatMap((w) => templateSlugsOf(w.settings))
         );
+        const stepsByWs = await templateStepsByWorkspace(active, userId);
         for (const w of active) {
           const s = (w.settings ?? {}) as Record<string, unknown>;
           const state = readTemplateState(s);
@@ -428,9 +430,14 @@ export function registerInstalledRoutes(app: HubHono): void {
             retiredReason: health.retiredReason,
             lifecycleWarning: health.lifecycleWarning,
             overlays: overlayHealthFor(s, templateCatalog),
-            templateState: state,
+            templateState: templateStateWire(state),
             ...(health.attached && !health.stamped
-              ? { note: unstampedNote(state) }
+              ? {
+                  note: unstampedNote(
+                    state,
+                    stepsByWs.get(w.id)?.applyWarning ?? null
+                  ),
+                }
               : {}),
           });
         }

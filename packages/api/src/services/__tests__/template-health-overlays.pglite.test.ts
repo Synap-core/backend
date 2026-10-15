@@ -51,6 +51,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   cpCatalogCache,
   podSettings,
+  proposals,
   skills,
   workspaces,
 } from "@synap/database/schema";
@@ -168,7 +169,7 @@ const overlay = (row: Awaited<ReturnType<typeof healthOf>>, slug: string) =>
   row.overlays.find((o) => o.slug === slug)!;
 
 beforeAll(async () => {
-  for (const t of [skills, workspaces, cpCatalogCache, podSettings])
+  for (const t of [skills, workspaces, cpCatalogCache, podSettings, proposals])
     await h.client!.exec(ddlFor(t));
   // The founder's case: business-developer (retired → crm) on the CRM space.
   // The space's own slug is ALSO listed in the ledger — never its own overlay.

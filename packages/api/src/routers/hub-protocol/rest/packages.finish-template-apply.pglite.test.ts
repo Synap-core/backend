@@ -343,21 +343,25 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     });
 
     // Decided (approved here; rejected reads the same): the stored array still
-    // names it, but nothing waits any more — plain drift.
+    // names it, but nothing waits any more — the rest of the apply is left to
+    // run, and every door says so with ONE state (review2 UX-M4).
     await q(`update proposals set status = 'approved' where id = $1`, [
       h.filedProposalId,
     ]);
+    const finish = `Not finished: run \`synap templates update ${SLUG}\` to apply the rest of ${SLUG}.`;
     const [decided] = await listWorkspaceTemplateHealth([id]);
     expect(decided).toMatchObject({
       drifted: true,
       awaitingApproval: [],
-      applyWarning: null,
+      state: "layer-2-not-run",
+      applyWarning: finish,
     });
     expect(decided!.warnings).not.toContain(warning);
     expect(await hubRow(id)).toMatchObject({
       drifted: true,
       awaitingApproval: [],
-      applyWarning: null,
+      state: "layer-2-not-run",
+      applyWarning: finish,
     });
     expect((await space()).settings.templateApply.proposals).toEqual([
       h.filedProposalId,
