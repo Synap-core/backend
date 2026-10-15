@@ -14,11 +14,15 @@ import {
   Spinner,
   Textarea,
 } from "@heroui/react";
-import { Check, ExternalLink, ShieldAlert, X } from "lucide-react";
+import { ArrowUpRight, Check, X } from "lucide-react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
-import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
+import { navHref } from "../../../lib/console-nav";
+import {
+  ConnectionRequestDetails,
+  matchesApprovedConnection,
+  useConnectionRequest,
+} from "./ConnectionRequestDecision";
 
 interface ConnectionRequestReviewProps {
   /** The pod being asked for access. Anchors the page against phishing. */
@@ -34,19 +38,40 @@ export function ConnectionRequestReview({
   const params = useParams<{ requestId: string }>();
   const requestId = params.requestId;
   const router = useRouter();
-  const utils = trpc.useUtils();
-  const request = trpc.applicationConnections.getReviewRequest.useQuery(
-    { requestId },
-    { enabled: Boolean(requestId), retry: false }
-  );
-  const [reason, setReason] = useState("");
-  const [actionError, setActionError] = useState<string | null>(null);
   const [approvedReturnUrl, setApprovedReturnUrl] = useState<string | null>(
     null
   );
   const [autoReturning, setAutoReturning] = useState(false);
   const [declined, setDeclined] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+
+  const review = useConnectionRequest(requestId, {
+    onApproved: (data) => {
+      let isRequesterBrowser = false;
+      try {
+        isRequesterBrowser =
+          window.sessionStorage.getItem(
+            `application-connection-requester:${requestId}`
+          ) === "1";
+      } catch {
+        // Safe default: never auto-navigate when browser storage is blocked.
+      }
+      setApprovedReturnUrl(data.returnUrl);
+      setAutoReturning(isRequesterBrowser);
+      if (isRequesterBrowser) {
+        window.setTimeout(() => window.location.assign(data.returnUrl), 900);
+      } else {
+        // Owner reviewing from Apps: return to the inventory
+        // after a short success beat so the page does not feel stuck.
+        window.setTimeout(() => router.push(navHref("apps")), 1_200);
+      }
+    },
+    onRejected: () => {
+      setDeclined(true);
+      window.setTimeout(() => router.push(navHref("apps")), 900);
+    },
+  });
+  const { request } = review;
 
   useEffect(() => {
     if (!request.isLoading && request.data) {
@@ -64,69 +89,12 @@ export function ConnectionRequestReview({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- closeReview is stable enough for this page
+    // `closeReview` is stable enough for this page; the listener binds once.
   }, []);
 
   function closeReview() {
-    router.push("/origins");
+    router.push(navHref("apps"));
   }
-
-  const approve = trpc.applicationConnections.approveRequest.useMutation({
-    onSuccess: async (data) => {
-      let isRequesterBrowser = false;
-      try {
-        isRequesterBrowser =
-          window.sessionStorage.getItem(
-            `application-connection-requester:${requestId}`
-          ) === "1";
-      } catch {
-        // Safe default: never auto-navigate when browser storage is blocked.
-      }
-      setApprovedReturnUrl(data.returnUrl);
-      setAutoReturning(isRequesterBrowser);
-      setActionError(null);
-      await Promise.all([
-        utils.applicationConnections.getReviewRequest.invalidate({
-          requestId,
-        }),
-        utils.applicationConnections.list.invalidate(),
-      ]);
-      if (isRequesterBrowser) {
-        window.setTimeout(() => window.location.assign(data.returnUrl), 900);
-      } else if (!isRequesterBrowser) {
-        // Owner reviewing from App origins: return to the inventory
-        // after a short success beat so the page does not feel stuck.
-        window.setTimeout(() => router.push("/origins"), 1_200);
-      }
-    },
-    onError: (error) => {
-      if (redirectToLoginIfUnauthorized(error)) return;
-      setActionError(
-        error.message ||
-          "We couldn’t approve this request. Refresh and try again."
-      );
-    },
-  });
-  const reject = trpc.applicationConnections.rejectRequest.useMutation({
-    onSuccess: async () => {
-      setActionError(null);
-      setDeclined(true);
-      await Promise.all([
-        utils.applicationConnections.getReviewRequest.invalidate({
-          requestId,
-        }),
-        utils.applicationConnections.list.invalidate(),
-      ]);
-      window.setTimeout(() => router.push("/origins"), 900);
-    },
-    onError: (error) => {
-      if (redirectToLoginIfUnauthorized(error)) return;
-      setActionError(
-        error.message ||
-          "We couldn’t decline this request. Refresh and try again."
-      );
-    },
-  });
 
   // Expired session → login (bring them back to this exact review), not a dead
   // "we couldn't open this request" error.
@@ -152,7 +120,7 @@ export function ConnectionRequestReview({
           </Alert>
           <div className="flex justify-end">
             <Button variant="flat" className="min-h-11" onPress={closeReview}>
-              Back to App origins
+              Back to Apps
             </Button>
           </div>
         </CardBody>
@@ -165,15 +133,8 @@ export function ConnectionRequestReview({
   const isPending =
     !approvedReturnUrl && !declined && data.status === "pending";
   const isExpired = data.status === "expired";
-  const matchingApproved = Boolean(
-    (data as { matchingApprovedConnection?: boolean })
-      .matchingApprovedConnection
-  );
-  const isWorking = approve.isPending || reject.isPending;
-  const expiresAt = new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(data.expiresAt));
+  const matchingApproved = matchesApprovedConnection(data);
+  const isWorking = review.isWorking;
   const statusLabel =
     data.status === "awaiting_local_auth"
       ? // Deliberately local: this is not the status's NAME, it is an
@@ -247,48 +208,7 @@ export function ConnectionRequestReview({
       </CardHeader>
       <Divider />
       <CardBody className="gap-4 px-6 py-4">
-        {canViewRequestDetails ? (
-          <dl className="grid gap-4 sm:grid-cols-2">
-            <Detail
-              label="Browser origin (required decision)"
-              value={data.requestedOrigin}
-              mono
-            />
-            <Detail label="Return URL" value={data.requestedCallbackUrl} mono />
-            <Detail label="App id" value={data.clientId} mono />
-            <Detail
-              label="Identity provider (separate Trust plane)"
-              value={data.issuerUrl}
-              mono
-            />
-            <Detail
-              className="sm:col-span-2"
-              label="Notes at registration"
-              value={applicationConnectionCapabilities(data.requestedScopes)}
-            />
-            <Detail label="Request expires" value={expiresAt} />
-            {data.publisherUrl ? (
-              <Detail label="Publisher" value={data.publisherUrl} />
-            ) : null}
-          </dl>
-        ) : (
-          <Detail label="Request expires" value={expiresAt} />
-        )}
-
-        {canViewRequestDetails && isPending ? (
-          <Alert
-            color="warning"
-            variant="flat"
-            title="What approval means"
-            startContent={<ShieldAlert size={18} />}
-          >
-            Approving adds this browser origin to the Pod allowlist so the site
-            may call the Pod API (CORS). It does not create membership or grant
-            workspace access. The identity provider listed above is managed
-            under Trust &amp; Keys; approving here may also ensure that provider
-            is registered so sign-in tokens can be verified.
-          </Alert>
-        ) : null}
+        <ConnectionRequestDetails data={data} isPending={isPending} />
 
         {matchingApproved && !isPending && data.status !== "approved" ? (
           <Alert
@@ -304,13 +224,13 @@ export function ConnectionRequestReview({
           </Alert>
         ) : null}
 
-        {actionError ? (
+        {review.actionError ? (
           <Alert
             color="danger"
             title="Action couldn’t be completed"
             role="alert"
           >
-            {actionError}
+            {review.actionError}
           </Alert>
         ) : null}
 
@@ -318,13 +238,13 @@ export function ConnectionRequestReview({
           <Alert color="success" title="Connection approved" role="status">
             {autoReturning
               ? "Returning to the requesting app now so it can finish the connection."
-              : "Approved. Returning to App origins. The requester’s browser can finish with Check connection."}
+              : "Approved. Returning to Apps. The requester’s browser can finish with Check connection."}
           </Alert>
         ) : null}
 
         {declined ? (
           <Alert color="default" title="Request declined" role="status">
-            Returning to App origins.
+            Returning to Apps.
           </Alert>
         ) : null}
 
@@ -336,8 +256,8 @@ export function ConnectionRequestReview({
           >
             You&apos;re signed in to the Pod, but only a Pod owner or
             administrator can approve an external application. Ask one to review
-            it from Pod Admin. Keep the requesting app available; it can resume
-            after approval without sharing your Pod credentials.
+            it from Pod Console. Keep the requesting app available; it can
+            resume after approval without sharing your Pod credentials.
           </Alert>
         ) : null}
 
@@ -368,8 +288,8 @@ export function ConnectionRequestReview({
           <Textarea
             label="Reason if declining"
             description="Required only if you decline (at least 3 characters), so the requester knows what to change."
-            value={reason}
-            onValueChange={setReason}
+            value={review.reason}
+            onValueChange={review.setReason}
             minRows={2}
             maxRows={3}
             isDisabled={isWorking}
@@ -393,11 +313,9 @@ export function ConnectionRequestReview({
               variant="flat"
               className="min-h-11"
               startContent={<X size={16} />}
-              isLoading={reject.isPending}
-              isDisabled={isWorking || reason.trim().length < 3}
-              onPress={() =>
-                reject.mutate({ requestId, reason: reason.trim() })
-              }
+              isLoading={review.rejecting}
+              isDisabled={isWorking || !review.canDecline}
+              onPress={() => review.reject()}
             >
               Decline
             </Button>
@@ -405,9 +323,9 @@ export function ConnectionRequestReview({
               color="primary"
               className="min-h-11"
               startContent={<Check size={16} />}
-              isLoading={approve.isPending}
+              isLoading={review.approving}
               isDisabled={isWorking}
-              onPress={() => approve.mutate({ requestId })}
+              onPress={() => review.approve()}
             >
               Allow this origin
             </Button>
@@ -417,7 +335,7 @@ export function ConnectionRequestReview({
           <Button
             color="primary"
             className="min-h-11"
-            endContent={<ExternalLink size={16} />}
+            endContent={<ArrowUpRight size={16} strokeWidth={1.75} />}
             onPress={() => window.location.assign(approvedReturnUrl)}
           >
             Open app in this browser
@@ -425,29 +343,6 @@ export function ConnectionRequestReview({
         ) : null}
       </CardFooter>
     </ReceiverShell>
-  );
-}
-
-function Detail({
-  label,
-  value,
-  mono = false,
-  className,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  className?: string;
-}) {
-  return (
-    <div className={className}>
-      <dt className="text-xs font-medium text-foreground/50">{label}</dt>
-      <dd
-        className={`mt-1 break-all text-sm text-foreground ${mono ? "font-mono text-[12px] leading-5" : ""}`}
-      >
-        {value}
-      </dd>
-    </div>
   );
 }
 

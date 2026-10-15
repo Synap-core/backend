@@ -16,6 +16,7 @@ import {
   type KratosSession,
 } from "../../../lib/kratos-flow";
 import { trpc, POD_URL } from "../../../lib/trpc";
+import { formatRelative, formatTimestamp } from "../../../lib/format";
 
 type InvitePreview =
   | {
@@ -557,8 +558,35 @@ function InviteHeader({
           invited you to join {scope} as{" "}
           <span className="text-foreground/85">{preview.role}</span>.
         </p>
+        <InviteExpiry expiresAt={preview.expiresAt} />
       </div>
     </>
+  );
+}
+
+/**
+ * WHEN — the trust signal this page already fetched and never showed. A
+ * genuine invite has a deadline; saying so is part of how it reads as one.
+ * The API answers `expired: true` for a past deadline, but a page left open
+ * can cross it, so the past tense is rendered too rather than "in 0m".
+ */
+function InviteExpiry({ expiresAt }: { expiresAt: Date | string }) {
+  const at = new Date(expiresAt);
+  if (Number.isNaN(at.getTime())) return null;
+  const msLeft = at.getTime() - Date.now();
+  const expired = msLeft <= 0;
+  return (
+    <p
+      className={`text-[12.5px] ${expired ? "text-danger" : "text-foreground/65"}`}
+    >
+      {expired ? "Expired" : "Expires"}{" "}
+      <time dateTime={at.toISOString()}>
+        {msLeft > 0 && msLeft < 60_000
+          ? "in under a minute"
+          : formatRelative(at)}
+      </time>{" "}
+      · {formatTimestamp(at)}
+    </p>
   );
 }
 

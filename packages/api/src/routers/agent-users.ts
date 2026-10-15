@@ -55,6 +55,7 @@ import { readReversibleDefault } from "@synap/database";
 import { assertCanManageRule } from "./governance-rules.js";
 import {
   AGENT_WRITE_MODE_LINE,
+  MACHINE_AGENT_TYPE,
   resolveAgentDirection,
   resolveAgentWriteMode,
   type AgentDirection,
@@ -68,6 +69,7 @@ import {
   parsePermission,
 } from "@synap-core/types/grants";
 import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
+import { loadMachineNames } from "../services/machine-roster.js";
 import {
   canDecidePendingConnection,
   pendingAgentConnectProposals,
@@ -120,11 +122,21 @@ void _originsAgree;
 /**
  * The caller's agent roster — the ONE visibility floor for "which agents can
  * this person reach" (`agentUsers.list`, and `captures.giveToAgent`'s pick).
+ *
+ * `includeComputers: false` leaves out computers (agent users of type
+ * `machine`): a surface with its own Computers page lists them there. The
+ * default keeps them, because the desktop resolves a computer's page through
+ * this roster (`object-nav` sends `machine` to the agent holder page).
  */
 export async function queryAgentUsers(
   ctx: { userId: string },
-  workspaceLens: Lens
+  workspaceLens: Lens,
+  opts: { includeComputers?: boolean } = {}
 ) {
+  const notAComputer =
+    opts.includeComputers === false
+      ? [drizzleSql`${users.agentType} IS DISTINCT FROM ${MACHINE_AGENT_TYPE}`]
+      : [];
   // Membership-tied agents — the caller's accessible agents. `userVisibleWhere`
   // is the structural floor (only workspaces the caller can see); the lens
   // narrows within it. `null` lens = no tied rows (pod-wide only).
@@ -133,6 +145,7 @@ export async function queryAgentUsers(
     // An app's own agent is shown only as its app (Connected), never here.
     notAnAppAgent(users.id),
     userVisibleWhere(workspaceMembers.workspaceId, ctx.userId),
+    ...notAComputer,
   ];
 
   let includeTied = true;
@@ -158,6 +171,8 @@ export async function queryAgentUsers(
           isPersonalAgent: users.isPersonalAgent,
           createdByUserId: users.createdByUserId,
           pausedAt: users.agentPausedAt,
+          // The computer it runs on (`host_user_id`) — named in `list`.
+          hostUserId: users.hostUserId,
           role: workspaceMembers.role,
           joinedAt: workspaceMembers.joinedAt,
         })
@@ -179,13 +194,16 @@ export async function queryAgentUsers(
       isPersonalAgent: users.isPersonalAgent,
       createdByUserId: users.createdByUserId,
       pausedAt: users.agentPausedAt,
+      // The computer it runs on (`host_user_id`) — named in `list`.
+      hostUserId: users.hostUserId,
     })
     .from(users)
     .where(
       and(
         eq(users.userType, "agent"),
         notAnAppAgent(users.id),
-        drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`
+        drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`,
+        ...notAComputer
       )
     );
 
@@ -603,14 +621,34 @@ export const agentUsersRouter = router({
    * a stale/forged workspace id can only narrow, never widen access.
    */
   list: protectedProcedure
-    .input(z.object({ workspaceId: ScopeFilterShape.workspaceId }))
+    .input(
+      z.object({
+        workspaceId: ScopeFilterShape.workspaceId,
+        /**
+         * `false` leaves computers (agent users of type `machine`) out — for a
+         * surface that lists them on their own page (the Pod Console). Omitted
+         * keeps them: the desktop opens a computer through this roster.
+         */
+        includeComputers: z.boolean().optional(),
+      })
+    )
     .query(async ({ input, ctx }) => {
       const { workspaceLens } = resolveScope(ctx, input);
       // + `lastSeenAt` / `host` / `activeKeys` / `pendingKeys` / `revokedKeys`
       // (V1 G3) — the connected signal Settings › Agents and the entry
       // surfaces read — then origin (needs the key counts) and viewer verbs.
       const rows = await withAgentPresence(
-        await queryAgentUsers(ctx, workspaceLens)
+        await queryAgentUsers(ctx, workspaceLens, {
+          includeComputers: input.includeComputers,
+        })
+      );
+      // `hostComputer` — the computer the agent runs on (`host_user_id`),
+      // named by the roster's own rule, so a surface can link to it. null =
+      // not on a computer (or the computer row is gone).
+      const hosts = await loadMachineNames(
+        rows
+          .map((r) => r.hostUserId)
+          .filter((id): id is string => typeof id === "string")
       );
       const publicOrigin =
         process.env.PUBLIC_URL ||
@@ -647,6 +685,7 @@ export const agentUsersRouter = router({
             ? (pendingConnect.get(r.id) ?? null)
             : null,
           operatedByViewer: operated.has(r.id),
+          hostComputer: (r.hostUserId && hosts.get(r.hostUserId)) || null,
           reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
           binding: dispatch.get(r.id)?.binding ?? null,
           assignments: assignments.get(r.id) ?? [],
@@ -663,6 +702,30 @@ export const agentUsersRouter = router({
   governance: protectedProcedure
     .input(z.object({ agentUserId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      // An agent's posture is read by those it answers to: the agent itself,
+      // its owner (the `disconnect` predicate), a person it acts for (a live
+      // key linked to them), or a pod admin. Anyone else gets NOT_FOUND, so
+      // the door never confirms an agent exists.
+      const [agent] = await db
+        .select({ id: users.id, createdByUserId: users.createdByUserId })
+        .from(users)
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
+        .limit(1);
+      const mayRead =
+        !!agent &&
+        (ctx.agentUserId === agent.id ||
+          ctx.userId === agent.id ||
+          (!!agent.createdByUserId && agent.createdByUserId === ctx.userId) ||
+          (await agentsOperatedBy(ctx.userId, [agent.id])).has(agent.id) ||
+          (await isPodAdmin(ctx.userId)));
+      if (!mayRead) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Agent user not found",
+        });
+      }
       const state = await readAgentGovernance({
         db,
         agentUserId: input.agentUserId,

@@ -53,12 +53,23 @@ describe("parseOpenParams", () => {
       id: UUID,
     });
   });
+
+  it("hosts automation and session (D6), still uuid-gated", () => {
+    expect(parseOpenParams("automation", UUID).status).toBe("host");
+    expect(parseOpenParams("Session", UUID)).toEqual({
+      status: "host",
+      type: "session",
+      id: UUID,
+    });
+    expect(parseOpenParams("session", "not-a-uuid").status).toBe("invalid-id");
+  });
 });
 
 describe("open helpers", () => {
-  it("titles host pages Entity / View, not Pod Admin", () => {
+  it("titles pages with the registry noun, not Pod Admin", () => {
     expect(openDocumentTitle(parseOpenParams("entity", UUID))).toBe("Entity");
     expect(openDocumentTitle(parseOpenParams("view", UUID))).toBe("View");
+    expect(openDocumentTitle(parseOpenParams("automation", UUID))).toBe("Rule");
     expect(openDocumentTitle(parseOpenParams("nope", UUID))).toBe("Not found");
   });
 });

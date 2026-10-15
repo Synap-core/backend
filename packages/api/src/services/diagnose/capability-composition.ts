@@ -42,10 +42,8 @@ import { listRuns } from "../runs/index.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { deriveCapabilityMode } from "../signal/capability-mode.js";
 import { createLogger } from "@synap-core/core";
-import {
-  DEFAULT_STUCK_THRESHOLD_HOURS,
-  type CapabilityComposition,
-} from "./types.js";
+import { DEFAULT_STUCK_THRESHOLD_HOURS } from "@synap-core/types/run-activity";
+import type { CapabilityComposition } from "./types.js";
 
 const logger = createLogger({ module: "capability-composition" });
 

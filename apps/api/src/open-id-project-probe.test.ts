@@ -39,19 +39,43 @@ describe("bare /open/:id probe order", () => {
     expect(HANDLER_BODY).toContain('type = "entity"');
   });
 
+  // The project probe is a GUARD, not a type: a project id goes on untyped
+  // (the route owns no type list), so what is pinned is that the `projects`
+  // lookup runs BEFORE the `entities` one and short-circuits it. (These two
+  // assertions replace ones that looked for a `type = "project"` assignment
+  // the handler stopped making when it dropped its private type list — they
+  // had been failing since.)
   it("probes `projects` before `entities`", () => {
-    const projectIdx = HANDLER_BODY.indexOf('type = "project"');
-    const entityIdx = HANDLER_BODY.indexOf('type = "entity"');
+    const projectIdx = HANDLER_BODY.indexOf(".from(projects)");
+    const entityIdx = HANDLER_BODY.indexOf(".from(entities)");
     expect(projectIdx).toBeGreaterThan(-1);
     expect(entityIdx).toBeGreaterThan(-1);
     expect(projectIdx).toBeLessThan(entityIdx);
   });
 
-  it("queries the `projects` table (not just a renamed entity check)", () => {
-    const projectBranch = HANDLER_BODY.slice(
-      HANDLER_BODY.indexOf('type = "project"') - 400,
-      HANDLER_BODY.indexOf('type = "project"')
+  it("the entity probe only runs when the projects probe MISSED", () => {
+    const guard = HANDLER_BODY.slice(
+      HANDLER_BODY.indexOf(".from(projects)") - 300,
+      HANDLER_BODY.indexOf(".from(projects)")
     );
-    expect(projectBranch).toContain(".from(projects)");
+    expect(guard).toMatch(/!\(await hit\(/);
+  });
+});
+
+describe("bare /open/:id owns no type list", () => {
+  // The public route may only type what changes its HTTP answer. Anything
+  // else is resolved user-floored behind a sign-in (pod-admin `/open/<id>` →
+  // `diagnose.resolveOpen`, or the app). A new `type = "<kind>"` here is a
+  // second, unfloored probe list — the thing this route was cleaned of.
+  it("assigns only proposal / entity / view", () => {
+    const assigned = [...HANDLER_BODY.matchAll(/\btype = "([a-z_]+)"/g)].map(
+      (m) => m[1]
+    );
+    expect(assigned.length).toBeGreaterThan(0);
+    expect([...new Set(assigned)].sort()).toEqual([
+      "entity",
+      "proposal",
+      "view",
+    ]);
   });
 });

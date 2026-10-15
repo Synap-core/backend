@@ -126,7 +126,12 @@ describe("summarizeGlobalHealth — stuck_runs section", () => {
       oldestAgeHoursIncludingOutsideLens: null,
     },
     duplicateClusters: [],
-    capabilities: { enabled: 1, unapproved: 0 },
+    capabilities: {
+      installed: 1,
+      verbs: 1,
+      verbsAwaitingEnable: 0,
+      capabilitiesAwaitingEnable: 0,
+    },
     agentActivity: [],
   };
 

@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import plugin from "tailwindcss/plugin";
 // HeroUI v2 plugin — wires CSS variables + tailwind-variants strings.
 // We import via require() so Next.js's TS loader handles it cleanly.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -56,6 +57,11 @@ const config: Config = {
     },
   },
   plugins: [
+    // The sidebar's remembered collapse, set on <html> before paint
+    // (`lib/nav-collapsed.ts`), so its widths are CSS rather than state.
+    plugin(({ addVariant }) =>
+      addVariant("nav-collapsed", "html[data-nav-collapsed] &")
+    ),
     heroui({
       defaultTheme: "dark",
       defaultExtendTheme: "dark",

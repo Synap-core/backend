@@ -19,16 +19,46 @@ export const trustedIssuersRouter = router({
     readBrokerTrustDiagnostics()
   ),
 
+  /**
+   * Approve an issuer, only from the status the person saw (`expectedStatus`,
+   * default `pending`) — so a stale screen cannot resurrect a rejected or
+   * revoked issuer. `approved` changes an approved issuer's scopes (the broker
+   * panel's scope fix); `rejected` / `revoked` reinstate on purpose.
+   * CONFLICT when the status moved, NOT_FOUND when there is no such issuer.
+   */
   approve: podAdminProcedure
     .input(
       z.object({
         id: z.string().uuid(),
         allowedScopes: trustedIssuerCapabilitiesSchema,
+        expectedStatus: z
+          .enum(["pending", "approved", "rejected", "revoked"])
+          .default("pending"),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const svc = new TrustedIssuerService();
-      return svc.approve(input.id, ctx.userId, input.allowedScopes);
+      const approved = await svc.approveFromStatus(
+        input.id,
+        ctx.userId,
+        input.allowedScopes,
+        input.expectedStatus
+      );
+      if (approved) return approved;
+      const current = await db.query.trustedIssuers.findFirst({
+        where: eq(trustedIssuers.id, input.id),
+        columns: { status: true },
+      });
+      if (!current) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Trusted issuer not found",
+        });
+      }
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `This issuer is ${current.status} now, not ${input.expectedStatus}. Reload and decide again.`,
+      });
     }),
 
   reject: podAdminProcedure
@@ -103,11 +133,17 @@ export const trustedIssuersRouter = router({
         input.displayName,
         null
       );
-      const approved = await svc.approve(
+      const approved = await svc.approvePending(
         pending.id,
         ctx.userId,
         input.allowedScopes
       );
+      if (!approved) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `The issuer for ${issuerUrl} was decided while it was being added`,
+        });
+      }
       return approved;
     }),
 });

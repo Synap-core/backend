@@ -3,10 +3,12 @@
  *
  * Pod Admin consumes the SAME tRPC AppRouter as admin-ui. Auth is the
  * pod's Kratos session cookie (sent via `credentials: "include"` in the
- * provider's fetch wrapper). Pod-admin operates pod-wide, so it never
- * sets the `X-Workspace-Id` header — every procedure it calls is either
+ * provider's fetch wrapper). Pod-admin operates pod-wide, so it sets no
+ * global `X-Workspace-Id` header — almost every procedure it calls is either
  * `protectedProcedure` (any authenticated pod user) or `podAdminProcedure`
- * (must be admin/owner of the pod-admin workspace).
+ * (must be admin/owner of the pod-admin workspace). A `workspaceProcedure`
+ * call passes `{ context: { workspaceId } }` and the provider's split link
+ * sends that one request with the header.
  */
 
 import { createTRPCReact } from "@trpc/react-query";

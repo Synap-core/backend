@@ -17,7 +17,7 @@
  * `lib/pod-trpc.ts`.
  */
 
-import { whoamiFromCookie } from "../../../lib/kratos";
+import { apiSessionDenial } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 
 export const dynamic = "force-dynamic";
@@ -34,17 +34,18 @@ interface AppRow {
 }
 
 export async function GET(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  const identity = await whoamiFromCookie(cookie);
-  if (!identity) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
 
   // One app: the detail page's read. `apps.get` is self-scoped, so a public id
   // that is not the caller's returns NOT_FOUND rather than someone else's app.
   const publicId = new URL(req.url).searchParams.get("publicId");
   if (publicId) {
-    const one = await callPodQuery<AppRow>("apps.get", { publicId }, cookie);
+    const one = await callPodQuery<AppRow>(
+      "apps.get",
+      { publicId },
+      req.headers
+    );
     if (!one.ok) {
       return Response.json({ error: one.message }, { status: one.status });
     }
@@ -56,7 +57,7 @@ export async function GET(req: Request) {
   const res = await callPodQuery<AppRow[]>(
     "apps.list",
     { includeRevoked: true },
-    cookie
+    req.headers
   );
   if (!res.ok) {
     return Response.json({ error: res.message }, { status: res.status });
@@ -65,11 +66,8 @@ export async function GET(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const cookie = req.headers.get("cookie") ?? "";
-  const identity = await whoamiFromCookie(cookie);
-  if (!identity) {
-    return Response.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
   const body = (await req.json().catch(() => null)) as {
     publicId?: unknown;
     action?: unknown;
@@ -88,7 +86,7 @@ export async function DELETE(req: Request) {
   const res = await callPodMutation<{ revoked?: boolean; removed?: boolean }>(
     END_PROCEDURE[action],
     { publicId },
-    cookie
+    req.headers
   );
   if (!res.ok) {
     return Response.json({ error: res.message }, { status: res.status });

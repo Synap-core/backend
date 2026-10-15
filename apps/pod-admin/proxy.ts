@@ -1,5 +1,5 @@
 /**
- * Pod Admin auth gate.
+ * Pod Console auth gate.
  *
  * Next.js 16 renamed the `middleware` file convention to `proxy` — same
  * request-interception semantics, new filename + export name.
@@ -15,7 +15,13 @@
  *
  *   2. pod_admin role — uses `trpc.sync.getStatus` as a "may I admin?"
  *      probe (it's wrapped in `podAdminProcedure`, returning 403 for
- *      non-admins). Not admin → 307 to `/forbidden`.
+ *      non-admins). Not admin → 307 to `/forbidden`, except on the
+ *      self-service receivers and the member console (`lib/route-policy.ts`).
+ *
+ * When the pod cannot ANSWER either question (unreachable, 5xx, 429 from its
+ * rate limiter) the request gets a 503 "try again" page — never /login and
+ * never /forbidden. Those two are verdicts about the person; a busy pod is
+ * not one (`lib/kratos.ts` `SessionCheck`).
  *
  * Public exemptions: `/login`, `/forbidden`, `/api/*`, `/_next/*`,
  * static files.
@@ -25,10 +31,18 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { whoamiFromCookie, isPodAdmin } from "./lib/kratos";
+import { checkSession, podAdminRole } from "./lib/kratos";
+import {
+  CONSOLE_ROLE_HEADER,
+  isMemberConsolePath,
+  isSelfService,
+  type ConsoleRole,
+} from "./lib/route-policy";
 
 export const config = {
-  // Match every page request EXCEPT the public exemptions.
+  // Match every page request EXCEPT the public exemptions. Must stay a
+  // literal (Next reads it statically); `lib/route-policy.test.ts` proves it
+  // equals `MATCHER_EXCLUDED_PREFIXES`.
   matcher: [
     /*
      * Match all request paths except for:
@@ -44,7 +58,6 @@ export const config = {
 };
 
 export async function proxy(req: NextRequest) {
-  const cookie = req.headers.get("cookie") ?? "";
   const currentUrl = req.nextUrl.pathname + req.nextUrl.search;
   const path = req.nextUrl.pathname;
 
@@ -72,65 +85,30 @@ export async function proxy(req: NextRequest) {
   }
 
   // ── 1. Kratos session ─────────────────────────────────────────────
-  const identity = await whoamiFromCookie(cookie);
-  if (!identity) {
+  const session = await checkSession(req.headers);
+  if (session.state === "unavailable") return podUnavailable();
+  if (session.state === "none") {
     const loginUrl = new URL(
       `/login?return=${encodeURIComponent(currentUrl)}`,
       req.url
     );
     return NextResponse.redirect(loginUrl);
   }
+  const { identity } = session;
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
-  // /connect, /my-connections, /approve-agent/* and /oauth/consent are
-  // self-service surfaces for any signed-in pod user (CLI/Raycast/Claude
-  // Desktop key minting, viewing/revoking your own keys, the matching
-  // agent-key approval, and authorizing an OAuth client against your own
-  // data). The backend endpoints they call already re-verify the Kratos
-  // session server-side — we just need a valid session here, not the
-  // pod_admin role. Requiring pod_admin on /oauth/consent would lock every
-  // non-admin pod member out of connecting claude.ai to their own pod.
-  const isSelfService =
-    path === "/connect" ||
-    path === "/my-connections" ||
-    // An app's detail page (`/apps/<public_id>`) is the same self-service
-    // object as the row it opens from `/my-connections`: `apps.get` /
-    // `apps.revoke` / `apps.remove` are already scoped to `ctx.userId` server-side, so this
-    // grants no reach — it only stops a non-admin from being 403'd on a page
-    // that shows their OWN app.
-    path.startsWith("/apps/") ||
-    // Your OWN vault, exactly like your own keys above. `secretsVault.list` /
-    // `.delete` are scoped to `ctx.userId` server-side, so this grants no
-    // reach — it only stops `pod_admin` being required to manage secrets that
-    // are already yours. Requiring it would lock every non-admin pod member
-    // out of their own vault, the same way it would have for /oauth/consent.
-    path === "/my-vault" ||
-    // Your OWN sign-in methods and recovery codes. Every call behind it is
-    // scoped to the caller's account; the one owner-only control (Synap Cloud
-    // trust) is re-checked by the pod (`PUT /api/account-recovery/cloud-trust`).
-    path === "/settings/security" ||
-    path === "/oauth/consent" ||
-    path.startsWith("/approve-agent") ||
-    // Approving YOUR computer (`synap init`, the device door). The pod's
-    // `apiKeys.getDeviceRequest` / `.decideDeviceRequest` re-check the signed-in
-    // session and make the computer the approver's own; requiring pod_admin
-    // would stop every non-admin member from connecting their own machine.
-    path === "/device" ||
-    path.startsWith("/connection-requests/") ||
-    // A proposal reviewer is usually a workspace editor, not a pod admin;
-    // `proposals.get`/`.approve` re-check editor role server-side, so we only
-    // need a valid Kratos session here — requiring pod_admin would 403 every
-    // non-admin reviewer landing from an AI-sent /open/<id> link.
-    path.startsWith("/proposal/") ||
-    // Signed-in `/open` is the compact web host for one entity or view.
-    // `entities.get` / `views.get` re-check access server-side; requiring
-    // pod_admin would 403 every non-admin operator landing from a share link.
-    path.startsWith("/open/");
-  if (!isSelfService) {
-    const admin = await isPodAdmin(cookie);
-    if (!admin) {
+  // Self-service receivers need only the session (each one's reason lives
+  // in `lib/route-policy.ts`). The member console (`/home`, `/review`)
+  // opens for any member but still asks the role, because the nav it
+  // renders depends on it. Everything else is pod_admin or /forbidden.
+  let role: ConsoleRole | null = null;
+  if (isMemberConsolePath(path) || !isSelfService(path)) {
+    const answer = await podAdminRole(req.headers);
+    if (answer === "unavailable") return podUnavailable();
+    if (answer === "member" && !isMemberConsolePath(path)) {
       return NextResponse.redirect(new URL("/forbidden", req.url));
     }
+    role = answer;
   }
 
   // Pass identity to downstream pages via request headers — useful for
@@ -139,7 +117,35 @@ export async function proxy(req: NextRequest) {
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-pod-admin-id", identity.id);
   requestHeaders.set("x-pod-admin-email", identity.email);
+  // A nameless identity must not inherit a client-sent name header.
   if (identity.name) requestHeaders.set("x-pod-admin-name", identity.name);
+  else requestHeaders.delete("x-pod-admin-name");
+  // The role shapes the console nav only (data stays gated server-side).
+  // Never forwarded from the client: deleted first, then set only where the
+  // proxy asked the pod.
+  requestHeaders.delete(CONSOLE_ROLE_HEADER);
+  if (role) requestHeaders.set(CONSOLE_ROLE_HEADER, role);
 
   return NextResponse.next({ request: { headers: requestHeaders } });
+}
+
+/**
+ * The pod did not answer "who is this?". Self-contained HTML (no app chrome:
+ * the layout would need the very answers we lack), and a 503 so a prefetch
+ * never caches it as the page. Its colours are the console theme's own
+ * (`tailwind.config.ts`: dark by default, the light theme when the browser
+ * asks for it), and Refresh is a plain link to this same address — no script.
+ */
+function podUnavailable(): NextResponse {
+  return new NextResponse(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><title>Pod Console</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:32rem;margin:0 auto;padding:4rem 1rem;line-height:1.5;color:#ECECEA;background:#0B0C0A}h1{font-size:1.25rem;font-weight:500;margin:0 0 .5rem}p{margin:0 0 1rem;color:rgba(236,236,234,.75)}.btn{display:inline-block;padding:.5rem 1rem;border-radius:12px;background:#047857;color:#fff;text-decoration:none;font-weight:500}.btn:hover{opacity:.9}.btn:focus-visible{outline:2px solid #34D399;outline-offset:2px}@media (prefers-color-scheme:light){body{color:#1A1A19;background:#FAF9F6}p{color:rgba(26,26,25,.75)}.btn:focus-visible{outline-color:#10B981}}</style></head><body><main><h1>Your pod didn’t answer just now</h1><p>The pod is busy or restarting, so the console couldn’t check your sign-in. Nothing was signed out.</p><p>Try again in a few seconds.</p><a class="btn" href="">Refresh</a></main></body></html>`,
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": "10",
+      },
+    }
+  );
 }

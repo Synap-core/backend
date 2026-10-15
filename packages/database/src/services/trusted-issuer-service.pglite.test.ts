@@ -109,7 +109,12 @@ describe("seedBuiltIn — CP scopes are pinned, wider = owner consent (D7)", () 
     const svc = new TrustedIssuerService();
     await seedCp(svc, [...PINNED, WIDER]);
     const row = (await svc.getByUrl(CP))!;
-    const approved = await svc.approve(row.id, "owner-1", [...PINNED, WIDER]);
+    const approved = (await svc.approveFromStatus(
+      row.id,
+      "owner-1",
+      [...PINNED, WIDER],
+      "approved"
+    ))!;
     expect(approved.allowedScopes).toContain(WIDER);
     expect(getPendingScopes(approved)).toEqual([]);
 

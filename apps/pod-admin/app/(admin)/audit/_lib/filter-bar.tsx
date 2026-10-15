@@ -1,16 +1,9 @@
 "use client";
 
 /**
- * Audit → shared filter bar.
- *
- * Sits sticky at the top of the body and feeds three sub-tabs:
- *   • Activity log    — `system.listAuditLogs` (subjectType + action + userId)
- *   • Proposals       — client-filtered `proposals.list`
- *   • Approval queue  — `proposals.list({ status: "pending" })`
- *
- * State is owned by the parent page and threaded through props so the bar
- * is one component, not three. Sub-tabs read whatever filters they care
- * about and ignore the rest.
+ * Audit log → filter bar for the activity log (`system.listAuditLogs`:
+ * subjectType + action + userId). State is owned by the parent page and
+ * threaded through props.
  *
  * Date range default = last 7 days. Workspace filter is multi-select but
  * the underlying procedure (`listAuditLogs`) only takes a single workspace
@@ -91,7 +84,7 @@ export function FilterBar({
   return (
     <div
       className={[
-        "sticky top-0 z-10 -mx-6 mb-5 px-6 py-3",
+        "-mx-4 mb-5 px-4 py-3 sm:-mx-6 sm:px-6 md:sticky md:top-0 md:z-10",
         "bg-background/85 backdrop-blur",
         "border-b border-foreground/[0.05]",
       ].join(" ")}

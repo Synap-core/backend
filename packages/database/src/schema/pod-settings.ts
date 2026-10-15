@@ -119,6 +119,71 @@ export interface PodMachineDefaults {
   keyTtlDays?: number;
 }
 
+/**
+ * A marketplace source a pod admin added (Pod Console D11). Lives on the
+ * singleton `pod_settings.settings.marketplaceSources` — no new table. The
+ * built-in Synap source is NOT stored here (it is compiled in, read from
+ * `CONTROL_PLANE_URL`); only its on/off switch is (`marketplaceOfficialSource`).
+ *
+ * Written only by a signed-in person who administers the pod
+ * (`marketplace.sources.*`) — never by an agent or a key. The trust vocabulary
+ * is `@synap-core/types/marketplace-source` (this package sits below it, so
+ * the union is spelled here).
+ */
+export interface MarketplaceSourceSetting {
+  /** From the source's own index; qualifies its packages (`acme/crm`). */
+  id: string;
+  /** Base address (or the index URL itself) the person added. */
+  url: string;
+  name: string;
+  trust: "trusted" | "showcase";
+  /** The pinned ed25519 key (raw, base64); null for an unsigned showcase. */
+  publicKey: string | null;
+  /** sha256 of the raw key, hex — what the person confirmed. */
+  keyFingerprint: string | null;
+  /** Trusted only: agents may PROPOSE installs from it. Default off. */
+  agentsMayPropose?: boolean;
+  /** User id of the person who added it. */
+  addedBy: string;
+  addedAt: string;
+  enabled: boolean;
+}
+
+/** The built-in Synap source's switch (it can be turned off, never removed). */
+export interface MarketplaceOfficialSourceSetting {
+  enabled: boolean;
+  changedBy: string;
+  changedAt: string;
+}
+
+/**
+ * Where one added source stands after its last sync, written by the sync
+ * worker under `marketplaceSourceStatus.<id>` (a separate key from the
+ * admin-written list, so a sync never races a person's edit).
+ */
+export interface MarketplaceSourceStatus {
+  state:
+    | "pending"
+    | "ok"
+    | "unreachable"
+    | "invalid"
+    | "bad_signature"
+    | "expired"
+    | "key_changed";
+  lastSyncAt: string;
+  /** Last time an index verified and was applied. */
+  lastOkAt: string | null;
+  /** Packages in the last applied index. */
+  packageCount: number;
+  /** `expires` of the last applied index — nothing from it installs after. */
+  validUntil: string | null;
+  /** One plain sentence on the last attempt when it did not apply. */
+  message: string | null;
+  /** key_changed only: the key the source is signed by now. */
+  pendingPublicKey?: string | null;
+  pendingFingerprint?: string | null;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   intelligenceDefaults?: PodIntelligenceDefaults;
@@ -126,6 +191,9 @@ export interface PodSettingsBlob {
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;
   federationOidcClient?: FederationOidcClient;
   governanceRulesBackfill?: GovernanceBackfillMarker;
+  marketplaceSources?: MarketplaceSourceSetting[];
+  marketplaceOfficialSource?: MarketplaceOfficialSourceSetting;
+  marketplaceSourceStatus?: Record<string, MarketplaceSourceStatus>;
   [k: string]: unknown;
 }
 

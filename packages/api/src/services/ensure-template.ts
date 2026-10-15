@@ -18,6 +18,7 @@
 
 import { and, db, eq, isNull, readTemplateState } from "@synap/database";
 import { cpCatalogCache, workspaces } from "@synap/database/schema";
+import { officialCatalogCondition } from "./capabilities/catalog-cache-query.js";
 import { getWorkspaceTemplate } from "@synap-core/workspace-templates";
 import {
   classifyTemplateLifecycle,
@@ -123,6 +124,7 @@ export async function readTemplateStanding(
       .from(cpCatalogCache)
       .where(
         and(
+          officialCatalogCondition(),
           eq(cpCatalogCache.kind, "template"),
           eq(cpCatalogCache.slug, slug),
           isNull(cpCatalogCache.retiredAt)

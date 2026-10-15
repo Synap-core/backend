@@ -31,6 +31,7 @@ import {
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -39,7 +40,7 @@ import {
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatRelative } from "../people/_lib/helpers";
+import { formatRelative, isUuid, readableError } from "../../../lib/format";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -56,29 +57,14 @@ type EntityRow = {
 
 /** `?focus=` must be a real entity id before we spend a query on it —
  * `entities.adminGet` rejects anything that is not a UUID. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ─── Page shell ───────────────────────────────────────────────────────
 
 export default function EntitiesPage() {
   return (
-    <Suspense fallback={<EntitiesFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <EntitiesInner />
     </Suspense>
-  );
-}
-
-function EntitiesFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-1">
-        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-          Entities
-        </h1>
-      </header>
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }
 
@@ -175,7 +161,7 @@ function EntitiesInner() {
     focusId != null &&
     !focusOnPage &&
     !entitiesQuery.isLoading &&
-    UUID_RE.test(focusId);
+    isUuid(focusId);
 
   const focusLookup = trpc.entities.adminGet.useQuery(
     { id: focusId ?? "" },
@@ -241,8 +227,8 @@ function EntitiesInner() {
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Bulk delete failed",
-        description: err.message,
+        title: "Couldn't delete the selected entities",
+        description: readableError(err.message),
         color: "danger",
       });
       setConfirmBulkDelete(false);
@@ -254,35 +240,30 @@ function EntitiesInner() {
   }
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <header className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
-            Entities
-          </h1>
-          <p className="text-[13px] text-foreground/55">
-            All entities on this pod. Deletions are permanent and cannot be
-            undone.
-          </p>
-        </div>
-        {someSelected && (
-          <div className="flex items-center gap-2">
-            <span className="text-[12.5px] text-foreground/55">
-              {selectedIds.size} selected
-            </span>
-            <Button
-              color="danger"
-              variant="flat"
-              radius="md"
-              size="sm"
-              startContent={<Trash2 className="h-3.5 w-3.5" />}
-              onPress={() => setConfirmBulkDelete(true)}
-            >
-              Delete selected
-            </Button>
-          </div>
-        )}
-      </header>
+    <PageShell>
+      <PageHeader
+        title="Entities"
+        description="Every entity on this pod, across all spaces. Deletions are permanent."
+        actions={
+          someSelected && (
+            <>
+              <span className="text-[12.5px] text-foreground/65">
+                {selectedIds.size} selected
+              </span>
+              <Button
+                color="danger"
+                variant="flat"
+                radius="md"
+                size="sm"
+                startContent={<Trash2 className="h-3.5 w-3.5" />}
+                onPress={() => setConfirmBulkDelete(true)}
+              >
+                Delete selected
+              </Button>
+            </>
+          )
+        }
+      />
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-end gap-3">
@@ -320,7 +301,7 @@ function EntitiesInner() {
               ...profiles.map((p) => (
                 <SelectItem key={p.profileSlug} textValue={p.profileSlug}>
                   {p.profileSlug}{" "}
-                  <span className="text-foreground/45">({p.count})</span>
+                  <span className="text-foreground/65">({p.count})</span>
                 </SelectItem>
               )),
             ]}
@@ -336,7 +317,7 @@ function EntitiesInner() {
                 setPodWideOnly(v);
                 if (v) setWorkspaceIdInput("");
               }}
-              aria-label="Pod-wide only (no workspace)"
+              aria-label="Pod-wide only (no space)"
             />
             Pod-wide only
           </label>
@@ -345,7 +326,7 @@ function EntitiesInner() {
         {!podWideOnly && (
           <div className="w-72">
             <Input
-              placeholder="Filter by workspace UUID…"
+              placeholder="Filter by space ID…"
               value={workspaceIdInput}
               onValueChange={setWorkspaceIdInput}
               radius="md"
@@ -360,7 +341,6 @@ function EntitiesInner() {
 
       <SectionCard
         title={`Entities${total > 0 ? ` (${total})` : ""}`}
-        hint="Click the trash icon to delete a row · use checkboxes for bulk deletion"
         actions={
           pageCount > 1 ? (
             <div className="flex items-center gap-1.5">
@@ -443,13 +423,13 @@ function EntitiesInner() {
                 onValueChange={toggleAll}
                 aria-label="Select all on this page"
               />
-              <div className="grid flex-1 grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-3 text-[10.5px] font-medium uppercase tracking-wider text-foreground/40">
+              <div className="grid flex-1 grid-cols-[1fr_auto] gap-3 text-[10.5px] font-medium uppercase tracking-wider text-foreground/65 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
                 <span>Title</span>
-                <span>Type</span>
-                <span>Workspace</span>
-                <span>Created by</span>
-                <span>Created</span>
-                <span />
+                <span className="hidden sm:block">Type</span>
+                <span className="hidden sm:block">Space</span>
+                <span className="hidden sm:block">Created by</span>
+                <span className="hidden sm:block">Created</span>
+                <span className="hidden sm:block" />
               </div>
             </div>
 
@@ -496,7 +476,7 @@ function EntitiesInner() {
         confirmLabel={`Delete ${selectedIds.size} entities`}
         isPending={batchDeleteMutation.isPending}
       />
-    </div>
+    </PageShell>
   );
 }
 
@@ -527,8 +507,8 @@ function EntityTableRow({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
-        title: "Delete failed",
-        description: err.message,
+        title: "Couldn't delete the entity",
+        description: readableError(err.message),
         color: "danger",
       });
       setConfirmDelete(false);
@@ -548,7 +528,7 @@ function EntityTableRow({
           onValueChange={onToggle}
           aria-label={`Select entity ${item.id}`}
         />
-        <div className="grid flex-1 grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] items-center gap-3">
+        <div className="grid flex-1 grid-cols-[1fr_auto] items-center gap-3 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
           <div className="flex min-w-0 items-center gap-2">
             <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
             <span className="truncate text-[12.5px] text-foreground">
@@ -557,29 +537,23 @@ function EntityTableRow({
               )}
             </span>
           </div>
-          <span className="truncate font-mono text-[11px] text-foreground/65">
+          <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.profileSlug}
           </span>
-          <span className="truncate font-mono text-[11px] text-foreground/55">
+          <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.workspaceName ? (
               item.workspaceName
             ) : item.workspaceId ? (
               item.workspaceId.slice(0, 8) + "…"
             ) : (
-              <span className="text-foreground/35">Pod-wide</span>
+              <span>Pod-wide</span>
             )}
           </span>
-          <span className="truncate font-mono text-[11px] text-foreground/45">
+          <span className="hidden truncate font-mono text-[11px] text-foreground/65 sm:block">
             {item.userId.slice(0, 8)}…
           </span>
-          <span className="truncate text-[11px] text-foreground/45">
-            {item.createdAt
-              ? formatRelative(
-                  item.createdAt instanceof Date
-                    ? item.createdAt
-                    : new Date(item.createdAt)
-                )
-              : "—"}
+          <span className="hidden truncate text-[11px] text-foreground/65 sm:block">
+            {formatRelative(item.createdAt)}
           </span>
           <Button
             isIconOnly
@@ -588,7 +562,7 @@ function EntityTableRow({
             radius="full"
             color="danger"
             aria-label={`Delete entity ${item.id}`}
-            className="opacity-0 transition-opacity group-hover:opacity-100"
+            className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
             onPress={() => setConfirmDelete(true)}
           >
             <Trash2 className="h-3.5 w-3.5" />

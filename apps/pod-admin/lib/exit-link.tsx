@@ -14,10 +14,18 @@
  * enforced. So the fallback is not something a caller remembers to render —
  * it is structural here, and `__tripwires__/exit-door.test.ts` pins that no
  * one goes back to hand-rolling it.
+ *
+ * The same holds for the DEVICE. On a phone `synap://` opens the mobile app,
+ * which opens a different set of things; `usePlacedExit` is the one place that
+ * asks, so a hand-off never offers "Get the desktop app" to a phone or a link
+ * that lands on the mobile app's "not found".
  */
 
-import { ExternalLink } from "lucide-react";
-import { DESKTOP_FALLBACK, type Exit } from "./open-in";
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { ArrowUpRight } from "lucide-react";
+import { placeExit, type Exit, type PlacedExit } from "./open-in";
+import { isPhone } from "./platform";
 
 /**
  * Contrast floor. Computed against this app's own themes (`tailwind.config.ts`)
@@ -72,21 +80,65 @@ export function externalProps(href: string) {
     : {};
 }
 
+/**
+ * Is this reader on a phone? False on the server and on the first client
+ * render (so the two agree), then the browser's answer — the same
+ * mount-then-measure shape as `useMediaQuery`. Width is NOT the question: a
+ * narrow desktop window still hands `synap://` to the desktop app.
+ */
+export function useIsPhone(): boolean {
+  const [phone, setPhone] = useState(false);
+  useEffect(() => {
+    const nav = navigator as Navigator & {
+      userAgentData?: { mobile?: boolean };
+    };
+    setPhone(isPhone(nav.userAgent, nav.userAgentData?.mobile));
+  }, []);
+  return phone;
+}
+
+/**
+ * `placeExit` for this device — and a web alternative that is the page the
+ * reader is already on is dropped: `/sources` saying "use Sources instead" of
+ * its own connectors hand-off would be a link to itself.
+ */
+export function usePlacedExit(exit: Exit): PlacedExit {
+  const onPhone = useIsPhone();
+  const pathname = usePathname();
+  const placed = placeExit(exit, onPhone);
+  if (placed.unavailable?.web?.href === pathname) {
+    return { ...placed, unavailable: { note: placed.unavailable.note } };
+  }
+  return placed;
+}
+
+/**
+ * Where a ROW's link goes on this device: the exit itself, or — when a phone
+ * cannot follow it — the console page that covers it. `null` = render the row
+ * as text; the list's `ExitFallback` says why, once.
+ */
+export function rowHref(placed: PlacedExit): string | null {
+  return placed.href ?? placed.unavailable?.web?.href ?? null;
+}
+
 export function ExitLink({ exit, label }: { exit: Exit; label: string }) {
+  const placed = usePlacedExit(exit);
+  // Nothing to click on this device: the fallback line carries the sentence
+  // (and the web page that covers it, when there is one).
+  if (placed.href === null) return <PlacedFallback placed={placed} />;
+  const href = placed.href;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-      <a
-        href={exit.href}
-        {...externalProps(exit.href)}
-        className={PRIMARY_CLASS}
-      >
+      <a href={href} {...externalProps(href)} className={PRIMARY_CLASS}>
         {label}
         {/* The icon is a promise about behaviour: it means "this opens away
             from here". pod-admin's own routes (`/proposal/:id`, `/open/:kind/:id`)
             navigate in place, so they must not wear it. */}
-        {leavesThisApp(exit.href) && <ExternalLink size={14} aria-hidden />}
+        {leavesThisApp(href) && (
+          <ArrowUpRight size={14} strokeWidth={1.75} aria-hidden />
+        )}
       </a>
-      <ExitFallback exit={exit} />
+      <PlacedFallback placed={placed} />
     </span>
   );
 }
@@ -95,31 +147,56 @@ export function ExitLink({ exit, label }: { exit: Exit; label: string }) {
  * The fallback on its own, for a LIST whose every row is a desktop link.
  * Rendered once beneath the list rather than once per row — six workspace rows
  * should not tell the reader to install the app six times.
+ *
+ * On a phone it is the device's line instead: the mobile app's install hatch
+ * when Relay can open the rows, or "open this on your computer" when it
+ * cannot. `showWeb={false}` for a list: each row's own web page is the row's
+ * link (`rowHref`), so one row's alternative must not speak for the list.
  */
-export function ExitFallback({ exit }: { exit: Exit }) {
-  if (!exit.fallback) return null;
-  return <DesktopFallbackLink />;
+export function ExitFallback({
+  exit,
+  showWeb = true,
+}: {
+  exit: Exit;
+  showWeb?: boolean;
+}) {
+  const placed = usePlacedExit(exit);
+  return <PlacedFallback placed={placed} showWeb={showWeb} />;
 }
 
 /**
- * The escape hatch with no `Exit` in hand.
- *
- * A LIST whose rows are all desktop links has no single exit to hang the
- * fallback off — `intelligence` rendered its own `<a href={DESKTOP_FALLBACK.href}>`
- * with its own classes, which is the seven-copy drift returning inside the wave
- * that removed it. The tripwire could not see it either: it matched
- * `exit.fallback` only. One component, and the guard now matches
- * `DESKTOP_FALLBACK.href` too.
+ * The one spelling of "the way out of a hand-off". Callers that already hold
+ * a `PlacedExit` (`HandoffCard`) render it directly rather than placing twice.
  */
-export function DesktopFallbackLink() {
+export function PlacedFallback({
+  placed,
+  showWeb = true,
+}: {
+  placed: PlacedExit;
+  showWeb?: boolean;
+}) {
+  if (placed.unavailable) {
+    const web = showWeb ? placed.unavailable.web : undefined;
+    return (
+      <span className="inline-flex flex-wrap items-center gap-x-2 text-[12px] text-foreground/70">
+        {placed.unavailable.note}
+        {web && (
+          <a href={web.href} className={FALLBACK_CLASS}>
+            {web.label}
+          </a>
+        )}
+      </span>
+    );
+  }
+  if (!placed.fallback) return null;
   return (
     <a
-      href={DESKTOP_FALLBACK.href}
+      href={placed.fallback.href}
       target="_blank"
       rel="noopener noreferrer"
       className={FALLBACK_CLASS}
     >
-      {DESKTOP_FALLBACK.label}
+      {placed.fallback.label}
     </a>
   );
 }

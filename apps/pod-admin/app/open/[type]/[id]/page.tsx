@@ -1,14 +1,16 @@
 /**
- * /open/:type/:id — signed-in compact read card for one entity or view.
+ * /open/:type/:id — the signed-in web page for one object (`HOST_TYPES`:
+ * entity, view, automation, session), or a named "opens in the app" card.
  *
  * Auth: middleware enforces a valid Kratos session (no pod_admin role required —
- * `entities.get` / `views.get` re-check access server-side). `/open/*` is in the
- * `isSelfService` allowlist in `proxy.ts`, so an unauthenticated visitor is
- * bounced to `/login?return=/open/<type>/<id>` and comes straight back.
+ * every read door is user-floored and re-checks access server-side). `/open/*`
+ * is in the `isSelfService` allowlist in `proxy.ts`, so an unauthenticated
+ * visitor is bounced to `/login?return=/open/<type>/<id>` and comes back.
  *
- * This is read-only. The rich renderer lives in the Synap app
- * (`synap://open/{type}/{id}`). Known bounce kinds (channel, document, …)
- * never pretend to render here.
+ * Mostly read-only: the only acts are the de-escalating ones (pause a rule,
+ * cancel a session) and a session's owner-only run again / revert. Authoring
+ * lives in the Synap app (`synap://open/{type}/{id}`). Known bounce kinds
+ * (channel, document, …) never pretend to render here.
  */
 
 import type { Metadata } from "next";

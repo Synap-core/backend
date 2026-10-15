@@ -6,7 +6,10 @@
  *
  *   - `listMachines`      — the person's computers, each with its key's state
  *                           and the agents it hosts;
- *   - `renameMachine`     — the display name ("devbox");
+ *   - `listAllMachines`   — every member's computers with their owner, for a
+ *                           pod admin (`machines.adminList`; the procedure is
+ *                           the gate, this reader is unfloored on purpose);
+ *   - `renameMachine`    — the display name ("devbox");
  *   - `setMachineOwnKeyTtlDays` — the per-computer lifetime override
  *                           (`agentMetadata.keyTtlDays`, read by
  *                           `resolveMachineKeyTtlDays`); null = the pod default;
@@ -17,7 +20,8 @@
  * the same computer and replaces its key (`mintForApprovedRequest`).
  *
  * OWNERSHIP: every read and write is floored on `created_by_user_id = person`
- * — the loaded row's owner, never a request-supplied id alone.
+ * — the loaded row's owner, never a request-supplied id alone — except
+ * `listAllMachines`, whose only caller is a `podAdminProcedure`.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -150,19 +154,99 @@ const keyView = (k: KeyRow | null, now: number): MachineKeyView | null =>
 
 /** The person's computers, newest first, each with the agents it hosts. */
 export async function listMachines(personId: string): Promise<MachineView[]> {
+  return (await loadMachineViews(personId)).map(({ view }) => view);
+}
+
+/** Who a computer belongs to: the person who approved it on `/device`. */
+export interface MachineOwnerView {
+  id: string;
+  /** Their display name, else their email. */
+  name: string;
+}
+
+export interface AdminMachineView extends MachineView {
+  /** null = the approver's row is gone (or was never recorded). */
+  owner: MachineOwnerView | null;
+}
+
+/**
+ * EVERY member's computers, newest first, each with its owner — the pod
+ * admin's roster (`machines.adminList`). Unfloored: the procedure is the gate.
+ * The same view as `listMachines`, so an admin and an owner read one shape
+ * and every derived word (key state, agents) agrees.
+ */
+export async function listAllMachines(): Promise<AdminMachineView[]> {
+  const rows = await loadMachineViews(null);
+  const ownerIds = [
+    ...new Set(
+      rows.map((r) => r.ownerId).filter((id): id is string => id !== null)
+    ),
+  ];
+  const owners = ownerIds.length
+    ? await db
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(inArray(users.id, ownerIds))
+    : [];
+  const ownerOf = new Map(
+    owners.map((o) => [
+      o.id,
+      { id: o.id, name: o.name?.trim() || o.email || o.id },
+    ])
+  );
+  return rows.map(({ view, ownerId }) => ({
+    ...view,
+    owner: (ownerId && ownerOf.get(ownerId)) || null,
+  }));
+}
+
+/**
+ * The computers behind `ids` (agents' `host_user_id`s), each named by
+ * `machineName`. An id that is not a computer is absent.
+ */
+export async function loadMachineNames(
+  ids: readonly string[]
+): Promise<Map<string, { id: string; name: string }>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  const rows = await db
+    .select({ id: users.id, name: users.name, meta: users.agentMetadata })
+    .from(users)
+    .where(
+      and(inArray(users.id, unique), eq(users.agentType, MACHINE_AGENT_TYPE))
+    );
+  return new Map(
+    rows.map((r) => [
+      r.id,
+      {
+        id: r.id,
+        name: machineName({ name: r.name, agentMetadata: r.meta }),
+      },
+    ])
+  );
+}
+
+/**
+ * The computers — one person's when `personId` is set, else every one — each
+ * shaped into a `MachineView`, with its approver's id beside it.
+ */
+async function loadMachineViews(
+  personId: string | null
+): Promise<Array<{ view: MachineView; ownerId: string | null }>> {
   const machines = await db
     .select({
       id: users.id,
       name: users.name,
       meta: users.agentMetadata,
       createdAt: users.createdAt,
+      createdByUserId: users.createdByUserId,
     })
     .from(users)
     .where(
       and(
         eq(users.userType, "agent"),
         eq(users.agentType, MACHINE_AGENT_TYPE),
-        eq(users.createdByUserId, personId)
+        personId === null ? undefined : eq(users.createdByUserId, personId)
       )
     )
     .orderBy(desc(users.createdAt));
@@ -219,7 +303,7 @@ export async function listMachines(personId: string): Promise<MachineView[]> {
             .filter((g) => g.apiKeyId === key.id && g.label)
             .map((g) => g.label as string)
         : [];
-      return {
+      const view: MachineView = {
         id: m.id,
         name,
         hostname: meta.hostname ?? null,
@@ -253,6 +337,7 @@ export async function listMachines(personId: string): Promise<MachineView[]> {
           })
           .sort((a, b) => a.displayName.localeCompare(b.displayName)),
       };
+      return { view, ownerId: m.createdByUserId };
     })
   );
 }
@@ -260,7 +345,8 @@ export async function listMachines(personId: string): Promise<MachineView[]> {
 /**
  * A computer's display name: the name a person gave it ("devbox"), else its
  * hostname, else the noun. The ONE rule — the Computers roster and the
- * hand-off roster (`readAgentsForHandoff`) both read it.
+ * hand-off roster (`readAgentsForHandoff`) and an agent's host link
+ * (`loadMachineNames`) all read it.
  */
 export function machineName(row: {
   name: string | null;

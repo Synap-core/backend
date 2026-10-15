@@ -269,7 +269,18 @@ describe("synap:// grammar matches deep-link-constants", () => {
 
   it("web-hosted kinds stay web, and every desktop link carries a fallback", () => {
     // Not skipped: this is pod-admin-local and needs no sibling checkout.
-    for (const objectKind of ["entity", "view", "proposal"]) {
+    // `automation` and `session` joined the web-hosted set with D6 (pod-admin
+    // renders them at `/open/<kind>/<id>`); `session` used to be this test's
+    // sample DESKTOP object link, so `workspace` (never hosted: the admin page
+    // is the console's view of it) takes that slot, and the desktop form of a
+    // hosted session is asserted through `objectInApp`.
+    for (const objectKind of [
+      "entity",
+      "view",
+      "proposal",
+      "automation",
+      "session",
+    ]) {
       const exit = openIn({ kind: "object", objectKind, id: ID });
       expect(exit.isDesktopLink).toBe(false);
       expect(exit.href.startsWith("synap://")).toBe(false);
@@ -278,7 +289,8 @@ describe("synap:// grammar matches deep-link-constants", () => {
       openIn({ kind: "app", appId: "data" }),
       openIn({ kind: "settings", section: "vault" }),
       openIn({ kind: "objectInApp", objectKind: "entity", id: ID }),
-      openIn({ kind: "object", objectKind: "session", id: ID }),
+      openIn({ kind: "object", objectKind: "workspace", id: ID }),
+      openIn({ kind: "objectInApp", objectKind: "session", id: ID }),
     ]) {
       expect(exit.isDesktopLink).toBe(true);
       expect(exit.fallback?.href).toBeTruthy();

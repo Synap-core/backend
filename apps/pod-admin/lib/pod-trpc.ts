@@ -12,12 +12,13 @@
  * contracts-publish pipeline. A newly added procedure is invisible to the typed
  * client until that shared artifact is regenerated, which is a release step and
  * not something to do from inside a feature change. The wire format is stable
- * and small; the response shapes are declared in
- * `app/(admin)/marketplace/_lib/types.ts`.
+ * and small; each caller declares the response shape it reads.
  *
  * SuperJSON is the pod's transformer (see `app/providers.tsx`), hence the
  * `{ json }` envelope in both directions.
  */
+
+import { podCallerHeaders } from "./pod-caller-headers";
 
 const INTERNAL_POD_URL = (
   process.env.POD_URL ?? "http://localhost:4000"
@@ -101,7 +102,7 @@ async function readPodEnvelope<T>(res: Response): Promise<PodCallResult<T>> {
 export async function callPodMutation<T>(
   procedure: string,
   input: unknown,
-  cookie: string
+  incoming: Headers
 ): Promise<PodCallResult<T>> {
   let res: Response;
   try {
@@ -110,7 +111,7 @@ export async function callPodMutation<T>(
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        Cookie: cookie,
+        ...podCallerHeaders(incoming),
       },
       body: JSON.stringify({ json: input }),
       cache: "no-store",
@@ -134,7 +135,7 @@ export async function callPodMutation<T>(
 export async function callPodQuery<T>(
   procedure: string,
   input: unknown,
-  cookie: string
+  incoming: Headers
 ): Promise<PodCallResult<T>> {
   const query =
     input === undefined
@@ -144,7 +145,7 @@ export async function callPodQuery<T>(
   try {
     res = await fetch(`${INTERNAL_POD_URL}/trpc/${procedure}${query}`, {
       method: "GET",
-      headers: { Accept: "application/json", Cookie: cookie },
+      headers: { Accept: "application/json", ...podCallerHeaders(incoming) },
       cache: "no-store",
     });
   } catch {

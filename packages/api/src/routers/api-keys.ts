@@ -47,7 +47,9 @@ import {
   workspaceMembers,
   mcpConnectCodes,
   users,
+  apps,
 } from "@synap/database/schema";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -154,6 +156,66 @@ async function loadKeyReach(keyIds: readonly string[]) {
 }
 
 /**
+ * WHO holds a key, as a key list names it. The key's own `keyType` cannot say:
+ * an app key (`app-connect.ts`), a computer key (`machine-connect.ts`) and a
+ * person's own token are ALL `user_pat` — only the holder tells them apart.
+ *
+ *   app      — the holder is some app's own agent principal (`apps.agent_user_id`,
+ *              the same fact `notAnAppAgent` reads); `name` is the app's.
+ *   computer — an agent user with `agent_type = 'machine'`.
+ *   agent    — any other agent user.
+ *   person   — a human.
+ * `null` = the holder row is gone.
+ */
+export interface KeyHolder {
+  kind: "app" | "computer" | "agent" | "person";
+  name: string | null;
+  /** An app holder's `public_id` — what its console page is keyed by. */
+  appId?: string;
+}
+
+async function loadKeyHolders(userIds: readonly string[]) {
+  const ids = [...new Set(userIds)];
+  const [holders, appRows] = ids.length
+    ? await Promise.all([
+        db
+          .select({
+            id: users.id,
+            name: users.name,
+            userType: users.userType,
+            agentType: users.agentType,
+          })
+          .from(users)
+          .where(inArray(users.id, ids)),
+        db
+          .select({
+            agentUserId: apps.agentUserId,
+            name: apps.name,
+            publicId: apps.publicId,
+          })
+          .from(apps)
+          .where(inArray(apps.agentUserId, ids)),
+      ])
+    : [[], []];
+  const appOf = new Map(appRows.map((a) => [a.agentUserId, a]));
+  const byId = new Map<string, KeyHolder>();
+  for (const u of holders) {
+    const app = appOf.get(u.id);
+    byId.set(
+      u.id,
+      app !== undefined
+        ? { kind: "app", name: app.name, appId: app.publicId }
+        : u.userType !== "agent"
+          ? { kind: "person", name: u.name }
+          : u.agentType === MACHINE_AGENT_TYPE
+            ? { kind: "computer", name: u.name }
+            : { kind: "agent", name: u.name }
+    );
+  }
+  return (userId: string): KeyHolder | null => byId.get(userId) ?? null;
+}
+
+/**
  * An OLD CLI-style key that ACTS AS YOU (MACHINE-IDENTITY-PLAN §0: kept,
  * flagged, offered a replacement): a Hub key minted for an integration
  * (`connectIntegration` — `hub_inbound`, `hubId` `integration:<kind>`) that you
@@ -199,7 +261,10 @@ export const apiKeysRouter = router({
     });
 
     // W1 — what each key may touch, for the connections screen.
-    const reachOf = await loadKeyReach(keys.map((k) => k.id));
+    const [reachOf, holderOf] = await Promise.all([
+      loadKeyReach(keys.map((k) => k.id)),
+      loadKeyHolders(keys.map((k) => k.userId)),
+    ]);
 
     // Remove sensitive fields (keyHash)
     return keys.map((key) => ({
@@ -213,6 +278,8 @@ export const apiKeysRouter = router({
       heldByAgent: key.userId !== ctx.userId,
       /** Who holds it: you, or the agent user acting for you (its holder page). */
       holderUserId: key.userId,
+      /** What holds it — an app, a computer, an agent or a person (`KeyHolder`). */
+      holder: holderOf(key.userId),
       /** An old CLI key whose calls are yours (`keyActsAsYou`): replace it with a computer. */
       actsAsYou: keyActsAsYou(key, ctx.userId),
       /** What this key may touch (W1): `access` + every live grant. */
@@ -260,10 +327,13 @@ export const apiKeysRouter = router({
         where: userIdFilter ? inArray(apiKeys.userId, userIdFilter) : undefined,
         orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
       });
+      const holderOf = await loadKeyHolders(keys.map((k) => k.userId));
 
       return keys.map((key) => ({
         id: key.id,
         userId: key.userId,
+        /** What holds it — an app, a computer, an agent or a person (`KeyHolder`). */
+        holder: holderOf(key.userId),
         keyName: key.keyName,
         keyPrefix: key.keyPrefix,
         keyType: key.keyType,

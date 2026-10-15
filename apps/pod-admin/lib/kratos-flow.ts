@@ -174,6 +174,28 @@ export async function whoami(): Promise<KratosSession | null> {
   }
 }
 
+/**
+ * Ask Kratos, from the browser, whether this browser's session is alive —
+ * `unknown` when Kratos did not answer (network, 5xx, 429), so a caller never
+ * mistakes a busy pod for a signed-out person.
+ */
+export async function browserSessionState(): Promise<
+  "active" | "none" | "unknown"
+> {
+  try {
+    const res = await fetch(`${kratosPublic()}/sessions/whoami`, {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === 401 || res.status === 403) return "none";
+    if (!res.ok) return "unknown";
+    const body = (await res.json()) as Partial<KratosSession>;
+    return body.active === false ? "none" : "active";
+  } catch {
+    return "unknown";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Login flow
 // ---------------------------------------------------------------------------
@@ -201,36 +223,83 @@ export async function createLoginFlow(
   if (res.status === 200) {
     const flow = await readJsonResponse<KratosFlow>(
       res,
-      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses."
+      "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Console deployment addresses."
     );
     return { flow };
   }
 
-  let body: { id?: string; message?: string; reason?: string } = {};
+  let body: unknown = null;
   try {
-    body = (await res.json()) as typeof body;
+    body = await res.json();
   } catch {
     /* not JSON */
   }
 
-  if (res.status === 400 && body.id === "session_already_available") {
-    const session = await whoami();
-    if (session) return { existingSession: session };
-  }
-
+  const refusal = loginFlowRefusal(res.status, body);
+  if (refusal.kind === "error") throw new Error(refusal.message);
+  // The invite flow checks the signed-in email, so hand back the session.
+  const session = await whoami();
+  if (session) return { existingSession: session };
   throw new Error(
-    body.message
-      ? `${body.message}${body.reason ? `: ${body.reason}` : ""}`
-      : `Failed to create login flow (${res.status})`
+    "You're already signed in, but the pod couldn't confirm it just now. Reload this page."
   );
 }
 
+/**
+ * Read Kratos' refusal to create a login flow.
+ *
+ * Kratos wraps every error as `{ error: { id, code, message, reason } }`. This
+ * once read `body.id` at the top level, so `session_already_available` (the
+ * answer to "start a sign-in" from a browser that already holds a session)
+ * never matched and the form printed "Failed to create login flow (400)" to a
+ * signed-in operator. A bare top-level shape is still tolerated.
+ */
+export function loginFlowRefusal(
+  status: number,
+  body: unknown
+): { kind: "signed_in" } | { kind: "error"; message: string } {
+  type ErrorShape = { id?: string; message?: string; reason?: string };
+  const raw = (typeof body === "object" && body !== null ? body : {}) as {
+    error?: ErrorShape;
+  } & ErrorShape;
+  const err: ErrorShape = raw.error ?? raw;
+  if (err.id === "session_already_available") return { kind: "signed_in" };
+  return {
+    kind: "error",
+    message: err.message
+      ? `${err.message}${err.reason ? `: ${err.reason}` : ""}`
+      : `Failed to create login flow (${status})`,
+  };
+}
+
+/**
+ * What /login does when Kratos says the browser is already signed in.
+ *
+ * `serverSession` is what this app's server saw on the same request
+ * (`checkSession`). `unavailable` means the pod could not answer it then —
+ * go back to `returnTo`; the gate there asks again. `none` means the server
+ * looked and found NO session while the browser's own Kratos call has one: the
+ * session cookie is not reaching this console's address (cookie domain), and
+ * going back would bounce straight here again — explain instead of looping.
+ */
+export function existingSessionAction(
+  serverSession: "active" | "none" | "unavailable"
+): "return" | "explain_cookie_scope" {
+  return serverSession === "none" ? "explain_cookie_scope" : "return";
+}
+
+/**
+ * What /login says instead of looping (`explain_cookie_scope`). Not an error
+ * the reader caused, so it reads as a calm note with one act: reload.
+ */
+export const COOKIE_SCOPE_COPY = {
+  title: "You're signed in, but this page can't tell yet.",
+  body: "Reload the page. If you land here again, this pod's sign-in isn't shared with the address you opened it at — open the console from the pod's own address, or ask whoever runs the pod.",
+} as const;
+
 /** Every self-service flow kind a `?flow=` id can belong to. */
 export type AnySelfServiceFlowKind =
-  | "login"
-  | "registration"
-  | "recovery"
-  | "settings";
+  "login" | "registration" | "recovery" | "settings";
 
 /**
  * Fetch the flow behind a `?flow=` id. Kratos sends recovery and settings
@@ -292,7 +361,7 @@ export function pageForFlow(
 }
 
 const UNEXPECTED_RESPONSE =
-  "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Admin deployment addresses.";
+  "Pod authentication returned an unexpected response. Verify this Pod's API and Pod Console deployment addresses.";
 
 /** Fetch a flow of a KNOWN kind (the page already knows which one it renders). */
 export async function fetchFlow(
@@ -311,7 +380,8 @@ export async function fetchFlow(
     /* not JSON */
   }
   throw new FlowLoadError(
-    body.error?.message ?? `This ${kind} link could not be loaded (${res.status})`,
+    body.error?.message ??
+      `This ${kind} link could not be loaded (${res.status})`,
     res.status,
     body.error?.id
   );
@@ -328,9 +398,7 @@ export class FlowLoadError extends Error {
 }
 
 export type CreateFlowResult =
-  | { flow: KratosFlow }
-  | { existingSession: true }
-  | { signInRequired: true };
+  { flow: KratosFlow } | { existingSession: true } | { signInRequired: true };
 
 /**
  * Start a recovery or settings BROWSER flow. Recovery refuses while signed in
@@ -347,7 +415,9 @@ export async function createBrowserFlow(
     headers: { Accept: "application/json" },
   });
   if (res.ok) {
-    return { flow: await readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE) };
+    return {
+      flow: await readJsonResponse<KratosFlow>(res, UNEXPECTED_RESPONSE),
+    };
   }
   let body: { error?: { id?: string; message?: string; reason?: string } } = {};
   try {
@@ -473,7 +543,8 @@ export async function revokeOtherSessions(): Promise<number> {
     credentials: "include",
     headers: { Accept: "application/json" },
   });
-  if (!res.ok) throw new Error(`Could not sign out other devices (${res.status})`);
+  if (!res.ok)
+    throw new Error(`Could not sign out other devices (${res.status})`);
   try {
     const body = (await res.json()) as { count?: number };
     return typeof body.count === "number" ? body.count : 0;

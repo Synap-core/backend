@@ -22,7 +22,8 @@ import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { ArrowLeft, Ban, Trash2 } from "lucide-react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
-import { formatRelative } from "../../(admin)/trust-keys/_lib/format";
+import { PageHeader } from "../../(admin)/components/page-header";
+import { formatRelative } from "../../../lib/format";
 import { chipColor, type AppDetailRow } from "../_lib/app-view";
 import { appHolderAccess, appMode } from "@synap-core/types/apps/app-view";
 import {
@@ -143,7 +144,7 @@ export default function AppDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[900px] px-6 py-10">
+    <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-10">
       <Button
         as={Link}
         href="/my-connections"
@@ -213,26 +214,20 @@ function AppDetail({
 
   return (
     <div className="mt-6">
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="break-words font-heading text-[22px] font-medium tracking-tight text-foreground">
-            {app.name}
-          </h1>
-          {app.description ? (
-            <p className="mt-1 max-w-2xl text-[13px] leading-5 text-foreground/60">
-              {app.description}
-            </p>
-          ) : null}
-        </div>
-        <Chip
-          size="sm"
-          variant="flat"
-          color={chipColor(view.tone)}
-          className="shrink-0"
-        >
-          {view.label}
-        </Chip>
-      </header>
+      <PageHeader
+        title={<span className="break-words">{app.name}</span>}
+        description={app.description}
+        actions={
+          <Chip
+            size="sm"
+            variant="flat"
+            color={chipColor(view.tone)}
+            className="shrink-0"
+          >
+            {view.label}
+          </Chip>
+        }
+      />
 
       {view.state === "asking" && asked && app.pending_request ? (
         <section

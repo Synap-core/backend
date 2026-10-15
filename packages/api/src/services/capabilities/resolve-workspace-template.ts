@@ -46,6 +46,7 @@
 
 import { db, and, eq } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
+import { officialCatalogCondition } from "./catalog-cache-query.js";
 import {
   getWorkspaceTemplate,
   toWorkspaceDefinition,
@@ -197,7 +198,13 @@ export async function resolveWorkspaceTemplate(
       })
       .from(cpCatalogCache)
       .where(
-        and(eq(cpCatalogCache.kind, "template"), eq(cpCatalogCache.slug, slug))
+        and(
+          // The official catalog only: a template from a source a person
+          // added is installed as `<source>/<slug>` and never resolves here.
+          officialCatalogCondition(),
+          eq(cpCatalogCache.kind, "template"),
+          eq(cpCatalogCache.slug, slug)
+        )
       )
       .limit(1);
 

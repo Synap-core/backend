@@ -1074,7 +1074,7 @@ federationRouter.post("/application-connections/requests/start", async (c) => {
       c,
       503,
       reviewTarget.code,
-      "This Pod needs a secure Pod Admin URL before application access can be set up"
+      "This Pod needs a secure Pod Console URL before application access can be set up"
     );
   }
   try {
@@ -1094,7 +1094,7 @@ federationRouter.post("/application-connections/requests/start", async (c) => {
       c,
       503,
       "POD_CONNECTION_START_FAILED",
-      "Could not start Pod Admin setup"
+      "Could not start Pod Console setup"
     );
   }
 });
@@ -1437,12 +1437,12 @@ federationRouter.post("/identity-links", authMiddleware, async (c) => {
     columns: { id: true, email: true },
   });
   const issuerService = new TrustedIssuerService();
-  let issuer = await issuerService.getByUrl(issuerUrl);
+  const issuer = await issuerService.getByUrl(issuerUrl);
   if (!issuer || issuer.status !== "approved") {
     return c.json(
       {
         error:
-          "This issuer is not approved to link Pod identities. Start a Pod Admin application-connection request so an owner can review the exact issuer and browser application.",
+          "This issuer is not approved to link Pod identities. Start a Pod Console application-connection request so an owner can review the exact issuer and browser application.",
         code: "ISSUER_APPROVAL_REQUIRED",
       },
       403
@@ -1789,12 +1789,17 @@ async function approveBootstrapIssuer(input: {
       approvedIssuer.allowedScopes.includes(capability)
     )
   ) {
-    issuer = await issuerService.approve(approvedIssuer.id, ownerUserId, [
-      ...new Set([
-        ...approvedIssuer.allowedScopes,
-        ...CONTROL_PLANE_ISSUER_SCOPES,
-      ]),
-    ]);
+    issuer = await issuerService.approveFromStatus(
+      approvedIssuer.id,
+      ownerUserId,
+      [
+        ...new Set([
+          ...approvedIssuer.allowedScopes,
+          ...CONTROL_PLANE_ISSUER_SCOPES,
+        ]),
+      ],
+      "approved"
+    );
   }
   return Boolean(
     issuer &&

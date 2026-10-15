@@ -79,7 +79,8 @@ body {
  * ------------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
-  .animate-shimmer-pulse {
+  .animate-shimmer-pulse,
+  .shimmer-pulse {
     animation: none !important;
   }
 }

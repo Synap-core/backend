@@ -50,6 +50,7 @@ import {
   OAUTH_REVOCABLE_AGENT_TYPES,
   OAUTH_SUPPORTED_SCOPES,
   mapCpScopesToPodScopes,
+  oauthKeyInstanceId,
   resolveIssuer,
   resolveOAuthAgentType,
   type OAuthAgentType,
@@ -264,7 +265,7 @@ oauthApp.get("/authorize", async (c) => {
       "pod-oauth: POD_ADMIN_URL not configured — cannot show consent"
     );
     return c.text(
-      "This pod is not configured with a Pod Admin URL, so it cannot show an authorization consent screen.",
+      "This pod is not configured with a Pod Console URL, so it cannot show an authorization consent screen.",
       503
     );
   }
@@ -408,7 +409,7 @@ oauthApp.post("/token", async (c) => {
       // exactly this connection's key and never kills another human's — agent
       // USERs are singleton per (createdByUserId, agentType), and instanceId
       // further isolates multi-runtime keys for the same human.
-      instanceId: `oauth:${claimed.clientId}:${claimed.userId}`,
+      instanceId: oauthKeyInstanceId(claimed.clientId, claimed.userId),
       scopes,
       ensureRegistryRow: true,
       ...MINT_LABELS[agentType],

@@ -16,15 +16,13 @@
 import { headers } from "next/headers";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 import { ApproveBatchForm } from "./ApproveBatchForm";
+import { isUuid } from "../../lib/format";
 
 interface ApproveAgentsPageProps {
   searchParams: Promise<{ keys?: string }>;
 }
 
 export const dynamic = "force-dynamic";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default async function ApproveAgentsPage({
   searchParams,
@@ -35,7 +33,7 @@ export default async function ApproveAgentsPage({
       (sp.keys ?? "")
         .split(",")
         .map((k) => k.trim())
-        .filter((k) => UUID_RE.test(k))
+        .filter((k) => isUuid(k))
     ),
   ].slice(0, PENDING_APPROVAL_BATCH_MAX);
   const h = await headers();

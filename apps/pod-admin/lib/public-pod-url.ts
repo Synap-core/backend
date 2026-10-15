@@ -7,7 +7,7 @@ declare global {
 }
 
 export const POD_PUBLIC_URL_CONFIGURATION_ERROR =
-  "This Pod Admin is not configured with the Pod's secure API URL. A Pod owner needs to set PUBLIC_URL to the Pod's HTTPS address and restart Pod Admin.";
+  "This Pod Console is not configured with the Pod's secure API URL. A Pod owner needs to set PUBLIC_URL to the Pod's HTTPS address and restart Pod Console.";
 
 function canonicalPublicPodUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;

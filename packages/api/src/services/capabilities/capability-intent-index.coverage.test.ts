@@ -127,6 +127,7 @@ function entry(slug: string, provides: string[] | null): CatalogCacheEntry {
     tags: null,
     contentHash: null,
     definition: provides === null ? {} : { key: slug, provides },
+    listing: null,
   };
 }
 

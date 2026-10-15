@@ -59,6 +59,7 @@ export type ObjectCategory =
   | "command"
   | "tool"
   | "application"
+  | "issuer"
   | "agent"
   | "proposal"
   | "notification"
@@ -432,6 +433,18 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "App",
     labelPlural: "Apps",
   },
+  // A trusted issuer — an outside service whose signed identity tokens the pod
+  // accepts (sign-in, provisioning). Inbound trust like an application, so it
+  // shares that hue; its own category because it is not an app: it never
+  // calls the pod with a grant, it vouches for who is calling.
+  issuer: {
+    kind: "issuer",
+    category: "issuer",
+    icon: "BadgeCheck",
+    color: ID(11),
+    label: "Trusted issuer",
+    labelPlural: "Trusted issuers",
+  },
 
   // ── Graph-only kinds ──
   // `source`, `participant` and `run` are returned by `getObjectGraph`
@@ -485,6 +498,17 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: AI,
     label: "Agent",
     labelPlural: "Agents",
+  },
+  // A computer (MACHINE-IDENTITY-PLAN): an agent user of type `machine` that
+  // holds its own key and hosts agents. "Machine" is the code word; the person
+  // reads "Computer".
+  machine: {
+    kind: "machine",
+    category: "agent",
+    icon: "Laptop",
+    color: AI,
+    label: "Computer",
+    labelPlural: "Computers",
   },
   // A `governance_rules` row: "which AI writes wait for me?" (concepts.md).
   // The user word is "Approvals" — never "Trust rules" (the old nav label),

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { TRPCError } from "@trpc/server";
 import {
   decodeDefinitionCursor,
+  decodeRunCursor,
   decodeRunGroupCursor,
   encodeDefinitionCursor,
+  encodeRunCursor,
   encodeRunGroupCursor,
 } from "./keyset-cursor.js";
 
@@ -37,7 +39,23 @@ describe("keyset cursors", () => {
     });
   });
 
+  it("keeps flow kind and a non-uuid id in run-feed cursors", () => {
+    // Capture / capability runs are keyed by correlationId — not a uuid.
+    const cursor = encodeRunCursor({
+      at: AT,
+      flowType: "capture",
+      id: "cap_123",
+    });
+
+    expect(decodeRunCursor(cursor)).toEqual({
+      at: AT.toISOString(),
+      flowType: "capture",
+      id: "cap_123",
+    });
+  });
+
   it("rejects malformed cursors as a caller error", () => {
     expect(() => decodeDefinitionCursor("not-a-cursor")).toThrow(TRPCError);
+    expect(() => decodeRunCursor("not-a-cursor")).toThrow(TRPCError);
   });
 });

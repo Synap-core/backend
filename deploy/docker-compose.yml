@@ -72,6 +72,9 @@ x-backend-env: &backend-env
   # Set CONTROL_PLANE_URL ⇒ connectors are brokered by that Control Plane.
   # "local" keeps this pod's own Nango key as the broker instead.
   SYNAP_CONNECTOR_BROKER: ${SYNAP_CONNECTOR_BROKER:-}
+  # Marketplace catalog: the Control Plane above when set, else Synap's public
+  # catalog (read anonymously). "off" ⇒ no catalog and no outbound fetch.
+  SYNAP_CATALOG_SOURCE: ${SYNAP_CATALOG_SOURCE:-}
   # Shared secret for the CP /internal/* push door (project-directory sync).
   # Unset = sync disabled (normal for self-hosted pods).
   SYNAP_POD_INTERNAL_KEY: ${SYNAP_POD_INTERNAL_KEY:-}

@@ -1,23 +1,17 @@
 "use client";
 
 /**
- * Governance › Activity (the former Audit tab; its `/audit` URL is kept).
+ * Audit log — what happened on this pod: the pod-wide event log under one
+ * filter bar.
  *
- * Three sub-tabs over the same filter bar:
- *   1. Activity log    — pod-wide event log with workspace filter (live data)
- *   2. Proposals       — proposal history the viewer may review (their
- *                        workspace lens ∪ what they authored, pod-wide included)
- *   3. Approval queue  — pending proposals in that same scope + bulk actions
- *
- * The active sub-tab is encoded in `?section=` so deep links from
- * Overview's Approval queue card land in the right place.
+ * Decisions moved to Review (`/review`): pending proposals are its Changes
+ * and Access, decided ones its History. The old `?section=proposals` /
+ * `?section=queue` links redirect there.
  */
 
-import { Tabs, Tab } from "@heroui/react";
-import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ActivitySection } from "./_lib/activity-section";
-import { ApprovalQueueSection } from "./_lib/approval-queue-section";
 import {
   type ActorSummary,
   type AuditFilters,
@@ -25,30 +19,11 @@ import {
   type WorkspaceSummary,
 } from "./_lib/filter-bar";
 import { defaultDateRange } from "./_lib/format";
-import { ProposalsSection } from "./_lib/proposals-section";
-import { GovernanceHeader } from "../governance/_lib/governance-header";
 
-type Section = "activity" | "proposals" | "queue";
-const SECTIONS: Section[] = ["activity", "proposals", "queue"];
+const TITLE = "Audit log";
+const DESCRIPTION = "What happened on this pod.";
 
 function AuditInner() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const raw = searchParams.get("section");
-  const active: Section = (SECTIONS as string[]).includes(raw ?? "")
-    ? (raw as Section)
-    : "activity";
-
-  function setActive(next: string | number) {
-    const value = String(next);
-    const params = new URLSearchParams(Array.from(searchParams.entries()));
-    if (value === "activity") params.delete("section");
-    else params.set("section", value);
-    const qs = params.toString();
-    router.replace(qs ? `/audit?${qs}` : "/audit", { scroll: false });
-  }
-
-  // Filter state — single source for all three sub-tabs.
   const [filters, setFilters] = useState<AuditFilters>(() => ({
     ...defaultDateRange(),
     userIds: [],
@@ -56,7 +31,7 @@ function AuditInner() {
     actions: [],
   }));
 
-  // Filter-options surface — populated by the Activity sub-tab once
+  // Filter-options surface — populated by the activity log once
   // `listAuditLogs` returns. Defaults are conservative.
   const [availableSubjectTypes, setAvailableSubjectTypes] = useState<string[]>([
     "workspaces",
@@ -84,8 +59,8 @@ function AuditInner() {
   }
 
   return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <GovernanceHeader active="activity" hint="What happened on this pod." />
+    <PageShell>
+      <PageHeader title={TITLE} description={DESCRIPTION} />
 
       <FilterBar
         filters={filters}
@@ -96,57 +71,20 @@ function AuditInner() {
         onReset={resetFilters}
       />
 
-      <Tabs
-        aria-label="Audit sections"
-        variant="underlined"
-        selectedKey={active}
-        onSelectionChange={setActive}
-        classNames={{
-          tabList: "gap-4 px-0 border-b border-foreground/[0.05] rounded-none",
-          tab: "px-1 h-10",
-          cursor: "bg-primary",
-          tabContent:
-            "text-foreground/55 group-data-[selected=true]:text-foreground text-[12.5px] font-medium",
-        }}
-      >
-        <Tab key="activity" title="Activity log">
-          <div className="pt-5">
-            <ActivitySection
-              filters={filters}
-              onAvailableSubjectTypes={setAvailableSubjectTypes}
-              onAvailableActors={setAvailableActors}
-              onAvailableWorkspaces={setAvailableWorkspaces}
-            />
-          </div>
-        </Tab>
-        <Tab key="proposals" title="Proposals">
-          <div className="pt-5">
-            <ProposalsSection filters={filters} />
-          </div>
-        </Tab>
-        <Tab key="queue" title="Approval queue">
-          <div className="pt-5">
-            <ApprovalQueueSection filters={filters} />
-          </div>
-        </Tab>
-      </Tabs>
-    </div>
+      <ActivitySection
+        filters={filters}
+        onAvailableSubjectTypes={setAvailableSubjectTypes}
+        onAvailableActors={setAvailableActors}
+        onAvailableWorkspaces={setAvailableWorkspaces}
+      />
+    </PageShell>
   );
 }
 
 export default function AuditPage() {
   return (
-    <Suspense fallback={<AuditFallback />}>
+    <Suspense fallback={<PageFallback />}>
       <AuditInner />
     </Suspense>
-  );
-}
-
-function AuditFallback() {
-  return (
-    <div className="px-6 py-6 max-w-[1400px]">
-      <GovernanceHeader active="activity" hint="What happened on this pod." />
-      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
-    </div>
   );
 }

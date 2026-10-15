@@ -79,7 +79,9 @@ import type {
   RunPathTaken,
 } from "@synap/database";
 import {
+  decodeRunCursor,
   decodeRunGroupCursor,
+  encodeRunCursor,
   encodeRunGroupCursor,
   type RunGroupCursor,
 } from "../../utils/keyset-cursor.js";
@@ -88,6 +90,7 @@ import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import {
   deriveRunActivity,
+  RECENT_FAILURE_WINDOW_DAYS,
   type SessionActivityWire,
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
@@ -189,6 +192,24 @@ export interface RunScope {
    * exclusion.
    */
   sessionId?: string;
+}
+
+/**
+ * What a ledger adapter reads: the caller's lens plus the page bound the
+ * keyset-paginated feed (`listRunsPage`) pushes down. Internal — the router's
+ * `scope` schema cannot carry `startedBefore`; only a decoded cursor sets it.
+ */
+type LedgerScope = RunScope & {
+  /** Only runs whose start column is strictly before this instant. */
+  startedBefore?: Date;
+};
+
+/** `col < startedBefore`, or nothing when the feed is not paging. */
+function startedBeforeWhere(
+  col: AnyPgColumn,
+  scope: LedgerScope
+): SQL | undefined {
+  return scope.startedBefore ? lt(col, scope.startedBefore) : undefined;
 }
 
 export interface ListRunsInput {
@@ -369,7 +390,7 @@ function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
 async function listAutomationRuns(
   userId: string,
   flowId: string | undefined,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string
@@ -420,7 +441,8 @@ async function listAutomationRuns(
         scope.subjectEntityId
           ? eq(automationRuns.subjectEntityId, scope.subjectEntityId)
           : undefined,
-        statusValues ? inArray(automationRuns.status, statusValues) : undefined
+        statusValues ? inArray(automationRuns.status, statusValues) : undefined,
+        startedBeforeWhere(automationRuns.startedAt, scope)
       )
     )
     .orderBy(desc(automationRuns.startedAt))
@@ -463,7 +485,7 @@ async function listAutomationRuns(
 async function listPlaybookRuns(
   userId: string,
   flowId: string | undefined,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string,
@@ -526,7 +548,8 @@ async function listPlaybookRuns(
         scope.subjectEntityId
           ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
           : undefined,
-        statusValues ? inArray(playbookRuns.status, statusValues) : undefined
+        statusValues ? inArray(playbookRuns.status, statusValues) : undefined,
+        startedBeforeWhere(playbookRuns.startedAt, scope)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
@@ -558,7 +581,7 @@ async function listPlaybookRuns(
 
 async function listCaptureRuns(
   userId: string,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string
@@ -600,7 +623,8 @@ async function listCaptureRuns(
           ? drizzleSql`${proposals.data}->'materialized'->'entityIds' @> ${JSON.stringify(
               [scope.subjectEntityId]
             )}::jsonb`
-          : undefined
+          : undefined,
+        startedBeforeWhere(proposals.createdAt, scope)
       )
     )
     .orderBy(desc(proposals.createdAt))
@@ -674,7 +698,7 @@ function capabilityRunStatus(status: string): RunStatus {
  */
 async function listCapabilityRuns(
   userId: string,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string
@@ -722,12 +746,15 @@ async function listCapabilityRuns(
     .where(
       // The ONE predicate `focusSessions.usage` also reads — see
       // `./capability-run-where.ts`.
-      capabilityRunProposalWhere(userId, {
-        exactRunId,
-        workspaceId: scope.workspaceId,
-        projectId: scope.projectId,
-        sessionId: scope.sessionId,
-      })
+      and(
+        capabilityRunProposalWhere(userId, {
+          exactRunId,
+          workspaceId: scope.workspaceId,
+          projectId: scope.projectId,
+          sessionId: scope.sessionId,
+        }),
+        startedBeforeWhere(proposals.createdAt, scope)
+      )
     )
     .orderBy(desc(proposals.createdAt))
     .limit(limit);
@@ -788,11 +815,14 @@ async function listCapabilityRuns(
           })
           .from(events)
           .where(
-            capabilityRunEventWhere(userId, {
-              exactRunId,
-              workspaceId: scope.workspaceId,
-              sessionId: scope.sessionId,
-            })
+            and(
+              capabilityRunEventWhere(userId, {
+                exactRunId,
+                workspaceId: scope.workspaceId,
+                sessionId: scope.sessionId,
+              }),
+              startedBeforeWhere(events.timestamp, scope)
+            )
           )
           .orderBy(desc(events.timestamp))
           .limit(limit);
@@ -909,7 +939,7 @@ async function listCapabilityRuns(
  */
 async function listAgentWriteRuns(
   userId: string,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string
@@ -949,7 +979,8 @@ async function listAgentWriteRuns(
                 exactRunId ? eq(events.correlationId, exactRunId) : undefined,
                 scope.workspaceId
                   ? drizzleSql`${events.data}->>'workspaceId' = ${scope.workspaceId}`
-                  : undefined
+                  : undefined,
+                startedBeforeWhere(events.timestamp, scope)
               )
             )
             .orderBy(desc(events.timestamp))
@@ -1044,7 +1075,8 @@ async function listAgentWriteRuns(
         scope.workspaceId
           ? eq(proposals.workspaceId, scope.workspaceId)
           : undefined,
-        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined
+        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined,
+        startedBeforeWhere(proposals.createdAt, scope)
       )
     )
     .orderBy(desc(proposals.createdAt))
@@ -1101,7 +1133,7 @@ async function listAgentWriteRuns(
 // never disagree about which population a session belongs to.
 async function listSessionRuns(
   userId: string,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string,
@@ -1176,7 +1208,8 @@ async function listSessionRuns(
           : undefined,
         scope.subjectEntityId
           ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
-          : undefined
+          : undefined,
+        startedBeforeWhere(focusSessions.startedAt, scope)
       )
     )
     .orderBy(desc(focusSessions.startedAt))
@@ -1218,7 +1251,7 @@ async function listSessionRuns(
  */
 async function listChatRuns(
   userId: string,
-  scope: RunScope,
+  scope: LedgerScope,
   limit: number,
   status?: RunStatus,
   exactRunId?: string
@@ -1248,7 +1281,8 @@ async function listChatRuns(
         statusValues ? inArray(chatTurns.status, statusValues) : undefined,
         scope.workspaceId
           ? eq(channels.workspaceId, scope.workspaceId)
-          : undefined
+          : undefined,
+        startedBeforeWhere(chatTurns.startedAt, scope)
       )
     )
     .orderBy(desc(chatTurns.startedAt))
@@ -1331,9 +1365,23 @@ void _sessionLensClassified;
  * `flowType` is set only that ledger is read; otherwise all ledgers are merged.
  */
 export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
-  const { userId, flowType, flowId, status, roster = false } = input;
-  const scope = input.scope ?? {};
   const perFlow = Math.min(input.limit ?? 25, 100);
+  const unique = await collectRuns(input, input.scope ?? {}, perFlow);
+  unique.sort(byStartedAtDesc);
+  return unique.slice(0, perFlow);
+}
+
+/**
+ * Every ledger the input asks for, each capped at `perFlow`, merged and
+ * deduped — UNSORTED. The one fan-out both `listRuns` and `listRunsPage` read,
+ * so a ledger added to the feed joins both.
+ */
+async function collectRuns(
+  input: ListRunsInput,
+  scope: LedgerScope,
+  perFlow: number
+): Promise<UnifiedRun[]> {
+  const { userId, flowType, flowId, status, roster = false } = input;
 
   // Automation runs have no project lens, but do carry a durable entity subject.
   // Only a project focus excludes them; entity focus is filtered in
@@ -1411,8 +1459,97 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
     seen.add(key);
     return true;
   });
-  unique.sort(byStartedAtDesc);
-  return unique.slice(0, perFlow);
+  return unique;
+}
+
+export interface ListRunsPageInput extends ListRunsInput {
+  /** Opaque keyset cursor returned by a previous `listRunsPage`. */
+  cursor?: string;
+}
+
+export interface RunsPage {
+  runs: UnifiedRun[];
+  nextCursor: string | null;
+}
+
+/**
+ * The feed's total order: newest start first, then flow kind and run id
+ * ascending — a deterministic tie-break so a page boundary inside one
+ * millisecond is reproducible. Undateable rows sort last (`byStartedAtDesc`).
+ */
+export function compareRunsForPage(
+  a: Pick<UnifiedRun, "startedAt" | "flowType" | "id">,
+  b: Pick<UnifiedRun, "startedAt" | "flowType" | "id">
+): number {
+  const time = byStartedAtDesc(a, b);
+  if (time !== 0) return time;
+  if (a.flowType !== b.flowType) return a.flowType < b.flowType ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Keyset-paginated `listRuns` — the same `{startedAt, id}` approach
+ * `listRunGroupsPage` uses, over the merged feed.
+ *
+ * Each ledger maps a DIFFERENT start column (and capture / capability /
+ * agent-write runs synthesise their id from a correlationId), so the exact
+ * keyset cannot be one SQL predicate. It is applied in two halves:
+ *   1. pushed down: every ledger reads only rows that started before the
+ *      cursor's millisecond ENDS (`< at + 1ms`) — index-friendly, and safe for
+ *      a microsecond column the millisecond cursor cannot name exactly;
+ *   2. here: rows inside that millisecond that the previous page already
+ *      returned are dropped by the total order (`compareRunsForPage`).
+ * Each ledger over-fetches one row, so "more exists" is known without a count.
+ *
+ * Bound: if one ledger holds more than `limit` runs in the cursor's exact
+ * millisecond, step 2 can eat a page's worth of them — the feed then ends
+ * early rather than repeating rows. Not reachable by any producer today.
+ *
+ * No cursor → the first `limit` rows `listRuns` returns, in the same order
+ * except that ties within one millisecond now break by kind and id.
+ */
+export async function listRunsPage(
+  input: ListRunsPageInput
+): Promise<RunsPage> {
+  const limit = Math.min(input.limit ?? 25, 100);
+  const cursor = input.cursor ? decodeRunCursor(input.cursor) : undefined;
+  const scope: LedgerScope = {
+    ...(input.scope ?? {}),
+    ...(cursor
+      ? { startedBefore: new Date(new Date(cursor.at).getTime() + 1) }
+      : {}),
+  };
+  const collected = await collectRuns(input, scope, limit + 1);
+  const after = cursor
+    ? collected.filter(
+        (r) =>
+          compareRunsForPage(r, {
+            startedAt: new Date(cursor.at),
+            flowType: cursor.flowType,
+            id: cursor.id,
+          }) > 0
+      )
+    : collected;
+  after.sort(compareRunsForPage);
+  const runs = after.slice(0, limit);
+  const last = runs.at(-1);
+  // An undateable last row cannot anchor a cursor; it already sorts last, so
+  // nothing dateable can follow it in this order.
+  const anchored =
+    last !== undefined &&
+    last.startedAt instanceof Date &&
+    !Number.isNaN(last.startedAt.getTime());
+  return {
+    runs,
+    nextCursor:
+      after.length > limit && last && anchored
+        ? encodeRunCursor({
+            at: last.startedAt,
+            flowType: last.flowType,
+            id: last.id,
+          })
+        : null,
+  };
 }
 
 // ── Public: run GROUPS (one row per template/flow) ───────────────────────────
@@ -1427,6 +1564,11 @@ export interface ListRunGroupsInput {
   limit?: number;
   /** Opaque keyset cursor returned by `listRunGroupsPage`. */
   cursor?: string;
+  /**
+   * One flow's group only (an automation or playbook id) — the server's group
+   * facts for a single template or rule, so no client re-derives them.
+   */
+  flowId?: string;
 }
 
 /**
@@ -1545,14 +1687,17 @@ export async function listRunGroupsPage(
   const scope = input.scope ?? {};
   const limit = Math.min(input.limit ?? 50, 100);
   const cursor = input.cursor ? decodeRunGroupCursor(input.cursor) : undefined;
+  const flowIds = input.flowId ? [input.flowId] : undefined;
 
   const jobs: Array<Promise<RunGroup[]>> = [];
   if (!flowType || flowType === "automation")
     jobs.push(
-      groupAutomationRuns(userId, scope.workspaceId, limit + 1, cursor)
+      groupAutomationRuns(userId, scope.workspaceId, limit + 1, cursor, flowIds)
     );
   if (!flowType || flowType === "playbook")
-    jobs.push(groupPlaybookRuns(userId, scope.workspaceId, limit + 1, cursor));
+    jobs.push(
+      groupPlaybookRuns(userId, scope.workspaceId, limit + 1, cursor, flowIds)
+    );
 
   const merged = (await Promise.all(jobs)).flat();
   merged.sort((a, b) => {
@@ -1603,30 +1748,6 @@ function withinRecentRuns(
     cols.id,
     db.select({ id: ranked.id }).from(ranked).where(lte(ranked.rn, window))
   );
-}
-
-/**
- * The window a failure counts as CURRENT for health (W2 calm): "failing" =
- * distinct flows with a failed run in the last 7 days, never lifetime runs.
- * Lifetime stays on `failedCount` for the drill-down.
- */
-export const RECENT_FAILURE_WINDOW_DAYS = 7;
-
-/**
- * THE recent-failure rule in TypeScript — the twin of the SQL in the run
- * groupers: a failure's instant is `completedAt ?? startedAt`, recent iff after
- * `now - RECENT_FAILURE_WINDOW_DAYS`. Used for ledgers the groupers do not
- * cover (chat turns), so flow and chat failures are windowed ONE way.
- *
- * `failed` only: a `blocked_by_policy` run is a calm governance outcome, not a
- * failure — it never makes a flow "failing".
- */
-export function isRecentFailure(
-  run: { completedAt?: Date | string | null; startedAt: Date | string },
-  nowMs: number
-): boolean {
-  const at = new Date(run.completedAt ?? run.startedAt).getTime();
-  return at > nowMs - RECENT_FAILURE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 }
 
 async function groupAutomationRuns(

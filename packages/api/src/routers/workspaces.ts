@@ -45,6 +45,7 @@ import {
 import type { LayerTwoBody } from "../services/template-apply/index.js";
 import { cpCatalogCache } from "@synap/database/schema";
 import { resolveWorkspaceTemplate } from "../services/capabilities/resolve-workspace-template.js";
+import { officialCatalogCondition } from "../services/capabilities/catalog-cache-query.js";
 import {
   readTemplateStanding,
   type EnsureTemplateResult,
@@ -1441,6 +1442,8 @@ export const workspaceCatalogRouter = router({
         // Retired templates are known (template health), never installable.
         .where(
           and(
+            // Official catalog only — added sources browse in the marketplace.
+            officialCatalogCondition(),
             eq(cpCatalogCache.kind, "template"),
             isNull(cpCatalogCache.retiredAt)
           )

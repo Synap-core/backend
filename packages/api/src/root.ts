@@ -66,6 +66,7 @@ import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
 import { applicationConnectionsRouter } from "./routers/application-connections.js";
+import { oauthClientsRouter } from "./routers/oauth-clients.js";
 import { sourceConfigsRouter } from "./routers/source-configs.js";
 import { sourceSubscriptionsRouter } from "./routers/source-subscriptions.js";
 import { feedsRouter } from "./routers/feeds.js";
@@ -103,6 +104,7 @@ import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
 import { placesRouter } from "./routers/places.js";
 import { brandRouter } from "./routers/brand.js";
+import { marketplaceRouter } from "./routers/marketplace.js";
 
 /**
  * Core API Router
@@ -184,6 +186,7 @@ export const coreRouter = router({
   sync: syncManagementRouter,
   trustedIssuers: trustedIssuersRouter,
   applicationConnections: applicationConnectionsRouter,
+  oauthClients: oauthClientsRouter,
   sourceConfigs: sourceConfigsRouter,
   sourceSubscriptions: sourceSubscriptionsRouter,
   feeds: feedsRouter,
@@ -218,6 +221,8 @@ export const coreRouter = router({
   places: placesRouter,
   // Brand — the ONE brand-workspace resolution (same as GET /api/hub/brand/kit).
   brand: brandRouter,
+  // Marketplace — the pod-owned catalog (browse, preflight, install).
+  marketplace: marketplaceRouter,
 });
 
 export type AppRouter = typeof coreRouter;
