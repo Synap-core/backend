@@ -832,6 +832,9 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
             ],
           },
           limit: { type: "number", minimum: 1, maximum: 50 },
+          // One catalog source by id (`synap`, or one a pod admin added).
+          // Omitted: Synap's catalog plus trusted sources open to agents.
+          source: { type: "string", minLength: 1, maxLength: 100 },
         },
       },
     },
@@ -895,6 +898,10 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           // already ACCEPTS it — an accepted-but-unadvertised param is the
           // exact undiscoverable state this catalog exists to prevent.
           definition: { type: "object" },
+          // The catalog source id (`synap`, or one a pod admin added) that
+          // market.search returned. Omitted: Synap's catalog — a bare slug
+          // never installs from another source.
+          source: { type: "string", minLength: 1, maxLength: 100 },
         },
       },
     },
