@@ -56,6 +56,24 @@ const DDL = readFileSync(
   "utf8"
 );
 
+// A decision on an issuer also actions its pending "needs approval"
+// notifications in the same transaction, so `notifications` must exist too —
+// sliced from the REAL baseline DDL (the only file that creates it). Throws if
+// the slice ever stops matching, so the suite can't run against a missing table.
+const NOTIFICATIONS_DDL = (() => {
+  const baseline = readFileSync(
+    fileURLToPath(
+      new URL("../../migrations/0000_baseline_schema.sql", import.meta.url)
+    ),
+    "utf8"
+  );
+  const start = baseline.indexOf('CREATE TABLE IF NOT EXISTS "notifications" (');
+  const end = baseline.indexOf("\n);", start);
+  if (start < 0 || end < 0)
+    throw new Error("notifications DDL not found in the baseline schema");
+  return baseline.slice(start, end + 3);
+})();
+
 const CP = "https://api.test-cp.example";
 const WIDER = "membership:activate";
 const OTHER = "sync";
@@ -79,7 +97,9 @@ function seedCp(
 
 beforeEach(async () => {
   await h.init();
-  await h.client!.exec(`DROP TABLE IF EXISTS "trusted_issuers"; ${DDL}`);
+  await h.client!.exec(
+    `DROP TABLE IF EXISTS "trusted_issuers"; DROP TABLE IF EXISTS "notifications"; ${DDL}; ${NOTIFICATIONS_DDL}`
+  );
 });
 
 describe("seedBuiltIn — CP scopes are pinned, wider = owner consent (D7)", () => {
