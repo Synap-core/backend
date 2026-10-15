@@ -18548,6 +18548,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -18632,6 +18635,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -18707,6 +18713,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -18795,6 +18804,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -18874,6 +18886,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -19029,6 +19044,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -19113,6 +19131,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -19188,6 +19209,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -19276,6 +19300,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
@@ -19355,6 +19382,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "install";
 					installSlug: string;
 					sourceUrl: string;
+					name: string;
+					billing: UrlReaderOffer["billing"];
+					billingHint?: string;
 				} | undefined;
 				sessionId: string | null;
 				intake: {
