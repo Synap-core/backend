@@ -1046,5 +1046,21 @@
       "cliBundle": true,
       "capability": null
     }
+  },
+  "synap/hand-off": {
+    "teachesTools": [
+      "synap_list_agents",
+      "synap_start_session",
+      "synap_update_session",
+      "synap_get_thread_context"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Hand work to an agent on the person's computer: find it (synap_list_agents, match computer names first, 2+ → ask), hand it a session, follow the room (worker QUESTION:/result protocol), report back.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   }
 }

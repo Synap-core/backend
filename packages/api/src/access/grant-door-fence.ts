@@ -200,6 +200,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_widgets: READS("widget", "view"),
   synap_template_health: READS("tool", "playbook", "automation", "view"),
   synap_governance: READS("proposal", "agent", "tool"),
+  // The roster of agents (+ their computers and dispatch tool) for hand-off.
+  synap_list_agents: READS("agent", "tool"),
   synap_export_project_pack: READS(
     "project",
     "entity",

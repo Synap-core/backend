@@ -72,11 +72,9 @@ import {
   getLinksFor,
   createLinks,
 } from "../links/links-service.js";
-import { WORKER_IRREVERSIBLE_DAILY_CEILING } from "@synap/governance-policy";
+import { workerIrreversibleSendCeiling } from "./worker-send-ceiling.js";
 import {
-  DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   WORKER_BATCH_LIMIT,
-  WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SKIP_REASONS,
   WORKER_TARGET_ROLE,
   type WorkerSkipReason,
@@ -92,7 +90,10 @@ import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
 } from "@synap-core/types/automations";
-import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import {
+  resolveWorkerMaxPending,
+  settleParentAutomationRunFromChild,
+} from "@synap/jobs";
 import {
   decidePinnedSubject,
   fillSoleRequiredEntityParam,
@@ -1252,7 +1253,7 @@ interface WorkerBatch {
  *      waiting on a person (the softer, earlier limit above the per-agent
  *      pending cap, so a batch never hits that refusal halfway);
  *   2. `volume_ceiling` — the enablement used today's irreversible-send
- *      ceiling (`WORKER_IRREVERSIBLE_DAILY_CEILING`, a system constant): sent
+ *      ceiling (axis `worker_irreversible_sends_daily`, tighten-only): sent
  *      today plus still pending. This only stops a NEW run; every send inside
  *      one is checked again at the send door (`worker-send-ceiling.ts`);
  *   3. `stale_transition` — a per_thing worker on a status: the subject is no
@@ -1271,13 +1272,16 @@ export async function gateWorkerRun(
   process: { statusProperty: string | null } = { statusProperty: null }
 ): Promise<WorkerSkipReason | null> {
   if (worker.automationId) {
-    const max = workerMaxPending(worker.maxPendingApprovals);
+    const max = await resolveWorkerMaxPending(
+      worker.automationId,
+      worker.maxPendingApprovals
+    );
     if ((await countWorkerPendingApprovals(worker.automationId)) >= max) {
       return WORKER_SKIP_REASONS.approvalsBacklog;
     }
     if (
       (await countWorkerIrreversibleSendsToday(worker.automationId)) >=
-      WORKER_IRREVERSIBLE_DAILY_CEILING
+      (await workerIrreversibleSendCeiling(worker.automationId))
     ) {
       return WORKER_SKIP_REASONS.volumeCeiling;
     }
@@ -1325,13 +1329,6 @@ export async function gateWorkerRun(
  */
 const loadStatusGroups = () => import("../lifecycle/status-groups.js");
 
-function workerMaxPending(declared: number | undefined): number {
-  const n =
-    typeof declared === "number" && Number.isInteger(declared)
-      ? declared
-      : DEFAULT_WORKER_MAX_PENDING_APPROVALS;
-  return Math.min(Math.max(n, 1), WORKER_MAX_PENDING_APPROVALS_CEILING);
-}
 
 /**
  * A per_moment worker run: the things in the worker's status under its scope

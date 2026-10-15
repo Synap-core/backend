@@ -49,6 +49,8 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 
 /** The exact `governanceRules.create`-shaped rule a grant writes. */
 type GovernanceRuleDraft = ReturnType<typeof nextRungRuleDraft>;
+/** A draft's identity and spec — its lineage travels separately. */
+export type RuleGrantDraft = Omit<GovernanceRuleDraft, "sourceProposalId">;
 import {
   assertProposalVisibleTo,
   visibleProposalIds,
@@ -256,7 +258,7 @@ export async function readNextRungs(params: {
 }
 
 /** The identity of a drafted rule — what "already covered" compares. */
-function ruleKey(rule: GovernanceRuleDraft): string {
+function ruleKey(rule: RuleGrantDraft): string {
   return [
     rule.agentUserId ?? "",
     rule.scopeKind,
@@ -272,7 +274,7 @@ function ruleKey(rule: GovernanceRuleDraft): string {
  * memory by {@link ruleKey}. Returns draft key → covering rule id.
  */
 async function findCoveringRules(
-  drafts: readonly GovernanceRuleDraft[]
+  drafts: readonly RuleGrantDraft[]
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const agentIds = [
@@ -314,7 +316,6 @@ async function findCoveringRules(
         targetPattern: r.targetPattern,
         ...(r.targetProfile ? { targetProfile: r.targetProfile } : {}),
         verdict: "auto",
-        sourceProposalId: "",
       }),
       r.id
     );
@@ -355,7 +356,7 @@ export type FileNextRungResult =
  * formatter lifts `cause.reasonCode`), read by `isNoNextRungError`; the
  * message keeps the pinned `NO_NEXT_RUNG:` prefix for older clients.
  */
-function noNextRung(detail: string): TRPCError {
+export function noNextRung(detail: string): TRPCError {
   return new TRPCError({
     code: "PRECONDITION_FAILED",
     message: `${NO_NEXT_RUNG_CODE}: ${detail}`,
@@ -369,7 +370,7 @@ function noNextRung(detail: string): TRPCError {
  * The owner's review line, in the vocabulary's words — "Next time, let it
  * update notes and tell you?" — never a raw event key.
  */
-export function nextRungRequestLine(rule: GovernanceRuleDraft): string {
+export function nextRungRequestLine(rule: RuleGrantDraft): string {
   const dot = rule.targetPattern.lastIndexOf(".");
   const subject = rule.targetPattern.slice(0, dot);
   const action = rule.targetPattern.slice(dot + 1);
@@ -406,10 +407,39 @@ export async function fileNextRung(params: {
     );
   }
   const { offer, rule } = projection;
+  const filed = await fileRuleGrant({
+    userId: params.userId,
+    rule,
+    mayGrant: params.mayGrant,
+    fromProposalId: params.row.id,
+  });
+  return { ...filed, offer };
+}
 
+export type RuleGrantResult =
+  | { outcome: "created"; ruleId: string }
+  | { outcome: "already_covered"; ruleId: string }
+  | { outcome: "proposed"; proposalId: string }
+  | { outcome: "needs_admin"; proposalId: string };
+
+/**
+ * File ONE drafted `auto` rule — the shared back half of every "widen" door
+ * (a card's next rung, a matrix cell's Widen). An identical active rule answers
+ * `already_covered`. `mayGrant` (the caller's door decided it) writes the rule
+ * now through `applyGovConfigChange`; otherwise a pending `settings.update` is
+ * filed for the agent's OWNER, applied by that same write on approval.
+ * `fromProposalId` is the card it was asked from (lineage), `null` when none.
+ */
+export async function fileRuleGrant(params: {
+  userId: string;
+  rule: RuleGrantDraft;
+  mayGrant: boolean;
+  fromProposalId: string | null;
+}): Promise<RuleGrantResult> {
+  const { rule } = params;
   const covering = (await findCoveringRules([rule])).get(ruleKey(rule));
   if (covering) {
-    return { outcome: "already_covered", ruleId: covering, offer };
+    return { outcome: "already_covered", ruleId: covering };
   }
 
   const spec = {
@@ -428,8 +458,8 @@ export async function fileNextRung(params: {
       store: "governance_rules",
       op: "set",
       spec,
-      // LINEAGE: the card the person granted it from.
-      sourceProposalId: params.row.id,
+      // LINEAGE: the card the person granted it from (none from the matrix).
+      sourceProposalId: params.fromProposalId,
       // A person authored this grant, by clicking it — the `user:` namespace
       // `governanceRules.create` stamps, never a machine namespace.
       createdBy: authoredCreatedBy(params.userId),
@@ -441,7 +471,7 @@ export async function fileNextRung(params: {
         message: "The rule write returned no row.",
       });
     }
-    return { outcome: "created", ruleId, offer };
+    return { outcome: "created", ruleId };
   }
 
   // Not the caller's to grant: the agent's OWNER decides (owner floor, 0248).
@@ -468,7 +498,9 @@ export async function fileNextRung(params: {
       store: "governance_rules",
       op: "set",
       ...spec,
-      nextRungFromProposalId: params.row.id,
+      ...(params.fromProposalId
+        ? { nextRungFromProposalId: params.fromProposalId }
+        : {}),
     } as Record<string, unknown>,
     createdBy: params.userId,
     proposedByUserId: params.userId,
@@ -493,9 +525,7 @@ export async function fileNextRung(params: {
       },
     },
   });
-  return {
-    outcome: callerIsOwner ? "needs_admin" : "proposed",
-    proposalId: proposal.id,
-    offer,
-  };
+  return callerIsOwner
+    ? { outcome: "needs_admin", proposalId: proposal.id }
+    : { outcome: "proposed", proposalId: proposal.id };
 }

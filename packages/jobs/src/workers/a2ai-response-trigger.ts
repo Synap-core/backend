@@ -50,6 +50,8 @@ import {
   eq,
   messages,
   persistAssistantReply,
+  agentOverridesForTurn,
+  type AgentTurnOverrides,
 } from "@synap/database";
 import { createNotificationViaService } from "../utils/notification-creator.js";
 
@@ -284,6 +286,7 @@ async function callIntelligenceHub(
     focusSessionId?: string | null;
     agentUserId?: string;
     turnContext?: Record<string, unknown>;
+    agentOverrides?: AgentTurnOverrides | null;
   }
 ): Promise<{
   text: string;
@@ -440,6 +443,13 @@ export async function handleA2AIResponseTrigger(
   let streamError: string | null = null;
   let aiSteps: unknown[] = [];
   let partialFailure: ISPartialFailure | null = null;
+  // Read at RUN time, not enqueue time: a config edited while the job waited
+  // applies. A failed read leaves it undefined so the IS reads it itself.
+  const agentOverrides = await agentOverridesForTurn({
+    userId,
+    workspaceId,
+    agentType,
+  });
   try {
     const result = await callIntelligenceHub(serviceUrl, serviceApiKey, {
       query: content,
@@ -452,6 +462,7 @@ export async function handleA2AIResponseTrigger(
       focusSessionId: job.data.focusSessionId,
       agentUserId,
       ...(job.data.turnContext ? { turnContext: job.data.turnContext } : {}),
+      ...(agentOverrides !== undefined ? { agentOverrides } : {}),
     });
     fullContent = result.text;
     streamError = result.error;

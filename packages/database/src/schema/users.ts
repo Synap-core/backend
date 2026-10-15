@@ -158,6 +158,14 @@ export const users = pgTable("users", {
   hostUserId: text("host_user_id").references((): any => users.id, {
     onDelete: "set null",
   }),
+  // PAUSED (0329, agent routing W1b): THE route skips a paused agent when it
+  // picks for a person, and refuses it by name. Pausing never revokes keys.
+  // NULL = not paused. Written only through `agentUsers.setPaused`.
+  agentPausedAt: timestamp("agent_paused_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  agentPausedBy: text("agent_paused_by"),
 
   // Sync metadata (nullable — agents have no Kratos identity)
   kratosIdentityId: text("kratos_identity_id"),

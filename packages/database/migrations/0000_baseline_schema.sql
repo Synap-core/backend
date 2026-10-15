@@ -58,6 +58,9 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_via" text;
 -- 0320: the computer an agent runs on (MACHINE-IDENTITY-PLAN). FK + the
 -- (person, type, computer) unique index live in 0320.
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "host_user_id" text;
+-- 0329: agent pause (agent routing W1b).
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_at" timestamp with time zone;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_by" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -4657,6 +4660,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'pending_proposal_cap';
+-- 0330: the caps fold.
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_per_run';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_approvals';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,
@@ -4682,6 +4690,8 @@ ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "source_proposal_id" 
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
 ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "expires_at" timestamptz;
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "subject_type" text; -- 0330
+ALTER TABLE "governance_ceilings" ADD COLUMN IF NOT EXISTS "subject_id" text; -- 0330
 CREATE INDEX IF NOT EXISTS "governance_ceilings_axis_scope_principal_idx"
   ON "governance_ceilings" ("axis", "scope_kind", "workspace_id", "principal_kind", "agent_user_id")
   WHERE "revoked_at" IS NULL;

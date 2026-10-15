@@ -174,11 +174,12 @@ async function seedCapture(opts: {
   owner?: string;
   text?: string;
   runId?: string | null;
+  workspaceId?: string;
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into documents (id, user_id, title, type, metadata, created_at, updated_at)
-     values ($1, $2, 'Capture', 'text', $3::jsonb, now(), now())`,
+    `insert into documents (id, user_id, title, type, metadata, created_at, updated_at, workspace_id)
+     values ($1, $2, 'Capture', 'text', $3::jsonb, now(), now(), $4)`,
     [
       id,
       opts.owner ?? USER,
@@ -191,6 +192,7 @@ async function seedCapture(opts: {
           door: "relay",
         },
       }),
+      opts.workspaceId ?? null,
     ]
   );
   await q(
@@ -408,6 +410,33 @@ describe("captures.giveToAgent", () => {
     });
   });
 
+  it("nobody named: the agent ASSIGNED to the capture's space takes it (W1b)", async () => {
+    const space = randomUUID();
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), space, USER]
+    );
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type) values ($1, 'participant', $2, 'workspace', $3, 'assigned_to')`,
+      [randomUUID(), AGENT_B, space]
+    );
+    const captureId = await seedCapture({ workspaceId: space });
+    const r = await giveCaptureToAgent({ access, userId: USER, captureId });
+    expect(r).toMatchObject({
+      status: "given",
+      agent: { id: AGENT_B },
+    });
+  });
+
+  it("a paused agent's orient says so — its worker idles", async () => {
+    await q(`update users set agent_paused_at = now() where id = $1`, [AGENT_B]);
+    try {
+      expect(await handedTo(AGENT_B)).toEqual({ status: "paused" });
+    } finally {
+      await q(`update users set agent_paused_at = null where id = $1`, [AGENT_B]);
+    }
+  });
+
   it("refuses a foreign capture, an unknown agent and a house agent — writing nothing", async () => {
     const foreign = await seedCapture({ owner: OTHER });
     expect(
@@ -530,6 +559,12 @@ describe("captures.giveToAgent — a BOUND agent is pushed", () => {
       parentSessionId: runId,
       onMissingRequired: "owe",
     });
+  });
+
+  it("a bound agent's orient lists nothing to pull — it is handed work through its provider", async () => {
+    // Reach is exclusive: a `synap worker` pulling for a bound agent would run
+    // the same work its provider already got.
+    expect(await handedTo(BOUND)).toEqual({ status: "bound" });
   });
 
   it("giving it again while the hand-off is live returns that session — never a second start", async () => {

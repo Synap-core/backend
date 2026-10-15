@@ -980,6 +980,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0320_machine_identity.sql",
   },
   {
+    table: "users",
+    column: "agent_paused_at",
+    addedBy: "0329_agent_assignment_and_pause.sql",
+  },
+  {
+    table: "users",
+    column: "agent_paused_by",
+    addedBy: "0329_agent_assignment_and_pause.sql",
+  },
+  {
     table: "governance_rules",
     column: "principal_class",
     addedBy: "0320_machine_identity.sql",
@@ -988,6 +998,16 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "governance_ceilings",
     column: "principal_class",
     addedBy: "0320_machine_identity.sql",
+  },
+  {
+    table: "governance_ceilings",
+    column: "subject_type",
+    addedBy: "0330_governance_ceiling_axes_fold.sql",
+  },
+  {
+    table: "governance_ceilings",
+    column: "subject_id",
+    addedBy: "0330_governance_ceiling_axes_fold.sql",
   },
   // device_auth_requests — the device door (0321). Absence means the CLI
   // cannot connect a computer at all.

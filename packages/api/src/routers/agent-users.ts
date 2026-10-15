@@ -76,6 +76,12 @@ import { links, tools } from "@synap/database/schema";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { createLink } from "../services/links/links-service.js";
 import { redispatchAfterAgentBound } from "../services/agent-dispatch/redispatch-on-choice.js";
+import {
+  loadAgentAssignments,
+  setAgentAssignment,
+  setAgentPaused,
+} from "../services/agent-dispatch/agent-assignment.js";
+import { ASSIGNMENT_TARGETS } from "../services/agent-dispatch/route.js";
 import { createLogger } from "@synap-core/core";
 
 const bindingLogger = createLogger({ module: "agent-users/set-binding" });
@@ -151,6 +157,7 @@ export async function queryAgentUsers(
           createdVia: users.createdVia,
           isPersonalAgent: users.isPersonalAgent,
           createdByUserId: users.createdByUserId,
+          pausedAt: users.agentPausedAt,
           role: workspaceMembers.role,
           joinedAt: workspaceMembers.joinedAt,
         })
@@ -171,6 +178,7 @@ export async function queryAgentUsers(
       createdVia: users.createdVia,
       isPersonalAgent: users.isPersonalAgent,
       createdByUserId: users.createdByUserId,
+      pausedAt: users.agentPausedAt,
     })
     .from(users)
     .where(
@@ -628,6 +636,9 @@ export const agentUsersRouter = router({
       const pendingConnect = await pendingAgentConnectProposals(
         rows.map((r) => r.id)
       );
+      // `assignments` — what each agent takes by default (THE route's
+      // assignment rung, W1b), as `{ type, id }` targets.
+      const assignments = await loadAgentAssignments(rows.map((r) => r.id));
       return rows.map((r) => {
         const verbs = withViewerVerbs(withAgentOrigin(r), viewer);
         return {
@@ -638,6 +649,7 @@ export const agentUsersRouter = router({
           operatedByViewer: operated.has(r.id),
           reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
           binding: dispatch.get(r.id)?.binding ?? null,
+          assignments: assignments.get(r.id) ?? [],
         };
       });
     }),
@@ -1125,6 +1137,62 @@ export const agentUsersRouter = router({
         agent.id
       )!;
       return { agentUserId: agent.id, ...summary };
+    }),
+
+  /**
+   * Assign an agent to what it should take by default — a playbook, a kind, a
+   * project or a space (`participant --assigned_to--> …`), or remove that
+   * assignment. THE route reads it when nobody named an agent, most specific
+   * target first. One agent per target: assigning replaces the previous one.
+   * HUMAN-ONLY, owner or pod admin (`services/agent-dispatch/agent-assignment.ts`).
+   */
+  setAssignment: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().uuid(),
+        target: z.object({
+          type: z.enum(ASSIGNMENT_TARGETS),
+          id: z.string().uuid(),
+        }),
+        assigned: z.boolean(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only a person can assign an agent — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite({ subjectType: "agent", action: "update" });
+      return setAgentAssignment({
+        callerId: ctx.userId,
+        agentUserId: input.agentUserId,
+        target: input.target,
+        assigned: input.assigned,
+      });
+    }),
+
+  /**
+   * Pause or resume an agent. A paused agent is never picked for anyone's
+   * work and is refused when named; its keys keep working. HUMAN-ONLY, owner
+   * or pod admin.
+   */
+  setPaused: protectedProcedure
+    .input(z.object({ agentUserId: z.string().uuid(), paused: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only a person can pause an agent — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite({ subjectType: "agent", action: "update" });
+      return setAgentPaused({
+        callerId: ctx.userId,
+        agentUserId: input.agentUserId,
+        paused: input.paused,
+      });
     }),
 
   /**

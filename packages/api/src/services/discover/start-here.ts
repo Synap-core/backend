@@ -80,10 +80,23 @@ async function readHandedToYou(
   agentUserId: string
 ): Promise<NonNullable<StartHere["handedToYou"]>> {
   try {
-    const { db, and, eq, inArray, desc, drizzleSql, focusSessions } =
+    const { db, and, eq, inArray, desc, drizzleSql, focusSessions, users } =
       await import("@synap/database");
     const { OPEN_SESSION_STATUSES } =
       await import("@synap-core/types/focus-sessions");
+    // Reach is exclusive (THE route): a bound agent is handed work through its
+    // provider, so it is never also handed the same work to pull.
+    const { resolveAgentReach } =
+      await import("../agent-dispatch/agent-binding.js");
+    if ((await resolveAgentReach(agentUserId)) === "dispatch") {
+      return { status: "bound" };
+    }
+    const [agent] = await db
+      .select({ pausedAt: users.agentPausedAt })
+      .from(users)
+      .where(eq(users.id, agentUserId))
+      .limit(1);
+    if (agent?.pausedAt) return { status: "paused" };
     const rows = await db
       .select({
         id: focusSessions.id,

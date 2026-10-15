@@ -77,7 +77,9 @@ beforeAll(async () => {
       limit_value integer NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
       revoked_at timestamptz,
-      expires_at timestamptz
+      expires_at timestamptz,
+      subject_type text,
+      subject_id text
     );
     CREATE TABLE events (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

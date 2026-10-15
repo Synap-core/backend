@@ -941,3 +941,4 @@ export function agentDisplayName(input: {
 
 // The reopenable agent conversation behind a piece of work.
 export * from "./conversation.js";
+export * from "./route-choice.js";

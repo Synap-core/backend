@@ -14,7 +14,6 @@ import { protectedProcedure } from "../../trpc.js";
 import { getPodCallback } from "../../utils/pod-callback.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 
-import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { aiRateLimitMiddleware } from "../../middleware/ai-rate-limit.js";
 import {
   describeAiFailure,
@@ -31,20 +30,27 @@ import {
   resolveAgentHandle,
   extractMentionAgentType,
   extractMentionHandles,
-  resolveMentionedMember,
 } from "../../utils/agent-handles.js";
 import { notifyHumanMentions } from "../../services/messaging/notify-room-post.js";
 import { recordOwnerRoomReply } from "../../services/focus-sessions/session-answer.js";
 import { resolveSummonedAgentUserId } from "../../services/messaging/turn-principal.js";
-import { resolveAgentReachMany } from "../../services/agent-dispatch/agent-binding.js";
+import {
+  routeRoomMessage,
+  type RoomCandidate,
+  type RoomRouting,
+} from "../../services/agent-dispatch/route-room.js";
+import {
+  offerRoomChoice,
+  wakeMentionedAgents,
+} from "../../services/agent-dispatch/room-follow-through.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
   eq,
   and,
-  asc,
   drizzleSql,
   persistAssistantReply,
+  agentOverridesForTurn,
 } from "@synap/database";
 import {
   channels,
@@ -707,164 +713,38 @@ export const sendMessageProcedure = protectedProcedure
       // the fallthrough path but routing engine overrides for GROUP.
       (channel.channelType === ChannelType.GROUP && !!mentionedAgentType);
 
-    // ── ROUTING ENGINE (GROUP / AGENT_COLLAB multiplayer rooms) ─────────────
-    //
-    // Restraint is the default: the correct, common outcome is SILENCE.
-    //
-    // Decision matrix:
-    //   aiReactionMode=off            → no AI, always.
-    //   explicit @mention of a channel AI_AGENT member → that teammate answers
-    //                                    (routedSource='mention').
-    //   aiReactionMode=only_mentioned → only @mention triggers; else silence.
-    //   aiReactionMode=when_confident → ask the IS cheap router; default null.
-    //
-    // For non-GROUP/AGENT_COLLAB channels: null (skip routing engine, use
-    // the single-responder isAiChannel gate above unchanged).
+    // ── WHO ANSWERS (GROUP / AGENT_COLLAB multiplayer rooms) ────────────────
+    // THE route, room pool (`services/agent-dispatch/route-room.ts` holds the
+    // decision matrix). Restraint is the default: silence. For other channel
+    // types the single-responder isAiChannel gate above decides.
 
     let routingDecision: RoutedTeammateContext | null = null;
-    // A mention named a roster member the pod does not run (reach ≠ 'pod').
-    let mentionedExternalAgent = false;
+    // The room's answer when no single agent fits: the person picks.
+    let roomChoice: RoomCandidate[] | null = null;
+    // External members the message named: reached their own way, never an IS turn.
+    let roomWake: RoomRouting["wake"] = [];
     const isMultiplayerRoom =
       channel.channelType === ChannelType.GROUP ||
       channel.channelType === ChannelType.AGENT_COLLAB;
 
     if (isMultiplayerRoom) {
-      const reactionMode =
-        (channel.aiReactionMode as AiReactionMode) ??
-        AiReactionMode.WHEN_CONFIDENT;
-
-      // Hard off — never route to any teammate.
-      if (reactionMode !== AiReactionMode.OFF) {
-        // 1. Explicit @mention resolution — highest priority.
-        //    EVERY handle is read (not just the first — "@bob and @ai" in a
-        //    multi-human room must still summon the AI), and each is validated
-        //    against the room's AI_AGENT roster: the first handle naming a
-        //    member wins; a handle naming no member routes nowhere.
-        const mentionHandles = [
+      const routed = await routeRoomMessage({
+        channelId,
+        senderId: userId,
+        reactionMode: (channel.aiReactionMode as AiReactionMode) ?? null,
+        mentionHandles: [
           ...(resolvedHandle ? [resolvedHandle.agentSlug] : []),
           ...extractMentionHandles(content),
-        ];
-        if (mentionHandles.length > 0) {
-          const roster = await db
-            .select({
-              memberId: channelMembers.memberId,
-              agentType: users.agentType,
-            })
-            .from(channelMembers)
-            .innerJoin(users, eq(users.id, channelMembers.memberId))
-            .where(
-              and(
-                eq(channelMembers.channelId, channelId),
-                eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
-              )
-            )
-            .orderBy(asc(channelMembers.createdAt));
-          // THE REACH RULE: an external agent (reach dispatch/pull) NEVER gets
-          // an IS turn under its name — only pod-reach members can answer here.
-          // Mentioning an external member is a message TO it, not a summons
-          // for the IS: no turn, and no router fallthrough to a house agent.
-          const reach = await resolveAgentReachMany(
-            roster.map((r) => r.memberId)
-          );
-          const mentionedMember = resolveMentionedMember(
-            mentionHandles,
-            roster.filter((r) => reach.get(r.memberId) === "pod")
-          );
-
-          if (mentionedMember) {
-            routingDecision = makeRoutedTeammateContext(
-              mentionedMember.memberId,
-              "mention"
-            );
-          } else if (resolveMentionedMember(mentionHandles, roster)) {
-            mentionedExternalAgent = true;
-          }
-          // If mention doesn't resolve to a channel member → silence (no fallthrough).
-        }
-
-        // 2. when_confident: ask the IS cheap router — only if no mention resolved.
-        if (
-          !routingDecision &&
-          !mentionedExternalAgent &&
-          reactionMode === AiReactionMode.WHEN_CONFIDENT
-        ) {
-          try {
-            // Fetch AI_AGENT members with their identity for the router payload.
-            const roomAiMembers = await db
-              .select({
-                memberId: channelMembers.memberId,
-                name: users.name,
-                agentType: users.agentType,
-              })
-              .from(channelMembers)
-              .innerJoin(users, eq(users.id, channelMembers.memberId))
-              .where(
-                and(
-                  eq(channelMembers.channelId, channelId),
-                  eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
-                )
-              );
-            // Only pod-reach members are router candidates (the reach rule —
-            // an external agent never gets an IS turn under its name).
-            const memberReach = await resolveAgentReachMany(
-              roomAiMembers.map((r) => r.memberId)
-            );
-            const aiMembers = roomAiMembers.filter(
-              (r) => memberReach.get(r.memberId) === "pod"
-            );
-
-            if (aiMembers.length > 0) {
-              // Fetch recent context (last 6 messages — cheap, bounded) through
-              // the one door: excludes ephemeral recaps AND soft-deleted messages
-              // so neither influences teammate routing (sender is pre-authorized,
-              // so no userId gate here).
-              const recentMessages = (
-                await queryChannelMessages<{ role: string; content: string }>(
-                  db,
-                  {
-                    channelId,
-                    order: "desc",
-                    limit: 6,
-                    columns: { role: true, content: true },
-                  }
-                )
-              ).reverse();
-
-              const routeResult = await resolvedService.client.routeTeammate({
-                channelId,
-                message: content,
-                recentContext: recentMessages,
-                members: aiMembers.map((m) => ({
-                  id: m.memberId,
-                  name: m.name ?? m.agentType ?? m.memberId,
-                  expertise: m.agentType ?? undefined,
-                })),
-              });
-
-              if (routeResult?.teammateId) {
-                // Validate the returned id is actually a channel AI_AGENT member
-                // (the IS router must not be able to route to an arbitrary user id).
-                const isValidMember = aiMembers.some(
-                  (m) => m.memberId === routeResult.teammateId
-                );
-                if (isValidMember) {
-                  routingDecision = makeRoutedTeammateContext(
-                    routeResult.teammateId,
-                    "orchestrator"
-                  );
-                }
-              }
-              // routeResult.teammateId===null → silence (restraint default).
-            }
-          } catch (routeErr) {
-            // IS router failure → silence, never crash the message send.
-            logger.warn(
-              { err: routeErr, channelId },
-              "IS cheap router failed — defaulting to silence"
-            );
-          }
-        }
-        // only_mentioned + no mention match → routingDecision stays null → silence.
+        ],
+      });
+      roomWake = routed.wake;
+      if (routed.kind === "answer") {
+        routingDecision = makeRoutedTeammateContext(
+          routed.teammateId,
+          routed.source
+        );
+      } else if (routed.kind === "choose") {
+        roomChoice = routed.candidates;
       }
     }
 
@@ -894,14 +774,44 @@ export const sendMessageProcedure = protectedProcedure
     // non-owner's reply does nothing here (v1 — open AI-principal decision).
     // Human door only; ephemeral messages vanish on reload, so they answer
     // nothing. Never throws.
+    let ownerReply: Awaited<ReturnType<typeof recordOwnerRoomReply>> | null =
+      null;
     if (!input.ephemeral && !ctx.agentUserId) {
-      await recordOwnerRoomReply({
+      ownerReply = await recordOwnerRoomReply({
         channelId,
         messageId: userMessageId,
         content,
         userId,
         wake: staysSilent && !anchoredComment?.decision.trigger && !captureTurn,
       });
+    }
+    // The room's follow-through (`agent-dispatch/room-follow-through.ts`):
+    // external members it named are reached their own way, and when several
+    // house agents fit with nobody named, the person is asked who answers.
+    if (isMultiplayerRoom && !input.ephemeral) {
+      await wakeMentionedAgents({
+        channelId,
+        senderId: userId,
+        messageId: userMessageId,
+        content,
+        wake: roomWake,
+      });
+      // Never ask "who should answer?" about a message something already
+      // answers: a reply to an agent's open question (the answer loop), an
+      // anchored comment's or a capture room's own turn.
+      if (
+        roomChoice &&
+        ownerReply?.status !== "answered" &&
+        !anchoredComment?.decision.trigger &&
+        !captureTurn
+      ) {
+        await offerRoomChoice({
+          channelId,
+          senderId: userId,
+          triggerMessageId: userMessageId,
+          candidates: roomChoice,
+        });
+      }
     }
     if (staysSilent) {
       // An anchored HUMAN comment on an intake run (or on a pending proposal of
@@ -1117,7 +1027,6 @@ export const sendMessageProcedure = protectedProcedure
       string,
       unknown
     >;
-    let workspaceSettingsForIS: Record<string, unknown> | undefined;
     if (workspaceId) {
       try {
         const [wsRow] = await db
@@ -1126,10 +1035,7 @@ export const sendMessageProcedure = protectedProcedure
           .where(eq(workspaces.id, workspaceId))
           .limit(1);
         const wsSettings = wsRow?.settings as
-          | {
-              agentPersonality?: string;
-              agentModelPreferences?: Record<string, unknown>;
-            }
+          | { agentPersonality?: string }
           | undefined;
         const wsPersonality = wsSettings?.agentPersonality;
         if (wsPersonality && !effectiveAgentConfig.personality) {
@@ -1138,16 +1044,15 @@ export const sendMessageProcedure = protectedProcedure
             personality: wsPersonality,
           };
         }
-        // Forward agentModelPreferences so IS can apply tier overrides
-        if (wsSettings?.agentModelPreferences) {
-          workspaceSettingsForIS = {
-            agentModelPreferences: wsSettings.agentModelPreferences,
-          };
-        }
       } catch {
-        // Non-critical — skip personality and model prefs if fetch fails
+        // Non-critical — skip personality if fetch fails
       }
     }
+    const agentOverrides = await agentOverridesForTurn({
+      userId,
+      workspaceId,
+      agentType: effectiveAgentType,
+    });
 
     let receivedStreamOutput = false;
     let turnCancelled = false;
@@ -1179,7 +1084,7 @@ export const sendMessageProcedure = protectedProcedure
       agentUserId: agentUserId ?? resolvedService.agentUserId,
       mcpServers: mcpServersList,
       deepAnalysis: input.deepAnalysis,
-      workspaceSettings: workspaceSettingsForIS,
+      ...(agentOverrides !== undefined ? { agentOverrides } : {}),
       contextObjectType: channel.contextObjectType ?? undefined,
       contextObjectId: channel.contextObjectId ?? undefined,
       ...getPodCallback(),

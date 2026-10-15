@@ -95,8 +95,8 @@ const CATEGORY_META: Record<
   issuer: { label: "Trusted issuers", tab: "Trust & Keys", Icon: ShieldCheck },
   "api-key": { label: "API keys", tab: "Trust & Keys", Icon: KeyRound },
   entity: { label: "Entities", tab: "Entities", Icon: Database },
-  proposal: { label: "Proposals", tab: "Audit", Icon: ClipboardCheck },
-  audit: { label: "Audit events", tab: "Audit", Icon: Mailbox },
+  proposal: { label: "Proposals", tab: "Governance", Icon: ClipboardCheck },
+  audit: { label: "Audit events", tab: "Governance", Icon: Mailbox },
 };
 
 // Per-bucket truncation so a noisy category doesn't crowd the others. Shared

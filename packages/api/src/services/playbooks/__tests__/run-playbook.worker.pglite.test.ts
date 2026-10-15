@@ -112,6 +112,7 @@ import {
   workspaceMembers,
   projectMembers,
   podMembers,
+  governanceCeilings,
   users,
   profiles,
   profileWorkspaceAccess,
@@ -169,6 +170,8 @@ beforeAll(async () => {
     focusSessions,
     profileProperties,
     propertyDefs,
+    // The worker gate reads its caps through `resolveCeiling` (W1c).
+    governanceCeilings,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -384,6 +387,22 @@ describe("the gate — before any session exists", () => {
     h.sends = 50;
     expect(await fire(worker())).toEqual({ skipped: "volume_ceiling" });
     expect(await sessions()).toHaveLength(0);
+  });
+
+  it("a stored ceiling for THIS worker tightens it (the caps fold, W1c)", async () => {
+    await deal("review");
+    h.sends = 3;
+    await q(
+      `insert into governance_ceilings (id, axis, principal_kind, scope_kind, subject_type, subject_id, limit_value, created_by, created_at)
+       values ($1, 'worker_irreversible_sends_daily', 'any', 'pod', 'automation', $2, 3, 'test', now())`,
+      [randomUUID(), AUTOMATION]
+    );
+    try {
+      expect(await fire(worker())).toEqual({ skipped: "volume_ceiling" });
+      expect(await sessions()).toHaveLength(0);
+    } finally {
+      await q(`delete from governance_ceilings`);
+    }
   });
 
   it("per_thing: a subject that left the status → stale_transition", async () => {

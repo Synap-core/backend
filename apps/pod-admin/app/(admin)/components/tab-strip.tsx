@@ -7,7 +7,9 @@
  * brief. Each tab links to its own route via Next.js `Link`. Active state
  * is derived from `usePathname()`; we mark a tab active when the path
  * starts with that tab's prefix (so deep links like `/audit/<id>` keep
- * Audit highlighted).
+ * Governance highlighted). A tab may own more than one prefix: Governance
+ * holds Agents & work (`/governance/*`) and Activity, which stays at `/audit`
+ * so no existing link moves.
  */
 
 import Link from "next/link";
@@ -19,6 +21,8 @@ interface Tab {
   /** Tabs that are not yet implemented carry `placeholder: true` so we
    *  can dim them slightly without making them un-clickable. */
   placeholder?: boolean;
+  /** Further path prefixes this tab owns (its `href` is always one). */
+  alsoActiveUnder?: string[];
 }
 
 const TABS: Tab[] = [
@@ -31,7 +35,11 @@ const TABS: Tab[] = [
   { href: "/connectors", label: "Connectors" },
   { href: "/marketplace", label: "Marketplace" },
   { href: "/intelligence", label: "Intelligence" },
-  { href: "/audit", label: "Audit" },
+  {
+    href: "/governance/agents",
+    label: "Governance",
+    alsoActiveUnder: ["/governance", "/audit"],
+  },
 ];
 
 export function TabStrip() {
@@ -47,8 +55,9 @@ export function TabStrip() {
       "
     >
       {TABS.map((tab) => {
-        const active =
-          pathname === tab.href || pathname?.startsWith(`${tab.href}/`);
+        const active = [tab.href, ...(tab.alsoActiveUnder ?? [])].some(
+          (prefix) => pathname === prefix || pathname?.startsWith(`${prefix}/`)
+        );
         return (
           <Link
             key={tab.href}

@@ -238,6 +238,10 @@ export const LINK_EDGE_ROLES = {
   // participant(agent) --dispatched_via--> tool: the agent's dispatch binding
   // — configuration of how it is reached, not work or lineage.
   dispatched_via: RELATED,
+  // participant(agent) --assigned_to--> playbook|profile|project|workspace:
+  // who takes that work by default (the route's assignment rung) —
+  // configuration, not work or lineage.
+  assigned_to: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 
 /**

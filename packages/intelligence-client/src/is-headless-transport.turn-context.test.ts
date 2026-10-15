@@ -47,3 +47,28 @@ describe("requestHeadlessChatText turnContext", () => {
     expect(await capturedBody({})).not.toHaveProperty("turnContext");
   });
 });
+
+describe("requestHeadlessChatText agentOverrides", () => {
+  // The a2ai worker's per-agent config (model, prompt, tools) reaches the IS
+  // ONLY through this body; null (no row) and absent (unknown) stay distinct.
+  it("forwards the pod's agent_configs row verbatim", async () => {
+    const agentOverrides = {
+      modelOverride: "openrouter/model-x",
+      promptAppend: "Be brief.",
+      extraToolIds: ["search"],
+      disabledToolIds: [],
+      maxStepsOverride: 4,
+    };
+    expect((await capturedBody({ agentOverrides })).agentOverrides).toEqual(
+      agentOverrides
+    );
+  });
+
+  it("forwards null and omits undefined", async () => {
+    expect(await capturedBody({ agentOverrides: null })).toHaveProperty(
+      "agentOverrides",
+      null
+    );
+    expect(await capturedBody({})).not.toHaveProperty("agentOverrides");
+  });
+});

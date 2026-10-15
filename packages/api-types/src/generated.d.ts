@@ -4971,6 +4971,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   participant|channel --member_of-->         session      (room participants)
  *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
+ *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -4981,7 +4982,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "document" | "track";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "document" | "track" | "profile";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates"
 /**
@@ -5052,7 +5053,18 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
  * The Hub REST links door lists it (the type-SSOT tripwire requires every
  * produced type there) and refuses it explicitly.
  */
- | "dispatched_via";
+ | "dispatched_via"
+/**
+ * participant(agentUserId) --assigned_to--> playbook | profile | project |
+ * workspace (0329). The agent that takes that target's work when nobody
+ * named one: THE route (`services/agent-dispatch/route.ts`) reads it as the
+ * rung after the roster, most specific target first (playbook > profile >
+ * project > workspace). ONE agent per target per OWNER (`metadata.ownerId`,
+ * unique index — a teammate's assignment in a shared space stays). HUMAN-WRITTEN
+ * ONLY, through `agentUsers.setAssignment` — an agent that could write it
+ * could staff itself onto anyone's work. The Hub REST door lists and refuses it.
+ */
+ | "assigned_to";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -5306,6 +5318,15 @@ export interface EffectiveCapabilityRenderer {
 	pages: CapabilityRendererPage[];
 	source: CapabilityRendererSource;
 }
+declare const GOVERNANCE_CEILING_AXES: [
+	"daily_write_count",
+	"pending_proposal_cap",
+	"automation_ai_dispatch_per_run",
+	"automation_ai_dispatch_daily",
+	"worker_pending_approvals",
+	"worker_irreversible_sends_daily"
+];
+export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
 declare const CONFIG_SCOPE_KINDS: [
 	"default",
 	"bridge",
@@ -9380,6 +9401,31 @@ export interface PartialTurnFailure {
 	readonly recoverable: boolean;
 	readonly needsOperator: boolean;
 }
+export type AgentDirection = "external" | "house";
+/**
+ * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
+ *  - `pod-default`      — creates and edits apply directly with Undo;
+ *  - `create-with-undo` — only creates apply directly (a stricter preset);
+ *  - `ask-first`        — every change asks (the agent's "Require approval"
+ *                          override, or the pod default switched off for a
+ *                          strict agent).
+ * Deletions and structural changes ask in every mode (engine floors).
+ */
+export type AgentWriteMode = "pod-default" | "create-with-undo" | "ask-first";
+declare const AGENT_REACHES: readonly [
+	"pod",
+	"dispatch",
+	"pull"
+];
+export type AgentReach = (typeof AGENT_REACHES)[number];
+declare const AGENT_BINDING_ERROR_CODES: readonly [
+	"ambiguous",
+	"tool_missing",
+	"tool_inactive",
+	"not_an_agent_tool",
+	"malformed"
+];
+export type AgentBindingErrorCode = (typeof AGENT_BINDING_ERROR_CODES)[number];
 /**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
@@ -14353,31 +14399,6 @@ export type ProposePropertyDefRetireResult = {
 	migrationProposalId: null;
 	noMigrationReason: string;
 };
-export type AgentDirection = "external" | "house";
-/**
- * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
- *  - `pod-default`      — creates and edits apply directly with Undo;
- *  - `create-with-undo` — only creates apply directly (a stricter preset);
- *  - `ask-first`        — every change asks (the agent's "Require approval"
- *                          override, or the pod default switched off for a
- *                          strict agent).
- * Deletions and structural changes ask in every mode (engine floors).
- */
-export type AgentWriteMode = "pod-default" | "create-with-undo" | "ask-first";
-declare const AGENT_REACHES: readonly [
-	"pod",
-	"dispatch",
-	"pull"
-];
-export type AgentReach = (typeof AGENT_REACHES)[number];
-declare const AGENT_BINDING_ERROR_CODES: readonly [
-	"ambiguous",
-	"tool_missing",
-	"tool_inactive",
-	"not_an_agent_tool",
-	"malformed"
-];
-export type AgentBindingErrorCode = (typeof AGENT_BINDING_ERROR_CODES)[number];
 declare const AgentBindingConfigSchema: z.ZodObject<{
 	protocol: z.ZodString;
 	provider: z.ZodString;
@@ -14405,6 +14426,13 @@ export interface AgentBindingSummary {
 		message: string;
 	};
 }
+declare const ASSIGNMENT_TARGETS: readonly [
+	"playbook",
+	"profile",
+	"project",
+	"workspace"
+];
+export type AssignmentTarget = (typeof ASSIGNMENT_TARGETS)[number];
 /** Where a principal's newest key stands — ONE derivation, server-side. */
 export type MachineKeyState = "active" | "expiring" | "expired" | "revoked" | "none";
 export interface MachineKeyView {
@@ -14441,6 +14469,105 @@ export interface MachineView {
 	/** The live key's access, by the grant's name ("AI — read & propose"). */
 	accessName: string | null;
 	agents: HostedAgentView[];
+}
+/**
+ * THE AGENT × WORK MATRIX — the contract of `governance.matrix` (agent routing
+ * W2) and the pure rules every surface draws it with.
+ *
+ * Rows: agents, grouped type → computer → agent. Columns: per space, one per
+ * PROCESS (a playbook that works a kind's lifecycle — founder decision
+ * 2026-10-14: one column per process), one "Other work" per space, and one
+ * locked "Floors" column of platform limits no rule can widen. A cell is what
+ * the agent's write WOULD do there, answered by the ONE resolver
+ * (`dryRunAgentGovernanceDecision`), for each of the column's probes.
+ *
+ * Marks (founder decisions 2026-10-14): ✓ auto · ? ask · — off (no grant and
+ * capability-denied share ONE mark; the why-drawer names which) · ◐ mixed
+ * with its split. A collapsed group never shows one member's verdict.
+ *
+ * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
+ */
+/** What one probe would do: act, ask a person, or not at all. */
+export type MatrixVerdict = "auto" | "ask" | "off";
+/** A cell's mark: one verdict, or `mixed` when its probes / members disagree. */
+export type MatrixMark = MatrixVerdict | "mixed";
+export type MatrixLens = "pod" | "mine";
+/** One representative write a column tests. */
+export interface MatrixProbe {
+	key: string;
+	/** The governance event key (`entity.update`, `entity.transition`…). */
+	action: string;
+	/** The kind the probe writes, when it is about one. */
+	profileSlug: string | null;
+}
+export type MatrixColumnKind = "process" | "other" | "floors";
+export interface MatrixColumn {
+	id: string;
+	kind: MatrixColumnKind;
+	label: string;
+	/** The space it sits in (`null` = pod-wide: the floors column). */
+	workspaceId: string | null;
+	workspaceName: string | null;
+	/** A process column's playbook. */
+	playbookId: string | null;
+	probes: MatrixProbe[];
+}
+/** One probe's answer — what the why-drawer reads. */
+export interface MatrixProbeAnswer {
+	probeKey: string;
+	verdict: MatrixVerdict;
+	/** The ladder rung that decided (`rung_2_8`…) and its reason token. */
+	rung: string;
+	reason: string;
+	/** The rule that decided, when one did. */
+	ruleId: string | null;
+}
+export interface MatrixSplit {
+	auto: number;
+	ask: number;
+	off: number;
+}
+export interface MatrixCell {
+	mark: MatrixMark;
+	split: MatrixSplit;
+	/** Per-probe answers (an agent row only; a group row carries the split). */
+	answers?: MatrixProbeAnswer[];
+}
+export interface MatrixAgentRow {
+	agentUserId: string;
+	name: string;
+	agentType: string | null;
+	hostUserId: string | null;
+	paused: boolean;
+	/**
+	 * The reader owns this agent. Widening an agent you own writes the rule;
+	 * widening anyone else's files a proposal to its owner (founder decision 8,
+	 * 2026-10-14), so a surface says which before the click.
+	 */
+	ownedByViewer: boolean;
+	cells: Record<string, MatrixCell>;
+}
+export interface MatrixComputerGroup {
+	/** The computer agent's id, or `null` for agents on no computer. */
+	hostUserId: string | null;
+	label: string;
+	cells: Record<string, MatrixCell>;
+	agents: MatrixAgentRow[];
+}
+export interface MatrixTypeGroup {
+	agentType: string;
+	cells: Record<string, MatrixCell>;
+	computers: MatrixComputerGroup[];
+}
+export interface AgentMatrix {
+	lens: MatrixLens;
+	columns: MatrixColumn[];
+	groups: MatrixTypeGroup[];
+	/** Set when a bound was hit — the person sees what was left out. */
+	partial: null | {
+		agentsOmitted: number;
+		columnsOmitted: number;
+	};
 }
 declare const TRUST_RUNGS: readonly [
 	"ask",
@@ -14520,6 +14647,19 @@ export type FileNextRungResult = {
 	proposalId: string;
 	offer: NextRungOffer;
 };
+export type RuleGrantResult = {
+	outcome: "created";
+	ruleId: string;
+} | {
+	outcome: "already_covered";
+	ruleId: string;
+} | {
+	outcome: "proposed";
+	proposalId: string;
+} | {
+	outcome: "needs_admin";
+	proposalId: string;
+};
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
  * propose a change to `governance_rules` / `governance_ceilings` /
@@ -14538,7 +14678,13 @@ export interface SettingsUpdateProposalData {
 	targetPattern?: string;
 	targetProfile?: string | null;
 	verdict?: "auto" | "propose";
-	axis?: "daily_write_count" | "pending_proposal_cap";
+	/** Any `governance_ceilings` axis (the caps fold, W1c). */
+	axis?: GovernanceCeilingAxis;
+	/** A ceiling for ONE thing (e.g. `{ type: "automation", id }`); omit = every one. */
+	subject?: {
+		type: string;
+		id: string;
+	} | null;
 	limitValue?: number;
 	configScopeKind?: ConfigScopeKind;
 	scopeRef?: string | null;
@@ -22177,6 +22323,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		answerRouteChoice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+				choiceMessageId: string;
+				agentUserId: string;
+			};
+			output: {
+				status: "started";
+				agentUserId: string;
+			} | {
+				status: "refused";
+				reason: "not_a_candidate" | "no_longer_eligible" | "not_started" | "already_answered";
+			};
+			meta: object;
+		}>;
 	}>>;
 	proposals: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -28290,6 +28451,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdVia: AgentCreatedVia | null;
 					parentAgentId: string | null;
 					hostUserId: string | null;
+					agentPausedAt: Date | null;
+					agentPausedBy: string | null;
 					kratosIdentityId: string | null;
 					lastSyncedAt: Date | null;
 				};
@@ -28612,7 +28775,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						theme?: string | null | undefined;
 						sidebarItems?: {
 							[x: string]: unknown;
-							kind: "view" | "cell" | "external" | "profile" | "app";
+							kind: "view" | "cell" | "profile" | "external" | "app";
 							appId?: string | undefined;
 							viewName?: string | undefined;
 							viewId?: string | undefined;
@@ -33264,6 +33427,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				operatedByViewer: boolean;
 				reach: "pod" | "dispatch" | "pull";
 				binding: AgentBindingSummary | null;
+				assignments: {
+					type: AssignmentTarget;
+					id: string;
+				}[];
 				id: string;
 				name: string | null;
 				createdByUserId: string | null;
@@ -33275,8 +33442,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				isPersonalAgent: boolean;
 				createdVia: AgentCreatedVia | null;
 				joinedAt: Date | null;
+				pausedAt: Date | null;
 				lastSeenAt: string | null;
 				host: string | null;
+				hostLabel: string | null;
 				activeKeys: number;
 				pendingKeys: number;
 				revokedKeys: number;
@@ -33349,6 +33518,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reach: AgentReach;
 				binding: AgentBindingSummary | null;
 				agentUserId: string;
+			};
+			meta: object;
+		}>;
+		setAssignment: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				target: {
+					type: "playbook" | "project" | "workspace" | "profile";
+					id: string;
+				};
+				assigned: boolean;
+			};
+			output: {
+				agentUserId: string;
+				target: {
+					type: AssignmentTarget;
+					id: string;
+				};
+				assigned: boolean;
+				replaced: string[];
+			};
+			meta: object;
+		}>;
+		setPaused: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				paused: boolean;
+			};
+			output: {
+				agentUserId: string;
+				pausedAt: string | null;
 			};
 			meta: object;
 		}>;
@@ -33467,6 +33667,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		matrix: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				lens: "pod" | "mine";
+			};
+			output: AgentMatrix;
+			meta: object;
+		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
@@ -33480,7 +33687,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentLabel: string | null;
 					scopeKind: "pod" | "workspace";
 					workspaceId: string | null;
-					targetKind: "capability" | "connection" | "action" | "profile";
+					targetKind: "capability" | "profile" | "connection" | "action";
 					targetPattern: string;
 					targetProfile: string | null;
 					verdict: "auto" | "propose";
@@ -33503,7 +33710,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentLabel: string | null;
 					scopeKind: "pod" | "workspace";
 					workspaceId: string | null;
-					targetKind: "capability" | "connection" | "action" | "profile";
+					targetKind: "capability" | "profile" | "connection" | "action";
 					targetPattern: string;
 					targetProfile: string | null;
 					verdict: "auto" | "propose";
@@ -33537,7 +33744,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentLabel: string | null;
 					scopeKind: "pod" | "workspace";
 					workspaceId: string | null;
-					targetKind: "capability" | "connection" | "action" | "profile";
+					targetKind: "capability" | "profile" | "connection" | "action";
 					targetPattern: string;
 					targetProfile: string | null;
 					verdict: "auto" | "propose";
@@ -33553,7 +33760,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				principalKind: "agent" | "any";
 				scopeKind: "pod" | "workspace";
-				targetKind: "capability" | "connection" | "action" | "profile";
+				targetKind: "capability" | "profile" | "connection" | "action";
 				targetPattern: string;
 				verdict: "auto" | "propose";
 				agentUserId?: string | undefined;
@@ -33639,7 +33846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				principalKind: "agent" | "any" | "class";
 				scopeKind: "pod" | "workspace";
-				targetKind: "capability" | "connection" | "action" | "profile";
+				targetKind: "capability" | "profile" | "connection" | "action";
 				targetPattern: string;
 				verdict: "auto" | "propose";
 				agentUserId?: string | undefined;
@@ -33657,7 +33864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					agentUserId: string | null;
 					sourceProposalId: string | null;
-					targetKind: "capability" | "connection" | "action" | "profile";
+					targetKind: "capability" | "profile" | "connection" | "action";
 					expiresAt: Date | null;
 					verdict: "auto" | "propose";
 					scopeKind: "pod" | "workspace";
@@ -33689,6 +33896,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: FileNextRungResult;
 			meta: object;
 		}>;
+		widenCell: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				workspaceId: string | null;
+				action: string;
+				profileSlug: string | null;
+			};
+			output: RuleGrantResult;
+			meta: object;
+		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -33701,7 +33918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdBy: string;
 					agentUserId: string | null;
 					sourceProposalId: string | null;
-					targetKind: "capability" | "connection" | "action" | "profile";
+					targetKind: "capability" | "profile" | "connection" | "action";
 					expiresAt: Date | null;
 					verdict: "auto" | "propose";
 					scopeKind: "pod" | "workspace";
@@ -33748,7 +33965,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceilings: {
 					id: string;
-					axis: "daily_write_count" | "pending_proposal_cap";
+					axis: "daily_write_count" | "pending_proposal_cap" | "automation_ai_dispatch_per_run" | "automation_ai_dispatch_daily" | "worker_pending_approvals" | "worker_irreversible_sends_daily";
 					principalKind: "agent" | "any" | "class";
 					agentUserId: string | null;
 					principalClass: string | null;
@@ -33795,11 +34012,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentUserId: string | null;
 					sourceProposalId: string | null;
 					expiresAt: Date | null;
+					subjectId: string | null;
+					subjectType: string | null;
 					scopeKind: "pod" | "workspace";
 					revokedAt: Date | null;
 					principalKind: "agent" | "any" | "class";
 					principalClass: string | null;
-					axis: "daily_write_count" | "pending_proposal_cap";
+					axis: "daily_write_count" | "pending_proposal_cap" | "automation_ai_dispatch_per_run" | "automation_ai_dispatch_daily" | "worker_pending_approvals" | "worker_irreversible_sends_daily";
 					limitValue: number;
 				};
 			};
@@ -33818,11 +34037,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentUserId: string | null;
 					sourceProposalId: string | null;
 					expiresAt: Date | null;
+					subjectId: string | null;
+					subjectType: string | null;
 					scopeKind: "pod" | "workspace";
 					revokedAt: Date | null;
 					principalKind: "agent" | "any" | "class";
 					principalClass: string | null;
-					axis: "daily_write_count" | "pending_proposal_cap";
+					axis: "daily_write_count" | "pending_proposal_cap" | "automation_ai_dispatch_per_run" | "automation_ai_dispatch_daily" | "worker_pending_approvals" | "worker_irreversible_sends_daily";
 					limitValue: number;
 				};
 			};
@@ -34072,7 +34293,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | null | undefined;
 				scopeKind?: "pod" | "workspace" | undefined;
 				workspaceId?: string | null | undefined;
-				targetKind?: "capability" | "action" | "profile" | undefined;
+				targetKind?: "capability" | "profile" | "action" | undefined;
 				targetPattern?: string | undefined;
 				targetProfile?: string | null | undefined;
 				verdict?: "auto" | "propose" | undefined;

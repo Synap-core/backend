@@ -27,6 +27,7 @@ import { branchesProcedures } from "./channels/branches.js";
 import { externalProcedures } from "./channels/external.js";
 import { feedsProcedures } from "./channels/feeds.js";
 import { membershipProcedures } from "./channels/membership.js";
+import { answerRouteChoiceProcedure } from "./channels/route-choice.js";
 
 export {
   TurnContextSchema,
@@ -93,4 +94,5 @@ export const channelsRouter = router({
   toggleReaction: messagingProcedures.toggleReaction,
   getChannelReactions: messagingProcedures.getChannelReactions,
   markChannelRead: messagingProcedures.markChannelRead,
+  answerRouteChoice: answerRouteChoiceProcedure,
 });

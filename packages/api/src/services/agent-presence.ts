@@ -20,6 +20,11 @@ export interface AgentPresence {
   lastSeenAt: string | null;
   /** Instance label (`api_keys.instance_id`) of the key last seen; `null` if none/unlabelled. */
   host: string | null;
+  /**
+   * The computer's HUMAN name on that same key (`api_keys.instance_label`,
+   * 0325 — "devbox"); `null` when it was never seen or an older CLI sent none.
+   */
+  hostLabel: string | null;
   /** Live keys (active, not revoked, not expired) — 0 means the agent cannot connect. */
   activeKeys: number;
   /** Keys minted and still awaiting the person's approval (inactive, not revoked, not expired). */
@@ -40,6 +45,7 @@ export interface AgentPresence {
 export const NEVER_SEEN: Readonly<AgentPresence> = {
   lastSeenAt: null,
   host: null,
+  hostLabel: null,
   activeKeys: 0,
   pendingKeys: 0,
   revokedKeys: 0,
@@ -61,6 +67,7 @@ export async function loadAgentPresence(
       userId: apiKeys.userId,
       lastUsedAt: apiKeys.lastUsedAt,
       instanceId: apiKeys.instanceId,
+      instanceLabel: apiKeys.instanceLabel,
       isActive: apiKeys.isActive,
       revokedAt: apiKeys.revokedAt,
       expiresAt: apiKeys.expiresAt,
@@ -76,6 +83,7 @@ export async function loadAgentPresence(
       if (!cur.lastSeenAt || at > cur.lastSeenAt) {
         cur.lastSeenAt = at;
         cur.host = r.instanceId ?? null;
+        cur.hostLabel = r.instanceLabel?.trim() || null;
       }
     }
     // An expired key cannot authenticate: it is neither live nor approvable.

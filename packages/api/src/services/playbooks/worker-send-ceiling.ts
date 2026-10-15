@@ -23,12 +23,30 @@ import {
   countWorkerIrreversibleSentToday,
   workerAutomationOfSession,
 } from "@synap/database";
-import { WORKER_IRREVERSIBLE_DAILY_CEILING } from "@synap/governance-policy";
+import { db } from "@synap/database";
+import { resolveCeiling } from "@synap/database/agent-governance";
 import { WORKER_SKIP_REASONS } from "@synap-core/types/workers";
 
 export interface WorkerSendRefusal {
   reason: typeof WORKER_SKIP_REASONS.volumeCeiling;
   message: string;
+}
+
+/**
+ * ONE worker enablement's irreversible-send ceiling per UTC day (axis
+ * `worker_irreversible_sends_daily`, the caps fold). Tighten-only: a row can
+ * lower it for one worker, never raise it past the platform limit.
+ */
+export async function workerIrreversibleSendCeiling(
+  automationId: string
+): Promise<number> {
+  return (
+    await resolveCeiling({
+      db,
+      axis: "worker_irreversible_sends_daily",
+      subject: { type: "automation", id: automationId },
+    })
+  ).value;
 }
 
 export async function refuseWorkerSendPastCeiling(opts: {
@@ -42,9 +60,10 @@ export async function refuseWorkerSendPastCeiling(opts: {
   const used = opts.replay
     ? await countWorkerIrreversibleSentToday(automationId)
     : await countWorkerIrreversibleSendsToday(automationId);
-  if (used < WORKER_IRREVERSIBLE_DAILY_CEILING) return null;
+  const ceiling = await workerIrreversibleSendCeiling(automationId);
+  if (used < ceiling) return null;
   return {
     reason: WORKER_SKIP_REASONS.volumeCeiling,
-    message: `Not sent: this worker reached today's limit of ${WORKER_IRREVERSIBLE_DAILY_CEILING} sends that can't be undone. It can send again tomorrow (UTC).`,
+    message: `Not sent: this worker reached today's limit of ${ceiling} sends that can't be undone. It can send again tomorrow (UTC).`,
   };
 }

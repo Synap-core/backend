@@ -1301,7 +1301,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Optional array of agent IDs participating in this session."
+            "description": "Optional agent ids to hand this session to (find them, and the computer each runs on, with synap_list_agents). Naming another agent is a hand-off: it is refused when that agent cannot take the person's work (paused, not theirs), and may wait on the person's approval."
           },
           "templateId": {
             "type": ["string", "null"],
@@ -3579,7 +3579,7 @@
           },
           "addAgentId": {
             "type": "string",
-            "description": "APPEND one agent user id to the session roster (optional). Idempotent — re-attaching an agent already on the session writes nothing. Use this to staff a session already in flight; the roster is otherwise only settable when the session is created."
+            "description": "APPEND one agent user id to the session roster (optional) — how you hand work already in flight to an agent; find it, and its computer, with synap_list_agents. Idempotent — re-attaching an agent already on the session writes nothing. Another agent is refused when it cannot take the person's work (paused, not theirs)."
           },
           "followPlaybookId": {
             "type": ["string", "null"],
@@ -3852,6 +3852,20 @@
             "description": "Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page."
           }
         },
+        "required": []
+      }
+    },
+    {
+      "name": "synap_list_agents",
+      "annotations": {
+        "title": "List agents and computers",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused or not live: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
         "required": []
       }
     },

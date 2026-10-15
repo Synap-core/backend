@@ -17,6 +17,12 @@
  * `governance-policy/src/agent-hand-off.test.ts`). The session room, realtime,
  * project placement and spawn lineage are stubbed as in the sibling suites.
  *
+ * THE route, before governance (`handOffRefusal` → `route()`): a PAUSED
+ * agent, and one that does not act for the session's owner, are DENIED by
+ * name and never reach the governance gate; a pod agent (a room member, not a
+ * hand-off) passes through to governance as before; and approving a hand-off
+ * re-asks the route, so an agent paused since the proposal is refused there.
+ *
  * NOT covered here, measured: the Hub `PATCH /focus-sessions/:id` door (it
  * calls the same `gateAgentHandOff`; typecheck only).
  */
@@ -84,6 +90,13 @@ import { proposalExecRegistry } from "../../../routers/proposals/execution-regis
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
 const WORKER = "33333333-3333-4333-8333-333333333333";
+/** USER's worker, paused by a person. */
+const PAUSED = "44444444-4444-4444-8444-444444444444";
+/** A worker that acts for someone else. */
+const STRANGER = "55555555-5555-4555-8555-555555555555";
+/** USER's house agent (agentType, no key): the pod runs it. */
+const HOUSE = "66666666-6666-4666-8666-666666666666";
+const OTHER_PERSON = "77777777-7777-4777-8777-777777777777";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -177,6 +190,25 @@ beforeAll(async () => {
       ($3, 'w@x.test', 'Worker', 'agent')`,
     [USER, AGENT, WORKER]
   );
+  await h.client!.query(
+    `insert into users (id, email, name, user_type, agent_type, created_by_user_id, agent_paused_at) values
+      ($1, 'p@x.test', 'Paused worker', 'agent', null, $5, now()),
+      ($2, 's@x.test', 'Stranger', 'agent', null, $4, null),
+      ($3, 'h@x.test', 'Twin', 'agent', 'meta', $5, null),
+      ($4, 'o@x.test', 'Other', 'human', null, null, null)`,
+    [PAUSED, STRANGER, HOUSE, OTHER_PERSON, USER]
+  );
+  // A pulling agent acts for the person its key is linked to — THE route's
+  // floor for reach 'pull' (`agentsOperatedBy`).
+  const key = (agentId: string, personId: string) =>
+    h.client!.query(
+      `insert into api_keys (id, user_id, key_type, linked_user_id, is_active) values ($1, $2, 'hub_inbound', $3, true)`,
+      [randomUUID(), agentId, personId]
+    );
+  await key(AGENT, USER);
+  await key(WORKER, USER);
+  await key(PAUSED, USER);
+  await key(STRANGER, OTHER_PERSON);
   registerFocusSessionExecutors();
 }, 120_000);
 
@@ -332,5 +364,95 @@ describe("start_session agentIds — an agent's start naming other agents", () =
     expect(handOffCalls()).toHaveLength(0);
     expect(res.handOffs).toBeUndefined();
     expect(await roster(res.session.id)).toEqual([WORKER]);
+  });
+});
+
+describe("THE route decides which agent may take the session", () => {
+  it("update: a PAUSED agent is denied by name and never reaches governance", async () => {
+    const sessionId = await seedSession();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      addAgentId: PAUSED,
+    });
+    expect(res).toMatchObject({ status: "denied" });
+    expect((res as { reason: string }).reason).toMatch(
+      /^Paused worker is paused/
+    );
+    expect(handOffCalls()).toHaveLength(0);
+    expect(await roster(sessionId)).toEqual([AGENT]);
+  });
+
+  it("start: an agent that does not act for the person is denied; the session still starts", async () => {
+    const res = await createFocusSession({
+      userId: USER,
+      goal: `Hand to a stranger ${randomUUID()}`,
+      agentUserId: AGENT,
+      agentIds: [AGENT, STRANGER],
+      matchTemplate: false,
+      forceCreate: true,
+    });
+    if (res.status !== "created") throw new Error(`got ${res.status}`);
+    expect(res.handOffs).toEqual([
+      expect.objectContaining({
+        status: "denied",
+        agentId: STRANGER,
+        reason: expect.stringMatching(/^Stranger does not act for/),
+      }),
+    ]);
+    expect(handOffCalls()).toHaveLength(0);
+    expect(await roster(res.session.id)).toEqual([AGENT]);
+  });
+
+  it("an unknown id is denied like a foreign one, never put on the roster", async () => {
+    const sessionId = await seedSession();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      addAgentId: randomUUID(),
+    });
+    expect(res).toMatchObject({ status: "denied" });
+    expect(await roster(sessionId)).toEqual([AGENT]);
+  });
+
+  it("CONTROL — a pod agent is a room member, not a hand-off: governance decides as before", async () => {
+    const sessionId = await seedSession();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      addAgentId: HOUSE,
+    });
+    expect(res.status).toBe("proposed");
+    expect(handOffCalls()).toHaveLength(1);
+  });
+
+  it("approval re-asks the route: an agent paused since the proposal is refused, not attached", async () => {
+    const sessionId = await seedSession();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      addAgentId: WORKER,
+    });
+    expect(res.status).toBe("proposed");
+    const [gate] = handOffCalls();
+    await h.client!.query(
+      `update users set agent_paused_at = now() where id = $1`,
+      [WORKER]
+    );
+    try {
+      await expect(approveHandOff(sessionId, gate!.data!)).rejects.toThrow(
+        /^Worker is paused/
+      );
+      expect(await roster(sessionId)).toEqual([AGENT]);
+    } finally {
+      await h.client!.query(
+        `update users set agent_paused_at = null where id = $1`,
+        [WORKER]
+      );
+    }
   });
 });

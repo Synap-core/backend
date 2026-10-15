@@ -81,6 +81,7 @@ export const TOOL_GROUPS = {
   sessions: [
     "synap_get_session",
     "synap_list_sessions",
+    "synap_list_agents",
     "synap_evaluate_session",
     "synap_revert_session",
     "synap_rerun_session",
@@ -181,6 +182,7 @@ export function toolGroupRef(group: ToolGroup | "builder"): string {
 const SKILL_STEM_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
   "focus-sessions": ["sessions"],
   "work-flow": ["sessions"],
+  "hand-off": ["sessions", "read"],
   writes: ["data"],
   capture: ["data"],
   "multi-entity-capture": ["data"],

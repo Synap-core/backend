@@ -44,7 +44,6 @@ export const CLIENT_SAFE_WORKSPACE_SETTINGS_KEYS = [
   // Agent / governance configuration surfaced in settings.
   "intelligenceServiceId",
   "agentPersonality",
-  "agentModelPreferences",
   "governanceMode",
   "aiGovernance",
   "proactiveAi",

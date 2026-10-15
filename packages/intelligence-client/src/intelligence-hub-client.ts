@@ -24,6 +24,7 @@ import {
   type StructureProgressEvent,
 } from "@synap-core/types/capture";
 import { isDelegationHeaders } from "@synap/database/is-delegation";
+import type { AgentTurnOverrides } from "@synap/database";
 
 import { iterateISChatStream, iterateSSEDataFrames } from "./is-chat-stream.js";
 
@@ -125,8 +126,14 @@ export interface IntelligenceHubRequest {
   requestId?: string;
   /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
   deepAnalysis?: boolean;
-  /** Workspace settings JSONB — forwarded to IS for agentModelPreferences tier overrides */
+  /** Workspace settings JSONB (e.g. `proactiveAi`) the IS may read for this turn. */
   workspaceSettings?: Record<string, unknown>;
+  /**
+   * The pod's `agent_configs` row for this turn (model, prompt append, tools,
+   * max steps). `null` = the pod looked and there is none; omitted = the pod did
+   * not look or the read failed, and the IS reads it from the pod itself.
+   */
+  agentOverrides?: AgentTurnOverrides | null;
   /** Entity context: channel is scoped to this entity (thread + contextObjectType='entity') */
   contextObjectType?: string;
   contextObjectId?: string;
@@ -264,6 +271,9 @@ export function buildChatRequestBody(
     mcpServers: request.mcpServers,
     deepAnalysis: request.deepAnalysis,
     workspaceSettings: request.workspaceSettings,
+    ...(request.agentOverrides !== undefined
+      ? { agentOverrides: request.agentOverrides }
+      : {}),
     channelKind: request.channelKind,
     focusSessionId: request.focusSessionId,
     contextObjectType: request.contextEntityId
@@ -283,48 +293,6 @@ export function buildChatRequestBody(
 
 // ── Cheap routing types ──────────────────────────────────────────────────────
 
-/**
- * Per-message routing request sent to the IS `/api/route` endpoint.
- *
- * The IS router must remain cheap (small model or heuristic) — it runs on
- * every message in a multiplayer room. Bias hard toward returning null
- * (restraint is the product thesis).
- */
-export interface RouteTeammateRequest {
-  /** Channel id — for logging / tracing only; IS must not query it. */
-  channelId: string;
-  /** The user message being evaluated. */
-  message: string;
-  /** Recent messages (oldest first, last N entries). Keep N small (≤ 6). */
-  recentContext: Array<{ role: string; content: string }>;
-  /** AI teammates that are members of this channel. */
-  members: Array<{
-    /** Agent-user id — returned verbatim in the response if selected. */
-    id: string;
-    /** Display name (for the router's reasoning). */
-    name: string;
-    /** Agent type / expertise hint (e.g. "code", "persona:cto"). */
-    expertise?: string;
-  }>;
-}
-
-/**
- * Response from the IS `/api/route` endpoint.
- *
- * `teammateId` is the agent-user id of the member who should answer, or
- * `null` when the router concludes silence is correct.
- *
- * The backend validates that the returned id is a real channel AI_AGENT
- * member before using it — the router may not inject arbitrary user ids.
- */
-export interface RouteTeammateResponse {
-  /** Agent-user id of the selected teammate, or null (silence). */
-  teammateId: string | null;
-  /** Confidence in [0, 1]. Informational — not used for routing gate. */
-  confidence: number;
-  /** Optional short reason (for logs/tracing; never surfaced to the user). */
-  reason?: string;
-}
 
 // ── Circuit breaker ─────────────────────────────────────────────────────────
 
@@ -1701,54 +1669,6 @@ export class IntelligenceHubClient {
     } catch (err) {
       console.warn(
         `[IntelligenceHubClient] analyzeBulkMapping error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
-      );
-      return null;
-    }
-  }
-
-  /**
-   * Cheap per-message routing decision for multiplayer rooms.
-   *
-   * Given the channel's AI teammate members, the current message, and recent
-   * context, asks the IS router: "which teammate (if any) should answer?"
-   *
-   * RESTRAINT IS THE DEFAULT: the IS router is biased toward returning null.
-   * Silence is the correct, common outcome — the IS should only return a
-   * teammateId when it is confident the message is squarely in that teammate's
-   * domain.
-   *
-   * Kept cheap: small/fast model or a heuristic. Timeout: 5 s. Never throws —
-   * returns null on failure so the caller defaults to silence.
-   */
-  async routeTeammate(
-    request: RouteTeammateRequest
-  ): Promise<RouteTeammateResponse | null> {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5_000);
-      try {
-        const response = await fetch(`${this.baseUrl}/api/route`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": this.apiKey,
-          },
-          body: JSON.stringify(request),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          console.warn(
-            `[IntelligenceHubClient] routeTeammate: non-OK response ${response.status} from ${this.baseUrl}/api/route — defaulting to silence`
-          );
-          return null;
-        }
-        return (await response.json()) as RouteTeammateResponse;
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch (err) {
-      console.warn(
-        `[IntelligenceHubClient] routeTeammate error (defaulting to silence): ${err instanceof Error ? err.message : String(err)}`
       );
       return null;
     }
