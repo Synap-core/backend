@@ -38,7 +38,10 @@ import {
   readReaderStamp,
   type UrlReaderOffer,
 } from "@synap-core/types/url-read";
-import type { UrlReadersContext } from "../capabilities/url-readers.js";
+import {
+  BUILTIN_READER_ID as BUILTIN,
+  type UrlReadersContext,
+} from "../capabilities/url-readers.js";
 import {
   inGroupSql,
   isArchivedSql,
@@ -47,7 +50,11 @@ import {
   type LibraryDb,
 } from "./read-model.js";
 import { loadLibraryGroup } from "./groups.js";
-import { libraryReadAiPerDay, libraryReadAiUsedToday } from "./read-budget.js";
+import {
+  LIBRARY_READ_WINDOW_MS,
+  libraryReadAiPerDay,
+  libraryReadAiUsedToday,
+} from "./read-budget.js";
 import { isAgentCaller } from "./agent-door.js";
 
 /** Read statuses a list's "Read N waiting with X" acts on. */
@@ -59,8 +66,6 @@ export const LIBRARY_WAITING_READ_STATUSES = [
 
 /** Waiting items of one group a readers / readWith call looks at, at most. */
 export const LIBRARY_READERS_SCAN_MAX = 1000;
-
-const BUILTIN = "builtin";
 
 export interface LibraryReadersDeps {
   listReaders(ctx: UrlReadersContext, url: string): Promise<UrlReaderOffer[]>;
@@ -328,7 +333,7 @@ function holdsFreshUnit(metadata: unknown, now: number): boolean {
   )?.aiAt;
   if (typeof aiAt !== "string") return false;
   const at = Date.parse(aiAt);
-  return Number.isFinite(at) && at >= now - 24 * 60 * 60 * 1000;
+  return Number.isFinite(at) && at >= now - LIBRARY_READ_WINDOW_MS;
 }
 
 export function defaultLibraryReadersDeps(): LibraryReadersDeps {

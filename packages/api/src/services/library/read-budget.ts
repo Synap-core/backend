@@ -24,6 +24,12 @@ import { documents, drizzleSql, and, eq } from "@synap/database";
 import type { db as DbType } from "@synap/database";
 import { envInt } from "@synap/shared-utils";
 
+/** The read budget's rolling window: one unit per item per this many hours. */
+export const LIBRARY_READ_WINDOW_HOURS = 24;
+/** {@link LIBRARY_READ_WINDOW_HOURS} in milliseconds. */
+export const LIBRARY_READ_WINDOW_MS =
+  LIBRARY_READ_WINDOW_HOURS * 60 * 60 * 1000;
+
 /** Items read with AI per person per rolling 24h (env `SYNAP_LIBRARY_READ_AI_PER_DAY`). */
 export const LIBRARY_READ_AI_PER_DAY_DEFAULT = 200;
 
@@ -59,7 +65,7 @@ export async function libraryReadAiUsedToday(
         eq(documents.userId, userId),
         drizzleSql`${documents.deletedAt} IS NULL`,
         drizzleSql`${documents.metadata} ? 'importItem'`,
-        drizzleSql`(${documents.metadata} #>> '{importRead,aiAt}')::timestamptz >= now() - interval '24 hours'`
+        drizzleSql`(${documents.metadata} #>> '{importRead,aiAt}')::timestamptz >= now() - make_interval(hours => ${LIBRARY_READ_WINDOW_HOURS})`
       )
     );
   return Number(row?.n ?? 0);
@@ -81,7 +87,7 @@ export async function reserveLibraryReadAi(
     );
     const [own] = await tx
       .select({
-        fresh: drizzleSql<boolean>`coalesce((${documents.metadata} #>> '{importRead,aiAt}')::timestamptz >= now() - interval '24 hours', false)`,
+        fresh: drizzleSql<boolean>`coalesce((${documents.metadata} #>> '{importRead,aiAt}')::timestamptz >= now() - make_interval(hours => ${LIBRARY_READ_WINDOW_HOURS}), false)`,
       })
       .from(documents)
       .where(

@@ -6,6 +6,7 @@
 
 import { BUILTIN_READ_TEXT_MAX } from "../capabilities/web-read/limits.js";
 import { TRANSCRIBE_STORED_MEDIA_MAX_BYTES } from "../media-copy/transcribe-stored-media.js";
+import { LIBRARY_READ_WINDOW_MS } from "./read-budget.js";
 
 /** Characters of text kept (stored, summarised, searched) — the built-in reader's own cap. */
 export const LIGHT_READ_TEXT_MAX = BUILTIN_READ_TEXT_MAX;
@@ -35,4 +36,4 @@ export const LIGHT_READ_MAX_ATTEMPTS = 3;
 export const LIGHT_READ_TRANSCRIBE_BYTES_MAX =
   TRANSCRIBE_STORED_MEDIA_MAX_BYTES;
 /** How long a checkpointed billed read may be resumed (the budget unit's window). */
-export const READ_CHECKPOINT_TTL_MS = 24 * 60 * 60 * 1000;
+export const READ_CHECKPOINT_TTL_MS = LIBRARY_READ_WINDOW_MS;

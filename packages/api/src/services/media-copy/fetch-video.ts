@@ -17,8 +17,8 @@
  *               the response, {@link VIDEO_IDLE_TIMEOUT_MS} of silence between
  *               chunks, {@link VIDEO_TOTAL_TIMEOUT_MS} overall.
  *
- * Cap: `LIBRARY_MEDIA_VIDEO_MAX_BYTES` (env, bytes), default 1 GiB (founder
- * decision P4). Never throws: every refusal is a typed reason.
+ * Cap: `LIBRARY_MEDIA_VIDEO_MAX_BYTES` (env, bytes), default 1 GiB.
+ * Never throws: every refusal is a typed reason.
  */
 
 import { envInt } from "@synap/shared-utils";
