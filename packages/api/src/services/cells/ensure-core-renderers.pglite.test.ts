@@ -16,6 +16,10 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 
+// Since marketplace sources, an unscoped catalog read is the OFFICIAL source
+// only (`officialCatalogUrl()`); the rows here are seeded under cp.test.
+process.env.CONTROL_PLANE_URL = "https://cp.test";
+
 const h = vi.hoisted(() => ({
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;

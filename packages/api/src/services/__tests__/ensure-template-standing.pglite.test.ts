@@ -102,6 +102,9 @@ function ddlFor(table: PgTable): string {
 }
 
 const CP = "https://cp.example.test";
+// Since marketplace sources, a bare template slug reads the OFFICIAL catalog
+// only (`officialCatalogUrl()`); the rows here are seeded under CP, so pin it.
+process.env.CONTROL_PLANE_URL = CP;
 const WS_CRM = randomUUID();
 const WS_OLD = randomUUID();
 

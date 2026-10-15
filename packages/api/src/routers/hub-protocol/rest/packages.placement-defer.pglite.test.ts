@@ -22,6 +22,10 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
+// Since marketplace sources, an unscoped catalog read is the OFFICIAL source
+// only (`officialCatalogUrl()`); the rows here are seeded under cp.test.
+process.env.CONTROL_PLANE_URL = "https://cp.test";
+
 const h = vi.hoisted(() => ({
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
