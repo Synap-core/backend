@@ -114,7 +114,7 @@ beforeAll(async () => {
     [WS, U]
   );
   // A tool-less reader (the builtin ladder's shape) and a non-reader.
-  await skill("web_read", ["*"]);
+  await skill("web.read", ["*"]);
   await skill("entity.query", null);
   // A tool-backed reader: the verb lives on the tool's catalog (id = skill name).
   const readerId = await skill("capture_social_post", [
@@ -151,7 +151,7 @@ describe("reader URL patterns reach the registry rows", () => {
       { workspaceId: WS, userId: U },
       { limit: null }
     );
-    const reader = caps.find((c) => c.name === "web_read");
+    const reader = caps.find((c) => c.name === "web.read");
     const plain = caps.find((c) => c.name === "entity.query");
     expect(
       reader,

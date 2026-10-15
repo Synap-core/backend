@@ -76,6 +76,7 @@ import {
   listReadersForUrl,
   readUrl,
 } from "./url-readers.js";
+import { setSkillApproved } from "./set-skill-approved.js";
 
 const U = randomUUID();
 const WS = randomUUID();
@@ -247,5 +248,36 @@ describe("the url-reader door over real rows", () => {
     expect(r.read.blocked?.reason).toBe("needs_reader");
     expect(r.read.via.billed).toBe(false);
     expect(r.offers.map((o) => o.state)).toEqual(["enable"]);
+  });
+
+  // LAST: it turns the pack on. The offers are cached briefly; the door that
+  // turns a verb on must drop that cache, or the person who just tapped
+  // "Turn on" is told "Turn on" again (R1 M2).
+  it("turning the reader on through its door is seen by the very next resolve", async () => {
+    await q(
+      `update workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2`,
+      [WS, U]
+    );
+    const before = await listReadersForUrl({ userId: U, workspaceId: WS }, IG);
+    expect(before[0]!.state).toBe("enable"); // now cached
+    // The pack and its tool switched on BEHIND the cache (no door): still
+    // cached as `enable` — the cache really is in the way…
+    await q(`update capabilities set approved = true where id = $1`, [
+      CONTAINER,
+    ]);
+    await q(`update tools set approved = true where workspace_id = $1`, [WS]);
+    expect(
+      (await listReadersForUrl({ userId: U, workspaceId: WS }, IG))[0]!.state
+    ).toBe("enable");
+    // …until the verb is turned on through THE door.
+    const { rows } = await q(
+      `select id from skills where name = 'capture_social_post'`
+    );
+    await setSkillApproved({ userId: U, skillId: rows[0]!.id, approved: true });
+    const after = await listReadersForUrl({ userId: U, workspaceId: WS }, IG);
+    expect(after[0]).toMatchObject({
+      readerId: "capture_social_post",
+      state: "ready",
+    });
   });
 });

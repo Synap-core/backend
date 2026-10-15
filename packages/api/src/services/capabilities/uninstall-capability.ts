@@ -12,6 +12,7 @@
  * All steps run inside a single transaction so a crash leaves the DB consistent.
  */
 
+import { invalidateUrlReaderCache } from "./url-reader-cache.js";
 import { db, eq, and, or, inArray } from "@synap/database";
 import {
   capabilities as capabilitiesTable,
@@ -36,6 +37,16 @@ import type { Context } from "../../types/context.js";
 export async function uninstallCapability(
   containerId: string,
   _ctx: Context
+): Promise<{ success: true; deleted: { tools: number; skills: number } }> {
+  try {
+    return await uninstallInTx(containerId);
+  } finally {
+    invalidateUrlReaderCache(); // its reader verbs are gone
+  }
+}
+
+function uninstallInTx(
+  containerId: string
 ): Promise<{ success: true; deleted: { tools: number; skills: number } }> {
   return db.transaction(async (tx) => {
     // ── 1. Collect member ids ─────────────────────────────────────────────────

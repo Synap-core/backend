@@ -23,6 +23,7 @@ import {
 } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { enqueueSyncForCapability } from "./capability-nango-sync.js";
+import { invalidateUrlReaderCache } from "./url-reader-cache.js";
 
 const logger = createLogger({ module: "set-skill-approved" });
 
@@ -54,6 +55,7 @@ export async function setSkillApproved(input: {
     .set({ approved: input.approved, updatedAt: new Date() })
     .where(eq(skills.id, input.skillId))
     .returning();
+  invalidateUrlReaderCache(); // a reader verb may have turned on or off
 
   auditLog({
     subjectType: "skill",
