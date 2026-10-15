@@ -100,6 +100,31 @@ describe("readLibraryItemMedia", () => {
     expect(r.failed).toBe(2);
   });
 
+  it("failedAt is the newest failed attempt — the moment a retry moves", () => {
+    const r = readLibraryItemMedia({
+      importMediaFailed: 2,
+      importMediaFailures: [
+        {
+          sourceUrl: "https://cdn.test/a",
+          lastAttemptAt: "2026-10-14T08:00:00.000Z",
+        },
+        {
+          sourceUrl: "https://cdn.test/b",
+          lastAttemptAt: "2026-10-15T09:30:00.000Z",
+        },
+        { sourceUrl: "https://cdn.test/c" },
+      ],
+    });
+    expect(r.failedAt).toBe("2026-10-15T09:30:00.000Z");
+    // Nothing failed: no time to move.
+    expect(
+      readLibraryItemMedia({
+        importMediaFailed: 0,
+        importMediaFailures: [{ lastAttemptAt: "2026-10-15T09:30:00.000Z" }],
+      }).failedAt
+    ).toBeUndefined();
+  });
+
   it("absent → empty, zero (never throws)", () => {
     expect(readLibraryItemMedia(null)).toEqual({ media: [], failed: 0 });
     expect(
