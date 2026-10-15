@@ -66,6 +66,7 @@ describe("resolveConnectionStateLabel", () => {
     expect(resolveConnectionStateLabel("revoked")).toBe("Access removed");
     expect(resolveConnectionStateLabel("ready")).toBe("Connected");
     expect(resolveConnectionStateLabel("unverified")).toBe("Couldn't check");
+    expect(resolveConnectionStateLabel("unavailable")).toBe("Not available here");
   });
 
   it("a kind override applies only to its kind", () => {

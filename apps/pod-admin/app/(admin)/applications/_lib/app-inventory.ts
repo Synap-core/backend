@@ -71,6 +71,8 @@ const STATE_PILL: Record<ConnectionState, StatusKind> = {
   setting_up: "unknown",
   // The pod could not read the connection: neutral, never a fault.
   unverified: "unknown",
+  // The pod cannot offer the provider: nothing broke, nothing to do.
+  unavailable: "unknown",
   ready: "healthy",
   quiet: "unknown",
   off: "unknown",
@@ -304,6 +306,8 @@ const STATE_RANK: Record<ConnectionState, number> = {
   asking: 2,
   setting_up: 2,
   unverified: 2,
+  // Not live and not waiting on anyone: with the ones nobody is using.
+  unavailable: 3,
   off: 3,
   available: 3,
   revoked: 4,

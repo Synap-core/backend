@@ -428,6 +428,52 @@ const ROWS: Row[] = [
         NOW
       ),
   },
+  // ── a provider this pod cannot offer: the old rule read it as available (Connect) ──
+  {
+    kind: "tool",
+    state: "unavailable",
+    rulesOut: "a provider the pod cannot offer offers Connect (a dead end)",
+    resolve: () =>
+      resolveToolConnectionState(
+        { approved: true, connection: { required: true, state: "unavailable" } },
+        NOW
+      ),
+  },
+  {
+    kind: "tool",
+    state: "available",
+    rulesOut: "a missing account is folded into not-available-here",
+    resolve: () =>
+      resolveToolConnectionState(
+        { approved: true, connection: { required: true, state: "missing" } },
+        NOW
+      ),
+  },
+  {
+    kind: "tool",
+    state: "unverified",
+    rulesOut: "an unread broker list claims the pod cannot offer the provider",
+    resolve: () =>
+      resolveToolConnectionState(
+        {
+          approved: true,
+          connection: { required: true, state: "unavailable", unverified: FAULT },
+        },
+        NOW
+      ),
+  },
+  {
+    kind: "account",
+    state: "unavailable",
+    rulesOut: "an account the pod cannot offer reads Not connected + Connect",
+    resolve: () => resolveAccountConnectionState({ status: "unavailable" }, NOW),
+  },
+  {
+    kind: "account",
+    state: "available",
+    rulesOut: "a missing account is folded into not-available-here",
+    resolve: () => resolveAccountConnectionState({ status: "missing" }, NOW),
+  },
   // ── can't-check: the old rule folded every row below into available/ready/failing ──
   {
     kind: "tool",
@@ -575,6 +621,7 @@ describe("the states table — one primary action per state", () => {
     off: "turn_on",
     revoked: "remove",
     unverified: "recheck",
+    unavailable: null,
     available: "connect",
   };
   for (const state of CONNECTION_STATES) {
@@ -968,5 +1015,32 @@ describe("resolveAgentEndConsequence / resolveKeyEndConsequence", () => {
     const k = resolveKeyEndConsequence();
     expect(k.note).toMatch(/stops working at once/);
     expect(k.confirm).toMatch(/cannot be undone/);
+  });
+});
+
+describe("unavailable — the pod cannot offer the provider", () => {
+  it("a quiet mark, its own words, no step, never in Needs you", () => {
+    expect(connectionView("tool", "unavailable")).toMatchObject({
+      tone: "textMuted",
+      glyph: "dashed-circle",
+      label: "Not available here",
+      needsYou: false,
+      showChip: true,
+      primaryAction: null,
+      actions: [],
+    });
+  });
+
+  it("a catalog card whose provider the pod cannot offer is not a Connect", () => {
+    const v = resolveCapabilityConnection(
+      {
+        source: "installed",
+        status: "unavailable",
+        connection: { required: true, state: "unavailable" },
+      },
+      { now: NOW }
+    );
+    expect(v.state).toBe("unavailable");
+    expect(v.actions).not.toContain("connect");
   });
 });

@@ -44,7 +44,7 @@ export const CONNECTION_KINDS = [
 export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
 
 /**
- * The ten states. ORDER IS THE "Needs you" ORDER for the first three; a kind
+ * The eleven states. ORDER IS THE "Needs you" ORDER for the first three; a kind
  * that can never be in a state simply never produces it.
  *
  * `unverified` is the pod failing to READ a connection (its broker faulted),
@@ -62,6 +62,7 @@ export const CONNECTION_STATES = [
   "off",
   "revoked",
   "unverified",
+  "unavailable",
   "available",
 ] as const;
 export type ConnectionState = (typeof CONNECTION_STATES)[number];
@@ -415,6 +416,15 @@ const STATE_RULES: Record<
     primary: "recheck",
     others: [],
   },
+  // The pod cannot offer this provider at all (it is not set up on this pod's
+  // broker): nothing is broken and there is nothing to connect, so no step —
+  // "Connect" here was a dead end. Quiet like `available`, but never its verb.
+  unavailable: {
+    tone: "textMuted",
+    glyph: "dashed-circle",
+    primary: null,
+    others: [],
+  },
   available: {
     tone: "textMuted",
     glyph: "dashed-circle",
@@ -672,7 +682,7 @@ export interface AccountConnectionLike {
 
 /**
  * Order: revoked → asking (admin must approve the install) → needs sign-in →
- * failing → setting up → unverified → available → ready/quiet. An UNKNOWN
+ * failing → setting up → unverified → unavailable → available → ready/quiet. An UNKNOWN
  * status is `failing`, never `ready`: calm must be earned by a status we can
  * read. A status the pod could not CHECK (`unverified`, or a capability-card
  * connection carrying `unverified`) is `unverified`, never `available`.
@@ -701,7 +711,10 @@ export function resolveAccountConnectionState(
   // Only a negative verdict can be unverified: a status that says connected
   // was read, so it stands.
   if (s === "unverified" || (!s && a.unverified)) return "unverified";
-  if (s === "missing" || s === "unavailable" || s === "not_connected")
+  // A provider this pod cannot offer is not "Not connected": Connect has
+  // nowhere to go. Still a can't-check when the read faulted.
+  if (s === "unavailable") return a.unverified ? "unverified" : "unavailable";
+  if (s === "missing" || s === "not_connected")
     return a.unverified ? "unverified" : "available";
   if (s === "connected")
     return isQuiet(a.lastSyncedAt, now) ? "quiet" : "ready";
@@ -773,8 +786,8 @@ export interface ToolConnectionLike {
 /**
  * Order: off (you turned it off — nothing else matters until it is on) →
  * asking (not approved) → needs sign-in → failing → unverified (its required
- * connection could not be read) → available (needs an account it does not
- * have) → ready/quiet.
+ * connection could not be read) → unavailable (this pod cannot offer its
+ * provider) → available (needs an account it does not have) → ready/quiet.
  *
  * Known facts outrank a can't-check: an operator switch, an approval, a
  * health-mirror reconnect and a tool error are each read from the pod itself,
@@ -793,7 +806,9 @@ export function resolveToolConnectionState(
   // A required connection with no readable state is unmeasured; calling it
   // ready would claim an account nobody saw.
   if (required && !conn) return "unverified";
-  if (conn === "missing" || conn === "unavailable")
+  if (conn === "unavailable")
+    return t.connection?.unverified ? "unverified" : "unavailable";
+  if (conn === "missing")
     return t.connection?.unverified ? "unverified" : "available";
   return isQuiet(t.lastUsedAt, now) ? "quiet" : "ready";
 }

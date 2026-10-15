@@ -1179,6 +1179,8 @@ export const CONNECTION_STATE_LABELS = {
   // The pod could not read the connection (its broker faulted), so it states
   // the gap rather than guessing "Not connected".
   unverified: "Couldn't check",
+  // The pod cannot offer the provider (the capability badge's own words).
+  unavailable: "Not available here",
   available: "Not connected",
 } as const;
 
