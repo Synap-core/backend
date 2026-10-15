@@ -94,6 +94,8 @@ export const LibraryCurateOpSchema: z.ZodType<LibraryCurateOp> =
         .array(z.enum(IMPORT_GROUP_OUTPUTS))
         .max(IMPORT_GROUP_OUTPUTS.length)
         .optional(),
+      /** Build target space; null clears it. Writability checked in curate. */
+      workspaceId: uuid.nullable().optional(),
     }),
     z.object({ op: z.literal("group.archive"), groupId: uuid }),
     z.object({ op: z.literal("group.merge"), fromId: uuid, intoId: uuid }),

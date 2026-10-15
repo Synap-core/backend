@@ -439,6 +439,33 @@ export function urlPatternSpecificity(pattern: string): number {
   return 10 + p.host.length - (p.wildcardHost ? 5 : 0) + 2 * p.pathLiteral;
 }
 
+// ───────────────────────────── stored stamps ─────────────────────────────
+
+/**
+ * Read a STORED {@link ReaderStamp} (e.g. `documents.metadata.importRead.reader`)
+ * back defensively. `undefined` when it is absent or lacks `id`/`name`/`readAt`;
+ * optional keys of the wrong type are dropped, `billed` is true only when stored
+ * as `true`.
+ */
+export function readReaderStamp(raw: unknown): ReaderStamp | undefined {
+  if (!isRecord(raw)) return undefined;
+  const id = str(raw.id, SHORT_MAX);
+  const name = str(raw.name, SHORT_MAX);
+  const readAt = str(raw.readAt, 64);
+  if (!id || !name || !readAt) return undefined;
+  const out: ReaderStamp = { id, name, billed: raw.billed === true, readAt };
+  for (const k of [
+    "capabilityId",
+    "verbId",
+    "contentHash",
+    "correlationId",
+  ] as const) {
+    const v = str(raw[k], SHORT_MAX);
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 // ───────────────────────────── reader offers ─────────────────────────────
 
 /**

@@ -130,6 +130,7 @@ import {
   focusSessions,
   libraryGroups,
   proposals,
+  workspaces,
 } from "@synap/database/schema";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 import { ownCapturesWhere } from "../../captures/capture-scope.js";
@@ -235,6 +236,7 @@ beforeAll(async () => {
       proposals,
       libraryGroups,
       entities,
+      workspaces,
     ])
   );
   // The schema DDL helper emits columns only; the per-person key index is
@@ -246,7 +248,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   h.objects.clear();
   await h.client!.exec(
-    `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals; delete from library_groups; delete from entities;`
+    `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals; delete from library_groups; delete from entities; delete from workspaces;`
   );
 });
 
@@ -392,6 +394,126 @@ describe("list", () => {
     });
     expect(view.groupIds).toEqual([g]);
     expect(view.runId).toBe(r.runId);
+  });
+});
+
+describe("reader stamp and copied media reach the item view", () => {
+  it("lists `read.reader`, `media` (in order) and `mediaFailed` from the stored metadata", async () => {
+    const r = await keep(["https://www.instagram.com/p/ABC/"]);
+    const id = r.staged[0]!.itemId;
+    const reader = {
+      id: "capture_social_post",
+      name: "Apify",
+      verbId: "capture_social_post",
+      billed: true,
+      readAt: "2026-10-15T00:00:00.000Z",
+    };
+    const copy = (order: number, kind: "image" | "video") => ({
+      documentId: `00000000-0000-4000-8000-00000000000${order}`,
+      mime: kind === "video" ? "video/mp4" : "image/jpeg",
+      bytes: 100,
+      sourceUrl: `https://cdn.test/${order}`,
+      copiedAt: "2026-10-15T00:00:00.000Z",
+      kind,
+      order,
+    });
+    await q(
+      `update documents set metadata = metadata
+         || jsonb_build_object('importRead', $2::jsonb, 'importMedia', $3::jsonb, 'importMediaFailed', 1)
+       where id = $1`,
+      [
+        id,
+        JSON.stringify({ status: "read", suggestedActions: [], reader }),
+        JSON.stringify([copy(1, "video"), copy(0, "image")]),
+      ]
+    );
+    const view = (
+      await listLibraryItems({ userId: USER, input: {} })
+    ).items.find((i) => i.id === id)!;
+    expect(view.read.reader).toEqual(reader);
+    expect(view.media?.map((m) => [m.order, m.kind])).toEqual([
+      [0, "image"],
+      [1, "video"],
+    ]);
+    expect(view.mediaFailed).toBe(1);
+  });
+});
+
+describe("curate — a group's Build target space (group.update workspaceId)", () => {
+  const WS = "00000000-0000-4000-8000-0000000000c1";
+  const ARCHIVED = "00000000-0000-4000-8000-0000000000c2";
+  const space = (id: string, name: string, archived = false) =>
+    q(
+      `insert into workspaces (id, name, owner_id, archived_at) values ($1, $2, $3, $4)`,
+      [id, name, USER, archived ? new Date() : null]
+    );
+  const targetOf = async (groupId: string) =>
+    (
+      await q<{ workspace_id: string | null }>(
+        `select workspace_id from library_groups where id = $1`,
+        [groupId]
+      )
+    ).rows[0]!.workspace_id;
+
+  it("sets, reads back on the group view, and clears with null", async () => {
+    await space(WS, "Content");
+    const r = await keep(["https://example.com/t1"]);
+    const g = await newGroup("Posts", [r.staged[0]!.itemId]);
+    const set = await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.update", groupId: g, workspaceId: WS }],
+    });
+    expect(await targetOf(g)).toBe(WS);
+    expect(set.groups.find((x) => x.id === g)?.workspaceId).toBe(WS);
+    await curateLibrary({
+      userId: USER,
+      ops: [{ op: "group.update", groupId: g, workspaceId: null }],
+    });
+    expect(await targetOf(g)).toBeNull();
+  });
+
+  it("a space the person cannot write is FORBIDDEN and nothing is written", async () => {
+    await space(WS, "Content");
+    const r = await keep(["https://example.com/t2"]);
+    const g = await newGroup("Posts", [r.staged[0]!.itemId]);
+    h.deniedSpaces.add(WS);
+    try {
+      await expect(
+        curateLibrary({
+          userId: USER,
+          ops: [
+            { op: "group.update", groupId: g, name: "Renamed" },
+            { op: "group.update", groupId: g, workspaceId: WS },
+          ],
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      h.deniedSpaces.delete(WS);
+    }
+    expect(await targetOf(g)).toBeNull();
+    const { rows } = await q<{ name: string }>(
+      `select name from library_groups where id = $1`,
+      [g]
+    );
+    expect(rows[0]!.name).toBe("Posts");
+  });
+
+  it("an archived or unknown space is refused", async () => {
+    await space(ARCHIVED, "Old", true);
+    const r = await keep(["https://example.com/t3"]);
+    const g = await newGroup("Posts", [r.staged[0]!.itemId]);
+    for (const workspaceId of [
+      ARCHIVED,
+      "00000000-0000-4000-8000-0000000000c9",
+    ]) {
+      await expect(
+        curateLibrary({
+          userId: USER,
+          ops: [{ op: "group.update", groupId: g, workspaceId }],
+        })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    expect(await targetOf(g)).toBeNull();
   });
 });
 

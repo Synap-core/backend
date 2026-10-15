@@ -31,6 +31,7 @@ import {
 } from "@synap/database";
 import {
   LIBRARY_LIMITS,
+  readLibraryItemMedia,
   readLibraryItemRead,
   type LibraryItemView,
   type LibraryListRequest,
@@ -250,6 +251,7 @@ export function toLibraryItemView(row: {
   const source = (row.metadata as Record<string, unknown> | null)
     ?.intakeSource as { sessionId?: string | null } | undefined;
   const groupIds = c.groupIds ?? [];
+  const media = readLibraryItemMedia(row.metadata);
   return {
     ...base,
     read: readLibraryItemRead(row.metadata, base.contentStatus),
@@ -261,6 +263,8 @@ export function toLibraryItemView(row: {
     ...(c.archivedAt ? { archivedAt: c.archivedAt } : {}),
     ...(c.builtAt ? { builtAt: c.builtAt } : {}),
     ...(c.captureNoteId ? { captureNoteId: c.captureNoteId } : {}),
+    ...(media.media.length ? { media: media.media } : {}),
+    ...(media.failed ? { mediaFailed: media.failed } : {}),
   };
 }
 

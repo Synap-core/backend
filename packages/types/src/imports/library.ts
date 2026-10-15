@@ -23,6 +23,8 @@ import type {
   ImportItemView,
   ImportStageItemInput,
 } from "./curate.js";
+import type { EntityMediaCopy } from "../presentation/index.js";
+import { readReaderStamp, type ReaderStamp } from "../url-read/index.js";
 
 // ── Read status and action chips ───────────────────────────────────────────
 
@@ -81,7 +83,21 @@ export interface LibraryItemRead {
   chars?: number;
   readAt?: string;
   suggestedActions: LibraryAction[];
+  /** Who produced this read (the reader door stamps it; a reader never self-stamps). */
+  reader?: ReaderStamp;
 }
+
+/**
+ * One media file of an item the pod copied into itself (images, video), in
+ * reading order. Stored on `documents.metadata.importMedia` (an array, written
+ * by the media copy only); failed copies are counted on
+ * `documents.metadata.importMediaFailed`. Read back with {@link readLibraryItemMedia}.
+ */
+export type LibraryItemMedia = EntityMediaCopy & {
+  kind: "image" | "video";
+  role?: "cover" | "slide";
+  order: number;
+};
 
 // ── Items and groups as every client reads them ─────────────────────────────
 
@@ -99,6 +115,10 @@ export interface LibraryItemView extends ImportItemView {
   builtAt?: string;
   /** The capture holding the note typed at share time, linked to the item. */
   captureNoteId?: string;
+  /** Media copied into the pod for this item, in order (absent when none). */
+  media?: LibraryItemMedia[];
+  /** Media files whose copy failed (absent when none) — shown, never silent. */
+  mediaFailed?: number;
 }
 
 export interface LibraryGroupView {
@@ -157,6 +177,12 @@ export type LibraryCurateOp =
       name?: string;
       note?: string;
       outputs?: ImportGroupOutput[];
+      /**
+       * The space Build files this group into (`library_groups.workspace_id`);
+       * `null` clears it (Build then uses the import run's space). The person
+       * must be able to write that space.
+       */
+      workspaceId?: string | null;
     }
   | { op: "group.archive"; groupId: string }
   | { op: "group.merge"; fromId: string; intoId: string }
@@ -362,13 +388,50 @@ export function readLibraryItemRead(
           isActionKind((a as LibraryAction).kind)
       )
     : [];
+  const reader = readReaderStamp(r.reader);
   return {
     status: r.status,
     summary: typeof r.summary === "string" ? r.summary : undefined,
     chars: typeof r.chars === "number" ? r.chars : undefined,
     readAt: typeof r.readAt === "string" ? r.readAt : undefined,
     suggestedActions: actions,
+    ...(reader ? { reader } : {}),
   };
+}
+
+/**
+ * Reads `documents.metadata.importMedia` / `importMediaFailed` (written by the
+ * media copy). Malformed entries are dropped; the rest come back in `order`.
+ */
+export function readLibraryItemMedia(metadata: unknown): {
+  media: LibraryItemMedia[];
+  failed: number;
+} {
+  const m =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>)
+      : {};
+  const raw = Array.isArray(m.importMedia) ? m.importMedia : [];
+  const media = raw
+    .filter(
+      (x): x is LibraryItemMedia =>
+        !!x &&
+        typeof x === "object" &&
+        typeof (x as LibraryItemMedia).documentId === "string" &&
+        typeof (x as LibraryItemMedia).mime === "string" &&
+        typeof (x as LibraryItemMedia).sourceUrl === "string" &&
+        ((x as LibraryItemMedia).kind === "image" ||
+          (x as LibraryItemMedia).kind === "video") &&
+        typeof (x as LibraryItemMedia).order === "number"
+    )
+    .sort((a, b) => a.order - b.order);
+  const failed =
+    typeof m.importMediaFailed === "number" &&
+    Number.isFinite(m.importMediaFailed) &&
+    m.importMediaFailed > 0
+      ? Math.floor(m.importMediaFailed)
+      : 0;
+  return { media, failed };
 }
 
 /** True when the item still waits for the light read. */

@@ -4,6 +4,7 @@ import {
   isValidUrlPattern,
   matchUrlPattern,
   normalizeUrlRead,
+  readReaderStamp,
   urlPatternSpecificity,
   type ReaderStamp,
 } from "./index.js";
@@ -453,5 +454,25 @@ describe("normalizeUrlRead", () => {
     const r = normalizeUrlRead(hostile, SRC, VIA);
     expect(r.status).toBe("failed");
     expect(r.error).toContain("boom");
+  });
+});
+
+describe("readReaderStamp", () => {
+  it("reads a stored stamp, drops junk and wrong-typed optionals", () => {
+    expect(
+      readReaderStamp({
+        ...VIA,
+        verbId: "v",
+        capabilityId: 3,
+        billed: "yes",
+        extra: 1,
+      })
+    ).toEqual({ ...VIA, verbId: "v", billed: false });
+  });
+  it("undefined without id, name or readAt", () => {
+    expect(readReaderStamp({ name: "n", readAt: "t" })).toBeUndefined();
+    expect(readReaderStamp({ id: "i", readAt: "t" })).toBeUndefined();
+    expect(readReaderStamp({ id: "i", name: "n" })).toBeUndefined();
+    expect(readReaderStamp(null)).toBeUndefined();
   });
 });
