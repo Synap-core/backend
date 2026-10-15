@@ -33445,6 +33445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pausedAt: Date | null;
 				lastSeenAt: string | null;
 				host: string | null;
+				hostLabel: string | null;
 				activeKeys: number;
 				pendingKeys: number;
 				revokedKeys: number;
