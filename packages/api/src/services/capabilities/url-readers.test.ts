@@ -113,6 +113,7 @@ const APIFY_CATALOG: CatalogCacheEntry = {
   vendor: "synap-official",
   tags: null,
   contentHash: "h-apify",
+  listing: null,
   definition: {
     key: "apify",
     tools: [{ name: "apify_api", credentialRef: "apifyTokenSecret" }],
