@@ -26,7 +26,8 @@ describe("tripwire: ceiling defaults have one source", () => {
     expect({
       daily_write_count: DEFAULT_DAILY_WRITE_CEILING,
       pending_proposal_cap: AGENT_PENDING_PROPOSAL_CAP,
-      automation_ai_dispatch_per_run: AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerRun,
+      automation_ai_dispatch_per_run:
+        AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerRun,
       automation_ai_dispatch_daily:
         AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerDayDefault,
       worker_pending_approvals: DEFAULT_WORKER_MAX_PENDING_APPROVALS,

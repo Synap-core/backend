@@ -27,9 +27,12 @@ describe("agent × work matrix words", () => {
   });
 
   it("names the four marks", () => {
-    expect(Object.keys(MATRIX_MARK_LABELS).sort()).toEqual(
-      ["ask", "auto", "mixed", "off"]
-    );
+    expect(Object.keys(MATRIX_MARK_LABELS).sort()).toEqual([
+      "ask",
+      "auto",
+      "mixed",
+      "off",
+    ]);
     expect(resolveMatrixMarkLabel("auto")).toBe("Acts");
     expect(resolveMatrixMarkLabel("mixed")).toBe("Mixed");
   });

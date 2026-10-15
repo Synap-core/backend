@@ -16,7 +16,10 @@ describe("readRouteChoice", () => {
   it("a nameless candidate still gets a chip label", () => {
     expect(
       readRouteChoice({
-        routeChoice: { triggerMessageId: "m1", candidates: [A, { agentUserId: "b" }] },
+        routeChoice: {
+          triggerMessageId: "m1",
+          candidates: [A, { agentUserId: "b" }],
+        },
       })?.candidates[1]
     ).toEqual({ agentUserId: "b", name: "Agent" });
   });
@@ -26,24 +29,40 @@ describe("readRouteChoice", () => {
     expect(readRouteChoice({})).toBeNull();
     expect(readRouteChoice({ routeChoice: { candidates: [A, B] } })).toBeNull();
     expect(
-      readRouteChoice({ routeChoice: { triggerMessageId: "m1", candidates: [A, { name: "x" }] } })
+      readRouteChoice({
+        routeChoice: { triggerMessageId: "m1", candidates: [A, { name: "x" }] },
+      })
     ).toBeNull();
     // One candidate is not a choice.
     expect(
-      readRouteChoice({ routeChoice: { triggerMessageId: "m1", candidates: [A] } })
+      readRouteChoice({
+        routeChoice: { triggerMessageId: "m1", candidates: [A] },
+      })
     ).toBeNull();
   });
 
   it("an answered choice names the agent that answers", () => {
     expect(
       readRouteChoice({
-        routeChoice: { triggerMessageId: "m1", candidates: [A, B], answeredAgentUserId: "b" },
+        routeChoice: {
+          triggerMessageId: "m1",
+          candidates: [A, B],
+          answeredAgentUserId: "b",
+        },
       })
-    ).toEqual({ triggerMessageId: "m1", candidates: [A, B], answeredAgentUserId: "b" });
+    ).toEqual({
+      triggerMessageId: "m1",
+      candidates: [A, B],
+      answeredAgentUserId: "b",
+    });
     // An answer naming no candidate is not trusted.
     expect(
       readRouteChoice({
-        routeChoice: { triggerMessageId: "m1", candidates: [A, B], answeredAgentUserId: "zzz" },
+        routeChoice: {
+          triggerMessageId: "m1",
+          candidates: [A, B],
+          answeredAgentUserId: "zzz",
+        },
       })
     ).toEqual({ triggerMessageId: "m1", candidates: [A, B] });
   });

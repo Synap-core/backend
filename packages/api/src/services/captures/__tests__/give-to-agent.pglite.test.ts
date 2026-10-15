@@ -429,11 +429,15 @@ describe("captures.giveToAgent", () => {
   });
 
   it("a paused agent's orient says so — its worker idles", async () => {
-    await q(`update users set agent_paused_at = now() where id = $1`, [AGENT_B]);
+    await q(`update users set agent_paused_at = now() where id = $1`, [
+      AGENT_B,
+    ]);
     try {
       expect(await handedTo(AGENT_B)).toEqual({ status: "paused" });
     } finally {
-      await q(`update users set agent_paused_at = null where id = $1`, [AGENT_B]);
+      await q(`update users set agent_paused_at = null where id = $1`, [
+        AGENT_B,
+      ]);
     }
   });
 

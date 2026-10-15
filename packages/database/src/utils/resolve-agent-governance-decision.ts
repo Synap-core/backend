@@ -252,10 +252,7 @@ function principalEligible(
 ) {
   return or(
     eq(table.principalKind, "any"),
-    and(
-      eq(table.principalKind, "agent"),
-      eq(table.agentUserId, agentUserId)
-    ),
+    and(eq(table.principalKind, "agent"), eq(table.agentUserId, agentUserId)),
     and(
       eq(table.principalKind, "class"),
       sql`${table.principalClass} = (SELECT ${users.agentType} FROM ${users} WHERE ${users.id} = ${agentUserId})`
@@ -1284,7 +1281,7 @@ export async function resolveCeiling(
     createdAt: Date;
   }>;
 
-  let best: (typeof candidates)[number] & { score: number } | undefined;
+  let best: ((typeof candidates)[number] & { score: number }) | undefined;
   for (const row of candidates) {
     const score =
       (row.subjectId ? 8 : 0) +
@@ -1456,7 +1453,9 @@ export async function resolveAgentGovernanceDecision(
     : own.resolution;
 }
 
-async function resolveForPrincipal(input: ResolveAgentGovernanceInput): Promise<{
+async function resolveForPrincipal(
+  input: ResolveAgentGovernanceInput
+): Promise<{
   resolution: AgentGovernanceResolution;
   hostUserId: string | null;
 }> {

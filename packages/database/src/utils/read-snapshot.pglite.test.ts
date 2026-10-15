@@ -82,10 +82,20 @@ afterAll(async () => {
 });
 
 const CASES = (() => {
-  const out: Array<{ agentUserId: string; workspaceId: string | null; action: string }> = [];
+  const out: Array<{
+    agentUserId: string;
+    workspaceId: string | null;
+    action: string;
+  }> = [];
   for (const agentUserId of [AGENT_A, AGENT_B])
     for (const workspaceId of [null, WS_1, WS_2])
-      for (const action of ["entity.create", "entity.update", "entity.delete", "entity.transition", "document.update"])
+      for (const action of [
+        "entity.create",
+        "entity.update",
+        "entity.delete",
+        "entity.transition",
+        "document.update",
+      ])
         out.push({ agentUserId, workspaceId, action });
   return out;
 })();

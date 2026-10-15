@@ -69,7 +69,11 @@ const PROCESS_ACTIONS = [
   "entity.transition",
   "entity.delete",
 ] as const;
-const OTHER_ACTIONS = ["entity.create", "entity.update", "document.update"] as const;
+const OTHER_ACTIONS = [
+  "entity.create",
+  "entity.update",
+  "document.update",
+] as const;
 
 /**
  * The platform floors: one classified door per DISTINCT floor reason no rule
@@ -93,13 +97,11 @@ const probesFor = (
   actions: readonly string[],
   profileSlug: string | null
 ): MatrixProbe[] =>
-  actions
-    .slice(0, AGENT_MATRIX_LIMITS.probesPerColumn)
-    .map((action) => ({
-      key: `${action}${profileSlug ? `:${profileSlug}` : ""}`,
-      action,
-      profileSlug,
-    }));
+  actions.slice(0, AGENT_MATRIX_LIMITS.probesPerColumn).map((action) => ({
+    key: `${action}${profileSlug ? `:${profileSlug}` : ""}`,
+    action,
+    profileSlug,
+  }));
 
 async function readColumns(
   userId: string,
@@ -200,7 +202,10 @@ async function readAgents(userId: string, lens: MatrixLens) {
 }
 
 /** Run `tasks` with at most `limit` in flight. */
-async function pooled<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+async function pooled<T>(
+  tasks: Array<() => Promise<T>>,
+  limit: number
+): Promise<T[]> {
   const out = new Array<T>(tasks.length);
   let next = 0;
   await Promise.all(
@@ -280,17 +285,24 @@ export async function readAgentMatrix(p: {
 
   const collapse = (members: readonly MatrixAgentRow[]) =>
     Object.fromEntries(
-      columns.map((c) => [c.id, collapseCells(members.map((m) => m.cells[c.id]!))])
+      columns.map((c) => [
+        c.id,
+        collapseCells(members.map((m) => m.cells[c.id]!)),
+      ])
     );
   const groups: MatrixTypeGroup[] = [];
-  for (const agentType of [...new Set(rows.map((r) => r.agentType ?? "agent"))]) {
+  for (const agentType of [
+    ...new Set(rows.map((r) => r.agentType ?? "agent")),
+  ]) {
     const ofType = rows.filter((r) => (r.agentType ?? "agent") === agentType);
     const computers: MatrixComputerGroup[] = [];
     for (const hostUserId of [...new Set(ofType.map((r) => r.hostUserId))]) {
       const onHost = ofType.filter((r) => r.hostUserId === hostUserId);
       computers.push({
         hostUserId,
-        label: hostUserId ? (hostNames.get(hostUserId) ?? "Computer") : "No computer",
+        label: hostUserId
+          ? (hostNames.get(hostUserId) ?? "Computer")
+          : "No computer",
         cells: collapse(onHost),
         agents: onHost,
       });

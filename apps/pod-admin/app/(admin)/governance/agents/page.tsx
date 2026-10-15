@@ -55,7 +55,9 @@ export default function AgentsAndWorkPage() {
   // Small pods open expanded; once the person toggles, their choice rules.
   const [expanded, setExpanded] = useState<Set<string> | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const [why, setWhy] = useState<{ rowKey: string; columnId: string } | null>(null);
+  const [why, setWhy] = useState<{ rowKey: string; columnId: string } | null>(
+    null
+  );
 
   const view = useMemo(
     () =>
@@ -100,11 +102,15 @@ export default function AgentsAndWorkPage() {
               role="status"
               className="flex items-start gap-2 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-status-stale ring-1 ring-inset ring-status-stale/30"
             >
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              <AlertTriangle
+                className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                aria-hidden
+              />
               <span>
-                Part of the pod is left out: {matrix.partial.agentsOmitted} agents and{" "}
-                {matrix.partial.columnsOmitted} columns past the limit of{" "}
-                {AGENT_MATRIX_LIMITS.agents} agents × {AGENT_MATRIX_LIMITS.columns} columns.
+                Part of the pod is left out: {matrix.partial.agentsOmitted}{" "}
+                agents and {matrix.partial.columnsOmitted} columns past the
+                limit of {AGENT_MATRIX_LIMITS.agents} agents ×{" "}
+                {AGENT_MATRIX_LIMITS.columns} columns.
               </span>
             </p>
           )}
@@ -121,12 +127,19 @@ export default function AgentsAndWorkPage() {
                 toggleExpanded(prev ?? defaultExpanded(matrix), key)
               )
             }
-            onWhy={(row, column) => setWhy({ rowKey: row.key, columnId: column.id })}
+            onWhy={(row, column) =>
+              setWhy({ rowKey: row.key, columnId: column.id })
+            }
           />
 
           {view.hiddenTypeGroups > 0 && (
             <div>
-              <Button size="sm" variant="flat" radius="md" onPress={() => setShowAll(true)}>
+              <Button
+                size="sm"
+                variant="flat"
+                radius="md"
+                onPress={() => setShowAll(true)}
+              >
                 Show all {matrix.groups.length} agent types
               </Button>
             </div>
@@ -138,7 +151,11 @@ export default function AgentsAndWorkPage() {
         target={whyTarget}
         onClose={() => setWhy(null)}
         onOpenAgent={(agent: MatrixAgentRow) =>
-          why && setWhy({ rowKey: agentRowKey(agent.agentUserId), columnId: why.columnId })
+          why &&
+          setWhy({
+            rowKey: agentRowKey(agent.agentUserId),
+            columnId: why.columnId,
+          })
         }
         onChanged={() => void query.refetch()}
       />
@@ -148,10 +165,19 @@ export default function AgentsAndWorkPage() {
 
 function Legend() {
   return (
-    <ul aria-label="Marks" className="flex flex-wrap items-center gap-4 text-[12px] text-foreground/70">
+    <ul
+      aria-label="Marks"
+      className="flex flex-wrap items-center gap-4 text-[12px] text-foreground/70"
+    >
       {LEGEND.map((mark) => (
         <li key={mark} className="flex items-center gap-1.5">
-          <span aria-hidden className={["text-[14px]", toneTextClass(MATRIX_MARKS[mark].tone)].join(" ")}>
+          <span
+            aria-hidden
+            className={[
+              "text-[14px]",
+              toneTextClass(MATRIX_MARKS[mark].tone),
+            ].join(" ")}
+          >
             {MATRIX_MARKS[mark].glyph}
           </span>
           {resolveMatrixMarkLabel(mark)}
@@ -188,16 +214,27 @@ function NoAgents() {
 function NoProcesses() {
   return (
     <div className="flex items-start gap-3 rounded-lg px-4 py-3 ring-1 ring-inset ring-foreground/10">
-      <Workflow className="mt-0.5 h-4 w-4 shrink-0 text-foreground/40" aria-hidden />
+      <Workflow
+        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/40"
+        aria-hidden
+      />
       <div className="flex flex-1 flex-col gap-0.5">
-        <p className="text-[13px] font-medium text-foreground">No processes yet</p>
+        <p className="text-[13px] font-medium text-foreground">
+          No processes yet
+        </p>
         <p className="text-[12px] text-foreground/55">
           A process is a playbook that works a kind&apos;s lifecycle; each gets
           its own column here. Until then, Other work shows what each agent may
           do in each space.
         </p>
       </div>
-      <Button as={Link} href="/marketplace" size="sm" variant="flat" radius="md">
+      <Button
+        as={Link}
+        href="/marketplace"
+        size="sm"
+        variant="flat"
+        radius="md"
+      >
         Browse templates
       </Button>
     </div>
@@ -211,7 +248,10 @@ function MatrixSkeleton() {
         <div key={i} className="flex items-center gap-3">
           <div className="h-4 w-48 rounded bg-foreground/10 shimmer-pulse" />
           {Array.from({ length: 5 }).map((__, j) => (
-            <div key={j} className="h-4 w-16 rounded bg-foreground/[0.07] shimmer-pulse" />
+            <div
+              key={j}
+              className="h-4 w-16 rounded bg-foreground/[0.07] shimmer-pulse"
+            />
           ))}
         </div>
       ))}

@@ -42,7 +42,8 @@ const HAND_OFF_GATE = "services/focus-sessions/agent-hand-off.ts";
 const HAND_OFF_ROSTER = "services/agent-dispatch/agents-for-handoff.ts";
 
 const PICK_CALL = /\b(listDispatchableAgentIds|ownedAgentIds)\s*\(/g;
-const DEFINITION = /\bfunction\s+(listDispatchableAgentIds|ownedAgentIds)\s*\(/g;
+const DEFINITION =
+  /\bfunction\s+(listDispatchableAgentIds|ownedAgentIds)\s*\(/g;
 const AI_PICKER = /\.routeTeammate\s*\(/;
 
 function tsFiles(dir: string, acc: string[] = []): string[] {

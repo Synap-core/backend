@@ -432,116 +432,112 @@ async function readAttention(
     issuers,
     appRequests,
   ] = await Promise.all([
-      settle(
-        "proposals",
-        { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
-        () =>
-          proposalsRouter.createCaller(ctx).groups({
+    settle(
+      "proposals",
+      { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
+      () =>
+        proposalsRouter.createCaller(ctx).groups({
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          projectId: input.projectId,
+          trackId: input.trackId,
+          automationId: input.automationId,
+          profileSlug: input.profileSlug,
+          status: "pending",
+          limit: clusterLimit,
+          excludeDraftSessions: true,
+          splitBySession: true,
+        })
+    ),
+    // Under a container lens the door narrows IN SQL, before its limit
+    // (`container`); the resolved containers below stay the authority.
+    notifsFollow
+      ? settle(
+          "notifications",
+          [] as AttentionNotification[],
+          async () =>
+            (
+              await notifCenterRouter.createCaller(ctx).list({
+                workspaceId: floorLens(input.workspaceId),
+                status: "unread",
+                limit: NOTIFICATION_SCAN_LIMIT,
+                ...(container ? { container } : {}),
+              })
+            ).notifications satisfies AttentionNotification[]
+        )
+      : settle("notifications", [] as AttentionNotification[], async () => []),
+    // System HEALTH is the pod's, never a container's: under a container lens
+    // the banner reads its own rows (every status-role type is `system`,
+    // pinned in the tests); at the floor it reads the floor read above.
+    // Under the intent lens the notification half is suppressed, so the
+    // banner reads its own rows too.
+    container || (follows && !notifsFollow)
+      ? settle("notifications", [] as AttentionNotification[], () =>
+          readHealthRows(ctx, input)
+        )
+      : null,
+    // The owed read under the SAME lens and owner floor `focusSessions.owed`
+    // applies (`listOwedSlots`), plus the session/track lenses that door does
+    // not expose. Drafts never count (`excludeDrafts`).
+    follows
+      ? settle(
+          "owed",
+          [] as AttentionOwed[],
+          async (): Promise<AttentionOwed[]> =>
+            await listNeedsYouOwed(owedScope)
+        )
+      : settle("owed", [] as AttentionOwed[], async () => []),
+    // The DRAFT half — owed slots on undecided agent drafts, folded into one
+    // `draft-asks` row per draft. PROPOSED, never needs-you.
+    settle(
+      "drafts",
+      {
+        slots: [] as OwedSlotSignalInput[],
+        starterNames: new Map<string, string>(),
+      },
+      async () =>
+        follows
+          ? await listDraftAskSlots(owedScope)
+          : { slots: [], starterNames: new Map<string, string>() }
+    ),
+    // The REVIEW half — at every scope, the pod included.
+    settle("review", { sessions: [], truncated: false }, async () =>
+      follows
+        ? await listSessionsAwaitingReview({
+            userId,
             workspaceId: input.workspaceId,
-            sessionId: input.sessionId,
             projectId: input.projectId,
             trackId: input.trackId,
-            automationId: input.automationId,
-            profileSlug: input.profileSlug,
-            status: "pending",
-            limit: clusterLimit,
-            excludeDraftSessions: true,
-            splitBySession: true,
+            sessionId: input.sessionId,
+            ...(things ? { subject: things.subject } : {}),
           })
-      ),
-      // Under a container lens the door narrows IN SQL, before its limit
-      // (`container`); the resolved containers below stay the authority.
-      notifsFollow
-        ? settle(
-            "notifications",
-            [] as AttentionNotification[],
-            async () =>
-              (
-                await notifCenterRouter.createCaller(ctx).list({
-                  workspaceId: floorLens(input.workspaceId),
-                  status: "unread",
-                  limit: NOTIFICATION_SCAN_LIMIT,
-                  ...(container ? { container } : {}),
-                })
-              ).notifications satisfies AttentionNotification[]
-          )
-        : settle(
-            "notifications",
-            [] as AttentionNotification[],
-            async () => []
-          ),
-      // System HEALTH is the pod's, never a container's: under a container lens
-      // the banner reads its own rows (every status-role type is `system`,
-      // pinned in the tests); at the floor it reads the floor read above.
-      // Under the intent lens the notification half is suppressed, so the
-      // banner reads its own rows too.
-      container || (follows && !notifsFollow)
-        ? settle("notifications", [] as AttentionNotification[], () =>
-            readHealthRows(ctx, input)
-          )
-        : null,
-      // The owed read under the SAME lens and owner floor `focusSessions.owed`
-      // applies (`listOwedSlots`), plus the session/track lenses that door does
-      // not expose. Drafts never count (`excludeDrafts`).
-      follows
-        ? settle(
-            "owed",
-            [] as AttentionOwed[],
-            async (): Promise<AttentionOwed[]> =>
-              await listNeedsYouOwed(owedScope)
-          )
-        : settle("owed", [] as AttentionOwed[], async () => []),
-      // The DRAFT half — owed slots on undecided agent drafts, folded into one
-      // `draft-asks` row per draft. PROPOSED, never needs-you.
-      settle(
-        "drafts",
-        {
-          slots: [] as OwedSlotSignalInput[],
-          starterNames: new Map<string, string>(),
-        },
-        async () =>
-          follows
-            ? await listDraftAskSlots(owedScope)
-            : { slots: [], starterNames: new Map<string, string>() }
-      ),
-      // The REVIEW half — at every scope, the pod included.
-      settle("review", { sessions: [], truncated: false }, async () =>
-        follows
-          ? await listSessionsAwaitingReview({
-              userId,
-              workspaceId: input.workspaceId,
-              projectId: input.projectId,
-              trackId: input.trackId,
-              sessionId: input.sessionId,
-              ...(things ? { subject: things.subject } : {}),
-            })
-          : { sessions: [], truncated: false }
-      ),
-      settle(
-        "captures",
-        { captures: [] as UnfinishedCapture[], truncated: false },
-        async () =>
-          readsCaptures
-            ? await listUnfinishedCaptures({ userId })
-            : { captures: [], truncated: false }
-      ),
-      settle(
-        "issuers",
-        { rows: [] as PendingIssuerSignalInput[], truncated: false },
-        async () =>
-          readsAccess
-            ? await listPendingIssuers({ isAdmin })
-            : { rows: [], truncated: false }
-      ),
-      settle(
-        "app-requests",
-        { rows: [] as PendingAppRequestSignalInput[], truncated: false },
-        async () =>
-          readsAccess
-            ? await listPendingAppRequests({ isAdmin })
-            : { rows: [], truncated: false }
-      ),
-    ]);
+        : { sessions: [], truncated: false }
+    ),
+    settle(
+      "captures",
+      { captures: [] as UnfinishedCapture[], truncated: false },
+      async () =>
+        readsCaptures
+          ? await listUnfinishedCaptures({ userId })
+          : { captures: [], truncated: false }
+    ),
+    settle(
+      "issuers",
+      { rows: [] as PendingIssuerSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listPendingIssuers({ isAdmin })
+          : { rows: [], truncated: false }
+    ),
+    settle(
+      "app-requests",
+      { rows: [] as PendingAppRequestSignalInput[], truncated: false },
+      async () =>
+        readsAccess
+          ? await listPendingAppRequests({ isAdmin })
+          : { rows: [], truncated: false }
+    ),
+  ]);
 
   const allNotifications = notifs.value;
   // Containers, cluster session names — through the session READ floor.

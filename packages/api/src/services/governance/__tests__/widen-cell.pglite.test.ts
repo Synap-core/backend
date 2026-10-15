@@ -22,9 +22,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: async () => holder.db,
     eventRepository: { append: async () => undefined },
     insertPendingProposal: (input: unknown) =>
-      (
-        actual.insertPendingProposal as (i: unknown, e: unknown) => unknown
-      )(input, holder.db),
+      (actual.insertPendingProposal as (i: unknown, e: unknown) => unknown)(
+        input,
+        holder.db
+      ),
   };
   Object.defineProperty(mocked, "db", {
     get: () => holder.db,
@@ -156,8 +157,11 @@ const DEAL_MOVE = {
 
 const ruleCount = async () =>
   Number(
-    (await client.query<{ n: number }>(`select count(*)::int as n from governance_rules`))
-      .rows[0]!.n
+    (
+      await client.query<{ n: number }>(
+        `select count(*)::int as n from governance_rules`
+      )
+    ).rows[0]!.n
   );
 
 const dryRun = (p: typeof DEAL_MOVE) =>
@@ -174,7 +178,10 @@ const verdictNow = async (p: typeof DEAL_MOVE) => (await dryRun(p)).outcome;
 
 describe("widenCell — who grants", () => {
   it("the OWNER's click writes the narrowest rule, and the next write of that kind acts", async () => {
-    expect(await dryRun(DEAL_MOVE)).toMatchObject({ outcome: "propose", rung: "default" });
+    expect(await dryRun(DEAL_MOVE)).toMatchObject({
+      outcome: "propose",
+      rung: "default",
+    });
     const r = await caller(OWNER).widenCell(DEAL_MOVE);
     expect(r.outcome).toBe("created");
     const rows = (
@@ -197,9 +204,9 @@ describe("widenCell — who grants", () => {
     ]);
     expect(await verdictNow(DEAL_MOVE)).toBe("auto");
     // Another kind in the same space still asks: the rule is narrow.
-    expect(await verdictNow({ ...DEAL_MOVE, profileSlug: "task" } as never)).toBe(
-      "propose"
-    );
+    expect(
+      await verdictNow({ ...DEAL_MOVE, profileSlug: "task" } as never)
+    ).toBe("propose");
   });
 
   it("a POD ADMIN on another user's agent files a proposal to the owner — never a rule (decision 8)", async () => {
@@ -242,7 +249,9 @@ describe("widenCell — who grants", () => {
 });
 
 describe("widenCell — never past what a rule can reach", () => {
-  const refused = async (input: Parameters<ReturnType<typeof caller>["widenCell"]>[0]) => {
+  const refused = async (
+    input: Parameters<ReturnType<typeof caller>["widenCell"]>[0]
+  ) => {
     let err: unknown;
     try {
       await caller(OWNER).widenCell(input);

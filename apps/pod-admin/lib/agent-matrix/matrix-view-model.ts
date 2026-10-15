@@ -47,7 +47,10 @@ export function markView(cell: Pick<MatrixCell, "mark" | "split">): MarkView {
     splitWords:
       cell.mark === "mixed"
         ? MATRIX_VERDICTS.filter((v) => cell.split[v] > 0)
-            .map((v) => `${cell.split[v]} ${resolveMatrixMarkLabel(v).toLowerCase()}`)
+            .map(
+              (v) =>
+                `${cell.split[v]} ${resolveMatrixMarkLabel(v).toLowerCase()}`
+            )
             .join(", ")
         : null,
   };
@@ -126,7 +129,8 @@ function everyGroupKey(matrix: AgentMatrix): Set<string> {
   const keys = new Set<string>();
   for (const g of matrix.groups) {
     keys.add(typeKey(g.agentType));
-    for (const c of g.computers) keys.add(computerKey(g.agentType, c.hostUserId));
+    for (const c of g.computers)
+      keys.add(computerKey(g.agentType, c.hostUserId));
   }
   return keys;
 }
@@ -151,7 +155,9 @@ export function visibleRows(
   expanded: ReadonlySet<string>,
   showAll: boolean
 ): { rows: MatrixRow[]; hiddenTypeGroups: number } {
-  const groups = showAll ? matrix.groups : matrix.groups.slice(0, TYPE_GROUP_CAP);
+  const groups = showAll
+    ? matrix.groups
+    : matrix.groups.slice(0, TYPE_GROUP_CAP);
   const rows: MatrixRow[] = [];
   const agentRow = (a: MatrixAgentRow, level: number): MatrixRow => ({
     key: agentRowKey(a.agentUserId),
@@ -210,8 +216,9 @@ export function visibleRows(
  */
 export function findRow(matrix: AgentMatrix, key: string): MatrixRow | null {
   return (
-    visibleRows(matrix, everyGroupKey(matrix), true).rows.find((r) => r.key === key) ??
-    null
+    visibleRows(matrix, everyGroupKey(matrix), true).rows.find(
+      (r) => r.key === key
+    ) ?? null
   );
 }
 
@@ -268,11 +275,18 @@ export function gridKeyAction(
     case "ArrowRight":
       return { type: "move", to: clamp({ ...pos, col: pos.col + 1 }) };
     case "Home":
-      return { type: "move", to: clamp(mod ? { row: 0, col: 0 } : { ...pos, col: 0 }) };
+      return {
+        type: "move",
+        to: clamp(mod ? { row: 0, col: 0 } : { ...pos, col: 0 }),
+      };
     case "End":
       return {
         type: "move",
-        to: clamp(mod ? { row: size.rows - 1, col: size.cols - 1 } : { ...pos, col: size.cols - 1 }),
+        to: clamp(
+          mod
+            ? { row: size.rows - 1, col: size.cols - 1 }
+            : { ...pos, col: size.cols - 1 }
+        ),
       };
     case " ":
     case "Spacebar":
@@ -295,7 +309,10 @@ export interface ProbeView {
   widenable: boolean;
 }
 
-export function probeViews(column: MatrixColumn, cell: MatrixCell): ProbeView[] {
+export function probeViews(
+  column: MatrixColumn,
+  cell: MatrixCell
+): ProbeView[] {
   const byKey = new Map((cell.answers ?? []).map((a) => [a.probeKey, a]));
   const out: ProbeView[] = [];
   for (const probe of column.probes) {

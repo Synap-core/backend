@@ -19,10 +19,7 @@
  *                               (founder decision 2026-10-13).
  */
 
-import {
-  readRouteChoice,
-  type AgentReach,
-} from "@synap-core/types/agents";
+import { readRouteChoice, type AgentReach } from "@synap-core/types/agents";
 import {
   db,
   and,
@@ -35,10 +32,7 @@ import {
   messages,
   users,
 } from "@synap/database";
-import {
-  AiReactionMode,
-  ChannelMemberKind,
-} from "@synap/database/schema";
+import { AiReactionMode, ChannelMemberKind } from "@synap/database/schema";
 import { resolveMentionedMember } from "../../utils/agent-handles.js";
 import { resolveAgentReachMany } from "./agent-binding.js";
 import { route } from "./route.js";
@@ -96,7 +90,10 @@ export async function routeRoomMessage(p: {
   for (const handle of p.mentionHandles) {
     const hit = resolveMentionedMember([handle], external);
     if (hit && !wake.some((w) => w.agentUserId === hit.agentUserId)) {
-      wake.push({ agentUserId: hit.agentUserId, reach: reach.get(hit.agentUserId)! });
+      wake.push({
+        agentUserId: hit.agentUserId,
+        reach: reach.get(hit.agentUserId)!,
+      });
     }
   }
   const mentioned =
@@ -141,7 +138,12 @@ export async function routeRoomMessage(p: {
     pool: "roster",
   });
   if (r.kind === "routed") {
-    return { kind: "answer", teammateId: r.agentUserId, source: "direct", wake };
+    return {
+      kind: "answer",
+      teammateId: r.agentUserId,
+      source: "direct",
+      wake,
+    };
   }
   if (r.kind === "choose" && r.candidates.length >= 2) {
     const byId = new Map(members.map((m) => [m.agentUserId, m]));
@@ -183,7 +185,10 @@ export async function answerRoomChoice(p: {
     .select({ metadata: messages.metadata })
     .from(messages)
     .where(
-      and(eq(messages.id, p.choiceMessageId), eq(messages.channelId, p.channelId))
+      and(
+        eq(messages.id, p.choiceMessageId),
+        eq(messages.channelId, p.channelId)
+      )
     )
     .limit(1);
   const choice = readRouteChoice(choiceRow?.metadata);
@@ -222,7 +227,8 @@ export async function answerRoomChoice(p: {
     roster: roster.map((m) => m.id),
     pool: "roster",
   });
-  if (r.kind !== "routed") return { status: "refused", reason: "no_longer_eligible" };
+  if (r.kind !== "routed")
+    return { status: "refused", reason: "no_longer_eligible" };
 
   // ONE answer per choice: claimed atomically on the choice message, so a
   // second tap, a reload or another person's tap cannot start a second turn.

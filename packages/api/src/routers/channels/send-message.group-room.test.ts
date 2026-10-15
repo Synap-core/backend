@@ -42,7 +42,9 @@ const m = vi.hoisted(() => ({
   }>,
   wake: vi.fn(async (_p: { wake: unknown[] }) => undefined),
   ownerReply: { status: "no_session" } as Record<string, unknown>,
-  offer: vi.fn(async (_p: { candidates: Array<{ agentUserId: string }> }) => undefined),
+  offer: vi.fn(
+    async (_p: { candidates: Array<{ agentUserId: string }> }) => undefined
+  ),
   chatEvents: [] as Array<{ event: string; data: Record<string, unknown> }>,
   reach: {} as Record<string, "pod" | "dispatch" | "pull">,
   overrides: vi.fn(async (_k: unknown): Promise<unknown> => null),
@@ -153,16 +155,19 @@ vi.mock("../../utils/intelligence-routing.js", async (importOriginal) => ({
 }));
 // The answer loop, at its door: what the owner's reply was (a "who should
 // answer?" is never asked about a message that answered an agent's question).
-vi.mock("../../services/focus-sessions/session-answer.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../services/focus-sessions/session-answer.js")
-  >()),
-  recordOwnerRoomReply: vi.fn(async () => m.ownerReply),
-}));
 vi.mock(
-  "../../services/agent-dispatch/room-follow-through.js",
-  () => ({ wakeMentionedAgents: m.wake, offerRoomChoice: m.offer })
+  "../../services/focus-sessions/session-answer.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../services/focus-sessions/session-answer.js")
+    >()),
+    recordOwnerRoomReply: vi.fn(async () => m.ownerReply),
+  })
 );
+vi.mock("../../services/agent-dispatch/room-follow-through.js", () => ({
+  wakeMentionedAgents: m.wake,
+  offerRoomChoice: m.offer,
+}));
 vi.mock("../../utils/emit-message-observation.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../utils/emit-message-observation.js")
@@ -307,7 +312,11 @@ describe("chat.sendMessage — an EXTERNAL agent on the room roster", () => {
   beforeEach(() => {
     m.roster = [
       { agentUserId: RESEARCHER, name: "Researcher", agentType: "researcher" },
-      { agentUserId: CLAUDE_CODE, name: "Claude Code", agentType: "claude-code" },
+      {
+        agentUserId: CLAUDE_CODE,
+        name: "Claude Code",
+        agentType: "claude-code",
+      },
     ];
     m.reach = { [CLAUDE_CODE]: "pull" };
   });

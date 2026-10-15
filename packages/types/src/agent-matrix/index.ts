@@ -24,7 +24,11 @@ export type MatrixVerdict = "auto" | "ask" | "off";
 /** A cell's mark: one verdict, or `mixed` when its probes / members disagree. */
 export type MatrixMark = MatrixVerdict | "mixed";
 
-export const MATRIX_VERDICTS = ["auto", "ask", "off"] as const satisfies ReadonlyArray<MatrixVerdict>;
+export const MATRIX_VERDICTS = [
+  "auto",
+  "ask",
+  "off",
+] as const satisfies ReadonlyArray<MatrixVerdict>;
 
 /**
  * Each mark as a MARK (ui-composition §1) — the glyph the founder chose and a
@@ -40,7 +44,9 @@ export const MATRIX_MARKS = {
 } as const satisfies Record<MatrixMark, { glyph: string; tone: UnitTone }>;
 
 /** The resolver's outcome → the matrix verdict (one mapping). */
-export function matrixVerdictOf(outcome: "auto" | "propose" | "deny"): MatrixVerdict {
+export function matrixVerdictOf(
+  outcome: "auto" | "propose" | "deny"
+): MatrixVerdict {
   return outcome === "auto" ? "auto" : outcome === "propose" ? "ask" : "off";
 }
 
@@ -138,7 +144,8 @@ export function canWidenAnswer(
   probe: Pick<MatrixProbe, "action" | "profileSlug">
 ): boolean {
   if (answer.verdict !== "ask") return false;
-  if (!(RULE_WIDENABLE_RUNGS as readonly string[]).includes(answer.rung)) return false;
+  if (!(RULE_WIDENABLE_RUNGS as readonly string[]).includes(answer.rung))
+    return false;
   const subject = probe.action.slice(0, probe.action.indexOf("."));
   return !PROFILED_SUBJECTS.includes(subject) || !!probe.profileSlug;
 }

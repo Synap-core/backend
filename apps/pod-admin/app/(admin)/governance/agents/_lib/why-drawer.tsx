@@ -75,7 +75,10 @@ export function WhyDrawer({
       headerRight={
         mark ? (
           <span className="flex items-center gap-1.5 text-[12px] text-foreground/70">
-            <span className={["text-[15px]", toneTextClass(mark.tone)].join(" ")} aria-hidden>
+            <span
+              className={["text-[15px]", toneTextClass(mark.tone)].join(" ")}
+              aria-hidden
+            >
               {mark.glyph}
             </span>
             {mark.splitWords ? `${mark.label}: ${mark.splitWords}` : mark.label}
@@ -124,7 +127,11 @@ function AgentWhy({
       onChanged();
     },
     onError: (err) =>
-      addToast({ title: "Revoke failed", description: err.message, color: "danger" }),
+      addToast({
+        title: "Revoke failed",
+        description: err.message,
+        color: "danger",
+      }),
   });
 
   async function onWiden() {
@@ -152,7 +159,11 @@ function AgentWhy({
 
   const outcome = result ? resolveNextRungOutcomeView(result) : null;
   const OutcomeIcon =
-    outcome?.glyph === "alert" ? AlertTriangle : outcome?.glyph === "person" ? User : Check;
+    outcome?.glyph === "alert"
+      ? AlertTriangle
+      : outcome?.glyph === "person"
+        ? User
+        : Check;
   const ruleLink = ruleHref(column.workspaceId);
 
   return (
@@ -176,10 +187,17 @@ function AgentWhy({
           return (
             <li key={p.probe.key} className="flex flex-col gap-1 py-3">
               <div className="flex items-center gap-2">
-                <span aria-hidden className={["w-4 text-[14px]", toneTextClass(m.tone)].join(" ")}>
+                <span
+                  aria-hidden
+                  className={["w-4 text-[14px]", toneTextClass(m.tone)].join(
+                    " "
+                  )}
+                >
                   {m.glyph}
                 </span>
-                <span className="flex-1 text-[13px] font-medium text-foreground">{p.title}</span>
+                <span className="flex-1 text-[13px] font-medium text-foreground">
+                  {p.title}
+                </span>
                 <span className="text-[12px] text-foreground/70">
                   {resolveMatrixMarkLabel(p.answer.verdict)}
                 </span>
@@ -187,11 +205,19 @@ function AgentWhy({
               <p className="pl-6 text-[12px] text-foreground/70">
                 Decided by: {resolveGovernanceRungLabel(p.answer.rung)}
               </p>
-              <p className="pl-6 text-[11.5px] text-foreground/50">{p.answer.reason}</p>
+              <p className="pl-6 text-[11.5px] text-foreground/50">
+                {p.answer.reason}
+              </p>
               {p.answer.ruleId && (
                 <div className="flex items-center gap-2 pl-6 pt-1">
                   {ruleLink && (
-                    <Button as={Link} href={ruleLink} size="sm" variant="flat" radius="md">
+                    <Button
+                      as={Link}
+                      href={ruleLink}
+                      size="sm"
+                      variant="flat"
+                      radius="md"
+                    >
                       Open rule
                     </Button>
                   )}
@@ -227,7 +253,10 @@ function AgentWhy({
           {outcome && (
             <span
               role="status"
-              className={["flex items-center gap-1.5 text-[12.5px]", toneTextClass(outcome.tone)].join(" ")}
+              className={[
+                "flex items-center gap-1.5 text-[12.5px]",
+                toneTextClass(outcome.tone),
+              ].join(" ")}
             >
               <OutcomeIcon className="h-3.5 w-3.5" aria-hidden />
               {outcome.label}
@@ -273,12 +302,24 @@ function GroupWhy({
                 onClick={() => onOpenAgent(a)}
                 className="flex w-full items-center gap-2 py-2.5 text-left outline-none hover:bg-foreground/[0.03] focus-visible:ring-2 focus-visible:ring-primary"
               >
-                <span aria-hidden className={["w-4 text-[14px]", m ? toneTextClass(m.tone) : ""].join(" ")}>
+                <span
+                  aria-hidden
+                  className={[
+                    "w-4 text-[14px]",
+                    m ? toneTextClass(m.tone) : "",
+                  ].join(" ")}
+                >
                   {m?.glyph}
                 </span>
-                <span className="flex-1 truncate text-[13px] text-foreground">{a.name}</span>
+                <span className="flex-1 truncate text-[13px] text-foreground">
+                  {a.name}
+                </span>
                 <span className="text-[12px] text-foreground/70">
-                  {m ? (m.splitWords ? `${m.label}: ${m.splitWords}` : m.label) : ""}
+                  {m
+                    ? m.splitWords
+                      ? `${m.label}: ${m.splitWords}`
+                      : m.label
+                    : ""}
                 </span>
               </button>
             </li>
@@ -286,7 +327,12 @@ function GroupWhy({
         })}
       </ul>
       {target.row.members.length > MEMBER_CAP && !showAll && (
-        <Button size="sm" variant="light" radius="md" onPress={() => setShowAll(true)}>
+        <Button
+          size="sm"
+          variant="light"
+          radius="md"
+          onPress={() => setShowAll(true)}
+        >
           Show all {target.row.members.length}
         </Button>
       )}

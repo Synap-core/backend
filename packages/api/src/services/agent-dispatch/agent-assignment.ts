@@ -60,7 +60,12 @@ export async function setAgentAssignment(p: {
   target: { type: AssignmentTarget; id: string };
   /** false = remove this agent's assignment to the target. */
   assigned: boolean;
-}): Promise<{ agentUserId: string; target: { type: AssignmentTarget; id: string }; assigned: boolean; replaced: string[] }> {
+}): Promise<{
+  agentUserId: string;
+  target: { type: AssignmentTarget; id: string };
+  assigned: boolean;
+  replaced: string[];
+}> {
   const agent = await loadManagedAgent(p.callerId, p.agentUserId);
   // The target must be one the person can see — the links door's own floor.
   const refusal = await checkLinkEndpointVisible(
@@ -78,36 +83,36 @@ export async function setAgentAssignment(p: {
 
   const replaced = await db
     .transaction(async (tx) => {
-    const dropped = await tx
-      .delete(links)
-      .where(
-        and(
-          eq(links.linkType, "assigned_to"),
-          eq(links.toType, p.target.type),
-          eq(links.toId, p.target.id),
-          // Removing: only THIS agent's edge. Assigning: this owner's agent on
-          // the target — never a teammate's.
-          p.assigned
-            ? drizzleSql`COALESCE(${links.metadata}->>'ownerId', '') = ${agent.ownerId}`
-            : eq(links.fromId, agent.id)
+      const dropped = await tx
+        .delete(links)
+        .where(
+          and(
+            eq(links.linkType, "assigned_to"),
+            eq(links.toType, p.target.type),
+            eq(links.toId, p.target.id),
+            // Removing: only THIS agent's edge. Assigning: this owner's agent on
+            // the target — never a teammate's.
+            p.assigned
+              ? drizzleSql`COALESCE(${links.metadata}->>'ownerId', '') = ${agent.ownerId}`
+              : eq(links.fromId, agent.id)
+          )
         )
-      )
-      .returning({ fromId: links.fromId });
-    if (p.assigned) {
-      await createLink(
-        {
-          workspaceId: p.target.type === "workspace" ? p.target.id : null,
-          fromType: "participant",
-          fromId: agent.id,
-          toType: p.target.type,
-          toId: p.target.id,
-          linkType: "assigned_to",
-          metadata: { assignedBy: p.callerId, ownerId: agent.ownerId },
-        },
-        tx
-      );
-    }
-    return dropped.map((d) => d.fromId).filter((id) => id !== agent.id);
+        .returning({ fromId: links.fromId });
+      if (p.assigned) {
+        await createLink(
+          {
+            workspaceId: p.target.type === "workspace" ? p.target.id : null,
+            fromType: "participant",
+            fromId: agent.id,
+            toType: p.target.type,
+            toId: p.target.id,
+            linkType: "assigned_to",
+            metadata: { assignedBy: p.callerId, ownerId: agent.ownerId },
+          },
+          tx
+        );
+      }
+      return dropped.map((d) => d.fromId).filter((id) => id !== agent.id);
     })
     .catch((err: unknown) => {
       // Two concurrent assigns of one target: the unique index refuses the
@@ -135,7 +140,12 @@ export async function setAgentAssignment(p: {
       by: agent.by,
     },
   });
-  return { agentUserId: agent.id, target: p.target, assigned: p.assigned, replaced };
+  return {
+    agentUserId: agent.id,
+    target: p.target,
+    assigned: p.assigned,
+    replaced,
+  };
 }
 
 export async function setAgentPaused(p: {
@@ -147,7 +157,10 @@ export async function setAgentPaused(p: {
   const pausedAt = p.paused ? new Date() : null;
   await db
     .update(users)
-    .set({ agentPausedAt: pausedAt, agentPausedBy: p.paused ? p.callerId : null })
+    .set({
+      agentPausedAt: pausedAt,
+      agentPausedBy: p.paused ? p.callerId : null,
+    })
     .where(eq(users.id, agent.id));
   await auditLog({
     subjectType: "agent_user",
@@ -183,4 +196,3 @@ export async function loadAgentAssignments(
   }
   return out;
 }
-

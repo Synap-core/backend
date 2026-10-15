@@ -9,7 +9,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
-  session: { id: "s1", userId: "owner" } as { id: string; userId: string } | null,
+  session: { id: "s1", userId: "owner" } as {
+    id: string;
+    userId: string;
+  } | null,
   wakes: [] as Array<Record<string, unknown>>,
   attaches: [] as Array<Record<string, unknown>>,
   notices: [] as Array<Record<string, unknown>>,
@@ -64,14 +67,22 @@ describe("wakeMentionedAgents", () => {
   it("the owner's mention reaches a dispatch agent's live run", async () => {
     await wake("owner", "dispatch");
     expect(h.wakes).toEqual([
-      expect.objectContaining({ sessionId: "s1", agentUserId: "cc", kind: "message" }),
+      expect.objectContaining({
+        sessionId: "s1",
+        agentUserId: "cc",
+        kind: "message",
+      }),
     ]);
   });
 
   it("the owner's mention puts a pull agent on the roster", async () => {
     await wake("owner", "pull");
     expect(h.attaches).toEqual([
-      expect.objectContaining({ sessionId: "s1", agentId: "cc", userId: "owner" }),
+      expect.objectContaining({
+        sessionId: "s1",
+        agentId: "cc",
+        userId: "owner",
+      }),
     ]);
   });
 

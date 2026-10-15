@@ -68,7 +68,10 @@ describe("buildChatRequestBody", () => {
   it("forwards a null agentOverrides (looked, none) and omits an unknown one", () => {
     // null and absent mean different things to the IS: null = no row, absent =
     // read it yourself. Collapsing them would make a failed pod read look empty.
-    const none = buildChatRequestBody({ ...request, agentOverrides: null }, true);
+    const none = buildChatRequestBody(
+      { ...request, agentOverrides: null },
+      true
+    );
     expect(none).toHaveProperty("agentOverrides", null);
     const { agentOverrides: _drop, ...unknown } = request;
     expect(buildChatRequestBody(unknown, true)).not.toHaveProperty(

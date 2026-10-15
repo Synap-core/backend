@@ -44,15 +44,7 @@
  */
 
 import type { AgentReach } from "@synap-core/types/agents";
-import {
-  db,
-  and,
-  eq,
-  inArray,
-  isNotNull,
-  links,
-  users,
-} from "@synap/database";
+import { db, and, eq, inArray, isNotNull, links, users } from "@synap/database";
 import {
   listDispatchableAgentIds,
   ownedAgentIds,
@@ -103,7 +95,8 @@ export interface Routed {
  *   not_member   the pool is a room and the agent is not in it;
  *   paused       a person paused it.
  */
-export type RouteRefusal = "wrong_reach" | "not_owned" | "not_member" | "paused";
+export type RouteRefusal =
+  "wrong_reach" | "not_owned" | "not_member" | "paused";
 
 /** A refusal as the sentence a person (or the AI relaying it) reads. */
 export function routeRefusalLine(reason: RouteRefusal, who: string): string {
@@ -185,7 +178,9 @@ async function pausedAmong(ids: readonly string[]): Promise<Set<string>> {
   const rows = await db
     .select({ id: users.id })
     .from(users)
-    .where(and(inArray(users.id, [...new Set(ids)]), isNotNull(users.agentPausedAt)));
+    .where(
+      and(inArray(users.id, [...new Set(ids)]), isNotNull(users.agentPausedAt))
+    );
   return new Set(rows.map((r) => r.id));
 }
 
@@ -253,9 +248,7 @@ export async function namedVerdicts(
 }
 
 /** The assigned agents for the work's targets, most specific target first. */
-async function assignedFor(
-  targets: RouteWork["targets"]
-): Promise<string[]> {
+async function assignedFor(targets: RouteWork["targets"]): Promise<string[]> {
   const pairs = ASSIGNMENT_TARGETS.flatMap((t) =>
     targets?.[t] ? [{ type: t, id: targets[t]! }] : []
   );
@@ -320,17 +313,29 @@ export async function route(work: RouteWork): Promise<RouteResult> {
       : { kind: "choose", candidates: onRoster.ok };
   }
   if (onRoster.ok[0]) {
-    return routed(onRoster.ok[0], onRoster.reach.get(onRoster.ok[0])!, "roster");
+    return routed(
+      onRoster.ok[0],
+      onRoster.reach.get(onRoster.ok[0])!,
+      "roster"
+    );
   }
 
   // 3. assigned — the most specific target's agent that may take it.
   const assigned = await admit(work, await assignedFor(work.targets), null);
   if (assigned.ok[0]) {
-    return routed(assigned.ok[0], assigned.reach.get(assigned.ok[0])!, "assigned");
+    return routed(
+      assigned.ok[0],
+      assigned.reach.get(assigned.ok[0])!,
+      "assigned"
+    );
   }
 
   // 4–5. single, else the person chooses.
-  const pool = await admit(work, await ownedPool(work.ownerId, work.accept), null);
+  const pool = await admit(
+    work,
+    await ownedPool(work.ownerId, work.accept),
+    null
+  );
   const [only] = pool.ok;
   if (pool.ok.length === 1 && only) {
     return routed(only, pool.reach.get(only)!, "single");

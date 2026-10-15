@@ -74,7 +74,8 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTableElement>) {
-    const raw = (e.target as HTMLElement).closest<HTMLElement>("[data-pos]")?.dataset.pos;
+    const raw = (e.target as HTMLElement).closest<HTMLElement>("[data-pos]")
+      ?.dataset.pos;
     if (!raw) return;
     const [r, c] = raw.split(":").map(Number) as [number, number];
     const here = { row: r, col: c };
@@ -172,7 +173,14 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
               </th>
               {columns.map((column, i) => {
                 const cell = row.cells[column.id];
-                if (!cell) return <td key={column.id} role="gridcell" {...cellProps(r, i + 1)} />;
+                if (!cell)
+                  return (
+                    <td
+                      key={column.id}
+                      role="gridcell"
+                      {...cellProps(r, i + 1)}
+                    />
+                  );
                 return (
                   <td
                     key={column.id}
@@ -205,7 +213,10 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
 function RowLabel({ row }: { row: MatrixRow }) {
   const indent = (row.level - 1) * 16;
   return (
-    <span className="flex min-w-0 items-center gap-1.5" style={{ paddingLeft: indent }}>
+    <span
+      className="flex min-w-0 items-center gap-1.5"
+      style={{ paddingLeft: indent }}
+    >
       {row.kind === "agent" ? (
         <span aria-hidden className="inline-block w-3.5 shrink-0" />
       ) : (
@@ -220,7 +231,9 @@ function RowLabel({ row }: { row: MatrixRow }) {
       <span
         className={[
           "truncate",
-          row.kind === "agent" ? "text-foreground" : "font-medium text-foreground/80",
+          row.kind === "agent"
+            ? "text-foreground"
+            : "font-medium text-foreground/80",
         ].join(" ")}
       >
         {row.label}
@@ -231,7 +244,10 @@ function RowLabel({ row }: { row: MatrixRow }) {
         </span>
       )}
       {row.agent?.paused && (
-        <Pause aria-label="Paused" className="h-3 w-3 shrink-0 text-status-stale" />
+        <Pause
+          aria-label="Paused"
+          className="h-3 w-3 shrink-0 text-status-stale"
+        />
       )}
     </span>
   );
@@ -242,7 +258,9 @@ function CellMark({ cell }: { cell: MatrixCell }) {
   const m = markView(cell);
   return (
     <span aria-hidden className="flex items-center gap-2">
-      <span className={["text-[14px] font-medium", toneTextClass(m.tone)].join(" ")}>
+      <span
+        className={["text-[14px] font-medium", toneTextClass(m.tone)].join(" ")}
+      >
         {m.glyph}
       </span>
       {cell.mark === "mixed" && (

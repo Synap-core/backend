@@ -1035,8 +1035,7 @@ export const sendMessageProcedure = protectedProcedure
           .where(eq(workspaces.id, workspaceId))
           .limit(1);
         const wsSettings = wsRow?.settings as
-          | { agentPersonality?: string }
-          | undefined;
+          { agentPersonality?: string } | undefined;
         const wsPersonality = wsSettings?.agentPersonality;
         if (wsPersonality && !effectiveAgentConfig.personality) {
           effectiveAgentConfig = {

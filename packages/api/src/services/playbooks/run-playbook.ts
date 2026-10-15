@@ -1329,7 +1329,6 @@ export async function gateWorkerRun(
  */
 const loadStatusGroups = () => import("../lifecycle/status-groups.js");
 
-
 /**
  * A per_moment worker run: the things in the worker's status under its scope
  * (the board's own set — `listThingsInStatus`), minus those this enablement

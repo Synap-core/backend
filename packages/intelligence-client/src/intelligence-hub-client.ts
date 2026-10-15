@@ -293,7 +293,6 @@ export function buildChatRequestBody(
 
 // ── Cheap routing types ──────────────────────────────────────────────────────
 
-
 // ── Circuit breaker ─────────────────────────────────────────────────────────
 
 interface CircuitState {

@@ -99,11 +99,17 @@ beforeAll(async () => {
   await agent(H1, OWNER, "meta");
   await agent(H2, OWNER, "researcher");
   await agent(H_THEIRS, TEAMMATE, "meta");
-  await q(`insert into users (id, email, user_type) values ($1, 'o2@x.test', 'human')`, [OWNER2]);
+  await q(
+    `insert into users (id, email, user_type) values ($1, 'o2@x.test', 'human')`,
+    [OWNER2]
+  );
   await agent(D_PB, OWNER2, "claude-code");
   await agent(D_WS, OWNER2, "codex");
   await agent(D_PAUSED, OWNER2, "devin");
-  await q(`update users set agent_paused_at = now(), agent_paused_by = $2 where id = $1`, [D_PAUSED, OWNER2]);
+  await q(
+    `update users set agent_paused_at = now(), agent_paused_by = $2 where id = $1`,
+    [D_PAUSED, OWNER2]
+  );
   for (const [id, at] of [
     [D1, "2026-10-01T00:00:00Z"],
     [D2, "2026-10-02T00:00:00Z"],
@@ -152,7 +158,11 @@ describe("route — one row per rung", () => {
         pool: "owned",
       });
       // Named beats the roster.
-      expect(routedTo(r)).toEqual({ id: D2, via: "selector", reach: "dispatch" });
+      expect(routedTo(r)).toEqual({
+        id: D2,
+        via: "selector",
+        reach: "dispatch",
+      });
     },
     roster: async () => {
       const r = await route({
@@ -170,7 +180,11 @@ describe("route — one row per rung", () => {
         targets: { workspace: WORKSPACE },
         pool: "owned",
       });
-      expect(routedTo(r)).toEqual({ id: D_WS, via: "assigned", reach: "dispatch" });
+      expect(routedTo(r)).toEqual({
+        id: D_WS,
+        via: "assigned",
+        reach: "dispatch",
+      });
     },
     single: async () => {
       const r = await route({
@@ -196,7 +210,11 @@ describe("route — refusals never fall through", () => {
       roster: [D1],
       pool: "owned",
     });
-    expect(r).toMatchObject({ kind: "refused", reason: "wrong_reach", agentUserId: P_MINE });
+    expect(r).toMatchObject({
+      kind: "refused",
+      reason: "wrong_reach",
+      agentUserId: P_MINE,
+    });
   });
 
   it("a teammate's bound agent is not the owner's to hand work", async () => {
@@ -216,7 +234,11 @@ describe("route — refusals never fall through", () => {
       selector: { agentUserId: P_MINE },
       pool: "owned",
     });
-    expect(routedTo(mine)).toEqual({ id: P_MINE, via: "selector", reach: "pull" });
+    expect(routedTo(mine)).toEqual({
+      id: P_MINE,
+      via: "selector",
+      reach: "pull",
+    });
     const theirs = await route({
       ownerId: OWNER,
       accept: ["dispatch", "pull"],
@@ -234,7 +256,11 @@ describe("route — refusals never fall through", () => {
       roster: [H1, P_MINE],
       pool: "roster",
     });
-    expect(r).toMatchObject({ kind: "refused", reason: "wrong_reach", reach: "pull" });
+    expect(r).toMatchObject({
+      kind: "refused",
+      reason: "wrong_reach",
+      reach: "pull",
+    });
   });
 
   it("a room answers only from its own members", async () => {
@@ -271,14 +297,30 @@ describe("route — discriminating rows", () => {
   });
 
   it("two bound agents and nothing named: the person chooses (oldest first)", async () => {
-    const r = await route({ ownerId: OWNER, accept: ["dispatch"], pool: "owned" });
+    const r = await route({
+      ownerId: OWNER,
+      accept: ["dispatch"],
+      pool: "owned",
+    });
     expect(r).toEqual({ kind: "choose", candidates: [D1, D2] });
   });
 
   it("the teammate's single bound agent is never 'the single one'", async () => {
-    const r = await route({ ownerId: TEAMMATE, accept: ["dispatch"], pool: "owned" });
-    expect(routedTo(r)).toEqual({ id: D_THEIRS, via: "single", reach: "dispatch" });
-    const none = await route({ ownerId: randomUUID(), accept: ["dispatch"], pool: "owned" });
+    const r = await route({
+      ownerId: TEAMMATE,
+      accept: ["dispatch"],
+      pool: "owned",
+    });
+    expect(routedTo(r)).toEqual({
+      id: D_THEIRS,
+      via: "single",
+      reach: "dispatch",
+    });
+    const none = await route({
+      ownerId: randomUUID(),
+      accept: ["dispatch"],
+      pool: "owned",
+    });
     expect(none).toEqual({ kind: "choose", candidates: [] });
   });
 
@@ -300,7 +342,11 @@ describe("route — discriminating rows", () => {
       roster: [H1, H_THEIRS],
       pool: "roster",
     });
-    expect(routedTo(r)).toEqual({ id: H_THEIRS, via: "selector", reach: "pod" });
+    expect(routedTo(r)).toEqual({
+      id: H_THEIRS,
+      via: "selector",
+      reach: "pod",
+    });
   });
 
   it("outside a room a teammate's house agent is not the owner's", async () => {
@@ -322,7 +368,11 @@ describe("route — assignment and pause (W1b)", () => {
       targets: { playbook: PLAYBOOK, workspace: WORKSPACE },
       pool: "owned",
     });
-    expect(routedTo(r)).toEqual({ id: D_PB, via: "assigned", reach: "dispatch" });
+    expect(routedTo(r)).toEqual({
+      id: D_PB,
+      via: "assigned",
+      reach: "dispatch",
+    });
   });
 
   it("the roster outranks an assignment", async () => {
@@ -343,7 +393,11 @@ describe("route — assignment and pause (W1b)", () => {
       targets: { profile: PROFILE, workspace: WORKSPACE },
       pool: "owned",
     });
-    expect(routedTo(r)).toEqual({ id: D_WS, via: "assigned", reach: "dispatch" });
+    expect(routedTo(r)).toEqual({
+      id: D_WS,
+      via: "assigned",
+      reach: "dispatch",
+    });
   });
 
   it("an assignee of the wrong reach is skipped", async () => {
@@ -358,7 +412,11 @@ describe("route — assignment and pause (W1b)", () => {
   });
 
   it("a paused agent is never 'the single one', and is refused by name", async () => {
-    const pool = await route({ ownerId: OWNER2, accept: ["dispatch"], pool: "owned" });
+    const pool = await route({
+      ownerId: OWNER2,
+      accept: ["dispatch"],
+      pool: "owned",
+    });
     expect(pool).toEqual({ kind: "choose", candidates: [D_PB, D_WS] });
     const named = await route({
       ownerId: OWNER2,

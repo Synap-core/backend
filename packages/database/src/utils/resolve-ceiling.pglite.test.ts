@@ -64,7 +64,10 @@ beforeAll(async () => {
   for (let i = 0; i < 2; i++) {
     await pg.exec(`BEGIN; ${M0330} COMMIT;`);
   }
-  await pg.query(`INSERT INTO users (id, agent_type) VALUES ($1, 'claude-code'), ($2, 'codex')`, [AGENT, OTHER_AGENT]);
+  await pg.query(
+    `INSERT INTO users (id, agent_type) VALUES ($1, 'claude-code'), ($2, 'codex')`,
+    [AGENT, OTHER_AGENT]
+  );
   db = drizzle(pg);
 }, 120_000);
 
@@ -126,8 +129,17 @@ describe("resolveCeiling", () => {
   });
 
   it("a subject row outranks an agent + workspace row", async () => {
-    await row({ axis: "automation_ai_dispatch_daily", limit: 7, agent: AGENT, workspace: WS });
-    await row({ axis: "automation_ai_dispatch_daily", limit: 3, subject: AUTOMATION });
+    await row({
+      axis: "automation_ai_dispatch_daily",
+      limit: 7,
+      agent: AGENT,
+      workspace: WS,
+    });
+    await row({
+      axis: "automation_ai_dispatch_daily",
+      limit: 3,
+      subject: AUTOMATION,
+    });
     const r = await resolveCeiling({
       db,
       axis: "automation_ai_dispatch_daily",
@@ -139,44 +151,106 @@ describe("resolveCeiling", () => {
   });
 
   it("a row for another subject never applies", async () => {
-    await row({ axis: "automation_ai_dispatch_per_run", limit: 2, subject: OTHER_AUTOMATION });
+    await row({
+      axis: "automation_ai_dispatch_per_run",
+      limit: 2,
+      subject: OTHER_AUTOMATION,
+    });
     expect(
-      await resolveCeiling({ db, axis: "automation_ai_dispatch_per_run", subject })
-    ).toMatchObject({ value: CEILING_DEFAULTS.automation_ai_dispatch_per_run, source: "default" });
+      await resolveCeiling({
+        db,
+        axis: "automation_ai_dispatch_per_run",
+        subject,
+      })
+    ).toMatchObject({
+      value: CEILING_DEFAULTS.automation_ai_dispatch_per_run,
+      source: "default",
+    });
   });
 
   it("principal and scope rank as the rule resolver ranks them; newest breaks a tie", async () => {
     await row({ axis: "daily_write_count", limit: 100 });
     await row({ axis: "daily_write_count", limit: 80, agent: AGENT });
-    await row({ axis: "daily_write_count", limit: 60, agent: AGENT, workspace: WS, at: "2026-01-01T00:00:00Z" });
-    await row({ axis: "daily_write_count", limit: 40, agent: AGENT, workspace: WS, at: "2026-06-01T00:00:00Z" });
+    await row({
+      axis: "daily_write_count",
+      limit: 60,
+      agent: AGENT,
+      workspace: WS,
+      at: "2026-01-01T00:00:00Z",
+    });
+    await row({
+      axis: "daily_write_count",
+      limit: 40,
+      agent: AGENT,
+      workspace: WS,
+      at: "2026-06-01T00:00:00Z",
+    });
     expect(await resolveDailyWriteCeiling({ db, agentUserId: AGENT })).toBe(80);
-    expect(await resolveDailyWriteCeiling({ db, agentUserId: AGENT, workspaceId: WS })).toBe(40);
-    expect(await resolveDailyWriteCeiling({ db, agentUserId: OTHER_AGENT })).toBe(100);
+    expect(
+      await resolveDailyWriteCeiling({
+        db,
+        agentUserId: AGENT,
+        workspaceId: WS,
+      })
+    ).toBe(40);
+    expect(
+      await resolveDailyWriteCeiling({ db, agentUserId: OTHER_AGENT })
+    ).toBe(100);
   });
 
   it("a tighten-only axis never resolves above its default", async () => {
-    await row({ axis: "worker_irreversible_sends_daily", limit: 500, subject: AUTOMATION });
+    await row({
+      axis: "worker_irreversible_sends_daily",
+      limit: 500,
+      subject: AUTOMATION,
+    });
     expect(
-      await resolveCeiling({ db, axis: "worker_irreversible_sends_daily", subject })
-    ).toMatchObject({ value: CEILING_DEFAULTS.worker_irreversible_sends_daily, source: "row" });
+      await resolveCeiling({
+        db,
+        axis: "worker_irreversible_sends_daily",
+        subject,
+      })
+    ).toMatchObject({
+      value: CEILING_DEFAULTS.worker_irreversible_sends_daily,
+      source: "row",
+    });
     await pg.query(`DELETE FROM governance_ceilings`);
-    await row({ axis: "worker_irreversible_sends_daily", limit: 5, subject: AUTOMATION });
+    await row({
+      axis: "worker_irreversible_sends_daily",
+      limit: 5,
+      subject: AUTOMATION,
+    });
     expect(
-      (await resolveCeiling({ db, axis: "worker_irreversible_sends_daily", subject })).value
+      (
+        await resolveCeiling({
+          db,
+          axis: "worker_irreversible_sends_daily",
+          subject,
+        })
+      ).value
     ).toBe(5);
   });
 
   it("the pending-proposal reader still answers null when no row decided", async () => {
-    expect(await resolvePendingProposalCap({ db, agentUserId: AGENT })).toBeNull();
+    expect(
+      await resolvePendingProposalCap({ db, agentUserId: AGENT })
+    ).toBeNull();
     await row({ axis: "pending_proposal_cap", limit: 4, agent: AGENT });
     expect(await resolvePendingProposalCap({ db, agentUserId: AGENT })).toBe(4);
   });
 });
 
 describe("limitWithOwnValue — a stored row only tightens an owner-set limit", () => {
-  const row = (value: number) => ({ value, source: "row" as const, ceilingId: "c" });
-  const dflt = (value: number) => ({ value, source: "default" as const, ceilingId: null });
+  const row = (value: number) => ({
+    value,
+    source: "row" as const,
+    ceilingId: "c",
+  });
+  const dflt = (value: number) => ({
+    value,
+    source: "default" as const,
+    ceilingId: null,
+  });
   it("own 10, pod row 100 ⇒ 10 (never loosened)", () => {
     expect(limitWithOwnValue(10, row(100))).toBe(10);
   });

@@ -26,15 +26,19 @@ const SOURCE = path.resolve(
 );
 
 function producerRungs(src: string): Set<string> {
-  const start = src.indexOf("export async function dryRunAgentGovernanceDecision");
+  const start = src.indexOf(
+    "export async function dryRunAgentGovernanceDecision"
+  );
   const fnStart = src.indexOf("function reasonToRung");
   const end = src.indexOf("\n}\n", fnStart);
   expect(start).toBeGreaterThan(0);
   expect(fnStart).toBeGreaterThan(start);
   const slice = src.slice(start, end);
   const found = new Set<string>();
-  for (const m of slice.matchAll(/"([a-z][a-z0-9]*(?:-[a-z0-9]+)+)"/g)) found.add(m[1]!);
-  for (const m of slice.matchAll(/(?:return|rung:|:)\s*"(default)"/g)) found.add(m[1]!);
+  for (const m of slice.matchAll(/"([a-z][a-z0-9]*(?:-[a-z0-9]+)+)"/g))
+    found.add(m[1]!);
+  for (const m of slice.matchAll(/(?:return|rung:|:)\s*"(default)"/g))
+    found.add(m[1]!);
   return found;
 }
 

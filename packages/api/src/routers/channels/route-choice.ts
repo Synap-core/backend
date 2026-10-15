@@ -6,10 +6,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, and, eq, channels } from "@synap/database";
+import { eq, channels } from "@synap/database";
 import { protectedProcedure } from "../../trpc.js";
 import { aiRateLimitMiddleware } from "../../middleware/ai-rate-limit.js";
-import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { answerRoomChoice } from "../../services/agent-dispatch/route-room.js";
 
 export const answerRouteChoiceProcedure = protectedProcedure
@@ -24,17 +24,12 @@ export const answerRouteChoiceProcedure = protectedProcedure
     })
   )
   .mutation(async ({ ctx, input }) => {
-    // The same floor as reading the room: an invisible channel is NOT_FOUND.
-    const [visible] = await db
-      .select({ id: channels.id })
-      .from(channels)
-      .where(
-        and(
-          eq(channels.id, input.channelId),
-          channelVisibilityWhere(ctx.userId!)
-        )
-      )
-      .limit(1);
+    // The same floor as reading the room (the access layer's channel rule):
+    // an invisible channel is NOT_FOUND.
+    const visible = await scopedDb(AccessContext.from(ctx)).findFirst(
+      channels,
+      { where: eq(channels.id, input.channelId), columns: { id: true } }
+    );
     if (!visible) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
     }
@@ -45,7 +40,10 @@ export const answerRouteChoiceProcedure = protectedProcedure
       agentUserId: input.agentUserId,
     });
     if (res.status === "not_found") {
-      throw new TRPCError({ code: "NOT_FOUND", message: "That choice is gone" });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "That choice is gone",
+      });
     }
     return res;
   });

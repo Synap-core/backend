@@ -21,7 +21,8 @@
  */
 
 const SNAPSHOT_CLOCK_STEP_MS = 60_000;
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:?\d{2})?)?$/;
+const ISO_INSTANT =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}(:?\d{2})?)?$/;
 const WRITE_METHODS = new Set([
   "insert",
   "update",
@@ -80,7 +81,10 @@ export function createReadSnapshot<T extends object>(
   };
 
   const wrap = (target: unknown, path: string): unknown => {
-    if (!target || (typeof target !== "object" && typeof target !== "function")) {
+    if (
+      !target ||
+      (typeof target !== "object" && typeof target !== "function")
+    ) {
       return target;
     }
     return new Proxy(target as object, {
@@ -99,7 +103,11 @@ export function createReadSnapshot<T extends object>(
             onRejected?: (e: unknown) => unknown
           ) => pending!.then(onFulfilled, onRejected);
         }
-        if (typeof prop === "string" && path === "" && WRITE_METHODS.has(prop)) {
+        if (
+          typeof prop === "string" &&
+          path === "" &&
+          WRITE_METHODS.has(prop)
+        ) {
           throw new Error(
             `read snapshot: "${prop}" is a write — a snapshot only reads`
           );

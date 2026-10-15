@@ -10,7 +10,15 @@
  *
  * Real: the tables, route(), the room rule. Captured: the auto-respond door.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -39,7 +47,13 @@ vi.mock("../../../utils/trigger-auto-respond.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { users, apiKeys, links, channelMembers, messages } from "@synap/database";
+import {
+  users,
+  apiKeys,
+  links,
+  channelMembers,
+  messages,
+} from "@synap/database";
 import { AiReactionMode } from "@synap/database/schema";
 import { routeRoomMessage, answerRoomChoice } from "../route-room.js";
 
@@ -65,7 +79,12 @@ const SOLO = randomUUID();
 const DUO = randomUUID();
 const SHARED = randomUUID();
 
-async function member(channelId: string, memberId: string, kind: string, at: string) {
+async function member(
+  channelId: string,
+  memberId: string,
+  kind: string,
+  at: string
+) {
   await q(
     `insert into channel_members (id, channel_id, member_id, member_kind, created_at) values ($1, $2, $3, $4, $5)`,
     [randomUUID(), channelId, memberId, kind, at]
@@ -142,10 +161,9 @@ describe("routeRoomMessage", () => {
   it("two house agents, nobody named ⇒ the person chooses", async () => {
     const r = await confident(DUO);
     expect(r.kind).toBe("choose");
-    expect(r.kind === "choose" && r.candidates.map((c) => c.agentUserId)).toEqual([
-      RESEARCHER,
-      WRITER,
-    ]);
+    expect(
+      r.kind === "choose" && r.candidates.map((c) => c.agentUserId)
+    ).toEqual([RESEARCHER, WRITER]);
   });
 
   it("only_mentioned: silence, no choice", async () => {
@@ -188,11 +206,19 @@ describe("answerRoomChoice — one answer per choice", () => {
     return { trigger, choice };
   }
   const answer = (choice: string, agentUserId: string) =>
-    answerRoomChoice({ channelId: DUO, callerId: OWNER, choiceMessageId: choice, agentUserId });
+    answerRoomChoice({
+      channelId: DUO,
+      callerId: OWNER,
+      choiceMessageId: choice,
+      agentUserId,
+    });
 
   it("the first tap starts the turn on the original message; a second is refused", async () => {
     const { trigger, choice } = await seedChoice();
-    expect(await answer(choice, WRITER)).toEqual({ status: "started", agentUserId: WRITER });
+    expect(await answer(choice, WRITER)).toEqual({
+      status: "started",
+      agentUserId: WRITER,
+    });
     expect(h.turns).toEqual([
       expect.objectContaining({ userMessageId: trigger, agentType: "writer" }),
     ]);
@@ -219,9 +245,15 @@ describe("answerRoomChoice — one answer per choice", () => {
   it("a turn that does not start releases the claim — the person can pick again", async () => {
     const { choice } = await seedChoice();
     h.start = false;
-    expect(await answer(choice, WRITER)).toEqual({ status: "refused", reason: "not_started" });
+    expect(await answer(choice, WRITER)).toEqual({
+      status: "refused",
+      reason: "not_started",
+    });
     h.start = true;
-    expect(await answer(choice, WRITER)).toEqual({ status: "started", agentUserId: WRITER });
+    expect(await answer(choice, WRITER)).toEqual({
+      status: "started",
+      agentUserId: WRITER,
+    });
   });
 
   it("an agent that is not a candidate is refused", async () => {

@@ -1991,32 +1991,33 @@ export function resolveMatrixMarkLabel(
  * rung added to `GOVERNANCE_RUNGS` is a BUILD error here until it is named.
  * The resolver's `reason` sentence is the detail under it; this is the name.
  */
-export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> = {
-  "governance-rule": "A rule",
-  "default-auto-approve": "The everyday default",
-  "workspace-auto-approve-for": "The space's always-allow list",
-  default: "The ask-first default",
-  "not-agent": "Not an agent",
-  "cbac-capability-allowlist": "Not in its tool list",
-  "admin-actions": "Admin actions always ask",
-  "force-propose": "A change of scope or identity",
-  "criteria-change": "Changing its own criteria",
-  "pod-admin-schema-change": "A pod-wide schema change",
-  "agent-schema-definition": "Defining a new kind",
-  "agent-structure-write": "Changing how the pod works",
-  "destructive-actions-hard-floor": "Destructive actions always ask",
-  "user-observation-inference": "An inference about a person",
-  "per-capability-governance": "The tool's own setting",
-  "agent-owned-workspace-destructive": "Destructive in an agent's space",
-  "writes-require-proposal": "Set to ask for every write",
-  "per-channel-capability-gate": "The channel's setting",
-  "untrusted-origin": "An untrusted source",
-  "daily-write-ceiling": "Its daily limit",
-  "human-gate": "A person's decision",
-  "arbitrary-execution": "Running code on the pod",
-  "human-only-status": "A status only a person sets",
-  "lifecycle-terminal": "Closing it (done or lost)",
-};
+export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
+  {
+    "governance-rule": "A rule",
+    "default-auto-approve": "The everyday default",
+    "workspace-auto-approve-for": "The space's always-allow list",
+    default: "The ask-first default",
+    "not-agent": "Not an agent",
+    "cbac-capability-allowlist": "Not in its tool list",
+    "admin-actions": "Admin actions always ask",
+    "force-propose": "A change of scope or identity",
+    "criteria-change": "Changing its own criteria",
+    "pod-admin-schema-change": "A pod-wide schema change",
+    "agent-schema-definition": "Defining a new kind",
+    "agent-structure-write": "Changing how the pod works",
+    "destructive-actions-hard-floor": "Destructive actions always ask",
+    "user-observation-inference": "An inference about a person",
+    "per-capability-governance": "The tool's own setting",
+    "agent-owned-workspace-destructive": "Destructive in an agent's space",
+    "writes-require-proposal": "Set to ask for every write",
+    "per-channel-capability-gate": "The channel's setting",
+    "untrusted-origin": "An untrusted source",
+    "daily-write-ceiling": "Its daily limit",
+    "human-gate": "A person's decision",
+    "arbitrary-execution": "Running code on the pod",
+    "human-only-status": "A status only a person sets",
+    "lifecycle-terminal": "Closing it (done or lost)",
+  };
 
 /** A rung's words; an unknown rung humanizes rather than leaks. */
 export function resolveGovernanceRungLabel(

@@ -34,7 +34,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../../../utils/workspace-role.js", () => ({
   isPodAdmin: async () => h.admin,
 }));
-vi.mock("../../../utils/audit-log.js", () => ({ auditLog: async () => undefined }));
+vi.mock("../../../utils/audit-log.js", () => ({
+  auditLog: async () => undefined,
+}));
 vi.mock(
   "../../../routers/hub-protocol/rest/link-endpoint-visibility.js",
   () => ({
@@ -111,30 +113,60 @@ const holders = async () =>
 describe("setAgentAssignment", () => {
   it("one agent per target: assigning B replaces A", async () => {
     const target = { type: "playbook" as const, id: PLAYBOOK };
-    await setAgentAssignment({ callerId: OWNER, agentUserId: A, target, assigned: true });
+    await setAgentAssignment({
+      callerId: OWNER,
+      agentUserId: A,
+      target,
+      assigned: true,
+    });
     expect(await holders()).toEqual([A]);
-    const r = await setAgentAssignment({ callerId: OWNER, agentUserId: B, target, assigned: true });
+    const r = await setAgentAssignment({
+      callerId: OWNER,
+      agentUserId: B,
+      target,
+      assigned: true,
+    });
     expect(r.replaced).toEqual([A]);
     expect(await holders()).toEqual([B]);
   });
 
   it("removing drops only this agent's edge", async () => {
     const target = { type: "playbook" as const, id: PLAYBOOK };
-    await setAgentAssignment({ callerId: OWNER, agentUserId: A, target, assigned: false });
+    await setAgentAssignment({
+      callerId: OWNER,
+      agentUserId: A,
+      target,
+      assigned: false,
+    });
     expect(await holders()).toEqual([B]);
-    await setAgentAssignment({ callerId: OWNER, agentUserId: B, target, assigned: false });
+    await setAgentAssignment({
+      callerId: OWNER,
+      agentUserId: B,
+      target,
+      assigned: false,
+    });
     expect(await holders()).toEqual([]);
   });
 
   it("someone else's agent is refused unless they are a pod admin", async () => {
     const target = { type: "playbook" as const, id: PLAYBOOK };
     await expect(
-      setAgentAssignment({ callerId: STRANGER, agentUserId: A, target, assigned: true })
+      setAgentAssignment({
+        callerId: STRANGER,
+        agentUserId: A,
+        target,
+        assigned: true,
+      })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await holders()).toEqual([]);
     h.admin = true;
     try {
-      await setAgentAssignment({ callerId: STRANGER, agentUserId: A, target, assigned: true });
+      await setAgentAssignment({
+        callerId: STRANGER,
+        agentUserId: A,
+        target,
+        assigned: true,
+      });
       expect(await holders()).toEqual([A]);
     } finally {
       h.admin = false;
@@ -163,11 +195,26 @@ describe("setAgentAssignment", () => {
 describe("setAgentAssignment — per owner", () => {
   it("a teammate's assignment on a shared target stays", async () => {
     const target = { type: "playbook" as const, id: PLAYBOOK };
-    await setAgentAssignment({ callerId: STRANGER, agentUserId: THEIRS, target, assigned: true });
-    await setAgentAssignment({ callerId: OWNER, agentUserId: A, target, assigned: true });
+    await setAgentAssignment({
+      callerId: STRANGER,
+      agentUserId: THEIRS,
+      target,
+      assigned: true,
+    });
+    await setAgentAssignment({
+      callerId: OWNER,
+      agentUserId: A,
+      target,
+      assigned: true,
+    });
     expect((await holders()).sort()).toEqual([A, THEIRS].sort());
     // Re-assigning replaces only the owner's own agent.
-    await setAgentAssignment({ callerId: OWNER, agentUserId: B, target, assigned: true });
+    await setAgentAssignment({
+      callerId: OWNER,
+      agentUserId: B,
+      target,
+      assigned: true,
+    });
     expect((await holders()).sort()).toEqual([B, THEIRS].sort());
     await q(`delete from links`);
   });
@@ -175,7 +222,11 @@ describe("setAgentAssignment — per owner", () => {
 
 describe("setAgentPaused", () => {
   it("pauses with who, resumes clearing both", async () => {
-    const paused = await setAgentPaused({ callerId: OWNER, agentUserId: A, paused: true });
+    const paused = await setAgentPaused({
+      callerId: OWNER,
+      agentUserId: A,
+      paused: true,
+    });
     expect(paused.pausedAt).not.toBeNull();
     const [row] = (
       await q<{ agent_paused_at: unknown; agent_paused_by: string | null }>(

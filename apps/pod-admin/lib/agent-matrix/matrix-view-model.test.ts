@@ -32,7 +32,9 @@ const FLOORS: MatrixColumn = {
   workspaceId: null,
   workspaceName: null,
   playbookId: null,
-  probes: [{ key: "floor:entity.delete", action: "entity.delete", profileSlug: null }],
+  probes: [
+    { key: "floor:entity.delete", action: "entity.delete", profileSlug: null },
+  ],
 };
 const DEALS: MatrixColumn = {
   id: "process:pb",
@@ -53,7 +55,9 @@ const OTHER: MatrixColumn = {
   workspaceId: "ws-sales",
   workspaceName: "Sales",
   playbookId: null,
-  probes: [{ key: "entity.create", action: "entity.create", profileSlug: null }],
+  probes: [
+    { key: "entity.create", action: "entity.create", profileSlug: null },
+  ],
 };
 const COLUMNS = [FLOORS, DEALS, OTHER];
 
@@ -66,7 +70,11 @@ const ans = (
 
 function agent(
   id: string,
-  verdicts: { floors?: MatrixProbeAnswer[]; deals?: MatrixProbeAnswer[]; other?: MatrixProbeAnswer[] },
+  verdicts: {
+    floors?: MatrixProbeAnswer[];
+    deals?: MatrixProbeAnswer[];
+    other?: MatrixProbeAnswer[];
+  },
   o: Partial<MatrixAgentRow> = {}
 ): MatrixAgentRow {
   return {
@@ -77,19 +85,37 @@ function agent(
     paused: false,
     ownedByViewer: true,
     cells: {
-      floors: cellOfAnswers(verdicts.floors ?? [ans("floor:entity.delete", "ask", "destructive-actions-hard-floor")]),
-      "process:pb": cellOfAnswers(
-        verdicts.deals ?? [ans("entity.create:deal", "auto"), ans("entity.update:deal", "auto")]
+      floors: cellOfAnswers(
+        verdicts.floors ?? [
+          ans("floor:entity.delete", "ask", "destructive-actions-hard-floor"),
+        ]
       ),
-      "other:ws-sales": cellOfAnswers(verdicts.other ?? [ans("entity.create", "ask")]),
+      "process:pb": cellOfAnswers(
+        verdicts.deals ?? [
+          ans("entity.create:deal", "auto"),
+          ans("entity.update:deal", "auto"),
+        ]
+      ),
+      "other:ws-sales": cellOfAnswers(
+        verdicts.other ?? [ans("entity.create", "ask")]
+      ),
     },
     ...o,
   };
 }
 
-function group(agentType: string, computers: Array<{ host: string | null; label: string; agents: MatrixAgentRow[] }>): MatrixTypeGroup {
+function group(
+  agentType: string,
+  computers: Array<{
+    host: string | null;
+    label: string;
+    agents: MatrixAgentRow[];
+  }>
+): MatrixTypeGroup {
   const collapse = (as: MatrixAgentRow[]) =>
-    Object.fromEntries(COLUMNS.map((c) => [c.id, collapseCells(as.map((a) => a.cells[c.id]!))]));
+    Object.fromEntries(
+      COLUMNS.map((c) => [c.id, collapseCells(as.map((a) => a.cells[c.id]!))])
+    );
   const all = computers.flatMap((c) => c.agents);
   return {
     agentType,
@@ -107,26 +133,36 @@ const ALLOWED = agent("cc-1", {});
 const ASKING = agent("cc-2", {
   deals: [ans("entity.create:deal", "ask"), ans("entity.update:deal", "auto")],
 });
-const LOOSE = agent("codex-1", {}, { agentType: "codex", ownedByViewer: false });
+const LOOSE = agent(
+  "codex-1",
+  {},
+  { agentType: "codex", ownedByViewer: false }
+);
 
 function matrix(groups: MatrixTypeGroup[], columns = COLUMNS): AgentMatrix {
   return { lens: "pod", columns, groups, partial: null };
 }
 
 const MATRIX = matrix([
-  group("claude-code", [{ host: "mac", label: "Mac", agents: [ALLOWED, ASKING] }]),
+  group("claude-code", [
+    { host: "mac", label: "Mac", agents: [ALLOWED, ASKING] },
+  ]),
   group("codex", [{ host: null, label: "No computer", agents: [LOOSE] }]),
 ]);
 
 describe("marks", () => {
   it("draws each mark with its glyph, tone and vocabulary words", () => {
-    expect(markView({ mark: "auto", split: { auto: 2, ask: 0, off: 0 } })).toEqual({
+    expect(
+      markView({ mark: "auto", split: { auto: 2, ask: 0, off: 0 } })
+    ).toEqual({
       glyph: "✓",
       tone: "success",
       label: "Acts",
       splitWords: null,
     });
-    expect(markView({ mark: "off", split: { auto: 0, ask: 0, off: 1 } }).glyph).toBe("—");
+    expect(
+      markView({ mark: "off", split: { auto: 0, ask: 0, off: 1 } }).glyph
+    ).toBe("—");
   });
 
   it("a collapsed group shows ◐ + the split, never one member's verdict", () => {
@@ -149,7 +185,9 @@ describe("marks", () => {
 
 describe("columns under their space", () => {
   it("groups consecutive columns of one space under one header", () => {
-    expect(columnGroups(COLUMNS).map((g) => [g.label, g.columns.length])).toEqual([
+    expect(
+      columnGroups(COLUMNS).map((g) => [g.label, g.columns.length])
+    ).toEqual([
       [null, 1],
       ["Sales", 2],
     ]);
@@ -176,20 +214,34 @@ describe("rows: type → computer → agent", () => {
   });
 
   it("toggling a group hides only that group's rows", () => {
-    const open = toggleExpanded(defaultExpanded(MATRIX), "computer:claude-code:mac");
+    const open = toggleExpanded(
+      defaultExpanded(MATRIX),
+      "computer:claude-code:mac"
+    );
     const { rows } = visibleRows(MATRIX, open, false);
-    expect(rows.map((r) => r.label)).toEqual(["claude-code", "Mac", "codex", "codex-1"]);
+    expect(rows.map((r) => r.label)).toEqual([
+      "claude-code",
+      "Mac",
+      "codex",
+      "codex-1",
+    ]);
   });
 
   it("a big pod opens collapsed", () => {
     const many = Array.from({ length: 21 }, (_, i) => agent(`a${i}`, {}));
-    const big = matrix([group("claude-code", [{ host: null, label: "No computer", agents: many }])]);
+    const big = matrix([
+      group("claude-code", [
+        { host: null, label: "No computer", agents: many },
+      ]),
+    ]);
     expect(defaultExpanded(big).size).toBe(0);
   });
 
   it(`caps at ${TYPE_GROUP_CAP} type groups, then Show all`, () => {
     const groups = Array.from({ length: TYPE_GROUP_CAP + 3 }, (_, i) =>
-      group(`type-${i}`, [{ host: null, label: "No computer", agents: [agent(`x${i}`, {})] }])
+      group(`type-${i}`, [
+        { host: null, label: "No computer", agents: [agent(`x${i}`, {})] },
+      ])
     );
     const capped = visibleRows(matrix(groups), new Set(), false);
     expect(capped.rows).toHaveLength(TYPE_GROUP_CAP);
@@ -203,14 +255,18 @@ describe("rows: type → computer → agent", () => {
 describe("keyboard model", () => {
   const size = { rows: 5, cols: 4 };
   it("arrows move and clamp at the edges", () => {
-    expect(gridKeyAction("ArrowRight", { row: 0, col: 3 }, size, false)).toEqual({
+    expect(
+      gridKeyAction("ArrowRight", { row: 0, col: 3 }, size, false)
+    ).toEqual({
       type: "move",
       to: { row: 0, col: 3 },
     });
-    expect(gridKeyAction("ArrowDown", { row: 1, col: 1 }, size, false)).toEqual({
-      type: "move",
-      to: { row: 2, col: 1 },
-    });
+    expect(gridKeyAction("ArrowDown", { row: 1, col: 1 }, size, false)).toEqual(
+      {
+        type: "move",
+        to: { row: 2, col: 1 },
+      }
+    );
     expect(gridKeyAction("ArrowUp", { row: 0, col: 1 }, size, false)).toEqual({
       type: "move",
       to: { row: 0, col: 1 },
@@ -218,15 +274,29 @@ describe("keyboard model", () => {
   });
 
   it("Home / End go to the row's ends; with a modifier, the grid's corners", () => {
-    expect(gridKeyAction("End", { row: 2, col: 1 }, size, false)).toEqual({ type: "move", to: { row: 2, col: 3 } });
-    expect(gridKeyAction("Home", { row: 2, col: 3 }, size, false, true)).toEqual({ type: "move", to: { row: 0, col: 0 } });
+    expect(gridKeyAction("End", { row: 2, col: 1 }, size, false)).toEqual({
+      type: "move",
+      to: { row: 2, col: 3 },
+    });
+    expect(
+      gridKeyAction("Home", { row: 2, col: 3 }, size, false, true)
+    ).toEqual({ type: "move", to: { row: 0, col: 0 } });
   });
 
   it("Enter opens the why of a cell; Space expands a group and does nothing on an agent", () => {
-    expect(gridKeyAction("Enter", { row: 1, col: 2 }, size, false)).toEqual({ type: "why", at: { row: 1, col: 2 } });
-    expect(gridKeyAction(" ", { row: 1, col: 2 }, size, true)).toEqual({ type: "toggle", at: { row: 1, col: 2 } });
+    expect(gridKeyAction("Enter", { row: 1, col: 2 }, size, false)).toEqual({
+      type: "why",
+      at: { row: 1, col: 2 },
+    });
+    expect(gridKeyAction(" ", { row: 1, col: 2 }, size, true)).toEqual({
+      type: "toggle",
+      at: { row: 1, col: 2 },
+    });
     expect(gridKeyAction(" ", { row: 1, col: 2 }, size, false)).toBeNull();
-    expect(gridKeyAction("Enter", { row: 1, col: 0 }, size, true)).toEqual({ type: "toggle", at: { row: 1, col: 0 } });
+    expect(gridKeyAction("Enter", { row: 1, col: 0 }, size, true)).toEqual({
+      type: "toggle",
+      at: { row: 1, col: 0 },
+    });
   });
 });
 
@@ -238,18 +308,32 @@ describe("WHY: widen and revoke", () => {
       ["Update Deal", false],
     ]);
     // An ask on a floor rung, and the floors column itself, are never widenable.
-    expect(probeViews(FLOORS, ASKING.cells["floors"]!).every((p) => !p.widenable)).toBe(true);
+    expect(
+      probeViews(FLOORS, ASKING.cells["floors"]!).every((p) => !p.widenable)
+    ).toBe(true);
     // Even an answer a rule could reach is locked in the floors column.
     const floorsDoc: MatrixColumn = {
       ...FLOORS,
-      probes: [{ key: "floor:document.update", action: "document.update", profileSlug: null }],
+      probes: [
+        {
+          key: "floor:document.update",
+          action: "document.update",
+          profileSlug: null,
+        },
+      ],
     };
-    const reachable = cellOfAnswers([ans("floor:document.update", "ask", "default")]);
+    const reachable = cellOfAnswers([
+      ans("floor:document.update", "ask", "default"),
+    ]);
     expect(probeViews(floorsDoc, reachable)[0]!.widenable).toBe(false);
     // …the same answer in a space's column is offered (the control).
-    expect(probeViews({ ...floorsDoc, kind: "other" }, reachable)[0]!.widenable).toBe(true);
+    expect(
+      probeViews({ ...floorsDoc, kind: "other" }, reachable)[0]!.widenable
+    ).toBe(true);
     // Other work's entity write names no kind: widening it would cover every kind.
-    expect(probeViews(OTHER, ASKING.cells["other:ws-sales"]!)[0]!.widenable).toBe(false);
+    expect(
+      probeViews(OTHER, ASKING.cells["other:ws-sales"]!)[0]!.widenable
+    ).toBe(false);
   });
 
   it("your own agent widens to a rule; another user's agent asks its owner (decision 8)", () => {
@@ -263,7 +347,12 @@ describe("WHY: widen and revoke", () => {
       route: "owner",
       label: "Ask the owner to widen",
     });
-    expect(widenPlan({ ownedByViewer: true }, probeViews(DEALS, ALLOWED.cells["process:pb"]!))).toBeNull();
+    expect(
+      widenPlan(
+        { ownedByViewer: true },
+        probeViews(DEALS, ALLOWED.cells["process:pb"]!)
+      )
+    ).toBeNull();
   });
 
   it("names each rule that decided, once", () => {
@@ -275,7 +364,9 @@ describe("WHY: widen and revoke", () => {
   });
 
   it("several outcomes read as one mark: a failure first, then the strongest", () => {
-    expect(combineWidenOutcomes(["already_covered", "created"])).toBe("created");
+    expect(combineWidenOutcomes(["already_covered", "created"])).toBe(
+      "created"
+    );
     expect(combineWidenOutcomes(["proposed", "failed"])).toBe("failed");
     expect(combineWidenOutcomes([])).toBeNull();
   });
@@ -283,10 +374,18 @@ describe("WHY: widen and revoke", () => {
 
 describe("page state", () => {
   it("a failed read is failed, never an empty matrix", () => {
-    expect(matrixState({ isLoading: false, isError: true, data: undefined })).toBe("failed");
-    expect(matrixState({ isLoading: true, isError: false, data: undefined })).toBe("loading");
-    expect(matrixState({ isLoading: false, isError: false, data: matrix([]) })).toBe("no-agents");
-    expect(matrixState({ isLoading: false, isError: false, data: MATRIX })).toBe("ready");
+    expect(
+      matrixState({ isLoading: false, isError: true, data: undefined })
+    ).toBe("failed");
+    expect(
+      matrixState({ isLoading: true, isError: false, data: undefined })
+    ).toBe("loading");
+    expect(
+      matrixState({ isLoading: false, isError: false, data: matrix([]) })
+    ).toBe("no-agents");
+    expect(
+      matrixState({ isLoading: false, isError: false, data: MATRIX })
+    ).toBe("ready");
   });
 
   it("knows when no space has a process yet", () => {

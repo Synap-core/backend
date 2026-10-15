@@ -80,7 +80,13 @@ beforeAll(async () => {
     `insert into users (id, email, user_type) values ($1, 'o@x', 'human'), ($2, 'p@x', 'human')`,
     [OWNER, OTHER]
   );
-  const agent = (id: string, type: string, owner: string, host: string | null, name: string) =>
+  const agent = (
+    id: string,
+    type: string,
+    owner: string,
+    host: string | null,
+    name: string
+  ) =>
     q(
       `insert into users (id, email, name, user_type, agent_type, created_by_user_id, host_user_id) values ($1, $2, $3, 'agent', $4, $5, $6)`,
       [id, `${id}@x`, name, type, owner, host]
@@ -95,9 +101,20 @@ beforeAll(async () => {
   );
   await q(
     `insert into playbooks (id, name, workspace_id, subject_profile) values ($1, 'Work a deal', $3, $4::jsonb), ($2, 'Loose checklist', $3, null)`,
-    [PB_DEALS, PB_LOOSE, SALES, JSON.stringify({ profileSlug: "deal", statusProperty: "stage" })]
+    [
+      PB_DEALS,
+      PB_LOOSE,
+      SALES,
+      JSON.stringify({ profileSlug: "deal", statusProperty: "stage" }),
+    ]
   );
-  const rule = (principal: string, agentId: string | null, pattern: string, verdict: string, ws: string | null) =>
+  const rule = (
+    principal: string,
+    agentId: string | null,
+    pattern: string,
+    verdict: string,
+    ws: string | null
+  ) =>
     q(
       `insert into governance_rules (principal_kind, agent_user_id, scope_kind, workspace_id, target_kind, target_pattern, verdict, created_by) values ($1, $2, $3, $4, 'action', $5, $6, 'x')`,
       [principal, agentId, ws ? "workspace" : "pod", ws, pattern, verdict]
@@ -118,7 +135,9 @@ describe("readAgentMatrix", () => {
     const m = await readAgentMatrix({ userId: OWNER, lens: "pod" });
     // Non-vacuity: several distinct floor kinds, each a real event key.
     expect(floorProbes().length).toBeGreaterThan(1);
-    expect(floorProbes().every((p) => /^[\w-]+\.[\w.-]+$/.test(p.action))).toBe(true);
+    expect(floorProbes().every((p) => /^[\w-]+\.[\w.-]+$/.test(p.action))).toBe(
+      true
+    );
     expect(m.columns.map((c) => c.id)).toEqual([
       "floors",
       `other:${OPS}`,
@@ -171,10 +190,14 @@ describe("readAgentMatrix", () => {
 
   it("'mine' is the caller's own agents; a computer groups, it is never a row", async () => {
     const m = await readAgentMatrix({ userId: OWNER, lens: "mine" });
-    const ids = m.groups.flatMap((g) => g.computers.flatMap((c) => c.agents.map((a) => a.agentUserId)));
+    const ids = m.groups.flatMap((g) =>
+      g.computers.flatMap((c) => c.agents.map((a) => a.agentUserId))
+    );
     expect(ids.sort()).toEqual([CC, CODEX].sort());
     const ccGroup = m.groups.find((g) => g.agentType === "claude-code")!;
-    expect(ccGroup.computers.map((c) => [c.hostUserId, c.label])).toEqual([[COMPUTER, "Mac"]]);
+    expect(ccGroup.computers.map((c) => [c.hostUserId, c.label])).toEqual([
+      [COMPUTER, "Mac"],
+    ]);
   });
 
   it("each row says whether the reader owns the agent (a widen on another's agent is a proposal)", async () => {
@@ -191,9 +214,15 @@ describe("readAgentMatrix", () => {
     const m = await readAgentMatrix({ userId: OWNER, lens: "pod" });
     const cc = m.groups.find((g) => g.agentType === "claude-code")!;
     for (const col of m.columns) {
-      const members = cc.computers.flatMap((c) => c.agents).map((a) => a.cells[col.id]!.split);
+      const members = cc.computers
+        .flatMap((c) => c.agents)
+        .map((a) => a.cells[col.id]!.split);
       const sum = members.reduce(
-        (s, x) => ({ auto: s.auto + x.auto, ask: s.ask + x.ask, off: s.off + x.off }),
+        (s, x) => ({
+          auto: s.auto + x.auto,
+          ask: s.ask + x.ask,
+          off: s.off + x.off,
+        }),
         { auto: 0, ask: 0, off: 0 }
       );
       expect(cc.cells[col.id]!.split).toEqual(sum);
