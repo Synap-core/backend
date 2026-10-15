@@ -119,6 +119,7 @@ import {
   syncGeneration,
 } from "@synap/database/schema";
 import { router } from "../trpc.js";
+import { appliedPackageVersion } from "../services/applied-package-version.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
 
 const OWNER = "owner-1";
@@ -201,9 +202,10 @@ describe("createFromDefinition — a pack added to an existing space", () => {
       slug: string;
       version: string;
     }>;
-    // Recorded; its version written by the finisher on convergence.
+    // Recorded; its version written by the finisher on convergence — the
+    // version of the definition sent, never the caller's label.
     expect(packs.map((p) => [p.slug, p.version])).toEqual([
-      ["pipeline-views", "1.4.0"],
+      ["pipeline-views", appliedPackageVersion({ views: [] })],
     ]);
   });
 
@@ -217,7 +219,9 @@ describe("createFromDefinition — a pack added to an existing space", () => {
     });
     const row = await rowOf(ws);
     expect(row.settings.packageSlug).toBe("content-os");
-    expect(row.settings.packageVersion).toBe("0.9.0");
+    expect(row.settings.packageVersion).toBe(
+      appliedPackageVersion({ views: [] })
+    );
     expect(row.settings.installedPacks).toBeUndefined();
   });
 });

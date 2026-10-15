@@ -194,10 +194,9 @@ describe("workspaces.ensureTemplate", () => {
       profiles: CATALOG_DEF.profiles,
       _meta: { slug: "crm", version: "v2" },
     });
-    expect(applied.identity).toMatchObject({
-      packageSlug: "crm",
-      packageVersion: "v2",
-    });
+    expect(applied.identity).toMatchObject({ packageSlug: "crm" });
+    // The server resolved this body from the catalog: its version names it.
+    expect(applied.catalogVersion).toBe("v2");
     // Layer 2 is the catalog package parsed through the Hub door's schema.
     expect(applied.layerTwoBody).toMatchObject({ _meta: { slug: "crm" } });
   });
