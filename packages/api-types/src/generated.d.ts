@@ -7996,6 +7996,20 @@ export interface LibraryItemView extends ImportItemView {
 	media?: LibraryItemMedia[];
 	/** Media files whose copy failed (absent when none) — shown, never silent. */
 	mediaFailed?: number;
+	/**
+	 * When the newest failed copy was last tried (absent when none failed). A
+	 * `library.retryMedia` landed when this moved: tried again, kept or not.
+	 */
+	mediaFailedAt?: string;
+	/**
+	 * A reader OTHER than the one that produced the read can serve this item's
+	 * link (installed: ready / enable / connect, or one to install from the
+	 * catalog) — the row's "Needs a reader" without asking `library.readers`
+	 * per row. Set only on a weak read (needs_file / title_only / unreadable)
+	 * by the person's doors (`library.list` / `group` / `search`); absent =
+	 * not a weak read, or not known (the lookup failed — never guessed false).
+	 */
+	readerAvailable?: boolean;
 }
 export interface LibraryGroupView {
 	id: string;
@@ -8080,11 +8094,19 @@ export interface LibraryReadersResult {
 	/** A group's waiting items with a link (absent for one item). */
 	waiting?: number;
 }
+/** Result of `library.retryMedia`: the failed copies queued to be tried again (0 = none failed). */
+export interface LibraryRetryMediaResult {
+	queued: number;
+}
 /** Result of `library.readWith`. */
 export interface LibraryReadWithResult {
 	/** Reads queued (one job per item). */
 	queued: number;
-	/** Items left out: this reader bills your account and today's read budget is spent. */
+	/**
+	 * Items not read now: this reader bills your account and today's read
+	 * budget is spent. They wait (`over_budget`, the reader remembered) and are
+	 * read with it once the budget has room; an item already read keeps its read.
+	 */
 	overBudget: number;
 	/** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
 	skipped: number;
@@ -35834,6 +35856,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				groupId?: string | undefined;
 			};
 			output: LibraryReadWithResult;
+			meta: object;
+		}>;
+		retryMedia: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				itemId: string;
+			};
+			output: LibraryRetryMediaResult;
 			meta: object;
 		}>;
 		health: import("@trpc/server").TRPCQueryProcedure<{
