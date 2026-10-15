@@ -28,6 +28,7 @@
 
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import { paramPlaceholderTokens } from "../_shared/interpolate.js";
+import { isValidUrlPattern } from "@synap-core/types/url-read";
 
 /** Canonical (key-sorted) JSON — jsonb does not preserve key insertion order, so a
  * plain JSON.stringify would report false drift on key order alone. Normalizes
@@ -63,6 +64,12 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v9 = v8 + the skill-row `url_patterns` COLUMN (migration 0330): the URLs a
+ *      READER verb declares (`urls` in the catalog, projected by
+ *      `projectUrlPatterns`). A v8 stamp says "clean under a comparator that
+ *      never read this column", so honouring it would leave a reader's declared
+ *      URLs unrouted on every pod that converged before it; retiring v8 stamps
+ *      makes each container re-diff once.
  * v8 = v7 + the reconcile's install-time-param gate reads EVERY projected field
  *      (`installTimePlaceholders`: skill code/description/parameters/…, tool
  *      config/metadata/description), not skill names alone. The comparator's
@@ -98,7 +105,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 8;
+export const DRIFT_COMPARATOR_VERSION = 9;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -154,6 +161,9 @@ export interface InstalledSkillRow {
   /** The live row's `skills.intent` column — see the entry in
    *  `PROJECTED_SKILL_FIELDS`. */
   intent?: string | null;
+  /** The live row's `skills.url_patterns` column (0330) — see the entry in
+   *  `PROJECTED_SKILL_FIELDS`. */
+  urlPatterns?: string[] | null;
   /** The live row's `skills.metadata` bag. Only its `allowedHosts` and `readOnly`
    *  keys are definition-owned; every other key is DB state (see
    *  the `SKILL_METADATA_*` constants). */
@@ -186,6 +196,31 @@ export interface DefinitionSkillRow {
    * nothing on every real template.
    */
   intent?: string | null;
+  /**
+   * The URLs a READER verb reads (`urls` in the catalog skill), projected onto
+   * `skills.url_patterns` by {@link projectUrlPatterns}.
+   */
+  urls?: readonly string[] | null;
+}
+
+/**
+ * THE applier's `skills.url_patterns` projection — and the comparator's
+ * `expected`, so the two cannot disagree. Keeps only patterns the url-read
+ * grammar accepts (`isValidUrlPattern`), trimmed and de-duplicated in declared
+ * order; nothing left (or nothing declared) → `null`, "not a reader". Always a
+ * value, never `undefined`: a template that drops `urls` must clear the column,
+ * because a stale pattern keeps routing URLs to a reader that no longer
+ * declares them.
+ */
+export function projectUrlPatterns(urls: unknown): string[] | null {
+  if (!Array.isArray(urls)) return null;
+  const out: string[] = [];
+  for (const u of urls) {
+    if (typeof u !== "string") continue;
+    const p = u.trim();
+    if (p && isValidUrlPattern(p) && !out.includes(p)) out.push(p);
+  }
+  return out.length > 0 ? out : null;
 }
 
 /**
@@ -435,6 +470,15 @@ export const PROJECTED_SKILL_FIELDS: Record<
       typeof d.intent === "string" && d.intent.length > 0
         ? (i.intent ?? null)
         : undefined,
+  },
+  /**
+   * The URLs a READER verb reads (0330). Always written (`null` = not a
+   * reader), so it never skips: a template that drops `urls` converges the
+   * column to null.
+   */
+  urlPatterns: {
+    expected: (d) => projectUrlPatterns(d.urls),
+    actual: (i) => i.urlPatterns ?? null,
   },
   // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly the
   // definition-owned keys of this bag (`projectSkillMetadata` above); every

@@ -71,6 +71,7 @@ describe("skillExecFieldsChanged — value semantics", () => {
     parameters: { type: "object", properties: { a: { type: "string" } } },
     executionMode: "sync",
     timeoutSeconds: 30,
+    urlPatterns: ["instagram.com/p/*"],
   };
   const liveRowSameContent = {
     kind: "code",
@@ -80,6 +81,7 @@ describe("skillExecFieldsChanged — value semantics", () => {
     parameters: { properties: { a: { type: "string" } }, type: "object" },
     executionMode: "sync",
     timeoutSeconds: 30,
+    urlPatterns: ["instagram.com/p/*"],
     approved: true,
     body: null,
   };
@@ -97,6 +99,8 @@ describe("skillExecFieldsChanged — value semantics", () => {
     ["executionMode", "async"],
     ["timeoutSeconds", 60],
     ["kind", "declarative"],
+    // A reader that now receives MORE urls widens what its vendor sees.
+    ["urlPatterns", ["instagram.com/p/*", "*"]],
   ])("a changed %s DOES demote", (field, value) => {
     expect(
       skillExecFieldsChanged(
@@ -104,6 +108,25 @@ describe("skillExecFieldsChanged — value semantics", () => {
         liveRowSameContent
       )
     ).toBe(true);
+  });
+
+  it("widening an approved reader's declared URLs demotes it; the same list does not", () => {
+    const live = { ...liveRowSameContent, urlPatterns: ["instagram.com/p/*"] };
+    expect(
+      skillExecFieldsChanged(
+        {
+          ...definitionPatch,
+          urlPatterns: ["instagram.com/p/*", "tiktok.com/@*/video/*"],
+        },
+        live
+      )
+    ).toBe(true);
+    expect(
+      skillExecFieldsChanged(
+        { ...definitionPatch, urlPatterns: ["instagram.com/p/*"] },
+        live
+      )
+    ).toBe(false);
   });
 
   it("an absent key is not a change", () => {

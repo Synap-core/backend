@@ -1096,6 +1096,10 @@ export async function ensureSynapCoreCapability(): Promise<void> {
           // Core's own 47 builtins, which are exactly the ones a `tools: []`
           // definition left unroutable by intent.
           intent: skills.intent,
+          // PROJECTED_SKILL_FIELDS.urlPatterns (0330). Lock-step with the
+          // general reconcile's select; omitted, it reads `undefined` and a
+          // builtin reader's declared URLs would drift every boot.
+          urlPatterns: skills.urlPatterns,
           // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
           // bag. Omit the column and it is `undefined` on every row — a
           // declared egress allowlist would then never be seen as drift.

@@ -2221,6 +2221,9 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "proven_at" timestamptz;
 -- definition declaring `tools: []` (all of Synap Core's builtins) has no tool
 -- row to hang a verb catalog on. See migrations/0292_skills_intent.sql.
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "intent" text;
+-- 0330: the URL patterns a READER verb declares (`urls` in the catalog; grammar
+-- in `@synap-core/types/url-read`). NULL = not a reader. A RE_APPROVAL field.
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");

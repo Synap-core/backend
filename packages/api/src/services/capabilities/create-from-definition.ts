@@ -93,6 +93,7 @@ import {
 import {
   canonicalJson,
   projectSkillMetadata,
+  projectUrlPatterns,
   mergePreservingExisting,
 } from "./capability-drift.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
@@ -905,6 +906,9 @@ export async function createCapabilityFromDefinition(
         // revoke one set elsewhere (the same undefined-is-load-bearing rule the
         // egress/readOnly keys follow).
         intent: skillsTable.intent,
+        // Read so `skillExecFieldsChanged` can compare the declared reader URLs
+        // by value (`url_patterns` is a RE_APPROVAL field).
+        urlPatterns: skillsTable.urlPatterns,
         // Read so the egress projection can MERGE onto the live bag rather than
         // replace it, and so `allowedHostsChanged` can compare by value.
         metadata: skillsTable.metadata,
@@ -947,6 +951,7 @@ export async function createCapabilityFromDefinition(
             parameters: s.parameters,
             executionMode: s.executionMode ?? "sync",
             timeoutSeconds: s.timeoutSeconds ?? 30,
+            urlPatterns: projectUrlPatterns(s.urls),
           },
           existingSkill as unknown as Record<string, unknown>
         ) ||
@@ -1020,6 +1025,9 @@ export async function createCapabilityFromDefinition(
           // the authority, and it is how a tool-less builtin like
           // `messaging.send` becomes reachable by intent at all.
           intent: resolveVerbIntent(s, knownIntents),
+          // The URLs a READER verb reads (0330). Always written — `null` = not
+          // a reader — so a template that drops `urls` stops routing to it.
+          urlPatterns: projectUrlPatterns(s.urls),
           // The ONLY definition-owned keys of this DB-owned bag. `undefined`
           // when the definition declares none, which Drizzle SKIPS — the
           // live bag (marketSource, rule, counters) is then untouched.
@@ -1068,6 +1076,8 @@ export async function createCapabilityFromDefinition(
       // `messaging.send`) carry an intent, because it lands on the skill row
       // itself instead of on a tool that does not exist.
       intent: resolveVerbIntent(s, knownIntents),
+      // The URLs a READER verb reads (0330), same projection as the update.
+      urlPatterns: projectUrlPatterns(s.urls) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
       // sandbox egress allowlist. Without it a published package could never
       // grant its own skill egress: the sandbox is default-deny, so the skill

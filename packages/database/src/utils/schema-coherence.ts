@@ -684,6 +684,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "intent",
     addedBy: "0292_skills_intent.sql",
   },
+  // The URLs a READER verb reads (0330). Selected by every registry read (the
+  // url-reader resolver routes on it), so a missing column 500s the registry.
+  {
+    table: "skills",
+    column: "url_patterns",
+    addedBy: "0330_skills_url_patterns.sql",
+  },
 
   // A session's OWN phases (0270). Every session read selects `stages`, so a
   // missing column 500s every session door exactly as `criteria` would.

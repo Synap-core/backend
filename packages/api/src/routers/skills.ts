@@ -1098,6 +1098,13 @@ export const skillsRouter = router({
          * error naming the offenders, which a Zod enum here could not.
          */
         intent: z.string().min(1).optional(),
+        /**
+         * The URLs a READER verb reads (`skills.url_patterns`, 0330), already
+         * projected by the applier (`projectUrlPatterns`). Applier-only, like
+         * `intent`, and not on `update`: a definition re-apply is the one thing
+         * that changes what a reader receives (a RE_APPROVAL field).
+         */
+        urlPatterns: z.array(z.string().min(1).max(300)).max(64).optional(),
         /** The acting AGENT identity, when this create is agent-initiated
          *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
          *  Threaded into checkPermissionOrPropose below so an agent-created
@@ -1182,6 +1189,9 @@ export const skillsRouter = router({
           // intent is intact — a proposal that dropped it would install a
           // verb that no intent lookup can ever find.
           ...(input.intent ? { intent: input.intent } : {}),
+          ...(input.urlPatterns?.length
+            ? { urlPatterns: input.urlPatterns }
+            : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1237,6 +1247,10 @@ export const skillsRouter = router({
           // the definition declares none → the column stays NULL, which is the
           // honest reading for a skill that declares no intent.
           ...(input.intent ? { intent: input.intent } : {}),
+          // The reader's declared URLs (applier-only); omitted → NULL, not a reader.
+          ...(input.urlPatterns?.length
+            ? { urlPatterns: input.urlPatterns }
+            : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),

@@ -145,6 +145,30 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
    * Absent = the skill declares nothing, never `false`.
    */
   declaredReadOnly?: boolean;
+  /**
+   * The URLs this verb READS — its backing skill's `skills.url_patterns`
+   * (0330, the catalog skill's `urls`), in the `@synap-core/types/url-read`
+   * grammar. Present ONLY on a reader verb; absent = not a reader. The url-reader
+   * resolver routes a URL to a verb from this field (with `backingSkillExecutable`,
+   * `granted` and the row's `enabled` / `connection` for the offer state).
+   */
+  urlPatterns?: string[];
+}
+
+/**
+ * Stamp each verb with its backing skill's declared reader URLs (verb id = skill
+ * name, the same key as the intent map). A verb whose skill declares none is
+ * returned unchanged, so the key stays ABSENT rather than `undefined`/`[]`.
+ */
+export function withUrlPatterns(
+  verbs: CapabilityVerbStateWithResponseShape[],
+  urlPatternsByName: Map<string, string[]>
+): CapabilityVerbStateWithResponseShape[] {
+  if (urlPatternsByName.size === 0) return verbs;
+  return verbs.map((v) => {
+    const urlPatterns = urlPatternsByName.get(v.id);
+    return urlPatterns ? { ...v, urlPatterns: [...urlPatterns] } : v;
+  });
 }
 
 /**
@@ -969,7 +993,12 @@ export async function listCapabilities(
   // `buildSkillVerb` on its own row instead — which is where tool-less skills
   // were always meant to surface.
   const skillIntentsByTool = new Map<string, Map<string, string>>();
+  // verb id (= skill name) → the skill row's declared reader URLs (0330).
+  const urlPatternsByName = new Map<string, string[]>();
   for (const s of skillRows) {
+    if (Array.isArray(s.urlPatterns) && s.urlPatterns.length > 0) {
+      urlPatternsByName.set(s.name, s.urlPatterns);
+    }
     const declared = declaredReadOnly(s.metadata);
     if (declared !== undefined) declaredReadOnlyByName.set(s.name, declared);
     // Empty string is treated as absent, matching the write door's `z.string()
@@ -1092,15 +1121,18 @@ export async function listCapabilities(
       containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
     containerName:
       containerByMember.get(containerMemberKey("tool", row.id))?.name ?? null,
-    verbs: buildVerbStates(
-      row.capabilities as ToolVerbCatalogEntry[] | null,
-      grantByGrantableId.get(row.id),
-      row.kind,
-      providerSpecByName,
-      backingSkillExecutableByName,
-      declaredReadOnlyByName,
-      skillIntentByName,
-      skillIntentsByTool.get(row.id) ?? new Map()
+    verbs: withUrlPatterns(
+      buildVerbStates(
+        row.capabilities as ToolVerbCatalogEntry[] | null,
+        grantByGrantableId.get(row.id),
+        row.kind,
+        providerSpecByName,
+        backingSkillExecutableByName,
+        declaredReadOnlyByName,
+        skillIntentByName,
+        skillIntentsByTool.get(row.id) ?? new Map()
+      ),
+      urlPatternsByName
     ),
     ...(row.kind === "provider"
       ? {
@@ -1160,7 +1192,10 @@ export async function listCapabilities(
           // the broad registry for management surfaces, but mark them so the
           // shared action projection never advertises an unlaunchable skill.
           runnable: row.status === "active",
-          verbs: buildSkillVerb(row, skillIntentByName),
+          verbs: withUrlPatterns(
+            buildSkillVerb(row, skillIntentByName),
+            urlPatternsByName
+          ),
         }
   );
 
