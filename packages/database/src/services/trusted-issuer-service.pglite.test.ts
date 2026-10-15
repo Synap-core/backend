@@ -67,7 +67,9 @@ const NOTIFICATIONS_DDL = (() => {
     ),
     "utf8"
   );
-  const start = baseline.indexOf('CREATE TABLE IF NOT EXISTS "notifications" (');
+  const start = baseline.indexOf(
+    'CREATE TABLE IF NOT EXISTS "notifications" ('
+  );
   const end = baseline.indexOf("\n);", start);
   if (start < 0 || end < 0)
     throw new Error("notifications DDL not found in the baseline schema");
