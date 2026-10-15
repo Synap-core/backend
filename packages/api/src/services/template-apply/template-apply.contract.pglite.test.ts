@@ -1410,6 +1410,66 @@ describe("a caller's version label is never stamped", () => {
   });
 });
 
+// ── A create of the caller's own body never takes the catalog's version ────
+//
+// The slug is published, so the catalog HAS a version for it — but a create
+// (or a resume) builds the caller's definition, not the catalog's. Stamping
+// the catalog's version would read "up to date" for content the space never
+// got, and every later update would plan `unchanged` (review Q1).
+
+describe("a create of the caller's own body never takes the catalog's version", () => {
+  const ownBody = (slug: string) => {
+    const def = body({ slug, version: "unused", playbooks: ["Own"] });
+    delete (def._meta as { version?: string }).version;
+    return def;
+  };
+  it.each([
+    [
+      "applyTemplate",
+      async (def: Record<string, unknown>) => {
+        await applyTemplate({
+          definition: def as never,
+          actor: { userId: OWNER },
+          source: "contract",
+          identity: {
+            packageSlug: (def._meta as { slug: string }).slug,
+            proposalId: (def._meta as { slug: string }).slug,
+            workspaceName: def.workspaceName as string,
+          },
+        });
+      },
+    ],
+    [
+      "hub POST /workspaces/from-definition",
+      async (def: Record<string, unknown>) => {
+        const res = await hubWorkspacesApp().request(
+          "/workspaces/from-definition",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(def),
+          }
+        );
+        expect(res.status).toBe(200);
+      },
+    ],
+    [
+      "tRPC createFromDefinition",
+      async (def: Record<string, unknown>) => {
+        await trpc().createFromDefinition({ definition: def as never });
+      },
+    ],
+  ])("%s stamps no catalog version", async (name, send) => {
+    const slug = `own-${name.replace(/[^a-z]+/gi, "-").toLowerCase()}`;
+    publish({ slug, version: "CATALOG-v9", playbooks: ["Catalog"] });
+    await send(ownBody(slug));
+    const { id, state } = await theSpace(slug);
+    expect(await playbooksIn(id)).toEqual(["Own"]);
+    expect(state?.state).toBe("active");
+    expect(state?.version).not.toBe("CATALOG-v9");
+  });
+});
+
 // ── A layer-2 failure never leaks its raw cause to the caller (review U2) ────
 //
 // The raw error can carry DB / connector internals; the operator log has it.

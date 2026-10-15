@@ -57,9 +57,10 @@ export interface LayerOneInput {
   /** The catalog identity. */
   packageSlug?: string;
   /**
-   * The caller's version. A create materializes it as given; a re-hit uses it
-   * only as the FALLBACK when the catalog cache resolves no version (a private
-   * template the pod's anonymous cache never sees).
+   * The version of `definition`. A create or resume (both build `definition`)
+   * stamps it as given and nothing else; a re-sync uses it only as the
+   * FALLBACK when the catalog cache resolves no version (a private template
+   * the pod's anonymous cache never sees) — then it re-syncs `definition`.
    */
   packageVersion?: string;
   workspaceType?: "personal" | "agent" | "project" | "operational";
@@ -278,16 +279,15 @@ export async function applyLayerOne(
 
     // ── No space: build one ───────────────────────────────────────────────
     if (!target.found) {
-      // The caller's explicit version wins on a create; else the catalog's.
-      const version =
-        packageVersion || !packageSlug
-          ? packageVersion
-          : (await resolveFresh(packageSlug))?.version;
+      // A create builds the CALLER's definition, so it stamps only the
+      // version the caller passed — never the catalog's, which names a body
+      // this create did not apply (a door that applies the catalog body
+      // passes the catalog version itself).
       const result = await createWorkspaceFromDefinition({
         definition,
         userId,
         packageSlug,
-        packageVersion: version,
+        packageVersion,
         templateId,
         templateName,
         workspaceName,
@@ -355,7 +355,8 @@ export async function applyLayerOne(
         definition,
         userId,
         packageSlug,
-        packageVersion: packageVersion ?? resolved?.version,
+        // The resume continues the caller's definition: its version only.
+        packageVersion,
         templateId,
         templateName,
         workspaceName,

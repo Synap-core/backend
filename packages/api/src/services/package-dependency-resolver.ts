@@ -870,6 +870,8 @@ async function ensureWorkspaceDependencyPresent(
     userId,
     proposalId: slug,
     packageSlug: slug,
+    // The catalog body is what layer one builds: its version names it.
+    packageVersion: resolvedTemplate.version,
     templateId: slug,
     createdBy: "provisioning",
   });
