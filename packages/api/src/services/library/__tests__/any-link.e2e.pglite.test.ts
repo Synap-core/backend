@@ -154,7 +154,7 @@ vi.mock("@synap/shared-utils", async (importOriginal) => {
     h.fetched.push(u);
     const page = h.web.get(u);
     if (!page) throw new Error(`unexpected outbound request: ${u}`);
-    return new Response(page.bytes, {
+    return new Response(new Uint8Array(page.bytes), {
       status: 200,
       headers: {
         "content-type": page.type,

@@ -42,6 +42,7 @@ import {
   readUrl,
   structurerPageContext,
   type ReadUrlResult,
+  type UrlReadersContext,
 } from "../services/capabilities/url-readers.js";
 import {
   presentationFromUiHints,
@@ -239,6 +240,27 @@ import {
 } from "../utils/capture-update-arm.js";
 
 const logger = createLogger({ module: "capture-router" });
+
+/**
+ * A captured lone link, read through THE url-reader door with the free
+ * readers only (capture never bills). A failed reader lookup is logged and
+ * answers `undefined`: the capture goes on without the read and without a
+ * reader adjunct (never an install invite). Kept outside `structure` so the
+ * procedure's every `return` stays one of its exits (structure-intake-wiring
+ * tripwire).
+ */
+function readCapturedLink(
+  ctx: UrlReadersContext,
+  url: string
+): Promise<ReadUrlResult | undefined> {
+  return readUrl(ctx, url, { allowBilled: false }).catch((err: unknown) => {
+    logger.warn(
+      { err, userId: ctx.userId },
+      "capture.structure: link readers could not be listed — link not read, reader omitted (not an install invite)"
+    );
+    return undefined;
+  });
+}
 
 /**
  * Resolve a captured body through the canonical EntityBodyService door — the
@@ -1326,21 +1348,14 @@ const captureBaseRouter = router({
        */
       const linkUrl = loneHttpUrl(inputText);
       const linkRead: Promise<ReadUrlResult | undefined> = linkUrl
-        ? readUrl(
+        ? readCapturedLink(
             {
               userId,
               workspaceId: workspaceId ?? null,
               agentUserId: ctx.agentUserId ?? null,
             },
-            linkUrl,
-            { allowBilled: false }
-          ).catch((err: unknown) => {
-            logger.warn(
-              { err, userId },
-              "capture.structure: link readers could not be listed — link not read, reader omitted (not an install invite)"
-            );
-            return undefined;
-          })
+            linkUrl
+          )
         : Promise.resolve(undefined);
       const publicUrlReader = linkRead.then((r) =>
         r ? captureLinkReader(r) : undefined
