@@ -18,6 +18,9 @@ import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => {
   process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
+  // The catalog rows below are seeded under `https://cp.test`; an unscoped
+  // catalog read is the OFFICIAL source only (`officialCatalogUrl()`), so pin it.
+  process.env.CONTROL_PLANE_URL = "https://cp.test";
   const state = {
     client: null as null | {
       query: (sql: string, params?: unknown[]) => Promise<unknown>;
