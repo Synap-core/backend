@@ -583,7 +583,7 @@ async function readContent(args: {
   const page = args.reader ? null : readLibraryPageMeta(row.metadata);
   if (page) {
     const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
-    read = readSentPage(html, s.url, deps.now());
+    read = await readSentPage(html, s.url, deps.now());
   } else {
     const resumed = args.reader
       ? resumableRead(args.checkpoint, args.reader, s.url, deps.now())
