@@ -76,6 +76,7 @@ import {
   owedLibraryMedia,
   planLibraryMedia,
   readLibraryMediaFailures,
+  retryLibraryMediaPlan,
   type LibraryMediaFailureReason,
 } from "./library-media-record.js";
 import { libraryMediaCopyMetadata } from "./media-copy-documents.js";
@@ -209,13 +210,24 @@ function resolveCopyDeps(deps: CopyLibraryItemMediaDeps): ResolvedDeps {
   };
 }
 
+export interface CopyLibraryItemMediaInput {
+  userId: string;
+  itemId: string;
+  media: UrlReadMedia[];
+  /**
+   * The person's "Try again": copy these URLs even when the item gave up on
+   * them (a permanent refusal, attempts spent). Never set by a reader run.
+   */
+  retryFailed?: boolean;
+}
+
 /**
  * Copy `media` (what a reader found on the item's URL) into the pod and
  * record it on the item. Owner-floored: `itemId` must be `userId`'s live
  * Library item, else nothing runs (`skipped`/`not_found`).
  */
 export async function copyLibraryItemMedia(
-  input: { userId: string; itemId: string; media: UrlReadMedia[] },
+  input: CopyLibraryItemMediaInput,
   deps: CopyLibraryItemMediaDeps = {}
 ): Promise<CopyLibraryItemMediaResult> {
   try {
@@ -236,6 +248,68 @@ export async function copyLibraryItemMedia(
       failed: 0,
     };
   }
+}
+
+/**
+ * The person's "Try again" on "Couldn't keep the pictures"
+ * (`library.retryMedia`, run by the light-read queue): copy again every URL
+ * the item failed to copy — no reader run, no read budget. Honest: a link that
+ * expired fails again and stays counted (`importMediaFailed`, its
+ * `lastAttemptAt` moved), so the client says it and points to "Read again".
+ * Nothing failed → `skipped` / `nothing_owed`. Never throws.
+ */
+export async function retryLibraryItemMedia(
+  input: { userId: string; itemId: string },
+  deps: CopyLibraryItemMediaDeps = {}
+): Promise<CopyLibraryItemMediaResult> {
+  const database = deps.database ?? defaultDb;
+  let media: UrlReadMedia[];
+  try {
+    const [row] = await database
+      .select({ metadata: documents.metadata })
+      .from(documents)
+      .where(
+        and(
+          eq(documents.id, input.itemId),
+          eq(documents.userId, input.userId),
+          isNull(documents.deletedAt),
+          drizzleSql`${documents.metadata} ? 'importItem'`
+        )
+      )
+      .limit(1);
+    if (!row) {
+      return {
+        status: "skipped",
+        reason: "not_found",
+        copied: 0,
+        reused: 0,
+        failed: 0,
+      };
+    }
+    media = retryLibraryMediaPlan(row.metadata);
+  } catch (err) {
+    logger.error(
+      { err, itemId: input.itemId },
+      "library-media-copy: the retry could not read the item"
+    );
+    return {
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+      copied: 0,
+      reused: 0,
+      failed: 0,
+    };
+  }
+  if (media.length === 0) {
+    return {
+      status: "skipped",
+      reason: "nothing_owed",
+      copied: 0,
+      reused: 0,
+      failed: 0,
+    };
+  }
+  return copyLibraryItemMedia({ ...input, media, retryFailed: true }, deps);
 }
 
 interface ItemRow {
@@ -391,6 +465,8 @@ interface FailedCopy {
   sourceUrl: string;
   kind: UrlReadMedia["kind"];
   reason: LibraryMediaFailureReason;
+  order: number;
+  role?: UrlReadMedia["role"];
 }
 
 /**
@@ -433,7 +509,7 @@ async function recordLibraryItemMedia(
 }
 
 async function copyLibraryItemMediaUnsafe(
-  input: { userId: string; itemId: string; media: UrlReadMedia[] },
+  input: CopyLibraryItemMediaInput,
   d: ResolvedDeps
 ): Promise<CopyLibraryItemMediaResult> {
   const none = (reason: CopyLibraryItemMediaResult["reason"]) =>
@@ -467,7 +543,7 @@ async function copyLibraryItemMediaUnsafe(
     planLibraryMedia(input.media),
     held,
     live,
-    readLibraryMediaFailures(row.metadata)
+    input.retryFailed ? [] : readLibraryMediaFailures(row.metadata)
   );
   if (todo.length === 0 && dead.size === 0) return none("nothing_owed");
 
@@ -485,6 +561,8 @@ async function copyLibraryItemMediaUnsafe(
           sourceUrl: rest.url,
           kind: rest.kind,
           reason: "store_unavailable",
+          order: rest.order,
+          ...(rest.role ? { role: rest.role } : {}),
         });
       }
       logger.warn(
@@ -494,7 +572,13 @@ async function copyLibraryItemMediaUnsafe(
       break;
     }
     if (out.kind === "failed") {
-      failed.push({ sourceUrl: m.url, kind: m.kind, reason: out.reason });
+      failed.push({
+        sourceUrl: m.url,
+        kind: m.kind,
+        reason: out.reason,
+        order: m.order,
+        ...(m.role ? { role: m.role } : {}),
+      });
       continue;
     }
     if (out.minted) minted.add(out.documentId);

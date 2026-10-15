@@ -85,6 +85,7 @@ import { reserveLibraryReadAi } from "../read-budget.js";
 import {
   enqueueLibraryLightRead,
   lightReadJobExpireSeconds,
+  runLibraryLightReadJob,
   sweepLibraryLightReads,
 } from "../light-read-queue.js";
 import { LibraryActionError, runLibraryAction } from "../run-action.js";
@@ -1020,6 +1021,46 @@ describe("light-read job expiry (a big media copy outlives pg-boss's 15 min)", (
         SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: "99999",
       })
     ).toBe(720 * 60);
+  });
+});
+
+describe("the pictures' Try again rides the light-read queue as a media-only job", () => {
+  it("sent with its own key; run, it copies media and never reads (no reader, no budget)", async () => {
+    const sent: Array<{ data: unknown; options: unknown }> = [];
+    await enqueueLibraryLightRead(
+      [{ userId: USER, itemId: "i2", media: "retry" }],
+      async (_q, data, options) => void sent.push({ data, options })
+    );
+    expect(sent).toEqual([
+      {
+        data: { userId: USER, itemId: "i2", media: "retry" },
+        options: {
+          singletonKey: "library-media-retry:i2",
+          expireInSeconds: 3600,
+        },
+      },
+    ]);
+    const retried: unknown[] = [];
+    const out = await runLibraryLightReadJob(
+      { userId: USER, itemId: "i2", media: "retry" },
+      {
+        // A database or reader touched here would throw: the job is media only.
+        database: new Proxy(
+          {},
+          {
+            get() {
+              throw new Error("a media retry must not read the item");
+            },
+          }
+        ) as never,
+        retryMedia: async (input) => {
+          retried.push(input);
+          return { status: "copied" };
+        },
+      }
+    );
+    expect(retried).toEqual([{ userId: USER, itemId: "i2" }]);
+    expect(out).toEqual({ itemId: "i2", status: "media_copied" });
   });
 });
 

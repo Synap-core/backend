@@ -42,6 +42,12 @@ export interface LibraryLightReadPayload {
    * the automatic read (the best FREE ready reader).
    */
   reader?: string;
+  /**
+   * `"retry"`: no read at all — copy again the media the item failed to
+   * copy (the person's "Try again", `library.retryMedia`). No reader runs and
+   * no read budget is spent.
+   */
+  media?: "retry";
 }
 
 /**

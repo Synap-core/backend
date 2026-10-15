@@ -33,6 +33,9 @@ export interface LibraryMediaFailure {
   reason: LibraryMediaFailureReason;
   attempts: number;
   lastAttemptAt: string;
+  /** Where the copy sits in the item's reading order (kept so a retry restores it). */
+  order?: number;
+  role?: UrlReadMedia["role"];
 }
 
 /** Refusals a retry cannot change — never fetched again for this item. */
@@ -117,6 +120,8 @@ export function mergeLibraryMedia(
       sourceUrl: string;
       kind: UrlReadMedia["kind"];
       reason: LibraryMediaFailureReason;
+      order?: number;
+      role?: UrlReadMedia["role"];
     }>;
     at: string;
   },
@@ -143,12 +148,16 @@ export function mergeLibraryMedia(
   for (const f of run.failed) {
     if (held.has(f.sourceUrl)) continue;
     const before = failures.get(f.sourceUrl);
+    const order = f.order ?? before?.order;
+    const role = f.role ?? before?.role;
     failures.set(f.sourceUrl, {
       sourceUrl: f.sourceUrl,
       kind: f.kind,
       reason: f.reason,
       attempts: (before?.attempts ?? 0) + 1,
       lastAttemptAt: run.at,
+      ...(order !== undefined ? { order } : {}),
+      ...(role ? { role } : {}),
     });
   }
   const importMediaFailures = [...failures.values()];
@@ -157,4 +166,27 @@ export function mergeLibraryMedia(
     importMediaFailed: importMediaFailures.length,
     importMediaFailures,
   };
+}
+
+/**
+ * The media a person's "Try again" (`library.retryMedia`) copies: EVERY URL
+ * the item failed to copy and does not hold now — permanent refusals and
+ * spent attempts included (the person asked; an expired link fails again and
+ * says so). Reading order is the failure's own, else after what is held.
+ */
+export function retryLibraryMediaPlan(metadata: unknown): UrlReadMedia[] {
+  const held = readLibraryItemMedia(metadata).media;
+  const holds = new Set(held.map((m) => m.sourceUrl));
+  let next = held.reduce((n, m) => Math.max(n, m.order + 1), 0);
+  return readLibraryMediaFailures(metadata)
+    .filter(
+      (f) =>
+        !holds.has(f.sourceUrl) && (f.kind === "image" || f.kind === "video")
+    )
+    .map((f) => ({
+      url: f.sourceUrl,
+      kind: f.kind,
+      order: typeof f.order === "number" ? f.order : next++,
+      ...(f.role ? { role: f.role } : {}),
+    }));
 }

@@ -1,7 +1,9 @@
 /**
  * The light read's doors onto the `library-light-read` queue:
  *   - `enqueueLibraryLightRead` — called when items enter the Library
- *     (`library.add`) and when a file is attached to a `needs_file` item;
+ *     (`library.add`), when a file is attached to a `needs_file` item, and
+ *     for a person's "Try again" on an item's pictures (`media: "retry"`,
+ *     `library.retryMedia` — the copy door only, no read);
  *   - `runLibraryLightReadJob` — the handler the api puts in the jobs slot;
  *   - `sweepLibraryLightReads` — the hourly re-enqueue of items not read yet
  *     or held over budget (only for people whose budget has room again).
@@ -91,6 +93,8 @@ export async function enqueueLibraryLightRead(
     force?: boolean;
     /** The reader the person chose (`library.readWith`). */
     reader?: string;
+    /** Copy the item's failed media again, nothing else (`library.retryMedia`). */
+    media?: "retry";
   }>,
   send?: Send
 ): Promise<number> {
@@ -116,8 +120,12 @@ export async function enqueueLibraryLightRead(
           itemId: item.itemId,
           ...(item.force ? { force: true } : {}),
           ...(item.reader ? { reader: item.reader } : {}),
+          ...(item.media ? { media: item.media } : {}),
         },
-        { singletonKey: `library-light-read:${item.itemId}`, expireInSeconds }
+        {
+          singletonKey: `library-${item.media ? "media-retry" : "light-read"}:${item.itemId}`,
+          expireInSeconds,
+        }
       );
       queued++;
     } catch (err) {
@@ -136,8 +144,27 @@ export async function runLibraryLightReadJob(
   opts: {
     database?: Pick<typeof DbType, "select"> & LibraryReadDb;
     deps?: LightReadDeps;
+    /** Test seam: the media retry (`retryLibraryItemMedia`). */
+    retryMedia?: (input: {
+      userId: string;
+      itemId: string;
+    }) => Promise<{ status: string }>;
   } = {}
 ): Promise<LibraryLightReadResult> {
+  if (payload.media === "retry") {
+    // The person's "Try again" on the pictures: the copy door only.
+    const out = await (
+      opts.retryMedia ??
+      (async (input: { userId: string; itemId: string }) =>
+        (
+          await import("../media-copy/copy-library-item-media.js")
+        ).retryLibraryItemMedia(input))
+    )({ userId: payload.userId, itemId: payload.itemId });
+    return {
+      itemId: payload.itemId,
+      status: `media_${out.status}`,
+    };
+  }
   const database =
     opts.database ?? ((await import("@synap/database")).db as never);
   let deps = opts.deps;

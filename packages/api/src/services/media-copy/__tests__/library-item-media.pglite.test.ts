@@ -19,6 +19,7 @@ import type { db as DatabaseHandle } from "@synap/database";
 import type { UrlReadMedia } from "@synap-core/types/url-read";
 import {
   copyLibraryItemMedia,
+  retryLibraryItemMedia,
   type CopyLibraryItemMediaDeps,
 } from "../copy-library-item-media.js";
 import { fetchExternalImage } from "../fetch-image.js";
@@ -623,6 +624,107 @@ describe("copyLibraryItemMedia", () => {
     expect(r).toMatchObject({ status: "failed", error: "db down mid-run" });
     expect(h.stored).toHaveLength(1);
     expect(h.discarded).toHaveLength(1);
+  });
+});
+
+describe("retryLibraryItemMedia (the person's Try again)", () => {
+  async function viewOf(id: string) {
+    return toLibraryItemView({
+      id,
+      metadata: await metaOf(id),
+      createdAt: new Date(),
+    });
+  }
+
+  it("copies again what a reader run gave up on, in its reading order — no reader, no new links", async () => {
+    const id = await item(A);
+    let gone = true;
+    const net = web({
+      // The CDN refused (a permanent refusal: a reader run never retries it)…
+      [IMG1]: () => (gone ? respond([], { status: 403 }) : respond([PNG])),
+      [IMG2]: () => respond([Buffer.from(png(10, 10))]),
+    });
+    const h = harness(net);
+    const plan = media([IMG1, "image", 0], [IMG2, "image", 1]);
+    await copyLibraryItemMedia({ userId: A, itemId: id, media: plan }, h.deps);
+    expect(
+      await copyLibraryItemMedia({ userId: A, itemId: id, media: plan }, h.deps)
+    ).toMatchObject({ status: "skipped", reason: "nothing_owed" });
+    expect((await viewOf(id))?.mediaFailed).toBe(1);
+
+    // …and serves it now: the person's Try again copies it, in ITS place.
+    gone = false;
+    const r = await retryLibraryItemMedia({ userId: A, itemId: id }, h.deps);
+    expect(r).toMatchObject({ status: "copied", copied: 1, failed: 0 });
+    expect(net.hits).toEqual([IMG1, IMG2, IMG1]);
+    const m = await metaOf(id);
+    expect(
+      m.importMedia.map((x: any) => [x.sourceUrl, x.order, x.role])
+    ).toEqual([
+      [IMG1, 0, "cover"],
+      [IMG2, 1, "slide"],
+    ]);
+    const view = await viewOf(id);
+    expect(view?.mediaFailed).toBeUndefined();
+    expect(view?.mediaFailedAt).toBeUndefined();
+    // Nothing failed any more: a second tap fetches nothing.
+    expect(
+      await retryLibraryItemMedia({ userId: A, itemId: id }, h.deps)
+    ).toMatchObject({
+      status: "skipped",
+      reason: "nothing_owed",
+    });
+    expect(net.hits).toHaveLength(3);
+  });
+
+  it("an expired link fails AGAIN, honestly: still counted, its attempt time moves (the client's 'it landed')", async () => {
+    const id = await item(A);
+    const net = web({ [IMG1]: () => respond([], { status: 403 }) });
+    let at = "2026-10-15T10:00:00.000Z";
+    const h = harness(net, { now: () => new Date(at) });
+    await copyLibraryItemMedia(
+      { userId: A, itemId: id, media: media([IMG1, "image", 0]) },
+      h.deps
+    );
+    expect((await viewOf(id))?.mediaFailedAt).toBe(at);
+    at = "2026-10-15T11:00:00.000Z";
+    const r = await retryLibraryItemMedia({ userId: A, itemId: id }, h.deps);
+    expect(r).toMatchObject({ status: "copied", copied: 0, failed: 1 });
+    const view = await viewOf(id);
+    expect(view?.mediaFailed).toBe(1);
+    expect(view?.mediaFailedAt).toBe(at);
+    expect((await metaOf(id)).importMediaFailures).toMatchObject([
+      {
+        sourceUrl: IMG1,
+        reason: "http_4xx",
+        attempts: 2,
+        order: 0,
+        role: "cover",
+      },
+    ]);
+  });
+
+  it("owner floor: another person's item is not_found and nothing is fetched", async () => {
+    const id = await item(A, {
+      importMediaFailed: 1,
+      importMediaFailures: [
+        {
+          sourceUrl: IMG1,
+          kind: "image",
+          reason: "http_4xx",
+          attempts: 1,
+          lastAttemptAt: "2026-10-15T09:00:00.000Z",
+        },
+      ],
+    });
+    const net = web({});
+    expect(
+      await retryLibraryItemMedia({ userId: B, itemId: id }, harness(net).deps)
+    ).toMatchObject({
+      status: "skipped",
+      reason: "not_found",
+    });
+    expect(net.fetch).not.toHaveBeenCalled();
   });
 });
 
