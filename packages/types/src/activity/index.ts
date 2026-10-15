@@ -312,6 +312,13 @@ export function resolveActivityVerb(action: string): string {
  * 2026-10-05). Only the act's own words are stripped, never another verb
  * that happens to lead a title ("Plan the UI…" stays whole); a title that
  * would be emptied stays as it is.
+ *
+ * A QUESTION is someone's own sentence, never an object a verb can lead:
+ *  - stripped of its act's verb it is answered, so it loses its "?"
+ *    ("Approve the spec?" approved → "Approved the spec", not "…the spec?");
+ *  - kept whole (an `ask`, or a question another act answered) it is quoted
+ *    ("Asked “Approve the spec?”", not "Asked Approve the spec?").
+ * An `ask` always quotes: what was asked is the asker's words.
  */
 export function activityObjectTitle(action: string, title: string): string {
   const words = [
@@ -325,10 +332,10 @@ export function activityObjectTitle(action: string, title: string): string {
     // A whole word only ("Created", not "Creates…"), with its separator.
     const m = /^(?::\s*|\s+)/.exec(rest);
     if (!m) continue;
-    const object = rest.slice(m[0].length).trim();
+    const object = rest.slice(m[0].length).trim().replace(/\?+$/, "").trim();
     if (object) return object;
   }
-  return title;
+  return action === "ask" || /\?\s*$/.test(title) ? `“${title.trim()}”` : title;
 }
 
 // ── Filters ─────────────────────────────────────────────────────────────────

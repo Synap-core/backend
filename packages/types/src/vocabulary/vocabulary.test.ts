@@ -288,9 +288,13 @@ describe("resolveActionLabel — two moods", () => {
   });
 
   it("`retry` is a real verb with both moods (a failed approval is retried, not approved again)", () => {
-    expect(resolveActionLabel("retry", "imperative")).toBe("Retry");
+    // ONE retry verb on a button ("Try again", the kit's), history keeps "Retried".
+    expect(resolveActionLabel("retry", "imperative")).toBe("Try again");
     expect(resolveActionLabel("retry", "past")).toBe("Retried");
     expect(ACTION_VERBS.retry).toBeDefined();
+    // A can't-check is CHECKED again, not retried.
+    expect(resolveActionLabel("check_again", "imperative")).toBe("Check again");
+    expect(resolveActionLabel("check_again", "past")).toBe("Checked again");
   });
 
   it("`reverted` has one status label", () => {

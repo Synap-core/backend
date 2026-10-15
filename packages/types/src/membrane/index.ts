@@ -93,6 +93,7 @@ export const CONNECTION_ACTIONS = [
   "decline",
   "reconnect",
   "retry",
+  "recheck",
   "see_failure",
   "open",
   "rename",
@@ -137,6 +138,7 @@ const ACTION_VERB = {
   decline: "decline",
   reconnect: "reconnect",
   retry: "retry",
+  recheck: "check_again",
   see_failure: "see_failure",
   open: "open",
   rename: "rename",
@@ -409,7 +411,8 @@ const STATE_RULES: Record<
   unverified: {
     tone: "textSecondary",
     glyph: "question",
-    primary: "retry",
+    // It re-checks; it does not redo anything (`retry` is a failed act's verb).
+    primary: "recheck",
     others: [],
   },
   available: {

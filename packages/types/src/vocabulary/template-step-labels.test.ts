@@ -8,13 +8,15 @@ import {
 
 describe("template step words (one mark, every surface)", () => {
   it("names every step, with the words the surfaces draw", () => {
-    expect(TEMPLATE_STEPS.length).toBe(4); // non-vacuity
+    expect(TEMPLATE_STEPS.length).toBe(6); // non-vacuity
     for (const step of TEMPLATE_STEPS) {
       expect(TEMPLATE_STEP_LABELS[step]).toMatch(/\S/);
     }
     expect(resolveTemplateStepLabel("update")).toBe("Update available");
     expect(resolveTemplateStepLabel("unfinished")).toBe("Not finished");
     expect(resolveTemplateStepLabel("awaiting-approval")).toBe("Waiting for approval");
+    expect(resolveTemplateStepLabel("needs-consent")).toBe("Needs your OK");
+    expect(resolveTemplateStepLabel("agent-asked")).toBe("Asked by an agent");
     expect(resolveTemplateStepLabel("current")).toBe("Up to date");
   });
 
@@ -25,6 +27,6 @@ describe("template step words (one mark, every surface)", () => {
   });
 
   it("an unknown step humanizes, never leaks the token", () => {
-    expect(resolveTemplateStepLabel("needs-consent")).toBe("Needs consent");
+    expect(resolveTemplateStepLabel("rolling-back")).toBe("Rolling back");
   });
 });

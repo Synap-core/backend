@@ -35,7 +35,10 @@ import {
   finishTemplateApply,
   type FinishTemplateApplyResult,
 } from "../template-apply-finisher.js";
-import { templateApplyWarningFor } from "../template-health.js";
+import {
+  dataChangesHeldSentence,
+  templateApplyWarningFor,
+} from "../template-health.js";
 import { appliedPackageVersion } from "../applied-package-version.js";
 import { applyLayerOne, type LayerOneResult } from "./layer-one.js";
 import { declaresLayerTwo } from "./layer-two-keys.js";
@@ -47,8 +50,6 @@ export { resolveTarget, findLegacyWorkspaceMatch } from "./resolve-target.js";
 export { applyLayerOne, type LayerOneResult } from "./layer-one.js";
 
 const logger = createLogger({ module: "template-apply" });
-
-export { declaresLayerTwo } from "./layer-two-keys.js";
 
 export interface ApplyTemplateInput {
   /** The layer-1 definition (also the overlay, on a compose). */
@@ -265,10 +266,7 @@ export async function applyCatalogLayerTwo(input: {
   /** The version the stamp / pack record names, on convergence. */
   version?: string;
   finish: FinishInput;
-}): Promise<{
-  layer2: LayerTwoReport;
-  finished: FinishTemplateApplyResult | null;
-}> {
+}): Promise<LayerTwoReport> {
   const { workspaceId, userId, catalogPackage } = input;
   let layer2: LayerTwoReport = { status: "skipped" };
   let body: LayerTwoBody | null = null;
@@ -302,18 +300,19 @@ export async function applyCatalogLayerTwo(input: {
   // dependency's outcome, never on the host's own record).
   const { built, pendingVersionStamp, pendingPack } = input.finish;
   const claims = built || !!pendingVersionStamp || !!pendingPack;
-  const finished = claims
-    ? await finishWithTruth(
-        { workspaceId, userId, source: input.source, layer2 },
-        {
-          ...input.finish,
-          definition: catalogPackage,
-          // A pack layered onto its domain: the outcome is the pack's.
-          overlay: !built && !pendingVersionStamp && !!pendingPack,
-        }
-      )
-    : null;
-  return { layer2, finished };
+  // The finisher's outcome is the space's record (or logged, unwritable);
+  // the caller reports layer 2 itself.
+  if (claims)
+    await finishWithTruth(
+      { workspaceId, userId, source: input.source, layer2 },
+      {
+        ...input.finish,
+        definition: catalogPackage,
+        // A pack layered onto its domain: the outcome is the pack's.
+        overlay: !built && !pendingVersionStamp && !!pendingPack,
+      }
+    );
+  return layer2;
 }
 
 export async function applyTemplate(
@@ -522,7 +521,7 @@ export async function applyTemplate(
           overlay
         )
       : finished?.held
-        ? `Not finished: this update of ${identity.packageSlug ?? "the template"} changes existing data, and waits for you to agree to it. Run \`synap templates update${identity.packageSlug ? ` ${identity.packageSlug}` : ""}\` to review the changes.`
+        ? dataChangesHeldSentence(identity.packageSlug)
         : null;
 
   return {

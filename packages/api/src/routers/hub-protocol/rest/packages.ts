@@ -551,8 +551,6 @@ export function nonWorkspacePackageKind(
   return null;
 }
 
-/** The engagement project could not be resolved: the door answers 400. */
-
 // ─── Route registration ──────────────────────────────────────────────────────
 
 export function registerPackagesRoutes(app: HubHono): void {

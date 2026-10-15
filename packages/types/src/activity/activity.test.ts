@@ -10,6 +10,7 @@ import {
   matchesActivityActor,
   parseActivityActorFilter,
   resolveActivityOutcomeView,
+  activityObjectTitle,
   resolveActivityVerb,
   selectAgentsToday,
   startOfActivityDay,
@@ -181,5 +182,31 @@ describe("selectAgentsToday — THE Home selection", () => {
     expect(now.getTime() - start.getTime()).toBeLessThan(24 * 3600 * 1000);
     expect(start.getHours()).toBe(0);
     expect(start.getMinutes()).toBe(0);
+  });
+});
+
+describe("activityObjectTitle — a question is someone's sentence, not an object", () => {
+  // The track history read "Asked Approve the spec?" and "Approved the spec?":
+  // the verb glued to the asker's own question. Each row below is one the old
+  // rule (strip the act's verb, else the title as-is) gets WRONG.
+  const line = (action: string, title: string) =>
+    `${resolveActivityVerb(action)} ${activityObjectTitle(action, title)}`;
+
+  it("an answered question loses its '?' once its verb is stripped", () => {
+    expect(line("approve", "Approve the spec?")).toBe("Approved the spec");
+  });
+
+  it("what was asked is quoted, never led by the verb", () => {
+    expect(line("ask", "Approve the spec?")).toBe("Asked “Approve the spec?”");
+    expect(line("ask", "Pick a cover")).toBe("Asked “Pick a cover”");
+  });
+
+  it("a question another act answered stays whole, quoted", () => {
+    expect(line("reject", "Approve the spec?")).toBe("Rejected “Approve the spec?”");
+  });
+
+  it("titles that are not questions keep today's rule", () => {
+    expect(line("create", "Create Lumen Atelier")).toBe("Created Lumen Atelier");
+    expect(line("create", "Plan the UI refactor")).toBe("Created Plan the UI refactor");
   });
 });

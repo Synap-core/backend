@@ -299,7 +299,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // Re-running an approval that already failed (`approval_failed`). The write
   // was approved once, so "Approve" is the wrong word on that button — and for a
   // transient provider outage it is the reviewer's ONLY recovery.
-  retry: { imperative: "Retry", past: "Retried" },
+  // ONE retry verb: the button says "Try again", like every failed read and
+  // act in the kit (SpatialErrorState, LoadFailed). History keeps "Retried":
+  // "Tried again the sync" is not a sentence.
+  retry: { imperative: "Try again", past: "Retried" },
+  // Re-CHECKING what could not be read (a connection the pod failed to read):
+  // nothing is redone, the pod is asked again — so not "Try again".
+  check_again: { imperative: "Check again", past: "Checked again" },
   // AI availability CTAs (`@synap-core/types/ai-availability`) — the CP's
   // `PodBillingAction` vocabulary. `ask_admin` is the member's verb whenever
   // they cannot pay; `upgrade` also covers renewing a plan that has no AI.
@@ -1399,6 +1405,9 @@ export function resolveCaptureChipStateLabel(
  *   - `unfinished` — the last apply failed, partly applied, or never ran its
  *     second layer (and an awaiting one whose proposals were all decided);
  *   - `awaiting-approval` — the last apply waits on proposals still pending;
+ *   - `needs-consent` — the update would change existing records and waits
+ *     for a person to agree to those data changes;
+ *   - `agent-asked` — an agent filed a proposal to update this space;
  *   - `current` — nothing to do.
  * Keyed by `TemplateStep`, so a new step is a BUILD error here until it is
  * named. "Waiting for approval" is the same words the capture chip uses for
@@ -1408,6 +1417,8 @@ export const TEMPLATE_STEPS = [
   "update",
   "unfinished",
   "awaiting-approval",
+  "needs-consent",
+  "agent-asked",
   "current",
 ] as const;
 export type TemplateStep = (typeof TEMPLATE_STEPS)[number];
@@ -1416,6 +1427,8 @@ export const TEMPLATE_STEP_LABELS: Readonly<Record<TemplateStep, string>> = {
   update: "Update available",
   unfinished: "Not finished",
   "awaiting-approval": "Waiting for approval",
+  "needs-consent": "Needs your OK",
+  "agent-asked": "Asked by an agent",
   current: "Up to date",
 };
 

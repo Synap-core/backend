@@ -10,6 +10,7 @@ import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
 import { PG_UUID_RE, uuidParam } from "./_codecs/_openapi.js";
 import { TRPCError } from "@trpc/server";
+import { refusalCodeInCause } from "../../../utils/trpc-cause-code.js";
 import {
   db,
   users,
@@ -537,26 +538,27 @@ export async function resolveActingContext(
 export function httpStatusForTrpcError(
   err: unknown
 ): 400 | 403 | 404 | 409 | 412 | 500 {
-  let cursor: unknown = err;
-  for (
-    let depth = 0;
-    cursor && typeof cursor === "object" && depth < 4;
-    depth++
-  ) {
-    const code = (cursor as { code?: unknown }).code;
-    if (code === "BAD_REQUEST") return 400;
-    if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
-    if (code === "NOT_FOUND") return 404;
+  // The ONE cause walk + refusal set (`utils/trpc-cause-code.ts`).
+  switch (refusalCodeInCause(err)) {
+    case "BAD_REQUEST":
+      return 400;
+    case "FORBIDDEN":
+    case "UNAUTHORIZED":
+      return 403;
+    case "NOT_FOUND":
+      return 404;
     // A refusal the caller can act on (a near-twin, a stale base version, a
     // row that moved under a compare-and-set) — never a server fault. Five
     // routes used to patch this locally; the ones that didn't answered 500
     // with the actionable message redacted (dogfood 2026-09-25: an agent's
     // playbook create got an opaque 500 for "extend the existing one").
-    if (code === "CONFLICT") return 409;
-    if (code === "PRECONDITION_FAILED") return 412;
-    cursor = (cursor as { cause?: unknown }).cause;
+    case "CONFLICT":
+      return 409;
+    case "PRECONDITION_FAILED":
+      return 412;
+    case null:
+      return 500;
   }
-  return 500;
 }
 
 /**

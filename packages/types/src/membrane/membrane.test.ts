@@ -574,7 +574,7 @@ describe("the states table — one primary action per state", () => {
     quiet: "open",
     off: "turn_on",
     revoked: "remove",
-    unverified: "retry",
+    unverified: "recheck",
     available: "connect",
   };
   for (const state of CONNECTION_STATES) {
@@ -659,7 +659,8 @@ describe("action rules", () => {
         approve: ["Approve", "Approved"],
         decline: ["Decline", "Declined"],
         reconnect: ["Reconnect", "Reconnected"],
-        retry: ["Retry", "Retried"],
+        retry: ["Try again", "Retried"],
+        recheck: ["Check again", "Checked again"],
         see_failure: ["See what failed", "Saw what failed"],
         open: ["Open", "Opened"],
         rename: ["Rename", "Renamed"],
@@ -793,7 +794,7 @@ describe("resolveCapabilityConnection — a catalog card on the tool rule", () =
     });
   }
 
-  it("the view is a tool's view, with Retry as the one step when unverified", () => {
+  it("the view is a tool's view, with Check again as the one step when unverified", () => {
     const v = resolveCapabilityConnection(
       {
         source: "installed",
@@ -810,10 +811,12 @@ describe("resolveCapabilityConnection — a catalog card on the tool rule", () =
       label: "Couldn't check",
       needsYou: false,
       showChip: true,
-      primaryAction: "retry",
-      actions: ["retry"],
+      primaryAction: "recheck",
+      actions: ["recheck"],
     });
-    expect(resolveConnectionAction("retry").label).toBe("Retry");
+    // A can't-check re-asks the pod; a failed act is tried again. Two verbs.
+    expect(resolveConnectionAction("recheck").label).toBe("Check again");
+    expect(resolveConnectionAction("retry").label).toBe("Try again");
   });
 });
 
