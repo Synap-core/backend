@@ -13760,6 +13760,40 @@ export interface OverlayTemplateHealth {
 	 */
 	replacementHere: boolean;
 }
+/**
+ * The data changes a space's update waits on, as a health row carries them.
+ * `null` on the row = nothing held.
+ */
+export interface PendingDataChanges {
+	/**
+	 * How many changes the update waits on. 0 only when `unreadable` (the hold
+	 * is known, its list is not); otherwise never 0 (nothing held is `null`).
+	 */
+	count: number;
+	/**
+	 * One plain sentence per change (`describeConversionOp`); when `unreadable`,
+	 * the one sentence saying the list could not be read.
+	 */
+	sentences: string[];
+	/**
+	 * The apply HELD its stamp because it could not read which data changes it
+	 * waits on (`settings.template.heldForDataChangesUnreadable`). Held all the
+	 * same — never folded into "nothing held".
+	 */
+	unreadable: boolean;
+	/**
+	 * Agreeing takes a pod owner or admin (an op rewrites every row of its kind,
+	 * pod-wide: the `/packages/apply` door answers 403
+	 * `DATA_CHANGES_NEED_POD_ADMIN` otherwise), and the reader is not one — so
+	 * the reader cannot agree themselves. `true` too when the reader is not
+	 * known (a caller that passed no viewer).
+	 */
+	needsPodAdmin: boolean;
+}
+/** An agent's pending "update this space to its template" proposal. */
+export interface TemplateUpdateProposal {
+	id: string;
+}
 /** One workspace's identity + its template health — the MCP `template_health` row shape. */
 export interface WorkspaceTemplateHealth extends TemplateHealth {
 	workspaceId: string;
@@ -13770,21 +13804,31 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
 	/**
 	 * The proposals this space's last template apply is waiting on, LIVE
 	 * (`awaitingApprovalByWorkspace`): still pending, by id. `[]` when nothing
-	 * waits — including once they were approved or rejected (plain drift then).
+	 * waits — including once they were approved or rejected (`state` then
+	 * reads `layer-2-not-run`).
 	 */
 	awaitingApproval: string[];
 	/**
-	 * Where the last template apply on this space stands (`readTemplateState`)
-	 * — the one state a client draws its mark from (building / failed /
-	 * partial / awaiting approval…), never re-derived from the sentence.
-	 * `null` = no template state recorded.
+	 * Where the last template apply on this space stands, as health reads it
+	 * (`healthApplyState`: the recorded state, except an awaiting-approval
+	 * with nothing left pending reads `layer-2-not-run` and an abandoned
+	 * build reads `failed`) — the one state a client draws its mark from,
+	 * never re-derived from the sentence. `null` = no template state recorded.
 	 */
 	state: TemplateApplyStateName | null;
 	/** Why the last template apply did not finish — `templateApplyWarning`. `null` = nothing to say. */
 	applyWarning: string | null;
 	/**
-	 * Non-fatal template problems in this space — a retired / unlisted template
-	 * (`lifecycleWarning`, first), then each overlay's warning, and an `always` skill whose body is over the
+	 * The data changes this space's update waits on the person to agree to
+	 * (the version stamp is held until then). `null` = nothing held.
+	 */
+	pendingDataChanges: PendingDataChanges | null;
+	/** An agent's pending "update this space" proposal — its door. `null` = none. */
+	updateProposal: TemplateUpdateProposal | null;
+	/**
+	 * Non-fatal template problems in this space — the apply warning, a retired /
+	 * unlisted template (`lifecycleWarning`), each overlay's warning, a read
+	 * that could not be checked, and an `always` skill whose body is over the
 	 * per-skill budget (it loads on demand instead). Empty when there are none.
 	 */
 	warnings: string[];
