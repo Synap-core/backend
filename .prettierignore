@@ -34,3 +34,8 @@ CHANGELOG.md
 # Markdown FIXTURES are byte-exact test inputs: prettier re-flows directive
 # fences and tables (it once turned a golden's closing `::::` into a table row).
 **/__fixtures__/**
+
+# Byte-for-byte copy of the synap-app comment scanner, identical in every repo:
+# reformatting it here would fork it from the canonical.
+scripts/strip-comments.mjs
+scripts/strip-comments.d.mts

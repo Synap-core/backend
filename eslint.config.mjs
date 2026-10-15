@@ -61,6 +61,10 @@ export default [
       "**/*.d.ts", // Declaration files (auto-generated, not hand-written)
       "**/.claude/**",
       "**/deploy/pod-agent/**", // Standalone Node.js agent (not part of TS build)
+      // Byte-for-byte copy of the synap-app comment scanner, identical in every
+      // repo: a lint or format fix here would fork it from the canonical.
+      "scripts/strip-comments.mjs",
+      "scripts/strip-comments.d.mts",
     ],
   },
   js.configs.recommended,
