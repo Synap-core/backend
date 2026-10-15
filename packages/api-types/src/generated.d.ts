@@ -13765,10 +13765,22 @@ export interface OverlayTemplateHealth {
  * `null` on the row = nothing held.
  */
 export interface PendingDataChanges {
-	/** How many changes the update waits on. Never 0 (that is `null`). */
+	/**
+	 * How many changes the update waits on. 0 only when `unreadable` (the hold
+	 * is known, its list is not); otherwise never 0 (nothing held is `null`).
+	 */
 	count: number;
-	/** One plain sentence per change (`describeConversionOp`). */
+	/**
+	 * One plain sentence per change (`describeConversionOp`); when `unreadable`,
+	 * the one sentence saying the list could not be read.
+	 */
 	sentences: string[];
+	/**
+	 * The apply HELD its stamp because it could not read which data changes it
+	 * waits on (`settings.template.heldForDataChangesUnreadable`). Held all the
+	 * same — never folded into "nothing held".
+	 */
+	unreadable: boolean;
 	/**
 	 * Agreeing takes a pod owner or admin (an op rewrites every row of its kind,
 	 * pod-wide: the `/packages/apply` door answers 403
