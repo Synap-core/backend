@@ -170,13 +170,19 @@ export function confirmItems(
   if (preflight.requires.code) {
     items.push({
       key: "code",
-      label: `I accept that this runs code from ${preflight.sourceName} on my pod (${preflight.risks.code.join(", ")}).`,
+      label:
+        preflight.risks.code.length > 0
+          ? `I accept that this runs code from ${preflight.sourceName} on my pod (${preflight.risks.code.join(", ")}).`
+          : `I accept that this may run code from ${preflight.sourceName} on my pod.`,
     });
   }
   if (preflight.requires.network) {
     items.push({
       key: "network",
-      label: `I accept that it can reach ${preflight.risks.networkHosts.join(", ")}.`,
+      label:
+        preflight.risks.networkHosts.length > 0
+          ? `I accept that it can reach ${preflight.risks.networkHosts.join(", ")}.`
+          : "I accept that it may reach other sites on the internet.",
     });
   }
   return items;
@@ -184,9 +190,17 @@ export function confirmItems(
 
 /** Plain lines naming what the package brings (shown for every source). */
 export function riskLines(
-  risks: Pick<MarketPreflight["risks"], "code" | "networkHosts" | "connectors">
+  risks: Pick<
+    MarketPreflight["risks"],
+    "code" | "networkHosts" | "connectors"
+  > & {
+    incomplete?: boolean;
+  }
 ): string[] {
   const lines: string[] = [];
+  if (risks.incomplete) {
+    lines.push("This package is too large to inspect fully.");
+  }
   if (risks.code.length > 0) lines.push(`Runs code: ${risks.code.join(", ")}`);
   if (risks.networkHosts.length > 0) {
     lines.push(`Can reach: ${risks.networkHosts.join(", ")}`);

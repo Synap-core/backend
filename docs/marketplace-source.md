@@ -55,21 +55,31 @@ plus `.sig`). Plus one file per package definition, on the **same origin**.
 }
 ```
 
-| Field                       | Rule                                                                                                                                                                       |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source.id`                 | 2–40 characters, `[a-z0-9-]`, not `synap`. It qualifies every package (`acme/crm`) and must never change once a pod added you.                                             |
-| `source.publicKey`          | The raw ed25519 public key (32 bytes), base64. Required unless you are an unsigned showcase.                                                                               |
-| `expires`                   | ISO 8601 with offset. After it, pods refuse the index and stop installing from the copy they hold. Re-sign and republish before then (a week or a month ahead is typical). |
-| `packages[].kind`           | `capability`, `automation`, `template`, `cell`, `skill` or `view` (`workspace` and `workflow` are read as `template` and `automation`).                                    |
-| `packages[].slug`           | Lowercase `[a-z0-9._-]`; a cell is `<package>/<cell>`. One `(kind, slug)` per index.                                                                                       |
-| `packages[].version`        | Any string up to 100 characters. A `h-` version is a **content version** and is checked (below).                                                                           |
-| `packages[].definitionUrl`  | Relative to the index, or absolute — but always https on the **index's own origin**. A package whose definition lives elsewhere is left out.                               |
-| `packages[].sha256`         | Lowercase hex sha256 of the definition file's exact bytes.                                                                                                                 |
-| `homepageUrl`, `installUrl` | https only. A showcase listing's Install opens `installUrl`, else `homepageUrl`, in a new tab.                                                                             |
-| `icon`                      | A short icon name. Pods never fetch remote images (they would tell you who browses).                                                                                       |
+| Field                       | Rule                                                                                                                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source.id`                 | 2–40 characters, `[a-z0-9-]`, not `synap`. It qualifies every package (`acme/crm`) and must never change once a pod added you.                                                                                                        |
+| `source.publicKey`          | The raw ed25519 public key (32 bytes), base64. Required unless you are an unsigned showcase.                                                                                                                                          |
+| `expires`                   | ISO 8601 with offset, **at most 31 days ahead** of when a pod reads it. After it, pods refuse the index and stop installing from the copy they hold. Re-sign and republish before then, each time with a later `expires` (see below). |
+| `packages[].kind`           | `capability`, `automation`, `template`, `cell`, `skill` or `view` (`workspace` and `workflow` are read as `template` and `automation`).                                                                                               |
+| `packages[].slug`           | Lowercase `[a-z0-9._-]`; a cell is `<package>/<cell>`. One `(kind, slug)` per index.                                                                                                                                                  |
+| `packages[].version`        | Any string up to 100 characters. A `h-` version is a **content version** and is checked (below).                                                                                                                                      |
+| `packages[].definitionUrl`  | Relative to the index, or absolute — but always https on the **index's own origin**. A package whose definition lives elsewhere is left out.                                                                                          |
+| `packages[].sha256`         | Lowercase hex sha256 of the definition file's exact bytes.                                                                                                                                                                            |
+| `homepageUrl`, `installUrl` | https only. A showcase listing's Install opens `installUrl`, else `homepageUrl`, in a new tab.                                                                                                                                        |
+| `icon`                      | A short icon name. Pods never fetch remote images (they would tell you who browses).                                                                                                                                                  |
 
 Caps: the index is at most 2 MB and 2000 packages; a signature at most 512
 bytes; a definition at most 5 MB. Anything larger is refused, never truncated.
+
+### Freshness: `expires` only moves forward
+
+`expires` is your index's clock. A pod refuses an index whose `expires` is
+more than 31 days ahead, and — once it accepted one — any index that expires
+**earlier** than the one it already holds (an older copy a mirror or a
+man-in-the-middle could replay). So each re-signed index carries an `expires`
+at least as late as the last one, and a copy captured today stops working
+within a month. A pod keeps the last accepted value with the source's sync
+status (`validUntil`); the same index fetched again is fine.
 
 ### `synap-index.json.sig`
 
@@ -168,6 +178,20 @@ Updates from your source are never applied automatically. A space or package
 installed from you is stamped `acme/<slug>`; template health compares it with
 your listing, and bringing it up to date is a person's install.
 
+A package from you only **adds** to a pod. It is refused, naming the item,
+when it would overwrite something the pod already has under the same name —
+a capability key (or one Synap's catalog uses), a tool (by credential ref, or
+by name when it has none), an MCP server slug, a skill name or a secret name —
+or when it links a secret by a literal `vault://` reference. A template may
+reuse a pod-wide kind (`person`, `deal`, …) and add fields to it in its own
+space, but not give that kind a lifecycle or new options for a field it
+already has: that would change it for every space.
+
+When an agent proposes one of your packages, the proposal records the listing
+digest (`sha256`) the reviewer was shown. Approval installs only that exact
+package: if your index lists anything else by then, the approval is refused
+and the agent has to propose it again.
+
 ## What the pod never sends you
 
 Every request a pod makes to your source is an anonymous `GET` with one header
@@ -175,7 +199,11 @@ Every request a pod makes to your source is an anonymous `GET` with one header
 
 - no cookies, no `Authorization`, no pod key, no relay token, no user identity;
 - no redirects followed (a redirect is an error — serve the files directly);
-- https only, and definitions only from the index's own origin.
+- https only, and definitions only from the index's own origin;
+- public addresses only: the pod resolves your host when it connects and
+  refuses it if any address it resolves to is loopback, private (RFC 1918),
+  link-local, CGNAT (`100.64.0.0/10`), unique-local IPv6 or otherwise
+  reserved. A source on an internal network cannot be added.
 
 You learn that a pod asked, and nothing about who it is or who uses it.
 

@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { generateKeyPairSync, sign, createHash } from "node:crypto";
 import {
+  MARKETPLACE_INDEX_MAX_LIFETIME_DAYS,
   keyFingerprint,
   verifyDefinitionBytes,
   verifyEd25519,
@@ -241,6 +242,50 @@ describe("verifyIndex — expiry, size, shape", () => {
         now: NOW,
       })
     ).toMatchObject({ ok: false, reason: "expired" });
+  });
+
+  it(`refuses an index that says it stays valid more than ${MARKETPLACE_INDEX_MAX_LIFETIME_DAYS} days ahead`, () => {
+    const k = keypair();
+    const verify = (expires: string) => {
+      const bytes = indexBytes(k.publicKey, { expires });
+      return verifyIndex({
+        indexBytes: bytes,
+        signature: sigOf(bytes, k.privateKey),
+        pinnedKey: k.publicKey,
+        requireSignature: true,
+        now: NOW,
+      });
+    };
+    expect(verify("2036-10-13T12:00:00Z")).toMatchObject({
+      ok: false,
+      reason: "invalid",
+    });
+    // Exactly at the cap is still fine.
+    expect(verify("2026-11-13T12:00:00Z")).toMatchObject({ ok: true });
+  });
+
+  it("refuses an OLDER copy than the index the pod already accepted (a replay)", () => {
+    const k = keypair();
+    const bytes = indexBytes(k.publicKey, { expires: "2026-10-20T00:00:00Z" });
+    const verify = (lastAcceptedExpires: string | null) =>
+      verifyIndex({
+        indexBytes: bytes,
+        signature: sigOf(bytes, k.privateKey),
+        pinnedKey: k.publicKey,
+        requireSignature: true,
+        lastAcceptedExpires,
+        now: NOW,
+      });
+    expect(verify("2026-11-01T00:00:00Z")).toMatchObject({
+      ok: false,
+      reason: "replayed",
+    });
+    // The same index again, or a newer one, is accepted.
+    expect(verify("2026-10-20T00:00:00Z")).toMatchObject({ ok: true });
+    expect(verify("2026-10-15T00:00:00Z")).toMatchObject({ ok: true });
+    expect(verify(null)).toMatchObject({ ok: true });
+    // A floor from before the lifetime cap (years ahead) never locks it out.
+    expect(verify("2036-01-01T00:00:00Z")).toMatchObject({ ok: true });
   });
 
   it("refuses an oversized index before reading it", () => {

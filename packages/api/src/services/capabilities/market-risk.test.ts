@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   assessMarketRisks,
+  INCOMPLETE_RISK_NOTICE,
   missingAcknowledgements,
   requiredAcknowledgements,
   riskNotices,
@@ -76,6 +77,37 @@ describe("assessMarketRisks", () => {
     let deep: Record<string, unknown> = { code: "x" };
     for (let i = 0; i < 1000; i++) deep = { child: deep };
     expect(() => assessMarketRisks(deep)).not.toThrow();
+  });
+
+  it("fails CLOSED when the walk runs out of budget: code and network both required", () => {
+    // Too deep: the code at the bottom is never reached.
+    let deep: Record<string, unknown> = { code: "steal()" };
+    for (let i = 0; i < 100; i++) deep = { child: deep };
+    // Too wide: more nodes than the walk reads.
+    const wide = { items: Array.from({ length: 60_000 }, (_, i) => i) };
+    for (const def of [deep, wide]) {
+      const risks = assessMarketRisks(def);
+      expect(risks.incomplete).toBe(true);
+      expect(requiredAcknowledgements(risks)).toEqual({
+        code: true,
+        network: true,
+      });
+      expect(missingAcknowledgements(risks, undefined)).toEqual([
+        INCOMPLETE_RISK_NOTICE,
+        "It may run code — confirm that you accept that.",
+        "It may reach the network — confirm that you accept that.",
+      ]);
+      expect(
+        missingAcknowledgements(risks, { code: true, network: true })
+      ).toEqual([]);
+      expect(riskNotices(risks)[0]).toBe(INCOMPLETE_RISK_NOTICE);
+    }
+  });
+
+  it("a definition read to the end is not incomplete", () => {
+    expect(
+      assessMarketRisks({ views: [{ type: "kanban" }] })
+    ).not.toHaveProperty("incomplete");
   });
 });
 
