@@ -420,7 +420,7 @@ export const libraryRouter = router({
 
   /**
    * Read items (or a group's waiting items) with one reader. The person's tap
-   * is the consent — an agent is refused (it reads links with `web_read`).
+   * is the consent — an agent is refused (it reads links with `web.read`).
    * A reader billed to the person's account takes one daily-budget unit per
    * item; what today's budget cannot hold is counted `overBudget`, not queued.
    */
