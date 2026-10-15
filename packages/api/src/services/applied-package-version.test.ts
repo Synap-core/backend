@@ -3,7 +3,10 @@
  * the Control Plane's own rule (see `applied-package-version.ts`).
  */
 import { describe, it, expect } from "vitest";
-import { appliedPackageVersion } from "./applied-package-version.js";
+import {
+  APPLY_REQUEST_FIELDS,
+  appliedPackageVersion,
+} from "./applied-package-version.js";
 
 const SOURCE = { name: "@synap-core/workspace-templates", version: "9.9.9" };
 
@@ -48,4 +51,30 @@ describe("appliedPackageVersion", () => {
     expect(appliedPackageVersion(stale)).toMatch(/^h-[0-9a-f]{12}$/);
     expect(appliedPackageVersion(stale)).not.toBe("h-415dd71e1e6c");
   });
+});
+
+// A consented update (`acceptDataChanges`) of a template the pod's catalog
+// cache cannot resolve was stamped `hash(body + acceptDataChanges)` and read
+// drifted right after a successful consent (review2 P1).
+describe("appliedPackageVersion — request fields are not content", () => {
+  const def = {
+    _meta: { slug: "crm", version: "LABEL" },
+    workspaceName: "CRM",
+    profiles: [{ slug: "lead" }],
+  };
+
+  it("a consented update hashes the same as the template alone", () => {
+    expect(
+      appliedPackageVersion({ ...def, acceptDataChanges: ["lead-to-facet"] })
+    ).toBe(appliedPackageVersion(def));
+  });
+
+  it.each(APPLY_REQUEST_FIELDS.map((f) => [f]))(
+    "%s never changes the version",
+    (field) => {
+      expect(appliedPackageVersion({ ...def, [field]: "x" })).toBe(
+        appliedPackageVersion(def)
+      );
+    }
+  );
 });

@@ -40,6 +40,9 @@ export const APPLY_REQUEST_FIELDS = [
   "force",
   "projectId",
   "projectName",
+  // The person's consent to this update's data changes — a request, not
+  // content (the CLI merges it into the top-level body).
+  "acceptDataChanges",
 ] as const;
 
 /** Never part of the content hash: the caller's label, the CP's own stamps. */
