@@ -271,6 +271,36 @@ export async function findRunStagedSource(input: {
   };
 }
 
+/**
+ * A live document of this user that ALREADY HOLDS these exact bytes (by the
+ * `fileSha256` key — the bytes the pod stored, never the client-declared
+ * `sourceSha256` of an original) as a real stored blob of this exact mime.
+ * The media copy reuses it instead of storing the same bytes twice. A text
+ * rendition (another mime) never qualifies. Owner-floored; newest first.
+ */
+export async function findStoredDocumentBySha256(input: {
+  database: typeof DbType;
+  userId: string;
+  fileSha256: string;
+  mimeType: string;
+}): Promise<{ documentId: string; size: number } | null> {
+  const [row] = await input.database
+    .select({ id: documentsTable.id, size: documentsTable.size })
+    .from(documentsTable)
+    .where(
+      and(
+        eq(documentsTable.userId, input.userId),
+        isNull(documentsTable.deletedAt),
+        drizzleSql`${fileHashExpr} = ${input.fileSha256.toLowerCase()}`,
+        drizzleSql`${documentsTable.storageKey} IS NOT NULL`,
+        eq(documentsTable.mimeType, input.mimeType)
+      )
+    )
+    .orderBy(desc(documentsTable.createdAt))
+    .limit(1);
+  return row ? { documentId: row.id, size: row.size } : null;
+}
+
 /** The one refusal sentence; clients detect it by the `run_full:` prefix. */
 export function runFullMessage(count: number): string {
   return `run_full: this run already holds ${count} files (max ${PHOTO_RUN_MAX_ITEMS}). Start a new run for the rest.`;

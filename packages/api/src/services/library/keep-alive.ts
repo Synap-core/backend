@@ -24,14 +24,20 @@
  * (opt-in): `enabled` turns on 1, 2 and 3; `archiveAfterDays: 0` stops 1.
  *
  * ALWAYS (not a keep-alive feature, a promise): an item deleted more than
- * `deleteUndoDays` ago has its stored read text and saved page HTML purged.
+ * `deleteUndoDays` ago has its stored read text, saved page HTML and media
+ * copies purged. Inside the undo window nothing is touched, so a restored
+ * item comes back with its pictures.
  *
  * The AI's capture door is untouched; this reads the person's own Library only.
  */
 
-import { LIBRARY_LIMITS } from "@synap-core/types/imports";
+import {
+  LIBRARY_LIMITS,
+  readLibraryItemMedia,
+} from "@synap-core/types/imports";
 import { libraryReadTextKey } from "@synap/database";
 import { libraryPageHtmlKey } from "./page-html.js";
+import { LIBRARY_MEDIA_COPY_OF } from "../media-copy/media-copy-documents.js";
 import { rowsOf } from "../../utils/execute-rows.js";
 import { isArchivedOn, waitingInGroupSql } from "./read-model.js";
 import { db as defaultDb, podSettings, drizzleSql } from "@synap/database";
@@ -137,6 +143,9 @@ export async function archiveUnseenLibraryItems(args: {
   return rowsOf<{ id: string }>(result).length;
 }
 
+const DOCUMENT_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Items purged in one pass at most (the next pass continues). */
 const PURGE_BATCH_MAX = 500;
 
@@ -146,20 +155,29 @@ const PURGE_BATCH_MAX = 500;
  * item is stamped `importCuration.purgedAt` so it is never purged twice. A
  * storage object already gone is not a failure; any other failure leaves the
  * item for the next pass (said in the log).
+ *
+ * Its MEDIA COPIES (`importMedia`) go too — each document deleted with its
+ * blobs — but only a document the Library MINTED (`mediaCopyOfLibraryItem`
+ * set) and that no other not-yet-purged Library item of the person still
+ * names (the bytes ledger lets two items share one copy). A document the
+ * copy merely REUSED (the person's own upload, an imported photo) has its own
+ * life and is never deleted here.
  */
 export async function purgeDeletedLibraryItems(args: {
   database?: typeof defaultDb;
   now?: Date;
   remove?: (key: string) => Promise<void>;
+  /** Delete one media-copy document + its blobs (default: `deleteBody`). */
+  removeDocument?: (documentId: string) => Promise<void>;
 }): Promise<number> {
   const database = args.database ?? defaultDb;
   const now = args.now ?? new Date();
   const cutoff = new Date(
     now.getTime() - LIBRARY_LIMITS.deleteUndoDays * DAY_MS
   ).toISOString();
-  const due = rowsOf<{ id: string; userId: string }>(
+  const due = rowsOf<{ id: string; userId: string; metadata: unknown }>(
     await database.execute(drizzleSql`
-      SELECT id, user_id AS "userId" FROM documents
+      SELECT id, user_id AS "userId", metadata FROM documents
       WHERE deleted_at IS NOT NULL AND deleted_at < ${cutoff}::timestamptz
         AND metadata ? 'importItem'
         AND (metadata #>> '{importCuration,purgedAt}') IS NULL
@@ -172,6 +190,15 @@ export async function purgeDeletedLibraryItems(args: {
       const { storage } = await import("@synap/storage");
       await storage.delete(key);
     });
+  const removeDocument =
+    args.removeDocument ??
+    (async (documentId: string) => {
+      const { EntityBodyService, eventRepository } =
+        await import("@synap/database");
+      await new EntityBodyService(database, eventRepository).deleteBody({
+        documentId,
+      });
+    });
   let purged = 0;
   for (const d of due) {
     try {
@@ -183,9 +210,19 @@ export async function purgeDeletedLibraryItems(args: {
           if (!isMissingObject(err)) throw err;
         });
       }
+      for (const documentId of new Set(
+        readLibraryItemMedia(d.metadata)
+          .media.map((m) => m.documentId)
+          // A malformed id names no document; never let it fail the cast.
+          .filter((id) => DOCUMENT_UUID.test(id))
+      )) {
+        if (await libraryOwnsMediaCopy(database, d, documentId)) {
+          await removeDocument(documentId);
+        }
+      }
       await database.execute(drizzleSql`
         UPDATE documents SET metadata = jsonb_set(
-          (metadata - 'importRead' - 'importPage'), '{importCuration,purgedAt}',
+          (metadata - 'importRead' - 'importPage' - 'importMedia' - 'importMediaFailed' - 'importMediaFailures'), '{importCuration,purgedAt}',
           ${JSON.stringify(now.toISOString())}::jsonb, true)
         WHERE id = ${d.id}::uuid`);
       purged++;
@@ -197,6 +234,32 @@ export async function purgeDeletedLibraryItems(args: {
     }
   }
   return purged;
+}
+
+/**
+ * The media document is a Library-minted copy of this person's, and no OTHER
+ * Library item not yet purged names it — so it goes with this item.
+ */
+async function libraryOwnsMediaCopy(
+  database: typeof defaultDb,
+  item: { id: string; userId: string },
+  documentId: string
+): Promise<boolean> {
+  const [row] = rowsOf<{ owned: boolean }>(
+    await database.execute(drizzleSql`
+      SELECT EXISTS (
+        SELECT 1 FROM documents m
+         WHERE m.id = ${documentId}::uuid AND m.user_id = ${item.userId}
+           AND (m.metadata ->> ${LIBRARY_MEDIA_COPY_OF}) IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM documents o
+              WHERE o.user_id = ${item.userId} AND o.id <> ${item.id}::uuid
+                AND o.metadata ? 'importItem'
+                AND (o.metadata #>> '{importCuration,purgedAt}') IS NULL
+                AND (o.metadata -> 'importMedia') @> ${JSON.stringify([{ documentId }])}::jsonb)
+      ) AS owned`)
+  );
+  return Boolean(row?.owned);
 }
 
 function isMissingObject(err: unknown): boolean {

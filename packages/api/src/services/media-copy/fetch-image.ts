@@ -86,60 +86,22 @@ export async function fetchExternalImage(
   url: string,
   deps: FetchImageDeps = {}
 ): Promise<ImageFetchResult> {
-  const validate = deps.validate ?? validateExternalUrl;
-  const fetchImpl = deps.fetch ?? safePublicFetch;
   const maxBytes = deps.maxBytes ?? MEDIA_COPY_MAX_BYTES;
-
-  if (!validate(url).valid) return { ok: false, reason: "blocked" };
-
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
     deps.timeoutMs ?? TIMEOUT_MS
   );
   try {
-    let res: Response;
-    try {
-      res = await fetchImpl(
-        url,
-        {
-          method: "GET",
-          signal: controller.signal,
-          headers: {
-            Accept: "image/png,image/jpeg,image/gif,image/webp;q=0.9",
-            "User-Agent": "SynapMediaCopy/1.0",
-          },
-        },
-        REDIRECT_HOPS
-      );
-    } catch (err) {
-      if (controller.signal.aborted) return { ok: false, reason: "timeout" };
-      // safePublicFetch throws "Blocked outbound request" on a refused hop.
-      return {
-        ok: false,
-        reason:
-          err instanceof Error && /^Blocked outbound request/.test(err.message)
-            ? "blocked"
-            : "fetch_failed",
-      };
-    }
-    if (!res.ok) {
-      await cancel(res);
-      return {
-        ok: false,
-        reason:
-          res.status >= 500
-            ? "http_5xx"
-            : res.status === 408 || res.status === 429
-              ? "http_retry_later"
-              : "http_4xx",
-      };
-    }
-    const declared = Number(res.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      await cancel(res);
-      return { ok: false, reason: "too_large" };
-    }
+    const opened = await openGuardedMedia(url, {
+      signal: controller.signal,
+      accept: "image/png,image/jpeg,image/gif,image/webp;q=0.9",
+      maxBytes,
+      fetch: deps.fetch,
+      validate: deps.validate,
+    });
+    if (!opened.ok) return opened;
+    const res = opened.res;
 
     const streamed = await readImageCapped(res, maxBytes);
     if (!streamed.ok) {
@@ -165,6 +127,72 @@ export async function fetchExternalImage(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * THE guarded open every remote-media download goes through (images here,
+ * videos in `fetch-video.ts`): the URL is vetted (`validateExternalUrl`), the
+ * request goes through `safePublicFetch` (every redirect hop re-resolved,
+ * refused on any non-public address, socket pinned), a non-2xx status maps to
+ * a typed reason, and a truthful `Content-Length` over `maxBytes` is refused
+ * before a byte is read. The caller reads the body (capped, sniffed) and owns
+ * the abort signal (its timeouts). Never throws.
+ */
+export async function openGuardedMedia(
+  url: string,
+  opts: {
+    signal: AbortSignal;
+    accept: string;
+    maxBytes: number;
+    fetch?: FetchImageDeps["fetch"];
+    validate?: FetchImageDeps["validate"];
+  }
+): Promise<
+  { ok: true; res: Response } | { ok: false; reason: ImageFetchFailure }
+> {
+  const validate = opts.validate ?? validateExternalUrl;
+  const fetchImpl = opts.fetch ?? safePublicFetch;
+  if (!validate(url).valid) return { ok: false, reason: "blocked" };
+  let res: Response;
+  try {
+    res = await fetchImpl(
+      url,
+      {
+        method: "GET",
+        signal: opts.signal,
+        headers: { Accept: opts.accept, "User-Agent": "SynapMediaCopy/1.0" },
+      },
+      REDIRECT_HOPS
+    );
+  } catch (err) {
+    if (opts.signal.aborted) return { ok: false, reason: "timeout" };
+    // safePublicFetch throws "Blocked outbound request" on a refused hop.
+    return {
+      ok: false,
+      reason:
+        err instanceof Error && /^Blocked outbound request/.test(err.message)
+          ? "blocked"
+          : "fetch_failed",
+    };
+  }
+  if (!res.ok) {
+    await cancel(res);
+    return {
+      ok: false,
+      reason:
+        res.status >= 500
+          ? "http_5xx"
+          : res.status === 408 || res.status === 429
+            ? "http_retry_later"
+            : "http_4xx",
+    };
+  }
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > opts.maxBytes) {
+    await cancel(res);
+    return { ok: false, reason: "too_large" };
+  }
+  return { ok: true, res };
 }
 
 /**

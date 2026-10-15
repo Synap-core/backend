@@ -118,3 +118,49 @@ function le24(b: Uint8Array, at: number, v: number): void {
   b[at + 1] = (v >> 8) & 0xff;
   b[at + 2] = (v >> 16) & 0xff;
 }
+
+/** An ISO-BMFF `ftyp` box with this major brand (an MP4 when the brand is a video one). */
+export function mp4Head(brand: string): Uint8Array {
+  const b = new Uint8Array(32);
+  be32(b, 0, 32);
+  b.set([...ascii("ftyp")], 4);
+  b.set([...ascii(brand.padEnd(4, " ").slice(0, 4))], 8);
+  b.set([...ascii("isomiso2avc1mp41")], 16);
+  return b;
+}
+
+/** An EBML header whose DocType is `docType` ("webm" → WebM, "matroska" → MKV). */
+export function webmHead(docType: string): Uint8Array {
+  const dt = [...ascii(docType)];
+  const body = [
+    0x42,
+    0x86,
+    0x81,
+    0x01, // EBMLVersion 1
+    0x42,
+    0xf7,
+    0x81,
+    0x01, // EBMLReadVersion 1
+    0x42,
+    0xf2,
+    0x81,
+    0x04, // EBMLMaxIDLength 4
+    0x42,
+    0xf3,
+    0x81,
+    0x08, // EBMLMaxSizeLength 8
+    0x42,
+    0x82,
+    0x80 | dt.length,
+    ...dt, // DocType
+    0x42,
+    0x87,
+    0x81,
+    0x04, // DocTypeVersion 4
+    0x42,
+    0x85,
+    0x81,
+    0x02, // DocTypeReadVersion 2
+  ];
+  return new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x80 | body.length, ...body]);
+}

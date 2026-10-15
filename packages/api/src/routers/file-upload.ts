@@ -285,6 +285,11 @@ export async function storeDocumentFromBuffer(params: {
    * entity's picture, not a document anyone filed.
    */
   mediaCopyOf?: string;
+  /**
+   * Extra `documents.metadata` keys (merged last) — e.g. a Library item's
+   * media copy names its item (`libraryMediaCopyMetadata`).
+   */
+  metadata?: Record<string, unknown>;
 }): Promise<StoredDocument> {
   const { userId, workspaceId, buffer, mimeType, filename } = params;
 
@@ -308,11 +313,16 @@ export async function storeDocumentFromBuffer(params: {
     filename,
     mimeType,
     bytes: buffer,
-    ...(params.mediaCopyOf
+    ...(params.mediaCopyOf || params.metadata
       ? {
           metadata: {
-            uploadKind: MEDIA_COPY_UPLOAD_KIND,
-            mediaCopyOf: params.mediaCopyOf,
+            ...(params.mediaCopyOf
+              ? {
+                  uploadKind: MEDIA_COPY_UPLOAD_KIND,
+                  mediaCopyOf: params.mediaCopyOf,
+                }
+              : {}),
+            ...params.metadata,
           },
         }
       : {}),
