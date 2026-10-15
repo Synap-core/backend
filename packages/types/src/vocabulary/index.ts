@@ -1399,6 +1399,9 @@ export function resolveCaptureChipStateLabel(
  *   - `unfinished` — the last apply failed, partly applied, or never ran its
  *     second layer (and an awaiting one whose proposals were all decided);
  *   - `awaiting-approval` — the last apply waits on proposals still pending;
+ *   - `needs-consent` — the update would change existing records and waits
+ *     for a person to agree to those data changes;
+ *   - `agent-asked` — an agent filed a proposal to update this space;
  *   - `current` — nothing to do.
  * Keyed by `TemplateStep`, so a new step is a BUILD error here until it is
  * named. "Waiting for approval" is the same words the capture chip uses for
@@ -1408,6 +1411,8 @@ export const TEMPLATE_STEPS = [
   "update",
   "unfinished",
   "awaiting-approval",
+  "needs-consent",
+  "agent-asked",
   "current",
 ] as const;
 export type TemplateStep = (typeof TEMPLATE_STEPS)[number];
@@ -1416,6 +1421,8 @@ export const TEMPLATE_STEP_LABELS: Readonly<Record<TemplateStep, string>> = {
   update: "Update available",
   unfinished: "Not finished",
   "awaiting-approval": "Waiting for approval",
+  "needs-consent": "Needs your OK",
+  "agent-asked": "Asked by an agent",
   current: "Up to date",
 };
 
