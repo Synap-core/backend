@@ -1379,6 +1379,48 @@ export function resolveCaptureChipStateLabel(
 }
 
 /**
+ * Where a space stands with its TEMPLATE — the person's next step, as the
+ * words of its mark. One table for every surface that draws the step (the
+ * desktop banner, the space page, the catalog card and detail, the CLI), so
+ * the same space never reads two ways (review2 UF7 / UX-S3).
+ *
+ * The step itself is classified from the pod's template-health row by ONE
+ * rule (`classifyTemplateHealth`, `@synap-core/web/marketplace`):
+ *   - `update` — a newer template version is published;
+ *   - `unfinished` — the last apply failed, partly applied, or never ran its
+ *     second layer (and an awaiting one whose proposals were all decided);
+ *   - `awaiting-approval` — the last apply waits on proposals still pending;
+ *   - `current` — nothing to do.
+ * Keyed by `TemplateStep`, so a new step is a BUILD error here until it is
+ * named. "Waiting for approval" is the same words the capture chip uses for
+ * the same idea (`CAPTURE_CHIP_STATE_LABELS.awaiting_approval`).
+ */
+export const TEMPLATE_STEPS = [
+  "update",
+  "unfinished",
+  "awaiting-approval",
+  "current",
+] as const;
+export type TemplateStep = (typeof TEMPLATE_STEPS)[number];
+
+export const TEMPLATE_STEP_LABELS: Readonly<Record<TemplateStep, string>> = {
+  update: "Update available",
+  unfinished: "Not finished",
+  "awaiting-approval": "Waiting for approval",
+  current: "Up to date",
+};
+
+/** A template step's words; an unknown step humanizes rather than leaks. */
+export function resolveTemplateStepLabel(
+  step: TemplateStep | (string & {})
+): string {
+  return (
+    (TEMPLATE_STEP_LABELS as Readonly<Record<string, string>>)[step] ??
+    humanizeToken(step)
+  );
+}
+
+/**
  * PROVENANCE labels — "who or what produced this", as a human word.
  *
  * ── Why this table exists BEFORE anything renders provenance ───────────────
