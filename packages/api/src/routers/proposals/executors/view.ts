@@ -2,7 +2,6 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   proposals,
-  views,
   eq,
   and,
   getWorkspaceMembership,
@@ -15,6 +14,7 @@ import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import {
   isViewContentProposalApproved,
+  loadViewContentTarget,
   markViewContentProposalApproved,
 } from "../../../services/views/view-content-proposal.js";
 import { reportApproved } from "./shared.js";
@@ -235,10 +235,7 @@ export function registerViewExecutors(): void {
       }
 
       // The workspace comes from the VIEW ROW, never from the proposal.
-      const view = await db.query.views.findFirst({
-        where: eq(views.id, viewId),
-        columns: { id: true, workspaceId: true },
-      });
+      const view = await loadViewContentTarget(viewId);
       if (!view) {
         throw new TRPCError({
           code: "NOT_FOUND",
