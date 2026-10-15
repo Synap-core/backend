@@ -281,6 +281,12 @@ describe("resolveActionLabel — two moods", () => {
     expect(ACTION_VERBS.reopen).toBeDefined();
   });
 
+  it("`read_again` is a real verb with both moods (Library: run a reader again)", () => {
+    expect(resolveActionLabel("read_again", "imperative")).toBe("Read again");
+    expect(resolveActionLabel("read_again", "past")).toBe("Read");
+    expect(ACTION_VERBS.read_again).toBeDefined();
+  });
+
   it("`retry` is a real verb with both moods (a failed approval is retried, not approved again)", () => {
     expect(resolveActionLabel("retry", "imperative")).toBe("Retry");
     expect(resolveActionLabel("retry", "past")).toBe("Retried");

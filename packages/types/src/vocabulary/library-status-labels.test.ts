@@ -28,6 +28,13 @@ describe("Library marks — the one door", () => {
     }
   });
 
+  it("names the derived needs_reader display state beside needs_file", () => {
+    expect(resolveLibraryStatusLabel("needs_reader")).toBe("Needs a reader");
+    expect(LIBRARY_STATUS_LABELS.needs_reader).not.toBe(
+      LIBRARY_STATUS_LABELS.needs_file
+    );
+  });
+
   it("an unknown token humanizes, never leaks", () => {
     expect(resolveLibraryStatusLabel("waiting_on_device")).toBe(
       "Waiting on device"
