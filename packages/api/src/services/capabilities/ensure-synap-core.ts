@@ -835,6 +835,28 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Read one link (Web Access W0) — the agent's door onto `readUrl` ──────
+    {
+      name: "web.read",
+      kind: "builtin",
+      scope: "pod",
+      intent: "read_webpage",
+      description:
+        "Read one web page or post into clean text + metadata + media, through the pod's one link reader. " +
+        "Use when: the user gives a link, or you need a search result in full. " +
+        "Don't use when: filling entity fields from a page (capture it), or to click, log in or post (no verb does that). " +
+        "Cost: free with the pod's built-in reader (articles, YouTube, X, Bluesky, GitHub, Wikipedia, arXiv, Reddit, HN, Google Docs); a reader on the user's own account (e.g. Instagram, TikTok) runs ONLY when you name it in `reader`, and then through that reader's own approval. " +
+        "Returns { read: { status: ok|partial|blocked|failed, via, title, text, media, blocked? }, offers[] }. `blocked` is a wall, not an empty page: tell the user blocked.reason and offer blocked.nextStep (install/enable/connect a reader from `offers`, open it in their browser, attach the file) — never retry blindly. `failed` may be retried later. " +
+        'Args: url (required, http/https); reader (optional: an offers[].readerId — "builtin" or a reader verb id).',
+      parameters: {
+        type: "object",
+        required: ["url"],
+        properties: {
+          url: { type: "string" },
+          reader: { type: "string" },
+        },
+      },
+    },
     {
       name: "market.install",
       kind: "builtin",
