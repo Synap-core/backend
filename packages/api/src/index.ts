@@ -342,6 +342,7 @@ export { runInboundAttachmentIngest } from "./services/connectors/ingest-inbound
 // fills the jobs IoC slot and copies an entity's external images into the pod.
 export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";
 export { backfillEntityMediaCopies } from "./services/media-copy/backfill-media-copy.js";
+export { backfillLibraryItemMedia } from "./services/media-copy/backfill-library-media.js";
 export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy-reactor.js";
 export {
   runEventSync,

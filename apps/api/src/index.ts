@@ -2179,6 +2179,25 @@ try {
                 "Media-copy backfill failed (non-fatal; resumes next boot)"
               )
             );
+
+          // Library thumbnail BACKFILL: items read before the Library copied
+          // media hold no pod copy, and clients draw a thumbnail only from one.
+          // Their card image goes through the SAME copy door, one at a time,
+          // rate-limited and capped per boot (resumes next boot); an expired
+          // link is recorded on the item as a failed copy. Off the boot path.
+          void startupHooksSettled
+            .then(async () => {
+              const { backfillLibraryItemMedia } = await import("@synap/api");
+              const r = await backfillLibraryItemMedia();
+              if (r.status !== "already-complete")
+                apiLogger.info(r, "Library media backfill ran");
+            })
+            .catch((err) =>
+              apiLogger.warn(
+                { err },
+                "Library media backfill failed (non-fatal; resumes next boot)"
+              )
+            );
         } catch (err) {
           apiLogger.error(
             { err },
