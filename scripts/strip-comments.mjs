@@ -26,18 +26,24 @@
  *
  * Heuristics, stated (a scanner is not a parser):
  *   - A `/` starts a regex when the previous token is a punctuator or one of
- *     REGEX_AFTER_WORDS; after a name, number, string, `)`, `]` or `}` it is a
- *     division. `</` is a JSX closing tag, never a regex.
+ *     REGEX_AFTER_WORDS, or is a `}` that ends its line (a statement starts on
+ *     the next one); after a name, number, string, `)`, `]` or a mid-line `}`
+ *     it is a division. `</` is a JSX closing tag, never a regex.
  *   - JSX TEXT is not parsed. An apostrophe in it (`<p>Don't</p>`) opens a
  *     quoted string, which ends at the end of the line (a quoted string cannot
  *     span lines), so the cost is at most that one line not being stripped.
  *   - A `//` glued to a `:` (`https://` in JSX text) and a block opener glued to
- *     a name or `-` (`@synap-core/*` in JSX text) are not comments. Measured
- *     2026-10-15 with the TypeScript parser over synap-app, browser, relay,
- *     backend, IS, cli and CP: 0 of 74,242 real block comments are glued.
- *   - Every heuristic errs toward UNDER-stripping (prose left in, a noisy red),
- *     never toward hiding code (a silent green). Still misread: a backtick in
- *     JSX text, which opens a template that can span lines.
+ *     a name, `-` or `*` (`@synap-core/*`, `src/**\/*.tsx` in JSX text) are
+ *     not comments. Measured with the TypeScript parser over synap-app,
+ *     browser, relay, backend, IS, cli and CP (13,725 files): the helper blanks
+ *     exactly the parser's comments in every file.
+ *   - A misread heuristic usually UNDER-strips (prose left in, a noisy red).
+ *     It does not always: the cases below can blank code, which reads as a
+ *     silent green. Still misread, pinned as hand cases in the self-test:
+ *       - `//` in JSX text (`<p>and/or // either</p>`) blanks the rest of
+ *         that line, code included;
+ *       - a backtick in JSX text opens a template that can span lines, and
+ *         flips code and template text until the next backtick.
  */
 
 const REGEX_AFTER_WORDS = new Set([
@@ -66,7 +72,7 @@ const isWordChar = (c) =>
   c > "\u007f";
 const isSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f" || c === "\v" || c === "\ufeff" || c === "\u00a0";
 /** `core/*`: a block opener glued to a name is a path glob in JSX text, never a comment (measured). */
-const isGlued = (c) => c !== undefined && (isWordChar(c) || c === "-");
+const isGlued = (c) => c !== undefined && (isWordChar(c) || c === "-" || c === "*");
 const NOT_EOL = /[^\n\r\u2028\u2029]/g;
 const isEol = (c) => c === "\n" || c === "\r" || c === "\u2028" || c === "\u2029";
 
@@ -138,6 +144,8 @@ export function stripComments(source, lang) {
   /** What the last significant token was, to tell a regex from a division. */
   let prev = "punct"; // "punct" | "value" | a word
   let prevChar = "";
+  /** A line break since the last token: `}` then a new line opens a statement, so `/` is a regex. */
+  let newLine = false;
 
   /** Scan a template body from `i` (just past "`" or "}"); returns where code resumes. */
   const scanTemplate = (i) => {
@@ -185,16 +193,20 @@ export function stripComments(source, lang) {
     const c = source[i];
     const d = source[i + 1];
     if (isSpace(c) || c === "\u2028" || c === "\u2029") {
+      if (isEol(c)) newLine = true;
       i++;
+      continue;
     } else if (c === "/" && d === "/" && source[i - 1] !== ":") {
       let j = i + 2;
       while (j < n && !isEol(source[j])) j++;
       blank(i, j);
       i = j;
+      continue;
     } else if (c === "/" && d === "*" && !isGlued(source[i - 1])) {
       const j = skipBlock(i);
       blank(i, j);
       i = j;
+      continue;
     } else if (c === "'" || c === '"') {
       i = skipQuoted(i);
       prev = "value";
@@ -203,7 +215,8 @@ export function stripComments(source, lang) {
       i = scanTemplate(i + 1);
       prevChar = "`";
     } else if (c === "/") {
-      const regex = prevChar !== "<" && (prev === "punct" || REGEX_AFTER_WORDS.has(prev));
+      const regex =
+        prevChar !== "<" && (prev === "punct" || REGEX_AFTER_WORDS.has(prev) || (prevChar === "}" && newLine));
       if (regex) {
         i = skipRegex(i);
         prev = "value";
@@ -244,6 +257,7 @@ export function stripComments(source, lang) {
       prevChar = c;
       i++;
     }
+    newLine = false;
   }
   return result();
 }

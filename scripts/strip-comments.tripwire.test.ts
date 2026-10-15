@@ -10,6 +10,9 @@
  * TypeScript-parser differential stays in synap-app (it proves the scanner, not
  * the copy). Named `*.tripwire.test.ts` so `pnpm tripwires` (CI) runs it.
  */
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { stripComments } from "./strip-comments.mjs";
 
@@ -17,6 +20,26 @@ const NAIVE = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "");
 
 /** The test's own blanking, so a case reads as "these chars are comment". */
 const blankOf = (s: string) => s.replace(/[^\n\r]/g, " ");
+
+/**
+ * The canonical scanner's content hash (synap-app
+ * packages/design-tokens/scripts/strip-comments.test.ts pins the same value).
+ * This file is a byte copy: edited here, it fails this test. Change the
+ * canonical, copy it to every repo, then update every pin.
+ */
+const STRIP_COMMENTS_SHA256 =
+  "bad4c8051268e3d69f9fe9198e66879726f64f8b28cf4bbeaa36359ef181c925";
+
+describe("stripComments — byte copy of the pinned canonical", () => {
+  it("strip-comments.mjs hashes to STRIP_COMMENTS_SHA256", () => {
+    const bytes = readFileSync(
+      fileURLToPath(new URL("./strip-comments.mjs", import.meta.url))
+    );
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+      STRIP_COMMENTS_SHA256
+    );
+  });
+});
 
 describe("stripComments — hand cases (byte copy of the synap-app scanner)", () => {
   it("a glob string opens no comment: `'image/*'` before real code", () => {
@@ -136,6 +159,47 @@ describe("stripComments — hand cases (byte copy of the synap-app scanner)", ()
     expect(out.split("\n").slice(0, 3)).toEqual(src.split("\n").slice(0, 3));
     expect(out).toContain("const hunted = 1;");
     expect(out).not.toContain("/* c */");
+  });
+
+  it("JSX text: a glob `src/**\/*.tsx` opens no comment (a block opener glued to `*`)", () => {
+    const src = [
+      "export const Help = () => (",
+      "  <p>Matches <code>src/**/*.tsx</code> files</p>",
+      ");",
+      "export const Mark = () => <Sparkles size={12} />;",
+      "/* end */",
+    ].join("\n");
+    const out = stripComments(src, "ts");
+    expect(out).toContain("<code>src/**/*.tsx</code>");
+    expect(out).toContain("<Sparkles size={12} />");
+    expect(out).not.toContain("end");
+  });
+
+  it("a `}` that ends its line is followed by a statement: `/a\\/*b/` there is a regex", () => {
+    const src = "const f = () => {}\n/a\\/*b/.test(s); hunted();\n/* x */";
+    const out = stripComments(src, "ts");
+    expect(out).toContain("/a\\/*b/.test(s); hunted();");
+    expect(out).not.toContain("/* x */");
+    // A mid-line `}` is still a value: the `/` after it divides, the comment goes.
+    expect(stripComments("const r = {a}/2; /* c */", "ts")).toBe(
+      "const r = {a}/2; " + blankOf("/* c */")
+    );
+  });
+
+  // STILL MISREAD — pinned so a fix (or a regression) is seen, and the header's
+  // list is updated with it. Both are JSX TEXT, which the scanner does not parse.
+  it("still misread: `//` in JSX text blanks the rest of that line, code included", () => {
+    const out = stripComments(
+      "const A = () => <p>and/or // either</p>; const hunted = <Sparkles />;",
+      "ts"
+    );
+    expect(out).not.toContain("hunted");
+  });
+
+  it("still misread: a backtick in JSX text opens a template until the next backtick", () => {
+    const src =
+      "<p>press ` to open</p>;\nconst a = 1; // kept as template text\nconst t = `x`;";
+    expect(stripComments(src, "ts")).toContain("// kept as template text");
   });
 
   it("an unterminated block comment runs to the end (JS semantics)", () => {
