@@ -39,6 +39,13 @@ vi.mock("../services/library/readers.js", () => ({
     h.ran.push("readWith");
     return { queued: 1, overBudget: 0, skipped: 0 };
   },
+  libraryReaderAvailability: () => async () => new Map(),
+}));
+vi.mock("../services/library/retry-media.js", () => ({
+  libraryRetryMedia: async () => {
+    h.ran.push("retryMedia");
+    return { queued: 2 };
+  },
 }));
 
 import { libraryRouter } from "./library.js";
@@ -104,6 +111,23 @@ describe("library.readWith is the person's tap only", () => {
     ]);
   });
 
+  for (const [who, extra] of [
+    ["an agent key", { agentUserId: "agent-1" }],
+    ["the IS internal key", { keyType: "is_internal" }],
+  ] as const) {
+    it(`retryMedia: ${who} is FORBIDDEN before anything runs`, async () => {
+      await expect(
+        caller(extra).retryMedia({ itemId: ITEM })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(h.ran).toEqual([]);
+    });
+  }
+
+  it("a person reaches retryMedia", async () => {
+    expect(await caller().retryMedia({ itemId: ITEM })).toEqual({ queued: 2 });
+    expect(h.ran).toEqual(["retryMedia"]);
+  });
+
   it("a person reaches readWith", async () => {
     expect(
       await caller().readWith({
@@ -161,7 +185,11 @@ describe("Hub REST /library/readers", () => {
 
   it("has no write: spending a reader is never a REST call", async () => {
     const app = appAs({});
-    for (const path of ["/library/readWith", "/library/readers"]) {
+    for (const path of [
+      "/library/readWith",
+      "/library/readers",
+      "/library/retryMedia",
+    ]) {
       const res = await app.request(path, {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -15,6 +15,7 @@
  *   build      a group → one governed bundle (first build or rebuild)
  *   readers    who can read an item / a group's waiting items (live offers)
  *   readWith   read items / a group's waiting items with one reader (person only)
+ *   retryMedia copy an item's failed pictures again (person only)
  *   health     unread / groups waiting / oldest wait (orient)
  *
  * The AI's capture door (MCP `synap_capture`) is untouched and never lands
@@ -48,6 +49,7 @@ import {
   type LibraryListResult,
   type LibraryReadersResult,
   type LibraryReadWithResult,
+  type LibraryRetryMediaResult,
   type LibraryRunActionResult,
   type LibrarySearchResult,
 } from "@synap-core/types/imports";
@@ -75,9 +77,11 @@ import {
   readNowLibraryItem,
 } from "../services/library/build.js";
 import {
+  libraryReaderAvailability,
   libraryReaders,
   libraryReadWith,
 } from "../services/library/readers.js";
+import { libraryRetryMedia } from "../services/library/retry-media.js";
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -242,6 +246,14 @@ async function runLibraryActionDoor(args: {
   }
 }
 
+/** The rows' reader bit, asked as THIS caller (an agent's lens stays its own). */
+function readerBitFor(ctx: Context, userId: string) {
+  return libraryReaderAvailability({
+    userId,
+    caller: { agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+  });
+}
+
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const libraryRouter = router({
@@ -278,7 +290,11 @@ export const libraryRouter = router({
     .query(async ({ ctx, input }): Promise<LibraryListResult> => {
       const userId = requireUserId(ctx.userId);
       await adoptImportGroups({ userId });
-      return listLibraryItems({ userId, input });
+      return listLibraryItems({
+        userId,
+        input,
+        readerAvailability: readerBitFor(ctx, userId),
+      });
     }),
 
   /** Every live group with counts. */
@@ -315,6 +331,7 @@ export const libraryRouter = router({
           groupId: row.id,
           ...(input.limit ? { limit: input.limit } : {}),
         },
+        readerAvailability: readerBitFor(ctx, userId),
       });
       return { group: views[0]!, ...page };
     }),
@@ -347,6 +364,7 @@ export const libraryRouter = router({
         userId,
         q: input.q,
         limit: input.limit,
+        readerAvailability: readerBitFor(ctx, userId),
       });
     }),
 
@@ -434,6 +452,18 @@ export const libraryRouter = router({
         ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
       });
+    }),
+
+  /**
+   * "Try again" on "Couldn't keep the pictures": the item's failed copies are
+   * copied again (a media-only job — no reader, no read budget). The person's
+   * tap only — an agent is refused, like `readWith`.
+   */
+  retryMedia: personProcedure
+    .input(z.object({ itemId: uuid }))
+    .mutation(async ({ ctx, input }): Promise<LibraryRetryMediaResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryRetryMedia({ userId, itemId: input.itemId });
     }),
 
   /** Unread / groups waiting / oldest wait. */

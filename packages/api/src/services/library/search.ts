@@ -28,7 +28,6 @@ import {
 } from "@synap/database";
 import type {
   LibraryHealth,
-  LibraryItemView,
   LibrarySearchResult,
 } from "@synap-core/types/imports";
 import { ownCapturesWhere } from "../captures/capture-scope.js";
@@ -41,9 +40,10 @@ import {
   libraryTextMatchSql,
   readStatusSql,
   waitingInGroupSql,
-  toLibraryItemView,
+  libraryItemViews,
   selectLibraryItemRows,
   type LibraryDb,
+  type LibraryReaderAvailability,
 } from "./read-model.js";
 import { countGroups, listLibraryGroupRows } from "./groups.js";
 import {
@@ -68,6 +68,8 @@ export async function searchLibrary(args: {
   readTextIds?: readonly string[];
   /** Narrow to a project's runs (the Library's own lens). */
   lens?: { projectId?: string };
+  /** The person's doors ask for the rows' reader bit (one lookup per page). */
+  readerAvailability?: LibraryReaderAvailability;
 }): Promise<LibrarySearchResult> {
   const database = args.database ?? defaultDb;
   const q = args.q.trim();
@@ -112,9 +114,7 @@ export async function searchLibrary(args: {
       title: c.title,
       createdAt: c.createdAt.toISOString(),
     })),
-    items: itemRows
-      .map(toLibraryItemView)
-      .filter((v): v is LibraryItemView => v !== null),
+    items: await libraryItemViews(itemRows, args.readerAvailability),
   };
 }
 
@@ -133,6 +133,7 @@ export async function searchLibraryWithReadText(args: {
   limit: number;
   lens?: { projectId?: string };
   lookup?: LibraryReadTextLookup;
+  readerAvailability?: LibraryReaderAvailability;
 }): Promise<LibrarySearchResult & { readTextSearch: "ok" | "down" }> {
   const q = args.q.trim();
   let readTextIds: string[] = [];

@@ -40,10 +40,13 @@ import {
 } from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 import {
+  libraryReaderAvailability,
   libraryReaders,
   libraryReadWith,
   type LibraryReadersDeps,
 } from "../readers.js";
+import { libraryRetryMedia } from "../retry-media.js";
+import { listLibraryItems } from "../read-model.js";
 
 const USER = "user-readers-1";
 const OTHER = "user-readers-2";
@@ -457,5 +460,239 @@ describe("library.readWith", () => {
       })
     ).rejects.toThrow(/registry down/);
     expect(sent).toEqual([]);
+  });
+});
+
+async function readOf(id: string): Promise<Record<string, unknown>> {
+  const { rows } = await q<{ r: Record<string, unknown> }>(
+    `select metadata -> 'importRead' as r from documents where id = $1`,
+    [id]
+  );
+  return rows[0]!.r;
+}
+
+describe("library.readWith — what today's budget cannot hold WAITS with the choice", () => {
+  it("over budget → marked over_budget with the reader (the sweep reads it); a read item keeps its read", async () => {
+    const waiting = await item({
+      url: "https://www.instagram.com/p/wait",
+      status: "needs_file",
+      read: {
+        blocked: { reason: "needs_reader", nextStep: "install_reader" },
+        suggestedActions: [{ id: "date-0", kind: "date" }],
+      },
+    });
+    const read = await item({
+      url: "https://www.instagram.com/p/read",
+      status: "read",
+      read: { summary: "kept" },
+    });
+    const { deps, sent } = fakeDeps({ usedToday: async () => 200 });
+    expect(
+      await libraryReadWith({
+        userId: USER,
+        itemIds: [waiting, read],
+        readerId: APIFY.readerId,
+        deps,
+      })
+    ).toEqual({ queued: 0, overBudget: 2, skipped: 0 });
+    expect(sent).toEqual([]);
+    // The mark changes NOW (the client re-reads on settle) and the sweep has
+    // the reader the person chose; why it was blocked and its chips are kept.
+    expect(await readOf(waiting)).toMatchObject({
+      status: "over_budget",
+      requestedReader: APIFY.readerId,
+      blocked: { reason: "needs_reader" },
+      suggestedActions: [{ id: "date-0" }],
+    });
+    expect(await readOf(read)).toEqual({
+      status: "read",
+      summary: "kept",
+      suggestedActions: [],
+    });
+  });
+
+  it("a queued item is not marked; another person's item is never touched", async () => {
+    const mine = await item({
+      url: "https://www.instagram.com/p/m1",
+      status: "needs_file",
+    });
+    const theirs = await item({
+      userId: OTHER,
+      url: "https://www.instagram.com/p/t1",
+      status: "needs_file",
+    });
+    const { deps } = fakeDeps({ usedToday: async () => 199 });
+    await libraryReadWith({
+      userId: USER,
+      itemIds: [mine, theirs],
+      readerId: APIFY.readerId,
+      deps,
+    });
+    expect((await readOf(mine)).status).toBe("needs_file");
+    expect((await readOf(theirs)).status).toBe("needs_file");
+  });
+});
+
+describe("the rows' reader bit (readerAvailable) — one lookup per lens, the preview's rule", () => {
+  function lookupDeps(over: Partial<LibraryReadersDeps> = {}) {
+    const loads: UrlReadersContext[] = [];
+    const deps: Partial<LibraryReadersDeps> = {
+      readerLookup: async (ctx) => {
+        loads.push(ctx);
+        return (url) => offersFor(url);
+      },
+      listReaders: async () => {
+        throw new Error("a row must never ask the door one by one");
+      },
+      ...over,
+    };
+    return { deps, loads };
+  }
+
+  it("a needs-a-reader row says so in the LIST itself (the value arrives), for one source load", async () => {
+    const ig = await item({
+      url: "https://www.instagram.com/p/a",
+      status: "needs_file",
+    });
+    const ig2 = await item({
+      url: "https://www.instagram.com/p/b",
+      status: "needs_file",
+    });
+    // Read by the only reader there is: nobody ELSE can serve it.
+    const page = await item({
+      url: "https://example.com/t",
+      status: "title_only",
+      read: {
+        reader: {
+          id: "builtin:article",
+          name: "Synap article reader",
+          billed: false,
+          readAt: NOW.toISOString(),
+        },
+      },
+    });
+    // Not weak: never asked.
+    const done = await item({
+      url: "https://www.instagram.com/p/c",
+      status: "read",
+    });
+    const note = await item({ status: "unreadable" });
+    const { deps, loads } = lookupDeps();
+    const { items } = await listLibraryItems({
+      userId: USER,
+      input: {},
+      readerAvailability: libraryReaderAvailability({ userId: USER, deps }),
+    });
+    const bit = Object.fromEntries(items.map((i) => [i.id, i.readerAvailable]));
+    expect(bit).toEqual({
+      [ig]: true,
+      [ig2]: true,
+      [page]: false,
+      [done]: undefined,
+      [note]: undefined,
+    });
+    // Every row of the page (one lens) from ONE source load, as the person.
+    expect(loads).toEqual([
+      { userId: USER, workspaceId: null, allSpaces: true },
+    ]);
+  });
+
+  it("an agent caller's bit is asked in the agent's lens", async () => {
+    await item({ url: "https://www.instagram.com/p/a", status: "needs_file" });
+    const { deps, loads } = lookupDeps();
+    await listLibraryItems({
+      userId: USER,
+      input: {},
+      readerAvailability: libraryReaderAvailability({
+        userId: USER,
+        caller: { agentUserId: "agent-1" },
+        deps,
+      }),
+    });
+    expect(readsAllSpaces(loads[0]!)).toBe(false);
+  });
+
+  it("a failed lookup leaves the bit UNKNOWN (absent) — never false, never a failed list", async () => {
+    const ig = await item({
+      url: "https://www.instagram.com/p/a",
+      status: "needs_file",
+    });
+    const { deps } = lookupDeps({
+      readerLookup: async () => {
+        throw new Error("registry down");
+      },
+    });
+    const { items } = await listLibraryItems({
+      userId: USER,
+      input: {},
+      readerAvailability: libraryReaderAvailability({ userId: USER, deps }),
+    });
+    expect(items.map((i) => i.id)).toEqual([ig]);
+    expect("readerAvailable" in items[0]!).toBe(false);
+  });
+});
+
+describe("library.retryMedia — the person's Try again on the pictures", () => {
+  const FAILED = {
+    importMediaFailed: 1,
+    importMediaFailures: [
+      {
+        sourceUrl: "https://cdn.test/a.jpg",
+        kind: "image",
+        reason: "http_4xx",
+        attempts: 3,
+        lastAttemptAt: NOW.toISOString(),
+      },
+    ],
+  };
+  async function withMedia(userId = USER, extra: object = FAILED) {
+    const id = await item({ userId, url: "https://www.instagram.com/p/m" });
+    await q(
+      `update documents set metadata = metadata || $2::jsonb where id = $1`,
+      [id, JSON.stringify(extra)]
+    );
+    return id;
+  }
+
+  it("queues ONE media-only job (no reader, no budget) and counts what it retries", async () => {
+    const id = await withMedia();
+    const sent: unknown[] = [];
+    expect(
+      await libraryRetryMedia({
+        userId: USER,
+        itemId: id,
+        deps: { enqueue: async (items) => (sent.push(...items), items.length) },
+      })
+    ).toEqual({ queued: 1 });
+    expect(sent).toEqual([{ userId: USER, itemId: id, media: "retry" }]);
+  });
+
+  it("nothing failed → a true zero, nothing queued; another person's item is NOT_FOUND; a down queue is an ERROR", async () => {
+    const clean = await withMedia(USER, {});
+    const sent: unknown[] = [];
+    const enqueue = async (items: unknown[]) => (
+      sent.push(...items),
+      items.length
+    );
+    expect(
+      await libraryRetryMedia({
+        userId: USER,
+        itemId: clean,
+        deps: { enqueue },
+      })
+    ).toEqual({ queued: 0 });
+    expect(sent).toEqual([]);
+    const theirs = await withMedia(OTHER);
+    await expect(
+      libraryRetryMedia({ userId: USER, itemId: theirs, deps: { enqueue } })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    const mine = await withMedia();
+    await expect(
+      libraryRetryMedia({
+        userId: USER,
+        itemId: mine,
+        deps: { enqueue: async () => 0 },
+      })
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
   });
 });

@@ -13,8 +13,9 @@
  *     refuses an agent): the tap IS the consent. One light-read job per item,
  *     carrying `reader` (an explicit read: it may bill). A reader that bills
  *     the person's account takes one unit of the daily read budget per item;
- *     items past what today's budget holds are NOT queued and counted
- *     `overBudget` (nothing about them changes — the person taps again later).
+ *     items past what today's budget holds are NOT queued, counted
+ *     `overBudget` and marked `over_budget` with the chosen reader, which the
+ *     hourly sweep reads once the budget has room (a `read` item keeps its read).
  *
  * Owner-floored throughout (a foreign or missing id reads NOT_FOUND / is
  * skipped). The reader lookup runs in the item's own lens (its workspace).
@@ -28,12 +29,14 @@ import {
   inArray,
   drizzleSql,
 } from "@synap/database";
-import type {
-  LibraryReaderOffer,
-  LibraryReadersResult,
-  LibraryReadWithResult,
-  ImportItemMetadata,
+import {
+  readLibraryItemRead,
+  type LibraryReaderOffer,
+  type LibraryReadersResult,
+  type LibraryReadWithResult,
+  type ImportItemMetadata,
 } from "@synap-core/types/imports";
+import { createLogger } from "@synap-core/core";
 import {
   readReaderStamp,
   type UrlReaderOffer,
@@ -48,6 +51,7 @@ import {
   libraryItemsWhere,
   readStatusSql,
   type LibraryDb,
+  type LibraryReaderAvailability,
 } from "./read-model.js";
 import { loadLibraryGroup } from "./groups.js";
 import {
@@ -67,8 +71,14 @@ export const LIBRARY_WAITING_READ_STATUSES = [
 /** Waiting items of one group a readers / readWith call looks at, at most. */
 export const LIBRARY_READERS_SCAN_MAX = 1000;
 
+const logger = createLogger({ module: "library/readers" });
+
 export interface LibraryReadersDeps {
   listReaders(ctx: UrlReadersContext, url: string): Promise<UrlReaderOffer[]>;
+  /** One source load per lens, then a pure fold per URL (`urlReaderLookup`). */
+  readerLookup(
+    ctx: UrlReadersContext
+  ): Promise<(url: string) => UrlReaderOffer[]>;
   enqueue(
     items: Array<{
       userId: string;
@@ -246,6 +256,71 @@ export async function libraryReaders(args: {
   return { offers, waiting: rows.length };
 }
 
+/**
+ * The rows' "a reader can serve this" bit (`LibraryItemView.readerAvailable`),
+ * for a page of items: only WEAK reads (needs a reader / title only / could
+ * not be read) with a link are asked, and the reader sources are loaded ONCE
+ * per lens (the item's space — almost always one per page) and folded per URL
+ * in memory — never one registry read per row. The rule is the preview's:
+ * an offer exists that did NOT produce the stored read (the door's own
+ * `!current`), installed (ready / enable / connect) or to install from the
+ * catalog — so the row and the open preview say the same thing.
+ *
+ * A lens whose lookup FAILED leaves its items without the bit (unknown, the
+ * client keeps its plain mark) and is logged — never written as `false`.
+ */
+export function libraryReaderAvailability(args: {
+  userId: string;
+  caller?: LibraryReadersCaller;
+  deps?: Partial<LibraryReadersDeps>;
+}): LibraryReaderAvailability {
+  const deps = { ...defaultLibraryReadersDeps(), ...args.deps };
+  return async (rows) => {
+    const out = new Map<string, boolean>();
+    const byLens = new Map<string | null, ReadableRow[]>();
+    for (const row of rows) {
+      const url = urlOf(row);
+      if (!url) continue;
+      const item = (row.metadata as Record<string, unknown> | null)
+        ?.importItem as ImportItemMetadata | undefined;
+      const status = readLibraryItemRead(
+        row.metadata,
+        item?.contentStatus
+      ).status;
+      if (
+        !(LIBRARY_WAITING_READ_STATUSES as readonly string[]).includes(status)
+      ) {
+        continue;
+      }
+      const lens = byLens.get(row.workspaceId) ?? [];
+      lens.push(row);
+      byLens.set(row.workspaceId, lens);
+    }
+    for (const lensRows of byLens.values()) {
+      let lookup: (url: string) => UrlReaderOffer[];
+      try {
+        lookup = await deps.readerLookup(
+          ctxOf(args.userId, lensRows[0]!, args.caller)
+        );
+      } catch (err) {
+        logger.warn(
+          { err, items: lensRows.length },
+          "library readers: the reader lookup failed — rows keep their plain mark"
+        );
+        continue;
+      }
+      for (const row of lensRows) {
+        const current = readerIdOfStamp(row.metadata);
+        out.set(
+          row.id,
+          lookup(urlOf(row)!).some((o) => o.readerId !== current)
+        );
+      }
+    }
+    return out;
+  };
+}
+
 /** `library.readWith` — one job per item with the chosen reader (the tap is the consent). */
 export async function libraryReadWith(args: {
   database?: LibraryDb;
@@ -281,6 +356,7 @@ export async function libraryReadWith(args: {
     force: true;
   }> = [];
   let overBudget = 0;
+  const held: string[] = [];
   for (const row of rows) {
     const url = urlOf(row);
     if (!url) {
@@ -303,6 +379,7 @@ export async function libraryReadWith(args: {
       }
       if (room <= 0) {
         overBudget++;
+        held.push(row.id);
         continue;
       }
       room--;
@@ -314,6 +391,9 @@ export async function libraryReadWith(args: {
       force: true,
     });
   }
+  if (held.length > 0) {
+    await holdOverBudget(database, args.userId, held, args.readerId);
+  }
   const queued = due.length > 0 ? await deps.enqueue(due) : 0;
   if (due.length > 0 && queued === 0) {
     // The queue is down: say so — a tap that read nothing must not look done.
@@ -323,6 +403,39 @@ export async function libraryReadWith(args: {
     });
   }
   return { queued, overBudget, skipped };
+}
+
+/**
+ * Items the tap could not afford today WAIT with the person's choice: marked
+ * `over_budget` with the reader they chose (`requestedReader`), so the mark
+ * says it at once and the hourly sweep reads them with THAT reader once the
+ * budget has room — "It waits for tomorrow's reading budget" is then true. An
+ * item already `read` keeps its read untouched (never masked by a wait).
+ * Everything else on the stored read (why it was blocked, who read it, its
+ * chips) is kept.
+ */
+async function holdOverBudget(
+  database: LibraryDb,
+  userId: string,
+  ids: readonly string[],
+  readerId: string
+): Promise<void> {
+  const patch = JSON.stringify({
+    status: "over_budget",
+    requestedReader: readerId,
+  });
+  await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) || ${patch}::jsonb)`,
+    })
+    .where(
+      and(
+        libraryItemsWhere(userId),
+        inArray(documents.id, [...ids]),
+        drizzleSql`COALESCE(${documents.metadata} #>> '{importRead,status}', 'not_read') <> 'read'`
+      )
+    );
 }
 
 /** An item already stamped inside the 24h window reuses its unit (read-budget.ts). */
@@ -342,6 +455,11 @@ export function defaultLibraryReadersDeps(): LibraryReadersDeps {
       const { listReadersForUrl } =
         await import("../capabilities/url-readers.js");
       return listReadersForUrl(ctx, url);
+    },
+    async readerLookup(ctx) {
+      const { urlReaderLookup } =
+        await import("../capabilities/url-readers.js");
+      return urlReaderLookup(ctx);
     },
     async enqueue(items) {
       const { enqueueLibraryLightRead } = await import("./light-read-queue.js");
