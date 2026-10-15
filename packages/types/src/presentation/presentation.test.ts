@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  INLINE_IMAGE_MIME_TYPES,
+  INLINE_VIDEO_MIME_TYPES,
   declaredMediaSources,
   parseProfilePresentation,
   presentationFromUiHints,
@@ -117,5 +119,24 @@ describe("presentationFromUiHints", () => {
     expect(presentationFromUiHints(null)).toBeNull();
     expect(presentationFromUiHints([])).toBeNull();
     expect(presentationFromUiHints("media")).toBeNull();
+  });
+});
+
+describe("inline mime allowlists (the ONE list; web + relay + the pod's copy read it)", () => {
+  it("images: exactly the four rasters, never SVG", () => {
+    expect([...INLINE_IMAGE_MIME_TYPES]).toEqual([
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+    ]);
+    expect(INLINE_IMAGE_MIME_TYPES as readonly string[]).not.toContain(
+      "image/svg+xml"
+    );
+  });
+  it("video: exactly mp4 + webm, and disjoint from the image list", () => {
+    expect([...INLINE_VIDEO_MIME_TYPES]).toEqual(["video/mp4", "video/webm"]);
+    for (const m of INLINE_VIDEO_MIME_TYPES)
+      expect(INLINE_IMAGE_MIME_TYPES as readonly string[]).not.toContain(m);
   });
 });

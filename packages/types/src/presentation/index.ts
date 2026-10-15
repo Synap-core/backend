@@ -89,6 +89,35 @@ export interface EntityMediaCopy {
 }
 
 /**
+ * The raster types that may ever be drawn in an `<img>` — the ONE list. The
+ * display door (`SpatialMediaPreview` in `@synap-core/web/spatial-ui`, which
+ * re-exports it), relay's renderers and the pod's media copy all refuse the
+ * same types from here.
+ *
+ * Why an ALLOWLIST, not sanitisation: the pod signs a stored blob with no
+ * `ResponseContentType` override, so the browser gets whatever `Content-Type`
+ * was recorded at upload, from the storage origin. An `image/svg+xml` blob is
+ * a script-capable document there, and an `<img>`/`<iframe>`/`<object>`
+ * pointed at it is an XSS primitive. Do NOT add `image/svg+xml` to either list,
+ * and never move a type between them.
+ */
+export const INLINE_IMAGE_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+
+/**
+ * Video containers played inline in a `<video>` (founder decision D5). A
+ * SEPARATE list from {@link INLINE_IMAGE_MIME_TYPES} on purpose: that list gates
+ * `<img>`, and a video mime must never reach an `<img>` (or vice versa). A
+ * `<video>` only ever DECODES its bytes as frames — it never renders its source
+ * as a document — so it cannot reopen the SVG hole.
+ */
+export const INLINE_VIDEO_MIME_TYPES = ["video/mp4", "video/webm"] as const;
+
+/**
  * What a renderer gets back for "this entity's media". A REFERENCE, never a
  * URL: signing is async and lives in the display door (`useStoredFileUrl` →
  * `SpatialMediaPreview`), which also decides renderability (mime allowlist).
