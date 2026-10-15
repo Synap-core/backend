@@ -202,7 +202,6 @@ function buildDeps(submitted: SubmitCaptureGraphInput[]): ImportBuildDeps {
     }),
     instructionsFor: async (explicit) => explicit || undefined,
     generate: async () => ({}),
-    readUrl,
     readBytes: async (key) => h.objects.get(key) ?? Buffer.alloc(0),
     // Files a REAL proposal row: "built for this group" is derived from the
     // bundle's status. Approved here (a review that went through); the
