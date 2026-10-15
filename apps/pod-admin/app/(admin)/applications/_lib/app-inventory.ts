@@ -69,6 +69,8 @@ const STATE_PILL: Record<ConnectionState, StatusKind> = {
   needs_signin: "stale",
   failing: "down",
   setting_up: "unknown",
+  // The pod could not read the connection: neutral, never a fault.
+  unverified: "unknown",
   ready: "healthy",
   quiet: "unknown",
   off: "unknown",
@@ -301,6 +303,7 @@ const STATE_RANK: Record<ConnectionState, number> = {
   quiet: 1,
   asking: 2,
   setting_up: 2,
+  unverified: 2,
   off: 3,
   available: 3,
   revoked: 4,
