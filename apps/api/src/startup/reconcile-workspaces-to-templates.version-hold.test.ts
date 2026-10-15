@@ -9,9 +9,10 @@
  * while the space's last apply is unfinished (pinned on PGlite by
  * `template-apply-finisher.boot.pglite.test.ts`).
  *
- * Driven through the real `reconcileWorkspacesToTemplates`; the pending-change
- * read is faked, `holdsTemplateStamp` and `readTemplateState` are the REAL
- * ones, and the assertion is on what reached the channel.
+ * Driven through the real `reconcileWorkspacesToTemplates`; `readTemplateState`
+ * is the REAL one, and the assertion is on what reached the channel. The
+ * data-change hold (Contract C) is the channel's own (one place for every
+ * stamp): this pass never reads pending changes.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -134,28 +135,13 @@ beforeEach(() => {
 });
 
 describe("boot pass — the version stamp waits for what it checked", () => {
-  it("HOLDS the stamp while a consentable data change is pending", async () => {
+  it("the data-change hold is the CHANNEL's: the pass hands the converged template over and never reads pending changes itself", async () => {
+    // (Contract C is decided in ONE place every stamp passes through — the
+    // finisher; pinned on PGlite by template-apply-finisher.boot.pglite.)
     h.pending.mockResolvedValue([change("crm.deal", false)]);
     await reconcileWorkspacesToTemplates();
-    expect(h.finishBootConvergence).not.toHaveBeenCalled();
-  });
-
-  it("stamps when only destructive changes remain (operator steps never hold it)", async () => {
-    h.pending.mockResolvedValue([change("crm.churned", true)]);
-    await reconcileWorkspacesToTemplates();
+    expect(h.pending).not.toHaveBeenCalled();
     expect(stampedVersion()).toBe("2.0.0");
-  });
-
-  it("stamps when nothing is pending", async () => {
-    h.pending.mockResolvedValue([]);
-    await reconcileWorkspacesToTemplates();
-    expect(stampedVersion()).toBe("2.0.0");
-  });
-
-  it("a FAILED pending read holds the stamp — never stamped unearned", async () => {
-    h.pending.mockRejectedValue(new Error("ledger unreadable"));
-    await reconcileWorkspacesToTemplates();
-    expect(h.finishBootConvergence).not.toHaveBeenCalled();
   });
 
   it("playbooks that did not converge hold it too", async () => {

@@ -102,11 +102,10 @@ export interface LayerOneResult {
   /** The version layer 1 materialized / re-synced to — never stamped here. */
   pendingVersionStamp?: string;
   /**
-   * `"reconciled"` only: the profile slugs of the definition the re-sync ran
-   * against — what a pending template DATA change is matched on (the stamp
-   * hold, `applyTemplate`).
+   * `"reconciled"` only: the definition the re-sync ran against — what a
+   * pending template DATA change is matched on (the finisher's stamp hold).
    */
-  resyncedProfileSlugs?: string[];
+  resyncedDefinition?: WorkspaceDefinitionInput;
   /**
    * Built just now (create / resume) only: what the create core made, in the
    * definition's order — a door's seed step reads the entities positionally.
@@ -433,11 +432,7 @@ export async function applyLayerOne(
       outcome: "reconciled",
       action,
       reconciled: report,
-      resyncedProfileSlugs: (
-        (resyncDefinition.profiles ?? []) as Array<{ slug?: unknown }>
-      )
-        .map((p) => p.slug)
-        .filter((slug): slug is string => typeof slug === "string" && !!slug),
+      resyncedDefinition: resyncDefinition,
       ...(resolved?.packageDefinition
         ? { packageDefinition: resolved.packageDefinition }
         : {}),

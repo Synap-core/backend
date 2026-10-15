@@ -438,3 +438,54 @@ describe("mergeTemplateState + legacyMirror", () => {
     expect(packs).toEqual([{ slug: "a", version: "1.0", installedAt: "t1" }]);
   });
 });
+
+describe("heldForDataChanges — the stamp held for a data change", () => {
+  const base = { slug: "crm", version: "v1", state: "active", at: "t" };
+  it("is read back from settings.template, both forms", () => {
+    expect(
+      readTemplateState({
+        template: { ...base, heldForDataChanges: ["lead-to-facet"] },
+      })
+    ).toMatchObject({ heldForDataChanges: ["lead-to-facet"] });
+    const unreadable = readTemplateState({
+      template: {
+        ...base,
+        heldForDataChanges: [],
+        heldForDataChangesUnreadable: true,
+      },
+    });
+    expect(unreadable).toMatchObject({
+      heldForDataChanges: [],
+      heldForDataChangesUnreadable: true,
+    });
+  });
+  it("absent or malformed reads as nothing held", () => {
+    const plain = readTemplateState({ template: base });
+    expect(plain?.heldForDataChanges).toBeUndefined();
+    const bad = readTemplateState({
+      template: {
+        ...base,
+        heldForDataChanges: "lead-to-facet",
+        heldForDataChangesUnreadable: "yes",
+      },
+    });
+    expect(bad?.heldForDataChanges).toBeUndefined();
+    expect(bad?.heldForDataChangesUnreadable).toBeUndefined();
+  });
+  it("a patch of null clears both", () => {
+    const held = readTemplateState({
+      template: {
+        ...base,
+        heldForDataChanges: [],
+        heldForDataChangesUnreadable: true,
+      },
+    });
+    const next = mergeTemplateState(
+      held,
+      { heldForDataChanges: null, heldForDataChangesUnreadable: null },
+      "t2"
+    );
+    expect(next.heldForDataChanges).toBeUndefined();
+    expect(next.heldForDataChangesUnreadable).toBeUndefined();
+  });
+});

@@ -50,6 +50,8 @@ const h = vi.hoisted(() => ({
   failResync: false,
   /** What `pendingTemplateDataChanges` answers (the consentable data changes). */
   pendingDataChanges: [] as Array<Record<string, unknown>>,
+  /** Make the pending-changes read throw. */
+  pendingUnreadable: false,
   /** When layer 2 throws, the next N template-state writes fail (a DB blip). */
   blipWritesAfterLayerTwo: 0,
   failNextWrites: 0,
@@ -69,6 +71,8 @@ const h = vi.hoisted(() => ({
   ],
   /** The pod catalog cache, by slug (what `installFromCatalog` resolves). */
   catalog: new Map<string, Record<string, unknown>>(),
+  /** Run the REAL dependency resolver (the resolver rows). */
+  realResolver: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -98,7 +102,10 @@ vi.mock("@synap/database", async (importOriginal) => {
         ...args
       );
     },
-    pendingTemplateDataChanges: async () => h.pendingDataChanges,
+    pendingTemplateDataChanges: async () => {
+      if (h.pendingUnreadable) throw new Error("ledger unreadable");
+      return h.pendingDataChanges;
+    },
     // The create/resume core, following its contract (pinned on the REAL core
     // by @synap/database `create-workspace-hands-back-stamp.pglite.test.ts`):
     // the space is left "pending", the version handed back, never written.
@@ -213,16 +220,23 @@ vi.mock("../../utils/tier-check.js", () => ({
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: () => undefined,
 }));
-vi.mock("../package-dependency-resolver.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../package-dependency-resolver.js")
-  >()),
-  resolvePackageDependencies: async () => ({
-    installed: [],
-    composeRequested: false,
-    composeTargetWorkspaceId: undefined,
-  }),
-}));
+vi.mock("../package-dependency-resolver.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../package-dependency-resolver.js")>();
+  return {
+    ...actual,
+    resolvePackageDependencies: async (
+      ...args: Parameters<typeof actual.resolvePackageDependencies>
+    ) =>
+      h.realResolver
+        ? actual.resolvePackageDependencies(...args)
+        : {
+            installed: [],
+            composeRequested: false,
+            composeTargetWorkspaceId: undefined,
+          },
+  };
+});
 vi.mock("../package-apply-post-workspace.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../package-apply-post-workspace.js")>();
@@ -1348,13 +1362,81 @@ describe("a pending template data change holds the stamp on every door", () => {
     expect(await playbooksIn(id)).toEqual(["Close", "Qualify"]);
     const held = await theSpace(slug);
     expect(held.state?.version).toBe("d-1");
+    // The hold is recorded on the space: what health names (be-health).
+    expect(held.state?.heldForDataChanges).toEqual(["lead-to-facet"]);
     expect(reply.warning).toMatch(/changes existing data/);
     // Once nothing is pending (the person consented through the update
     // door), the next apply earns the stamp.
     await catalogTrpc().installFromCatalog({ slug, workspaceId: id });
+    const stamped = (await theSpace(slug)).state;
+    expect(stamped).toMatchObject({ state: "active", version: "d-2" });
+    expect(stamped?.heldForDataChanges).toBeUndefined();
+  });
+
+  it("an unreadable pending list holds too, recorded as unreadable — never as 'none'", async () => {
+    const slug = "data-change-unreadable";
+    publish({ slug, version: "u-1", playbooks: ["Qualify"] });
+    await catalogTrpc().installFromCatalog({ slug });
+    const { id } = await theSpace(slug);
+    publish({ slug, version: "u-2", playbooks: ["Qualify", "Close"] });
+    h.pendingUnreadable = true;
+    try {
+      await catalogTrpc().installFromCatalog({ slug, workspaceId: id });
+    } finally {
+      h.pendingUnreadable = false;
+    }
+    const held = (await theSpace(slug)).state;
+    expect(held?.version).toBe("u-1");
+    expect(held).toMatchObject({
+      heldForDataChanges: [],
+      heldForDataChangesUnreadable: true,
+    });
+  });
+
+  it("the dependency resolver (a `require`d space re-synced) holds its stamp too", async () => {
+    const slug = "dep-held";
+    publish({ slug, version: "r-1", playbooks: ["Qualify"] });
+    const resolve = async () => {
+      const { resolvePackageDependencies } =
+        await import("../package-dependency-resolver.js");
+      h.realResolver = true;
+      try {
+        return await resolvePackageDependencies({
+          definition: {
+            dependencies: [{ slug, kind: "workspace", relation: "require" }],
+          },
+          userId: OWNER,
+        });
+      } finally {
+        h.realResolver = false;
+      }
+    };
+    await resolve();
+    const { id, state } = await theSpace(slug);
+    expect(state).toMatchObject({ state: "active", version: "r-1" });
+    publish({ slug, version: "r-2", playbooks: ["Qualify", "Close"] });
+    h.pendingDataChanges = [
+      {
+        opKey: "lead-to-facet",
+        description: "Leads become a role on people",
+        affected: 3,
+        destructive: false,
+        counts: {},
+      },
+    ];
+    try {
+      await resolve();
+    } finally {
+      h.pendingDataChanges = [];
+    }
+    expect(await playbooksIn(id)).toEqual(["Close", "Qualify"]);
+    const held = (await theSpace(slug)).state;
+    expect(held?.version).toBe("r-1");
+    expect(held?.heldForDataChanges).toEqual(["lead-to-facet"]);
+    await resolve();
     expect((await theSpace(slug)).state).toMatchObject({
       state: "active",
-      version: "d-2",
+      version: "r-2",
     });
   });
 });

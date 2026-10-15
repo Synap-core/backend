@@ -17,13 +17,7 @@
  * Layer-1 failures (dependency graph, compose, create) still throw — there is
  * no space to report on — with the typed errors the doors already map.
  */
-import {
-  sql,
-  pendingTemplateDataChanges,
-  holdsTemplateStamp,
-  type TemplateDataChange,
-  type WorkspaceDefinitionInput,
-} from "@synap/database";
+import type { WorkspaceDefinitionInput } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   materializeWorkspaceCore,
@@ -171,13 +165,6 @@ export interface TemplateApplyResult {
   dependencies: ResolvedPackageDependency[];
   layer2: LayerTwoReport;
   finished: FinishTemplateApplyResult | null;
-  /**
-   * A re-sync whose version stamp is HELD because a consentable template data
-   * change is pending (`pending`), or could not be measured (`null`). Layer 1
-   * and layer 2 ran; only the stamp waits for the person's consent at
-   * `synap templates update` (`/packages/apply`, which runs the change).
-   */
-  dataChangesHeld?: { pending: TemplateDataChange[] | null };
   /** The pod's one sentence for why the apply is not finished, when it is not. */
   warning: string | null;
 }
@@ -320,34 +307,10 @@ export async function applyCatalogLayerTwo(input: {
     claims || layer2.status === "failed"
       ? await finishWithTruth(
           { workspaceId, userId, source: input.source, layer2 },
-          input.finish
+          { ...input.finish, definition: catalogPackage }
         )
       : null;
   return { layer2, finished };
-}
-
-/**
- * DATA CHANGES (TEMPLATE-LIFECYCLE Contract C) on the apply path — the same
- * hold as the boot pass: a re-sync whose template's profiles a pending,
- * consentable data change still touches does NOT earn the version stamp (the
- * stamp would claim a convergence the data has not made). Health keeps the
- * space drifted, and `synap templates update` is where the person sees the
- * change and consents. A failed read holds too — never guess "none".
- * Returns `null` when nothing holds the stamp.
- */
-async function dataChangeHold(
-  profileSlugs: string[]
-): Promise<{ pending: TemplateDataChange[] | null } | null> {
-  try {
-    const pending = await pendingTemplateDataChanges(sql, profileSlugs);
-    return holdsTemplateStamp(pending) ? { pending } : null;
-  } catch (err) {
-    logger.warn(
-      { err },
-      "template apply: pending data changes unreadable — the version stamp is held"
-    );
-    return { pending: null };
-  }
 }
 
 export async function applyTemplate(
@@ -450,7 +413,6 @@ export async function applyTemplate(
 
   let layer2: LayerTwoReport = { status: "skipped" };
   let finished: FinishTemplateApplyResult | null = null;
-  let dataChangesHeld: TemplateApplyResult["dataChangesHeld"];
   const runLayerTwo = (
     body: PackagePostWorkspaceBody,
     posture: { agentUserId?: string; enrollAgentUserId?: string }
@@ -531,22 +493,21 @@ export async function applyTemplate(
     }
     if (body && (input.alwaysRunLayerTwo || declaresLayerTwo(body)))
       layer2 = await runLayerTwo(body, posture);
-    // An UPDATE (a re-sync) only: a first install converts nothing.
-    if (outcome === "reconciled" && pendingVersionStamp)
-      dataChangesHeld =
-        (await dataChangeHold(layerOne?.resyncedProfileSlugs ?? [])) ??
-        undefined;
     finished = await finish({
       built: outcome === "created",
-      pendingVersionStamp: dataChangesHeld ? undefined : pendingVersionStamp,
+      pendingVersionStamp,
       pendingPack,
+      // What a pending data change is matched on: the definition layer 1
+      // re-synced to (the overlay, on a compose). The finisher holds an
+      // update's stamp on it.
+      definition: layerOne?.resyncedDefinition ?? definition,
     });
   }
 
   const warning =
     finished && finished.state !== "converged"
       ? await unfinishedWarning(workspaceId, finished, identity.packageSlug)
-      : dataChangesHeld
+      : finished?.held
         ? `Not finished: this update of ${identity.packageSlug ?? "the template"} changes existing data, and waits for you to agree to it. Run \`synap templates update${identity.packageSlug ? ` ${identity.packageSlug}` : ""}\` to review the changes.`
         : null;
 
@@ -565,7 +526,6 @@ export async function applyTemplate(
       : {}),
     dependencies: core.dependencies,
     ...(pendingVersionStamp ? { pendingVersionStamp } : {}),
-    ...(dataChangesHeld ? { dataChangesHeld } : {}),
     layer2,
     finished,
     warning,

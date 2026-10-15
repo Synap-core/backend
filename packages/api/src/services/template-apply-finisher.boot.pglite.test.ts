@@ -12,7 +12,12 @@
  *  (4) the version is the WHOLE-template hash: it is stamped (or a pack's
  *      recorded) only when what the pass converged covers every layer-2 kind
  *      the template declares — boot never runs capabilities / skills / cells…
- *      (review F3: the boot stamp was a durable lie for those).
+ *      (review F3: the boot stamp was a durable lie for those);
+ *  (5) a consentable data change pending on the template's profiles (or an
+ *      unreadable pending list) holds the stamp — and a pack's version — and
+ *      the hold is RECORDED on the space (`heldForDataChanges`); the next
+ *      stamp clears it (TEMPLATE-LIFECYCLE Contract C, the same hold as every
+ *      other stamp).
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -22,6 +27,9 @@ const h = vi.hoisted(() => ({
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
+  /** The pending data changes, by profile slug asked (a throw = unreadable). */
+  pending: null as null | ((slugs: string[]) => Array<Record<string, unknown>>),
+  asked: [] as string[][],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -32,7 +40,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   const db = drizzle(client, { schema });
-  return { ...actual, db, getDb: async () => db };
+  return {
+    ...actual,
+    db,
+    getDb: async () => db,
+    pendingTemplateDataChanges: async (_sql: unknown, slugs: string[]) => {
+      h.asked.push(slugs);
+      return h.pending ? h.pending(slugs) : [];
+    },
+  };
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
@@ -198,5 +214,119 @@ describe("finishBootConvergence — the boot channel stamps only a finished appl
     expect(
       (await stateOf(id))?.packs?.find((p) => p.slug === "rules-pack")
     ).toBeUndefined();
+  });
+});
+
+describe("finishBootConvergence — a pending data change holds the stamp, recorded", () => {
+  const change = (opKey: string, destructive = false) => ({
+    opKey,
+    description: opKey,
+    affected: 3,
+    destructive,
+    counts: {},
+  });
+  const withLead = (version: string) =>
+    booted(version, { profiles: [{ slug: "lead" }], playbooks: [] });
+  const onLead =
+    (changes: Array<Record<string, unknown>>) => (slugs: string[]) =>
+      slugs.includes("lead") ? changes : [];
+
+  it("(5) a pending change on the template's profile: no stamp, the hold recorded; the next stamp clears it", async () => {
+    const id = await space("active");
+    h.asked.length = 0;
+    h.pending = onLead([change("lead-to-facet")]);
+    let r;
+    try {
+      r = await finishBootConvergence({
+        workspaceId: id,
+        userId: OWNER,
+        template: withLead("v-2"),
+      });
+    } finally {
+      h.pending = null;
+    }
+    expect(h.asked).toEqual([["lead"]]);
+    expect(r).toMatchObject({
+      versionStamped: false,
+      held: { opKeys: ["lead-to-facet"], unreadable: false },
+    });
+    expect(await stateOf(id)).toMatchObject({
+      state: "active",
+      version: "v-1",
+      heldForDataChanges: ["lead-to-facet"],
+    });
+    const after = await finishBootConvergence({
+      workspaceId: id,
+      userId: OWNER,
+      template: withLead("v-2"),
+    });
+    expect(after.versionStamped).toBe(true);
+    const stamped = await stateOf(id);
+    expect(stamped?.version).toBe("v-2");
+    expect(stamped?.heldForDataChanges).toBeUndefined();
+  });
+
+  it("(5) an unreadable pending list holds, recorded as unreadable", async () => {
+    const id = await space("active");
+    h.pending = () => {
+      throw new Error("ledger unreadable");
+    };
+    try {
+      await finishBootConvergence({
+        workspaceId: id,
+        userId: OWNER,
+        template: withLead("v-2"),
+      });
+    } finally {
+      h.pending = null;
+    }
+    expect(await stateOf(id)).toMatchObject({
+      version: "v-1",
+      heldForDataChanges: [],
+      heldForDataChangesUnreadable: true,
+    });
+  });
+
+  it("(5) only destructive changes left (operator steps) never hold it", async () => {
+    const id = await space("active");
+    h.pending = onLead([change("lead-purge", true)]);
+    try {
+      await finishBootConvergence({
+        workspaceId: id,
+        userId: OWNER,
+        template: withLead("v-2"),
+      });
+    } finally {
+      h.pending = null;
+    }
+    const state = await stateOf(id);
+    expect(state?.version).toBe("v-2");
+    expect(state?.heldForDataChanges).toBeUndefined();
+  });
+
+  it("(5) a pack whose profile a pending change touches is not advanced, and the hold is recorded", async () => {
+    const id = await space("active");
+    h.pending = onLead([change("lead-to-facet")]);
+    let r;
+    try {
+      r = await finishBootConvergence({
+        workspaceId: id,
+        userId: OWNER,
+        packs: [
+          {
+            slug: "lead-pack",
+            version: "p-2",
+            templatePackage: { profiles: [{ slug: "lead" }], playbooks: [] },
+            converged: ["playbooks"],
+          },
+        ],
+      });
+    } finally {
+      h.pending = null;
+    }
+    expect(r).toMatchObject({ packsRecorded: 0, packsHeld: 1 });
+    const state = await stateOf(id);
+    expect(state?.packs?.find((p) => p.slug === "lead-pack")).toBeUndefined();
+    expect(state?.heldForDataChanges).toEqual(["lead-to-facet"]);
   });
 });

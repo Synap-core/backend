@@ -32,6 +32,7 @@
  */
 
 import type { WorkspaceSettings } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import { postWorkspaceLayersConverged } from "./capabilities/install-layers.js";
 import {
   declaredLayerTwoKinds,
@@ -41,6 +42,66 @@ import {
 export type TemplateApplyRecord = NonNullable<
   WorkspaceSettings["templateApply"]
 >;
+
+const logger = createLogger({ module: "template-apply-finisher" });
+
+/**
+ * The profile slugs a template definition declares — what a pending template
+ * data change is matched on. The ONE extraction (apply, dependency, boot).
+ */
+export function templateProfileSlugs(definition: object | undefined): string[] {
+  const profiles = (definition as { profiles?: unknown } | undefined)?.profiles;
+  return (Array.isArray(profiles) ? profiles : [])
+    .map((p) => (p as { slug?: unknown } | null)?.slug)
+    .filter((slug): slug is string => typeof slug === "string" && !!slug);
+}
+
+/** Why a stamp is held: the pending opKeys, or the list could not be read. */
+export interface DataChangeHold {
+  opKeys: string[];
+  unreadable: boolean;
+}
+
+/**
+ * DATA CHANGES (TEMPLATE-LIFECYCLE Contract C), decided HERE for every stamp:
+ * a template whose profiles a pending, consentable data change still touches
+ * does not earn its version — the stamp would claim a convergence the data
+ * has not made. Health keeps the space drifted and names the change
+ * (`settings.template.heldForDataChanges`); `synap templates update` is where
+ * a person sees it and agrees. A failed read holds too — never guess "none".
+ * `null` = nothing holds the stamp.
+ */
+export async function dataChangeHold(
+  definition: object | undefined
+): Promise<DataChangeHold | null> {
+  const { sql, pendingTemplateDataChanges, holdsTemplateStamp } =
+    await import("@synap/database");
+  try {
+    const pending = await pendingTemplateDataChanges(
+      sql,
+      templateProfileSlugs(definition)
+    );
+    if (!holdsTemplateStamp(pending)) return null;
+    return {
+      opKeys: pending.filter((c) => !c.destructive).map((c) => c.opKey),
+      unreadable: false,
+    };
+  } catch (err) {
+    logger.warn(
+      { err },
+      "template apply: pending data changes unreadable — the version stamp is held"
+    );
+    return { opKeys: [], unreadable: true };
+  }
+}
+
+/** The record of a hold (`null` patch = cleared, once a stamp lands). */
+function heldPatch(hold: DataChangeHold | null) {
+  return {
+    heldForDataChanges: hold ? hold.opKeys : null,
+    heldForDataChangesUnreadable: hold?.unreadable ? (true as const) : null,
+  };
+}
 
 export interface FinishTemplateApplyInput {
   workspaceId: string;
@@ -71,6 +132,14 @@ export interface FinishTemplateApplyInput {
    * `post` is ignored then: a failure is never read from a result bag.
    */
   layerTwoFailed?: { error: unknown };
+  /**
+   * The template definition this apply converged the space to. An UPDATE's
+   * stamp (a re-hit, not a build: a first install converts nothing) and an
+   * already-recorded pack's version are HELD while a consentable data change
+   * touches its profiles (`dataChangeHold`); the hold is recorded on the
+   * space. Omitted = no data-change check (nothing to match on).
+   */
+  definition?: object;
 }
 
 export interface FinishTemplateApplyResult {
@@ -78,6 +147,8 @@ export interface FinishTemplateApplyResult {
   versionStamped: boolean;
   /** Present when the apply did not converge — the record written. */
   templateApply?: TemplateApplyRecord;
+  /** Layers converged, but the stamp is held for these data changes. */
+  held?: DataChangeHold;
 }
 
 /** What did not land, read from the layer-2 bag: proposal ids and error lines. */
@@ -157,6 +228,15 @@ export async function finishTemplateApply(
     post === null
       ? !pendingVersionStamp && !pendingPack
       : postWorkspaceLayersConverged(post);
+  // Read BEFORE the row lock (a dry run per pending op); applied under it.
+  const hold =
+    converged &&
+    input.definition &&
+    ((pendingVersionStamp && !built) || pendingPack)
+      ? await dataChangeHold(input.definition)
+      : null;
+  let held: DataChangeHold | undefined;
+  let versionWasHeld = false;
   const { proposals, failures } =
     !converged && post ? notLanded(post) : { proposals: [], failures: [] };
   const recordState: TemplateApplyRecord["state"] =
@@ -175,13 +255,38 @@ export async function finishTemplateApply(
     workspaceId,
     (current) => {
       const now = new Date().toISOString();
+      // The hold covers the space's own stamp on an update, and a pack's
+      // version only when the pack is already recorded (its update — a
+      // pack's first install converts nothing).
+      const versionHeld = !!hold && !!pendingVersionStamp && !built;
+      const packHeld =
+        !!hold &&
+        !!pendingPack &&
+        !!current?.packs?.some((p) => p.slug === pendingPack.slug);
+      const pack =
+        pendingPack && packHeld
+          ? { slug: pendingPack.slug, version: undefined }
+          : pendingPack;
+      if (versionHeld || packHeld) held = hold!;
+      versionWasHeld = versionHeld;
+      // A new hold replaces the record; the space's own stamp landing clears
+      // it (a pack converging says nothing about the space's own version).
+      const holdRecord =
+        versionHeld || packHeld
+          ? heldPatch(hold)
+          : pendingVersionStamp
+            ? heldPatch(null)
+            : {};
       if (current?.state === "failed") {
         failed = true;
         // The space's own failure stands — only its own update clears it. An
         // overlay pack layered onto it whose layer 2 just converged is still
         // recorded: that is the pack's convergence, not the space's.
-        return converged && pendingPack
-          ? { packs: withPack(current.packs, pendingPack, now) }
+        return converged && pack
+          ? {
+              packs: withPack(current.packs, pack, now),
+              ...(packHeld ? heldPatch(hold) : {}),
+            }
           : null;
       }
       if (converged) {
@@ -193,10 +298,11 @@ export async function finishTemplateApply(
           // A converged space has no build to resume: its create's ledger
           // goes (a later failed re-sync must never read as "resume").
           ...(active ? { completedSteps: null } : {}),
-          ...(pendingVersionStamp ? { version: pendingVersionStamp } : {}),
-          ...(pendingPack
-            ? { packs: withPack(current?.packs, pendingPack, now) }
+          ...(pendingVersionStamp && !versionHeld
+            ? { version: pendingVersionStamp }
             : {}),
+          ...(pack ? { packs: withPack(current?.packs, pack, now) } : {}),
+          ...holdRecord,
         };
       }
       return {
@@ -212,7 +318,8 @@ export async function finishTemplateApply(
   if (converged)
     return {
       state: "converged",
-      versionStamped: !!pendingVersionStamp && !!written,
+      versionStamped: !!pendingVersionStamp && !!written && !versionWasHeld,
+      ...(held ? { held } : {}),
     };
   const templateApply: TemplateApplyRecord = {
     state: recordState,
@@ -299,15 +406,41 @@ export async function finishBootConvergence(input: {
   packsRecorded: number;
   /** The template's layer-2 kinds this pass did not converge (no stamp). */
   uncovered: LayerTwoKey[];
+  /** The template's stamp is held for these data changes (Contract C). */
+  held?: DataChangeHold;
+  /** Packs whose version is held for a data change. */
+  packsHeld: number;
 }> {
   const { workspaceId, userId, template } = input;
   const uncovered = template ? bootUncoveredLayerTwo(template) : [];
-  const version = uncovered.length === 0 ? template?.version : undefined;
-  const packs = (input.packs ?? [])
-    .filter((p) => bootUncoveredLayerTwo(p).length === 0)
-    .map((p) => ({ slug: p.slug, version: p.version }));
-  if (!version && packs.length === 0)
-    return { versionStamped: false, packsRecorded: 0, uncovered };
+  const covered = uncovered.length === 0 ? template : undefined;
+  // Contract C, the same hold every stamp passes (`dataChangeHold`): a boot
+  // pass is always an update of an existing space.
+  const held = covered ? await dataChangeHold(covered.templatePackage) : null;
+  const version = held ? undefined : covered?.version;
+  const packs: Array<{ slug: string; version: string }> = [];
+  const packHolds: DataChangeHold[] = [];
+  for (const p of input.packs ?? []) {
+    if (bootUncoveredLayerTwo(p).length > 0) continue;
+    const packHold = await dataChangeHold(p.templatePackage);
+    if (packHold) packHolds.push(packHold);
+    else packs.push({ slug: p.slug, version: p.version });
+  }
+  const holds = [...(held ? [held] : []), ...packHolds];
+  const hold: DataChangeHold | null =
+    holds.length > 0
+      ? {
+          opKeys: [...new Set(holds.flatMap((h) => h.opKeys))],
+          unreadable: holds.some((h) => h.unreadable),
+        }
+      : null;
+  const done = {
+    uncovered,
+    packsHeld: packHolds.length,
+    ...(held ? { held } : {}),
+  };
+  if (!version && packs.length === 0 && !hold)
+    return { versionStamped: false, packsRecorded: 0, ...done };
   const { getDb, writeTemplateState, withPack, isTemplateApplyUnfinished } =
     await import("@synap/database");
   let versionStamped = false;
@@ -321,7 +454,7 @@ export async function finishBootConvergence(input: {
         !!version &&
         current?.state !== "building" &&
         !isTemplateApplyUnfinished(current);
-      if (!stamp && packs.length === 0) return null;
+      if (!stamp && packs.length === 0 && !hold) return null;
       versionStamped = stamp;
       return {
         ...(stamp ? { version } : {}),
@@ -333,9 +466,11 @@ export async function finishBootConvergence(input: {
               ),
             }
           : {}),
+        // A new hold replaces the record; the own stamp landing clears it.
+        ...(hold ? heldPatch(hold) : stamp ? heldPatch(null) : {}),
       };
     },
     { userId }
   );
-  return { versionStamped, packsRecorded: packs.length, uncovered };
+  return { versionStamped, packsRecorded: packs.length, ...done };
 }

@@ -53,13 +53,9 @@
 import { createLogger } from "@synap-core/core";
 import {
   getDb,
-  sql,
   workspaces,
   reconcileWorkspaceFromDefinition,
-  pendingTemplateDataChanges,
-  holdsTemplateStamp,
   readTemplateState,
-  type TemplateDataChange,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import {
@@ -209,39 +205,6 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     lookupTemplate
   );
 
-  // DATA CHANGES (TEMPLATE-LIFECYCLE Contract C): a template whose profiles a
-  // pending conversion op still touches is NOT stamped to its new version —
-  // this pass holds the stamp (marker invariant) and health keeps showing
-  // the space drifted, so `synap templates update` is where the person sees
-  // the change and consents. Boot never runs a conversion. Computed ONCE per
-  // template (a dry run per pending op); a failed read is left to the
-  // pass below, which then holds the stamp rather than guess.
-  const pendingByKey = new Map<string, TemplateDataChange[] | undefined>();
-  const pendingFor = async (
-    key: string,
-    resolved: ResolvedWorkspaceTemplate
-  ): Promise<TemplateDataChange[] | undefined> => {
-    if (pendingByKey.has(key)) return pendingByKey.get(key);
-    let pending: TemplateDataChange[] | undefined;
-    try {
-      const slugs = (
-        (resolved.workspaceDefinition.profiles ?? []) as Array<{
-          slug?: unknown;
-        }>
-      )
-        .map((p) => p.slug)
-        .filter((s): s is string => typeof s === "string" && !!s);
-      pending = await pendingTemplateDataChanges(sql, slugs);
-    } catch (err) {
-      logger.warn(
-        { err, templateKey: key },
-        "Pending template data changes unreadable — the version stamp is held"
-      );
-      pending = undefined;
-    }
-    pendingByKey.set(key, pending);
-    return pending;
-  };
   let versionHeld = 0;
 
   for (const { ws, subtype: templateKey } of ordered) {
@@ -341,38 +304,20 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
       });
 
       // THE STAMP, through the one finisher's boot channel — only for what
-      // this pass CHECKED: layer 1 + playbooks + rules converged and no
-      // consentable data change is pending (TEMPLATE-LIFECYCLE Contract C:
-      // a pending — or unmeasurable — data change holds the stamp; the person
-      // consents at `synap templates update`). The channel also holds it
-      // while the space's last apply is unfinished, and whenever the template
-      // declares a layer-2 kind this pass does not converge (capabilities,
-      // skills, cells…): the version is the WHOLE-template hash, and boot
-      // never runs the rest of layer 2 unattended.
-      const pending = await pendingFor(templateKey, resolved);
-      const dataHeld = !pending || holdsTemplateStamp(pending);
-      if (dataHeld && resolved.version) {
-        versionHeld++;
-        logger.warn(
-          {
-            workspaceId: ws.id,
-            templateKey,
-            version: resolved.version,
-            pending: pending?.map((c) => ({
-              opKey: c.opKey,
-              affected: c.affected,
-            })),
-          },
-          "Template version stamp held: data changes await consent (synap templates update)"
-        );
-      }
+      // this pass CHECKED: layer 1 + playbooks + rules converged. The channel
+      // holds it while a consentable data change is pending or unmeasurable
+      // (TEMPLATE-LIFECYCLE Contract C, the same hold as every other stamp —
+      // recorded on the space; the person consents at `synap templates
+      // update`), while the space's last apply is unfinished, and whenever
+      // the template declares a layer-2 kind this pass does not converge
+      // (capabilities, skills, cells…): the version is the WHOLE-template
+      // hash, and boot never runs the rest of layer 2 unattended.
       const current = readTemplateState(ws.settings, {
         packageSlug: ws.packageSlug,
       });
       if (
         playbooksConverged &&
         rulesConverged &&
-        !dataHeld &&
         resolved.version &&
         resolved.version !== current?.version
       ) {
@@ -385,6 +330,18 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
             converged: ["playbooks", "rules"],
           },
         });
+        if (boot.held) {
+          versionHeld++;
+          logger.warn(
+            {
+              workspaceId: ws.id,
+              templateKey,
+              version: resolved.version,
+              held: boot.held,
+            },
+            "Template version stamp held: data changes await consent (synap templates update)"
+          );
+        }
         if (boot.uncovered.length > 0) {
           versionHeld++;
           logger.info(

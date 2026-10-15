@@ -52,6 +52,8 @@ vi.mock("@synap/database", async (importOriginal) => {
     // Template health's catalog-completeness read: no sync stamps here (it
     // only gates `unlisted`, not drift).
     getCatalogSyncStamps: async () => ({}),
+    // An update's stamp passes the data-change hold (Contract C): none here.
+    pendingTemplateDataChanges: async () => [],
     preflightWorkspaceFromDefinition: async () => ({
       dryRun: true,
       ok: true,

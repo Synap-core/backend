@@ -86,6 +86,16 @@ export interface TemplateState {
   proposals?: string[];
   failures?: string[];
   packs?: TemplatePackEntry[];
+  /**
+   * The template data changes (conversion opKeys) the last stamp is HELD for
+   * (TEMPLATE-LIFECYCLE Contract C): layer 1 and layer 2 converged, but a
+   * consentable change still touches the template's profiles, so the version
+   * (or a pack's) was not stamped. `[]` only with `heldForDataChangesUnreadable`
+   * (the pending list could not be read — held, never guessed "none"). Absent =
+   * nothing held; cleared by the next stamp. Written only by the finisher.
+   */
+  heldForDataChanges?: string[];
+  heldForDataChangesUnreadable?: true;
   /** When this state was last written ("" = unknown, a legacy record). */
   at: string;
 }
@@ -107,6 +117,8 @@ export interface TemplateStatePatch {
   proposals?: string[] | null;
   failures?: string[] | null;
   packs?: TemplatePackEntry[] | null;
+  heldForDataChanges?: string[] | null;
+  heldForDataChangesUnreadable?: true | null;
 }
 
 /** Promoted columns a reader can pass for a row whose settings lack the key. */
@@ -194,6 +206,10 @@ function normalize(t: Record<string, unknown>): TemplateState {
   if (failures) out.failures = failures;
   const packs = parsePacks(t.packs);
   if (packs) out.packs = packs;
+  const held = strings(t.heldForDataChanges);
+  if (held) out.heldForDataChanges = held;
+  if (t.heldForDataChangesUnreadable === true)
+    out.heldForDataChangesUnreadable = true;
   return out;
 }
 

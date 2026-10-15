@@ -73,6 +73,7 @@ import { resolveWorkspaceTemplate } from "./capabilities/resolve-workspace-templ
 import type { PackageDefinitionOutput } from "@synap-core/workspace-templates";
 import { applyLayerOne } from "./template-apply/layer-one.js";
 import { composeOntoBaseWorkspace } from "./compose-overlay.js";
+import { layerTwoFailedSentence } from "./template-health.js";
 import { isPackDefinition, primaryPackDomain } from "./pack-definition.js";
 import {
   createCapabilityFromDefinition,
@@ -153,14 +154,8 @@ async function seedDependencyLayers(
       { err: layer2.error, slug, workspaceId },
       "dependency post-workspace layers failed (non-fatal — workspace already exists; recorded on it)"
     );
-    return {
-      slug,
-      status: "failed",
-      error:
-        layer2.error instanceof Error
-          ? layer2.error.message
-          : String(layer2.error),
-    };
+    // The raw cause is in the operator log above, never in the reply.
+    return { slug, status: "failed", error: layerTwoFailedSentence(slug) };
   }
   return { slug, status: "no-layers" };
 }
