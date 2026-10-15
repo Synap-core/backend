@@ -280,7 +280,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       ? searchLibraryForAsk({ userId, query, limit, projectId })
           .then((lane): Settled & { textDown?: boolean } => ({
             status: "ok",
-            items: lane.items as unknown as Record<string, unknown>[],
+            items: lane.items,
             ...(lane.readTextSearch === "down" ? { textDown: true } : {}),
           }))
           .catch((err): Settled => {

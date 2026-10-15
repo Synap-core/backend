@@ -48,6 +48,7 @@ import { documents, libraryReadTextKey } from "@synap/database";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 import {
   ASK_LIBRARY_SNIPPET_MAX,
+  ASK_LIBRARY_TEXT_FETCH_MAX,
   readerOf,
   searchLibraryForAsk,
   snippetOf,
@@ -210,6 +211,44 @@ describe("ask · library lane", () => {
     });
   });
 
+  it("fetches read texts for the top hits only; a summary holding the words costs no fetch", async () => {
+    // 6 items whose read text holds the word; 2 of them say it in their
+    // summary too. Only ASK_LIBRARY_TEXT_FETCH_MAX of the other 4 are fetched.
+    const ids: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      ids.push(
+        await keepRead({
+          title: `Page ${i}`,
+          summary: i < 2 ? `A note on ceramics, part ${i}.` : `Part ${i}.`,
+          text: `Long text ${i} about ceramics and kilns.`,
+        })
+      );
+    }
+    const fetched: string[] = [];
+    const lane = await searchLibraryForAsk(
+      { userId: USER, query: "ceramics", limit: 10 },
+      {
+        lookup: indexFromStoredText,
+        readText: async (key) => {
+          fetched.push(key);
+          return h.objects.get(key)!.toString("utf-8");
+        },
+      }
+    );
+    expect(lane.items).toHaveLength(6);
+    expect(fetched).toHaveLength(ASK_LIBRARY_TEXT_FETCH_MAX);
+    const from = lane.items.map((i) => i.snippetFrom);
+    expect(from.filter((f) => f === "read_text")).toHaveLength(
+      ASK_LIBRARY_TEXT_FETCH_MAX
+    );
+    // Every hit still carries a snippet (the summary stands in, said so).
+    expect(lane.items.every((i) => i.snippet)).toBe(true);
+    const summaryHits = lane.items.filter(
+      (i) => i.snippet?.includes("ceramics") && i.snippetFrom === "summary"
+    );
+    expect(summaryHits).toHaveLength(2);
+  });
+
   it("a failed SQL read THROWS — it is never an empty lane", async () => {
     const broken = {
       select: () => {
@@ -226,7 +265,7 @@ describe("ask · library lane", () => {
 });
 
 describe("ask · library lane helpers", () => {
-  it("carries the reader stamp when the read has one, tolerates its absence", () => {
+  it("carries the reader stamp when the read has one, and nothing without one", () => {
     const stamp = {
       id: "builtin:article",
       name: "Synap reader",
@@ -242,10 +281,9 @@ describe("ask · library lane helpers", () => {
       billed: false,
       readAt: "2026-10-14T09:00:00.000Z",
     });
+    // A malformed stamp never reaches here: the read model parses it
+    // (`readLibraryItemRead` → `readReaderStamp`) before a view exists.
     expect(readerOf({ read: { status: "read" } } as never)).toBeUndefined();
-    expect(
-      readerOf({ read: { status: "read", reader: { id: 1 } } } as never)
-    ).toBeUndefined();
   });
 
   it("content terms drop question and filler words; the snippet centres on the first match", () => {
