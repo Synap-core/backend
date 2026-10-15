@@ -308,6 +308,38 @@ describe("foldUrlReaders — who can read this link", () => {
   });
 });
 
+describe("foldUrlReaders — one verb seen in several spaces (allSpaces rows)", () => {
+  const inSpace = (
+    ws: string | null,
+    container: string,
+    extra: Partial<RegistryCapability> = {},
+    v: Partial<Verb> = {}
+  ) =>
+    toolRow(
+      "Apify — Web Scraping",
+      [verb("capture_social_post", { urlPatterns: APIFY_PATTERNS, ...v })],
+      { containerId: container, workspaceId: ws, ...extra }
+    );
+
+  it("stays ONE offer; the copy that can run wins over a disabled one in the lens", () => {
+    const offers = foldUrlReaders(
+      [inSpace(null, "cap-pod", { enabled: false }), inSpace("ws-s", "cap-s")],
+      IG,
+      null
+    );
+    expect(offers.map((o) => [o.readerId, o.state, o.capabilityId])).toEqual([
+      ["capture_social_post", "ready", "cap-s"],
+    ]);
+  });
+
+  it("both runnable: the caller's own lens wins over another space", () => {
+    const rows = [inSpace("ws-other", "cap-other"), inSpace("ws-s", "cap-s")];
+    expect(foldUrlReaders(rows, IG, "ws-s")[0]!.capabilityId).toBe("cap-s");
+    // …and with no lens copy, registry order (first seen) stays.
+    expect(foldUrlReaders(rows, IG, null)[0]!.capabilityId).toBe("cap-other");
+  });
+});
+
 describe("installOffersForUrl — the catalog's readers", () => {
   it("an IG URL gets the catalog's reader as an install offer", () => {
     const [offer] = installOffersForUrl([APIFY_CATALOG], IG, new Set());

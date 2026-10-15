@@ -90,8 +90,13 @@ function urlOf(row: ReadableRow): string | null {
   return typeof url === "string" && url.trim() ? url.trim() : null;
 }
 
+/**
+ * A Library item is the PERSON's, whatever space it was kept in: its readers
+ * are every reader the person can see (`allSpaces`), each run in its own
+ * space — a pack installed in a space reads a pod-wide kept post.
+ */
 function ctxOf(userId: string, row: ReadableRow): UrlReadersContext {
-  return { userId, workspaceId: row.workspaceId };
+  return { userId, workspaceId: row.workspaceId, allSpaces: true };
 }
 
 const COLUMNS = {

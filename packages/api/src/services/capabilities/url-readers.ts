@@ -60,6 +60,12 @@ interface RankedReader {
   builtin: boolean;
   /** The capability container the verb lives in, when it has one. */
   containerId?: string;
+  /**
+   * The space the verb RUNS in: its own row's space when the read saw every
+   * space (`allSpaces`), so the gate, grant and vault resolve exactly as for a
+   * direct run there. Absent (or `null` = a pod-wide row) → the caller's lens.
+   */
+  workspaceId?: string | null;
 }
 
 const TOOL_KINDS = new Set(["tool", "builtin-tool", "source-provider"]);
@@ -134,11 +140,31 @@ function builtinCandidate(url: string): RankedReader | null {
   };
 }
 
-/** Installed verb readers of `url`, one per verb id (tool row preferred). */
+/** Can this row's verb run now (the pack on, its backing skill executable)? */
+function verbRunnable(
+  row: RegistryCapability,
+  v: NonNullable<RegistryCapability["verbs"]>[number]
+): boolean {
+  return row.enabled === true && v.backingSkillExecutable === true;
+}
+
+/**
+ * Installed verb readers of `url`, one per verb id (tool row preferred).
+ *
+ * An `allSpaces` read can see the SAME verb in several spaces (one pack
+ * installed in two). It stays ONE offer — the reader id is the verb id — and
+ * the copy that can run wins, then the copy in the caller's own lens
+ * (`lensWorkspaceId`, pod-wide rows included), then registry order.
+ */
 function verbReaders(
   rows: readonly RegistryCapability[],
-  url: string
+  url: string,
+  lensWorkspaceId: string | null = null
 ): RankedReader[] {
+  const local = (row: RegistryCapability) =>
+    row.workspaceId === undefined ||
+    row.workspaceId === null ||
+    row.workspaceId === lensWorkspaceId;
   const best = new Map<string, { row: RegistryCapability; spec: number }>();
   const verbOf = new Map<
     string,
@@ -156,11 +182,23 @@ function verbReaders(
       const isTool = TOOL_KINDS.has(row.kind);
       if (prior) {
         const priorTool = TOOL_KINDS.has(prior.row.kind);
+        const priorVerb = verbOf.get(v.id)!;
         // Same rule as foldVerbsByIntent: a tool row (connection, grant) wins
         // over the skill row of the same verb; between tool rows, the granted.
+        // Tied on that, a copy in ANOTHER space (allSpaces only): the runnable
+        // one, then the caller's own lens.
+        const kindTie = isTool === priorTool;
+        const grantTie =
+          kindTie && (!isTool || !!v.granted === !!priorVerb.granted);
+        const otherSpace = row.workspaceId !== prior.row.workspaceId;
         const better =
           (isTool && !priorTool) ||
-          (isTool && priorTool && v.granted && !verbOf.get(v.id)?.granted);
+          (isTool && priorTool && v.granted && !priorVerb.granted) ||
+          (grantTie &&
+            otherSpace &&
+            (verbRunnable(row, v) !== verbRunnable(prior.row, priorVerb)
+              ? verbRunnable(row, v)
+              : local(row) && !local(prior.row)));
         if (!better) continue;
       }
       best.set(v.id, { row, spec });
@@ -184,7 +222,7 @@ function verbReaders(
       name: row.containerName ?? row.name,
       containerId: row.containerId ?? null,
       connection,
-      enabled: row.enabled === true && v.backingSkillExecutable === true,
+      enabled: verbRunnable(row, v),
     });
     const state: UrlReaderOffer["state"] = !block
       ? "ready"
@@ -207,6 +245,7 @@ function verbReaders(
       specificity: spec,
       builtin: false,
       ...(row.containerId ? { containerId: row.containerId } : {}),
+      ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
     });
   }
   return out;
@@ -214,10 +253,11 @@ function verbReaders(
 
 function rankedFold(
   rows: readonly RegistryCapability[],
-  url: string
+  url: string,
+  lensWorkspaceId: string | null = null
 ): RankedReader[] {
   if (!isHttpUrl(url)) return [];
-  const all = verbReaders(rows, url);
+  const all = verbReaders(rows, url, lensWorkspaceId);
   const builtin = builtinCandidate(url);
   if (builtin) all.push(builtin);
   return all.sort(compareReaders);
@@ -227,13 +267,16 @@ function rankedFold(
  * PURE: the installed readers of `url` (plus the built-in), ranked — most
  * specific declaration first, free before billed, ready before the rest, the
  * built-in on ties. A verb is a reader ONLY by declaring a pattern that
- * matches; an intent alone (`read_webpage`) routes nothing.
+ * matches; an intent alone (`read_webpage`) routes nothing. `lensWorkspaceId`
+ * breaks a tie between copies of one verb in different spaces (rows from an
+ * `allSpaces` read) in favour of the caller's own lens.
  */
 export function foldUrlReaders(
   rows: readonly RegistryCapability[],
-  url: string
+  url: string,
+  lensWorkspaceId: string | null = null
 ): UrlReaderOffer[] {
-  return rankedFold(rows, url).map((r) => r.offer);
+  return rankedFold(rows, url, lensWorkspaceId).map((r) => r.offer);
 }
 
 interface CatalogReaderSkill {
@@ -346,6 +389,23 @@ export interface UrlReadersContext {
   workspaceId: string | null;
   /** The acting agent, when the read originates from one (threaded to the gate). */
   agentUserId?: string | null;
+  /**
+   * Consider every reader the PERSON can see — pod-wide plus every space on
+   * their access floor (the registry's `allSpaces` read, `userVisibleWhere`) —
+   * and run the chosen verb in ITS OWN space. A Library item is the person's,
+   * whatever space it was kept in, so a pack installed in one space reads a
+   * pod-wide kept post. Absent → on for the person at POD ALTITUDE
+   * (`workspaceId: null`), the lens otherwise. NEVER for an agent: an agent's
+   * read keeps its own lens (`agentUserId` set ⇒ ignored), so this widens
+   * nothing an agent can run.
+   */
+  allSpaces?: boolean;
+}
+
+/** Does this read see every space the person can see? (Never an agent's.) */
+export function readsAllSpaces(ctx: UrlReadersContext): boolean {
+  if (ctx.agentUserId) return false;
+  return ctx.allSpaces ?? ctx.workspaceId === null;
 }
 
 interface ReaderSources {
@@ -370,7 +430,10 @@ export function invalidateUrlReaderCache(): void {
 async function loadReaderSources(
   ctx: UrlReadersContext
 ): Promise<ReaderSources> {
-  const key = `${ctx.userId}\u0000${ctx.workspaceId ?? ""}`;
+  const allSpaces = readsAllSpaces(ctx);
+  // The mode is part of the key: a person's all-spaces list must never answer
+  // an agent's lensed read (or the reverse) for the same user and lens.
+  const key = `${ctx.userId}\u0000${ctx.workspaceId ?? ""}\u0000${allSpaces ? "all" : "lens"}`;
   const hit = sourcesCache.get(key);
   if (hit && Date.now() - hit.at < SOURCES_TTL_MS) return hit.sources;
 
@@ -381,7 +444,11 @@ async function loadReaderSources(
   // `limit: null` — never slice before folding (see capabilitiesByIntent).
   const [rows, entries] = await Promise.all([
     listCapabilities(
-      { userId: ctx.userId, workspaceId: ctx.workspaceId },
+      {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        ...(allSpaces ? { allSpaces: true } : {}),
+      },
       { limit: null }
     ),
     queryCatalogCache({ kind: "capability" }),
@@ -449,7 +516,7 @@ async function resolveReaders(
   url: string
 ): Promise<ResolvedReaders> {
   const sources = await loadReaderSources(ctx);
-  const installed = rankedFold(sources.rows, url);
+  const installed = rankedFold(sources.rows, url, ctx.workspaceId);
   const seen = new Set(installed.map((r) => r.offer.readerId));
   const install = rankedInstallOffers(
     sources.catalog,
@@ -672,7 +739,9 @@ export async function readUrl(
       verbId: chosen.offer.verbId ?? chosen.offer.readerId,
       parameters: { url: sourceUrl },
       userId: ctx.userId,
-      workspaceId: ctx.workspaceId,
+      // The verb's own space when the read saw every space (never an agent's
+      // read — its rows carry no space), else the caller's lens.
+      workspaceId: chosen.workspaceId ?? ctx.workspaceId,
       agentUserId: ctx.agentUserId ?? null,
       observability: "mirror",
       suppressProposal: !opts.interactive,

@@ -948,7 +948,13 @@ export function defaultLightReadDeps(args: {
       const { readUrl } = await import("../capabilities/url-readers.js");
       return (
         await readUrl(
-          { userId: args.userId, workspaceId: args.workspaceId },
+          // The item is the person's: every reader they can see, each run in
+          // its own space (same context as `library.readers`).
+          {
+            userId: args.userId,
+            workspaceId: args.workspaceId,
+            allSpaces: true,
+          },
           url,
           opts
         )
@@ -958,7 +964,7 @@ export function defaultLightReadDeps(args: {
       const { listReadersForUrl } =
         await import("../capabilities/url-readers.js");
       return listReadersForUrl(
-        { userId: args.userId, workspaceId: args.workspaceId },
+        { userId: args.userId, workspaceId: args.workspaceId, allSpaces: true },
         url
       );
     },

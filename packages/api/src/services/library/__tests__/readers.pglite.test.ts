@@ -190,6 +190,30 @@ describe("library.readers — one item", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
+  it("an item's readers are the PERSON's, every space (allSpaces), for readers AND readWith", async () => {
+    // A pod-wide kept post (workspace_id NULL): a reader installed in a space
+    // must be in view — the lookup asks for every space the person can see.
+    const ig = await item({ url: "https://www.instagram.com/p/a" });
+    const ctxs: unknown[] = [];
+    const { deps } = fakeDeps({
+      listReaders: async (ctx, url) => {
+        ctxs.push(ctx);
+        return offersFor(url);
+      },
+    });
+    await libraryReaders({ userId: USER, itemId: ig, deps });
+    await libraryReadWith({
+      userId: USER,
+      itemIds: [ig],
+      readerId: APIFY.readerId,
+      deps,
+    });
+    expect(ctxs).toEqual([
+      { userId: USER, workspaceId: null, allSpaces: true },
+      { userId: USER, workspaceId: null, allSpaces: true },
+    ]);
+  });
+
   it("a failed reader lookup is an ERROR, never an empty list", async () => {
     const ig = await item({ url: "https://www.instagram.com/p/a" });
     const { deps } = fakeDeps({
