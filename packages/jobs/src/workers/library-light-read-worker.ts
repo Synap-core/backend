@@ -20,6 +20,7 @@
 
 import type PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
+import { envInt } from "@synap/shared-utils";
 
 const logger = createLogger({ module: "library-light-read-worker" });
 
@@ -54,10 +55,11 @@ export const LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT = 4;
 export function libraryLightReadConcurrency(
   env: Record<string, string | undefined> = process.env
 ): number {
-  const raw = Number(env.SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY);
-  return Number.isInteger(raw) && raw >= 1
-    ? Math.min(raw, 16)
-    : LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT;
+  return envInt(env, "SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY", {
+    default: LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT,
+    min: 1,
+    max: 16,
+  });
 }
 
 /** What one read did — stored as the pg-boss job `output`. */

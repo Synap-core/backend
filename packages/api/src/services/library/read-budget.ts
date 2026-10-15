@@ -22,15 +22,23 @@
 
 import { documents, drizzleSql, and, eq } from "@synap/database";
 import type { db as DbType } from "@synap/database";
+import { envInt } from "@synap/shared-utils";
 
 /** Items read with AI per person per rolling 24h (env `SYNAP_LIBRARY_READ_AI_PER_DAY`). */
 export const LIBRARY_READ_AI_PER_DAY_DEFAULT = 200;
 
-export function libraryReadAiPerDay(): number {
-  const raw = Number(process.env.SYNAP_LIBRARY_READ_AI_PER_DAY);
-  return Number.isInteger(raw) && raw >= 0
-    ? raw
-    : LIBRARY_READ_AI_PER_DAY_DEFAULT;
+/** Ceiling of the knob: a budget no person could spend in a day. */
+const LIBRARY_READ_AI_PER_DAY_MAX = 100_000;
+
+export function libraryReadAiPerDay(
+  env: Record<string, string | undefined> = process.env
+): number {
+  // 0 is a real setting (no AI reads); an empty value is not.
+  return envInt(env, "SYNAP_LIBRARY_READ_AI_PER_DAY", {
+    default: LIBRARY_READ_AI_PER_DAY_DEFAULT,
+    min: 0,
+    max: LIBRARY_READ_AI_PER_DAY_MAX,
+  });
 }
 
 export type LibraryReadDb = Pick<

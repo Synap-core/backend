@@ -11,6 +11,7 @@
 
 import { isArchivedSql, lightReadEligibleSql } from "./read-model.js";
 import { createLogger } from "@synap-core/core";
+import { envInt } from "@synap/shared-utils";
 import {
   documents,
   drizzleSql,
@@ -58,11 +59,11 @@ export const LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT = 60;
 export function lightReadJobExpireSeconds(
   env: Record<string, string | undefined> = process.env
 ): number {
-  const raw = Number(env.SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES);
-  const minutes =
-    Number.isInteger(raw) && raw >= 5
-      ? Math.min(raw, 720)
-      : LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT;
+  const minutes = envInt(env, "SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES", {
+    default: LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT,
+    min: 5,
+    max: 720,
+  });
   return minutes * 60;
 }
 

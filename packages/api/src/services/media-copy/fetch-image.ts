@@ -26,6 +26,7 @@ import {
   type ValidateUrlResult,
 } from "@synap/shared-utils";
 import {
+  COPIED_IMAGE_ACCEPT,
   SNIFF_HEAD_BYTES,
   sniffImageSize,
   sniffImageType,
@@ -82,6 +83,18 @@ export interface FetchImageDeps {
   timeoutMs?: number;
 }
 
+/** Past either decoder bound ({@link MEDIA_COPY_MAX_SIDE}, {@link MEDIA_COPY_MAX_PIXELS})? */
+export function exceedsImageBounds(size: {
+  width: number;
+  height: number;
+}): boolean {
+  return (
+    size.width > MEDIA_COPY_MAX_SIDE ||
+    size.height > MEDIA_COPY_MAX_SIDE ||
+    size.width * size.height > MEDIA_COPY_MAX_PIXELS
+  );
+}
+
 export async function fetchExternalImage(
   url: string,
   deps: FetchImageDeps = {}
@@ -95,7 +108,7 @@ export async function fetchExternalImage(
   try {
     const opened = await openGuardedMedia(url, {
       signal: controller.signal,
-      accept: "image/png,image/jpeg,image/gif,image/webp;q=0.9",
+      accept: COPIED_IMAGE_ACCEPT,
       maxBytes,
       fetch: deps.fetch,
       validate: deps.validate,
@@ -110,12 +123,7 @@ export async function fetchExternalImage(
       return streamed;
     }
     const size = sniffImageSize(streamed.bytes, streamed.mime);
-    if (
-      size &&
-      (size.width > MEDIA_COPY_MAX_SIDE ||
-        size.height > MEDIA_COPY_MAX_SIDE ||
-        size.width * size.height > MEDIA_COPY_MAX_PIXELS)
-    ) {
+    if (size && exceedsImageBounds(size)) {
       return { ok: false, reason: "too_large" };
     }
     return {
@@ -196,21 +204,24 @@ export async function openGuardedMedia(
 }
 
 /**
- * Read the body chunk by chunk: sniff once the head has arrived (stop on a
- * non-image), stop the moment the total passes `maxBytes`.
+ * THE capped body reader of a guarded download: chunk by chunk, stopping the
+ * moment the total passes `maxBytes` (never `arrayBuffer()` on an unbounded
+ * stream). `head`, when given, judges the first `bytes` as soon as they
+ * arrive — `false` stops the download (`rejected`).
  */
-async function readImageCapped(
+export async function readBodyCapped(
   res: Response,
-  maxBytes: number
+  maxBytes: number,
+  head?: { bytes: number; accept: (head: Buffer) => boolean }
 ): Promise<
-  | { ok: true; bytes: Buffer; mime: CopiedImageMime }
-  | { ok: false; reason: ImageFetchFailure }
+  | { ok: true; bytes: Buffer }
+  | { ok: false; reason: "too_large" | "empty" | "fetch_failed" | "rejected" }
 > {
   if (!res.body) return { ok: false, reason: "empty" };
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  let mime: CopiedImageMime | null = null;
+  let judged = !head;
   try {
     for (;;) {
       let step: ReadableStreamReadResult<Uint8Array>;
@@ -225,11 +236,11 @@ async function readImageCapped(
       total += value.byteLength;
       if (total > maxBytes) return { ok: false, reason: "too_large" };
       chunks.push(value);
-      if (!mime && total >= SNIFF_HEAD_BYTES) {
-        mime = sniffImageType(
-          Buffer.concat(chunks).subarray(0, SNIFF_HEAD_BYTES)
-        );
-        if (!mime) return { ok: false, reason: "not_image" };
+      if (!judged && head && total >= head.bytes) {
+        judged = true;
+        if (!head.accept(Buffer.concat(chunks).subarray(0, head.bytes))) {
+          return { ok: false, reason: "rejected" };
+        }
       }
     }
   } finally {
@@ -240,11 +251,85 @@ async function readImageCapped(
     }
   }
   if (total === 0) return { ok: false, reason: "empty" };
-  const bytes = Buffer.concat(chunks);
+  return { ok: true, bytes: Buffer.concat(chunks) };
+}
+
+/**
+ * Read the body capped: sniff once the head has arrived (stop on a
+ * non-image), stop the moment the total passes `maxBytes`.
+ */
+async function readImageCapped(
+  res: Response,
+  maxBytes: number
+): Promise<
+  | { ok: true; bytes: Buffer; mime: CopiedImageMime }
+  | { ok: false; reason: ImageFetchFailure }
+> {
+  let mime: CopiedImageMime | null = null;
+  const read = await readBodyCapped(res, maxBytes, {
+    bytes: SNIFF_HEAD_BYTES,
+    accept: (head) => (mime = sniffImageType(head)) !== null,
+  });
+  if (!read.ok) {
+    return {
+      ok: false,
+      reason: read.reason === "rejected" ? "not_image" : read.reason,
+    };
+  }
   // A body shorter than the sniff head still gets judged.
-  mime = mime ?? sniffImageType(bytes);
-  if (!mime) return { ok: false, reason: "not_image" };
-  return { ok: true, bytes, mime };
+  const judged: CopiedImageMime | null = mime ?? sniffImageType(read.bytes);
+  if (!judged) return { ok: false, reason: "not_image" };
+  return { ok: true, bytes: read.bytes, mime: judged };
+}
+
+/**
+ * Any remote FILE's bytes through the same guarded door (validate +
+ * `safePublicFetch`, `Content-Length` pre-check, capped streamed read,
+ * timeout). No type sniff — the caller decides what the bytes are (e.g. an
+ * inbound attachment keeps the sender's declared type). Never throws.
+ */
+export async function fetchGuardedBytes(
+  url: string,
+  opts: {
+    maxBytes: number;
+    timeoutMs: number;
+    accept?: string;
+    fetch?: FetchImageDeps["fetch"];
+    validate?: FetchImageDeps["validate"];
+  }
+): Promise<
+  | { ok: true; bytes: Buffer; contentType: string | null }
+  | { ok: false; reason: ImageFetchFailure }
+> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  try {
+    const opened = await openGuardedMedia(url, {
+      signal: controller.signal,
+      accept: opts.accept ?? "*/*",
+      maxBytes: opts.maxBytes,
+      fetch: opts.fetch,
+      validate: opts.validate,
+    });
+    if (!opened.ok) return opened;
+    const read = await readBodyCapped(opened.res, opts.maxBytes);
+    if (!read.ok) {
+      if (controller.signal.aborted && read.reason === "fetch_failed") {
+        return { ok: false, reason: "timeout" };
+      }
+      return {
+        ok: false,
+        reason: read.reason === "rejected" ? "fetch_failed" : read.reason,
+      };
+    }
+    return {
+      ok: true,
+      bytes: read.bytes,
+      contentType: opened.res.headers.get("content-type"),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function cancel(res: Response): Promise<void> {

@@ -8,7 +8,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { createHash } from "node:crypto";
 import { safePublicFetch, type AddressResolver } from "@synap/shared-utils";
 import {
   fetchExternalVideoToSink,
@@ -68,7 +67,6 @@ function collectingSink() {
 }
 
 const URL_OK = "https://cdn.example.com/v.mp4";
-const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
 describe("sniffVideoType", () => {
   it("mp4 (ftyp + video brand) and webm (EBML + webm DocType) only", () => {
@@ -106,7 +104,7 @@ describe("libraryMediaVideoMaxBytes", () => {
 });
 
 describe("fetchExternalVideoToSink", () => {
-  it("streams an mp4 into the sink: sniffed type, byte count, sha256 of exactly what was stored", async () => {
+  it("streams an mp4 into the sink: sniffed type, byte count, exactly the bytes (no second hash pass)", async () => {
     const head = mp4Head("isom");
     const rest = new Uint8Array(500).fill(7);
     const s = streamed([head, rest], {
@@ -123,7 +121,8 @@ describe("fetchExternalVideoToSink", () => {
       stored: { key: "stored-key" },
     });
     expect(c.bytes().byteLength).toBe(head.byteLength + 500);
-    expect(got.ok && got.sha256).toBe(sha(c.bytes()));
+    // The sink (storage) hashes as the bytes pass; the fetcher does not.
+    expect(got).not.toHaveProperty("sha256");
     expect(c.calls).toEqual(["video/mp4"]);
   });
 

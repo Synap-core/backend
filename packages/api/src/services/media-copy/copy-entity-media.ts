@@ -67,6 +67,8 @@ import { storeDocumentFromBuffer } from "../../routers/file-upload.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { fetchExternalImage, type ImageFetchResult } from "./fetch-image.js";
 import { liveDocumentIds } from "./live-documents.js";
+import type { CopiedImageMime } from "./image-sniff.js";
+import type { CopiedVideoMime } from "./video-sniff.js";
 import { imageFromLibraryCopy } from "./library-handoff.js";
 import {
   collectMediaSourceUrls,
@@ -453,18 +455,23 @@ async function recordMediaCopyRun(
   });
 }
 
-const EXT: Record<string, string> = {
+/**
+ * The extension of every type a copy can hold. `satisfies` over the two
+ * inline lists: a type added to (or dropped from) either list fails the build
+ * here until it is classified.
+ */
+const EXT = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
   "video/mp4": "mp4",
   "video/webm": "webm",
-};
+} as const satisfies Record<CopiedImageMime | CopiedVideoMime, string>;
 
 /** A filename from the URL path, with the SNIFFED type's extension. */
 export function filenameFor(sourceUrl: string, mime: string): string {
-  const ext = EXT[mime] ?? "img";
+  const ext = (EXT as Record<string, string>)[mime] ?? "img";
   let base = "image";
   try {
     const last = new URL(sourceUrl).pathname.split("/").filter(Boolean).pop();

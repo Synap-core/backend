@@ -30,8 +30,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import {
   MEDIA_COPY_MAX_BYTES,
-  MEDIA_COPY_MAX_PIXELS,
-  MEDIA_COPY_MAX_SIDE,
+  exceedsImageBounds,
   type ImageFetchResult,
 } from "./fetch-image.js";
 import { sniffImageSize, sniffImageType } from "./image-sniff.js";
@@ -94,13 +93,7 @@ export async function imageFromLibraryCopy(
       const mime = sniffImageType(bytes);
       if (!mime) continue;
       const size = sniffImageSize(bytes, mime);
-      if (
-        size &&
-        (size.width > MEDIA_COPY_MAX_SIDE ||
-          size.height > MEDIA_COPY_MAX_SIDE ||
-          size.width * size.height > MEDIA_COPY_MAX_PIXELS)
-      )
-        continue;
+      if (size && exceedsImageBounds(size)) continue;
       return { ok: true, bytes, mime, ...(size ?? {}) };
     }
     return null;

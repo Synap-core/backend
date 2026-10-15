@@ -2,14 +2,20 @@
  * Image sniffing for the media-copy job — the bytes decide, never the server's
  * `Content-Type`.
  *
- * Pure TS, no native dependency. Recognises exactly the four raster types the
- * display door may draw inline (`INLINE_IMAGE_MIME_TYPES` in spatial-ui:
- * png · jpeg · gif · webp). Everything else — SVG, HTML, a video, a lying
- * `image/png` that is really markup — sniffs to `null` and is refused.
+ * Pure TS, no native dependency. Recognises exactly the raster types the
+ * display door may draw inline (`INLINE_IMAGE_MIME_TYPES`,
+ * `@synap-core/types/presentation`: png · jpeg · gif · webp) — the type is
+ * DERIVED from that list, so the sniffer cannot return a type it does not
+ * hold. Everything else — SVG, HTML, a video, a lying `image/png` that is
+ * really markup — sniffs to `null` and is refused.
  */
 
-export type CopiedImageMime =
-  "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+import { INLINE_IMAGE_MIME_TYPES } from "@synap-core/types/presentation";
+
+export type CopiedImageMime = (typeof INLINE_IMAGE_MIME_TYPES)[number];
+
+/** The `Accept` header of an image copy: exactly the inline list. */
+export const COPIED_IMAGE_ACCEPT = `${INLINE_IMAGE_MIME_TYPES.join(",")};q=0.9`;
 
 /** Bytes needed to decide the type (the WebP RIFF header is the longest). */
 export const SNIFF_HEAD_BYTES = 12;

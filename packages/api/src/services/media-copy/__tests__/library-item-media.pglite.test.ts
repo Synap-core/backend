@@ -213,7 +213,9 @@ function harness(
       const parts: Buffer[] = [];
       for await (const c of body) parts.push(Buffer.from(c));
       uploads.set(key, Buffer.concat(parts));
-      return { size: uploads.get(key)!.byteLength };
+      // Storage computes the checksum as the bytes pass (the one hash pass).
+      const buf = uploads.get(key)!;
+      return { size: buf.byteLength, checksum: `sha256:${sha(buf)}` };
     },
     adoptStoredObject: async (a) =>
       insertDoc({
@@ -579,7 +581,7 @@ describe("copyLibraryItemMedia", () => {
     ).toEqual(["store_unavailable", "store_unavailable"]);
   });
 
-  it("never throws: a broken database reads as skipped", async () => {
+  it("never throws — and a broken database is FAILED with why, never 'nothing owed'", async () => {
     const r = await copyLibraryItemMedia(
       { userId: A, itemId: randomUUID(), media: media([IMG1, "image", 0]) },
       {
@@ -590,7 +592,37 @@ describe("copyLibraryItemMedia", () => {
         } as never,
       }
     );
-    expect(r).toMatchObject({ status: "skipped", copied: 0 });
+    expect(r).toEqual({
+      status: "failed",
+      error: "db down",
+      copied: 0,
+      reused: 0,
+      failed: 0,
+    });
+  });
+
+  it("a record that fails mid-run is FAILED, and the copies it minted are discarded", async () => {
+    const id = await item(A);
+    const net = web({ [IMG1]: () => respond([PNG], { type: "image/png" }) });
+    const h = harness(net, {
+      database: new Proxy(database, {
+        get(target, prop, receiver) {
+          if (prop === "transaction") {
+            return async () => {
+              throw new Error("db down mid-run");
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      }),
+    });
+    const r = await copyLibraryItemMedia(
+      { userId: A, itemId: id, media: media([IMG1, "image", 0]) },
+      h.deps
+    );
+    expect(r).toMatchObject({ status: "failed", error: "db down mid-run" });
+    expect(h.stored).toHaveLength(1);
+    expect(h.discarded).toHaveLength(1);
   });
 });
 

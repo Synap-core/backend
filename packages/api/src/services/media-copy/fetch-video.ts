@@ -2,8 +2,8 @@
  * Fetch ONE external video STRAIGHT INTO STORAGE — the same guarded open as
  * images (`openGuardedMedia`: `validateExternalUrl` + `safePublicFetch`, every
  * redirect hop re-vetted, socket pinned), but the body is never buffered:
- * chunks flow from the socket into `sink` (a storage `uploadStream`) while a
- * running sha256 and byte count are kept.
+ * chunks flow from the socket into `sink` (a storage `uploadStream`, which
+ * computes the sha256 as the bytes pass) while the byte count is kept.
  *
  *   • type    → the first {@link VIDEO_SNIFF_HEAD_BYTES} are sniffed BEFORE
  *               the sink sees a byte; only MP4 / WebM pass (`sniffVideoType`).
@@ -21,13 +21,14 @@
  * decision P4). Never throws: every refusal is a typed reason.
  */
 
-import { createHash } from "node:crypto";
+import { envInt } from "@synap/shared-utils";
 import {
   openGuardedMedia,
   type FetchImageDeps,
   type ImageFetchFailure,
 } from "./fetch-image.js";
 import {
+  COPIED_VIDEO_ACCEPT,
   VIDEO_SNIFF_HEAD_BYTES,
   sniffVideoType,
   type CopiedVideoMime,
@@ -48,11 +49,11 @@ const DOCUMENT_SIZE_MAX = 2_147_483_647;
 export function libraryMediaVideoMaxBytes(
   env: Record<string, string | undefined> = process.env
 ): number {
-  const raw = env.LIBRARY_MEDIA_VIDEO_MAX_BYTES?.trim();
-  const n = raw && /^\d+$/.test(raw) ? Number(raw) : NaN;
-  return Number.isSafeInteger(n) && n > 0
-    ? Math.min(n, DOCUMENT_SIZE_MAX)
-    : LIBRARY_MEDIA_VIDEO_MAX_BYTES_DEFAULT;
+  return envInt(env, "LIBRARY_MEDIA_VIDEO_MAX_BYTES", {
+    default: LIBRARY_MEDIA_VIDEO_MAX_BYTES_DEFAULT,
+    min: 1,
+    max: DOCUMENT_SIZE_MAX,
+  });
 }
 
 export type VideoFetchFailure =
@@ -66,7 +67,6 @@ export type VideoFetchResult<T> =
       ok: true;
       mime: CopiedVideoMime;
       bytes: number;
-      sha256: string;
       stored: T;
     }
   | { ok: false; reason: VideoFetchFailure; cause?: unknown };
@@ -116,7 +116,7 @@ export async function fetchExternalVideoToSink<T>(
   try {
     const opened = await openGuardedMedia(url, {
       signal: controller.signal,
-      accept: "video/mp4,video/webm;q=0.9",
+      accept: COPIED_VIDEO_ACCEPT,
       maxBytes,
       fetch: deps.fetch,
       validate: deps.validate,
@@ -175,14 +175,13 @@ export async function fetchExternalVideoToSink<T>(
     );
     if (!mime) return { ok: false, reason: "not_video" };
 
-    // 2 — the rest, streamed into the sink under the cap, hashed as it passes.
-    const hash = createHash("sha256");
+    // 2 — the rest, streamed into the sink under the cap. No hash here: the
+    // storage upload computes the checksum as the bytes pass (one pass).
     let bytes = 0;
     let failure: VideoFetchFailure | null = null;
     let drained = false;
     async function* body(): AsyncGenerator<Uint8Array> {
       for (const chunk of head) {
-        hash.update(chunk);
         bytes += chunk.byteLength;
         yield chunk;
       }
@@ -206,7 +205,6 @@ export async function fetchExternalVideoToSink<T>(
           failure = "too_large";
           throw new Error("video fetch: too_large");
         }
-        hash.update(got.chunk);
         yield got.chunk;
       }
     }
@@ -228,7 +226,7 @@ export async function fetchExternalVideoToSink<T>(
         cause: new Error("the sink did not read the whole body"),
       };
     }
-    return { ok: true, mime, bytes, sha256: hash.digest("hex"), stored };
+    return { ok: true, mime, bytes, stored };
   } finally {
     clearTimeout(total);
     clearTimeout(idle);

@@ -13,9 +13,12 @@
  *            header (Matroska shares the magic; only its DocType tells).
  */
 
-import type { INLINE_VIDEO_MIME_TYPES } from "@synap-core/types/presentation";
+import { INLINE_VIDEO_MIME_TYPES } from "@synap-core/types/presentation";
 
 export type CopiedVideoMime = (typeof INLINE_VIDEO_MIME_TYPES)[number];
+
+/** The `Accept` header of a video copy: exactly the inline list. */
+export const COPIED_VIDEO_ACCEPT = `${INLINE_VIDEO_MIME_TYPES.join(",")};q=0.9`;
 
 /** Bytes read before deciding (the EBML header with its DocType fits). */
 export const VIDEO_SNIFF_HEAD_BYTES = 64;
