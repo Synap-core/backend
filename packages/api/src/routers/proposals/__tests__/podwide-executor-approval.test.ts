@@ -78,7 +78,8 @@ const dbStub = {
   }),
 };
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   // A total vi.mock REPLACES the module wholesale, so any export the source
   // chain newly imports becomes undefined and every test in this file dies.
   // That has happened repeatedly here (store-entity-source-blob.js pulled in
@@ -114,6 +115,9 @@ vi.mock("@synap/database", () => {
     workspaces: { __table: "workspaces" },
     relations: { __table: "relations" },
     projectMembers: { __table: "project_members" },
+    // Read at module load (`artifacts.kind.enumValues`,
+    // record-session-artifact.ts), so a callable stub cannot stand in for it.
+    artifacts: actual.artifacts,
     eq: () => ({}),
     and: () => ({}),
     isNull: () => ({}),
@@ -148,7 +152,8 @@ vi.mock("@synap/database", () => {
   });
 });
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   ProposalStatus: { APPROVED: "approved", PENDING: "pending" },
 }));
 
