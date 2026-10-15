@@ -40,6 +40,7 @@ import {
   type HubHono,
   type HubVariables,
   readJsonBody,
+  requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -305,10 +306,12 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         403
       );
     }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
     try {
       const outcome = await getPlaybookDoor(
         doorIdentity(c, c.get("agentUserId")),
-        c.req.param("id")
+        id
       );
       if (outcome.kind === "not_found") {
         return c.json({ error: outcome.error }, 404);
