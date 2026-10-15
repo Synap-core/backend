@@ -2,7 +2,7 @@
  * @synap-core/types/url-read — what reading ONE web page or post produced.
  *
  * The ONE contract between every reader (the pod's built-in ladder, an
- * installed reader verb such as an Apify actor, the agents' `web_read` verb)
+ * installed reader verb such as an Apify actor, the agents' `web.read` verb)
  * and every consumer (the Library light read, Build, agents, web and relay).
  * A read is `ok | partial | blocked | failed`; a blocked read says WHY and the
  * next step, a failed one carries the error — never folded into "empty".
@@ -345,8 +345,21 @@ const HOST_RE =
 const PATH_CHAR_RE = /^[A-Za-z0-9\-._~!$&'()*+,;=:@%/]*$/;
 const PATTERN_MAX = 300;
 
+/** Parsed patterns by source text: a pattern's path regex is compiled ONCE. */
+const PARSED_PATTERNS = new Map<string, ParsedPattern | null>();
+const PARSED_PATTERNS_MAX = 2_000;
+
 function parsePattern(pattern: unknown): ParsedPattern | null {
   if (typeof pattern !== "string") return null;
+  const hit = PARSED_PATTERNS.get(pattern);
+  if (hit !== undefined) return hit;
+  const parsed = parsePatternUncached(pattern);
+  if (PARSED_PATTERNS.size >= PARSED_PATTERNS_MAX) PARSED_PATTERNS.clear();
+  PARSED_PATTERNS.set(pattern, parsed);
+  return parsed;
+}
+
+function parsePatternUncached(pattern: string): ParsedPattern | null {
   const p = pattern.trim();
   if (!p || p.length > PATTERN_MAX) return null;
   if (p === "*")
@@ -437,6 +450,40 @@ export function urlPatternSpecificity(pattern: string): number {
   if (!p) return -1;
   if (p.any) return 0;
   return 10 + p.host.length - (p.wildcardHost ? 5 : 0) + 2 * p.pathLiteral;
+}
+
+/** Highest specificity among `patterns` that cover `url`, or -1 when none does. */
+export function bestUrlPatternSpecificity(
+  patterns: readonly string[] | null | undefined,
+  url: string
+): number {
+  let best = -1;
+  for (const p of patterns ?? []) {
+    if (matchUrlPattern(p, url))
+      best = Math.max(best, urlPatternSpecificity(p));
+  }
+  return best;
+}
+
+// ───────────────────────────── fetch policy ──────────────────────────────
+
+/**
+ * Hosts whose PAGES the pod never fetches itself (decision P1): Instagram
+ * and TikTok. A reader the person installed may read them, on their account,
+ * after their tap — never the pod's own page fetch. (TikTok's official oEmbed
+ * endpoint is an API call, not a page fetch; the pod's TikTok adapter uses
+ * it.) THE list: the pod's built-in reader and the import curate status both
+ * read it from here.
+ */
+export const POD_NEVER_FETCHES: readonly string[] = [
+  "*.instagram.com",
+  "instagr.am",
+  "*.tiktok.com",
+];
+
+/** Is `url` a page the pod never fetches itself? */
+export function podNeverFetches(url: string): boolean {
+  return POD_NEVER_FETCHES.some((p) => matchUrlPattern(p, url));
 }
 
 // ───────────────────────────── stored stamps ─────────────────────────────
@@ -554,4 +601,18 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The billing disclosure of a reader that runs on the person's own vendor
+ * account — never a price. `null` for a free reader. THE wording: the pod
+ * puts it on the wire (capture's install invite) and the Library's reader
+ * door shows the same line.
+ */
+export function readerBillingHint(
+  offer: Pick<UrlReaderOffer, "name" | "billing">
+): string | null {
+  return offer.billing === "account"
+    ? `Runs on your ${offer.name} account. ${offer.name} may bill it.`
+    : null;
 }

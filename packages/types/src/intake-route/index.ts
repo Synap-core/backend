@@ -205,9 +205,9 @@ export const DEPRECATED_INTAKE_PATHS: readonly DeprecatedIntakePath[] = [
     id: "capture.linkReader",
     host: "pod",
     reason:
-      "The link reader bolted onto Capture reads a lone URL a person sent as a capture. A link a person brings in belongs to the Library, which reads it with the same reader (readPublicUrl) on save." +
+      "The link reader bolted onto Capture reads a lone URL a person sent as a capture. A link a person brings in belongs to the Library, which reads it through the same reader door (readUrl) on save." +
       AGENT_KEPT,
-    replacedBy: `${LIBRARY}; read-public-url stays for Stage and Build`,
+    replacedBy: `${LIBRARY}; the reader door (readUrl) serves both`,
     where: "synap-backend/packages/api/src/routers/capture.ts:publicUrlReader",
   },
   {
