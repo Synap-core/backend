@@ -432,7 +432,8 @@ const ROWS: Row[] = [
   {
     kind: "tool",
     state: "unverified",
-    rulesOut: "a broker fault offers Connect (the connectable default read as a verdict)",
+    rulesOut:
+      "a broker fault offers Connect (the connectable default read as a verdict)",
     resolve: () =>
       resolveToolConnectionState(
         {
@@ -834,9 +835,9 @@ describe("resolveConnectionCardState — the connection card on the account rule
   }
 
   it("a re-sync of an account that synced before stays ready", () => {
-    expect(resolveConnectionCardState("syncing", { everSynced: true }, NOW)).toBe(
-      "ready"
-    );
+    expect(
+      resolveConnectionCardState("syncing", { everSynced: true }, NOW)
+    ).toBe("ready");
   });
 
   it("a connected card unsynced for the quiet window is quiet", () => {
