@@ -3247,7 +3247,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "agent" | "playbook" | "automation";
+			data: "agent" | "playbook" | "automation" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3262,7 +3262,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "human" | "agent" | "playbook" | "automation";
+			$type: "agent" | "playbook" | "automation" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3536,7 +3536,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3548,6 +3547,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -3830,7 +3830,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "capability" | "evidence" | "judge";
+			data: "capability" | "human" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4649,7 +4649,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "session" | "project";
+			data: "project" | "session";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4664,7 +4664,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "session" | "project";
+			$type: "project" | "session";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -7830,6 +7830,36 @@ export interface ImportListEntry {
 export type ImportGroupResult = ImportView & {
 	groupingDegraded?: boolean;
 };
+/**
+ * One media item the pod copied into itself. External images are copied, never
+ * hot-linked: an <img> on a third-party URL leaks the viewer's IP and referrer
+ * and dies with the source. Written by the pod's copy job to
+ * `entities.systemData.media`; never user-editable.
+ */
+export interface EntityMediaCopy {
+	documentId: string;
+	mime: string;
+	bytes: number;
+	/** the external URL it was copied from */
+	sourceUrl: string;
+	width?: number;
+	height?: number;
+	copiedAt: string;
+}
+/** Who read it. Stamped by the door that ran the reader — a reader never self-stamps. */
+export interface ReaderStamp {
+	/** `builtin:<rung>` (builtin:oembed, builtin:article, builtin:page, builtin:adapter:<site>) or a verb id */
+	id: string;
+	name: string;
+	capabilityId?: string;
+	verbId?: string;
+	contentHash?: string;
+	correlationId?: string;
+	/** true when the read ran on the person's paid account */
+	billed: boolean;
+	/** ISO timestamp */
+	readAt: string;
+}
 declare const LIBRARY_READ_STATUSES: readonly [
 	"read",
 	"not_read",
@@ -7870,7 +7900,20 @@ export interface LibraryItemRead {
 	chars?: number;
 	readAt?: string;
 	suggestedActions: LibraryAction[];
+	/** Who produced this read (the reader door stamps it; a reader never self-stamps). */
+	reader?: ReaderStamp;
 }
+/**
+ * One media file of an item the pod copied into itself (images, video), in
+ * reading order. Stored on `documents.metadata.importMedia` (an array, written
+ * by the media copy only); failed copies are counted on
+ * `documents.metadata.importMediaFailed`. Read back with {@link readLibraryItemMedia}.
+ */
+export type LibraryItemMedia = EntityMediaCopy & {
+	kind: "image" | "video";
+	role?: "cover" | "slide";
+	order: number;
+};
 export interface LibraryItemView extends ImportItemView {
 	read: LibraryItemRead;
 	/** Library groups (ids of `library_groups`) the item belongs to. */
@@ -7885,6 +7928,10 @@ export interface LibraryItemView extends ImportItemView {
 	builtAt?: string;
 	/** The capture holding the note typed at share time, linked to the item. */
 	captureNoteId?: string;
+	/** Media copied into the pod for this item, in order (absent when none). */
+	media?: LibraryItemMedia[];
+	/** Media files whose copy failed (absent when none) — shown, never silent. */
+	mediaFailed?: number;
 }
 export interface LibraryGroupView {
 	id: string;
@@ -12209,7 +12256,7 @@ export interface RankComparison {
 		moved: MovedItem[];
 	};
 }
-export type SubstrateKind = "semantic" | "structured" | "procedural" | "episodic";
+export type SubstrateKind = "semantic" | "structured" | "procedural" | "episodic" | "library";
 export interface AskSpaceHint {
 	workspaceId: string;
 	name: string;
@@ -12235,9 +12282,12 @@ export type AskSpacesHint = {
  * A degradation tag on the response. Substrate outages use the substrate name;
  * the semantic backbone additionally reports `"semantic:vector-down"` when its
  * vector leg was EXPECTED but ran keyword-only (the embedding provider failed) —
- * a partial degradation distinct from a whole-substrate error.
+ * a partial degradation distinct from a whole-substrate error. The Library lane
+ * likewise reports `"library:text-down"` when its SQL matches answered but the
+ * read-text index could not be asked (items findable only by what was read may
+ * be missing).
  */
-export type DegradedTag = SubstrateKind | "semantic:vector-down";
+export type DegradedTag = SubstrateKind | "semantic:vector-down" | "library:text-down";
 export interface AskAnswer {
 	substrate: SubstrateKind;
 	items: Record<string, unknown>[];
@@ -12373,6 +12423,14 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
 	 * Absent = the skill declares nothing, never `false`.
 	 */
 	declaredReadOnly?: boolean;
+	/**
+	 * The URLs this verb READS — its backing skill's `skills.url_patterns`
+	 * (0330, the catalog skill's `urls`), in the `@synap-core/types/url-read`
+	 * grammar. Present ONLY on a reader verb; absent = not a reader. The url-reader
+	 * resolver routes a URL to a verb from this field (with `backingSkillExecutable`,
+	 * `granted` and the row's `enabled` / `connection` for the offer state).
+	 */
+	urlPatterns?: string[];
 }
 /**
  * The registry's own capability row: the shared `Capability` contract with the
@@ -20987,7 +21045,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "error" | "running" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21740,7 +21798,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "error" | "running" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21841,7 +21899,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "error" | "running" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21958,7 +22016,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "error" | "running" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -27231,7 +27289,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "automation";
 				automationId: string;
 				name: string;
-				status: "active" | "archived" | "error" | "draft" | "paused";
+				status: "active" | "error" | "archived" | "draft" | "paused";
 			} | {
 				kind: "playbook";
 				playbookId: string;
@@ -27250,7 +27308,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automations: {
 					automationId: string;
 					name: string;
-					status: "active" | "archived" | "error" | "draft" | "paused";
+					status: "active" | "error" | "archived" | "draft" | "paused";
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					nextRunAt: Date | null;
 				}[];
@@ -31230,6 +31288,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executionMode?: "sync" | "async" | undefined;
 				timeoutSeconds?: number | undefined;
 				intent?: string | undefined;
+				urlPatterns?: string[] | undefined;
 				agentUserId?: string | undefined;
 				metadata?: Record<string, unknown> | undefined;
 			};
@@ -31327,6 +31386,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parameters: unknown;
 					category: string | null;
 					intent: string | null;
+					urlPatterns: string[] | null;
 					topics: string[] | null;
 					source: string | null;
 					author: string | null;
@@ -31395,6 +31455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parameters: unknown;
 					category: string | null;
 					intent: string | null;
+					urlPatterns: string[] | null;
 					topics: string[] | null;
 					source: string | null;
 					author: string | null;
@@ -31523,6 +31584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parameters: unknown;
 					category: string | null;
 					intent: string | null;
+					urlPatterns: string[] | null;
 					topics: string[] | null;
 					source: string | null;
 					author: string | null;
@@ -37251,7 +37313,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "error" | "draft" | "paused";
+					status: "active" | "error" | "archived" | "draft" | "paused";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -37294,7 +37356,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triggerType: "event" | "cron" | "webhook" | "manual";
 					triggerConfig: AutomationTriggerConfig;
 					flowDefinition: FlowDefinition;
-					status: "active" | "archived" | "error" | "draft" | "paused";
+					status: "active" | "error" | "archived" | "draft" | "paused";
 					errorMessage: string | null;
 					version: number;
 					lastRunAt: Date | null;
@@ -37421,7 +37483,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				name: string;
 				version: number;
-				status: "active" | "archived" | "error" | "draft" | "paused";
+				status: "active" | "error" | "archived" | "draft" | "paused";
 				errorMessage: string | null;
 				metadata: {
 					[key: string]: unknown;
