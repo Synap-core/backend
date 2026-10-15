@@ -29,6 +29,52 @@ describe("readLibraryItemRead — the reader stamp arrives", () => {
   });
 });
 
+describe("readLibraryItemRead — why a link was not read, and a transcript", () => {
+  it("passes a blocked reason and a transcript source through", () => {
+    const read = readLibraryItemRead({
+      importRead: {
+        status: "unreadable",
+        suggestedActions: [],
+        blocked: {
+          reason: "login_wall",
+          nextStep: "open_in_my_browser",
+          detail: "Sign in",
+        },
+        transcript: { source: "stt", lang: "en" },
+      },
+    });
+    expect(read.blocked).toEqual({
+      reason: "login_wall",
+      nextStep: "open_in_my_browser",
+      detail: "Sign in",
+    });
+    expect(read.transcript).toEqual({ source: "stt", lang: "en" });
+  });
+
+  it("drops an unknown reason / next step / source, keeps the read", () => {
+    const read = readLibraryItemRead({
+      importRead: {
+        status: "needs_file",
+        suggestedActions: [],
+        blocked: { reason: "nope" },
+        transcript: { source: "guess" },
+      },
+    });
+    expect(read.status).toBe("needs_file");
+    expect(read.blocked).toBeUndefined();
+    expect(read.transcript).toBeUndefined();
+    expect(
+      readLibraryItemRead({
+        importRead: {
+          status: "needs_file",
+          suggestedActions: [],
+          blocked: { reason: "needs_reader", nextStep: "teleport" },
+        },
+      }).blocked
+    ).toEqual({ reason: "needs_reader" });
+  });
+});
+
 describe("readLibraryItemMedia", () => {
   const copy = (order: number, kind = "image") => ({
     documentId: `d${order}`,

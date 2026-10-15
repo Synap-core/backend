@@ -24,7 +24,15 @@ import type {
   ImportStageItemInput,
 } from "./curate.js";
 import type { EntityMediaCopy } from "../presentation/index.js";
-import { readReaderStamp, type ReaderStamp } from "../url-read/index.js";
+import {
+  readReaderStamp,
+  URL_READ_BLOCK_REASONS,
+  URL_READ_NEXT_STEPS,
+  type ReaderStamp,
+  type UrlReadBlockReason,
+  type UrlReadNextStep,
+  type UrlReaderOffer,
+} from "../url-read/index.js";
 
 // ── Read status and action chips ───────────────────────────────────────────
 
@@ -85,6 +93,24 @@ export interface LibraryItemRead {
   suggestedActions: LibraryAction[];
   /** Who produced this read (the reader door stamps it; a reader never self-stamps). */
   reader?: ReaderStamp;
+  /**
+   * Why the reader could not read the link (a blocked read): kept on
+   * `needs_file` (no reader yet) and `unreadable` (login wall, paywall,
+   * challenge…) so a client can say WHY and offer the next step.
+   */
+  blocked?: LibraryReadBlocked;
+  /**
+   * The read text carries a transcript (labelled in the text): `platform` =
+   * the site's own captions; `stt` = speech-to-text of the stored video (AI).
+   */
+  transcript?: { source: "platform" | "stt"; lang?: string };
+}
+
+/** A blocked read's reason, as kept on the item. */
+export interface LibraryReadBlocked {
+  reason: UrlReadBlockReason;
+  nextStep?: UrlReadNextStep;
+  detail?: string;
 }
 
 /**
@@ -279,6 +305,37 @@ export interface LibraryGroupsResult {
   archived: number;
 }
 
+/**
+ * One reader offer for an item or a group (`library.readers`). For a group,
+ * `count` = how many of its WAITING items (needs a reader / title only /
+ * could not be read) this reader reads.
+ */
+export type LibraryReaderOffer = UrlReaderOffer & { count?: number };
+
+/** Result of `library.readers` — live, never stored. */
+export interface LibraryReadersResult {
+  offers: LibraryReaderOffer[];
+  /** A group's waiting items with a link (absent for one item). */
+  waiting?: number;
+}
+
+/** Input of `library.readWith`: items or a group's waiting items, one reader. */
+export interface LibraryReadWithRequest {
+  itemIds?: string[];
+  groupId?: string;
+  readerId: string;
+}
+
+/** Result of `library.readWith`. */
+export interface LibraryReadWithResult {
+  /** Reads queued (one job per item). */
+  queued: number;
+  /** Items left out: this reader bills your account and today's read budget is spent. */
+  overBudget: number;
+  /** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
+  skipped: number;
+}
+
 export interface LibraryRunActionResult {
   proposalId: string;
   status: "proposed" | "applied";
@@ -389,6 +446,8 @@ export function readLibraryItemRead(
       )
     : [];
   const reader = readReaderStamp(r.reader);
+  const blocked = readBlocked(r.blocked);
+  const transcript = readTranscript(r.transcript);
   return {
     status: r.status,
     summary: typeof r.summary === "string" ? r.summary : undefined,
@@ -396,6 +455,35 @@ export function readLibraryItemRead(
     readAt: typeof r.readAt === "string" ? r.readAt : undefined,
     suggestedActions: actions,
     ...(reader ? { reader } : {}),
+    ...(blocked ? { blocked } : {}),
+    ...(transcript ? { transcript } : {}),
+  };
+}
+
+function readBlocked(raw: unknown): LibraryReadBlocked | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const b = raw as Record<string, unknown>;
+  if (!(URL_READ_BLOCK_REASONS as readonly unknown[]).includes(b.reason)) {
+    return undefined;
+  }
+  return {
+    reason: b.reason as UrlReadBlockReason,
+    ...((URL_READ_NEXT_STEPS as readonly unknown[]).includes(b.nextStep)
+      ? { nextStep: b.nextStep as UrlReadNextStep }
+      : {}),
+    ...(typeof b.detail === "string" && b.detail
+      ? { detail: b.detail.slice(0, 500) }
+      : {}),
+  };
+}
+
+function readTranscript(raw: unknown): LibraryItemRead["transcript"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const t = raw as Record<string, unknown>;
+  if (t.source !== "platform" && t.source !== "stt") return undefined;
+  return {
+    source: t.source,
+    ...(typeof t.lang === "string" && t.lang ? { lang: t.lang } : {}),
   };
 }
 

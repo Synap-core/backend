@@ -7,13 +7,42 @@
  *
  *   | item                         | read                                   | AI? |
  *   | typed text                   | its own body                           | no  |
- *   | public page (readable)       | `readPublicUrl` (capped text)          | no  |
+ *   | any link                     | THE reader door `readUrl` (below)      | no* |
+ *   | link + page the browser sent | that page (`readSentPage`), no request | no  |
  *   | file: text-like              | its bytes as text                      | no  |
  *   | file: photo / PDF / document | IS extraction (vision on the BULK lane, | yes |
  *   |                              | the pod's vision-model preference)     |     |
  *   | file: audio / video          | IS transcript                          | yes |
- *   | Instagram / TikTok link      | nothing — `needs_file` (never scraped)  | no  |
- *   | title-only                   | nothing — `title_only`                  | no  |
+ *
+ * A link is read through the ONE door (`services/capabilities/url-readers.ts`):
+ * automatically (on keep, the sweep, Build's inline read) the best FREE ready
+ * reader — the pod's built-in ladder unless an installed free reader outranks
+ * it; the pod never fetches an Instagram/TikTok page itself, so those come
+ * back `blocked needs_reader`. EXPLICITLY (`reader` on the job: the person's
+ * "Read with X" tap, `library.readWith`) the named reader, billed or not — a
+ * billed read (*) first takes the item's ONE unit of the daily budget.
+ * Every door read stamps `importRead.reader`. The door's answer maps onto the
+ * stored read ({@link mapDoorRead}):
+ *   - ok      → `read` (title, author, text, transcript);
+ *   - partial → `read` when it carries body text (caption, text, transcript),
+ *               else `title_only` (a title alone is not a read of the thing);
+ *   - blocked needs_reader / unsupported → `needs_file` (no reader yet, or a
+ *               file type no reader handles): the stored status is unchanged
+ *               by design, its label and door come from the live offers;
+ *   - blocked login_wall / paywall / challenge / private / not_found /
+ *               ip_reputation → `unreadable`, WITH the reason kept
+ *               (`importRead.blocked`) — except a blocked read that says
+ *               `retry_later` (rate limited), which is retried like a failure;
+ *   - failed  → retried (attempts, {@link LIGHT_READ_MAX_ATTEMPTS}), then
+ *               `unreadable` with the error kept (`lastError`) — never silent.
+ * A staged `title_only` link (x, linkedin) that the door cannot read stays
+ * `title_only`. Media a read returns is copied into the pod IN THE SAME JOB
+ * (`copyLibraryItemMedia`: CDN links expire); a copied video is transcribed
+ * (`transcribeStoredMedia`, one AI unit, the item's own) when the reader gave
+ * no transcript. An explicit read that was over budget or failed remembers its
+ * reader (`requestedReader`), so the sweep retries it with THAT reader. An
+ * explicit RE-read of an item already read never erases the read it has: a
+ * failed one is recorded on `lastAttempt`.
  *
  * Then: a summary — for a file, the one extraction call's own summary (ONE AI
  * call per file); otherwise AI when the budget allows and the text is long,
@@ -60,11 +89,17 @@ import {
   type LibraryItemRead,
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
-import {
-  readHtmlPage,
-  readableTextFromHtml,
-  type PublicUrlRead,
-} from "../capabilities/read-public-url.js";
+import type {
+  ReaderStamp,
+  UrlRead,
+  UrlReaderOffer,
+} from "@synap-core/types/url-read";
+import type { LibraryReadBlocked } from "@synap-core/types/imports";
+import { readLibraryItemMedia } from "@synap-core/types/imports";
+import { readSentPage } from "../capabilities/web-read/read-builtin.js";
+import type { ReadUrlOptions } from "../capabilities/url-readers.js";
+import type { CopyLibraryItemMediaResult } from "../media-copy/copy-library-item-media.js";
+import type { TranscribeStoredMediaResult } from "../media-copy/transcribe-stored-media.js";
 import { readLibraryPageMeta } from "./page-html.js";
 import {
   groupIdsFromNames,
@@ -102,18 +137,51 @@ export const LIGHT_READ_TEXT_FILE_BYTES_MAX = 4 * 1024 * 1024;
 /** IS failures before an item is marked `unreadable`. */
 export const LIGHT_READ_MAX_ATTEMPTS = 3;
 
+/** Bytes of a copied video the STT step sends (the transcriber's own ceiling). */
+const LIGHT_READ_TRANSCRIBE_BYTES_MAX = 20 * 1024 * 1024;
+
 /** `importRead` as stored: the contract plus pod-internal bookkeeping. */
 export interface StoredLibraryRead extends LibraryItemRead {
   /** Storage key of the read text (`libraryReadTextKey`). */
   textKey?: string;
   /** When the AI budget was spent for this item (read-budget.ts). */
   aiAt?: string;
-  /** IS failures so far. */
+  /** IS / reader failures so far. */
   attempts?: number;
+  /** The last failed read's error (kept when it ends `unreadable`). */
+  lastError?: string;
+  /**
+   * The reader the person chose for a read that has not happened yet (over
+   * budget, or failed and waiting for its retry): the sweep's job reads with
+   * it, so a retry never silently falls back to the free reader.
+   */
+  requestedReader?: string;
+  /** An explicit RE-read that did not read (the earlier read is kept). */
+  lastAttempt?: {
+    readerId: string;
+    status: LibraryReadStatus;
+    blocked?: LibraryReadBlocked;
+    error?: string;
+    at: string;
+  };
 }
 
 export interface LightReadDeps {
-  readUrl(url: string): Promise<PublicUrlRead>;
+  /** THE reader door (`readUrl`), for this item's owner and lens. */
+  readUrl(url: string, opts: ReadUrlOptions): Promise<UrlRead>;
+  /** The readers of a link, live (`listReadersForUrl`) — the billing check of an explicit read. */
+  readers(url: string): Promise<UrlReaderOffer[]>;
+  /** Copy a read's media into the pod (`copyLibraryItemMedia`; never throws). */
+  copyMedia(input: {
+    userId: string;
+    itemId: string;
+    media: NonNullable<UrlRead["media"]>;
+  }): Promise<CopyLibraryItemMediaResult>;
+  /** Speech of a stored video (`transcribeStoredMedia`; never throws). */
+  transcribeStored(
+    documentId: string,
+    userId: string
+  ): Promise<TranscribeStoredMediaResult>;
   readBytes(storageKey: string): Promise<Buffer>;
   writeText(storageKey: string, text: string): Promise<void>;
   /** IS extraction of a file (photo OCR / PDF / document). `null` = the IS failed. */
@@ -198,17 +266,124 @@ export function extractiveSummary(text: string): string {
   ).trim();
 }
 
-type Got =
-  | {
-      kind: "text";
-      text: string;
-      usedAi: boolean;
-      /** A summary the reading call already wrote (a file's extraction). */
-      summary?: string;
+/** What the door said about the read, kept on the stored read. */
+interface DoorFacts {
+  reader?: ReaderStamp;
+  blocked?: LibraryReadBlocked;
+  error?: string;
+  transcript?: { source: "platform" | "stt"; lang?: string };
+}
+
+type Got = DoorFacts &
+  (
+    | {
+        kind: "text";
+        text: string;
+        usedAi: boolean;
+        /** A summary the reading call already wrote (a file's extraction). */
+        summary?: string;
+      }
+    | { kind: "status"; status: LibraryReadStatus; usedAi?: boolean }
+    /** The IS / the reader failed: retry later (counts an attempt). */
+    | { kind: "retry"; usedAi: boolean }
+  );
+
+const TRANSCRIPT_LABEL = {
+  platform: "Transcript (from the site)",
+  stt: "Transcript (speech to text, by AI)",
+} as const;
+
+/** The read's text as stored: title, author, body, then a labelled transcript. */
+export function composeDoorReadText(
+  read: Pick<UrlRead, "title" | "author" | "text">,
+  transcript?: { source: "platform" | "stt"; text: string }
+): { full: string; body: string } {
+  const body = [
+    read.text?.trim() ?? "",
+    transcript?.text.trim()
+      ? `${TRANSCRIPT_LABEL[transcript.source]}:\n${transcript.text.trim()}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const full = [
+    read.title?.trim() ?? "",
+    read.author?.trim() ? `By ${read.author.trim()}` : "",
+    body,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  return { full, body };
+}
+
+/**
+ * The door's answer → the stored read (see the module header). PURE.
+ * `transcript` is the one the read carried or the pod made from its video.
+ */
+export function mapDoorRead(
+  read: UrlRead,
+  contentStatus: string | undefined,
+  transcript?: { source: "platform" | "stt"; text: string; lang?: string }
+): Got {
+  const facts: DoorFacts = { reader: read.via };
+  const stagedTitleOnly = contentStatus === "title_only";
+  if (read.status === "ok" || read.status === "partial") {
+    const { full, body } = composeDoorReadText(read, transcript);
+    const transcriptFact = transcript?.text.trim()
+      ? {
+          transcript: {
+            source: transcript.source,
+            ...(transcript.lang ? { lang: transcript.lang } : {}),
+          },
+        }
+      : {};
+    if (read.status === "ok" ? full.trim() : body.trim()) {
+      return {
+        ...facts,
+        ...transcriptFact,
+        kind: "text",
+        text: full,
+        usedAi: transcript?.source === "stt",
+      };
     }
-  | { kind: "status"; status: LibraryReadStatus; usedAi?: boolean }
-  /** The IS failed: retry later (counts an attempt). */
-  | { kind: "retry"; usedAi: boolean };
+    return { ...facts, kind: "status", status: "title_only" };
+  }
+  if (read.status === "blocked" && read.blocked) {
+    const blocked: LibraryReadBlocked = {
+      reason: read.blocked.reason,
+      ...(read.blocked.nextStep ? { nextStep: read.blocked.nextStep } : {}),
+      ...(read.blocked.detail ? { detail: read.blocked.detail } : {}),
+    };
+    if (blocked.nextStep === "retry_later") {
+      return { ...facts, blocked, kind: "retry", usedAi: false };
+    }
+    if (stagedTitleOnly) {
+      return { ...facts, blocked, kind: "status", status: "title_only" };
+    }
+    const status: LibraryReadStatus =
+      blocked.reason === "needs_reader" || blocked.reason === "unsupported"
+        ? "needs_file"
+        : "unreadable";
+    return { ...facts, blocked, kind: "status", status };
+  }
+  // failed (or a blocked read with no reason — normalizeUrlRead never makes one)
+  if (stagedTitleOnly) {
+    // A staged title-only link was never promised more than its title: a
+    // failed try is not retried into `unreadable`.
+    return {
+      ...facts,
+      ...(read.error ? { error: read.error } : {}),
+      kind: "status",
+      status: "title_only",
+    };
+  }
+  return {
+    ...facts,
+    ...(read.error ? { error: read.error } : {}),
+    kind: "retry",
+    usedAi: false,
+  };
+}
 
 async function loadRow(
   database: Pick<typeof DbType, "select">,
@@ -243,6 +418,8 @@ async function readContent(args: {
   row: ItemRow;
   item: ImportItemMetadata;
   deps: LightReadDeps;
+  /** The reader the person chose (explicit read); absent = automatic. */
+  reader?: string;
 }): Promise<Got> {
   const { row, item, deps } = args;
   const s = item.source;
@@ -307,27 +484,6 @@ async function readContent(args: {
       : { kind: "status", status: "unreadable", usedAi: true };
   }
 
-  // The page the person's browser sent (a login-only page): read it, not
-  // the URL — and even for a platform the pod never fetches, since the person
-  // gave the page themselves. Its text is DATA, like any page.
-  const page = readLibraryPageMeta(row.metadata);
-  if (page && s.url) {
-    const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
-    const head = readHtmlPage(html, s.url);
-    const body = readableTextFromHtml(html, LIGHT_READ_TEXT_MAX);
-    const title = head.kind === "read" ? head.title : "";
-    const text = [title, body].filter((t) => t.trim()).join("\n\n");
-    return text.trim()
-      ? { kind: "text", text, usedAi: false }
-      : { kind: "status", status: "unreadable" };
-  }
-
-  if (item.contentStatus === "needs_file") {
-    return { kind: "status", status: "needs_file" };
-  }
-  if (item.contentStatus === "title_only") {
-    return { kind: "status", status: "title_only" };
-  }
   if (s.kind === "text") {
     if (!row.storageKey) return { kind: "status", status: "unreadable" };
     const text = (await deps.readBytes(row.storageKey)).toString("utf-8");
@@ -335,15 +491,121 @@ async function readContent(args: {
       ? { kind: "text", text, usedAi: false }
       : { kind: "status", status: "unreadable" };
   }
-  if (s.url) {
-    const read = await deps.readUrl(s.url);
-    if (read.kind !== "read") return { kind: "status", status: "unreadable" };
-    const text = [read.title, read.text].filter((t) => t?.trim()).join("\n\n");
-    return text.trim()
-      ? { kind: "text", text, usedAi: false }
-      : { kind: "status", status: "unreadable" };
+  if (!s.url) return { kind: "status", status: "title_only" };
+
+  let read: UrlRead;
+  let usedAi = false;
+  // The page the person's browser sent (a login-only page): read it, not
+  // the URL — and even for a platform the pod never fetches, since the person
+  // gave the page themselves. Its text is DATA, like any page. A reader the
+  // person names explicitly reads the link itself.
+  const page = args.reader ? null : readLibraryPageMeta(row.metadata);
+  if (page) {
+    const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
+    read = readSentPage(html, s.url, deps.now());
+  } else {
+    if (args.reader) {
+      // A billed reader takes the item's ONE unit first (an AI summary that
+      // follows reuses it). Over budget ⇒ marked, read later — never a drop.
+      const offer = (await deps.readers(s.url)).find(
+        (o) => o.readerId === args.reader
+      );
+      if (offer?.billing === "account") {
+        if (!(await reserve()))
+          return { kind: "status", status: "over_budget" };
+        usedAi = true;
+      }
+    }
+    read = await deps.readUrl(
+      s.url,
+      args.reader
+        ? { reader: args.reader, allowBilled: true, interactive: true }
+        : { allowBilled: false }
+    );
   }
-  return { kind: "status", status: "title_only" };
+
+  let transcript:
+    { source: "platform" | "stt"; text: string; lang?: string } | undefined =
+    read.transcript?.text.trim()
+      ? {
+          source: read.transcript.source,
+          text: read.transcript.text,
+          ...(read.transcript.lang ? { lang: read.transcript.lang } : {}),
+        }
+      : undefined;
+  if (
+    (read.status === "ok" || read.status === "partial") &&
+    read.media?.length
+  ) {
+    // In the SAME job as the read: a social CDN link expires within days.
+    const copied = await deps.copyMedia({
+      userId: row.userId,
+      itemId: row.id,
+      media: read.media,
+    });
+    if (copied.failed > 0) {
+      logger.warn(
+        { itemId: row.id, failed: copied.failed },
+        "library light read: some media NOT copied (counted on the item)"
+      );
+    }
+    if (!transcript && read.media.some((m) => m.kind === "video")) {
+      const stt = await transcribeCopiedVideo({ ...args, reserve });
+      if (stt) {
+        transcript = stt;
+        usedAi = true;
+      }
+    }
+  }
+  const got = mapDoorRead(read, item.contentStatus, transcript);
+  return got.kind === "text" || got.kind === "retry"
+    ? { ...got, usedAi: got.usedAi || usedAi }
+    : { ...got, usedAi };
+}
+
+/**
+ * The first copied video's speech, when the reader gave no transcript. Takes
+ * the item's AI unit (the summary reuses it); a video over the transcriber's
+ * one-upload ceiling is not sent. Any failure leaves the read without a
+ * transcript (logged) — the read itself stands.
+ */
+async function transcribeCopiedVideo(args: {
+  database: Pick<typeof DbType, "select">;
+  row: ItemRow;
+  deps: LightReadDeps;
+  reserve: () => Promise<boolean>;
+}): Promise<{ source: "stt"; text: string; lang?: string } | null> {
+  const fresh = await loadRow(args.database, args.row.userId, args.row.id);
+  const video = readLibraryItemMedia(fresh?.metadata).media.find(
+    (m) =>
+      m.kind === "video" &&
+      (typeof m.bytes !== "number" ||
+        m.bytes <= LIGHT_READ_TRANSCRIBE_BYTES_MAX)
+  );
+  if (!video) return null;
+  if (!(await args.reserve())) {
+    logger.info(
+      { itemId: args.row.id },
+      "library light read: video NOT transcribed — the day's read budget is spent"
+    );
+    return null;
+  }
+  const got = await args.deps.transcribeStored(
+    video.documentId,
+    args.row.userId
+  );
+  if ("text" in got && got.text.trim()) {
+    return {
+      source: "stt",
+      text: got.text,
+      ...(got.lang ? { lang: got.lang } : {}),
+    };
+  }
+  logger.warn(
+    { itemId: args.row.id, failed: "failed" in got ? got.failed : "empty" },
+    "library light read: video NOT transcribed — the read keeps its text"
+  );
+  return null;
 }
 
 /**
@@ -366,9 +628,16 @@ async function indexQuietly(deps: LightReadDeps, itemId: string) {
 async function writeRead(
   database: LibraryReadDb,
   itemId: string,
-  next: Omit<StoredLibraryRead, "aiAt">
-): Promise<void> {
-  await database.transaction(async (tx) => {
+  next: Omit<StoredLibraryRead, "aiAt">,
+  /**
+   * An AUTOMATIC read that did not read yields to a read that landed while it
+   * ran (an explicit "Read with X" job on the same item): the queue's
+   * singletonKey does not dedupe on a standard pg-boss v10 queue, so two jobs
+   * of one item can overlap.
+   */
+  yieldToRead = false
+): Promise<boolean> {
+  return database.transaction(async (tx) => {
     const [locked] = await tx
       .select({ metadata: documents.metadata })
       .from(documents)
@@ -376,6 +645,7 @@ async function writeRead(
       .for("update");
     const current = ((locked?.metadata as Record<string, unknown> | null)
       ?.importRead ?? {}) as StoredLibraryRead;
+    if (yieldToRead && current.status === "read") return false;
     const previous = Array.isArray(current.suggestedActions)
       ? current.suggestedActions
       : [];
@@ -391,7 +661,23 @@ async function writeRead(
         updatedAt: new Date(),
       })
       .where(eq(documents.id, itemId));
+    return true;
   });
+}
+
+/** Note an explicit re-read that did not read, beside the read the item keeps. */
+async function recordLastAttempt(
+  database: LibraryReadDb,
+  itemId: string,
+  attempt: NonNullable<StoredLibraryRead["lastAttempt"]>
+): Promise<void> {
+  await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(coalesce(${documents.metadata}, '{}'::jsonb), '{importRead,lastAttempt}', ${JSON.stringify(attempt)}::jsonb, true)`,
+      updatedAt: new Date(),
+    })
+    .where(eq(documents.id, itemId));
 }
 
 /**
@@ -403,6 +689,11 @@ export async function lightReadLibraryItem(args: {
   userId: string;
   itemId: string;
   force?: boolean;
+  /**
+   * The reader the person chose ("Read with X"): implies `force`, may bill
+   * (one budget unit), and is interactive. Absent = automatic (free only).
+   */
+  reader?: string;
   deps: LightReadDeps;
 }): Promise<LightReadResult> {
   const { database, userId, itemId, deps } = args;
@@ -418,7 +709,14 @@ export async function lightReadLibraryItem(args: {
       : {}),
     ...readLibraryItemRead(meta, item.contentStatus),
   } as StoredLibraryRead;
-  if (!args.force && meta?.importRead && isFinal(prev, item)) {
+  // An explicit read, or the retry of one (the sweep's job carries no reader:
+  // the reader the person chose is remembered on the item).
+  const reader =
+    args.reader ??
+    (typeof prev.requestedReader === "string" && prev.requestedReader
+      ? prev.requestedReader
+      : undefined);
+  if (!args.force && !args.reader && meta?.importRead && isFinal(prev, item)) {
     return { itemId, status: "skipped" };
   }
 
@@ -466,13 +764,27 @@ export async function lightReadLibraryItem(args: {
 
   let got: Got;
   try {
-    got = await readContent({ database, row, item, deps });
+    got = await readContent({
+      database,
+      row,
+      item,
+      deps,
+      ...(reader ? { reader } : {}),
+    });
   } catch (err) {
-    // A reader that threw (storage, the IS transport) is a failed read, not
-    // an empty one: count the attempt, the sweep retries.
+    // A reader that threw (storage, the IS transport, the reader lookup) is a
+    // failed read, not an empty one: count the attempt, the sweep retries.
     logger.warn({ err, itemId }, "library light read: content NOT read");
-    got = { kind: "retry", usedAi: false };
+    got = {
+      kind: "retry",
+      usedAi: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
+  const facts = {
+    ...(got.reader ? { reader: got.reader } : {}),
+    ...(got.blocked ? { blocked: got.blocked } : {}),
+  };
 
   if (got.kind !== "text") {
     const attempts = (prev.attempts ?? 0) + (got.kind === "retry" ? 1 : 0);
@@ -482,6 +794,20 @@ export async function lightReadLibraryItem(args: {
         : attempts >= LIGHT_READ_MAX_ATTEMPTS
           ? "unreadable"
           : "not_read";
+    if (reader && prev.status === "read") {
+      // An explicit RE-read that did not read: the read the item has stays,
+      // the attempt is recorded (never silent, never an erased read).
+      await recordLastAttempt(database, itemId, {
+        readerId: reader,
+        status,
+        ...(got.blocked ? { blocked: got.blocked } : {}),
+        ...(got.error ? { error: got.error } : {}),
+        at: now.toISOString(),
+      });
+      return { itemId, status, usedAi: got.usedAi ?? false };
+    }
+    // The person's choice waits with the item until it can run.
+    const waiting = status === "not_read" || status === "over_budget";
     // Nothing read: chips can still come from the title and card.
     const actions = detectLibraryActions({
       title,
@@ -489,14 +815,23 @@ export async function lightReadLibraryItem(args: {
       ...(siteName ? { siteName } : {}),
       now,
     });
-    await writeRead(database, itemId, {
-      status,
-      suggestedActions: actions,
-      ...(attempts ? { attempts } : {}),
-      ...(status !== "not_read" && status !== "over_budget"
-        ? { readAt: now.toISOString() }
-        : {}),
-    });
+    const written = await writeRead(
+      database,
+      itemId,
+      {
+        status,
+        suggestedActions: actions,
+        ...facts,
+        ...(attempts ? { attempts } : {}),
+        ...(got.error ? { lastError: got.error.slice(0, 500) } : {}),
+        ...(reader && waiting ? { requestedReader: reader } : {}),
+        ...(status !== "not_read" && status !== "over_budget"
+          ? { readAt: now.toISOString() }
+          : {}),
+      },
+      !reader && !args.force
+    );
+    if (!written) return { itemId, status: "skipped" };
     if (status !== "not_read") await indexQuietly(deps, itemId);
     const suggested = await suggest(`${title}\n${cardText}`);
     return {
@@ -561,6 +896,8 @@ export async function lightReadLibraryItem(args: {
     readAt: now.toISOString(),
     suggestedActions: actions,
     textKey,
+    ...facts,
+    ...(got.transcript ? { transcript: got.transcript } : {}),
   });
   await indexQuietly(deps, itemId);
   const suggested = await suggest(
@@ -607,10 +944,33 @@ export function defaultLightReadDeps(args: {
     return c;
   };
   return {
-    async readUrl(url) {
-      const { readPublicUrl } =
-        await import("../capabilities/read-public-url.js");
-      return readPublicUrl(url);
+    async readUrl(url, opts) {
+      const { readUrl } = await import("../capabilities/url-readers.js");
+      return (
+        await readUrl(
+          { userId: args.userId, workspaceId: args.workspaceId },
+          url,
+          opts
+        )
+      ).read;
+    },
+    async readers(url) {
+      const { listReadersForUrl } =
+        await import("../capabilities/url-readers.js");
+      return listReadersForUrl(
+        { userId: args.userId, workspaceId: args.workspaceId },
+        url
+      );
+    },
+    async copyMedia(input) {
+      const { copyLibraryItemMedia } =
+        await import("../media-copy/copy-library-item-media.js");
+      return copyLibraryItemMedia(input);
+    },
+    async transcribeStored(documentId, userId) {
+      const { transcribeStoredMedia } =
+        await import("../media-copy/transcribe-stored-media.js");
+      return transcribeStoredMedia(documentId, userId);
     },
     async readBytes(storageKey) {
       const { storage } = await import("@synap/storage");

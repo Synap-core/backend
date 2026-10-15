@@ -34,6 +34,30 @@ export interface LibraryLightReadPayload {
   itemId: string;
   /** Read again even when a final read is on the item. */
   force?: boolean;
+  /**
+   * The reader the person chose ("Read with X", `library.readWith`): a reader
+   * id from the item's offers (`"builtin"` or a verb id). Implies `force`,
+   * may bill (one unit of the daily read budget) and is interactive. Absent =
+   * the automatic read (the best FREE ready reader).
+   */
+  reader?: string;
+}
+
+/**
+ * Workers on the light-read queue (env `SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY`,
+ * default 4, 1–16): a hosted reader (an Apify run) can take up to 120 s, so
+ * one worker would serialize a bulk "Read N with X". pg-boss v10 has no
+ * `localConcurrency` — concurrency is N `work()` registrations.
+ */
+export const LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT = 4;
+
+export function libraryLightReadConcurrency(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const raw = Number(env.SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY);
+  return Number.isInteger(raw) && raw >= 1
+    ? Math.min(raw, 16)
+    : LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT;
 }
 
 /** What one read did — stored as the pg-boss job `output`. */
@@ -76,6 +100,7 @@ export async function handleLibraryLightRead(
   logger.info(
     {
       itemId: job.data.itemId,
+      reader: job.data.reader ?? null,
       status: result.status,
       chars: result.chars ?? null,
       actions: result.actions ?? null,

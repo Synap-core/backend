@@ -59,7 +59,13 @@ async function defaultSend(): Promise<Send> {
  * hourly sweep — the item is still `not_read`, never lost.
  */
 export async function enqueueLibraryLightRead(
-  items: ReadonlyArray<{ userId: string; itemId: string; force?: boolean }>,
+  items: ReadonlyArray<{
+    userId: string;
+    itemId: string;
+    force?: boolean;
+    /** The reader the person chose (`library.readWith`). */
+    reader?: string;
+  }>,
   send?: Send
 ): Promise<number> {
   if (items.length === 0) return 0;
@@ -82,6 +88,7 @@ export async function enqueueLibraryLightRead(
           userId: item.userId,
           itemId: item.itemId,
           ...(item.force ? { force: true } : {}),
+          ...(item.reader ? { reader: item.reader } : {}),
         },
         { singletonKey: `library-light-read:${item.itemId}` }
       );
@@ -129,6 +136,7 @@ export async function runLibraryLightReadJob(
     userId: payload.userId,
     itemId: payload.itemId,
     ...(payload.force ? { force: true } : {}),
+    ...(payload.reader ? { reader: payload.reader } : {}),
     deps,
   });
 }
