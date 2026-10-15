@@ -30,6 +30,7 @@ import type {
 import { StorageUploadUnavailableError } from "./interface.js";
 import { attachmentDisposition, buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
+import { uploadStreamToS3 } from "./s3-stream-upload.js";
 
 export interface MinIOConfig {
   /** MinIO endpoint URL (e.g., "http://localhost:9000") */
@@ -180,6 +181,29 @@ export class MinIOStorageProvider implements IFileStorage {
       path,
       size: body.length,
       checksum: fileChecksum(body),
+      uploadedAt: new Date(),
+    };
+  }
+
+  async uploadStream(
+    path: string,
+    body: AsyncIterable<Uint8Array>,
+    options?: UploadOptions
+  ): Promise<FileMetadata> {
+    await this.ensureBucket();
+    const { size, checksum } = await uploadStreamToS3({
+      client: this.client,
+      bucket: this.bucketName,
+      key: path,
+      body,
+      contentType: options?.contentType,
+      metadata: options?.metadata,
+    });
+    return {
+      url: await this.objectUrl(path),
+      path,
+      size,
+      checksum,
       uploadedAt: new Date(),
     };
   }
