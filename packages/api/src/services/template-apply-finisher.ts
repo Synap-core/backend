@@ -140,6 +140,15 @@ export interface FinishTemplateApplyInput {
    * space. Omitted = no data-change check (nothing to match on).
    */
   definition?: object;
+  /**
+   * An OVERLAY pack composed onto a base that keeps its own template: the
+   * outcome is the pack's, not the base's. A layer-2 failure or an unfinished
+   * layer 2 is reported by the caller and never recorded as the base's own
+   * (it would read "Not finished" on a converged space, and its "Finish
+   * update" would re-sync the wrong template); a convergence records only the
+   * pack's version — the base's state is never moved.
+   */
+  overlay?: boolean;
 }
 
 export interface FinishTemplateApplyResult {
@@ -196,6 +205,8 @@ export async function finishTemplateApply(
 ): Promise<FinishTemplateApplyResult> {
   const { workspaceId, userId, built, pendingVersionStamp, pendingPack, post } =
     input;
+  if (input.overlay && input.layerTwoFailed)
+    return { state: "failed", versionStamped: false };
   if (input.layerTwoFailed) {
     const { getDb, writeTemplateState, LAYER_TWO_FAILED_STEP } =
       await import("@synap/database");
@@ -289,6 +300,10 @@ export async function finishTemplateApply(
             }
           : null;
       }
+      if (input.overlay)
+        return converged && pack
+          ? { packs: withPack(current?.packs, pack, now), ...holdRecord }
+          : null;
       if (converged) {
         // A space another door is still building stays "building" unless
         // this apply built it.

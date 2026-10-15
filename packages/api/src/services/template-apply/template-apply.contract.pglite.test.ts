@@ -1128,6 +1128,141 @@ describe("a pack composed onto a base whose layer 2 failed", () => {
   });
 });
 
+// ── An overlay pack's outcome is the pack's, never the base's (review2 Q7) ──
+//
+// A pack composed onto a base that keeps its own template: a failure (here
+// the door's pre-layer-2 step) is REPORTED, never recorded as the base's own
+// failure — that read "Not finished · Finish update" on a converged base, and
+// "Finish update" re-synced the base. A pack that converges records its own
+// version and never moves the base's state.
+
+describe("an overlay pack's outcome is the pack's, never the base's own record", () => {
+  const base = async (slug: string, template: Record<string, unknown>) => {
+    const id = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, package_slug, provisioning_status, settings) values ($1,$2,$3,$4,'active',$5::jsonb)`,
+      [
+        id,
+        `Base ${slug}`,
+        OWNER,
+        slug,
+        JSON.stringify({ template: { slug, at: "t0", ...template } }),
+      ]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+      [randomUUID(), id, OWNER]
+    );
+    return id;
+  };
+  const stateOf = async (id: string) => {
+    const { rows } = await q<{ settings: unknown }>(
+      `select settings from workspaces where id = $1`,
+      [id]
+    );
+    return readTemplateState(rows[0]!.settings);
+  };
+  const pack: Pkg = {
+    slug: "overlay-pack",
+    version: "o-1",
+    playbooks: ["Pack play"],
+  };
+
+  it("a pack whose pre-layer-2 step fails: reported (layer 2 failed + a warning), the converged base untouched", async () => {
+    const id = await base("overlay-base-a", {
+      version: "b-1",
+      state: "active",
+    });
+    const reply = await applyTemplate({
+      definition: body(pack) as never,
+      actor: { userId: OWNER },
+      source: "contract",
+      targetWorkspaceId: id,
+      catalogVersion: pack.version,
+      identity: { packageSlug: pack.slug },
+      beforeLayerTwo: async () => {
+        throw new Error("project not visible");
+      },
+    });
+    expect(reply.outcome).toBe("composed");
+    expect(reply.layer2.status).toBe("failed");
+    expect(reply.warning).toBeTruthy();
+    const state = await stateOf(id);
+    expect(state).toMatchObject({ state: "active", version: "b-1" });
+    expect(state?.failedLayer).toBeUndefined();
+  });
+
+  it("a pack whose layer 2 throws: the base's own record is untouched", async () => {
+    const id = await base("overlay-base-b", {
+      version: "b-1",
+      state: "active",
+    });
+    h.failLayerTwo = true;
+    try {
+      await applyTemplate({
+        definition: body(pack) as never,
+        actor: { userId: OWNER },
+        source: "contract",
+        targetWorkspaceId: id,
+        catalogVersion: pack.version,
+        identity: { packageSlug: pack.slug },
+      });
+    } finally {
+      h.failLayerTwo = false;
+    }
+    expect(await stateOf(id)).toMatchObject({
+      state: "active",
+      version: "b-1",
+    });
+  });
+
+  it("a pack that converges onto an UNFINISHED base records its version and never marks the base active", async () => {
+    const id = await base("overlay-base-c", {
+      version: "b-1",
+      state: "layer-2-not-run",
+      pendingVersion: "b-2",
+    });
+    await applyTemplate({
+      definition: body(pack) as never,
+      actor: { userId: OWNER },
+      source: "contract",
+      targetWorkspaceId: id,
+      catalogVersion: pack.version,
+      identity: { packageSlug: pack.slug },
+    });
+    const state = await stateOf(id);
+    expect(state).toMatchObject({ state: "layer-2-not-run", version: "b-1" });
+    expect(state?.packs?.find((p) => p.slug === pack.slug)?.version).toBe(
+      "o-1"
+    );
+  });
+
+  it("applyCatalogLayerTwo that claimed nothing records nothing, even when its layer 2 fails", async () => {
+    const id = await base("overlay-base-d", {
+      version: "b-1",
+      state: "active",
+    });
+    const { applyCatalogLayerTwo } = await import("./index.js");
+    h.failLayerTwo = true;
+    try {
+      await applyCatalogLayerTwo({
+        workspaceId: id,
+        userId: OWNER,
+        source: "contract",
+        catalogPackage: body(pack),
+        packageSlug: pack.slug,
+        finish: { built: false },
+      });
+    } finally {
+      h.failLayerTwo = false;
+    }
+    expect(await stateOf(id)).toMatchObject({
+      state: "active",
+      version: "b-1",
+    });
+  });
+});
+
 // ── A failed layer-1 RE-SYNC (review F1) ───────────────────────────────────
 //
 // A built space carries its create's full resume ledger. When a later

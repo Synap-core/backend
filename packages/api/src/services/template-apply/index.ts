@@ -296,20 +296,23 @@ export async function applyCatalogLayerTwo(input: {
       scopes: [],
       source: input.source,
     });
-  // Nothing claimed (no build, no version, no pack) and nothing failed: no
-  // outcome of THIS apply to write — finishing would mark the host space
-  // "active" over a record that is not this apply's to clear.
-  const claims =
-    input.finish.built ||
-    !!input.finish.pendingVersionStamp ||
-    !!input.finish.pendingPack;
-  const finished =
-    claims || layer2.status === "failed"
-      ? await finishWithTruth(
-          { workspaceId, userId, source: input.source, layer2 },
-          { ...input.finish, definition: catalogPackage }
-        )
-      : null;
+  // Nothing claimed (no build, no version, no pack): no outcome of THIS
+  // apply to write — finishing would mark the host space "active", or
+  // "failed", over a record that is not this apply's (the failure is in the
+  // dependency's outcome, never on the host's own record).
+  const { built, pendingVersionStamp, pendingPack } = input.finish;
+  const claims = built || !!pendingVersionStamp || !!pendingPack;
+  const finished = claims
+    ? await finishWithTruth(
+        { workspaceId, userId, source: input.source, layer2 },
+        {
+          ...input.finish,
+          definition: catalogPackage,
+          // A pack layered onto its domain: the outcome is the pack's.
+          overlay: !built && !pendingVersionStamp && !!pendingPack,
+        }
+      )
+    : null;
   return { layer2, finished };
 }
 
@@ -428,10 +431,13 @@ export async function applyTemplate(
       scopes: actor.scopes ?? [],
       source: input.source,
     });
+  // An overlay pack composed onto a base that keeps its own template: the
+  // outcome is the pack's — never recorded as the base's own (the finisher).
+  const overlay = core.status === "composed" && !core.reconcile.identityStamped;
   const finish = (rest: FinishInput) =>
     finishWithTruth(
       { workspaceId, userId, source: input.source, layer2 },
-      rest
+      { ...rest, overlay }
     );
 
   // An APPROVED apply runs what the person approved, even on an unchanged
@@ -509,7 +515,12 @@ export async function applyTemplate(
 
   const warning =
     finished && finished.state !== "converged"
-      ? await unfinishedWarning(workspaceId, finished, identity.packageSlug)
+      ? await unfinishedWarning(
+          workspaceId,
+          finished,
+          identity.packageSlug,
+          overlay
+        )
       : finished?.held
         ? `Not finished: this update of ${identity.packageSlug ?? "the template"} changes existing data, and waits for you to agree to it. Run \`synap templates update${identity.packageSlug ? ` ${identity.packageSlug}` : ""}\` to review the changes.`
         : null;
@@ -547,14 +558,17 @@ export async function applyTemplate(
 export async function unfinishedWarning(
   workspaceId: string,
   finished: Pick<FinishTemplateApplyResult, "state">,
-  slug: string | undefined
+  slug: string | undefined,
+  /** An overlay pack: the base's record is not its own — never read. */
+  overlay = false
 ): Promise<string | null> {
   let read: string | null = null;
-  let readFailed = false;
+  // Nothing read (an overlay, or a read that threw) is never "none pending".
+  let unread = overlay;
   try {
-    read = await templateApplyWarningFor(workspaceId);
+    if (!overlay) read = await templateApplyWarningFor(workspaceId);
   } catch (err) {
-    readFailed = true;
+    unread = true;
     logger.warn(
       { err, workspaceId },
       "template apply: unfinished, and its warning could not be read"
@@ -562,7 +576,7 @@ export async function unfinishedWarning(
   }
   if (read) return read;
   if (finished.state === "awaiting-approval")
-    return readFailed
+    return unread
       ? "Waiting for approval of the proposals this update filed."
       : null;
   return slug
