@@ -19,11 +19,12 @@
  * ONE governance resolver's dry run for the gate's own write
  * (`focus_session.assign_agent`, door "chat" — what `gateAgentHandOff` asks
  * `checkPermissionOrPropose`): auto → `direct`, propose → `asks_you`, deny →
- * `blocked`. Two things the preview cannot see, by construction: the session's
- * space (it previews pod-wide, `workspaceId: null` — a space-scoped rule may
- * answer differently), and the per-agent PROPOSAL LIMIT, which
- * `createProposal` checks only when a proposal is filed — so an `asks_you` can
- * still come back refused at the limit; the reply's reason says so.
+ * `blocked`. When it would propose, the calling agent's PROPOSAL LIMIT is read
+ * with the gate's own pair (`countPendingAgentProposals` + `agentProposalCap`,
+ * what `createProposal` checks): at the limit the hand-off is refused, so it
+ * reads `blocked` with the refusal's own sentence. What the preview cannot
+ * see: the session's space (it previews pod-wide, `workspaceId: null` — a
+ * space-scoped rule may answer differently).
  *
  * Computers are not rows: an agent of type `machine` is the computer itself.
  * They are listed once under `computers`, with how many listed agents run on
@@ -37,6 +38,11 @@
 
 import { db, inArray, users } from "@synap/database";
 import { dryRunAgentGovernanceDecision } from "@synap/database/agent-governance";
+import {
+  agentProposalCap,
+  agentProposalLimitLine,
+  countPendingAgentProposals,
+} from "../../utils/permission-check.js";
 import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import { loadAgentPresence } from "../agent-presence.js";
@@ -172,6 +178,20 @@ export async function readAgentsForHandoff(
       : null,
   ]);
 
+  // At its proposal limit the caller's proposed hand-off is REFUSED, not
+  // asked — the gate's own pair, read only when the gate would propose.
+  const atLimit =
+    caller && gate?.outcome === "propose"
+      ? await Promise.all([
+          countPendingAgentProposals(caller),
+          agentProposalCap(caller),
+        ]).then(([pending, cap]) =>
+          pending >= cap
+            ? `${agentProposalLimitLine(cap, null)} Handing off now files a request to raise this limit for the person's review.`
+            : null
+        )
+      : null;
+
   const agents: HandoffAgent[] = agentRows.map((r) => {
     const seen = presence.get(r.id);
     const hostId = kindOf.get(r.id)?.hostUserId ?? null;
@@ -198,10 +218,12 @@ export async function readAgentsForHandoff(
         ? { handOff: "blocked", handOffReason: routeRefusalLine(whyNot, "It") }
         : !gate || r.id === caller || gate.outcome === "auto"
           ? { handOff: "direct", handOffReason: null }
-          : {
-              handOff: gate.outcome === "propose" ? "asks_you" : "blocked",
-              handOffReason: gate.reason,
-            };
+          : atLimit
+            ? { handOff: "blocked", handOffReason: atLimit }
+            : {
+                handOff: gate.outcome === "propose" ? "asks_you" : "blocked",
+                handOffReason: gate.reason,
+              };
     return {
       agentUserId: r.id,
       name: r.name,

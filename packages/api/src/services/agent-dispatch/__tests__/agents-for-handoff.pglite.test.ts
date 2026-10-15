@@ -51,6 +51,7 @@ import {
   type HandoffAgent,
 } from "../agents-for-handoff.js";
 import { HAND_OFF_ACCEPT, route } from "../route.js";
+import { AGENT_PENDING_PROPOSAL_CAP } from "../../../utils/permission-check.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -98,6 +99,8 @@ const APP_AGENT = randomUUID();
 /** A never-seen agent with no machine and no key. */
 const NEVER = randomUUID();
 const TOOL = randomUUID();
+/** The owner's agent that would do the handing — already at its proposal limit. */
+const CAPPED_CALLER = randomUUID();
 /** A third person with two computers that share one name. */
 const OWNER_B = randomUUID();
 const LAPTOP_1 = randomUUID();
@@ -204,6 +207,17 @@ beforeAll(async () => {
   );
   await agent(LAPTOP_1, OWNER_B, "laptop", "machine");
   await agent(LAPTOP_2, OWNER_B, "laptop", "machine");
+
+  await agent(CAPPED_CALLER, OWNER, "Busy Claude", "claude-code");
+  // Never seen and no label, so it moves no computer count and no ranking.
+  await key(CAPPED_CALLER, OWNER, null, null);
+  // AGENT_PENDING_PROPOSAL_CAP pending proposals: the gate's limit is reached.
+  for (let i = 0; i < AGENT_PENDING_PROPOSAL_CAP; i++) {
+    await q(
+      `insert into proposals (id, agent_user_id, status, created_at) values ($1, $2, 'pending', now())`,
+      [randomUUID(), CAPPED_CALLER]
+    );
+  }
 
   roster = await readAgentsForHandoff(OWNER, { now: NOW });
 }, 120_000);
@@ -358,6 +372,21 @@ describe("readAgentsForHandoff — what YOUR hand-off would do", () => {
       handOffReason: expect.stringMatching(/^It is paused/),
     });
     expect(by(THEIRS)).toMatchObject({ handOff: "blocked" });
+  });
+
+  it("a calling agent at its proposal limit is BLOCKED, in the refusal's own words", async () => {
+    const r = await readAgentsForHandoff(OWNER, {
+      callerAgentUserId: CAPPED_CALLER,
+      now: NOW,
+    });
+    const target = r.agents.find((a) => a.agentUserId === ON_DEVBOX)!;
+    expect(target.handOff).toBe("blocked");
+    expect(target.handOffReason).toMatch(
+      new RegExp(
+        `^Agent proposal limit reached \\(${AGENT_PENDING_PROPOSAL_CAP} pending\\)`
+      )
+    );
+    expect(target.handOffReason).toMatch(/raise this limit/);
   });
 
   it("a person (no calling agent) staffs directly", () => {

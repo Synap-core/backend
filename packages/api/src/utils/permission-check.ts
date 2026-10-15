@@ -3580,6 +3580,22 @@ export async function countPendingAgentProposals(
  * holding the 3x cap earned from old history. Scoring the same window makes
  * the two agree and lets trust be earned back / lost based on recent conduct.
  */
+/**
+ * The ONE sentence for an agent at its proposal limit — the refusal
+ * `createProposal` returns, and the hand-off preview (`readAgentsForHandoff`)
+ * that predicts it. `raise` is the cap-raise request the refusal filed, if any.
+ */
+export function agentProposalLimitLine(
+  cap: number,
+  raise: { proposedLimit: number; link: string } | null
+): string {
+  const planDoorHint =
+    " If you are building STRUCTURE, file it as ONE plan instead of N proposals: a single `synap_capture` call takes projects[]/sessions[]/documents[]/links[]/entities[]/skills[]/automations[]/rules[] together and costs one slot.";
+  return raise
+    ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${raise.proposedLimit} is waiting for your review: ${raise.link} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.${planDoorHint}`
+    : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.${planDoorHint}`;
+}
+
 export async function agentProposalCap(agentUserId: string): Promise<number> {
   const explicit = await resolvePendingProposalCap({ db, agentUserId });
   if (explicit != null) return explicit;
@@ -3849,11 +3865,15 @@ async function createProposal(args: {
       // as ONE `synap_capture` call costs ONE slot instead of N. An agent that
       // is told only "raise the cap or clear the queue" files its objects one
       // at a time and duplicates what it already proposed — observed live.
-      const planDoorHint =
-        " If you are building STRUCTURE, file it as ONE plan instead of N proposals: a single `synap_capture` call takes projects[]/sessions[]/documents[]/links[]/entities[]/skills[]/automations[]/rules[] together and costs one slot.";
-      const capReason = capRaise
-        ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${capRaise.proposedLimit} is waiting for your review: ${openLink(capRaise.proposalId)} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.${planDoorHint}`
-        : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.${planDoorHint}`;
+      const capReason = agentProposalLimitLine(
+        cap,
+        capRaise
+          ? {
+              proposedLimit: capRaise.proposedLimit,
+              link: openLink(capRaise.proposalId),
+            }
+          : null
+      );
       // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
       // a capped agent and a dead agent were byte-identical from the UI: the
       // write neither executed nor proposed, and NOTHING said so. This event is
