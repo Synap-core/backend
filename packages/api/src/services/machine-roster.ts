@@ -211,8 +211,7 @@ export async function listMachines(personId: string): Promise<MachineView[]> {
   return Promise.all(
     machines.map(async (m) => {
       const meta = (m.meta ?? {}) as AgentMetadata;
-      const name =
-        m.name?.trim() || meta.hostname || resolveMachineFallbackName();
+      const name = machineName({ name: m.name, agentMetadata: m.meta });
       const own = keysOf(m.id);
       const key = pickKey(own, now);
       const labels = key
@@ -256,6 +255,19 @@ export async function listMachines(personId: string): Promise<MachineView[]> {
       };
     })
   );
+}
+
+/**
+ * A computer's display name: the name a person gave it ("devbox"), else its
+ * hostname, else the noun. The ONE rule — the Computers roster and the
+ * hand-off roster (`readAgentsForHandoff`) both read it.
+ */
+export function machineName(row: {
+  name: string | null;
+  agentMetadata: unknown;
+}): string {
+  const meta = (row.agentMetadata ?? {}) as AgentMetadata;
+  return row.name?.trim() || meta.hostname || resolveMachineFallbackName();
 }
 
 /** A computer row with no name and no hostname (never expected): its noun. */

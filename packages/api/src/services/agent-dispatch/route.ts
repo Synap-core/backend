@@ -60,6 +60,14 @@ import {
 } from "./agent-binding.js";
 import { agentsOperatedBy } from "../agent-presence.js";
 
+/**
+ * The reaches that can TAKE a person's work handed to an agent (a capture, a
+ * session staffed by an AI): a `pull` agent picks it up when it checks in, a
+ * `dispatch` agent is pushed it. A `pod` agent answers in a room when asked;
+ * it never picks work up.
+ */
+export const HAND_OFF_ACCEPT: readonly AgentReach[] = ["dispatch", "pull"];
+
 /** How a caller names an agent. */
 export type AgentSelector = { agentUserId: string };
 
@@ -188,6 +196,48 @@ async function admit(
   };
 }
 
+/**
+ * The selector rung, batched: for each id, what `route()` answers when the
+ * caller NAMES it — `refusal: null` (it may take the work) or the reason it is
+ * refused, checked in the rung's order (reach, room, floor, paused). `route()`'s
+ * selector rung IS this function for one id, so a roster that shows "can take
+ * your work" (`readAgentsForHandoff`) can never disagree with the hand-off.
+ */
+export async function namedVerdicts(
+  work: Pick<RouteWork, "ownerId" | "accept">,
+  ids: readonly string[],
+  roomMembers: ReadonlySet<string> | null = null
+): Promise<Map<string, { reach: AgentReach; refusal: RouteRefusal | null }>> {
+  const uniq = [...new Set(ids)];
+  const reach = await resolveAgentReachMany(uniq);
+  const accepted = uniq.filter((id) => work.accept.includes(reach.get(id)!));
+  const inPool = roomMembers
+    ? accepted.filter((id) => roomMembers.has(id))
+    : accepted;
+  const [floor, paused] = await Promise.all([
+    passFloor(work.ownerId, inPool, reach, roomMembers),
+    pausedAmong(inPool),
+  ]);
+  const out = new Map<
+    string,
+    { reach: AgentReach; refusal: RouteRefusal | null }
+  >();
+  for (const id of uniq) {
+    const r = reach.get(id)!;
+    const refusal: RouteRefusal | null = !work.accept.includes(r)
+      ? "wrong_reach"
+      : roomMembers && !roomMembers.has(id)
+        ? "not_member"
+        : !floor.has(id)
+          ? "not_owned"
+          : paused.has(id)
+            ? "paused"
+            : null;
+    out.set(id, { reach: r, refusal });
+  }
+  return out;
+}
+
 /** The assigned agents for the work's targets, most specific target first. */
 async function assignedFor(
   targets: RouteWork["targets"]
@@ -240,20 +290,10 @@ export async function route(work: RouteWork): Promise<RouteResult> {
   // 1. selector — never falls through.
   if (work.selector) {
     const id = work.selector.agentUserId;
-    const reach = await resolveAgentReachMany([id]);
-    const r = reach.get(id)!;
-    const refuse = (reason: RouteRefusal): RouteResult => ({
-      kind: "refused",
-      reason,
-      agentUserId: id,
-      reach: r,
-    });
-    if (!work.accept.includes(r)) return refuse("wrong_reach");
-    if (roomMembers && !roomMembers.has(id)) return refuse("not_member");
-    const floor = await passFloor(work.ownerId, [id], reach, roomMembers);
-    if (!floor.has(id)) return refuse("not_owned");
-    if ((await pausedAmong([id])).has(id)) return refuse("paused");
-    return routed(id, r, "selector");
+    const v = (await namedVerdicts(work, [id], roomMembers)).get(id)!;
+    return v.refusal
+      ? { kind: "refused", reason: v.refusal, agentUserId: id, reach: v.reach }
+      : routed(id, v.reach, "selector");
   }
 
   // 2. roster — the first eligible member (a room never takes the first: it

@@ -28,6 +28,7 @@ const key = (over: Record<string, unknown>) => ({
   userId: "agent-a",
   lastUsedAt: null,
   instanceId: null,
+  instanceLabel: null,
   isActive: true,
   revokedAt: null,
   expiresAt: null,
@@ -40,15 +41,17 @@ beforeEach(() => {
 });
 
 describe("agent presence", () => {
-  it("lastSeenAt = the newest key use; host = that key's instance label; counts live vs pending", async () => {
+  it("lastSeenAt = the newest key use; host + hostLabel = that key's instance; counts live vs pending", async () => {
     rows.push(
       key({
         lastUsedAt: new Date("2026-09-27T10:00:00Z"),
         instanceId: "laptop",
+        instanceLabel: "MacBook",
       }),
       key({
         lastUsedAt: new Date("2026-09-28T09:00:00Z"),
         instanceId: "desktop",
+        instanceLabel: " devbox ",
       }),
       key({ id: "pending-key", isActive: false }), // minted, awaiting approval
       key({ isActive: false, revokedAt: new Date() }) // rejected — neither
@@ -57,6 +60,7 @@ describe("agent presence", () => {
     expect(p).toEqual({
       lastSeenAt: "2026-09-28T09:00:00.000Z",
       host: "desktop",
+      hostLabel: "devbox",
       activeKeys: 2,
       pendingKeys: 1,
       revokedKeys: 1,

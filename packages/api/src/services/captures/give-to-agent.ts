@@ -60,7 +60,7 @@ import {
   AgentBindingError,
   resolveAgentBinding,
 } from "../agent-dispatch/agent-binding.js";
-import { route } from "../agent-dispatch/route.js";
+import { HAND_OFF_ACCEPT, route } from "../agent-dispatch/route.js";
 import { findHandOffPlaybook } from "../agent-dispatch/hand-off-playbook.js";
 import { runPlaybook } from "../playbooks/run-playbook.js";
 import { resolveServiceName } from "@synap-core/types/service-marks";
@@ -219,7 +219,7 @@ export async function giveCaptureToAgent(p: {
     // itself (reach 'pod') is never handed work here.
     const routed = await route({
       ownerId: p.userId,
-      accept: ["dispatch", "pull"],
+      accept: HAND_OFF_ACCEPT,
       selector: { agentUserId: found.id },
       pool: "owned",
     });
@@ -236,7 +236,7 @@ export async function giveCaptureToAgent(p: {
     // happens to be the only one.
     const routed = await route({
       ownerId: p.userId,
-      accept: ["dispatch", "pull"],
+      accept: HAND_OFF_ACCEPT,
       targets: { workspace: row.workspaceId },
       pool: "owned",
     });
