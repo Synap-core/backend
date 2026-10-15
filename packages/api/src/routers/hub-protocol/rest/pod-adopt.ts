@@ -212,9 +212,9 @@ export function registerPodAdoptRoutes(app: HubHono): void {
         },
         source: "hub.pod.adopt",
         adoptWorkspaceId: workspaceId,
+        catalogVersion: resolved.version ?? undefined,
         identity: {
           packageSlug: templateSlug,
-          packageVersion: resolved.version ?? undefined,
           proposalId: templateSlug,
         },
       });

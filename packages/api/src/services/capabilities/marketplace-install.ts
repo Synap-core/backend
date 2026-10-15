@@ -607,9 +607,15 @@ export async function applyMarketInstall(
         layerTwoBody: postBody,
         actor: { userId: input.userId, scopes: [] },
         source: "market.install",
+        // A body the pod resolved from the catalog carries the catalog's
+        // version; a SUPPLIED body (RC4) is the caller's, and a version it
+        // asks for is the hash of what it sent (`applyTemplate`).
+        ...(supplied
+          ? { sentDefinition: supplied }
+          : { catalogVersion: entry?.version ?? input.version ?? undefined }),
         identity: {
           packageSlug: input.slug,
-          packageVersion: entry?.version ?? input.version ?? undefined,
+          ...(supplied && input.version ? { packageVersion: input.version } : {}),
           proposalId: input.slug,
           workspaceName: definition.workspaceName,
           templateId: input.slug,

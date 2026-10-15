@@ -849,6 +849,9 @@ export const definitionEngineProcedures = {
           linkedAgentId: input.linkedAgentId,
           createdBy: "user",
         },
+        // A `packageVersion` asks for a stamp; the stamp is the version of
+        // the definition sent, never the label (`applyTemplate`).
+        sentDefinition: input.definition as Record<string, unknown>,
         settingsFill: {
           ...(input.appId ? { appId: input.appId } : {}),
         },

@@ -42,6 +42,7 @@ import {
   type FinishTemplateApplyResult,
 } from "../template-apply-finisher.js";
 import { templateApplyWarningFor } from "../template-health.js";
+import { appliedPackageVersion } from "../applied-package-version.js";
 import { applyLayerOne, type LayerOneResult } from "./layer-one.js";
 import { declaresLayerTwo } from "./layer-two-keys.js";
 import { planTemplateApply, type TemplateApplyAction } from "./plan.js";
@@ -95,8 +96,28 @@ export interface ApplyTemplateInput {
    * Other doors run it only when the body brings layer-2 content.
    */
   alwaysRunLayerTwo?: boolean;
+  /**
+   * The server resolved `definition` from the catalog itself (installFrom-
+   * Catalog, adopt, a catalog install): the catalog's version names it, and
+   * is what the stamp says on convergence. Only server code that fetched the
+   * body sets it — never a value a caller sent.
+   */
+  catalogVersion?: string;
+  /**
+   * The body exactly as the caller sent it (before schema defaults and the
+   * door's wrapper fields are stripped) — what a stamp request is hashed
+   * over. Defaults to `definition`.
+   */
+  sentDefinition?: Record<string, unknown>;
   identity: {
     packageSlug?: string;
+    /**
+     * A caller asks for its apply to be versioned. The label itself is NEVER
+     * stamped (incident 2026-10-06): the stamp is the version of the body it
+     * sent (`appliedPackageVersion(sentDefinition)`, the CP's own rule) — the
+     * catalog's definition sent verbatim hashes to the catalog's version,
+     * anything else to its own. Ignored when `catalogVersion` is set.
+     */
     packageVersion?: string;
     proposalId?: string;
     workspaceName?: string;
@@ -334,6 +355,15 @@ export async function applyTemplate(
 ): Promise<TemplateApplyResult> {
   const { definition, actor, identity } = input;
   const { userId } = actor;
+  // The version this apply converges to — decided HERE, for every door, so
+  // no door can stamp a label it was handed (review2 Q2).
+  const version =
+    input.catalogVersion ??
+    (identity.packageVersion !== undefined
+      ? appliedPackageVersion(
+          input.sentDefinition ?? (definition as Record<string, unknown>)
+        )
+      : undefined);
 
   // ── Dependencies + compose (layer 1 of an overlay / pack / --onto) ──────
   // An adopt names its space: nothing to resolve or compose.
@@ -346,7 +376,7 @@ export async function applyTemplate(
         selfSlug: identity.packageSlug,
         targetWorkspaceId: input.targetWorkspaceId,
         packageSlug: identity.packageSlug,
-        packageVersion: identity.packageVersion,
+        packageVersion: version,
         deferCreate: true,
       });
 
@@ -372,7 +402,7 @@ export async function applyTemplate(
       templateId: identity.templateId,
       templateName: identity.templateName,
       packageSlug: identity.packageSlug,
-      packageVersion: identity.packageVersion,
+      packageVersion: version,
       workspaceType: identity.workspaceType,
       createdBy: identity.createdBy,
       linkedAgentId: identity.linkedAgentId,

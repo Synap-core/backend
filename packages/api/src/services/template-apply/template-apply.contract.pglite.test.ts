@@ -1085,7 +1085,8 @@ describe("a pack composed onto a base whose layer 2 failed", () => {
       actor: { userId: OWNER },
       source: "contract",
       targetWorkspaceId: baseId,
-      identity: { packageSlug: pack.slug, packageVersion: pack.version },
+      catalogVersion: pack.version,
+      identity: { packageSlug: pack.slug },
     });
     const { rows } = await q<{ settings: unknown }>(
       `select settings from workspaces where id = $1`,
@@ -1120,9 +1121,9 @@ describe("a failed layer-1 re-sync", () => {
         definition: body(pkg) as never,
         actor: { userId: OWNER },
         source: "contract",
+        catalogVersion: pkg.version,
         identity: {
           packageSlug: pkg.slug,
-          packageVersion: pkg.version,
           proposalId: pkg.slug,
           workspaceName: body(pkg).workspaceName as string,
         },
@@ -1166,9 +1167,9 @@ describe("a layer-2 failure whose failure record cannot be written", () => {
         definition: body(pkg) as never,
         actor: { userId: OWNER },
         source: "contract",
+        catalogVersion: pkg.version,
         identity: {
           packageSlug: pkg.slug,
-          packageVersion: pkg.version,
           proposalId: pkg.slug,
           workspaceName: body(pkg).workspaceName as string,
         },
@@ -1224,9 +1225,9 @@ describe("a space left 'building' is moved on, never terminal", () => {
       definition: body(pkg) as never,
       actor: { userId: OWNER },
       source: "contract",
+      catalogVersion: pkg.version,
       identity: {
         packageSlug: slug,
-        packageVersion: pkg.version,
         proposalId: slug,
         workspaceName: body(pkg).workspaceName as string,
       },
@@ -1299,9 +1300,9 @@ describe("a space left 'building' is moved on, never terminal", () => {
       definition: body(pkg) as never,
       actor: { userId: OWNER },
       source: "contract",
+      catalogVersion: pkg.version,
       identity: {
         packageSlug: slug,
-        packageVersion: pkg.version,
         proposalId: slug,
         workspaceName: body(pkg).workspaceName as string,
       },
@@ -1360,9 +1361,10 @@ describe("a pending template data change holds the stamp on every door", () => {
 
 // ── A caller's version LABEL is never stamped (review F4) ──────────────────
 //
-// Hub `/workspaces/from-definition` and MCP `synap_create_workspace` stamp
-// what `/packages/apply` stamps: the version of the definition actually sent
-// (`appliedPackageVersion`, the CP's own rule) — never `_meta.version` as given.
+// Every door stamps what `/packages/apply` stamps: the version of the
+// definition actually sent (`appliedPackageVersion`, the CP's own rule) —
+// never `_meta.version` / `packageVersion` as given. Decided once, inside
+// `applyTemplate`, so a create, an approval and a compose all keep it.
 
 describe("a caller's version label is never stamped", () => {
   const labelled = (slug: string) => ({
@@ -1399,6 +1401,33 @@ describe("a caller's version label is never stamped", () => {
         } as unknown as McpToolContext);
       },
     ],
+    [
+      "tRPC createFromDefinition",
+      async (def: Record<string, unknown>) => {
+        await trpc().createFromDefinition({
+          definition: def as never,
+          packageVersion: "LABEL-the-catalog-hash",
+        });
+      },
+    ],
+    [
+      "approve workspace/create",
+      async (def: Record<string, unknown>) => {
+        await approve(
+          "workspace/create",
+          {
+            name: def.workspaceName,
+            definition: def,
+            workspaceName: def.workspaceName,
+            packageSlug: (def._meta as { slug: string }).slug,
+            packageVersion: "LABEL-the-catalog-hash",
+            createdBy: "provisioning",
+            source: "packages.apply",
+          },
+          null
+        );
+      },
+    ],
   ])("%s stamps the definition's own version", async (name, send) => {
     const slug = `label-${name.replace(/[^a-z]+/gi, "-").toLowerCase()}`;
     const def = labelled(slug);
@@ -1407,6 +1436,28 @@ describe("a caller's version label is never stamped", () => {
     expect(state?.state).toBe("active");
     expect(state?.version).not.toBe("LABEL-the-catalog-hash");
     expect(state?.version).toBe(appliedPackageVersion(def));
+  });
+
+  it("a compose (tRPC 'Add to space') records the pack at its own version, never the label", async () => {
+    const base = "label-compose-base";
+    await applyTemplate({
+      definition: body({ slug: base, version: "b-1", playbooks: [] }) as never,
+      actor: { userId: OWNER },
+      source: "contract",
+      identity: { packageSlug: base, proposalId: base },
+    });
+    const { id } = await theSpace(base);
+    const packSlug = "label-compose-pack";
+    const def = labelled(packSlug);
+    await trpc().createFromDefinition({
+      definition: def as never,
+      packageVersion: "LABEL-the-catalog-hash",
+      workspaceId: id,
+    });
+    const { state } = await theSpace(base);
+    const pack = state?.packs?.find((p) => p.slug === packSlug);
+    expect(pack?.version).not.toBe("LABEL-the-catalog-hash");
+    expect(pack?.version).toBe(appliedPackageVersion(def));
   });
 });
 

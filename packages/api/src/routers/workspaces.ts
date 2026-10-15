@@ -1342,9 +1342,10 @@ export async function installTemplateFromCatalog(
     definition: pkg as unknown as WorkspaceDefinitionInput,
     layerTwoBody: parsed.data as unknown as LayerTwoBody,
     targetWorkspaceId: await installTarget(input.workspaceId, input.slug),
+    // The server resolved this body from the catalog: its version names it.
+    catalogVersion: resolved.version,
     identity: {
       packageSlug: input.slug,
-      packageVersion: resolved.version,
       proposalId: input.proposalId,
       workspaceName: (pkg as { workspaceName?: string }).workspaceName,
       templateId: input.slug,

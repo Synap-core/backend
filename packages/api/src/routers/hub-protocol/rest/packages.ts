@@ -927,6 +927,8 @@ export function registerPackagesRoutes(app: HubHono): void {
         source: "packages.apply",
         targetWorkspaceId: body.targetWorkspaceId,
         alwaysRunLayerTwo: true,
+        // Hashed over the RAW body: zod would strip fields the CP hashed.
+        sentDefinition: raw,
         identity: {
           packageSlug: body._meta?.slug,
           packageVersion: body._meta?.version,

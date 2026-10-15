@@ -74,6 +74,8 @@ export interface TrpcTemplateApplyInput {
   /** Install onto this existing space (compose). */
   targetWorkspaceId?: string;
   identity: ApplyTemplateInput["identity"];
+  catalogVersion?: ApplyTemplateInput["catalogVersion"];
+  sentDefinition?: ApplyTemplateInput["sentDefinition"];
   /** Written into the space's settings only where the key is absent. */
   settingsFill?: Record<string, unknown>;
   /** Written into a space built just now (absent keys only, like above). */
@@ -263,6 +265,8 @@ export async function applyTemplateForTrpc(
       source: input.source,
       targetWorkspaceId: input.targetWorkspaceId,
       identity,
+      catalogVersion: input.catalogVersion,
+      sentDefinition: input.sentDefinition,
       onProgress: (step, pct, label) =>
         emitChatEvent({
           event: "workspace:creation_progress",

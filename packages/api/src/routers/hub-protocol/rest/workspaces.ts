@@ -1112,19 +1112,20 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     // rule /packages/apply applies): a caller that asks for a stamp gets the
     // version of the definition it actually sent — the RAW body minus this
     // door's own wrapper fields, so a catalog body hashes the same here as on
-    // /packages/apply.
-    let packageVersion: string | undefined;
-    if (typeof meta?.version === "string") {
-      const rawDefinition = { ...(body as Record<string, unknown>) };
-      for (const wrapper of [
-        "proposalId",
-        "templateId",
-        "templateName",
-        "ownerUserId",
-      ])
-        delete rawDefinition[wrapper];
-      packageVersion = appliedPackageVersion(rawDefinition);
-    }
+    // /packages/apply. `applyTemplate` derives the stamp from the same body;
+    // the hash here is what the proposal records.
+    const rawDefinition = { ...(body as Record<string, unknown>) };
+    for (const wrapper of [
+      "proposalId",
+      "templateId",
+      "templateName",
+      "ownerUserId",
+    ])
+      delete rawDefinition[wrapper];
+    const packageVersion =
+      typeof meta?.version === "string"
+        ? appliedPackageVersion(rawDefinition)
+        : undefined;
     const isTemplateInput = !!(templateId || templateName || meta);
     if (isTemplateInput && !packageSlug && !proposalId) {
       return c.json(
@@ -1213,6 +1214,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         definition: definition as WorkspaceDefinitionInput,
         actor: { userId: ownerId, agentUserId, scopes },
         source: "hub.workspaces.from-definition",
+        sentDefinition: rawDefinition,
         identity: {
           packageSlug,
           packageVersion,
