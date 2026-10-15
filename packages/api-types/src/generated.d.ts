@@ -8539,27 +8539,6 @@ export interface CaptureUpdateResult {
 	reviewUrl?: string;
 	reason?: string;
 }
-declare const OBJECT_NAV_VIEWS: readonly [
-	"room"
-];
-export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
-/** Additive field on `capture.structure`. Absent when the text is not a lone URL,
- *  or when the installed-verb lookup failed (that is not "nothing installed"). */
-export type CaptureUrlReader = {
-	status: "enriched";
-	title: string;
-	author: string | null;
-	text: string;
-	imageUrl: string | null;
-	sourceUrl: string;
-} | {
-	status: "unavailable";
-	sourceUrl: string;
-} | {
-	status: "install";
-	installSlug: "web.read";
-	sourceUrl: string;
-};
 export interface KnownSourceHash {
 	/** The hash as ASKED (matched against either ledger key). */
 	hash: string;
@@ -12431,6 +12410,14 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
 	 * `granted` and the row's `enabled` / `connection` for the offer state).
 	 */
 	urlPatterns?: string[];
+	/**
+	 * The backing skill `requires` a tool that holds a CREDENTIAL (a vault secret
+	 * or a broker account — `tools.credential_ref` set), i.e. this verb runs on
+	 * the person's own account. Present (`true`) only then; absent = runs on
+	 * nothing of theirs. The url-reader resolver derives an offer's `billing`
+	 * from it (`account` vs `none`) — no cost field is stored.
+	 */
+	credentialed?: true;
 }
 /**
  * The registry's own capability row: the shared `Capability` contract with the
@@ -17699,6 +17686,10 @@ export interface RuleRunFacts {
 	/** The newest run's status — a quiet row's mark is read from it. */
 	latestStatus: string;
 }
+declare const OBJECT_NAV_VIEWS: readonly [
+	"room"
+];
+export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
 	/** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
@@ -18456,7 +18447,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degraded: true;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
 			} & {
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18526,7 +18531,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18587,7 +18606,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18661,7 +18694,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18726,7 +18773,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18867,7 +18928,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degraded: true;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
 			} & {
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18937,7 +19012,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -18998,7 +19087,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -19072,7 +19175,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -19137,7 +19254,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				reader?: CaptureUrlReader | undefined;
+				reader?: {
+					status: "enriched";
+					title: string;
+					author: string | null;
+					text: string;
+					imageUrl: string | null;
+					sourceUrl: string;
+				} | {
+					status: "unavailable";
+					sourceUrl: string;
+				} | {
+					status: "install";
+					installSlug: string;
+					sourceUrl: string;
+				} | undefined;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
