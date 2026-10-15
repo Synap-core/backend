@@ -7846,6 +7846,26 @@ export interface EntityMediaCopy {
 	height?: number;
 	copiedAt: string;
 }
+declare const URL_READ_BLOCK_REASONS: readonly [
+	"login_wall",
+	"paywall",
+	"challenge",
+	"ip_reputation",
+	"not_found",
+	"private",
+	"unsupported",
+	"needs_reader"
+];
+export type UrlReadBlockReason = (typeof URL_READ_BLOCK_REASONS)[number];
+declare const URL_READ_NEXT_STEPS: readonly [
+	"open_in_my_browser",
+	"attach_file",
+	"install_reader",
+	"enable_reader",
+	"connect_reader",
+	"retry_later"
+];
+export type UrlReadNextStep = (typeof URL_READ_NEXT_STEPS)[number];
 /** Who read it. Stamped by the door that ran the reader — a reader never self-stamps. */
 export interface ReaderStamp {
 	/** `builtin:<rung>` (builtin:oembed, builtin:article, builtin:page, builtin:adapter:<site>) or a verb id */
@@ -7859,6 +7879,30 @@ export interface ReaderStamp {
 	billed: boolean;
 	/** ISO timestamp */
 	readAt: string;
+}
+declare const READER_OFFER_STATES: readonly [
+	"ready",
+	"enable",
+	"connect",
+	"install"
+];
+export type ReaderOfferState = (typeof READER_OFFER_STATES)[number];
+/** One reader the Library can offer for an item. Computed live, never stored. */
+export interface UrlReaderOffer {
+	readerId: string;
+	name: string;
+	/** a `@synap-core/types/service-marks` id */
+	serviceId?: string;
+	verbId?: string;
+	capabilityId?: string;
+	installSlug?: string;
+	/** `account` = runs on the person's paid account */
+	billing: "none" | "account";
+	state: ReaderOfferState;
+	hint?: string;
+	proposalId?: string;
+	/** the reader that produced the item's current read */
+	current?: boolean;
 }
 declare const LIBRARY_READ_STATUSES: readonly [
 	"read",
@@ -7902,6 +7946,26 @@ export interface LibraryItemRead {
 	suggestedActions: LibraryAction[];
 	/** Who produced this read (the reader door stamps it; a reader never self-stamps). */
 	reader?: ReaderStamp;
+	/**
+	 * Why the reader could not read the link (a blocked read): kept on
+	 * `needs_file` (no reader yet) and `unreadable` (login wall, paywall,
+	 * challenge…) so a client can say WHY and offer the next step.
+	 */
+	blocked?: LibraryReadBlocked;
+	/**
+	 * The read text carries a transcript (labelled in the text): `platform` =
+	 * the site's own captions; `stt` = speech-to-text of the stored video (AI).
+	 */
+	transcript?: {
+		source: "platform" | "stt";
+		lang?: string;
+	};
+}
+/** A blocked read's reason, as kept on the item. */
+export interface LibraryReadBlocked {
+	reason: UrlReadBlockReason;
+	nextStep?: UrlReadNextStep;
+	detail?: string;
 }
 /**
  * One media file of an item the pod copied into itself (images, video), in
@@ -8001,6 +8065,29 @@ export interface LibraryGroupsResult {
 	ungrouped: number;
 	/** Archived items. */
 	archived: number;
+}
+/**
+ * One reader offer for an item or a group (`library.readers`). For a group,
+ * `count` = how many of its WAITING items (needs a reader / title only /
+ * could not be read) this reader reads.
+ */
+export type LibraryReaderOffer = UrlReaderOffer & {
+	count?: number;
+};
+/** Result of `library.readers` — live, never stored. */
+export interface LibraryReadersResult {
+	offers: LibraryReaderOffer[];
+	/** A group's waiting items with a link (absent for one item). */
+	waiting?: number;
+}
+/** Result of `library.readWith`. */
+export interface LibraryReadWithResult {
+	/** Reads queued (one job per item). */
+	queued: number;
+	/** Items left out: this reader bills your account and today's read budget is spent. */
+	overBudget: number;
+	/** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
+	skipped: number;
 }
 export interface LibraryRunActionResult {
 	proposalId: string;
@@ -35700,6 +35787,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				groupId: string;
 			};
 			output: ImportBuildResult;
+			meta: object;
+		}>;
+		readers: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				itemId?: string | undefined;
+				groupId?: string | undefined;
+			};
+			output: LibraryReadersResult;
+			meta: object;
+		}>;
+		readWith: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				readerId: string;
+				itemIds?: string[] | undefined;
+				groupId?: string | undefined;
+			};
+			output: LibraryReadWithResult;
 			meta: object;
 		}>;
 		health: import("@trpc/server").TRPCQueryProcedure<{
