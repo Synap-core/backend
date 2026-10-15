@@ -15,6 +15,7 @@
  * (`secret.userId === actorUserId`, with a pod-admin fallback).
  */
 
+import { invalidateUrlReaderCache } from "./url-reader-cache.js";
 import { randomUUID } from "node:crypto";
 import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
 import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
@@ -364,7 +365,7 @@ export interface AddCredentialInput {
  * default (respects `idx_secrets_capability_default`, keyed on
  * (capability_id, is_pod_wide)). The secret is always owned by the actor.
  */
-export async function addCredential(
+async function addCredentialWrite(
   input: AddCredentialInput
 ): Promise<CapabilityCredentialView> {
   const {
@@ -606,7 +607,7 @@ export async function updateCredential(
  * credential is promoted to default so the capability always has a resolvable
  * default.
  */
-export async function removeCredential(input: {
+async function removeCredentialWrite(input: {
   capabilityId: string;
   credentialId: string;
   actorUserId: string;
@@ -694,7 +695,7 @@ export async function removeCredential(input: {
  * Nango connections (Nango filters by `end_user.id`), so a member can never
  * revoke another user's connection.
  */
-export async function disconnectConnection(input: {
+async function disconnectConnectionWrite(input: {
   capabilityId: string;
   /** The Nango connectionId (== `accountHint`), not a `secrets` id. */
   connectionId: string;
@@ -788,4 +789,37 @@ export async function disconnectConnection(input: {
   await detachNangoConnectionRegistry(connectionId);
 
   return { ok: true, podWide: true, provider };
+}
+
+// ── The doors, each dropping the reader cache: connecting or disconnecting a
+// pack changes whether its reader verbs can run (`url-reader-cache.ts`). ──
+
+export async function addCredential(
+  ...args: Parameters<typeof addCredentialWrite>
+): ReturnType<typeof addCredentialWrite> {
+  try {
+    return await addCredentialWrite(...args);
+  } finally {
+    invalidateUrlReaderCache();
+  }
+}
+
+export async function removeCredential(
+  ...args: Parameters<typeof removeCredentialWrite>
+): ReturnType<typeof removeCredentialWrite> {
+  try {
+    return await removeCredentialWrite(...args);
+  } finally {
+    invalidateUrlReaderCache();
+  }
+}
+
+export async function disconnectConnection(
+  ...args: Parameters<typeof disconnectConnectionWrite>
+): ReturnType<typeof disconnectConnectionWrite> {
+  try {
+    return await disconnectConnectionWrite(...args);
+  } finally {
+    invalidateUrlReaderCache();
+  }
 }

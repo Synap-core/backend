@@ -5,8 +5,9 @@
  * For an inbound message that carried attachments, this fetches each url's bytes
  * OFF the sensor path and lands them through the CANONICAL doors — nothing is
  * hand-rolled here:
- *   • fetch      → `safeExternalFetch` + `validateExternalUrl` SSRF guard
- *                  (the same door the automation `fetch` node uses),
+ *   • fetch      → `fetchGuardedBytes` (media-copy's ONE remote-bytes door:
+ *                  `validateExternalUrl` + pinned `safePublicFetch`, a
+ *                  Content-Length pre-check, a capped streamed read, 30 s),
  *   • store      → `createGovernedFileEntityFromBuffer` (blob → documents row +
  *                  immutable v1 → GOVERNED `entities.create` for the `file` kind),
  *   • link       → a `channel_context_items` REFERENCED row bound to the channel
@@ -27,9 +28,9 @@ import {
   ChannelContextObjectType,
   ChannelContextRelationshipType,
 } from "@synap/database";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 import type { InboundAttachmentJobData } from "@synap/jobs/workers/inbound-attachment-worker.js";
+import { fetchGuardedBytes } from "../media-copy/fetch-image.js";
 import { createGovernedFileEntityFromBuffer } from "../../routers/create-governed-file-entity.js";
 import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 
@@ -37,6 +38,8 @@ const logger = createLogger({ module: "ingest-inbound-attachments" });
 
 /** Refuse to buffer more than this per attachment (defensive; pre-store bound). */
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25MB
+/** One attachment's whole download (headers + body). */
+const ATTACHMENT_TIMEOUT_MS = 30_000;
 /** Sensor-side ingest acts as the pod owner (human provenance) via the hub door. */
 const INGEST_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
 
@@ -83,73 +86,26 @@ export async function runInboundAttachmentIngest(
 
   for (const att of input.attachments.slice(0, 8)) {
     try {
-      const urlCheck = validateExternalUrl(att.url);
-      if (!urlCheck.valid) {
+      // THE guarded remote-bytes door (media-copy `openGuardedMedia`):
+      // validate + pinned `safePublicFetch`, Content-Length pre-check, capped
+      // streamed read, timeout — never `arrayBuffer()` on an unbounded body.
+      const got = await fetchGuardedBytes(att.url, {
+        maxBytes: MAX_ATTACHMENT_BYTES,
+        timeoutMs: ATTACHMENT_TIMEOUT_MS,
+      });
+      if (!got.ok) {
         logger.warn(
-          { url: att.url, reason: urlCheck.reason, messageId: input.messageId },
-          "inbound-attachment: url blocked by SSRF guard — skipping"
+          { url: att.url, reason: got.reason, messageId: input.messageId },
+          "inbound-attachment: not fetched (blocked, non-2xx, empty, oversized or timed out) — skipping"
         );
         skipped++;
         continue;
       }
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30_000);
-      let buffer: Buffer;
-      let mimeType: string;
-      try {
-        const res = await safeExternalFetch(att.url, {
-          method: "GET",
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          logger.warn(
-            { url: att.url, status: res.status, messageId: input.messageId },
-            "inbound-attachment: fetch non-2xx — skipping"
-          );
-          skipped++;
-          continue;
-        }
-        // Reject an oversized body BEFORE reading it into memory — a truthful
-        // Content-Length lets us skip the OOM that `arrayBuffer()` would cause on a
-        // huge/hostile url. (A server that omits/lies about the header still hits
-        // the post-buffer cap below; the 30s abort bounds an unbounded stream.)
-        const declaredLen = Number(res.headers.get("content-length"));
-        if (
-          Number.isFinite(declaredLen) &&
-          declaredLen > MAX_ATTACHMENT_BYTES
-        ) {
-          logger.warn(
-            { url: att.url, bytes: declaredLen, messageId: input.messageId },
-            "inbound-attachment: Content-Length over cap — skipping before buffering"
-          );
-          skipped++;
-          continue;
-        }
-        const arrayBuf = await res.arrayBuffer();
-        if (
-          arrayBuf.byteLength === 0 ||
-          arrayBuf.byteLength > MAX_ATTACHMENT_BYTES
-        ) {
-          logger.warn(
-            {
-              url: att.url,
-              bytes: arrayBuf.byteLength,
-              messageId: input.messageId,
-            },
-            "inbound-attachment: empty or oversized — skipping"
-          );
-          skipped++;
-          continue;
-        }
-        buffer = Buffer.from(arrayBuf);
-        mimeType =
-          res.headers.get("content-type")?.split(";")[0]?.trim() ||
-          att.type ||
-          "application/octet-stream";
-      } finally {
-        clearTimeout(timer);
-      }
+      const buffer = got.bytes;
+      const mimeType =
+        got.contentType?.split(";")[0]?.trim() ||
+        att.type ||
+        "application/octet-stream";
 
       // Store through the GOVERNED file door (no agentUserId → owner/human
       // provenance, auto-applies when `entity.create ∈ DEFAULT_AUTO_APPROVE`).

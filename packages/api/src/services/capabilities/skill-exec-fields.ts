@@ -93,6 +93,10 @@ export const RE_APPROVAL_FIELDS = [
   "executionMode",
   "timeoutSeconds",
   "kind",
+  // The URLs a READER verb receives (`url_patterns`, 0330). Widening them
+  // widens what the reader's vendor sees — the same trust class as
+  // `allowedHosts` — so a change re-earns approval.
+  "urlPatterns",
 ] as const;
 
 /**

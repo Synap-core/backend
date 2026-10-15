@@ -23,6 +23,16 @@ import type {
   ImportItemView,
   ImportStageItemInput,
 } from "./curate.js";
+import type { EntityMediaCopy } from "../presentation/index.js";
+import {
+  readReaderStamp,
+  URL_READ_BLOCK_REASONS,
+  URL_READ_NEXT_STEPS,
+  type ReaderStamp,
+  type UrlReadBlockReason,
+  type UrlReadNextStep,
+  type UrlReaderOffer,
+} from "../url-read/index.js";
 
 // ── Read status and action chips ───────────────────────────────────────────
 
@@ -81,7 +91,39 @@ export interface LibraryItemRead {
   chars?: number;
   readAt?: string;
   suggestedActions: LibraryAction[];
+  /** Who produced this read (the reader door stamps it; a reader never self-stamps). */
+  reader?: ReaderStamp;
+  /**
+   * Why the reader could not read the link (a blocked read): kept on
+   * `needs_file` (no reader yet) and `unreadable` (login wall, paywall,
+   * challenge…) so a client can say WHY and offer the next step.
+   */
+  blocked?: LibraryReadBlocked;
+  /**
+   * The read text carries a transcript (labelled in the text): `platform` =
+   * the site's own captions; `stt` = speech-to-text of the stored video (AI).
+   */
+  transcript?: { source: "platform" | "stt"; lang?: string };
 }
+
+/** A blocked read's reason, as kept on the item. */
+export interface LibraryReadBlocked {
+  reason: UrlReadBlockReason;
+  nextStep?: UrlReadNextStep;
+  detail?: string;
+}
+
+/**
+ * One media file of an item the pod copied into itself (images, video), in
+ * reading order. Stored on `documents.metadata.importMedia` (an array, written
+ * by the media copy only); failed copies are counted on
+ * `documents.metadata.importMediaFailed`. Read back with {@link readLibraryItemMedia}.
+ */
+export type LibraryItemMedia = EntityMediaCopy & {
+  kind: "image" | "video";
+  role?: "cover" | "slide";
+  order: number;
+};
 
 // ── Items and groups as every client reads them ─────────────────────────────
 
@@ -99,6 +141,24 @@ export interface LibraryItemView extends ImportItemView {
   builtAt?: string;
   /** The capture holding the note typed at share time, linked to the item. */
   captureNoteId?: string;
+  /** Media copied into the pod for this item, in order (absent when none). */
+  media?: LibraryItemMedia[];
+  /** Media files whose copy failed (absent when none) — shown, never silent. */
+  mediaFailed?: number;
+  /**
+   * When the newest failed copy was last tried (absent when none failed). A
+   * `library.retryMedia` landed when this moved: tried again, kept or not.
+   */
+  mediaFailedAt?: string;
+  /**
+   * A reader OTHER than the one that produced the read can serve this item's
+   * link (installed: ready / enable / connect, or one to install from the
+   * catalog) — the row's "Needs a reader" without asking `library.readers`
+   * per row. Set only on a weak read (needs_file / title_only / unreadable)
+   * by the person's doors (`library.list` / `group` / `search`); absent =
+   * not a weak read, or not known (the lookup failed — never guessed false).
+   */
+  readerAvailable?: boolean;
 }
 
 export interface LibraryGroupView {
@@ -157,6 +217,12 @@ export type LibraryCurateOp =
       name?: string;
       note?: string;
       outputs?: ImportGroupOutput[];
+      /**
+       * The space Build files this group into (`library_groups.workspace_id`);
+       * `null` clears it (Build then uses the import run's space). The person
+       * must be able to write that space.
+       */
+      workspaceId?: string | null;
     }
   | { op: "group.archive"; groupId: string }
   | { op: "group.merge"; fromId: string; intoId: string }
@@ -251,6 +317,46 @@ export interface LibraryGroupsResult {
   ungrouped: number;
   /** Archived items. */
   archived: number;
+}
+
+/**
+ * One reader offer for an item or a group (`library.readers`). For a group,
+ * `count` = how many of its WAITING items (needs a reader / title only /
+ * could not be read) this reader reads.
+ */
+export type LibraryReaderOffer = UrlReaderOffer & { count?: number };
+
+/** Result of `library.readers` — live, never stored. */
+export interface LibraryReadersResult {
+  offers: LibraryReaderOffer[];
+  /** A group's waiting items with a link (absent for one item). */
+  waiting?: number;
+}
+
+/** Input of `library.readWith`: items or a group's waiting items, one reader. */
+export interface LibraryReadWithRequest {
+  itemIds?: string[];
+  groupId?: string;
+  readerId: string;
+}
+
+/** Result of `library.retryMedia`: the failed copies queued to be tried again (0 = none failed). */
+export interface LibraryRetryMediaResult {
+  queued: number;
+}
+
+/** Result of `library.readWith`. */
+export interface LibraryReadWithResult {
+  /** Reads queued (one job per item). */
+  queued: number;
+  /**
+   * Items not read now: this reader bills your account and today's read
+   * budget is spent. They wait (`over_budget`, the reader remembered) and are
+   * read with it once the budget has room; an item already read keeps its read.
+   */
+  overBudget: number;
+  /** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
+  skipped: number;
 }
 
 export interface LibraryRunActionResult {
@@ -362,13 +468,93 @@ export function readLibraryItemRead(
           isActionKind((a as LibraryAction).kind)
       )
     : [];
+  const reader = readReaderStamp(r.reader);
+  const blocked = readBlocked(r.blocked);
+  const transcript = readTranscript(r.transcript);
   return {
     status: r.status,
     summary: typeof r.summary === "string" ? r.summary : undefined,
     chars: typeof r.chars === "number" ? r.chars : undefined,
     readAt: typeof r.readAt === "string" ? r.readAt : undefined,
     suggestedActions: actions,
+    ...(reader ? { reader } : {}),
+    ...(blocked ? { blocked } : {}),
+    ...(transcript ? { transcript } : {}),
   };
+}
+
+function readBlocked(raw: unknown): LibraryReadBlocked | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const b = raw as Record<string, unknown>;
+  if (!(URL_READ_BLOCK_REASONS as readonly unknown[]).includes(b.reason)) {
+    return undefined;
+  }
+  return {
+    reason: b.reason as UrlReadBlockReason,
+    ...((URL_READ_NEXT_STEPS as readonly unknown[]).includes(b.nextStep)
+      ? { nextStep: b.nextStep as UrlReadNextStep }
+      : {}),
+    ...(typeof b.detail === "string" && b.detail
+      ? { detail: b.detail.slice(0, 500) }
+      : {}),
+  };
+}
+
+function readTranscript(raw: unknown): LibraryItemRead["transcript"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const t = raw as Record<string, unknown>;
+  if (t.source !== "platform" && t.source !== "stt") return undefined;
+  return {
+    source: t.source,
+    ...(typeof t.lang === "string" && t.lang ? { lang: t.lang } : {}),
+  };
+}
+
+/**
+ * Reads `documents.metadata.importMedia` / `importMediaFailed` (written by the
+ * media copy). Malformed entries are dropped; the rest come back in `order`.
+ */
+export function readLibraryItemMedia(metadata: unknown): {
+  media: LibraryItemMedia[];
+  failed: number;
+  /** The newest `lastAttemptAt` of the failed copies (`importMediaFailures`), when any. */
+  failedAt?: string;
+} {
+  const m =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>)
+      : {};
+  const raw = Array.isArray(m.importMedia) ? m.importMedia : [];
+  const media = raw
+    .filter(
+      (x): x is LibraryItemMedia =>
+        !!x &&
+        typeof x === "object" &&
+        typeof (x as LibraryItemMedia).documentId === "string" &&
+        typeof (x as LibraryItemMedia).mime === "string" &&
+        typeof (x as LibraryItemMedia).sourceUrl === "string" &&
+        ((x as LibraryItemMedia).kind === "image" ||
+          (x as LibraryItemMedia).kind === "video") &&
+        typeof (x as LibraryItemMedia).order === "number"
+    )
+    .sort((a, b) => a.order - b.order);
+  const failed =
+    typeof m.importMediaFailed === "number" &&
+    Number.isFinite(m.importMediaFailed) &&
+    m.importMediaFailed > 0
+      ? Math.floor(m.importMediaFailed)
+      : 0;
+  let failedAt: string | undefined;
+  for (const f of Array.isArray(m.importMediaFailures)
+    ? m.importMediaFailures
+    : []) {
+    const at =
+      f && typeof f === "object"
+        ? (f as Record<string, unknown>).lastAttemptAt
+        : undefined;
+    if (typeof at === "string" && (!failedAt || at > failedAt)) failedAt = at;
+  }
+  return { media, failed, ...(failed && failedAt ? { failedAt } : {}) };
 }
 
 /** True when the item still waits for the light read. */

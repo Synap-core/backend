@@ -45,7 +45,8 @@ describe("classifySubstrates", () => {
   // the runbook was present, ranked well, and simply never searched.
   it("a plain entity query leads with semantic, and still reaches procedural", () => {
     const r = classifySubstrates("the onboarding revamp project");
-    expect(r.substrates).toEqual(["semantic", "procedural"]);
+    // Library is queried too (cheap, owner-floored): the Library only LEADS on a cue.
+    expect(r.substrates).toEqual(["semantic", "procedural", "library"]);
     expect(r.primary, "an uncued query must not be LED by procedural").toBe(
       "semantic"
     );
@@ -88,6 +89,7 @@ describe("classifySubstrates", () => {
     expect(classifySubstrates("").substrates).toEqual([
       "semantic",
       "procedural",
+      "library",
     ]);
     expect(classifySubstrates("   ").primary).toBe("semantic");
   });
@@ -264,5 +266,32 @@ describe("classifySubstrates", () => {
         classifySubstrates("list our clients").substrates
       );
     });
+  });
+});
+
+describe("library lane", () => {
+  it("runs on EVERY query, including under a project lens (it is the person's own, owner-floored)", () => {
+    expect(classifySubstrates("anything at all").substrates).toContain(
+      "library"
+    );
+    expect(
+      classifySubstrates("the branding references", [], { projectLens: true })
+        .substrates
+    ).toContain("library");
+  });
+
+  it.each([
+    "the pricing pages I bookmarked",
+    "find the post I saved about onboarding",
+    "what is in my library about brand voice",
+    "the links I kept on sourdough",
+  ])("a 'the thing I kept' phrasing leads with the Library: %s", (query) => {
+    expect(classifySubstrates(query).primary).toBe("library");
+  });
+
+  it("an uncued query is NOT led by the Library", () => {
+    expect(classifySubstrates("the onboarding revamp project").primary).toBe(
+      "semantic"
+    );
   });
 });

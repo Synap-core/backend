@@ -28,7 +28,34 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   objects: new Map<string, Buffer>(),
+  /** URL reads attempted from Build — there must be none. */
+  urlReads: [] as string[],
+  /** Outbound requests through the SSRF doors. */
+  netRequests: [] as string[],
 }));
+
+// The pod's network, seen from the SSRF doors: staging's default reader
+// (`readBuiltin`) must never request an Instagram/TikTok page (decision P1).
+// Every request is recorded and refused, so nothing leaves the test.
+vi.mock("@synap/shared-utils", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const refuse = async (url: string) => {
+    h.netRequests.push(url);
+    throw new Error("no network in this test");
+  };
+  return { ...actual, safePublicFetch: refuse, safeExternalFetch: refuse };
+});
+// Build never reads a URL: it reads the STORED read.
+vi.mock("../../capabilities/url-readers.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    readUrl: async (_ctx: unknown, url: string) => {
+      h.urlReads.push(url);
+      throw new Error("Build must not fetch the URL");
+    },
+  };
+});
 
 // The write floor reads workspace_members through the relational query API,
 // which this fixture does not stand up; the stub keeps its CONTRACT: a
@@ -137,6 +164,7 @@ import { buildImportGroup, type ImportBuildDeps } from "../build.js";
 import { discardImport } from "../discard.js";
 import { attachImportItemFile } from "../attach.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
+import type { UrlRead } from "@synap-core/types/url-read";
 
 const USER = "user-import-1";
 const OTHER = "user-import-2";
@@ -144,13 +172,18 @@ const OTHER = "user-import-2";
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-const readUrl = async (url: string) => ({
-  kind: "read" as const,
+const readUrl = async (url: string): Promise<UrlRead> => ({
+  status: "ok",
+  sourceUrl: url,
   title: `Title of ${new URL(url).pathname.slice(1) || url}`,
   author: "Ada",
   text: "A".repeat(2000),
-  imageUrl: null,
-  sourceUrl: url,
+  via: {
+    id: "builtin:article",
+    name: "Synap page reader",
+    billed: false,
+    readAt: new Date().toISOString(),
+  },
 });
 
 async function openAndStage(
@@ -196,6 +229,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   h.objects.clear();
+  h.urlReads.length = 0;
   await h.client!.exec(
     `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals;`
   );
@@ -247,6 +281,40 @@ describe("an import is a RUN, never the ambient work session", () => {
 });
 
 describe("stage", () => {
+  it("the default staging read never requests an Instagram or TikTok page (P1), and reads other pages through the pinned door", async () => {
+    h.netRequests.length = 0;
+    const { sessionId: _s } = await openImportSession({
+      userId: USER,
+      origin: "relay",
+    });
+    const session = await loadImportSession({ userId: USER, sessionId: _s });
+    const out = await stageImportItems({
+      userId: USER,
+      session,
+      // No `readUrl` dep: the production default runs.
+      items: [
+        { kind: "url", url: "https://www.instagram.com/p/Cxyz123/" },
+        { kind: "url", url: "https://www.tiktok.com/@ada/photo/123" },
+        { kind: "url", url: "https://plain.example.net/post" },
+      ],
+    });
+    expect(out.staged).toHaveLength(3);
+    const requested = h.netRequests.map((u) => new URL(u));
+    // Reachability: the default reader DID go to the network for the plain page…
+    expect(requested.map((u) => u.hostname)).toContain("plain.example.net");
+    // …and never for an Instagram/TikTok PAGE (TikTok's official oEmbed
+    // endpoint is an API call the TikTok adapter makes, not the page).
+    const platformPages = requested.filter(
+      (u) =>
+        /(^|\.)(instagram\.com|tiktok\.com)$/.test(u.hostname) &&
+        u.pathname !== "/oembed"
+    );
+    expect(platformPages.map(String)).toEqual([]);
+    const items = (await view(_s)).items;
+    const ig = items.find((i) => i.source.platform === "instagram")!;
+    expect(ig.card).toEqual({ siteName: "instagram.com" });
+  });
+
   it("stages links, text and files with a preview card only, and lists them in the run", async () => {
     const pdf = Buffer.from("%PDF-1.4 fake");
     const { sessionId, outcome } = await openAndStage([
@@ -590,6 +658,31 @@ describe("group", () => {
   });
 });
 
+/** What the light read leaves on an item it READ: the text beside it + importRead. */
+async function storeRead(
+  itemId: string,
+  text: string,
+  extra: Record<string, unknown> = {}
+) {
+  const textKey = `library-read/${itemId}.txt`;
+  h.objects.set(textKey, Buffer.from(text));
+  await q(
+    `update documents set metadata = metadata || $2::jsonb where id = $1`,
+    [
+      itemId,
+      JSON.stringify({
+        importRead: {
+          status: "read",
+          suggestedActions: [],
+          textKey,
+          readAt: "2026-10-15T00:00:00.000Z",
+        },
+        ...extra,
+      }),
+    ]
+  );
+}
+
 describe("build", () => {
   function deps(submitted: SubmitCaptureGraphInput[]): ImportBuildDeps {
     return {
@@ -611,7 +704,6 @@ describe("build", () => {
           intent: "When a baking video arrives, add it to the list.",
         },
       }),
-      readUrl,
       readBytes: async (key) => h.objects.get(key) ?? Buffer.alloc(0),
       countRecent: async () => 3,
       submit: async (input) => {
@@ -631,6 +723,10 @@ describe("build", () => {
       { kind: "url", url: "https://example.com/later" },
     ]);
     const [bread, reel, later] = outcome.staged.map((s) => s.itemId);
+    await storeRead(
+      bread!,
+      "Bake at 250C with steam for the first 20 minutes."
+    );
     await curateImport({
       userId: USER,
       sessionId,
@@ -757,6 +853,97 @@ describe("build", () => {
     });
     expect(result).toMatchObject({ status: "proposed", read: 1, skipped: [] });
     expect(files).toEqual(["video bytes"]);
+  });
+
+  it("a READ Instagram post is built from its STORED read — the URL is never fetched — and its copied images ride along", async () => {
+    const { sessionId, outcome } = await openAndStage([
+      { kind: "url", url: "https://www.instagram.com/p/moodboard" },
+    ]);
+    const ig = outcome.staged[0]!.itemId;
+    const copy = (order: number, kind: "image" | "video") => ({
+      documentId: `d${order}`,
+      mime: kind === "video" ? "video/mp4" : "image/jpeg",
+      bytes: 100,
+      sourceUrl: `https://cdn.ig.test/${order}.${kind === "video" ? "mp4" : "jpg"}`,
+      copiedAt: "2026-10-15T00:00:00.000Z",
+      kind,
+      order,
+    });
+    await storeRead(
+      ig,
+      "Brand moodboard\n\nBy studio.north\n\nMuted palettes and serif type.",
+      { importMedia: [copy(0, "image"), copy(1, "image"), copy(2, "video")] }
+    );
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [{ op: "createGroup", name: "Branding", itemIds: [ig] }],
+    });
+    const texts: string[] = [];
+    const submitted: SubmitCaptureGraphInput[] = [];
+    const d = deps(submitted);
+    const structure = d.structure;
+    d.structure = async (input) => {
+      texts.push(input.text);
+      return structure(input);
+    };
+    const result = await buildImportGroup({
+      userId: USER,
+      sessionId,
+      groupKey: "branding",
+      deps: d,
+    });
+    expect(result).toMatchObject({ status: "proposed", read: 1, skipped: [] });
+    expect(texts[0]).toContain("Muted palettes and serif type.");
+    expect(h.urlReads).toEqual([]);
+    const thing = submitted[0]!.entities.find((e) => e.ref !== "group")!;
+    // Images only — the entity copy takes these bytes from the Library copy.
+    expect(thing.properties?.["media-urls"]).toEqual([
+      "https://cdn.ig.test/0.jpg",
+      "https://cdn.ig.test/1.jpg",
+    ]);
+  });
+
+  it("an Instagram post with nothing read and no file is skipped; an unread item is read FIRST through the light read", async () => {
+    const { sessionId, outcome } = await openAndStage([
+      { kind: "url", url: "https://www.instagram.com/p/unread" },
+      { kind: "url", url: "https://example.com/fresh" },
+    ]);
+    const [ig, fresh] = outcome.staged.map((s) => s.itemId);
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [{ op: "createGroup", name: "Mixed", itemIds: [ig!, fresh!] }],
+    });
+    const texts: string[] = [];
+    const readFirst: string[][] = [];
+    const d = deps([]);
+    const structure = d.structure;
+    d.structure = async (input) => {
+      texts.push(input.text);
+      return structure(input);
+    };
+    d.readFirst = async (ids) => {
+      readFirst.push([...ids]);
+      // The light read reads the page; the IG post stays without a reader.
+      await storeRead(fresh!, "Fresh text from the light read.");
+      await q(
+        `update documents set metadata = metadata || '{"importRead":{"status":"needs_file","suggestedActions":[]}}'::jsonb where id = $1`,
+        [ig]
+      );
+    };
+    const result = await buildImportGroup({
+      userId: USER,
+      sessionId,
+      groupKey: "mixed",
+      deps: d,
+    });
+    expect(readFirst).toEqual([[ig, fresh]]);
+    expect(result).toMatchObject({ status: "proposed", read: 1 });
+    expect(result.skipped).toEqual([{ itemId: ig, reason: "needs_file" }]);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain("Fresh text from the light read.");
+    expect(h.urlReads).toEqual([]);
   });
 
   it("builds a group ONCE under concurrent Builds, and a failed Build frees it", async () => {

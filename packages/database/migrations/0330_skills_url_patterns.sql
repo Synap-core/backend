@@ -1,0 +1,22 @@
+-- 0330_skills_url_patterns
+--
+-- A READER verb declares the URLs it reads: `urls: ["instagram.com/p/*", ...]`
+-- in its catalog skill, projected here by the definition applier. The intent
+-- `read_webpage` (0329) is for DISCOVERY ("which capabilities read URLs?"); the
+-- declared patterns are for ROUTING ("which one reads THIS url?"), so the pod
+-- can offer "Read with X" / "Install X" honestly before running anything.
+--
+-- Grammar: `@synap-core/types/url-read` (`isValidUrlPattern`); the applier keeps
+-- only patterns that parse. NULL = not a reader (never an empty array).
+--
+-- TRUST CLASS. Widening the URLs a reader receives widens what its vendor sees,
+-- the same class as `allowedHosts`, so `url_patterns` is a RE_APPROVAL field
+-- (`skill-exec-fields.ts`): a change demotes an approved skill.
+--
+-- NO INDEX. Read only as part of the registry's existing skill read; never a
+-- standalone predicate.
+--
+-- Fresh installs also get the column from 0000_baseline_schema.sql. This file
+-- is for pods that already booted.
+
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];

@@ -36,7 +36,14 @@ import {
   type CaptureFiledOutcomeInput,
 } from "../services/intake/capture-filed-part.js";
 import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
-import { readInstalledPublicUrl } from "../services/capabilities/read-public-url.js";
+import { loneHttpUrl } from "../services/capabilities/web-read/html.js";
+import {
+  captureLinkReader,
+  readUrl,
+  structurerPageContext,
+  type ReadUrlResult,
+  type UrlReadersContext,
+} from "../services/capabilities/url-readers.js";
 import {
   presentationFromUiHints,
   type ProfilePresentation,
@@ -233,6 +240,27 @@ import {
 } from "../utils/capture-update-arm.js";
 
 const logger = createLogger({ module: "capture-router" });
+
+/**
+ * A captured lone link, read through THE url-reader door with the free
+ * readers only (capture never bills). A failed reader lookup is logged and
+ * answers `undefined`: the capture goes on without the read and without a
+ * reader adjunct (never an install invite). Kept outside `structure` so the
+ * procedure's every `return` stays one of its exits (structure-intake-wiring
+ * tripwire).
+ */
+function readCapturedLink(
+  ctx: UrlReadersContext,
+  url: string
+): Promise<ReadUrlResult | undefined> {
+  return readUrl(ctx, url, { allowBilled: false }).catch((err: unknown) => {
+    logger.warn(
+      { err, userId: ctx.userId },
+      "capture.structure: link readers could not be listed — link not read, reader omitted (not an install invite)"
+    );
+    return undefined;
+  });
+}
 
 /**
  * Resolve a captured body through the canonical EntityBodyService door — the
@@ -1305,26 +1333,33 @@ const captureBaseRouter = router({
         input.text ??
         (input.file?.filename ? `[file: ${input.file.filename}]` : "");
 
-      // Additive. A lone URL is read in-process when a reader verb is installed,
-      // or named as one install invite when none is. Never fails the capture.
+      // Additive. A lone URL is read through the ONE url-reader door
+      // (`readUrl`): the best free ready reader, else the built-in ladder.
+      // Capture never bills (`allowBilled: false`). The read feeds the
+      // structurer (below) and the `reader` adjunct; a blocked
+      // read names an install invite when a catalog reader would read it.
+      // Never fails the capture: a reader-list failure omits the adjunct.
       /**
        * @deprecated intake path `capture.linkReader` (person's use) — a link a person brings is read by the Library on save
-       *   (same `readPublicUrl`).
+       *   (same `readUrl` door).
        *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
        *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
        *   capture with an agent key) is kept — founder 2026-10-13.
        */
-      const publicUrlReader = readInstalledPublicUrl({
-        text: inputText,
-        userId,
-        workspaceId: workspaceId ?? null,
-        onLookupError: (err) => {
-          logger.warn(
-            { err, userId },
-            "capture.structure: capability intent lookup failed — reader omitted (not an install invite)"
-          );
-        },
-      });
+      const linkUrl = loneHttpUrl(inputText);
+      const linkRead: Promise<ReadUrlResult | undefined> = linkUrl
+        ? readCapturedLink(
+            {
+              userId,
+              workspaceId: workspaceId ?? null,
+              agentUserId: ctx.agentUserId ?? null,
+            },
+            linkUrl
+          )
+        : Promise.resolve(undefined);
+      const publicUrlReader = linkRead.then((r) =>
+        r ? captureLinkReader(r) : undefined
+      );
 
       logger.debug(
         { userId, contentLength: input.text?.length ?? 0 },
@@ -1922,12 +1957,21 @@ const captureBaseRouter = router({
       const previousEntities =
         input.previousEntities ?? roomRound?.previousEntities;
 
+      // Capture reads for real: the linked page's text and title reach the
+      // structurer as QUOTED DATA (fenced and labelled — hidden text is NOT
+      // reliably stripped, so the fence is the defence), not only the echo.
+      const linkReadResult = await linkRead;
+      const pageContext = linkReadResult
+        ? structurerPageContext(linkReadResult.read)
+        : null;
       const structureInput = {
         text: input.text ?? "",
         file: input.file,
         url: input.url,
         html: input.html,
-        context: input.context,
+        context:
+          [input.context, pageContext].filter(Boolean).join("\n\n") ||
+          undefined,
         instructions: structureInstructions,
         ...(roomRound?.comments.length ? { comments: roomRound.comments } : {}),
         hints: {

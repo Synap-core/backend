@@ -353,6 +353,9 @@ export async function reconcileCapabilitiesToTemplates(
                 // and reach no installed pod, which is the whole class this
                 // select's comment above is about.
                 intent: skills.intent,
+                // PROJECTED_SKILL_FIELDS.urlPatterns (0330) — omitted, a
+                // reader's changed URLs would diff clean and never land.
+                urlPatterns: skills.urlPatterns,
                 // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
                 // bag. Omit the column and it is `undefined` on every row — a
                 // declared egress allowlist would then never be seen as drift.

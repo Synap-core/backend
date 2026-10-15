@@ -3808,6 +3808,48 @@ const propertyDefProposeRetireHandler: BuiltinVerbHandler = async (
   });
 };
 
+// ── Read one link (Web Access W0 · "Any link → data") ─────────────────────────
+//
+// `web.read` is the AGENT's door onto the ONE url-reader door (`readUrl`,
+// url-readers.ts): the pod's free built-in ladder, or a reader verb the person
+// installed. It never fetches anything itself and never picks a vendor: routing
+// is the readers' declared `urls`. Read-only (READ_ONLY_BUILTIN_VERBS) — reading
+// a public page mutates nothing. An account-billed reader runs ONLY when the
+// caller names it in `reader`, and then through THAT verb's own gate
+// (`executeCapability` with the acting agent) — this verb never widens what a
+// caller may run. `url-readers.ts` is lazy-imported: it pulls in the HTML
+// extractor, which no other builtin needs.
+
+const webReadParams = z.object({
+  /** The http(s) link to read. */
+  url: z.string().trim().min(1).max(4096),
+  /**
+   * A reader id from a previous answer's `offers` (`"builtin"` or a verb id).
+   * Omit to let the pod pick its best free reader.
+   */
+  reader: z.string().trim().min(1).max(200).optional(),
+});
+
+const webReadHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = webReadParams.parse(params);
+  const { readUrl } = await import("./url-readers.js");
+  return readUrl(
+    {
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId,
+      agentUserId: ctx.agentUserId ?? null,
+    },
+    input.url,
+    {
+      ...(input.reader ? { reader: input.reader } : {}),
+      // Naming a reader is the explicit choice a billed read needs; the named
+      // verb's own gate still decides whether it runs.
+      allowBilled: input.reader !== undefined,
+      interactive: true,
+    }
+  );
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -3899,6 +3941,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "skill.update_rule": skillUpdateRuleHandler,
   "profile.propose_retire": profileProposeRetireHandler,
   "property_def.propose_retire": propertyDefProposeRetireHandler,
+  // Read one link through the one url-reader door (built-in or installed reader).
+  "web.read": webReadHandler,
 };
 
 /**
@@ -3964,6 +4008,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "skill.update_rule": skillUpdateRuleParams,
   "profile.propose_retire": profileProposeRetireParams,
   "property_def.propose_retire": propertyDefProposeRetireParams,
+  "web.read": webReadParams,
 };
 
 /**
@@ -4035,4 +4080,8 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // calibration cron must be able to auto-run it. A propose verdict on the verb
   // ITSELF would stall the flow that exists to surface dead automations.
   "automation.recommend_health",
+  // web.read — reads a public page (or runs a read-only reader verb through its
+  // own gate). Mutates nothing in the pod; reads never flood recall
+  // (observability "mirror").
+  "web.read",
 ]);

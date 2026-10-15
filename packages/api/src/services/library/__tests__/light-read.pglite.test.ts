@@ -72,10 +72,22 @@ import type {
   ImportItemMetadata,
   LibraryItemRead,
 } from "@synap-core/types/imports";
+import type { ReaderStamp, UrlRead } from "@synap-core/types/url-read";
+import type { ReadUrlOptions } from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
-import { lightReadLibraryItem, type LightReadDeps } from "../light-read.js";
+import {
+  lightReadLibraryItem,
+  resumableRead,
+  READ_CHECKPOINT_TTL_MS,
+  type LightReadDeps,
+} from "../light-read.js";
 import { reserveLibraryReadAi } from "../read-budget.js";
-import { sweepLibraryLightReads } from "../light-read-queue.js";
+import {
+  enqueueLibraryLightRead,
+  lightReadJobExpireSeconds,
+  runLibraryLightReadJob,
+  sweepLibraryLightReads,
+} from "../light-read-queue.js";
 import { LibraryActionError, runLibraryAction } from "../run-action.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
 import { keepLibraryPageHtml, readLibraryPageMeta } from "../page-html.js";
@@ -147,7 +159,30 @@ interface Calls {
   extract: number;
   transcribe: number;
   readUrl: number;
+  /** The options each door read was asked with. */
+  readOpts: ReadUrlOptions[];
+  copied: Array<{ itemId: string; urls: string[] }>;
+  stt: string[];
   indexed: string[];
+}
+
+const STAMP = (id = "builtin:article"): ReaderStamp => ({
+  id,
+  name: id === "builtin:article" ? "Synap article reader" : id,
+  billed: false,
+  readAt: NOW.toISOString(),
+});
+
+/** A door answer (what `readUrl` returns: always through normalizeUrlRead). */
+function doorRead(url: string, over: Partial<UrlRead> = {}): UrlRead {
+  return {
+    status: "ok",
+    sourceUrl: url,
+    via: STAMP(),
+    title: "Local-first conf",
+    text: LONG_PAGE,
+    ...over,
+  };
 }
 
 function makeDeps(over: Partial<LightReadDeps> & { perDay?: number } = {}): {
@@ -159,19 +194,33 @@ function makeDeps(over: Partial<LightReadDeps> & { perDay?: number } = {}): {
     extract: 0,
     transcribe: 0,
     readUrl: 0,
+    readOpts: [],
+    copied: [],
+    stt: [],
     indexed: [],
   };
   const deps: LightReadDeps = {
-    async readUrl(url) {
+    async readUrl(url, opts) {
       calls.readUrl++;
+      calls.readOpts.push(opts);
+      return doorRead(url);
+    },
+    readers: async () => [],
+    async copyMedia(input) {
+      calls.copied.push({
+        itemId: input.itemId,
+        urls: input.media.map((m) => m.url),
+      });
       return {
-        kind: "read",
-        title: "Local-first conf",
-        author: null,
-        text: LONG_PAGE,
-        imageUrl: null,
-        sourceUrl: url,
+        status: "copied",
+        copied: input.media.length,
+        reused: 0,
+        failed: 0,
       };
+    },
+    async transcribeStored(documentId) {
+      calls.stt.push(documentId);
+      return { text: "Today we bake a sourdough loaf.", lang: "en" };
     },
     readBytes: async (k) => {
       const b = h.objects.get(k);
@@ -399,29 +448,6 @@ describe("light read", () => {
     });
   });
 
-  it("Instagram stays needs_file and title-only stays title_only — no reader runs", async () => {
-    const ig = await stageItem({
-      item: {
-        source: {
-          kind: "url",
-          url: "https://instagram.com/p/x",
-          platform: "instagram",
-        },
-        contentStatus: "needs_file",
-      },
-    });
-    const t = await stageItem({
-      item: {
-        source: { kind: "url", url: "https://x.example" },
-        contentStatus: "title_only",
-      },
-    });
-    const { deps, calls } = makeDeps();
-    expect(await read(ig, deps)).toMatchObject({ status: "needs_file" });
-    expect(await read(t, deps)).toMatchObject({ status: "title_only" });
-    expect(calls).toMatchObject({ readUrl: 0, extract: 0, summarize: 0 });
-  });
-
   it("an IS failure stays not_read, then unreadable after the last attempt", async () => {
     const id = await stageItem({
       item: {
@@ -447,6 +473,594 @@ describe("light read", () => {
     const { deps } = makeDeps();
     expect(await read(id, deps)).toMatchObject({ status: "skipped" });
     expect(await readOf(id)).toBeUndefined();
+  });
+});
+
+// ── The reader door ─────────────────────────────────────────────────────────
+
+const IG = "https://www.instagram.com/p/carousel1";
+const APIFY = "capture_social_post";
+const APIFY_STAMP: ReaderStamp = {
+  id: APIFY,
+  name: "Apify social reader",
+  verbId: APIFY,
+  capabilityId: "cap-apify",
+  correlationId: "run-1",
+  billed: true,
+  readAt: NOW.toISOString(),
+};
+const APIFY_OFFER = {
+  readerId: APIFY,
+  name: "Apify social reader",
+  verbId: APIFY,
+  billing: "account" as const,
+  state: "ready" as const,
+};
+
+async function stageLink(
+  url: string,
+  over: Partial<ImportItemMetadata> = {},
+  read?: Partial<LibraryItemRead> & Record<string, unknown>
+) {
+  return stageItem({
+    item: {
+      source: {
+        kind: "url",
+        url,
+        ...(url.includes("instagram") ? { platform: "instagram" } : {}),
+      },
+      contentStatus: url.includes("instagram") ? "needs_file" : "readable",
+      ...over,
+    },
+    ...(read ? { read } : {}),
+  });
+}
+
+/** A media copy that records what it copied on the row, like the real one. */
+function recordingCopy(calls: Calls): LightReadDeps["copyMedia"] {
+  return async (input) => {
+    calls.copied.push({
+      itemId: input.itemId,
+      urls: input.media.map((m) => m.url),
+    });
+    const importMedia = input.media.map((m, i) => ({
+      documentId: `doc-${i}`,
+      mime: m.kind === "video" ? "video/mp4" : "image/jpeg",
+      bytes: 1000,
+      sourceUrl: m.url,
+      copiedAt: NOW.toISOString(),
+      kind: m.kind,
+      order: m.order,
+    }));
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importMedia}', $2::jsonb) where id = $1`,
+      [input.itemId, JSON.stringify(importMedia)]
+    );
+    return {
+      status: "copied",
+      copied: importMedia.length,
+      reused: 0,
+      failed: 0,
+    };
+  };
+}
+
+describe("the reader door", () => {
+  it("an Instagram link is read through the door automatically: free only, needs_file kept, reader + why stamped", async () => {
+    const ig = await stageLink(IG);
+    const { deps, calls } = makeDeps({
+      readUrl: async (url, opts) => {
+        calls.readOpts.push(opts);
+        return doorRead(url, {
+          status: "blocked",
+          via: STAMP("builtin:policy"),
+          title: undefined,
+          text: undefined,
+          blocked: { reason: "needs_reader", nextStep: "install_reader" },
+        });
+      },
+    });
+    expect(await read(ig, deps)).toMatchObject({ status: "needs_file" });
+    expect(calls.readOpts).toEqual([{ allowBilled: false }]);
+    const r = (await readOf(ig))!;
+    expect(r.reader).toMatchObject({ id: "builtin:policy", billed: false });
+    expect(r.blocked).toEqual({
+      reason: "needs_reader",
+      nextStep: "install_reader",
+    });
+    expect(calls.copied).toEqual([]);
+    // The client reads the why through the one projection.
+    const { rows } = await q<{ id: string; metadata: unknown }>(
+      `select id, metadata from documents where id = $1`,
+      [ig]
+    );
+    expect(toLibraryItemView(rows[0] as never)!.read.blocked).toEqual({
+      reason: "needs_reader",
+      nextStep: "install_reader",
+    });
+  });
+
+  it("Read with Apify: one budget unit, the post read (caption, author), media copied in the same job, the reel transcribed and labelled", async () => {
+    const ig = await stageLink(IG);
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url, opts) => {
+        calls.readUrl++;
+        calls.readOpts.push(opts);
+        return doorRead(url, {
+          via: APIFY_STAMP,
+          title: "Brand moodboard",
+          author: "studio.north",
+          text: "Muted palettes and serif type for autumn.",
+          media: [
+            {
+              url: "https://cdn.ig.test/1.jpg",
+              kind: "image",
+              role: "cover",
+              order: 0,
+            },
+            {
+              url: "https://cdn.ig.test/2.jpg",
+              kind: "image",
+              role: "slide",
+              order: 1,
+            },
+            {
+              url: "https://cdn.ig.test/3.mp4",
+              kind: "video",
+              role: "slide",
+              order: 2,
+            },
+          ],
+        });
+      },
+      summarize: async () => ({ summary: "A moodboard." }),
+    });
+    deps.copyMedia = recordingCopy(calls);
+    const res = await read(ig, deps, { reader: APIFY });
+    expect(res).toMatchObject({ status: "read", usedAi: true });
+    expect(calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true },
+    ]);
+    expect(calls.copied).toEqual([
+      {
+        itemId: ig,
+        urls: [
+          "https://cdn.ig.test/1.jpg",
+          "https://cdn.ig.test/2.jpg",
+          "https://cdn.ig.test/3.mp4",
+        ],
+      },
+    ]);
+    expect(calls.stt).toEqual(["doc-2"]);
+    const r = (await readOf(ig))!;
+    expect(r.status).toBe("read");
+    expect(r.reader).toEqual(APIFY_STAMP);
+    expect(r.transcript).toEqual({ source: "stt", lang: "en" });
+    expect(r.aiAt).toEqual(expect.any(String));
+    expect(r.requestedReader).toBeUndefined();
+    const text = h.objects.get(r.textKey)!.toString();
+    expect(text).toContain("By studio.north");
+    expect(text).toContain("Muted palettes and serif type for autumn.");
+    expect(text).toContain(
+      "Transcript (speech to text, by AI):\nToday we bake a sourdough loaf."
+    );
+  });
+
+  it("a transcript the reader brought is labelled from the site — no speech-to-text spent", async () => {
+    const id = await stageLink("https://www.youtube.com/watch?v=abc");
+    const { deps, calls } = makeDeps({
+      readUrl: async (url) =>
+        doorRead(url, {
+          via: STAMP("builtin:adapter:youtube"),
+          status: "partial",
+          title: "Sourdough basics",
+          text: undefined,
+          transcript: { text: "Flour, water, salt.", source: "platform" },
+          media: [
+            { url: "https://cdn.yt.test/v.mp4", kind: "video", order: 0 },
+          ],
+        }),
+      summarize: async () => null,
+    });
+    deps.copyMedia = recordingCopy(calls);
+    expect(await read(id, deps)).toMatchObject({ status: "read" });
+    expect(calls.stt).toEqual([]);
+    const r = (await readOf(id))!;
+    expect(r.transcript).toEqual({ source: "platform" });
+    expect(h.objects.get(r.textKey)!.toString()).toContain(
+      "Transcript (from the site):\nFlour, water, salt."
+    );
+  });
+
+  it("a billed read over the day's budget is MARKED over_budget, keeps the chosen reader, and the sweep's job reads with it", async () => {
+    const ig = await stageLink(IG);
+    const over = makeDeps({ perDay: 0, readers: async () => [APIFY_OFFER] });
+    expect(await read(ig, over.deps, { reader: APIFY })).toMatchObject({
+      status: "over_budget",
+    });
+    expect(over.calls.readUrl).toBe(0);
+    expect((await readOf(ig))!).toMatchObject({
+      status: "over_budget",
+      requestedReader: APIFY,
+    });
+    // The sweep's job carries no reader: the item remembers the person's choice.
+    const later = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      summarize: async () => null,
+    });
+    expect(await read(ig, later.deps)).toMatchObject({ status: "read" });
+    expect(later.calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true },
+    ]);
+    expect((await readOf(ig))!.requestedReader).toBeUndefined();
+  });
+
+  it("blocked by a login wall → unreadable WITH the reason; a file no reader handles → needs_file", async () => {
+    const wall = await stageLink("https://news.example/locked");
+    const pdf = await stageLink("https://files.example/report.bin");
+    const { deps } = makeDeps({
+      readUrl: async (url) =>
+        doorRead(url, {
+          status: "blocked",
+          title: undefined,
+          text: undefined,
+          blocked: url.includes("locked")
+            ? {
+                reason: "login_wall",
+                nextStep: "open_in_my_browser",
+                detail: "Sign in to read",
+              }
+            : { reason: "unsupported", nextStep: "attach_file" },
+        }),
+    });
+    expect(await read(wall, deps)).toMatchObject({ status: "unreadable" });
+    expect((await readOf(wall))!.blocked).toEqual({
+      reason: "login_wall",
+      nextStep: "open_in_my_browser",
+      detail: "Sign in to read",
+    });
+    expect(await read(pdf, deps)).toMatchObject({ status: "needs_file" });
+    expect((await readOf(pdf))!.blocked).toMatchObject({
+      reason: "unsupported",
+    });
+  });
+
+  it("a failed read is retried (attempts) with the chosen reader, then unreadable WITH the error — never folded silently", async () => {
+    const ig = await stageLink(IG);
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url, opts) => {
+        calls.readOpts.push(opts);
+        return doorRead(url, {
+          status: "failed",
+          via: { ...APIFY_STAMP, correlationId: undefined },
+          title: undefined,
+          text: undefined,
+          error: "actor run timed out",
+        });
+      },
+    });
+    expect(await read(ig, deps, { reader: APIFY })).toMatchObject({
+      status: "not_read",
+    });
+    expect((await readOf(ig))!).toMatchObject({
+      status: "not_read",
+      attempts: 1,
+      requestedReader: APIFY,
+      lastError: "actor run timed out",
+    });
+    expect(await read(ig, deps)).toMatchObject({ status: "not_read" });
+    expect(await read(ig, deps)).toMatchObject({ status: "unreadable" });
+    expect(calls.readOpts.every((o) => o.reader === APIFY)).toBe(true);
+    expect((await readOf(ig))!).toMatchObject({
+      status: "unreadable",
+      attempts: 3,
+      lastError: "actor run timed out",
+    });
+  });
+
+  it("a partial read with a caption is a read; with only a title it is title_only (media still copied)", async () => {
+    const caption = await stageLink("https://www.tiktok.com/@a/video/1");
+    const bare = await stageLink("https://www.tiktok.com/@a/video/2");
+    const { deps, calls } = makeDeps({
+      readUrl: async (url) =>
+        doorRead(url, {
+          status: "partial",
+          via: STAMP("builtin:adapter:tiktok"),
+          title: url.endsWith("1") ? "Cold proof" : "Untitled clip",
+          text: url.endsWith("1")
+            ? "Proof it overnight in the fridge."
+            : undefined,
+          media: [{ url: `${url}/cover.jpg`, kind: "image", order: 0 }],
+        }),
+    });
+    expect(await read(caption, deps)).toMatchObject({ status: "read" });
+    expect(await read(bare, deps)).toMatchObject({ status: "title_only" });
+    expect(calls.copied.map((c) => c.itemId)).toEqual([caption, bare]);
+    expect((await readOf(bare))!.reader).toMatchObject({
+      id: "builtin:adapter:tiktok",
+    });
+  });
+
+  it("a staged title-only link the door CAN read is read; one it cannot stays title_only", async () => {
+    const x = await stageLink("https://x.com/a/status/1", {
+      contentStatus: "title_only",
+    });
+    const li = await stageLink("https://linkedin.com/posts/1", {
+      contentStatus: "title_only",
+    });
+    const { deps } = makeDeps({
+      readUrl: async (url) =>
+        url.includes("x.com")
+          ? doorRead(url, { via: STAMP("builtin:adapter:x"), text: "Ship it." })
+          : doorRead(url, {
+              status: "failed",
+              title: undefined,
+              text: undefined,
+              error: "fetch failed",
+            }),
+    });
+    expect(await read(x, deps)).toMatchObject({ status: "read" });
+    expect(await read(li, deps)).toMatchObject({ status: "title_only" });
+  });
+
+  it("an explicit RE-read that did not read keeps the read the item has, and records the attempt", async () => {
+    const id = await stageLink("https://example.com/kept");
+    const first = makeDeps({ summarize: async () => null });
+    await read(id, first.deps);
+    const before = (await readOf(id))!;
+    expect(before.status).toBe("read");
+    const { deps } = makeDeps({
+      readUrl: async (url) =>
+        doorRead(url, {
+          status: "blocked",
+          via: STAMP("other_reader"),
+          title: undefined,
+          text: undefined,
+          blocked: { reason: "paywall" },
+        }),
+    });
+    expect(await read(id, deps, { reader: "other_reader" })).toMatchObject({
+      status: "unreadable",
+    });
+    const after = (await readOf(id))!;
+    expect(after).toMatchObject({
+      status: "read",
+      textKey: before.textKey,
+      reader: before.reader,
+      lastAttempt: {
+        readerId: "other_reader",
+        status: "unreadable",
+        blocked: { reason: "paywall" },
+      },
+    });
+  });
+
+  it("an automatic read yields to a read that landed while it ran (overlapping jobs)", async () => {
+    const id = await stageLink(IG);
+    const { deps } = makeDeps({
+      readUrl: async (url) => {
+        // The explicit job finished first.
+        await q(
+          `update documents set metadata = jsonb_set(metadata, '{importRead}', '{"status":"read","suggestedActions":[],"summary":"from Apify"}'::jsonb) where id = $1`,
+          [id]
+        );
+        return doorRead(url, {
+          status: "blocked",
+          via: STAMP("builtin:policy"),
+          title: undefined,
+          text: undefined,
+          blocked: { reason: "needs_reader" },
+        });
+      },
+    });
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect((await readOf(id))!).toMatchObject({
+      status: "read",
+      summary: "from Apify",
+    });
+  });
+});
+
+describe("a billed read is never billed twice (job expiry, crash)", () => {
+  const billedRead = (url: string): UrlRead =>
+    doorRead(url, {
+      via: APIFY_STAMP,
+      title: "Brand moodboard",
+      text: "Muted palettes and serif type for autumn.",
+      media: [{ url: "https://cdn.ig.test/3.mp4", kind: "video", order: 0 }],
+    });
+
+  it("a job that EXPIRED mid-copy and was redelivered while the first still runs resumes — the reader runs ONCE", async () => {
+    const ig = await stageLink(IG);
+    let readerRuns = 0;
+    const second = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => {
+        readerRuns++;
+        return billedRead(url);
+      },
+      summarize: async () => null,
+    });
+    second.deps.copyMedia = recordingCopy(second.calls);
+    let redelivered: unknown;
+    const first = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => {
+        readerRuns++;
+        return billedRead(url);
+      },
+      summarize: async () => null,
+      // pg-boss re-queued the job while this copy streams: the redelivery
+      // runs to completion before the first copy returns.
+      copyMedia: async (input) => {
+        redelivered = await read(ig, second.deps, { reader: APIFY });
+        return recordingCopy(first.calls)(input);
+      },
+    });
+    expect(await read(ig, first.deps, { reader: APIFY })).toMatchObject({
+      status: "read",
+    });
+    expect(redelivered).toMatchObject({ status: "read" });
+    expect(readerRuns).toBe(1);
+    // The redelivery still copied the media (the part that was unfinished).
+    expect(second.calls.copied).toHaveLength(1);
+    const r = (await readOf(ig))!;
+    expect(r.status).toBe("read");
+    expect(r.reader).toEqual(APIFY_STAMP);
+    expect(r.readCheckpoint).toBeUndefined();
+    expect(h.objects.get(r.textKey)!.toString()).toContain(
+      "Muted palettes and serif type for autumn."
+    );
+  });
+
+  it("a crash after the read (the copy threw) keeps the read across the retry; the sweep's job resumes with no second bill", async () => {
+    const ig = await stageLink(IG);
+    const crash = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => {
+        crash.calls.readUrl++;
+        return billedRead(url);
+      },
+      copyMedia: async () => {
+        throw new Error("storage write failed");
+      },
+    });
+    expect(await read(ig, crash.deps, { reader: APIFY })).toMatchObject({
+      status: "not_read",
+    });
+    expect(crash.calls.readUrl).toBe(1);
+    expect((await readOf(ig))!).toMatchObject({
+      status: "not_read",
+      requestedReader: APIFY,
+      readCheckpoint: { readerId: APIFY, read: { status: "ok" } },
+    });
+    const later = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      summarize: async () => null,
+    });
+    later.deps.copyMedia = recordingCopy(later.calls);
+    expect(await read(ig, later.deps)).toMatchObject({ status: "read" });
+    expect(later.calls.readUrl).toBe(0);
+    expect(later.calls.copied).toHaveLength(1);
+    expect((await readOf(ig))!.readCheckpoint).toBeUndefined();
+  });
+
+  it("only a BILLED read is checkpointed; a free one re-runs freely", async () => {
+    const page = await stageLink("https://example.com/a");
+    const { deps } = makeDeps({
+      copyMedia: async () => {
+        throw new Error("storage write failed");
+      },
+      readUrl: async (url) =>
+        doorRead(url, {
+          media: [{ url: "https://cdn.test/a.jpg", kind: "image", order: 0 }],
+        }),
+    });
+    expect(await read(page, deps, { reader: "builtin" })).toMatchObject({
+      status: "not_read",
+    });
+    expect((await readOf(page))!.readCheckpoint).toBeUndefined();
+  });
+
+  it("resumableRead: only the SAME reader, inside the window, a usable read", () => {
+    const cp = {
+      readerId: APIFY,
+      at: NOW.toISOString(),
+      read: billedRead(IG),
+    };
+    expect(resumableRead(cp, APIFY, IG, NOW)).toMatchObject({
+      status: "ok",
+      via: { id: APIFY, billed: true },
+    });
+    expect(resumableRead(cp, "other_reader", IG, NOW)).toBeNull();
+    const late = new Date(NOW.getTime() + READ_CHECKPOINT_TTL_MS + 1);
+    expect(resumableRead(cp, APIFY, IG, late)).toBeNull();
+    expect(
+      resumableRead({ ...cp, read: { ...cp.read, via: null } }, APIFY, IG, NOW)
+    ).toBeNull();
+    expect(
+      resumableRead(
+        { ...cp, read: { ...cp.read, status: "failed" } },
+        APIFY,
+        IG,
+        NOW
+      )
+    ).toBeNull();
+    expect(resumableRead(undefined, APIFY, IG, NOW)).toBeNull();
+  });
+});
+
+describe("light-read job expiry (a big media copy outlives pg-boss's 15 min)", () => {
+  it("every light-read job is sent with an expiry sized for the copy (env-tunable)", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    await enqueueLibraryLightRead(
+      [{ userId: USER, itemId: "i1", reader: APIFY, force: true }],
+      async (_q, _d, options) => void sent.push(options)
+    );
+    expect(sent).toEqual([
+      { singletonKey: "library-light-read:i1", expireInSeconds: 3600 },
+    ]);
+    expect(lightReadJobExpireSeconds({})).toBe(3600);
+    expect(
+      lightReadJobExpireSeconds({
+        SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: "90",
+      })
+    ).toBe(5400);
+    // Garbage or below the floor → the default, never pg-boss's 15 min.
+    for (const v of ["abc", "2", "-1", "1.5"]) {
+      expect(
+        lightReadJobExpireSeconds({
+          SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: v,
+        })
+      ).toBe(3600);
+    }
+    expect(
+      lightReadJobExpireSeconds({
+        SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: "99999",
+      })
+    ).toBe(720 * 60);
+  });
+});
+
+describe("the pictures' Try again rides the light-read queue as a media-only job", () => {
+  it("sent with its own key; run, it copies media and never reads (no reader, no budget)", async () => {
+    const sent: Array<{ data: unknown; options: unknown }> = [];
+    await enqueueLibraryLightRead(
+      [{ userId: USER, itemId: "i2", media: "retry" }],
+      async (_q, data, options) => void sent.push({ data, options })
+    );
+    expect(sent).toEqual([
+      {
+        data: { userId: USER, itemId: "i2", media: "retry" },
+        options: {
+          singletonKey: "library-media-retry:i2",
+          expireInSeconds: 3600,
+        },
+      },
+    ]);
+    const retried: unknown[] = [];
+    const out = await runLibraryLightReadJob(
+      { userId: USER, itemId: "i2", media: "retry" },
+      {
+        // A database or reader touched here would throw: the job is media only.
+        database: new Proxy(
+          {},
+          {
+            get() {
+              throw new Error("a media retry must not read the item");
+            },
+          }
+        ) as never,
+        retryMedia: async (input) => {
+          retried.push(input);
+          return { status: "copied" };
+        },
+      }
+    );
+    expect(retried).toEqual([{ userId: USER, itemId: "i2" }]);
+    expect(out).toEqual({ itemId: "i2", status: "media_copied" });
   });
 });
 
@@ -756,14 +1370,10 @@ describe("page HTML from the browser", () => {
     const { deps, calls } = makeDeps({
       readUrl: async (url) => {
         calls.readUrl++;
-        return {
-          kind: "read",
+        return doorRead(url, {
           title: "Sign in",
-          author: null,
           text: "Please log in to continue.",
-          imageUrl: null,
-          sourceUrl: url,
-        };
+        });
       },
       summarize: async () => null,
     });
@@ -825,7 +1435,17 @@ describe("page HTML from the browser", () => {
       deps: {
         readUrl: async (url) => {
           fetched++;
-          return { kind: "unavailable", sourceUrl: url };
+          return {
+            status: "failed",
+            sourceUrl: url,
+            error: "not reachable in this test",
+            via: {
+              id: "builtin:article",
+              name: "test",
+              billed: false,
+              readAt: "2026-10-15T00:00:00.000Z",
+            },
+          };
         },
       },
     });

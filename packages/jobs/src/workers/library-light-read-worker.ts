@@ -20,6 +20,7 @@
 
 import type PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
+import { envInt } from "@synap/shared-utils";
 
 const logger = createLogger({ module: "library-light-read-worker" });
 
@@ -34,6 +35,37 @@ export interface LibraryLightReadPayload {
   itemId: string;
   /** Read again even when a final read is on the item. */
   force?: boolean;
+  /**
+   * The reader the person chose ("Read with X", `library.readWith`): a reader
+   * id from the item's offers (`"builtin"` or a verb id). Implies `force`,
+   * may bill (one unit of the daily read budget) and is interactive. Absent =
+   * the automatic read (the best FREE ready reader).
+   */
+  reader?: string;
+  /**
+   * `"retry"`: no read at all — copy again the media the item failed to
+   * copy (the person's "Try again", `library.retryMedia`). No reader runs and
+   * no read budget is spent.
+   */
+  media?: "retry";
+}
+
+/**
+ * Workers on the light-read queue (env `SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY`,
+ * default 4, 1–16): a hosted reader (an Apify run) can take up to 120 s, so
+ * one worker would serialize a bulk "Read N with X". pg-boss v10 has no
+ * `localConcurrency` — concurrency is N `work()` registrations.
+ */
+export const LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT = 4;
+
+export function libraryLightReadConcurrency(
+  env: Record<string, string | undefined> = process.env
+): number {
+  return envInt(env, "SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY", {
+    default: LIBRARY_LIGHT_READ_CONCURRENCY_DEFAULT,
+    min: 1,
+    max: 16,
+  });
 }
 
 /** What one read did — stored as the pg-boss job `output`. */
@@ -76,6 +108,7 @@ export async function handleLibraryLightRead(
   logger.info(
     {
       itemId: job.data.itemId,
+      reader: job.data.reader ?? null,
       status: result.status,
       chars: result.chars ?? null,
       actions: result.actions ?? null,

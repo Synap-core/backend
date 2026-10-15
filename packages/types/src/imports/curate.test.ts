@@ -13,6 +13,7 @@ import {
   type ImportGroup,
   type ImportItemView,
 } from "./curate.js";
+import { POD_NEVER_FETCHES } from "../url-read/index.js";
 
 function item(over: Partial<ImportItemView> & { id: string }): ImportItemView {
   return {
@@ -61,13 +62,23 @@ describe("importPlatformOf / importHostOf — platform from the host only", () =
 });
 
 describe("importContentStatusFor — what Build may read, from metadata alone", () => {
-  it("never plans to scrape Instagram or TikTok", () => {
-    expect(importContentStatusFor({ kind: "url", platform: "instagram" })).toBe(
-      "needs_file"
-    );
-    expect(importContentStatusFor({ kind: "url", platform: "tiktok" })).toBe(
-      "needs_file"
-    );
+  it("a page the pod never fetches (POD_NEVER_FETCHES) needs the file — read from the policy list, by URL", () => {
+    const status = (url: string) =>
+      importContentStatusFor({
+        kind: "url",
+        url,
+        platform: importPlatformOf(url) ?? "web",
+      });
+    expect(status("https://www.instagram.com/p/abc/")).toBe("needs_file");
+    expect(status("https://vm.tiktok.com/x")).toBe("needs_file");
+    // `instagr.am` is on the policy list but not in the platform table: only
+    // a status DERIVED from the list catches it (a platform switch would not).
+    expect(importPlatformOf("https://instagr.am/p/abc")).toBe("web");
+    expect(status("https://instagr.am/p/abc")).toBe("needs_file");
+    for (const p of POD_NEVER_FETCHES) {
+      const host = p.replace(/^\*\./, "");
+      expect([p, status(`https://${host}/x`)]).toEqual([p, "needs_file"]);
+    }
   });
   it("YouTube is captions, X/LinkedIn title only, the web readable", () => {
     expect(importContentStatusFor({ kind: "url", platform: "youtube" })).toBe(

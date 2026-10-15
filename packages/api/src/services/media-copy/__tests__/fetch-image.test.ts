@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fetchExternalImage,
+  fetchGuardedBytes,
   MEDIA_COPY_MAX_SIDE,
   PERMANENT_FETCH_FAILURES,
 } from "../fetch-image.js";
@@ -186,5 +187,80 @@ describe("fetchExternalImage", () => {
         fetch: streamed([png(MEDIA_COPY_MAX_SIDE, 8)]).fetch,
       })
     ).toMatchObject({ ok: true, width: MEDIA_COPY_MAX_SIDE });
+  });
+});
+
+describe("fetchGuardedBytes (any file through the same guarded door)", () => {
+  const PDF = new TextEncoder().encode("%PDF-1.7 a small document");
+  it("returns the bytes and the declared type, without sniffing", async () => {
+    const s = streamed([PDF], {
+      headers: { "content-type": "application/pdf; charset=binary" },
+    });
+    const got = await fetchGuardedBytes("https://files.example.com/a.pdf", {
+      maxBytes: 1024,
+      timeoutMs: 5_000,
+      fetch: s.fetch,
+    });
+    expect(got).toEqual({
+      ok: true,
+      bytes: Buffer.from(PDF),
+      contentType: "application/pdf; charset=binary",
+    });
+    // The pinned door was asked, with an Accept header and the redirect cap.
+    expect(s.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a truthful Content-Length over the cap BEFORE reading a byte", async () => {
+    const s = streamed([PDF], {
+      headers: { "content-type": "application/pdf", "content-length": "5000" },
+    });
+    expect(
+      await fetchGuardedBytes("https://files.example.com/a.pdf", {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        fetch: s.fetch,
+      })
+    ).toEqual({ ok: false, reason: "too_large" });
+    expect(s.pulled()).toBe(0);
+  });
+
+  it("cuts a lying server at the cap; an empty body and a 404 are refused", async () => {
+    const endless = streamed(() => new Uint8Array(256), {
+      headers: { "content-type": "application/octet-stream" },
+    });
+    expect(
+      await fetchGuardedBytes("https://files.example.com/x", {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        fetch: endless.fetch,
+      })
+    ).toEqual({ ok: false, reason: "too_large" });
+    expect(endless.pulled()).toBeLessThanOrEqual(6);
+    expect(
+      await fetchGuardedBytes("https://files.example.com/x", {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        fetch: streamed([]).fetch,
+      })
+    ).toEqual({ ok: false, reason: "empty" });
+    expect(
+      await fetchGuardedBytes("https://files.example.com/x", {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        fetch: streamed([PDF], { status: 404 }).fetch,
+      })
+    ).toEqual({ ok: false, reason: "http_4xx" });
+  });
+
+  it("a private address never reaches the fetcher (the real SSRF guard)", async () => {
+    const s = streamed([PDF]);
+    expect(
+      await fetchGuardedBytes("http://169.254.169.254/latest/meta-data", {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        fetch: s.fetch,
+      })
+    ).toEqual({ ok: false, reason: "blocked" });
+    expect(s.fetch).not.toHaveBeenCalled();
   });
 });

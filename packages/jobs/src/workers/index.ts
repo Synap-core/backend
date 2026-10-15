@@ -101,6 +101,7 @@ import {
   handleLibraryLightReadSweep,
   LIBRARY_LIGHT_READ_QUEUE,
   LIBRARY_LIGHT_READ_SWEEP_QUEUE,
+  libraryLightReadConcurrency,
 } from "./library-light-read-worker.js";
 import {
   handleLibraryKeepAlive,
@@ -787,9 +788,14 @@ export async function registerAllWorkers(): Promise<void> {
   // Library light read (on save — text, summary, action chips; handler slot
   // filled by the api layer at boot, IoC) + the hourly sweep that re-enqueues
   // items not read yet or held over budget.
-  await boss.work(LIBRARY_LIGHT_READ_QUEUE, async ([job]: any[]) =>
-    handleLibraryLightRead(job)
-  );
+  // N workers (a hosted reader run can take 120 s): see
+  // `libraryLightReadConcurrency`.
+  const lightReadWorkers = libraryLightReadConcurrency();
+  for (let i = 0; i < lightReadWorkers; i++) {
+    await boss.work(LIBRARY_LIGHT_READ_QUEUE, async ([job]: any[]) =>
+      handleLibraryLightRead(job)
+    );
+  }
   await boss.work(LIBRARY_LIGHT_READ_SWEEP_QUEUE, async () =>
     handleLibraryLightReadSweep()
   );

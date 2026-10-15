@@ -1,7 +1,9 @@
 /**
  * The light read's doors onto the `library-light-read` queue:
  *   - `enqueueLibraryLightRead` — called when items enter the Library
- *     (`library.add`) and when a file is attached to a `needs_file` item;
+ *     (`library.add`), when a file is attached to a `needs_file` item, and
+ *     for a person's "Try again" on an item's pictures (`media: "retry"`,
+ *     `library.retryMedia` — the copy door only, no read);
  *   - `runLibraryLightReadJob` — the handler the api puts in the jobs slot;
  *   - `sweepLibraryLightReads` — the hourly re-enqueue of items not read yet
  *     or held over budget (only for people whose budget has room again).
@@ -11,6 +13,7 @@
 
 import { isArchivedSql, lightReadEligibleSql } from "./read-model.js";
 import { createLogger } from "@synap-core/core";
+import { envInt } from "@synap/shared-utils";
 import {
   documents,
   drizzleSql,
@@ -41,10 +44,35 @@ const logger = createLogger({ module: "library/light-read-queue" });
 /** Items one sweep re-enqueues at most (oldest first). */
 export const LIGHT_READ_SWEEP_BATCH = 200;
 
+/**
+ * How long one light-read job may run before pg-boss expires it, in minutes
+ * (env `SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES`, default 60, 5–720).
+ *
+ * pg-boss's default is 15 minutes, and on expiry it re-queues the job as a
+ * retry WHILE the first handler is still running. A light read copies the
+ * item's media in the same job — a video streams up to 1 GiB with a 30-minute
+ * cap of its own (`VIDEO_TOTAL_TIMEOUT_MS`) — so a big copy outlived the
+ * default and ran twice. Sized for the copy plus the read, transcript and
+ * summary around it. A billed read is never re-run by such a retry either way:
+ * it is checkpointed on the item before the copy (`importRead.readCheckpoint`).
+ */
+export const LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT = 60;
+
+export function lightReadJobExpireSeconds(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const minutes = envInt(env, "SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES", {
+    default: LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT,
+    min: 5,
+    max: 720,
+  });
+  return minutes * 60;
+}
+
 type Send = (
   queue: string,
   data: LibraryLightReadPayload,
-  options: { singletonKey: string }
+  options: { singletonKey: string; expireInSeconds: number }
 ) => Promise<unknown>;
 
 async function defaultSend(): Promise<Send> {
@@ -59,7 +87,15 @@ async function defaultSend(): Promise<Send> {
  * hourly sweep — the item is still `not_read`, never lost.
  */
 export async function enqueueLibraryLightRead(
-  items: ReadonlyArray<{ userId: string; itemId: string; force?: boolean }>,
+  items: ReadonlyArray<{
+    userId: string;
+    itemId: string;
+    force?: boolean;
+    /** The reader the person chose (`library.readWith`). */
+    reader?: string;
+    /** Copy the item's failed media again, nothing else (`library.retryMedia`). */
+    media?: "retry";
+  }>,
   send?: Send
 ): Promise<number> {
   if (items.length === 0) return 0;
@@ -74,6 +110,7 @@ export async function enqueueLibraryLightRead(
     return 0;
   }
   let queued = 0;
+  const expireInSeconds = lightReadJobExpireSeconds();
   for (const item of items) {
     try {
       await sendFn(
@@ -82,8 +119,13 @@ export async function enqueueLibraryLightRead(
           userId: item.userId,
           itemId: item.itemId,
           ...(item.force ? { force: true } : {}),
+          ...(item.reader ? { reader: item.reader } : {}),
+          ...(item.media ? { media: item.media } : {}),
         },
-        { singletonKey: `library-light-read:${item.itemId}` }
+        {
+          singletonKey: `library-${item.media ? "media-retry" : "light-read"}:${item.itemId}`,
+          expireInSeconds,
+        }
       );
       queued++;
     } catch (err) {
@@ -102,8 +144,27 @@ export async function runLibraryLightReadJob(
   opts: {
     database?: Pick<typeof DbType, "select"> & LibraryReadDb;
     deps?: LightReadDeps;
+    /** Test seam: the media retry (`retryLibraryItemMedia`). */
+    retryMedia?: (input: {
+      userId: string;
+      itemId: string;
+    }) => Promise<{ status: string }>;
   } = {}
 ): Promise<LibraryLightReadResult> {
+  if (payload.media === "retry") {
+    // The person's "Try again" on the pictures: the copy door only.
+    const out = await (
+      opts.retryMedia ??
+      (async (input: { userId: string; itemId: string }) =>
+        (
+          await import("../media-copy/copy-library-item-media.js")
+        ).retryLibraryItemMedia(input))
+    )({ userId: payload.userId, itemId: payload.itemId });
+    return {
+      itemId: payload.itemId,
+      status: `media_${out.status}`,
+    };
+  }
   const database =
     opts.database ?? ((await import("@synap/database")).db as never);
   let deps = opts.deps;
@@ -129,6 +190,7 @@ export async function runLibraryLightReadJob(
     userId: payload.userId,
     itemId: payload.itemId,
     ...(payload.force ? { force: true } : {}),
+    ...(payload.reader ? { reader: payload.reader } : {}),
     deps,
   });
 }

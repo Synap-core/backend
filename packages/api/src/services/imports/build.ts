@@ -1,12 +1,19 @@
 /**
  * BUILD — turn ONE curated group into ONE governed bundle.
  *
- *   1. READ only the KEPT items of the group, by what staging said Build can
- *      read: a readable page → `readPublicUrl` (its capped text); typed text →
- *      the text; a file → its bytes, handed to the IS extractor (the same
- *      `client.structure({ file })` path capture uses); captions → there is no
- *      pod captions reader today, so the title and card are used and the item
- *      is reported `unreadable`; `needs_file` with no file → skipped.
+ *   1. READ only the KEPT items of the group — what the pod already READ and
+ *      STORED, never the URL again: a file → its bytes, handed to the IS
+ *      extractor (the same `client.structure({ file })` path capture uses);
+ *      typed text → the text; a link → the light read's stored text
+ *      (`importRead.textKey`, written by THE reader door), else the page the
+ *      person's browser sent (`importPage`, read with `readSentPage`), else
+ *      only the title and card (reported `unreadable`). An item the light read
+ *      never reached is read through it first (`readFirst`, automatic: the
+ *      free readers only). A `needs_file` link that a reader HAS read is built
+ *      like any read item; one with nothing read and no file is skipped.
+ *      The media the Library copied for the item ride on its primary thing as
+ *      `media-urls` (their source URLs): the entity media copy takes the
+ *      bytes from the Library's copy (`imageFromLibraryCopy`), never the CDN.
  *   2. STRUCTURE each item through the existing structure path. The ONLY
  *      instruction is the person's words (`importItemInstructions`: group note,
  *      then item note), composed through `assembleStructureContext`. The
@@ -71,7 +78,13 @@ import type {
   SubmitCaptureGraphInput,
 } from "../capture-agent/submit-capture-graph.js";
 import { captureStructureToGraph } from "../capture-agent/capture-structure-to-graph.js";
-import type { PublicUrlRead } from "../capabilities/read-public-url.js";
+import { readLibraryItemMedia } from "@synap-core/types/imports";
+import { readSentPage } from "../capabilities/web-read/read-builtin.js";
+import { readLibraryPageMeta } from "../library/page-html.js";
+import {
+  CAPTURED_MEDIA_URLS_PROPERTY,
+  MAX_MEDIA_URLS_PER_ENTITY,
+} from "../media-copy/media-plan.js";
 import {
   recordSessionRunManifest,
   mergeStructureRunMeta,
@@ -127,8 +140,13 @@ export interface ImportBuildDeps {
   /** The person's words, composed with their stored guidelines. */
   instructionsFor(explicit: string): Promise<string | undefined>;
   generate: GenerateJson;
-  readUrl(url: string): Promise<PublicUrlRead>;
   readBytes(storageKey: string): Promise<Buffer>;
+  /**
+   * Run the light read (THE reader door, automatic) for items it never
+   * reached, so Build reads a STORED read. Absent ⇒ Build reads what is
+   * stored as it is. A failure is logged; those items build from their card.
+   */
+  readFirst?(itemIds: readonly string[]): Promise<void>;
   /** Existing Templates for a kind + intent (workspace-scoped door). */
   matchTemplates?(input: {
     profileSlug: string;
@@ -241,14 +259,75 @@ async function readItemContent(
     const body = await readStoredText(row, deps);
     return body ? { kind: "text", text: body } : { kind: "none" };
   }
-  if (item.contentStatus === "readable" && s.url) {
-    const read = await deps.readUrl(s.url);
-    return read.kind === "read" && read.text.trim()
-      ? { kind: "text", text: read.text }
-      : { kind: "none" };
+  // A link: what the reader door read and the light read stored — never the
+  // URL again.
+  const stored = storedReadTextKey(row.metadata);
+  if (stored) {
+    const text = (await deps.readBytes(stored)).toString("utf-8");
+    if (text.trim()) return { kind: "text", text };
   }
-  // captions (no pod reader), title_only: nothing beyond the card.
+  // The page the person's browser sent (read with no request).
+  const page = readLibraryPageMeta(row.metadata);
+  if (page && s.url) {
+    const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
+    const read = await readSentPage(html, s.url);
+    const text =
+      read.status === "ok" || read.status === "partial"
+        ? [read.title, read.text].filter((t) => t?.trim()).join("\n\n")
+        : "";
+    if (text.trim()) return { kind: "text", text };
+  }
+  // title_only / unread / blocked: nothing beyond the card.
   return { kind: "none" };
+}
+
+/** The stored read text of an item the light read READ, else null. */
+export function storedReadTextKey(metadata: unknown): string | null {
+  const read = (metadata as Record<string, unknown> | null)?.importRead as
+    { status?: unknown; textKey?: unknown } | undefined;
+  return read?.status === "read" &&
+    typeof read.textKey === "string" &&
+    read.textKey
+    ? read.textKey
+    : null;
+}
+
+/** The light read never finished this item (no read, or not read yet). */
+function awaitsLightRead(metadata: unknown): boolean {
+  const status = (
+    (metadata as Record<string, unknown> | null)?.importRead as
+      { status?: unknown } | undefined
+  )?.status;
+  return status === undefined || status === "not_read";
+}
+
+/**
+ * The Library's copied IMAGES of an item, as `media-urls` on its primary
+ * thing: the entity media copy finds each URL in the Library's copies
+ * (`imageFromLibraryCopy`) and re-stores those bytes — zero re-downloads, no
+ * kind-specific code; `resolveEntityMedia` draws the entity's copy. Videos
+ * are not handed off (the entity copy is images-only; a video URL there
+ * would be fetched only to be refused).
+ */
+export function withLibraryMedia(
+  entity: CaptureGraphEntity,
+  metadata: unknown
+): CaptureGraphEntity {
+  const urls = readLibraryItemMedia(metadata)
+    .media.filter((m) => m.kind === "image")
+    .map((m) => m.sourceUrl);
+  if (urls.length === 0) return entity;
+  const props = { ...(entity.properties ?? {}) };
+  const prior = Array.isArray(props[CAPTURED_MEDIA_URLS_PROPERTY])
+    ? (props[CAPTURED_MEDIA_URLS_PROPERTY] as unknown[]).filter(
+        (u): u is string => typeof u === "string"
+      )
+    : [];
+  props[CAPTURED_MEDIA_URLS_PROPERTY] = [...new Set([...prior, ...urls])].slice(
+    0,
+    MAX_MEDIA_URLS_PER_ENTITY
+  );
+  return { ...entity, properties: props };
 }
 
 /** A typed-text item's own body (the text the person staged). */
@@ -313,12 +392,13 @@ export async function extractItem(args: {
         }),
         prefix
       );
+      const [primary, ...rest] = graph.entities;
       return {
         item,
         contentRead,
-        entities: graph.entities,
+        entities: [withLibraryMedia(primary!, args.row.metadata), ...rest],
         relations: graph.relations,
-        primaryRef: graph.entities[0]!.ref,
+        primaryRef: primary!.ref,
         unreadable: !contentRead && item.contentStatus !== "title_only",
         ...(answer.meta ? { meta: answer.meta } : {}),
       };
@@ -333,7 +413,7 @@ export async function extractItem(args: {
   return {
     item,
     contentRead,
-    entities: [fallbackEntity(item, ref)],
+    entities: [withLibraryMedia(fallbackEntity(item, ref), args.row.metadata)],
     relations: [],
     primaryRef: ref,
     unreadable: item.contentStatus !== "title_only",
@@ -1305,16 +1385,71 @@ export async function buildImportMembers(args: {
     prior = resolved.prior;
   }
   const skipped: Array<{ itemId: string; reason: ImportBuildSkipReason }> = [];
-  const toBuild: Array<{ row: ImportItemRow; view: ImportItemView }> = [];
+  let kept: Array<{ row: ImportItemRow; view: ImportItemView }> = [];
   for (const m of members) {
     if (m.view.decision === "later" || m.view.decision === "exclude") {
       skipped.push({
         itemId: m.view.id,
         reason: m.view.decision === "later" ? "later" : "excluded",
       });
-    } else if (
+    } else {
+      kept.push(m);
+    }
+  }
+  // Build reads STORED reads: an item the light read never reached is read
+  // through it first (the reader door, automatic — free readers only).
+  const unread = kept.filter(
+    (m) => !m.view.source.documentId && awaitsLightRead(m.row.metadata)
+  );
+  if (unread.length > 0 && deps.readFirst) {
+    try {
+      await deps.readFirst(unread.map((m) => m.view.id));
+      const fresh = new Map(
+        (
+          await database
+            .select({ id: documents.id, metadata: documents.metadata })
+            .from(documents)
+            .where(
+              and(
+                eq(documents.userId, args.userId),
+                inArray(
+                  documents.id,
+                  unread.map((m) => m.view.id)
+                )
+              )
+            )
+        ).map((r) => [r.id, r.metadata])
+      );
+      kept = kept.map((m) =>
+        fresh.has(m.view.id)
+          ? {
+              ...m,
+              row: {
+                ...m.row,
+                metadata: (fresh.get(m.view.id) ?? {}) as Record<
+                  string,
+                  unknown
+                >,
+              },
+            }
+          : m
+      );
+    } catch (err) {
+      logger.warn(
+        { err, count: unread.length },
+        "import build: light read before Build FAILED — those items build from their card"
+      );
+    }
+  }
+  const toBuild: Array<{ row: ImportItemRow; view: ImportItemView }> = [];
+  for (const m of kept) {
+    // A needs_file link a reader has READ is built like any read item; one
+    // with nothing read and no file has nothing to build from.
+    if (
       m.view.contentStatus === "needs_file" &&
-      !m.view.source.documentId
+      !m.view.source.documentId &&
+      !storedReadTextKey(m.row.metadata) &&
+      !readLibraryPageMeta(m.row.metadata)
     ) {
       skipped.push({ itemId: m.view.id, reason: "needs_file" });
     } else {
@@ -1583,10 +1718,24 @@ export function defaultImportBuildDeps(args: {
       const { generateViaIS } = await import("../mail-feed/generate.js");
       return generateViaIS(input);
     },
-    async readUrl(url) {
-      const { readPublicUrl } =
-        await import("../capabilities/read-public-url.js");
-      return readPublicUrl(url);
+    async readFirst(itemIds) {
+      const { runLibraryLightReadJob } =
+        await import("../library/light-read-queue.js");
+      // A few at a time — the same pace Build always read at.
+      for (let i = 0; i < itemIds.length; i += READ_CONCURRENCY) {
+        await Promise.all(
+          itemIds.slice(i, i + READ_CONCURRENCY).map(async (itemId) => {
+            try {
+              await runLibraryLightReadJob({ userId: args.userId, itemId });
+            } catch (err) {
+              logger.warn(
+                { err, itemId },
+                "import build: light read FAILED — the item builds from its card"
+              );
+            }
+          })
+        );
+      }
     },
     async readBytes(storageKey) {
       const { storage } = await import("@synap/storage");

@@ -14,6 +14,7 @@ import {
   PROJECTED_SKILL_FIELDS,
   RUNTIME_PLACEHOLDER_SKILL_FIELDS,
   type InstalledSkillRow,
+  projectUrlPatterns,
 } from "./capability-drift.js";
 
 describe("canonicalJson", () => {
@@ -198,5 +199,29 @@ describe("installTimePlaceholders", () => {
     expect(where.sort()).toEqual(
       fields.map((f) => `skill "plain" ${f}`).sort()
     );
+  });
+});
+
+describe("projectUrlPatterns — the reader URLs the applier writes", () => {
+  it("keeps valid patterns in declared order, trimmed and de-duplicated", () => {
+    expect(
+      projectUrlPatterns([" instagram.com/p/* ", "instagram.com/p/*", "*"])
+    ).toEqual(["instagram.com/p/*", "*"]);
+  });
+  it("drops patterns the url-read grammar refuses", () => {
+    expect(
+      projectUrlPatterns([
+        "https://x.com/*",
+        "x.com/p?x=1",
+        3,
+        "tiktok.com/@*/video/*",
+      ])
+    ).toEqual(["tiktok.com/@*/video/*"]);
+  });
+  it("nothing usable, or nothing declared → null (not a reader)", () => {
+    expect(projectUrlPatterns([])).toBeNull();
+    expect(projectUrlPatterns(["not a pattern"])).toBeNull();
+    expect(projectUrlPatterns(undefined)).toBeNull();
+    expect(projectUrlPatterns("instagram.com/p/*")).toBeNull();
   });
 });

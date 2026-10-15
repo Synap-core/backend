@@ -12,6 +12,10 @@
  *   plan   → `planMediaCopy` (declared media property + `media-urls`, minus
  *            what is already copied or given up on)
  *   fetch  → `fetchExternalImage` (SSRF guard, streamed byte cap, magic bytes)
+ *            — unless the same person's Library already copied that URL
+ *            (`library-handoff.ts`): then the bytes come from that copy's
+ *            blob, re-stored as this entity's own document (no fetch; the
+ *            CDN link has usually expired by Build time)
  *   store  → `storeDocumentFromBuffer` — the STORE-ONLY half of the upload
  *            door: blob + `documents` row + immutable v1, and NO entity. The
  *            governed `createGovernedFileEntityFromBuffer` would mint a second
@@ -63,6 +67,9 @@ import { storeDocumentFromBuffer } from "../../routers/file-upload.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { fetchExternalImage, type ImageFetchResult } from "./fetch-image.js";
 import { liveDocumentIds } from "./live-documents.js";
+import type { CopiedImageMime } from "./image-sniff.js";
+import type { CopiedVideoMime } from "./video-sniff.js";
+import { imageFromLibraryCopy } from "./library-handoff.js";
 import {
   collectMediaSourceUrls,
   mergeMediaSystemData,
@@ -86,6 +93,14 @@ export interface EntityMediaCopyResult {
 
 export interface CopyEntityMediaDeps {
   fetchImage?: (url: string) => Promise<ImageFetchResult>;
+  /**
+   * The same person's Library copy of a URL (the hand-off), consulted BEFORE
+   * fetching; `null` = none, fetch as usual (default: `imageFromLibraryCopy`).
+   */
+  fromLibrary?: (
+    userId: string,
+    sourceUrl: string
+  ) => Promise<ImageFetchResult | null>;
   store?: typeof storeDocumentFromBuffer;
   now?: () => Date;
   /**
@@ -144,7 +159,7 @@ export function resetStorageUnavailableForTests(): void {
   storageUnavailableUntil = 0;
 }
 
-function isStorageUnconfigured(err: unknown): boolean {
+export function isStorageUnconfigured(err: unknown): boolean {
   const e = err as { name?: unknown; context?: { provider?: unknown } } | null;
   return e?.name === "ValidationError" && e.context?.provider !== undefined;
 }
@@ -199,6 +214,9 @@ export async function runEntityMediaCopy(
   if (urls.length === 0 && !stale) return skipped;
 
   const fetchImage = deps.fetchImage ?? ((u: string) => fetchExternalImage(u));
+  const fromLibrary =
+    deps.fromLibrary ??
+    ((userId: string, u: string) => imageFromLibraryCopy(userId, u));
   const store = deps.store ?? storeDocumentFromBuffer;
   const now = deps.now ?? (() => new Date());
 
@@ -213,7 +231,11 @@ export async function runEntityMediaCopy(
   }> = [];
 
   for (const sourceUrl of urls) {
-    const got = await fetchImage(sourceUrl);
+    // The Library may already hold these bytes (copied while the CDN link
+    // still worked): re-store them as this entity's own copy, no fetch.
+    const got =
+      (await fromLibrary(row.userId, sourceUrl)) ??
+      (await fetchImage(sourceUrl));
     if (!got.ok) {
       failed.push({ sourceUrl, reason: got.reason });
       logger.info(
@@ -433,16 +455,23 @@ async function recordMediaCopyRun(
   });
 }
 
-const EXT: Record<string, string> = {
+/**
+ * The extension of every type a copy can hold. `satisfies` over the two
+ * inline lists: a type added to (or dropped from) either list fails the build
+ * here until it is classified.
+ */
+const EXT = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
-};
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+} as const satisfies Record<CopiedImageMime | CopiedVideoMime, string>;
 
 /** A filename from the URL path, with the SNIFFED type's extension. */
 export function filenameFor(sourceUrl: string, mime: string): string {
-  const ext = EXT[mime] ?? "img";
+  const ext = (EXT as Record<string, string>)[mime] ?? "img";
   let base = "image";
   try {
     const last = new URL(sourceUrl).pathname.split("/").filter(Boolean).pop();

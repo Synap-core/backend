@@ -145,6 +145,52 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
    * Absent = the skill declares nothing, never `false`.
    */
   declaredReadOnly?: boolean;
+  /**
+   * The URLs this verb READS — its backing skill's `skills.url_patterns`
+   * (0330, the catalog skill's `urls`), in the `@synap-core/types/url-read`
+   * grammar. Present ONLY on a reader verb; absent = not a reader. The url-reader
+   * resolver routes a URL to a verb from this field (with `backingSkillExecutable`,
+   * `granted` and the row's `enabled` / `connection` for the offer state).
+   */
+  urlPatterns?: string[];
+  /**
+   * The backing skill `requires` a tool that holds a CREDENTIAL (a vault secret
+   * or a broker account — `tools.credential_ref` set), i.e. this verb runs on
+   * the person's own account. Present (`true`) only then; absent = runs on
+   * nothing of theirs. The url-reader resolver derives an offer's `billing`
+   * from it (`account` vs `none`) — no cost field is stored.
+   */
+  credentialed?: true;
+}
+
+/**
+ * Stamp each verb whose backing skill requires a credentialed tool (verb id =
+ * skill name). Others are returned unchanged, so the key stays ABSENT.
+ */
+export function withCredentialed(
+  verbs: CapabilityVerbStateWithResponseShape[],
+  credentialedByName: ReadonlySet<string>
+): CapabilityVerbStateWithResponseShape[] {
+  if (credentialedByName.size === 0) return verbs;
+  return verbs.map((v) =>
+    credentialedByName.has(v.id) ? { ...v, credentialed: true as const } : v
+  );
+}
+
+/**
+ * Stamp each verb with its backing skill's declared reader URLs (verb id = skill
+ * name, the same key as the intent map). A verb whose skill declares none is
+ * returned unchanged, so the key stays ABSENT rather than `undefined`/`[]`.
+ */
+export function withUrlPatterns(
+  verbs: CapabilityVerbStateWithResponseShape[],
+  urlPatternsByName: Map<string, string[]>
+): CapabilityVerbStateWithResponseShape[] {
+  if (urlPatternsByName.size === 0) return verbs;
+  return verbs.map((v) => {
+    const urlPatterns = urlPatternsByName.get(v.id);
+    return urlPatterns ? { ...v, urlPatterns: [...urlPatterns] } : v;
+  });
 }
 
 /**
@@ -969,7 +1015,27 @@ export async function listCapabilities(
   // `buildSkillVerb` on its own row instead — which is where tool-less skills
   // were always meant to surface.
   const skillIntentsByTool = new Map<string, Map<string, string>>();
+  // verb id (= skill name) → the skill row's declared reader URLs (0330).
+  const urlPatternsByName = new Map<string, string[]>();
+  // verb id (= skill name) whose skill `requires` a tool holding a credential —
+  // read off the `requires` edges and the tool rows already loaded, no query.
+  const credentialedToolIds = new Set(
+    toolRows
+      .filter((r) => (r.credentialRef ?? "").trim().length > 0)
+      .map((r) => r.id)
+  );
+  const credentialedByName = new Set<string>();
   for (const s of skillRows) {
+    if (
+      (skillRequiredTools.get(s.id) ?? []).some((t) =>
+        credentialedToolIds.has(t)
+      )
+    ) {
+      credentialedByName.add(s.name);
+    }
+    if (Array.isArray(s.urlPatterns) && s.urlPatterns.length > 0) {
+      urlPatternsByName.set(s.name, s.urlPatterns);
+    }
     const declared = declaredReadOnly(s.metadata);
     if (declared !== undefined) declaredReadOnlyByName.set(s.name, declared);
     // Empty string is treated as absent, matching the write door's `z.string()
@@ -1092,15 +1158,21 @@ export async function listCapabilities(
       containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
     containerName:
       containerByMember.get(containerMemberKey("tool", row.id))?.name ?? null,
-    verbs: buildVerbStates(
-      row.capabilities as ToolVerbCatalogEntry[] | null,
-      grantByGrantableId.get(row.id),
-      row.kind,
-      providerSpecByName,
-      backingSkillExecutableByName,
-      declaredReadOnlyByName,
-      skillIntentByName,
-      skillIntentsByTool.get(row.id) ?? new Map()
+    verbs: withCredentialed(
+      withUrlPatterns(
+        buildVerbStates(
+          row.capabilities as ToolVerbCatalogEntry[] | null,
+          grantByGrantableId.get(row.id),
+          row.kind,
+          providerSpecByName,
+          backingSkillExecutableByName,
+          declaredReadOnlyByName,
+          skillIntentByName,
+          skillIntentsByTool.get(row.id) ?? new Map()
+        ),
+        urlPatternsByName
+      ),
+      credentialedByName
     ),
     ...(row.kind === "provider"
       ? {
@@ -1160,7 +1232,13 @@ export async function listCapabilities(
           // the broad registry for management surfaces, but mark them so the
           // shared action projection never advertises an unlaunchable skill.
           runnable: row.status === "active",
-          verbs: buildSkillVerb(row, skillIntentByName),
+          verbs: withCredentialed(
+            withUrlPatterns(
+              buildSkillVerb(row, skillIntentByName),
+              urlPatternsByName
+            ),
+            credentialedByName
+          ),
         }
   );
 

@@ -139,12 +139,12 @@ Every wave:
   - A group keeps its note, outputs, `builtAt`, built refs and a "new since built" count.
   - Items join groups incrementally: titles + light-read summary, existing groups as the vocabulary, a suggestion only (the person confirms or it auto-joins only above a high confidence).
 - **Light read on save** (async job, cheap tier, budgeted):
-  - URL → `readPublicUrl` text (metadata + body cap);
+  - URL → the one reader door `readUrl` (built-in ladder, or an installed reader the person taps; see `LIBRARY.md` "Reading a link"), text + summary stored;
   - file → existing extraction;
   - image → OCR via the vision model with the pod's vision preference and the bulk lane;
   - audio/video file → transcript;
   - then a short summary plus an embedding;
-  - **Instagram/TikTok remain metadata-only** (no scraping); the item asks for the file.
+  - **Instagram/TikTok: the pod never fetches them itself** (no scraping). The item says "Needs a reader"; a reader the person installed may read it on their account after a tap, or the person attaches the file.
 - **Action detection** on the light read (date / receipt / contact / task) → a `suggestedActions[]` chip list.
 - **Caps:** remove per-import caps where the Library replaces them (2000 items / 40 groups / 400 titles / 200 run sources); page everything.
 - **Doors:**

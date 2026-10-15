@@ -1812,10 +1812,12 @@ the low-level doors below only when you deliberately want a single substrate or 
 specific shape (a graph traversal, a typed-entity filter, an entity's neighborhood).
 
 ```
-# THE read door — routes across semantic / procedural / episodic, tells you which answered
+# THE read door — routes across semantic / procedural / episodic / library, tells you which answered
 POST /api/hub/knowledge/ask   body: { query, workspaceId?, limit? }
   → { query, routedTo: [...], primary, answers: [{ substrate, items, status }], degraded, understanding, verdict }
 ```
+
+A link the person kept is in their Library: `ask` finds it (a `library` block — title, source URL, a snippet of what was read, who read it; `degraded: ["library"]` means the Library could not be read, never "nothing kept"). To read any URL use the `read_webpage` intent (builtin `web.read`).
 
 Low-level doors (`ask` routes to these — graph-based, not semantic; type filter →
 relations → neighborhood):

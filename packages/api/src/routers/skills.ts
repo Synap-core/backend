@@ -372,6 +372,25 @@ export async function insertSkillGoverned(
   return { status: "installed", skill };
 }
 
+/**
+ * Marks a `skills.create` caller context as THE capability-definition applier
+ * (`create-from-definition.ts`) — the one writer of a verb's routing `intent`
+ * and of a reader's `urlPatterns`. A Symbol: no HTTP body, header or JSON can
+ * carry it, so a member's `skills.create` cannot claim to be the applier.
+ */
+export const SKILL_DEFINITION_APPLIER: unique symbol = Symbol(
+  "skills.definitionApplier"
+);
+
+/** Did the definition applier build this caller context? */
+function isDefinitionApplier(ctx: unknown): boolean {
+  return (
+    typeof ctx === "object" &&
+    ctx !== null &&
+    (ctx as Record<symbol, unknown>)[SKILL_DEFINITION_APPLIER] === true
+  );
+}
+
 export const skillsRouter = router({
   /**
    * List skills for the current user
@@ -1098,6 +1117,13 @@ export const skillsRouter = router({
          * error naming the offenders, which a Zod enum here could not.
          */
         intent: z.string().min(1).optional(),
+        /**
+         * The URLs a READER verb reads (`skills.url_patterns`, 0330), already
+         * projected by the applier (`projectUrlPatterns`). Applier-only, like
+         * `intent`, and not on `update`: a definition re-apply is the one thing
+         * that changes what a reader receives (a RE_APPROVAL field).
+         */
+        urlPatterns: z.array(z.string().min(1).max(300)).max(64).optional(),
         /** The acting AGENT identity, when this create is agent-initiated
          *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
          *  Threaded into checkPermissionOrPropose below so an agent-created
@@ -1113,6 +1139,20 @@ export const skillsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const skillId = randomUUID();
+
+      // `intent` and `urlPatterns` are the applier's alone: a reader pattern
+      // decides which kept links a verb receives, so a member-authored skill
+      // must never declare one through this door (only a definition does).
+      if (
+        (input.intent !== undefined || input.urlPatterns !== undefined) &&
+        !isDefinitionApplier(ctx)
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "intent and urlPatterns come only from a capability definition; install or update its package instead.",
+        });
+      }
 
       // Documentation + optional Code. Derive `kind` from code presence (explicit
       // input.kind still honored). A skill must carry documentation or code.
@@ -1182,6 +1222,9 @@ export const skillsRouter = router({
           // intent is intact — a proposal that dropped it would install a
           // verb that no intent lookup can ever find.
           ...(input.intent ? { intent: input.intent } : {}),
+          ...(input.urlPatterns?.length
+            ? { urlPatterns: input.urlPatterns }
+            : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1237,6 +1280,10 @@ export const skillsRouter = router({
           // the definition declares none → the column stays NULL, which is the
           // honest reading for a skill that declares no intent.
           ...(input.intent ? { intent: input.intent } : {}),
+          // The reader's declared URLs (applier-only); omitted → NULL, not a reader.
+          ...(input.urlPatterns?.length
+            ? { urlPatterns: input.urlPatterns }
+            : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),

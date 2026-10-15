@@ -13,6 +13,9 @@
  *   readNow    one item structured now (governed), filed alone
  *   runAction  run one suggested chip as ONE governed proposal
  *   build      a group → one governed bundle (first build or rebuild)
+ *   readers    who can read an item / a group's waiting items (live offers)
+ *   readWith   read items / a group's waiting items with one reader (person only)
+ *   retryMedia copy an item's failed pictures again (person only)
  *   health     unread / groups waiting / oldest wait (orient)
  *
  * The AI's capture door (MCP `synap_capture`) is untouched and never lands
@@ -44,6 +47,9 @@ import {
   type LibraryGroupsResult,
   type LibraryHealth,
   type LibraryListResult,
+  type LibraryReadersResult,
+  type LibraryReadWithResult,
+  type LibraryRetryMediaResult,
   type LibraryRunActionResult,
   type LibrarySearchResult,
 } from "@synap-core/types/imports";
@@ -62,11 +68,20 @@ import {
   LibraryActionError,
   runLibraryAction,
 } from "../services/library/run-action.js";
-import { libraryHealth, searchLibrary } from "../services/library/search.js";
+import {
+  libraryHealth,
+  searchLibraryWithReadText,
+} from "../services/library/search.js";
 import {
   buildLibraryGroup,
   readNowLibraryItem,
 } from "../services/library/build.js";
+import {
+  libraryReaderAvailability,
+  libraryReaders,
+  libraryReadWith,
+} from "../services/library/readers.js";
+import { libraryRetryMedia } from "../services/library/retry-media.js";
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -94,6 +109,8 @@ export const LibraryCurateOpSchema: z.ZodType<LibraryCurateOp> =
         .array(z.enum(IMPORT_GROUP_OUTPUTS))
         .max(IMPORT_GROUP_OUTPUTS.length)
         .optional(),
+      /** Build target space; null clears it. Writability checked in curate. */
+      workspaceId: uuid.nullable().optional(),
     }),
     z.object({ op: z.literal("group.archive"), groupId: uuid }),
     z.object({ op: z.literal("group.merge"), fromId: uuid, intoId: uuid }),
@@ -171,6 +188,25 @@ export const LibrarySearchInputSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20),
 });
 
+/** `library.readers`: exactly one of an item or a group. */
+export const LibraryReadersInputSchema = z
+  .object({ itemId: uuid.optional(), groupId: uuid.optional() })
+  .refine((v) => Boolean(v.itemId) !== Boolean(v.groupId), {
+    message: "Name one item or one group.",
+  });
+
+/** `library.readWith`: items or a group's waiting items, one reader. */
+export const LibraryReadWithInputSchema = z
+  .object({
+    itemIds: optIds,
+    groupId: uuid.optional(),
+    /** `"builtin"` or a reader verb id, from `library.readers`. */
+    readerId: z.string().min(1).max(200),
+  })
+  .refine((v) => Boolean(v.itemIds?.length) !== Boolean(v.groupId), {
+    message: "Name items or one group.",
+  });
+
 // ─── Build deps ─────────────────────────────────────────────────────────────
 
 function depsFor(ctx: Context, userId: string) {
@@ -210,6 +246,14 @@ async function runLibraryActionDoor(args: {
   }
 }
 
+/** The rows' reader bit, asked as THIS caller (an agent's lens stays its own). */
+function readerBitFor(ctx: Context, userId: string) {
+  return libraryReaderAvailability({
+    userId,
+    caller: { agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+  });
+}
+
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const libraryRouter = router({
@@ -246,7 +290,11 @@ export const libraryRouter = router({
     .query(async ({ ctx, input }): Promise<LibraryListResult> => {
       const userId = requireUserId(ctx.userId);
       await adoptImportGroups({ userId });
-      return listLibraryItems({ userId, input });
+      return listLibraryItems({
+        userId,
+        input,
+        readerAvailability: readerBitFor(ctx, userId),
+      });
     }),
 
   /** Every live group with counts. */
@@ -283,6 +331,7 @@ export const libraryRouter = router({
           groupId: row.id,
           ...(input.limit ? { limit: input.limit } : {}),
         },
+        readerAvailability: readerBitFor(ctx, userId),
       });
       return { group: views[0]!, ...page };
     }),
@@ -308,7 +357,15 @@ export const libraryRouter = router({
     .input(LibrarySearchInputSchema)
     .query(async ({ ctx, input }): Promise<LibrarySearchResult> => {
       const userId = requireUserId(ctx.userId);
-      return searchLibrary({ userId, q: input.q, limit: input.limit });
+      // The captures + the Library's own fields + the READ TEXT (through the
+      // search index). `readTextSearch: "down"` rides along when the index
+      // could not be asked (additive; the declared result type is unchanged).
+      return searchLibraryWithReadText({
+        userId,
+        q: input.q,
+        limit: input.limit,
+        readerAvailability: readerBitFor(ctx, userId),
+      });
     }),
 
   /** One item, structured now and filed alone (governed). */
@@ -361,6 +418,52 @@ export const libraryRouter = router({
         });
       }
       return result;
+    }),
+
+  /**
+   * Who can read an item — or a group's WAITING items (grouped by reader, with
+   * a count). Live, never stored; a failed lookup is an error, never [].
+   */
+  readers: podProcedure
+    .input(LibraryReadersInputSchema)
+    .query(async ({ ctx, input }): Promise<LibraryReadersResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryReaders({
+        userId,
+        caller: { agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+        ...(input.itemId ? { itemId: input.itemId } : {}),
+        ...(input.groupId ? { groupId: input.groupId } : {}),
+      });
+    }),
+
+  /**
+   * Read items (or a group's waiting items) with one reader. The person's tap
+   * is the consent — an agent is refused (it reads links with `web.read`).
+   * A reader billed to the person's account takes one daily-budget unit per
+   * item; what today's budget cannot hold is counted `overBudget`, not queued.
+   */
+  readWith: personProcedure
+    .input(LibraryReadWithInputSchema)
+    .mutation(async ({ ctx, input }): Promise<LibraryReadWithResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryReadWith({
+        userId,
+        readerId: input.readerId,
+        ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
+        ...(input.groupId ? { groupId: input.groupId } : {}),
+      });
+    }),
+
+  /**
+   * "Try again" on "Couldn't keep the pictures": the item's failed copies are
+   * copied again (a media-only job — no reader, no read budget). The person's
+   * tap only — an agent is refused, like `readWith`.
+   */
+  retryMedia: personProcedure
+    .input(z.object({ itemId: uuid }))
+    .mutation(async ({ ctx, input }): Promise<LibraryRetryMediaResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryRetryMedia({ userId, itemId: input.itemId });
     }),
 
   /** Unread / groups waiting / oldest wait. */

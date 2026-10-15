@@ -5,7 +5,9 @@
  * team/platform/unified-knowledge-access.mdx): SEMANTIC (relevance recall over
  * the typed entity graph), STRUCTURED (an ENUMERATIVE typed listing — "what are
  * my tasks"), PROCEDURAL (knowledge_keys — institutional how-to docs), EPISODIC
- * (knowledge_facts — raw personal captures). The agent shouldn't pick a door;
+ * (knowledge_facts — raw personal captures), LIBRARY (the links, files and pages
+ * the person kept — found by title, URL, note, and the words of what was read
+ * from them). The agent shouldn't pick a door;
  * `ask` routes for it. This pure classifier decides WHICH substrate(s) a query
  * touches, from cheap heuristics.
  *
@@ -32,7 +34,7 @@ import {
 } from "../retrieval/understand-query.js";
 
 export type SubstrateKind =
-  "semantic" | "structured" | "procedural" | "episodic";
+  "semantic" | "structured" | "procedural" | "episodic" | "library";
 
 /**
  * Enumerative LEAD phrases — a query is list-shaped when it opens with a
@@ -122,6 +124,22 @@ const EPISODIC_CUES = [
   "recall when",
 ];
 
+/**
+ * Phrasings that say "the thing I kept" — the Library leads. Like the other
+ * cues these only decide ORDER: the Library lane runs on every query.
+ */
+const LIBRARY_CUES = [
+  "my library",
+  "in the library",
+  "in my library",
+  "i saved",
+  "i kept",
+  "i bookmarked",
+  "saved links",
+  "kept links",
+  "saved posts",
+];
+
 /** Task-status words the structured lane understands (mapped to the enum downstream). */
 const STATUS_CUES = ["open", "pending", "done", "completed"];
 
@@ -134,6 +152,7 @@ const compile = (cues: string[]): RegExp[] =>
 const ENUMERATIVE_RE = compile(ENUMERATIVE_CUES);
 const PROCEDURAL_RE = compile(PROCEDURAL_CUES);
 const EPISODIC_RE = compile(EPISODIC_CUES);
+const LIBRARY_RE = compile(LIBRARY_CUES);
 const STATUS_RE = compile(STATUS_CUES);
 
 /**
@@ -248,6 +267,7 @@ export function classifySubstrates(
 
   const procedural = PROCEDURAL_RE.some((re) => re.test(q));
   const episodic = EPISODIC_RE.some((re) => re.test(q));
+  const library = LIBRARY_RE.some((re) => re.test(q));
 
   // STRUCTURED: an enumerative lead AND a named profile — but suppressed when the
   // query is really a how-to (procedural) or a raw-capture recall (episodic), so
@@ -292,6 +312,12 @@ export function classifySubstrates(
   if (procedural || !opts?.projectLens) substrates.push("procedural");
   if (structured) substrates.push("structured");
   if (episodic) substrates.push("episodic");
+  // LIBRARY RUNS UNCONDITIONALLY, like procedural: a link the person kept is
+  // recall material whatever the phrasing ("what do my branding references
+  // have in common" names no Library word), and gating access on a cue list
+  // would leave a kept page unfindable by its own words. The lane is owner-
+  // floored and bounded (`searchLibrary`); the cue only decides which lane LEADS.
+  substrates.push("library");
 
   // A strongly-enumerative/procedural/episodic query is usually NOT best served
   // by relevance recall, so when cued, that substrate leads. Structured wins
@@ -303,7 +329,9 @@ export function classifySubstrates(
       ? "procedural"
       : episodic
         ? "episodic"
-        : "semantic";
+        : library
+          ? "library"
+          : "semantic";
 
   return {
     substrates,

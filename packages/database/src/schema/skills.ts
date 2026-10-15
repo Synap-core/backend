@@ -253,6 +253,16 @@ export const skills = pgTable(
      */
     intent: text("intent"),
 
+    /**
+     * The URLs a READER verb reads — the catalog skill's `urls`, projected by
+     * the definition applier (only patterns `isValidUrlPattern` accepts;
+     * grammar in `@synap-core/types/url-read`). NULL = not a reader. The intent
+     * `read_webpage` is for DISCOVERY; these patterns are for ROUTING (which
+     * reader reads THIS url). A RE_APPROVAL field: widening them widens what
+     * the vendor sees, the same trust class as `allowedHosts`. (0330)
+     */
+    urlPatterns: text("url_patterns").array(),
+
     // ── Discoverability (from agent_skills merge) ─────────────────────────
 
     /** Searchable keywords — "animation", "react", "timeline", etc. */

@@ -105,8 +105,8 @@ table plan keeps its own flag (`csvTablePlan`, on).
 - D2 group membership = `parent_of` container → item.
 - D3 a group becomes a List (container + list view) or a Project, per the person's choice.
 - D4 import reads content at Build only (default flipped).
-- D5 link metadata at Collect via the ungated `readPublicUrl()`, metadata only.
-- D6 video content: fetched on the person's device, plus files they provide.
+- D5 link metadata at Collect via the ungated `readPublicUrl()`, metadata only. (Since the Library reader door: Build never re-reads a URL; it uses the read stored by the light read, `readUrl`. See `LIBRARY.md` "Reading a link".)
+- D6 video content: fetched on the person's device, plus files they provide. (A reader the person installed may now return a post's video, copied into the pod on an explicit tap.)
 - D7 contacts / Telegram / LinkedIn stay direct for now.
 
 ## 7. Side effects to carry

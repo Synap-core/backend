@@ -101,6 +101,28 @@ export interface IFileStorage {
   ): Promise<FileMetadata>;
 
   /**
+   * Upload a file from a STREAM — the body is never held whole in memory (a
+   * 1 GB video copied from the web goes chunk by chunk into storage).
+   *
+   * S3-compatible backends run a multipart upload (fixed-size parts, R2's
+   * rule; one plain PUT when the body is smaller than one part) and ABORT it
+   * when the body errors, so a refused or failed stream leaves no object and
+   * no dangling parts. The local backend writes a temp file and renames it
+   * into place only on success.
+   *
+   * `size` and `checksum` (`sha256:<hex>`, {@link fileChecksum}'s encoding)
+   * are computed over the bytes as they pass.
+   *
+   * @param body - Any async iterable of byte chunks (a Node `Readable` is one).
+   *   Throwing from it (e.g. a byte cap passed) aborts the upload with that error.
+   */
+  uploadStream(
+    path: string,
+    body: AsyncIterable<Uint8Array>,
+    options?: UploadOptions
+  ): Promise<FileMetadata>;
+
+  /**
    * Download a file as string (for text files)
    *
    * @param path - Storage path/key

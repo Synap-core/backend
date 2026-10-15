@@ -1928,6 +1928,14 @@ export interface CapabilitySkillDef {
    * the seed and not in `capability_intents` is REJECTED by the applier.
    */
   intent?: string;
+  /**
+   * The URLs a READER verb reads (`intent: "read_webpage"`), in the
+   * `@synap-core/types/url-read` pattern grammar (`"instagram.com/p/*"`,
+   * `"*.example.com"`, `"*"`). Projected onto `skills.url_patterns` (invalid
+   * patterns dropped); routing reads it to pick the reader for a URL. Changing
+   * it on an approved skill demotes the skill (a RE_APPROVAL field).
+   */
+  urls?: string[];
 }
 
 /**

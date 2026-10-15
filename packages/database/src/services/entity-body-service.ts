@@ -166,6 +166,12 @@ export interface StoredObjectBody {
   size: number;
   mimeType: string;
   filename: string;
+  /**
+   * Extra `documents.metadata` keys, merged OVER the defaults (as bytes-mode
+   * does) — e.g. a media copy streamed into storage by the pod marks itself
+   * `uploadKind: "media-copy"` so list doors leave it out.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -354,8 +360,9 @@ export class EntityBodyService {
     };
   }
 
-  // --- stored-object mode (← presigned upload finalize) ---------------------
-  // Adopts an object a client PUT straight to storage. Same `documents` row
+  // --- stored-object mode (← presigned upload finalize, streamed media copy) -
+  // Adopts an object a client PUT straight to storage (or the pod streamed
+  // there with `storage.uploadStream`). Same `documents` row
   // shape as bytes-mode (type/metadata/provenance) but WITHOUT a v1 version
   // snapshot: the snapshot is a second full copy (bytes-mode uploads it from
   // memory), and for a 500 MB video that would mean downloading and re-uploading
@@ -378,6 +385,7 @@ export class EntityBodyService {
         metadata: {
           originalFileName: filename,
           uploadKind: "presigned-upload",
+          ...storedObject.metadata,
         },
         userId,
         workspaceId: workspaceId ?? undefined,

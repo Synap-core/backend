@@ -21,6 +21,8 @@
  * the CLI via this subpath.
  */
 
+import { podNeverFetches } from "../url-read/index.js";
+
 /** Where an import stands. One phase per session, moved only by the pod. */
 export const IMPORT_PHASES = [
   "collecting",
@@ -318,20 +320,21 @@ export function importPlatformOf(url: string): ImportPlatform | null {
 
 /**
  * What Build can read for a source, decided from metadata only.
- * Instagram and TikTok are never scraped by the pod: their content arrives
- * only as a file the person provides.
+ * A page the pod never fetches itself (`POD_NEVER_FETCHES`, decision P1:
+ * Instagram, TikTok) is `needs_file`: its content arrives as a file the
+ * person provides, or through a reader the person installed, on their
+ * account, after their tap. `platform` is the mark/label table only; the
+ * fetch policy is read from the url-read leaf, never restated here.
  */
 export function importContentStatusFor(
   source: ImportItemSource
 ): ImportContentStatus {
   if (source.kind === "file") return "file";
   if (source.kind === "text") return "readable";
+  if (source.url && podNeverFetches(source.url)) return "needs_file";
   switch (source.platform) {
     case "youtube":
       return "captions";
-    case "instagram":
-    case "tiktok":
-      return "needs_file";
     case "x":
     case "linkedin":
       return "title_only";

@@ -13,6 +13,10 @@
  */
 
 import fs from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import os from "node:os";
 import type {
@@ -76,6 +80,44 @@ export class LocalStorageProvider implements IFileStorage {
       path: storagePath,
       size: buf.length,
       checksum: fileChecksum(buf),
+      uploadedAt: new Date(),
+    };
+  }
+
+  /**
+   * Streams into a temp file beside the target and renames it into place
+   * only when the whole body arrived: a body that throws leaves nothing.
+   */
+  async uploadStream(
+    storagePath: string,
+    body: AsyncIterable<Uint8Array>,
+    _options?: UploadOptions
+  ): Promise<FileMetadata> {
+    const absPath = this.resolve(storagePath);
+    await this.ensureDir(absPath);
+    const tmpPath = `${absPath}.part-${randomUUID()}`;
+    const hash = createHash("sha256");
+    let size = 0;
+    async function* counted(): AsyncGenerator<Uint8Array> {
+      for await (const chunk of body) {
+        if (!chunk || chunk.byteLength === 0) continue;
+        hash.update(chunk);
+        size += chunk.byteLength;
+        yield chunk;
+      }
+    }
+    try {
+      await pipeline(Readable.from(counted()), createWriteStream(tmpPath));
+      await fs.rename(tmpPath, absPath);
+    } catch (err) {
+      await fs.unlink(tmpPath).catch(() => undefined);
+      throw err;
+    }
+    return {
+      url: `file://${absPath}`,
+      path: storagePath,
+      size,
+      checksum: `sha256:${hash.digest("hex")}`,
       uploadedAt: new Date(),
     };
   }

@@ -205,6 +205,65 @@ describe("runEntityMediaCopy", () => {
     ]);
   });
 
+  it("HAND-OFF: a URL the person's Library already copied is re-stored from that copy — never fetched", async () => {
+    state.row = entityRow({
+      properties: { "media-urls": [IMG, BROKEN] },
+      uiHints: {},
+    });
+    state.locked = { systemData: {} };
+    const fromLibrary = vi.fn(async (userId: string, url: string) =>
+      userId === "u1" && url === IMG
+        ? {
+            ok: true as const,
+            bytes: Buffer.from([9, 9, 9, 9]),
+            mime: "image/jpeg" as const,
+            width: 8,
+            height: 6,
+          }
+        : null
+    );
+    const fetchImage = vi.fn(async (_url: string) => ({
+      ok: false as const,
+      reason: "http_4xx" as const,
+    }));
+    const store = vi.fn(async () => ({
+      documentId: "entity-own-doc",
+    })) as never;
+
+    const result = await runEntityMediaCopy(
+      { entityId: "e1" },
+      {
+        fromLibrary,
+        fetchImage,
+        store,
+        now: () => new Date("2026-10-13T10:00:00Z"),
+      }
+    );
+
+    expect(result).toEqual({ status: "copied", copied: 1, failed: 1 });
+    // The Library held IMG: no request for it. BROKEN was not held: fetched.
+    expect(fetchImage.mock.calls.map((c) => c[0])).toEqual([BROKEN]);
+    expect(fromLibrary.mock.calls.map((c) => c[1])).toEqual([IMG, BROKEN]);
+    // The entity's OWN document (independent lifecycle), marked as its copy.
+    expect(store).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from([9, 9, 9, 9]),
+        mimeType: "image/jpeg",
+        mediaCopyOf: "e1",
+        storedBySystem: true,
+      })
+    );
+    const set = state.sets[0] as { systemData: { values: unknown[] } };
+    expect(JSON.parse(set.systemData.values[1] as string)).toEqual([
+      expect.objectContaining({
+        documentId: "entity-own-doc",
+        sourceUrl: IMG,
+        mime: "image/jpeg",
+        bytes: 4,
+      }),
+    ]);
+  });
+
   it("is idempotent: an already-copied sourceUrl is not fetched again", async () => {
     state.row = entityRow({
       properties: { "media-urls": [IMG] },

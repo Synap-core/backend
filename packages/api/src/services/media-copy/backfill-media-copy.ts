@@ -172,15 +172,40 @@ export async function readMediaScope(): Promise<MediaScope> {
   return { profileIds: declared.map((d) => d.id), coverage };
 }
 
-export async function readBackfillMarker(): Promise<MediaCopyBackfillMarker | null> {
+/** One key of the singleton `pod_settings.settings` blob (null when unset). */
+export async function readPodSettingsKey(key: string): Promise<unknown> {
   const [row] = await db
     .select({ settings: podSettings.settings })
     .from(podSettings)
     .orderBy(podSettings.createdAt)
     .limit(1);
-  const raw = (row?.settings as Record<string, unknown> | undefined)?.[
-    MEDIA_COPY_BACKFILL_SETTINGS_KEY
-  ];
+  return (row?.settings as Record<string, unknown> | undefined)?.[key] ?? null;
+}
+
+/** Write ONLY `key` on the singleton row — sibling settings are kept. */
+export async function writePodSettingsKey(
+  key: string,
+  value: unknown
+): Promise<void> {
+  const [existing] = await db
+    .select({ id: podSettings.id })
+    .from(podSettings)
+    .orderBy(podSettings.createdAt)
+    .limit(1);
+  if (existing) {
+    await db
+      .update(podSettings)
+      .set({
+        settings: drizzleSql`jsonb_set(coalesce(${podSettings.settings}, '{}'::jsonb), ${`{${key}}`}::text[], ${JSON.stringify(value)}::jsonb, true)`,
+      })
+      .where(eq(podSettings.id, existing.id));
+  } else {
+    await db.insert(podSettings).values({ settings: { [key]: value } });
+  }
+}
+
+export async function readBackfillMarker(): Promise<MediaCopyBackfillMarker | null> {
+  const raw = await readPodSettingsKey(MEDIA_COPY_BACKFILL_SETTINGS_KEY);
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Partial<MediaCopyBackfillMarker>;
   if (
@@ -203,27 +228,8 @@ export async function readBackfillMarker(): Promise<MediaCopyBackfillMarker | nu
   };
 }
 
-/** Write ONLY this key on the singleton row — sibling settings are kept. */
-async function writeBackfillMarker(
-  marker: MediaCopyBackfillMarker
-): Promise<void> {
-  const [existing] = await db
-    .select({ id: podSettings.id })
-    .from(podSettings)
-    .orderBy(podSettings.createdAt)
-    .limit(1);
-  if (existing) {
-    await db
-      .update(podSettings)
-      .set({
-        settings: drizzleSql`jsonb_set(coalesce(${podSettings.settings}, '{}'::jsonb), ${`{${MEDIA_COPY_BACKFILL_SETTINGS_KEY}}`}::text[], ${JSON.stringify(marker)}::jsonb, true)`,
-      })
-      .where(eq(podSettings.id, existing.id));
-  } else {
-    await db
-      .insert(podSettings)
-      .values({ settings: { [MEDIA_COPY_BACKFILL_SETTINGS_KEY]: marker } });
-  }
+function writeBackfillMarker(marker: MediaCopyBackfillMarker): Promise<void> {
+  return writePodSettingsKey(MEDIA_COPY_BACKFILL_SETTINGS_KEY, marker);
 }
 
 function defaultSend(): BackfillSend {

@@ -27,9 +27,11 @@ import {
   db as defaultDb,
   documents,
   libraryGroups,
+  workspaces,
   and,
   eq,
   inArray,
+  isNull,
   drizzleSql,
   type LibraryGroupRow,
 } from "@synap/database";
@@ -49,6 +51,7 @@ import {
   type LibraryItemCurationMeta,
 } from "./read-model.js";
 import { enqueueLibrarySearch } from "./search-index.js";
+import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import {
   groupViews,
   insertLibraryGroup,
@@ -73,6 +76,8 @@ export interface CurateGroup {
   outputs: ImportGroupOutput[];
   archived: boolean;
   isNew: boolean;
+  /** The space Build files the group into (`library_groups.workspace_id`). */
+  workspaceId?: string | null;
 }
 
 /** An item as curate sees it: its curation, plus whether it is deleted / cited. */
@@ -222,6 +227,8 @@ export function applyLibraryCurateOps(
         if (op.note !== undefined) next.note = note(op.note);
         if (op.outputs !== undefined)
           next.outputs = uniq(op.outputs) as ImportGroupOutput[];
+        // Writability of the space is checked by `curateLibrary` (async).
+        if (op.workspaceId !== undefined) next.workspaceId = op.workspaceId;
         touchGroup(next);
         break;
       }
@@ -390,7 +397,41 @@ function toCurateGroup(row: LibraryGroupRow): CurateGroup {
     outputs: readOutputs(row.outputs),
     archived: row.archivedAt !== null,
     isNew: false,
+    workspaceId: row.workspaceId,
   };
+}
+
+/**
+ * A group's Build target must be a live space the person can WRITE (editor+).
+ * The space is request-supplied here on purpose: it is the destination being
+ * chosen, and the gate is the person's own membership of it. Not the
+ * one-space-per-domain check — pointing a group at an existing space mints no
+ * space.
+ */
+async function assertBuildTargets(
+  database: LibraryDb,
+  userId: string,
+  ops: readonly LibraryCurateOp[]
+): Promise<void> {
+  const targets = new Set(
+    ops.flatMap((op) =>
+      op.op === "group.update" && op.workspaceId ? [op.workspaceId] : []
+    )
+  );
+  for (const workspaceId of targets) {
+    const [live] = await database
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(and(eq(workspaces.id, workspaceId), isNull(workspaces.archivedAt)))
+      .limit(1);
+    if (!live) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "That space does not exist or is archived.",
+      });
+    }
+    await assertWorkspaceWrite(database, userId, { workspaceId });
+  }
 }
 
 /** Apply the person's edits atomically. Bad op ⇒ BAD_REQUEST, nothing written. */
@@ -402,6 +443,7 @@ export async function curateLibrary(args: {
   const database = args.database ?? defaultDb;
   const written = await database.transaction(async (tx) => {
     const t = tx as unknown as LibraryDb;
+    await assertBuildTargets(t, args.userId, args.ops);
     // Every group of the person (keys must stay unique; ids are validated).
     const groupRows = await listLibraryGroupRows({
       database: t,
@@ -493,6 +535,7 @@ export async function curateLibrary(args: {
         note: g.note,
         origin: "user",
         outputs: g.outputs,
+        workspaceId: g.workspaceId ?? null,
       });
       realId.set(placeholder, row.id);
     }
@@ -507,6 +550,9 @@ export async function curateLibrary(args: {
           name: g.name,
           note: g.note,
           outputs: g.outputs,
+          ...(g.workspaceId !== undefined
+            ? { workspaceId: g.workspaceId }
+            : {}),
           archivedAt: g.archived
             ? drizzleSql`COALESCE(${libraryGroups.archivedAt}, now())`
             : null,

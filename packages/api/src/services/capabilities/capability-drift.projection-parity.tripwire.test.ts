@@ -132,13 +132,13 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     expect(
       Object.keys(PROJECTED_SKILL_FIELDS).length,
       "the projected-field set changed. " + WHY_IT_MATTERS
-    ).toBe(12);
+    ).toBe(13);
     expect(
       DRIFT_COMPARATOR_VERSION,
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(8);
+    ).toBe(9);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -194,6 +194,12 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     // the field whose readers were all joining THROUGH a tool, which is how a
     // `tools: []` definition lost its intent entirely.
     intent: { def: { intent: "send_message" }, live: { intent: null } },
+    // A READER's declared URLs (0330): always written, so a declared list
+    // against a live null is drift.
+    urlPatterns: {
+      def: { urls: ["instagram.com/p/*"] },
+      live: { urlPatterns: null },
+    },
   };
 
   const BASE = {

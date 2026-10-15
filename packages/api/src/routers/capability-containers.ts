@@ -15,6 +15,7 @@
  * (`playbooks.capabilityRegistry.list`) still lists individual tools/skills —
  * used here as the "add an existing part" picker.
  */
+import { invalidateUrlReaderCache } from "../services/capabilities/url-reader-cache.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -316,6 +317,7 @@ export const capabilityContainersRouter = router({
         })
         .where(eq(capabilities.id, input.id))
         .returning();
+      invalidateUrlReaderCache(); // the pack's reader verbs may have turned on or off
       return { capability: updated as CapabilityRow };
     }),
 

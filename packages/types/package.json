@@ -193,6 +193,10 @@
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
     },
+    "./url-read": {
+      "types": "./dist/url-read/index.d.ts",
+      "import": "./dist/url-read/index.js"
+    },
     "./titles": {
       "types": "./dist/titles/index.d.ts",
       "import": "./dist/titles/index.js"

@@ -491,6 +491,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // An agent's space grant riding a track create (wave 5, decision 4): the
   // access section reads "Grant · access" / "Granted".
   grant: { imperative: "Grant", past: "Granted", progressive: "Granting" },
+  // Library: run a reader on a kept link again (or with another reader). The
+  // button asks "Read again"; the receipt says it was "Read".
+  read_again: { imperative: "Read again", past: "Read" },
 };
 
 /**
@@ -1305,6 +1308,9 @@ export const LIBRARY_STATUS_LABELS: Readonly<Record<string, string>> = {
   over_budget: "Over budget",
   unreadable: "Unreadable",
   needs_file: "Needs the file",
+  // A DISPLAY key, not a stored status: a `needs_file` item an installed or
+  // installable reader could read (derived live from the reader offers).
+  needs_reader: "Needs a reader",
   title_only: "Title only",
   kept: "Kept",
   archived: "Archived",

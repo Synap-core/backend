@@ -31,6 +31,7 @@ import {
 } from "@synap/database";
 import {
   LIBRARY_LIMITS,
+  readLibraryItemMedia,
   readLibraryItemRead,
   type LibraryItemView,
   type LibraryListRequest,
@@ -201,6 +202,7 @@ export const ungroupedSql = drizzleSql`jsonb_array_length(COALESCE(${documents.m
 
 const LIBRARY_ITEM_COLUMNS = {
   id: documents.id,
+  workspaceId: documents.workspaceId,
   metadata: documents.metadata,
   createdAt: documents.createdAt,
   createdAtText: drizzleSql<string>`${documents.createdAt}::text`,
@@ -210,6 +212,7 @@ const LIBRARY_ITEM_COLUMNS = {
 
 export interface LibraryItemRow {
   id: string;
+  workspaceId: string | null;
   metadata: unknown;
   createdAt: Date;
   createdAtText: string;
@@ -250,6 +253,7 @@ export function toLibraryItemView(row: {
   const source = (row.metadata as Record<string, unknown> | null)
     ?.intakeSource as { sessionId?: string | null } | undefined;
   const groupIds = c.groupIds ?? [];
+  const media = readLibraryItemMedia(row.metadata);
   return {
     ...base,
     read: readLibraryItemRead(row.metadata, base.contentStatus),
@@ -261,7 +265,38 @@ export function toLibraryItemView(row: {
     ...(c.archivedAt ? { archivedAt: c.archivedAt } : {}),
     ...(c.builtAt ? { builtAt: c.builtAt } : {}),
     ...(c.captureNoteId ? { captureNoteId: c.captureNoteId } : {}),
+    ...(media.media.length ? { media: media.media } : {}),
+    ...(media.failed ? { mediaFailed: media.failed } : {}),
+    ...(media.failedAt ? { mediaFailedAt: media.failedAt } : {}),
   };
+}
+
+/**
+ * Which of a page's rows a reader can serve (`LibraryItemView.readerAvailable`),
+ * answered for the whole page at once (`libraryReaderAvailability`, readers.ts).
+ * A row absent from the map is not a weak read, or not known.
+ */
+export type LibraryReaderAvailability = (
+  rows: ReadonlyArray<{
+    id: string;
+    workspaceId: string | null;
+    metadata: unknown;
+  }>
+) => Promise<ReadonlyMap<string, boolean>>;
+
+/** Rows → views, with the page's reader bit when the door asks for it. */
+export async function libraryItemViews(
+  rows: readonly LibraryItemRow[],
+  readerAvailability?: LibraryReaderAvailability
+): Promise<LibraryItemView[]> {
+  const views = rows
+    .map(toLibraryItemView)
+    .filter((v): v is LibraryItemView => v !== null);
+  if (!readerAvailability || views.length === 0) return views;
+  const known = await readerAvailability(rows);
+  return views.map((v) =>
+    known.has(v.id) ? { ...v, readerAvailable: known.get(v.id)! } : v
+  );
 }
 
 function encodeCursor(row: { createdAtText: string; id: string }): string {
@@ -372,6 +407,8 @@ export async function listLibraryItems(args: {
   database?: LibraryDb;
   userId: string;
   input: LibraryListRequest;
+  /** The person's doors ask for the rows' reader bit (one lookup per page). */
+  readerAvailability?: LibraryReaderAvailability;
 }): Promise<{ items: LibraryItemView[]; nextCursor?: string }> {
   const database = args.database ?? defaultDb;
   const limit = Math.min(
@@ -399,9 +436,7 @@ export async function listLibraryItems(args: {
     .orderBy(desc(documents.createdAt), desc(documents.id))
     .limit(limit + 1)) as LibraryItemRow[];
   const page = rows.slice(0, limit);
-  const items = page
-    .map(toLibraryItemView)
-    .filter((v): v is LibraryItemView => v !== null);
+  const items = await libraryItemViews(page, args.readerAvailability);
   return {
     items,
     ...(rows.length > limit
