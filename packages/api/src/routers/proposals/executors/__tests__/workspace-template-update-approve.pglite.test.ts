@@ -442,6 +442,18 @@ describe("an agent's template update of an installed space", () => {
       expect(result.refusals).toEqual([
         expect.stringMatching(/changes existing data, and waits for you/),
       ]);
+      // The SEAM: the finisher records the hold, and health reads it back —
+      // the person sees "needs your OK", not a plain "update available".
+      const { listWorkspaceTemplateHealth } =
+        await import("../../../../services/template-health.js");
+      const [health] = await listWorkspaceTemplateHealth([ws], OWNER);
+      expect(health!.pendingDataChanges).toMatchObject({
+        count: 1,
+        unreadable: false,
+      });
+      expect(health!.applyWarning).toMatch(
+        /changes existing data, and waits for you/
+      );
     } finally {
       h.pendingDataChanges = [];
     }
