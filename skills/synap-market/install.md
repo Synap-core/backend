@@ -102,6 +102,29 @@ journey completes by itself once the lens holds real data.
 - **automation** — pre-checked by `(name, workspace)` before creating.
 - **cell** — keyed by `(typeKey, workspaceId)`.
 
+## Template updates — where a space stands, and whose step it is
+
+Read it with MCP `synap_template_health` (or `synap templates` in a terminal).
+Each space's row says what is left to do; act on these fields, not on
+`drifted` alone (`drifted: true` means "there is a step", not "apply now"):
+
+| Field | Means | Your move |
+|---|---|---|
+| `state: "active"`, `drifted: true` | a newer version is out | the update path below |
+| `state: "awaiting-approval"` + `awaitingApproval: [ids]` | the last update filed proposals | point the person to them; **do not re-apply** |
+| `state: "partial"` / `"layer-2-not-run"` / `"failed"` | the last update did not finish | `synap templates update <slug>` finishes it |
+| `pendingDataChanges: {count, sentences, needsPodAdmin}` | the update changes existing data and waits for a **person** to agree | tell them the sentences; they run `synap templates update <slug>` themselves (a pod owner/admin when `needsPodAdmin`) |
+| `updateProposal: {id}` | an update of this space is already proposed | point the person to that proposal; **never file another** |
+| `applyWarning` | the pod's one sentence for what is left | relay it as is |
+
+The update path is `synap templates update <slug>` (the person's door). Run
+with an agent key it becomes a proposal the person approves. **Agreeing to data
+changes is never an agent's**: the door answers `409
+DATA_CHANGES_NEED_CONSENT` with `needsPerson: true` for any agent, whatever it
+lists in `acceptDataChanges`. The version stamp (`settings.template.version`) is
+written only when an update converged, so a space never reads "up to date" over
+an update that did not land.
+
 ## Locked / tier-gated packages
 
 A package can declare a `requiredTier`. Installing one your account's plan
