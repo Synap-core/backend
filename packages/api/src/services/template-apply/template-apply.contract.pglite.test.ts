@@ -1292,7 +1292,7 @@ describe("a space left 'building' is moved on, never terminal", () => {
     expect(state).toMatchObject({ state: "failed", failedLayer: 2 });
   });
 
-  it("a space left 'building' with its build's ledger is resumed and finished: active, stamped, the same space", async () => {
+  it("a space left 'building' with its build's COMPLETE ledger is re-synced (never a no-op resume) and finished: active, stamped, the same space", async () => {
     const slug = "left-building";
     const id = randomUUID();
     await q(
@@ -1318,7 +1318,8 @@ describe("a space left 'building' is moved on, never terminal", () => {
       [randomUUID(), id, OWNER]
     );
     const pkg: Pkg = { slug, version: "l-1", playbooks: ["Qualify"] };
-    await applyTemplate({
+    h.resynced.length = 0;
+    const reply = await applyTemplate({
       definition: body(pkg) as never,
       actor: { userId: OWNER },
       source: "contract",
@@ -1329,10 +1330,28 @@ describe("a space left 'building' is moved on, never terminal", () => {
         workspaceName: body(pkg).workspaceName as string,
       },
     });
+    // Layer 1 really ran on it (a resume of a complete ledger runs nothing).
+    expect(reply.action).toMatchObject({
+      kind: "resync",
+      reason: "complete-ledger",
+    });
+    expect(h.resynced).toContain(id);
     const after = await theSpace(slug);
     expect(after.id).toBe(id);
     expect(after.state).toMatchObject({ state: "active", version: "l-1" });
     expect(await playbooksIn(id)).toEqual(["Qualify"]);
+  });
+
+  it("tRPC createFromDefinition with no explicit key is keyed (and locked) by the slug, like Hub and MCP", async () => {
+    const slug = "trpc-keyed";
+    await trpc().createFromDefinition({
+      definition: body({ slug, version: "k-1", playbooks: [] }) as never,
+    });
+    const { rows } = await q<{ provisioning_proposal_id: string | null }>(
+      `select provisioning_proposal_id from workspaces where package_slug = $1`,
+      [slug]
+    );
+    expect(rows).toEqual([{ provisioning_proposal_id: slug }]);
   });
 });
 

@@ -9,8 +9,27 @@
  *   - `failedInLayerTwo` re-synced only layer-2 failures.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { TemplateState } from "@synap/database";
-import { planTemplateApply } from "./plan.js";
+import { CREATE_CORE_LAST_STEP, planTemplateApply } from "./plan.js";
+import { stripComments } from "../../../../../scripts/strip-comments.mjs";
+
+/** Every step the real create core records, in its order. */
+const FULL_LEDGER = [
+  "workspace",
+  "member",
+  "profiles",
+  "relations",
+  "templates",
+  "views",
+  "bento",
+  "home",
+  "entities",
+  "flows",
+  "relations-seed",
+];
 
 const st = (over: Partial<TemplateState>): TemplateState => ({
   slug: "crm",
@@ -70,6 +89,34 @@ describe("planTemplateApply", () => {
         kind: "resume-layer1",
         completedSteps: ["workspace", "member", "profiles"],
       },
+    ],
+    [
+      "left 'building' with a COMPLETE ledger (the core finished, its finisher did not) → re-sync + reopen, never a no-op resume that stamps",
+      {
+        target: {
+          state: st({
+            state: "building",
+            version: "h-1",
+            completedSteps: FULL_LEDGER,
+          }),
+        },
+        version: "h-2",
+      },
+      { kind: "resync", reason: "complete-ledger", reopen: true },
+    ],
+    [
+      "failed in layer 1 with a COMPLETE ledger → re-sync + reopen, never a resume",
+      {
+        target: {
+          state: st({
+            state: "failed",
+            failedLayer: 1,
+            completedSteps: FULL_LEDGER,
+          }),
+        },
+        version: "h-2",
+      },
+      { kind: "resync", reason: "complete-ledger", reopen: true },
     ],
     [
       "left 'building' with NO ledger (legacy pending) at the SAME version → re-sync + reopen, never 'unchanged' forever",
@@ -163,5 +210,29 @@ describe("planTemplateApply", () => {
 
   it.each(rows)("%s", (_name, input, expected) => {
     expect(planTemplateApply(input)).toEqual(expected);
+  });
+});
+
+describe("CREATE_CORE_LAST_STEP is the create core's last ledger step", () => {
+  it("matches the last `completedSteps.push(...)` in createWorkspaceFromDefinition", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = stripComments(
+      readFileSync(
+        join(
+          here,
+          "../../../../database/src/utils/create-workspace-from-definition.ts"
+        ),
+        "utf8"
+      ),
+      "ts"
+    );
+    const pushed = [...src.matchAll(/completedSteps\.push\("([^"]+)"\)/g)].map(
+      (m) => m[1]
+    );
+    // Non-vacuity: the scan sees the core's ledger (11 steps today).
+    expect(pushed.length).toBeGreaterThanOrEqual(5);
+    expect(pushed[0]).toBe("workspace");
+    expect(pushed.at(-1)).toBe(CREATE_CORE_LAST_STEP);
+    expect(pushed).toEqual(FULL_LEDGER);
   });
 });

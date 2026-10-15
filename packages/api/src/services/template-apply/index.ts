@@ -360,7 +360,10 @@ export async function applyTemplate(
     layerOne = await applyLayerOne({
       definition,
       userId,
-      proposalId: identity.proposalId,
+      // The idempotency key (and the per-key lock that keeps two creates of
+      // one template apart) defaults to the slug — what Hub and MCP send — so
+      // no door applies a template unlocked.
+      proposalId: identity.proposalId ?? identity.packageSlug,
       workspaceName: identity.workspaceName,
       templateId: identity.templateId,
       templateName: identity.templateName,

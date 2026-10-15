@@ -12,7 +12,7 @@
  *     now: Hub `/pod/adopt`, approve adopt)    → resync (its layer 1 has never
  *                                                been this template's)
  *   failed in layer 1, with a resume ledger    → resume-layer1 (the create core
- *                                                continues from its steps)
+ *     the build did not finish                   continues from its steps)
  *   failed in a layer-1 RE-SYNC (`reconcile`)  → resync (the space was built:
  *                                                its ledger is the create's,
  *                                                every step done — a "resume"
@@ -23,10 +23,17 @@
  *   failed in layer 2                          → resync (layer 1 is built; its
  *                                                stamp is not trusted)
  *   left "building", with a resume ledger      → resume-layer1 (a build that
- *                                                died before its finisher: the
+ *     the build did not finish                   died before its finisher: the
  *                                                ledger is that build's own —
  *                                                the finisher clears it once a
  *                                                space converges)
+ *   failed / left "building" with a COMPLETE   → resync + reopen (every step of
+ *     ledger (`CREATE_CORE_LAST_STEP`)           the core ran: a "resume" would
+ *                                                run nothing, then stamp the
+ *                                                caller's version over that
+ *                                                build — or race a create still
+ *                                                between its core and its
+ *                                                finisher; a re-sync is additive)
  *   left "building", NO ledger                 → resync + reopen (legacy
  *                                                "pending"; reopening leaves
  *                                                "building", so the finisher
@@ -53,6 +60,13 @@ export const WORKSPACE_ROW_STEP = "workspace";
 /** The failed step layer one records when a re-sync of a BUILT space throws. */
 export const RESYNC_FAILED_STEP = "reconcile";
 
+/**
+ * The LAST step `createWorkspaceFromDefinition` records: a ledger holding it
+ * is a complete build, never resumed. Pinned to the core's source by
+ * `plan.test.ts` (its last `completedSteps.push(...)`).
+ */
+export const CREATE_CORE_LAST_STEP = "relations-seed";
+
 export type TemplateApplyAction =
   | { kind: "create" }
   | { kind: "resume-layer1"; completedSteps: string[] }
@@ -65,7 +79,8 @@ export type TemplateApplyAction =
         | "failed-resync"
         | "abandoned-build"
         | "unfinished"
-        | "adopt";
+        | "adopt"
+        | "complete-ledger";
       /** Leave "failed" before layer 2 re-runs. */
       reopen: boolean;
     }
@@ -87,6 +102,23 @@ export interface PlanTemplateApplyInput {
   adopting?: boolean;
 }
 
+/**
+ * The ONE rule for a space whose build may not have finished: resume only a
+ * ledger that holds the row step and lacks the core's last step; a complete
+ * ledger re-syncs; no ledger re-syncs for `noLedger`.
+ */
+function resumeOrResync(
+  completedSteps: string[] | undefined,
+  noLedger: "failed-no-ledger" | "abandoned-build"
+): TemplateApplyAction {
+  const steps = completedSteps ?? [];
+  if (steps.includes(CREATE_CORE_LAST_STEP))
+    return { kind: "resync", reason: "complete-ledger", reopen: true };
+  if (steps.includes(WORKSPACE_ROW_STEP))
+    return { kind: "resume-layer1", completedSteps: steps };
+  return { kind: "resync", reason: noLedger, reopen: true };
+}
+
 export function planTemplateApply(
   input: PlanTemplateApplyInput
 ): TemplateApplyAction {
@@ -104,21 +136,14 @@ export function planTemplateApply(
       return { kind: "resync", reason: "failed-layer-2", reopen: true };
     if (state.failedStep === RESYNC_FAILED_STEP)
       return { kind: "resync", reason: "failed-resync", reopen: true };
-    const steps = state.completedSteps ?? [];
-    if (steps.includes(WORKSPACE_ROW_STEP))
-      return { kind: "resume-layer1", completedSteps: steps };
-    return { kind: "resync", reason: "failed-no-ledger", reopen: true };
+    return resumeOrResync(state.completedSteps, "failed-no-ledger");
   }
-  if (state?.state === "building") {
+  if (state?.state === "building")
     // Either abandoned (a crash, a pre-step that threw before decision 3
     // covered it) or another apply still in its layer 2 (the per-key lock
     // spans layer 1 only). Resuming / re-syncing is additive either way, and
     // a "building" nothing can move on would read "in flight" forever.
-    const steps = state.completedSteps ?? [];
-    if (steps.includes(WORKSPACE_ROW_STEP))
-      return { kind: "resume-layer1", completedSteps: steps };
-    return { kind: "resync", reason: "abandoned-build", reopen: true };
-  }
+    return resumeOrResync(state.completedSteps, "abandoned-build");
   if (isTemplateApplyUnfinished(state))
     return { kind: "resync", reason: "unfinished", reopen: false };
   if (!version) return { kind: "unchanged", checked: false };
