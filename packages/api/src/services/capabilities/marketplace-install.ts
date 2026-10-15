@@ -1208,15 +1208,19 @@ export async function applyMarketInstall(
         layerTwoBody: postBody,
         actor: { userId: input.userId, scopes: [] },
         source: "market.install",
-        // A body the pod resolved from the catalog carries the catalog's
-        // version; a SUPPLIED body (RC4) is the caller's, and a version it
-        // asks for is the hash of what it sent (`applyTemplate`).
-        ...(supplied
-          ? { sentDefinition: supplied }
+        // A body the pod resolved from a catalog carries that catalog's
+        // version — an added source's verified listing included (its bytes
+        // were checked against the listed sha256 and content version). Only a
+        // body the CALLER sent (RC4) is versioned by the hash of what it sent
+        // (`applyTemplate`).
+        ...(input.definition
+          ? { sentDefinition: input.definition }
           : { catalogVersion: entry?.version ?? input.version ?? undefined }),
         identity: {
           packageSlug: pslug,
-          ...(supplied && input.version ? { packageVersion: input.version } : {}),
+          ...(input.definition && input.version
+            ? { packageVersion: input.version }
+            : {}),
           proposalId: pslug,
           workspaceName: definition.workspaceName,
           templateId: pslug,

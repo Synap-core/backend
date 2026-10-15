@@ -1326,7 +1326,8 @@ export interface NeedsYouByScope {
   byKind: Map<string, Map<string, number | null>>;
   /**
    * Needs-you that lives in NO space (`narrowAttention` with
-   * `workspaceId: null`): no-workspace rows + unfinished captures. null =
+   * `workspaceId: null`): no-workspace rows, unfinished captures and pending
+   * access requests. null =
    * not measured (the per-scope fallback) — never 0. `total` is NOT
    * Σ bySpace + podLevel: a cluster spanning two spaces counts in both, and
    * rows in spaces the caller did not ask about count in neither.

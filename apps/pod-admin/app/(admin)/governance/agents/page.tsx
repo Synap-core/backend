@@ -37,7 +37,7 @@ import {
   visibleRows,
 } from "../../../../lib/agent-matrix/matrix-view-model";
 import { ResourceRowError } from "../../components/resource-row";
-import { GovernanceHeader } from "../_lib/governance-header";
+import { PageHeader, PageShell } from "../../components/page-header";
 import { MatrixGrid } from "./_lib/matrix-grid";
 import { toneTextClass } from "./_lib/mark-tone";
 import { WhyDrawer, type WhyTarget } from "./_lib/why-drawer";
@@ -74,10 +74,10 @@ export default function AgentsAndWorkPage() {
   }, [why, matrix]);
 
   return (
-    <div className="max-w-[1400px] px-6 py-6">
-      <GovernanceHeader
-        active="agents"
-        hint="What each agent may do in each space's work — and why."
+    <PageShell>
+      <PageHeader
+        title="Agents & work"
+        description="What each agent may do in each space's work — and why."
       />
 
       {state === "loading" && <MatrixSkeleton />}
@@ -142,7 +142,7 @@ export default function AgentsAndWorkPage() {
         }
         onChanged={() => void query.refetch()}
       />
-    </div>
+    </PageShell>
   );
 }
 
