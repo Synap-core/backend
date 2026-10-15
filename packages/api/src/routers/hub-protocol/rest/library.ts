@@ -5,6 +5,9 @@
  *   POST /library/add     keep items (hub-protocol.write) — LibraryAddRequest
  *   GET  /library/list    items, newest first (hub-protocol.read) — LibraryListRequest as query
  *   GET  /library/search  one search over captures and the Library (hub-protocol.read)
+ *   GET  /library/readers ?itemId= | ?groupId= — who can read it (hub-protocol.read).
+ *        Agents may SEE the offers; spending them (`library.readWith`) is the
+ *        person's tap only, so there is no REST write for it.
  *
  * Same services as the tRPC `library` router, owner-floored on the
  * authenticated user. Static routes only (no `/library/:id` here).
@@ -22,11 +25,14 @@ import {
   type LibraryAddResult,
   type LibraryListResult,
   type LibrarySearchResult,
+  type LibraryReadersResult,
 } from "@synap-core/types/imports";
 import {
   LibraryAddInputSchema,
+  LibraryReadersInputSchema,
   LibrarySearchInputSchema,
 } from "../../library.js";
+import { libraryReaders } from "../../../services/library/readers.js";
 import { addToLibrary } from "../../../services/library/add.js";
 import { adoptImportGroups } from "../../../services/library/groups.js";
 import { listLibraryItems } from "../../../services/library/read-model.js";
@@ -158,6 +164,35 @@ export function registerLibraryRoutes(app: HubHono): void {
         userId: c.get("userId"),
         q: parsed.data.q,
         limit: parsed.data.limit,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      return failure(c, err);
+    }
+  });
+
+  app.get("/library/readers", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const parsed = LibraryReadersInputSchema.safeParse({
+      ...(c.req.query("itemId") ? { itemId: c.req.query("itemId") } : {}),
+      ...(c.req.query("groupId") ? { groupId: c.req.query("groupId") } : {}),
+    });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid query params", issues: parsed.error.issues },
+        400
+      );
+    }
+    try {
+      const result: LibraryReadersResult = await libraryReaders({
+        userId: c.get("userId"),
+        ...(parsed.data.itemId ? { itemId: parsed.data.itemId } : {}),
+        ...(parsed.data.groupId ? { groupId: parsed.data.groupId } : {}),
       });
       return c.json(result, 200);
     } catch (err) {

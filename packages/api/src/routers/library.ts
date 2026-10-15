@@ -13,6 +13,8 @@
  *   readNow    one item structured now (governed), filed alone
  *   runAction  run one suggested chip as ONE governed proposal
  *   build      a group → one governed bundle (first build or rebuild)
+ *   readers    who can read an item / a group's waiting items (live offers)
+ *   readWith   read items / a group's waiting items with one reader (person only)
  *   health     unread / groups waiting / oldest wait (orient)
  *
  * The AI's capture door (MCP `synap_capture`) is untouched and never lands
@@ -44,6 +46,8 @@ import {
   type LibraryGroupsResult,
   type LibraryHealth,
   type LibraryListResult,
+  type LibraryReadersResult,
+  type LibraryReadWithResult,
   type LibraryRunActionResult,
   type LibrarySearchResult,
 } from "@synap-core/types/imports";
@@ -70,6 +74,10 @@ import {
   buildLibraryGroup,
   readNowLibraryItem,
 } from "../services/library/build.js";
+import {
+  libraryReaders,
+  libraryReadWith,
+} from "../services/library/readers.js";
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -175,6 +183,25 @@ export const LibrarySearchInputSchema = z.object({
   q: z.string().min(1).max(200),
   limit: z.number().int().min(1).max(50).default(20),
 });
+
+/** `library.readers`: exactly one of an item or a group. */
+export const LibraryReadersInputSchema = z
+  .object({ itemId: uuid.optional(), groupId: uuid.optional() })
+  .refine((v) => Boolean(v.itemId) !== Boolean(v.groupId), {
+    message: "Name one item or one group.",
+  });
+
+/** `library.readWith`: items or a group's waiting items, one reader. */
+export const LibraryReadWithInputSchema = z
+  .object({
+    itemIds: optIds,
+    groupId: uuid.optional(),
+    /** `"builtin"` or a reader verb id, from `library.readers`. */
+    readerId: z.string().min(1).max(200),
+  })
+  .refine((v) => Boolean(v.itemIds?.length) !== Boolean(v.groupId), {
+    message: "Name items or one group.",
+  });
 
 // ─── Build deps ─────────────────────────────────────────────────────────────
 
@@ -373,6 +400,39 @@ export const libraryRouter = router({
         });
       }
       return result;
+    }),
+
+  /**
+   * Who can read an item — or a group's WAITING items (grouped by reader, with
+   * a count). Live, never stored; a failed lookup is an error, never [].
+   */
+  readers: podProcedure
+    .input(LibraryReadersInputSchema)
+    .query(async ({ ctx, input }): Promise<LibraryReadersResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryReaders({
+        userId,
+        ...(input.itemId ? { itemId: input.itemId } : {}),
+        ...(input.groupId ? { groupId: input.groupId } : {}),
+      });
+    }),
+
+  /**
+   * Read items (or a group's waiting items) with one reader. The person's tap
+   * is the consent — an agent is refused (it reads links with `web_read`).
+   * A reader billed to the person's account takes one daily-budget unit per
+   * item; what today's budget cannot hold is counted `overBudget`, not queued.
+   */
+  readWith: personProcedure
+    .input(LibraryReadWithInputSchema)
+    .mutation(async ({ ctx, input }): Promise<LibraryReadWithResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryReadWith({
+        userId,
+        readerId: input.readerId,
+        ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
+        ...(input.groupId ? { groupId: input.groupId } : {}),
+      });
     }),
 
   /** Unread / groups waiting / oldest wait. */
