@@ -63,6 +63,10 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 NEXT_TELEMETRY_DISABLED=1 \
 # ============================================================================
 FROM node:20-slim AS runner
 
+# Synap's own image: `synap tidy` removes a DANGLING image (a rebuild that took
+# its tag) only when it carries this label — never another stack's image.
+LABEL io.synap.first-party="true"
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends dumb-init \
  && rm -rf /var/lib/apt/lists/*

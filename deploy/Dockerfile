@@ -73,6 +73,10 @@ RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy/realtime
 # ============================================================================
 FROM node:20-alpine AS runner
 
+# Synap's own image: `synap tidy` removes a DANGLING image (a rebuild that took
+# its tag) only when it carries this label — never another stack's image.
+LABEL io.synap.first-party="true"
+
 # Git SHA the image was built from — surfaced at runtime via SYNAP_GIT_SHA so
 # /status/release can report `buildStamp` and a deploy-integrity check can
 # assert the running image actually matches the commit it claims to be.

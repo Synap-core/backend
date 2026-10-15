@@ -1,0 +1,21 @@
+# Synap unattended update (D2): the ONE unit that runs the update engine
+# without a person. Started by synap-update.path (a request in
+# state/requests/update.json) or synap-update.timer (the owner's policy,
+# state/update-policy.json). `--unattended` enforces the release signature
+# (D3). A hung run is stopped after 90 min: SIGTERM makes the engine roll
+# back, and the rollback (which may restore the database) gets 30 min.
+# Template: synap units install.
+[Unit]
+Description=Synap pod update (unattended)
+After=docker.service network-online.target
+Wants=network-online.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Environment=SYNAP_DEPLOY_DIR=@DEPLOY_DIR@
+Environment=SYNAP_ASSUME_YES=1
+ExecStart=@SYNAP@ update --unattended
+TimeoutStartSec=90min
+TimeoutStopSec=30min
+Nice=10

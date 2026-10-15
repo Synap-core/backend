@@ -1,0 +1,11 @@
+# Every 2 minutes, from 5 minutes after boot. Template: synap units install.
+[Unit]
+Description=Synap pod heal every 2 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

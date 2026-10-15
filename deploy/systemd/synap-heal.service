@@ -1,0 +1,14 @@
+# Synap self-heal (D1): restart this pod's unhealthy containers within a budget
+# (3 per 30 min per service), never postgres. Template — installed by
+# `synap units install`, which fills @SYNAP@ and @DEPLOY_DIR@.
+[Unit]
+Description=Synap pod heal (restart unhealthy containers)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Environment=SYNAP_DEPLOY_DIR=@DEPLOY_DIR@
+ExecStart=@SYNAP@ heal
+TimeoutStartSec=10min
+Nice=5

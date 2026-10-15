@@ -1802,6 +1802,19 @@ _reg_apply() {
     fi
     # 4. trust: the explicit CONTROL_PLANE_URL opt-in, then the services that read it
     SYNAP_ENV_FILE=.env envcfg_write_raw S CONTROL_PLANE_URL "$(jq -r .controlPlaneUrl "$r")" || return 1
+    # …and pod-agent, the CP's only way back in (backup vault, pushed updates): its
+    # trust is the CP issuer from this response + this pod's own public URL, through
+    # the one env writer. A value the operator set (--with-pod-agent …) is kept.
+    local pa_issuer pa_audience
+    pa_issuer="$(jq -r '.issuer // empty' "$r")"
+    pa_audience="$(_ue_env_get PUBLIC_URL)"; pa_audience="${pa_audience:-https://$(_ue_env_get DOMAIN)}"
+    if _is_canonical_https_url "$pa_issuer" && _is_canonical_https_url "$pa_audience"; then
+        [ -n "$(_ue_env_get POD_AGENT_ISSUER_URL)" ] || SYNAP_ENV_FILE=.env envcfg_write_raw S POD_AGENT_ISSUER_URL "$pa_issuer" || return 1
+        [ -n "$(_ue_env_get POD_AGENT_AUDIENCE)" ] || SYNAP_ENV_FILE=.env envcfg_write_raw S POD_AGENT_AUDIENCE "$pa_audience" || return 1
+        SYNAP_ENV_FILE=.env envcfg_write_raw S SYNAP_WITH_POD_AGENT 1 || return 1
+    else
+        _reg_warn "pod-agent not enabled: the Control Plane issuer (${pa_issuer:-none}) or the pod URL (${pa_audience}) is not a canonical https URL"
+    fi
     if [ "$(jq -r '.oidc == null' "$r")" != true ]; then
         generate_kratos_config "$(_ue_env_get DOMAIN)" pod
     fi
@@ -1810,6 +1823,11 @@ _reg_apply() {
     SYNAP_UPDATE_HEALTH_TRIES="${SYNAP_REGISTER_HEALTH_TRIES:-30}" _ue_backend_healthy \
         || { _reg_err "the backend did not come back healthy after the trust update"; return 1; }
     _reg_ok "trusting Control Plane $(jq -r .controlPlaneUrl "$r")"
+    if should_start_pod_agent; then
+        docker compose --profile pod-agent up -d pod-agent \
+            || { _reg_err "could not start the pod-agent"; return 1; }
+        _reg_ok "pod-agent started (the Control Plane can now deliver the backup vault and updates)"
+    fi
 }
 
 # <token> <cp-url> — the whole registration; idempotent across re-runs.
@@ -3040,6 +3058,7 @@ EOF
         REG_NAME="$POD_NAME"
         _reg_register_pod "$REGISTER_TOKEN" "$CONTROL_PLANE" || exit 1
     fi
+    _units_install_best_effort
     echo -e "${GREEN}✅ Installation complete!${NC}"
     echo ""
     echo "Management commands:"
@@ -3593,17 +3612,31 @@ _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_
 # into /status/release + notif-center is the wave-2 seam. SYNAP_UPDATE_NOTIFY_CMD
 # (env or .env) receives the JSON on stdin, best-effort.
 _ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup]
+    local ev
+    ev="$(jq -cn --arg status "$1" --arg from "$2" --arg to "$3" \
+        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" \
+        '{kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup}')"
+    _synap_event "$ev" 1 state/last-update.json
+}
+
+# The ONE host event recorder (update, heal, units): stamps ts + pod onto
+# <json-object>, appends it to state/events.jsonl, prints the `SYNAP_EVENT` line,
+# and with notify=1 pipes it to SYNAP_UPDATE_NOTIFY_CMD. [latest-file] keeps the
+# newest of that kind (last-update.json is the update outcome only — a heal
+# never overwrites it). cwd = deploy dir.
+_synap_event() { # <json-object> <notify 0|1> [latest-file]
     local ev hook
-    ev="$(jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg status "$1" --arg from "$2" --arg to "$3" \
-        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg pod "$(_ue_env_get DOMAIN)" \
-        '{ts:$ts, kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup, pod:$pod}')"
+    ev="$(jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pod "$(_ue_env_get DOMAIN)" '{ts:$ts} + . + {pod:$pod}' <<<"$1")"
     mkdir -p state
-    printf '%s\n' "$ev" > state/last-update.json.tmp && mv -f state/last-update.json.tmp state/last-update.json
+    if [ -n "${3:-}" ]; then
+        printf '%s\n' "$ev" > "$3.tmp" && mv -f "$3.tmp" "$3"
+    fi
     printf '%s\n' "$ev" >> state/events.jsonl
     echo "SYNAP_EVENT $ev"
+    [ "${2:-0}" = 1 ] || return 0
     hook="${SYNAP_UPDATE_NOTIFY_CMD:-$(_ue_env_get SYNAP_UPDATE_NOTIFY_CMD)}"
     if [ -n "$hook" ]; then
-        printf '%s\n' "$ev" | sh -c "$hook" || _ue_warn "notify hook failed (the outcome is still in state/last-update.json)"
+        printf '%s\n' "$ev" | sh -c "$hook" || _ue_warn "notify hook failed (the event is still in state/events.jsonl)"
     fi
 }
 
@@ -3803,18 +3836,40 @@ _ue_pull_images() { # <manifest> — before anything changes; a failure aborts t
     done
 }
 
-_ue_disk_ok() { # every filesystem the update writes to keeps $1 / SYNAP_UPDATE_MIN_FREE_MB MB free
-    local min="${1:-${SYNAP_UPDATE_MIN_FREE_MB:-2048}}" dir free root
+# "<free-MB> <dir>" of the first filesystem the update writes to (deploy dir,
+# Docker root) that has less than <min> MB free; empty when every one has enough.
+_ue_disk_short() { # <min-MB>
+    local dir free root
     root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
     for dir in "$(pwd)" "$root"; do
         [ -n "$dir" ] && [ -d "$dir" ] || continue
         free="$(df -Pk "$dir" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')"
         [ -n "$free" ] || continue
-        if [ "$free" -lt "$min" ]; then
-            _ue_err "only ${free} MB free on ${dir} (need ${min} MB for images + the pre-update dump). Free space, or set SYNAP_UPDATE_MIN_FREE_MB. Nothing was changed."
-            return 1
-        fi
+        if [ "$free" -lt "$1" ]; then echo "$free $dir"; return 0; fi
     done
+}
+
+_ue_disk_ok() { # every filesystem the update writes to keeps $1 / SYNAP_UPDATE_MIN_FREE_MB MB free
+    local min="${1:-${SYNAP_UPDATE_MIN_FREE_MB:-2048}}" short
+    short="$(_ue_disk_short "$min")"
+    [ -z "$short" ] && return 0
+    _ue_err "only ${short%% *} MB free on ${short#* } (need ${min} MB for images + the pre-update dump), after removing this pod's old release images. Free space, or set SYNAP_UPDATE_MIN_FREE_MB. Nothing was changed."
+    _ue_disk_consumers >&2
+    return 1
+}
+
+# The 3 biggest images and volumes that are NOT this pod's — named so the owner
+# knows what to remove; Synap never removes them. Read-only.
+_ue_disk_consumers() {
+    local v mp
+    echo "  Biggest consumers that are not this pod's (Synap never removes them):"
+    { docker images --format '{{.Size}}|image {{.Repository}}:{{.Tag}}' 2>/dev/null | grep -vE "\|image (${_SYNAP_FIRST_PARTY_IMAGE_RE#^}|<none>)" \
+        | awk -F'|' '{ n = $1 + 0; u = $1; sub(/^[0-9.]+/, "", u); m["kB"] = 1e3; m["MB"] = 1e6; m["GB"] = 1e9; m["TB"] = 1e12; printf "%.0f|%s\n", n * ((u in m) ? m[u] : 1), $2 }'
+      for v in $(docker volume ls -q 2>/dev/null); do
+          [ "$(docker volume inspect -f '{{index .Labels "com.docker.compose.project"}}' "$v" 2>/dev/null || true)" = "${COMPOSE_PROJECT_NAME:-}" ] && continue
+          mp="$(docker volume inspect -f '{{.Mountpoint}}' "$v" 2>/dev/null || true)"
+          [ -n "$mp" ] && echo "$(( $(du -sk "$mp" 2>/dev/null | cut -f1 || echo 0) * 1024 ))|volume ${v}"
+      done; } | sort -t'|' -k1,1nr | head -3 | awk -F'|' '{ printf "    %.1f GB  %s\n", $1 / 1e9, $2 }'
 }
 
 _ue_verify() { # <manifest> <services...>
@@ -3882,23 +3937,44 @@ _ue_services_healthy() {
 }
 
 # Keep the images of the current and previous release (Kamal-style local
-# rollback cache); remove older first-party images. In-use images are refused
-# by docker itself.
+# rollback cache); remove older first-party images — by REFERENCE without -f, so
+# a tag another stack put on the same image keeps it — and dangling ones built
+# from our Dockerfiles (LABEL io.synap.first-party). Images any container uses
+# are skipped. No release record yet ⇒ no image is touched. Also keeps the newest
+# 2 pre-update dumps (+ the one the current release names). Runs at the START
+# of every update (before the disk check) and after every applied one. Never
+# another stack's image, never a volume.
+_SYNAP_FIRST_PARTY_IMAGE_RE='^(ghcr\.io/synap-core/(backend|pod-admin|pod-agent)|synap-dev/|synap-local/|synap-adopted/)'
 _ue_prune_images() {
-    local keep ref id
-    keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
-        | while read -r ref; do docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null; done | sort -u)"
-    docker images --no-trunc --format '{{.ID}} {{.Repository}}' 2>/dev/null \
-        | awk '$2 ~ /^(ghcr\.io\/synap-core\/(backend|pod-admin)|synap-dev\/|synap-local\/|synap-adopted\/)/ {print $1}' | sort -u \
-        | while read -r id; do
-            grep -qx "$id" <<<"$keep" && continue
-            docker rmi -f "$id" >/dev/null 2>&1 || true
+    local keep used ids id repo tag dg ref b pinned d
+    if [ -s state/current-release.json ]; then
+        keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
+            | while read -r ref; do docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null; done | sort -u)"
+        ids="$(docker ps -aq 2>/dev/null | tr '\n' ' ')"
+        # shellcheck disable=SC2086 # one id per word
+        used="$( { [ -n "${ids// /}" ] && docker inspect -f '{{.Image}}' $ids 2>/dev/null; } || true)"
+        docker images --digests --no-trunc --format '{{.ID}}|{{.Repository}}|{{.Tag}}|{{.Digest}}' 2>/dev/null \
+            | while IFS='|' read -r id repo tag dg; do
+                [[ "$repo" =~ $_SYNAP_FIRST_PARTY_IMAGE_RE ]] || continue
+                grep -qxF "$id" <<<"${keep}"$'\n'"${used}" && continue
+                if [ "$tag" != "<none>" ]; then ref="${repo}:${tag}"; elif [ "$dg" != "<none>" ]; then ref="${repo}@${dg}"; else continue; fi
+                docker rmi "$ref" >/dev/null 2>&1 </dev/null || true
+            done
+        for id in $(docker images -q --no-trunc -f dangling=true -f label=io.synap.first-party=true 2>/dev/null); do
+            grep -qxF "$id" <<<"$used" || docker rmi "$id" >/dev/null 2>&1 </dev/null || true
         done
+    fi
     # A --from-source build leaves its BuildKit cache behind (10.8 GB on perso,
     # 2026-10-04: free space 16 GB → 4.6 GB after one update). Cap it; the
     # cache holds no data. --max-used-space is Docker 28+, --keep-storage older.
     docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
         || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
+    b="$(SYNAP_DEPLOY_DIR="$(pwd)" _bk_backups_dir)"
+    pinned="$(jq -r '.preUpdateBackup // empty' state/current-release.json 2>/dev/null || true)"
+    for d in $(ls -1d "$b"/*-pre-update 2>/dev/null | sort | awk '{ a[NR] = $0 } END { for (i = 1; i <= NR - 2; i++) print a[i] }'); do
+        [ "$d" = "$pinned" ] || rm -rf "$d"
+    done
+    return 0
 }
 
 # ── the engine ────────────────────────────────────────────────────────────────
@@ -3993,6 +4069,7 @@ synap_update_engine() {
     UE_EDGE="$(_ue_edge)" || exit 1
     _ue_edge_preflight "$UE_EDGE" || exit 1
     _ue_adopt_running
+    _ue_prune_images   # room first: this pod's old release images, before any disk check
     UE_FROM="$(_ue_current_release_id)"
 
     # 1. the target release
@@ -4133,6 +4210,100 @@ synap_update_engine() {
     set -e
 }
 
+# ── unattended updates (self-heal D2/D3: synap-update.service) ────────────────
+# Two systemd triggers run `synap update --unattended` (units: deploy/systemd/):
+#  • synap-update.path — a REQUEST, state/requests/update.json, from whoever was
+#    authorised to order an update. Honoured at any hour and whatever `auto`
+#    says: the order already passed its own policy (pod-agent policy.js).
+#  • synap-update.timer (installed DISABLED — `synap units install
+#    --enable-auto-update` opts in) — the owner's policy, state/update-policy.json.
+# The unattended path always verifies the release signature (D3:
+# SYNAP_RELEASE_VERIFY=enforce); a manual `synap update` keeps the .env setting.
+#
+# REQUEST CONTRACT (schema 1). Write it atomically (tmp file + rename) to
+# <deploy dir>/state/requests/update.json:
+#   {"schema": 1, "release": "<release id | fast | stable>",
+#    "requestedBy": "<free text>", "requestedAt": "<ISO-8601>", "id": "<opaque, e.g. the order's jti>"}
+# `release` follows pod-agent's validateUpdateTargetVersion: ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$,
+# never "latest". The engine TAKES the file (renames it to update.taken.json)
+# before anything else, so the .path unit can never loop on it, and the outcome
+# lands in state/last-update.json like every update's — an invalid request, or
+# one that met a busy lock, is recorded `aborted` and is not retried.
+#
+# POLICY, state/update-policy.json (every key optional):
+#   {"auto": true, "channel": "stable" | "fast" | "source", "window": "03:00-05:00", "pinned": false}
+# channel defaults to SYNAP_UPDATE_CHANNEL (.env), else stable; "source" means
+# --from-source (a dev host with no published releases). The window is the
+# host's local time and may wrap midnight ("23:00-02:00").
+_UE_RELEASE_RE='^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+
+_ue_take_request() { # → the taken file's path; empty when there is no request
+    local f=state/requests/update.json t=state/requests/update.taken.json
+    [ -f "$f" ] || return 0
+    mv -f "$f" "$t" && echo "$t"
+}
+
+_ue_in_window() { # <HH:MM-HH:MM> [now HH:MM]
+    local w="$1" now="${2:-$(date +%H:%M)}" a b
+    a="${w%-*}"; b="${w#*-}"
+    if [[ "$a" < "$b" ]]; then [[ ! "$now" < "$a" ]] && [[ "$now" < "$b" ]]
+    elif [ "$a" = "$b" ]; then return 0
+    else [[ ! "$now" < "$a" ]] || [[ "$now" < "$b" ]]; fi
+}
+
+# Sets the caller's mode/ref. 0 = run · 1 = nothing to do now · 2 = refused.
+_ue_unattended_plan() {
+    export SYNAP_RELEASE_VERIFY=enforce
+    if [ -n "${SYNAP_UNATTENDED_PLAN:-}" ]; then   # the --from-source re-exec: already planned
+        mode="${SYNAP_UNATTENDED_PLAN%%|*}"; ref="${SYNAP_UNATTENDED_PLAN#*|}"; return 0
+    fi
+    local req rel rid pol=state/update-policy.json channel window
+    req="$(_ue_take_request)"
+    if [ -n "$req" ]; then
+        rel="$(jq -r '.release // empty' "$req" 2>/dev/null || true)"
+        rid="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+        if [ "$(jq -r '.schema // empty' "$req" 2>/dev/null || true)" != 1 ] || ! [[ "$rel" =~ $_UE_RELEASE_RE ]] || [ "$rel" = latest ]; then
+            _ue_err "update request ${rid:-<no id>} refused: it must be {\"schema\":1, \"release\":\"<release id|fast|stable>\"} (got release '${rel}'). Nothing was changed."
+            _ue_record aborted "$(_ue_current_release_id)" "${rel:-?}" "invalid update request ${rid:-<no id>}" false
+            return 2
+        fi
+        _ue_log "update requested (${rid:-no id}, by $(jq -r '.requestedBy // "?"' "$req" 2>/dev/null || echo '?')): ${rel}"
+        mode=release; ref="$rel"
+    else
+        if [ -f "$pol" ] && ! jq -e 'type == "object"' "$pol" >/dev/null 2>&1; then
+            _ue_err "${pol} is not a JSON object — no automatic update until it is fixed"
+            return 2
+        fi
+        if [ "$(jq -r '.auto' "$pol" 2>/dev/null || true)" = false ]; then _ue_log "automatic updates are off (${pol}: auto false)"; return 1; fi
+        if [ "$(jq -r '.pinned' "$pol" 2>/dev/null || true)" = true ]; then _ue_log "this pod is pinned (${pol}: pinned true) — no automatic update"; return 1; fi
+        window="$(jq -r '.window // empty' "$pol" 2>/dev/null || true)"; window="${window:-03:00-05:00}"
+        if ! [[ "$window" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+            _ue_err "${pol}: window '${window}' is not HH:MM-HH:MM — no automatic update until it is fixed"
+            return 2
+        fi
+        if ! _ue_in_window "$window"; then _ue_log "outside the update window ${window} (now $(date +%H:%M)) — nothing to do"; return 1; fi
+        channel="$(jq -r '.channel // empty' "$pol" 2>/dev/null || true)"
+        channel="${channel:-$(_ue_env_get SYNAP_UPDATE_CHANNEL)}"; channel="${channel:-stable}"
+        case "$channel" in
+            source)      mode=source; ref="" ;;
+            fast|stable) mode=release; ref="$channel" ;;
+            *) _ue_err "update channel '${channel}' is not stable|fast|source"; return 2 ;;
+        esac
+    fi
+    export SYNAP_UNATTENDED_PLAN="${mode}|${ref}"
+    return 0
+}
+
+# The update lock was busy (router): a pending request is taken and recorded as
+# not run, so the .path unit cannot loop on it; a timer tick simply retries tomorrow.
+_ue_unattended_busy() { # cwd = deploy dir
+    local req
+    req="$(_ue_take_request)"
+    [ -n "$req" ] || return 0
+    _ue_record aborted "$(_ue_current_release_id)" "$(jq -r '.release // "?"' "$req" 2>/dev/null || echo '?')" \
+        "another pod operation held the update lock — request $(jq -r '.id // "?"' "$req" 2>/dev/null || echo '?') was not run; send it again" false
+}
+
 cmd_update() {
     local deploy_dir=$(get_deploy_dir)
     if [ -z "$deploy_dir" ]; then
@@ -4142,7 +4313,7 @@ cmd_update() {
 
     cd "$deploy_dir"
 
-    local mode="release" ref="" force=0
+    local mode="release" ref="" force=0 unattended=0
     local -a _update_argv=("$@")
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -4157,9 +4328,11 @@ cmd_update() {
                 ref="${2:-}"; shift 2 || exit 1 ;;
             --force)
                 force=1; shift ;;
+            --unattended)
+                unattended=1; shift ;;
             -h|--help)
                 cat <<'USAGE'
-synap update [--release <id|fast|stable>] [--from-source] [--force]
+synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattended]
 
   --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
                     or a channel — fast (every green main push) | stable (v* tags).
@@ -4167,6 +4340,10 @@ synap update [--release <id|fast|stable>] [--from-source] [--force]
   --from-source     build THIS checkout as synap-dev/*:<sha> (release local-<sha>);
                     same backup / canary / rollback as a release.
   --force           re-apply the release the pod is already on.
+  --unattended      what synap-update.service runs: a pending request
+                    (state/requests/update.json) or the owner's policy
+                    (state/update-policy.json: auto, channel, window); always
+                    SYNAP_RELEASE_VERIFY=enforce. Nothing to do = exit 0.
 
 Every update: lock → manifest → preflight → pull by digest → verified backup →
 migrate → canary → swap → all services → verify → record. Any failure rolls
@@ -4179,6 +4356,12 @@ USAGE
                 ref="$1"; shift ;;
         esac
     done
+    if [ "$unattended" = 1 ]; then
+        local plan_rc=0
+        _ue_unattended_plan || plan_rc=$?
+        [ "$plan_rc" = 1 ] && return 0
+        [ "$plan_rc" = 0 ] || exit 1
+    fi
     [ "$ref" = latest ] && ref=""
     # --from-source: sync the checkout FIRST, then run the synced installer. A
     # running bash keeps the functions it parsed, so without this re-exec every
@@ -4579,7 +4762,12 @@ cmd_backup() {
     # mounts, network access to postgres and minio).
     case "${1:-}" in
         init)
-            SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" backup_init
+            SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" backup_init "${2:-}"
+            return $?
+            ;;
+        kit-saved)
+            # The owner confirms they saved the recovery kit: clears the "not yet saved" mark.
+            SYNAP_DEPLOY_DIR="$deploy_dir" _bk_kit_mark saved
             return $?
             ;;
         status)
@@ -4597,6 +4785,9 @@ Usage:
   synap backup [label]          local dump of every database (backups/postgres/<ts>-<label>)
   synap backup init             create the off-host repository (BACKUP_REPOSITORY in .env)
                                 and print the recovery kit ONCE
+  synap backup init --non-interactive
+                                no TTY: the kit goes to state/backup/recovery-kit.txt (0600), marked
+                                "not yet saved" until: synap backup kit-saved
   synap backup push             dump + push an encrypted snapshot now (the service does it hourly)
   synap backup drill [snap]     restore a snapshot into a throwaway postgres, compare fingerprints
   synap backup status           repository, last runs, alarms
@@ -5001,6 +5192,13 @@ cmd_doctor() {
     pct="$(df -Pk "$deploy_dir" 2>/dev/null | awk 'NR==2 { gsub(/%/, "", $5); print 100 - $5 }')"
     if [ -n "$pct" ] && [ "$pct" -lt "${SYNAP_DOCTOR_MIN_FREE_PCT:-15}" ]; then _dr disk warn "only ${pct}% free on ${deploy_dir} (updates keep 2 releases of images + dumps)"
     elif [ -n "$pct" ]; then _dr disk ok "${pct}% free"; fi
+    # Headroom against the update's own floor (a from-source pod builds: 12 GB).
+    local floor dshort
+    floor="${SYNAP_UPDATE_MIN_FREE_MB:-2048}"
+    [ "$(jq -r '.source // false' state/current-release.json 2>/dev/null || true)" = true ] && floor="${SYNAP_UPDATE_MIN_FREE_SOURCE_MB:-12288}"
+    dshort="$(_ue_disk_short "$floor")"
+    if [ -n "$dshort" ]; then _dr disk error "only ${dshort%% *} MB free on ${dshort#* } — the next update needs ${floor} MB (it first removes this pod's old release images; the rest is yours to free)"
+    else _dr disk ok "update headroom: at least ${floor} MB free where updates write"; fi
 
     # ── lock ── who holds the update lock, for how long (a hung `synap update`
     # once held it 33 days: every later update failed fast against it).
@@ -5073,6 +5271,43 @@ cmd_doctor() {
         _dr kratos ok "kratos.yml is well-formed$([ -s ../kratos/kratos.yml.good ] && echo '; last verified copy: kratos.yml.good')"
     else
         while IFS= read -r line; do [ -n "$line" ] && _dr kratos error "kratos.yml: ${line}"; done <<< "$kerrs"
+    fi
+
+    # ── heal ── what synap heal gave up on, or only alerts about (never restarts)
+    local hf hsvc hat hn=0
+    for hf in state/heal/exhausted-* state/heal/alert-*; do
+        [ -e "$hf" ] || continue
+        hn=$((hn + 1)); hsvc="${hf##*/}"
+        hat="$(head -1 "$hf" 2>/dev/null)"; hat="$(date -u -d "@${hat}" +%Y-%m-%dT%H:%MZ 2>/dev/null || date -u -r "${hat:-0}" +%Y-%m-%dT%H:%MZ 2>/dev/null || echo '?')"
+        case "$hsvc" in
+            exhausted-*) _dr heal error "heal stopped restarting ${hsvc#exhausted-} (restart budget used up, ${hat}) — it re-arms once the service is healthy: docker compose logs --tail 100 ${hsvc#exhausted-}" ;;
+            alert-*)     _dr heal error "${hsvc#alert-} has been unhealthy since ${hat} — heal never restarts it: docker compose logs --tail 100 ${hsvc#alert-}" ;;
+        esac
+    done
+    if [ "$hn" = 0 ]; then
+        hn="$(grep -c . state/heal/restarts.log 2>/dev/null || true)"
+        _dr heal ok "no service over its restart budget$([ "${hn:-0}" -gt 0 ] 2>/dev/null && echo "; ${hn} restart(s) by heal in the last ${SYNAP_HEAL_WINDOW_MIN:-30} min")"
+    fi
+
+    # ── units ── the timers that make this pod heal and take pushed updates
+    local un ust ubad=""
+    if _units_have_systemd; then
+        for un in synap-heal.timer synap-update.path; do
+            ust="$(_units_state "$un" "$deploy_dir")"
+            [ "$ust" = current ] && [ "$(systemctl is-active "$un" 2>/dev/null || true)" = active ] && continue
+            [ "$ust" = current ] && ust=inactive
+            ubad="${ubad:+$ubad, }${un} ${ust}"
+        done
+        if [ -n "$ubad" ]; then
+            _dr units warn "${ubad} — this pod does not heal itself: sudo synap units install"
+        else
+            _dr units ok "heal and update-request units active; automatic updates $([ "$(systemctl is-enabled synap-update.timer 2>/dev/null || true)" = enabled ] && echo on || echo 'off (opt in: synap units install --enable-auto-update)')"
+        fi
+    else
+        _dr units info "no systemd: heal runs only from cron (synap units install prints the line)"
+    fi
+    if [ -f state/requests/update.json ] && [ -n "$(find state/requests/update.json -mmin +10 2>/dev/null)" ]; then
+        _dr units warn "an update request has waited over 10 min in state/requests/update.json — is synap-update.path active? (synap units status)"
     fi
 
     # ── url ──
@@ -5319,14 +5554,23 @@ cmd_clean() {
         echo "To deliberately wipe THIS pod's data: synap reset --full --delete-data (takes a verified backup first)."
         exit 1
     }
+    # Only THIS pod's leftovers: the host may run other stacks (the owner's own
+    # images, stopped containers, networks) that a global prune would delete.
+    _clean_images() { synap_update_lock "$deploy_dir" "synap clean" || exit 1; _ue_prune_images; }
+    _clean_networks() {
+        local n
+        for n in $(docker network ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-}" 2>/dev/null); do
+            docker network rm "$n" >/dev/null 2>&1 || true   # in use ⇒ refused by docker
+        done
+    }
     
     if [ -z "$what" ]; then
         echo -e "${BLUE}🧹 Clean Docker Resources${NC} (volumes are never removed)"
         echo ""
-        echo "  ${GREEN}[1]${NC} Remove stopped containers"
-        echo "  ${GREEN}[2]${NC} Remove unused images"
-        echo "  ${GREEN}[3]${NC} Remove unused networks"
-        echo "  ${GREEN}[4]${NC} Prune containers, images and networks (keeps volumes)"
+        echo "  ${GREEN}[1]${NC} Remove this pod's stopped containers"
+        echo "  ${GREEN}[2]${NC} Remove this pod's old release images (first-party only)"
+        echo "  ${GREEN}[3]${NC} Remove this pod's unused networks"
+        echo "  ${GREEN}[4]${NC} All three (volumes and other stacks are never touched)"
         echo "  ${GREEN}[5]${NC} Remove build cache"
         echo "  ${GREEN}[q]${NC} Quit"
         echo ""
@@ -5334,19 +5578,19 @@ cmd_clean() {
         
         case "$choice" in
             1)
-                docker container prune -f
+                docker compose rm -f
                 ;;
             2)
-                docker image prune -f
+                _clean_images
                 ;;
             3)
-                docker network prune -f
+                _clean_networks
                 ;;
             4)
-                echo -e "${YELLOW}⚠️  This will remove all unused containers, images and networks (volumes are kept)${NC}"
+                echo -e "${YELLOW}⚠️  This removes this pod's stopped containers, old release images and unused networks (volumes are kept)${NC}"
                 read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
-                    docker system prune -a -f
+                    docker compose rm -f; _clean_images; _clean_networks
                 fi
                 ;;
             5)
@@ -5363,22 +5607,22 @@ cmd_clean() {
     else
         case "$what" in
             containers)
-                docker container prune -f
+                docker compose rm -f
                 ;;
             images)
-                docker image prune -f
+                _clean_images
                 ;;
             volumes)
                 _clean_refuse_volumes
                 ;;
             networks)
-                docker network prune -f
+                _clean_networks
                 ;;
             all)
-                echo -e "${YELLOW}⚠️  This will remove all unused containers, images and networks (volumes are kept)${NC}"
+                echo -e "${YELLOW}⚠️  This removes this pod's stopped containers, old release images and unused networks (volumes are kept)${NC}"
                 read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
-                    docker system prune -a -f
+                    docker compose rm -f; _clean_images; _clean_networks
                 fi
                 ;;
             cache)
@@ -5392,6 +5636,217 @@ cmd_clean() {
     fi
     
     echo -e "${GREEN}✅ Cleanup complete!${NC}"
+}
+
+# ── heal (self-heal D1: synap-heal.timer, every 2 min) ────────────────────────
+# Docker restarts a container only when it EXITS; `unhealthy` is reported and
+# never acted on outside Swarm. heal restarts this project's containers that
+# Docker marks unhealthy, within a budget of SYNAP_HEAL_MAX_RESTARTS (3) per
+# SYNAP_HEAL_WINDOW_MIN (30) per service. A service that uses it up is no longer
+# restarted (marker state/heal/exhausted-<svc>, a doctor finding, a notify
+# event) until heal sees it healthy again. SYNAP_HEAL_NEVER (postgres — a
+# restart mid-write risks the data; postgres-backup — its health is backup
+# freshness, which a restart cannot fix) are alerted on, never restarted.
+# Kratos unhealthy or crash-looping on a kratos.yml that differs from the last
+# verified one (kratos.yml.good, kept by every verified update): when the file
+# is malformed, Kratos crash-loops, or a restart already did not help, the .good
+# copy is restored (the replaced file kept as kratos.yml.broken-<ts>) and Kratos
+# recreated. Reads first, lock-free; takes the update lock only to act, and
+# skips while an update, apply or install holds it.
+_heal_rows() { # "<service>|<status>|<health>" per container of this project
+    local ids
+    ids="$(docker compose ps -a -q 2>/dev/null | tr '\n' ' ')"
+    [ -n "${ids// /}" ] || return 0
+    # shellcheck disable=SC2086 # one id per word
+    docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' $ids 2>/dev/null || true
+}
+
+_heal_count() { # <service> — heal's restarts of it inside the window
+    local since=$(( $(date +%s) - ${SYNAP_HEAL_WINDOW_MIN:-30} * 60 ))
+    awk -v s="$1" -v t="$since" '$2 == s && $1 >= t' state/heal/restarts.log 2>/dev/null | grep -c . || true
+}
+
+_heal_event() { # <status> <service> <reason> [notify 0|1]
+    _synap_event "$(jq -cn --arg st "$1" --arg svc "$2" --arg r "$3" --argjson n "$(_heal_count "$2")" \
+        '{kind:"pod.heal", status:$st, service:$svc, reason:$r, restartsInWindow:$n}')" "${4:-0}"
+}
+
+# <state> <restarts-in-window> — 0 when the last verified kratos.yml was restored.
+_heal_kratos_restore() {
+    local cur=../kratos/kratos.yml good=../kratos/kratos.yml.good keep
+    [ -s "$good" ] && [ -z "$(kratos_config_errors "$good")" ] || return 1
+    [ -f "$cur" ] && cmp -s "$cur" "$good" && return 1
+    [ -n "$(kratos_config_errors "$cur")" ] || [ "$1" = restarting ] || [ "$2" -ge 1 ] || return 1
+    keep="../kratos/kratos.yml.broken-$(date -u +%Y%m%dT%H%M%SZ)"
+    [ -f "$cur" ] && cp -p "$cur" "$keep"
+    cp -p "$good" "$cur" || return 1   # in place: the bind mount keeps its inode
+    docker compose up -d --no-deps --force-recreate kratos >/dev/null 2>&1 </dev/null || true
+    echo "$(date +%s) kratos" >> state/heal/restarts.log
+    _heal_event kratos_config_restored kratos "Kratos was ${1} on a kratos.yml that differs from the last verified one: restored kratos.yml.good (the replaced file: ${keep#../kratos/})" 1
+}
+
+cmd_heal() {
+    case "${1:-}" in -h|--help) echo "Usage: synap heal   (restart this pod's unhealthy containers within a budget; run by synap-heal.timer)"; return 0 ;; esac
+    local deploy_dir=$(get_deploy_dir)
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    cd "$deploy_dir"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}synap heal needs jq${NC}" >&2; exit 2; }
+    mkdir -p state/heal
+    local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n todo=""
+    rows="$(_heal_rows)"
+    while IFS='|' read -r svc st h; do
+        [ -n "$svc" ] || continue
+        if [ "$st" = running ] && { [ "$h" = healthy ] || [ "$h" = none ]; }; then
+            for m in exhausted alert; do
+                [ -e "state/heal/${m}-${svc}" ] || continue
+                rm -f "state/heal/${m}-${svc}"
+                _heal_event recovered "$svc" "${svc} is healthy again — heal re-armed" 1
+            done
+        elif { [ "$st" = running ] && [ "$h" = unhealthy ]; } || { [ "$svc" = kratos ] && [ "$st" = restarting ]; }; then
+            grep -qx "${svc}|.*" <<<"$todo" || todo="${todo}${svc}|${st}|${h}"$'\n'
+        fi
+    done <<<"$rows"
+    # Forget restarts older than the window.
+    if [ -s state/heal/restarts.log ]; then
+        awk -v t="$(( $(date +%s) - ${SYNAP_HEAL_WINDOW_MIN:-30} * 60 ))" '$1 >= t' state/heal/restarts.log > state/heal/restarts.log.tmp \
+            && mv -f state/heal/restarts.log.tmp state/heal/restarts.log
+    fi
+    [ -n "$todo" ] || return 0
+    if ! synap_update_lock "$deploy_dir" "synap heal" 2>/dev/null; then
+        echo "synap heal: another pod operation holds the update lock — not acting now"
+        return 0
+    fi
+    while IFS='|' read -r svc st h; do
+        [ -n "$svc" ] || continue
+        case "$never" in
+            *" ${svc} "*)
+                if [ ! -e "state/heal/alert-${svc}" ]; then
+                    date +%s > "state/heal/alert-${svc}"
+                    _heal_event alert "$svc" "${svc} is ${h/none/$st} — heal never restarts it: docker compose logs --tail 100 ${svc}; synap doctor" 1
+                fi
+                continue ;;
+        esac
+        [ -e "state/heal/exhausted-${svc}" ] && continue
+        n="$(_heal_count "$svc")"
+        if [ "$svc" = kratos ] && _heal_kratos_restore "$st" "$n"; then continue; fi
+        # A crash loop is Docker's to back off; heal acts on `unhealthy` only.
+        [ "$st" = running ] || continue
+        if [ "$n" -ge "$max" ]; then
+            date +%s > "state/heal/exhausted-${svc}"
+            _heal_event budget_exhausted "$svc" "${svc} was restarted ${n} times in ${SYNAP_HEAL_WINDOW_MIN:-30} min and is still unhealthy — heal stopped restarting it: docker compose logs --tail 100 ${svc}; synap doctor" 1
+            continue
+        fi
+        echo "$(date +%s) ${svc}" >> state/heal/restarts.log
+        if docker compose restart "$svc" >/dev/null 2>&1 </dev/null; then
+            _heal_event restarted "$svc" "${svc} was unhealthy" 0
+        else
+            _heal_event restart_failed "$svc" "docker compose restart ${svc} failed" 1
+        fi
+    done <<<"$todo"
+    return 0
+}
+
+# ── units (systemd) ───────────────────────────────────────────────────────────
+# deploy/systemd/ holds the unit TEMPLATES (@SYNAP@ = this CLI, @DEPLOY_DIR@ =
+# this deploy dir); the set is whatever is in that directory. Installed:
+# synap-heal.timer and synap-update.path enabled;
+# synap-update.timer written but left as the owner set it (off on a fresh
+# install; --enable-auto-update turns it on). Hosts without systemd get the
+# cron lines to add by hand.
+_units_have_systemd() { [ -d "${SYNAP_SYSTEMD_RUN_DIR:-/run/systemd/system}" ] && command -v systemctl >/dev/null 2>&1; }
+_units_names() { (cd "$1" 2>/dev/null && ls -1 synap-*.service synap-*.timer synap-*.path 2>/dev/null) || true; }
+_units_self() { readlink -f "$SYNAP_SELF" 2>/dev/null || echo "$SYNAP_SELF"; }
+_units_render() { # <template> <deploy-dir>
+    sed -e "s#@SYNAP@#$(_units_self)#g" -e "s#@DEPLOY_DIR@#$2#g" "$1"
+}
+# <unit> <deploy-dir> → missing | outdated | current (installed vs this template)
+_units_state() {
+    local dst="${SYNAP_SYSTEMD_DIR:-/etc/systemd/system}"
+    [ -f "$dst/$1" ] || { echo missing; return 0; }
+    _units_render "$2/systemd/$1" "$(cd "$2" && pwd -P)" | cmp -s - "$dst/$1" && echo current || echo outdated
+}
+
+cmd_units() {
+    local sub="${1:-status}" auto=0 force=0 u
+    [ $# -gt 0 ] && shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --enable-auto-update) auto=1 ;;
+            --force) force=1 ;;
+            *) echo -e "${RED}Unknown option: $1${NC}"; exit 1 ;;
+        esac
+        shift
+    done
+    local deploy_dir=$(get_deploy_dir)
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    deploy_dir="$(cd "$deploy_dir" && pwd -P)"
+    cd "$deploy_dir"
+    local src="$deploy_dir/systemd" dst="${SYNAP_SYSTEMD_DIR:-/etc/systemd/system}" names
+    names="$(_units_names "$src")"
+    case "$sub" in
+        install)
+            [ -n "$names" ] || { echo -e "${RED}No unit templates in ${src}${NC}"; exit 1; }
+            mkdir -p state/requests state/heal
+            if ! _units_have_systemd; then
+                echo -e "${YELLOW}No systemd on this host — add this line to /etc/cron.d/synap (as root) instead:${NC}"
+                echo "*/2 * * * * root SYNAP_DEPLOY_DIR=${deploy_dir} $(_units_self) heal >/dev/null 2>&1"
+                echo "(Pushed update requests and automatic updates need systemd; run \`synap update\` by hand.)"
+                return 0
+            fi
+            if [ "$(id -u)" != 0 ] && [ -z "${SYNAP_SYSTEMD_DIR:-}" ]; then
+                echo -e "${RED}Installing systemd units needs root: sudo $(_units_self) units install${NC}"; exit 1
+            fi
+            for u in $names; do
+                # The .service units carry the deploy dir (timers/path name only their unit).
+                if [ -f "$dst/$u" ] && grep -q "SYNAP_DEPLOY_DIR=" "$dst/$u" && ! grep -qxF "Environment=SYNAP_DEPLOY_DIR=${deploy_dir}" "$dst/$u" && [ "$force" = 0 ]; then
+                    echo -e "${RED}${dst}/${u} is installed for another deploy dir ($(sed -n 's/.*SYNAP_DEPLOY_DIR=\([^ "]*\).*/\1/p' "$dst/$u" | head -1)). One pod per host: re-run with --force to repoint it here.${NC}"
+                    exit 1
+                fi
+            done
+            for u in $names; do
+                _units_render "$src/$u" "$deploy_dir" > "$dst/$u.synap-new" && mv -f "$dst/$u.synap-new" "$dst/$u" \
+                    || { echo -e "${RED}could not write ${dst}/${u}${NC}"; exit 1; }
+            done
+            systemctl daemon-reload
+            systemctl enable --now synap-heal.timer synap-update.path
+            [ "$auto" = 1 ] && systemctl enable --now synap-update.timer
+            echo -e "${GREEN}✓ units installed in ${dst}: heal every 2 min, update requests watched$([ "$auto" = 1 ] && echo ', automatic updates ON (03:00–05:00, state/update-policy.json)' || echo '; automatic updates: see synap units status')${NC}"
+            _synap_event "$(jq -cn --arg d "$dst" --argjson auto "$auto" '{kind:"pod.units", status:"installed", dir:$d, autoUpdateEnabledNow:($auto == 1)}')" 0 >/dev/null
+            ;;
+        status)
+            [ -n "$names" ] || { echo "no unit templates in ${src}"; return 0; }
+            if ! _units_have_systemd; then echo "no systemd on this host — see: synap units install (prints the cron lines)"; return 0; fi
+            for u in $names; do
+                local inst
+                case "$(_units_state "$u" "$deploy_dir")" in
+                    missing)  inst="not installed" ;;
+                    outdated) inst="installed (OUTDATED: re-run synap units install)" ;;
+                    *)        inst="installed" ;;
+                esac
+                printf '  %-22s %-44s %s/%s\n' "$u" "$inst" "$(systemctl is-enabled "$u" 2>/dev/null || true)" "$(systemctl is-active "$u" 2>/dev/null || true)"
+            done
+            ;;
+        remove)
+            if _units_have_systemd; then
+                for u in $names; do
+                    case "$u" in *.timer|*.path) systemctl disable --now "$u" >/dev/null 2>&1 || true ;; esac
+                done
+            fi
+            for u in $names; do rm -f "$dst/$u"; done
+            _units_have_systemd && systemctl daemon-reload
+            echo "units removed from ${dst}"
+            ;;
+        *) echo "Usage: synap units install [--enable-auto-update] [--force] | status | remove"; exit 1 ;;
+    esac
+}
+
+# The installer's last step: units when this host can take them, else the hint.
+_units_install_best_effort() {
+    if _units_have_systemd && [ "$(id -u)" = 0 ]; then
+        ( cmd_units install ) || echo -e "${YELLOW}⚠️  Self-heal + update units not installed — run: sudo $(_units_self) units install${NC}"
+    else
+        echo -e "${YELLOW}ℹ️  Self-heal + pushed updates: run 'sudo $(_units_self) units install' (prints the cron line on hosts without systemd)${NC}"
+    fi
 }
 
 cmd_shell() {
@@ -6330,7 +6785,9 @@ ${YELLOW}Management:${NC}
   synap federation <action>      External sign-in: status | connect-cloud | disable
   synap pod-key <action>         This pod's own identity key: ensure | show | enroll --pod-id <id> --code <spr_…>
   synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
-  synap clean [type]             Clean Docker resources (interactive if no type)
+  synap clean [type]             Clean this pod's Docker leftovers (interactive if no type; never volumes or other stacks')
+  synap heal                     Restart this pod's unhealthy containers (budget 3 / 30 min; never postgres)
+  synap units <install|status|remove>  systemd timers: heal (2 min), update requests; auto-update opt-in
   synap shell [service] [shell]   Open shell in container (default: backend, sh)
   synap exec <service> <cmd>     Execute command in container
   synap users <sub>              Manage pod users (list, add-admin, reset-password, delete)
@@ -6418,7 +6875,11 @@ export COMPOSE_PROJECT_NAME
 # Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
 case "${1:-help}" in
     install|update|rebuild|reset|restore|apply)
-        synap_update_lock "$(get_deploy_dir)" "synap $1" || exit 1
+        if ! synap_update_lock "$(get_deploy_dir)" "synap $1"; then
+            # An unattended run must still consume its request (no .path loop).
+            case " $* " in *" --unattended "*) [ "$1" = update ] && ( cd "$(get_deploy_dir)" && _ue_unattended_busy ) ;; esac
+            exit 1
+        fi
         ;;
     config)
         case "${2:-}" in
@@ -6511,6 +6972,14 @@ case "${1:-help}" in
     clean)
         shift
         cmd_clean "$@"
+        ;;
+    heal)
+        shift
+        cmd_heal "$@"
+        ;;
+    units)
+        shift
+        cmd_units "$@"
         ;;
     shell)
         shift

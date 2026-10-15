@@ -1,0 +1,13 @@
+# Automatic updates — INSTALLED DISABLED (opt in: synap units install
+# --enable-auto-update). Once a night inside 03:00–05:00 host time; the engine
+# re-checks the window and auto/channel/pinned in state/update-policy.json.
+# Template: synap units install.
+[Unit]
+Description=Synap pod automatic update window
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=110min
+
+[Install]
+WantedBy=timers.target

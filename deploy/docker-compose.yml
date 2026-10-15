@@ -124,11 +124,25 @@ x-backend-env: &backend-env
   # trusts the real client IP.
   SYNAP_SHARED_CLIENT_IP: ${SYNAP_SHARED_CLIENT_IP:-${CLOUDFLARED_TUNNEL_TOKEN:+true}}
 
+# ============================================================================
+# CONTAINER LOGS — bounded (json-file, 10 MB × 3 files per container), so a
+# chatty service can never fill the disk the updates need. A change here
+# reaches a container only when it is RECREATED: the next `synap update`
+# (every service) or `synap apply` (running services) does that — `synap tidy`
+# never recreates anything.
+# ============================================================================
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # ============================================================================
   # BACKEND API
   # ============================================================================
   backend:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
@@ -190,6 +204,7 @@ services:
   # Never starts automatically (profile guard + restart: "no").
   # ============================================================================
   backend-canary:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     container_name: synap-backend-canary
     restart: "no"
@@ -214,6 +229,7 @@ services:
   # Same image as backend — different working directory and entry point
   # ============================================================================
   realtime:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
@@ -285,6 +301,7 @@ services:
   # points to pod-admin so post-login users land directly on this app.
   # ============================================================================
   pod-admin:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_POD_ADMIN:-ghcr.io/synap-core/pod-admin:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_POD_ADMIN must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
@@ -320,6 +337,7 @@ services:
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
     build:
       context: ..
@@ -413,6 +431,7 @@ services:
   # Changing the image, PGDATA or the mount? Update deploy/pgdata-safety.sh and
   # run deploy/__tests__/pgdata-safety.test.sh — it fails when they disagree.
   postgres:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_POSTGRES:-timescale/timescaledb-ha:pg15}
     restart: always
     environment:
@@ -474,6 +493,7 @@ services:
   # Restore: synap restore --from-snapshot <id|latest>  |  synap restore <dir>
   # ============================================================================
   postgres-backup:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_POSTGRES:-timescale/timescaledb-ha:pg15}
     restart: always
     user: "0"
@@ -521,6 +541,7 @@ services:
   # REDIS
   # ============================================================================
   redis:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_REDIS:-redis:7-alpine}
     restart: always
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
@@ -539,6 +560,7 @@ services:
   # MINIO (Object Storage)
   # ============================================================================
   minio:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_MINIO:-minio/minio:latest}
     restart: always
     command: server /data --console-address ":9001"
@@ -566,6 +588,7 @@ services:
   # TYPESENSE (Search)
   # ============================================================================
   typesense:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_TYPESENSE:-typesense/typesense:0.25.2}
     restart: always
     command: >
@@ -593,6 +616,7 @@ services:
   # ORY KRATOS (Authentication)
   # ============================================================================
   kratos-migrate:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_KRATOS:-oryd/kratos:v1.3.1}
     deploy:
       restart_policy:
@@ -609,6 +633,7 @@ services:
       - synap-net
 
   kratos:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_KRATOS:-oryd/kratos:v1.3.1}
     restart: always
     environment:
@@ -681,6 +706,7 @@ services:
   # ORY HYDRA (OAuth2)
   # ============================================================================
   hydra-migrate:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_HYDRA:-oryd/hydra:v2.3.0}
     environment:
       DSN: postgres://synap:${POSTGRES_PASSWORD}@postgres:5432/hydra?sslmode=disable
@@ -692,6 +718,7 @@ services:
       - synap-net
 
   hydra:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_HYDRA:-oryd/hydra:v2.3.0}
     restart: always
     environment:
@@ -731,6 +758,7 @@ services:
   # CADDY (Reverse Proxy + SSL)
   # ============================================================================
   caddy:
+    logging: *default-logging
     image: ${SYNAP_IMAGE_CADDY:-caddy:2-alpine}
     restart: always
     ports:
@@ -776,6 +804,7 @@ services:
   # Start with: docker compose --profile rsshub up -d
   # ============================================================================
   rsshub:
+    logging: *default-logging
     image: diygod/rsshub:latest
     container_name: ${COMPOSE_PROJECT_NAME:-synap}-rsshub
     restart: unless-stopped
@@ -808,6 +837,7 @@ services:
   # BROWSERLESS — Chrome headless for RSSHub Puppeteer support
   # ============================================================================
   browserless:
+    logging: *default-logging
     image: browserless/chrome:latest
     container_name: ${COMPOSE_PROJECT_NAME:-synap}-browserless
     restart: unless-stopped
@@ -835,6 +865,7 @@ services:
   # Enable with: docker compose --profile monitoring up -d
   # ============================================================================
   dozzle:
+    logging: *default-logging
     container_name: dozzle
     image: amir20/dozzle:latest
     restart: unless-stopped
@@ -852,6 +883,7 @@ services:
   # Enable with: docker compose --profile monitoring up -d
   # ============================================================================
   prometheus:
+    logging: *default-logging
     image: prom/prometheus:v2.51.0
     profiles: ["monitoring"]
     volumes:
@@ -871,6 +903,7 @@ services:
   # GRAFANA — Metrics dashboards (optional)
   # ============================================================================
   grafana:
+    logging: *default-logging
     image: grafana/grafana:10.4.0
     profiles: ["monitoring"]
     volumes:
@@ -890,6 +923,7 @@ services:
   # ALERTMANAGER — Alert routing (Slack, PagerDuty, etc.) (optional)
   # ============================================================================
   alertmanager:
+    logging: *default-logging
     image: prom/alertmanager:v0.27.0
     profiles: ["monitoring"]
     volumes:
@@ -905,6 +939,7 @@ services:
   # Activated by pod-agent configure with profile: cloudflare-tunnel
   # ============================================================================
   cloudflared:
+    logging: *default-logging
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
@@ -932,6 +967,7 @@ services:
   # don't break.
   # ============================================================================
   pangolin-tunnel:
+    logging: *default-logging
     image: alpine:3.20
     restart: unless-stopped
     command:
@@ -959,6 +995,7 @@ services:
   # `synap` and install.sh require the same configuration before they start
   # this profile. Leaving it off keeps this optional operational surface absent.
   pod-agent:
+    logging: *default-logging
     profiles:
       - pod-agent
     build:
@@ -1014,6 +1051,7 @@ services:
   # POD SELF-UPDATER (one-shot, spawned by update-pod.sh via pod-agent)
   # ============================================================================
   updater:
+    logging: *default-logging
     image: docker:cli
     restart: "no"
     volumes:

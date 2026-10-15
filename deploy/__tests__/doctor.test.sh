@@ -125,7 +125,7 @@ doctor healthy; rc=$?
 grep -q "No findings" "$TMP/out" && ok "healthy pod: 'No findings'" || bad "healthy text: $(cat "$TMP/out")"
 doctor healthy --json; rc=$?
 [ "$rc" = 0 ] && [ "$(jq -r .ok "$TMP/out")" = true ] && [ "$(jq '.findings|length' "$TMP/out")" = 0 ] && ok "healthy --json: ok:true, 0 findings" || bad "healthy json (rc=$rc): $(cat "$TMP/out" "$TMP/err")"
-for c in env project checkout release override backup pgdata lock containers kratos; do
+for c in env project checkout release override backup pgdata lock containers kratos heal; do
   jq -e --arg c "$c" '[.checks[] | select(.check == $c and .severity == "ok")] | length > 0' "$TMP/out" >/dev/null && : || bad "healthy: check '$c' did not report ok"
 done
 ok "healthy: env, project, checkout, release, override, backup, pgdata, lock, containers, kratos all report ok"
@@ -236,4 +236,20 @@ doctor healthy --json
 finding kratos "missing or empty" && ok "a missing kratos.yml is a finding" || bad "kratos missing: $(jq -c .findings "$TMP/out")"
 grep -E "compose (.* )?(up|run|create|down|rm|stop|start|restart|pull|build)( |$)|^(rm|stop|kill|pull|tag|rmi|run|volume|system|image prune|network rm)" "$FAKE_LOG" \
   && bad "the heal checks ran a mutating docker command" || ok "the heal checks ran no mutating docker command"
+
+# ── 11. self-heal (W7-HOST): heal markers, update headroom, units ───────────
+healthy_env; mkdir -p "$DEPLOY/state/heal"
+date +%s > "$DEPLOY/state/heal/exhausted-kratos"; date +%s > "$DEPLOY/state/heal/alert-postgres"
+doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding heal "heal stopped restarting kratos" && ok "heal: a used-up restart budget is a finding" || bad "heal exhausted: rc=$rc $(jq -c .findings "$TMP/out")"
+finding heal "postgres has been unhealthy since" && ok "heal: an alert-only service (postgres) is a finding" || bad "heal alert: $(jq -c .findings "$TMP/out")"
+rm -rf "$DEPLOY/state/heal"
+SYNAP_UPDATE_MIN_FREE_MB=999999999 doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding disk "the next update needs 999999999 MB" && ok "disk: free space below the update floor is a finding" || bad "disk floor: rc=$rc $(jq -c .findings "$TMP/out")"
+doctor healthy --json
+jq -e '[.checks[] | select(.check == "disk" and .severity == "ok" and (.message | test("update headroom")))] | length == 1' "$TMP/out" >/dev/null \
+  && ok "disk: headroom vs the update floor reported ok on a roomy disk" || bad "disk headroom ok missing: $(jq -c .checks "$TMP/out")"
+jq -e '[.checks[] | select(.check == "units")] | length >= 1' "$TMP/out" >/dev/null && ok "units: reported (no systemd here: info)" || bad "units check missing"
+grep -E "compose (.* )?(up|run|create|down|rm|stop|start|restart|pull|build)( |$)|^(rm|stop|kill|pull|tag|rmi|run|volume|system|image prune|network rm)" "$FAKE_LOG" \
+  && bad "the self-heal checks ran a mutating docker command" || ok "the self-heal checks ran no mutating docker command"
 exit $fail

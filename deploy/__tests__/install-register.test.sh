@@ -270,6 +270,13 @@ BT="$(cat "$FAKE/token-at-bootstrap" 2>/dev/null)"
   && ok "happy: register-intelligence got Bearer provisionToken + {serviceApiKey, serviceUrl}" || bad "happy: AI request $(cat "$TMP/req-api_provision_register-intelligence.json" 2>/dev/null)"
 [ "$(env_of CONTROL_PLANE_URL)" = "https://cp.synap.test" ] && ok "happy: CONTROL_PLANE_URL written from the response (trust opt-in)" || bad "happy: CONTROL_PLANE_URL=$(env_of CONTROL_PLANE_URL)"
 grep -q 'compose up -d --no-deps --force-recreate backend realtime kratos' "$FAKE/docker.log" && ok "happy: backend/realtime/kratos recreated to read it" || bad "happy: no recreate after the trust write"
+# W7-PODREG: a registered pod comes up with pod-agent (issuer = the response's CP issuer, audience = PUBLIC_URL).
+[ "$(env_of SYNAP_WITH_POD_AGENT)" = 1 ] && [ "$(env_of POD_AGENT_ISSUER_URL)" = "https://cp.synap.test" ] \
+  && [ "$(env_of POD_AGENT_AUDIENCE)" = "https://pod.lab1.synap.live" ] \
+  && ok "happy: pod-agent trust written through the env door (issuer from the response, audience = the pod's public URL)" \
+  || bad "happy: pod-agent env: $(env_of SYNAP_WITH_POD_AGENT) / $(env_of POD_AGENT_ISSUER_URL) / $(env_of POD_AGENT_AUDIENCE)"
+grep -q 'compose --profile pod-agent up -d pod-agent' "$FAKE/docker.log" \
+  && ok "happy: the pod-agent profile is enabled and the service started after registration" || bad "happy: pod-agent never started"
 grep -q 'client_id: pod-client-1' "$ROOT/kratos/kratos.yml" 2>/dev/null && ok "happy: kratos.yml renders the stored OIDC client (no CP push)" || bad "happy: kratos.yml has no oidc client"
 [ "$(jq -r .podId "$DEPLOY/state/registration.json" 2>/dev/null)" = pod_123 ] && ok "happy: state/registration.json records pod_123" || bad "happy: no registration record"
 # R1-b: the CP holds the key now, so the backend must switch to signing (pod-cp-auth.ts reads this record).

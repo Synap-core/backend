@@ -1,0 +1,12 @@
+# Runs synap-update.service when an update request appears (contract: the
+# REQUEST CONTRACT comment above _ue_unattended_plan in `synap`). The engine
+# takes the file before running, so this can never loop. Template: synap units install.
+[Unit]
+Description=Synap pod update requests
+
+[Path]
+PathExists=@DEPLOY_DIR@/state/requests/update.json
+Unit=synap-update.service
+
+[Install]
+WantedBy=multi-user.target
