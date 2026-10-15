@@ -75,9 +75,18 @@ import type {
 import type { ReaderStamp, UrlRead } from "@synap-core/types/url-read";
 import type { ReadUrlOptions } from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
-import { lightReadLibraryItem, type LightReadDeps } from "../light-read.js";
+import {
+  lightReadLibraryItem,
+  resumableRead,
+  READ_CHECKPOINT_TTL_MS,
+  type LightReadDeps,
+} from "../light-read.js";
 import { reserveLibraryReadAi } from "../read-budget.js";
-import { sweepLibraryLightReads } from "../light-read-queue.js";
+import {
+  enqueueLibraryLightRead,
+  lightReadJobExpireSeconds,
+  sweepLibraryLightReads,
+} from "../light-read-queue.js";
 import { LibraryActionError, runLibraryAction } from "../run-action.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
 import { keepLibraryPageHtml, readLibraryPageMeta } from "../page-html.js";
@@ -850,6 +859,167 @@ describe("the reader door", () => {
       status: "read",
       summary: "from Apify",
     });
+  });
+});
+
+describe("a billed read is never billed twice (job expiry, crash)", () => {
+  const billedRead = (url: string): UrlRead =>
+    doorRead(url, {
+      via: APIFY_STAMP,
+      title: "Brand moodboard",
+      text: "Muted palettes and serif type for autumn.",
+      media: [{ url: "https://cdn.ig.test/3.mp4", kind: "video", order: 0 }],
+    });
+
+  it("a job that EXPIRED mid-copy and was redelivered while the first still runs resumes — the reader runs ONCE", async () => {
+    const ig = await stageLink(IG);
+    let readerRuns = 0;
+    const second = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => {
+        readerRuns++;
+        return billedRead(url);
+      },
+      summarize: async () => null,
+    });
+    second.deps.copyMedia = recordingCopy(second.calls);
+    let redelivered: unknown;
+    const first = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => {
+        readerRuns++;
+        return billedRead(url);
+      },
+      summarize: async () => null,
+      // pg-boss re-queued the job while this copy streams: the redelivery
+      // runs to completion before the first copy returns.
+      copyMedia: async (input) => {
+        redelivered = await read(ig, second.deps, { reader: APIFY });
+        return recordingCopy(first.calls)(input);
+      },
+    });
+    expect(await read(ig, first.deps, { reader: APIFY })).toMatchObject({
+      status: "read",
+    });
+    expect(redelivered).toMatchObject({ status: "read" });
+    expect(readerRuns).toBe(1);
+    // The redelivery still copied the media (the part that was unfinished).
+    expect(second.calls.copied).toHaveLength(1);
+    const r = (await readOf(ig))!;
+    expect(r.status).toBe("read");
+    expect(r.reader).toEqual(APIFY_STAMP);
+    expect(r.readCheckpoint).toBeUndefined();
+    expect(h.objects.get(r.textKey)!.toString()).toContain(
+      "Muted palettes and serif type for autumn."
+    );
+  });
+
+  it("a crash after the read (the copy threw) keeps the read across the retry; the sweep's job resumes with no second bill", async () => {
+    const ig = await stageLink(IG);
+    const crash = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => {
+        crash.calls.readUrl++;
+        return billedRead(url);
+      },
+      copyMedia: async () => {
+        throw new Error("storage write failed");
+      },
+    });
+    expect(await read(ig, crash.deps, { reader: APIFY })).toMatchObject({
+      status: "not_read",
+    });
+    expect(crash.calls.readUrl).toBe(1);
+    expect((await readOf(ig))!).toMatchObject({
+      status: "not_read",
+      requestedReader: APIFY,
+      readCheckpoint: { readerId: APIFY, read: { status: "ok" } },
+    });
+    const later = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      summarize: async () => null,
+    });
+    later.deps.copyMedia = recordingCopy(later.calls);
+    expect(await read(ig, later.deps)).toMatchObject({ status: "read" });
+    expect(later.calls.readUrl).toBe(0);
+    expect(later.calls.copied).toHaveLength(1);
+    expect((await readOf(ig))!.readCheckpoint).toBeUndefined();
+  });
+
+  it("only a BILLED read is checkpointed; a free one re-runs freely", async () => {
+    const page = await stageLink("https://example.com/a");
+    const { deps } = makeDeps({
+      copyMedia: async () => {
+        throw new Error("storage write failed");
+      },
+      readUrl: async (url) =>
+        doorRead(url, {
+          media: [{ url: "https://cdn.test/a.jpg", kind: "image", order: 0 }],
+        }),
+    });
+    expect(await read(page, deps, { reader: "builtin" })).toMatchObject({
+      status: "not_read",
+    });
+    expect((await readOf(page))!.readCheckpoint).toBeUndefined();
+  });
+
+  it("resumableRead: only the SAME reader, inside the window, a usable read", () => {
+    const cp = {
+      readerId: APIFY,
+      at: NOW.toISOString(),
+      read: billedRead(IG),
+    };
+    expect(resumableRead(cp, APIFY, IG, NOW)).toMatchObject({
+      status: "ok",
+      via: { id: APIFY, billed: true },
+    });
+    expect(resumableRead(cp, "other_reader", IG, NOW)).toBeNull();
+    const late = new Date(NOW.getTime() + READ_CHECKPOINT_TTL_MS + 1);
+    expect(resumableRead(cp, APIFY, IG, late)).toBeNull();
+    expect(
+      resumableRead({ ...cp, read: { ...cp.read, via: null } }, APIFY, IG, NOW)
+    ).toBeNull();
+    expect(
+      resumableRead(
+        { ...cp, read: { ...cp.read, status: "failed" } },
+        APIFY,
+        IG,
+        NOW
+      )
+    ).toBeNull();
+    expect(resumableRead(undefined, APIFY, IG, NOW)).toBeNull();
+  });
+});
+
+describe("light-read job expiry (a big media copy outlives pg-boss's 15 min)", () => {
+  it("every light-read job is sent with an expiry sized for the copy (env-tunable)", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    await enqueueLibraryLightRead(
+      [{ userId: USER, itemId: "i1", reader: APIFY, force: true }],
+      async (_q, _d, options) => void sent.push(options)
+    );
+    expect(sent).toEqual([
+      { singletonKey: "library-light-read:i1", expireInSeconds: 3600 },
+    ]);
+    expect(lightReadJobExpireSeconds({})).toBe(3600);
+    expect(
+      lightReadJobExpireSeconds({
+        SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: "90",
+      })
+    ).toBe(5400);
+    // Garbage or below the floor → the default, never pg-boss's 15 min.
+    for (const v of ["abc", "2", "-1", "1.5"]) {
+      expect(
+        lightReadJobExpireSeconds({
+          SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: v,
+        })
+      ).toBe(3600);
+    }
+    expect(
+      lightReadJobExpireSeconds({
+        SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: "99999",
+      })
+    ).toBe(720 * 60);
   });
 });
 

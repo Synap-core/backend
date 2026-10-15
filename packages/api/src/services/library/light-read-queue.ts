@@ -41,10 +41,35 @@ const logger = createLogger({ module: "library/light-read-queue" });
 /** Items one sweep re-enqueues at most (oldest first). */
 export const LIGHT_READ_SWEEP_BATCH = 200;
 
+/**
+ * How long one light-read job may run before pg-boss expires it, in minutes
+ * (env `SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES`, default 60, 5–720).
+ *
+ * pg-boss's default is 15 minutes, and on expiry it re-queues the job as a
+ * retry WHILE the first handler is still running. A light read copies the
+ * item's media in the same job — a video streams up to 1 GiB with a 30-minute
+ * cap of its own (`VIDEO_TOTAL_TIMEOUT_MS`) — so a big copy outlived the
+ * default and ran twice. Sized for the copy plus the read, transcript and
+ * summary around it. A billed read is never re-run by such a retry either way:
+ * it is checkpointed on the item before the copy (`importRead.readCheckpoint`).
+ */
+export const LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT = 60;
+
+export function lightReadJobExpireSeconds(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const raw = Number(env.SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES);
+  const minutes =
+    Number.isInteger(raw) && raw >= 5
+      ? Math.min(raw, 720)
+      : LIGHT_READ_JOB_EXPIRE_MINUTES_DEFAULT;
+  return minutes * 60;
+}
+
 type Send = (
   queue: string,
   data: LibraryLightReadPayload,
-  options: { singletonKey: string }
+  options: { singletonKey: string; expireInSeconds: number }
 ) => Promise<unknown>;
 
 async function defaultSend(): Promise<Send> {
@@ -80,6 +105,7 @@ export async function enqueueLibraryLightRead(
     return 0;
   }
   let queued = 0;
+  const expireInSeconds = lightReadJobExpireSeconds();
   for (const item of items) {
     try {
       await sendFn(
@@ -90,7 +116,7 @@ export async function enqueueLibraryLightRead(
           ...(item.force ? { force: true } : {}),
           ...(item.reader ? { reader: item.reader } : {}),
         },
-        { singletonKey: `library-light-read:${item.itemId}` }
+        { singletonKey: `library-light-read:${item.itemId}`, expireInSeconds }
       );
       queued++;
     } catch (err) {

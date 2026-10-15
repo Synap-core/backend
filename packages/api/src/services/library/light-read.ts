@@ -42,7 +42,12 @@
  * no transcript. An explicit read that was over budget or failed remembers its
  * reader (`requestedReader`), so the sweep retries it with THAT reader. An
  * explicit RE-read of an item already read never erases the read it has: a
- * failed one is recorded on `lastAttempt`.
+ * failed one is recorded on `lastAttempt`. A BILLED read that succeeded is
+ * checkpointed on the item before its media is copied
+ * (`importRead.readCheckpoint`): a job that runs the same reader again for
+ * the item — pg-boss redelivering an expired job while the first still
+ * copies a video, or the sweep after a crash — resumes from the stored read
+ * (media copy, transcript, summary) and never bills the account twice.
  *
  * Then: a summary — for a file, the one extraction call's own summary (ONE AI
  * call per file); otherwise AI when the budget allows and the text is long,
@@ -89,10 +94,12 @@ import {
   type LibraryItemRead,
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
-import type {
-  ReaderStamp,
-  UrlRead,
-  UrlReaderOffer,
+import {
+  normalizeUrlRead,
+  readReaderStamp,
+  type ReaderStamp,
+  type UrlRead,
+  type UrlReaderOffer,
 } from "@synap-core/types/url-read";
 import type { LibraryReadBlocked } from "@synap-core/types/imports";
 import { readLibraryItemMedia } from "@synap-core/types/imports";
@@ -156,6 +163,14 @@ export interface StoredLibraryRead extends LibraryItemRead {
    * it, so a retry never silently falls back to the free reader.
    */
   requestedReader?: string;
+  /**
+   * A BILLED read that succeeded, held until the item's read is written
+   * (media copy, transcript, summary still to come). The same reader run
+   * again for this item within {@link READ_CHECKPOINT_TTL_MS} resumes from
+   * it instead of billing the person's account again. Cleared by the final
+   * write; kept across a retry (`not_read`).
+   */
+  readCheckpoint?: ReadCheckpoint;
   /** An explicit RE-read that did not read (the earlier read is kept). */
   lastAttempt?: {
     readerId: string;
@@ -164,6 +179,70 @@ export interface StoredLibraryRead extends LibraryItemRead {
     error?: string;
     at: string;
   };
+}
+
+export interface ReadCheckpoint {
+  /** The reader id that produced `read` (a verb id). */
+  readerId: string;
+  at: string;
+  read: UrlRead;
+}
+
+/** How long a checkpointed billed read may be resumed (the budget unit's window). */
+export const READ_CHECKPOINT_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The checkpointed read for `reader`, or null when there is none to resume
+ * (another reader, too old, or not a usable read). Re-parsed through the one
+ * parse door, never trusted as stored.
+ */
+export function resumableRead(
+  checkpoint: unknown,
+  reader: string,
+  sourceUrl: string,
+  now: Date
+): UrlRead | null {
+  if (!checkpoint || typeof checkpoint !== "object") return null;
+  const cp = checkpoint as Partial<Record<keyof ReadCheckpoint, unknown>>;
+  if (cp.readerId !== reader || typeof cp.at !== "string") return null;
+  const age = now.getTime() - Date.parse(cp.at);
+  if (!Number.isFinite(age) || age < 0 || age > READ_CHECKPOINT_TTL_MS) {
+    return null;
+  }
+  const via = readReaderStamp((cp.read as { via?: unknown } | null)?.via);
+  if (!via) return null;
+  const read = normalizeUrlRead(cp.read, sourceUrl, via);
+  return read.status === "ok" || read.status === "partial" ? read : null;
+}
+
+/** Hold a billed read on the item before the slow part of the job runs. */
+async function saveReadCheckpoint(
+  database: LibraryReadDb,
+  itemId: string,
+  checkpoint: ReadCheckpoint
+): Promise<void> {
+  // Bounded like the stored text: the checkpoint is transient, not a copy.
+  const read: UrlRead = {
+    ...checkpoint.read,
+    ...(checkpoint.read.text
+      ? { text: checkpoint.read.text.slice(0, LIGHT_READ_TEXT_MAX) }
+      : {}),
+    ...(checkpoint.read.transcript
+      ? {
+          transcript: {
+            ...checkpoint.read.transcript,
+            text: checkpoint.read.transcript.text.slice(0, LIGHT_READ_TEXT_MAX),
+          },
+        }
+      : {}),
+  };
+  await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(coalesce(${documents.metadata}, '{}'::jsonb), '{importRead}', coalesce(${documents.metadata} -> 'importRead', '{"status":"not_read","suggestedActions":[]}'::jsonb) || jsonb_build_object('readCheckpoint', ${JSON.stringify({ ...checkpoint, read })}::jsonb))`,
+      updatedAt: new Date(),
+    })
+    .where(eq(documents.id, itemId));
 }
 
 export interface LightReadDeps {
@@ -414,12 +493,14 @@ async function loadRow(
 }
 
 async function readContent(args: {
-  database: Pick<typeof DbType, "select">;
+  database: LibraryReadDb;
   row: ItemRow;
   item: ImportItemMetadata;
   deps: LightReadDeps;
   /** The reader the person chose (explicit read); absent = automatic. */
   reader?: string;
+  /** `importRead.readCheckpoint` as stored (a billed read to resume). */
+  checkpoint?: unknown;
 }): Promise<Got> {
   const { row, item, deps } = args;
   const s = item.source;
@@ -504,24 +585,49 @@ async function readContent(args: {
     const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
     read = readSentPage(html, s.url, deps.now());
   } else {
-    if (args.reader) {
-      // A billed reader takes the item's ONE unit first (an AI summary that
-      // follows reuses it). Over budget ⇒ marked, read later — never a drop.
-      const offer = (await deps.readers(s.url)).find(
-        (o) => o.readerId === args.reader
+    const resumed = args.reader
+      ? resumableRead(args.checkpoint, args.reader, s.url, deps.now())
+      : null;
+    if (resumed) {
+      // The same reader already read this item (its unit is spent): the job
+      // that died or expired copying its media resumes — no second bill.
+      read = resumed;
+      usedAi = resumed.via.billed;
+      logger.info(
+        { itemId: row.id, reader: args.reader },
+        "library light read: resumed from the checkpointed read — reader not run again"
       );
-      if (offer?.billing === "account") {
-        if (!(await reserve()))
-          return { kind: "status", status: "over_budget" };
-        usedAi = true;
+    } else {
+      if (args.reader) {
+        // A billed reader takes the item's ONE unit first (an AI summary that
+        // follows reuses it). Over budget ⇒ marked, read later — never a drop.
+        const offer = (await deps.readers(s.url)).find(
+          (o) => o.readerId === args.reader
+        );
+        if (offer?.billing === "account") {
+          if (!(await reserve()))
+            return { kind: "status", status: "over_budget" };
+          usedAi = true;
+        }
+      }
+      read = await deps.readUrl(
+        s.url,
+        args.reader
+          ? { reader: args.reader, allowBilled: true, interactive: true }
+          : { allowBilled: false }
+      );
+      if (
+        args.reader &&
+        read.via.billed &&
+        (read.status === "ok" || read.status === "partial")
+      ) {
+        await saveReadCheckpoint(args.database, row.id, {
+          readerId: args.reader,
+          at: deps.now().toISOString(),
+          read,
+        });
       }
     }
-    read = await deps.readUrl(
-      s.url,
-      args.reader
-        ? { reader: args.reader, allowBilled: true, interactive: true }
-        : { allowBilled: false }
-    );
   }
 
   let transcript:
@@ -653,6 +759,11 @@ async function writeRead(
       ...next,
       suggestedActions: carryRunLibraryActions(previous, next.suggestedActions),
       ...(current.aiAt ? { aiAt: current.aiAt } : {}),
+      // A billed read still to be finished survives a retry; any final
+      // status (read, unreadable, …) ends it.
+      ...(current.readCheckpoint && next.status === "not_read"
+        ? { readCheckpoint: current.readCheckpoint }
+        : {}),
     };
     await tx
       .update(documents)
@@ -770,6 +881,7 @@ export async function lightReadLibraryItem(args: {
       item,
       deps,
       ...(reader ? { reader } : {}),
+      ...(prev.readCheckpoint ? { checkpoint: prev.readCheckpoint } : {}),
     });
   } catch (err) {
     // A reader that threw (storage, the IS transport, the reader lookup) is a
