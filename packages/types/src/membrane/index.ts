@@ -44,8 +44,13 @@ export const CONNECTION_KINDS = [
 export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
 
 /**
- * The nine states. ORDER IS THE "Needs you" ORDER for the first three; a kind
+ * The ten states. ORDER IS THE "Needs you" ORDER for the first three; a kind
  * that can never be in a state simply never produces it.
+ *
+ * `unverified` is the pod failing to READ a connection (its broker faulted),
+ * not the connection failing. It exists so a can't-check never folds into
+ * `available`: that would offer "Connect" for an account that may be
+ * connected and working.
  */
 export const CONNECTION_STATES = [
   "asking",
@@ -56,6 +61,7 @@ export const CONNECTION_STATES = [
   "quiet",
   "off",
   "revoked",
+  "unverified",
   "available",
 ] as const;
 export type ConnectionState = (typeof CONNECTION_STATES)[number];
@@ -397,6 +403,15 @@ const STATE_RULES: Record<
     primary: "remove",
     others: ["add_again"],
   },
+  // Neutral, never the error tone and never in "Needs you": nothing is known
+  // to be wrong with the connection itself, only that it could not be read.
+  // Asking the person again is the one honest step.
+  unverified: {
+    tone: "textSecondary",
+    glyph: "question",
+    primary: "retry",
+    others: [],
+  },
   available: {
     tone: "textMuted",
     glyph: "dashed-circle",
@@ -614,6 +629,17 @@ export function resolveAgentConnectionView(
   );
 }
 
+// ── Can't-check ─────────────────────────────────────────────────────────────
+
+/**
+ * Why a connection could not be read — `CapabilityCardConnection.unverified`
+ * on the wire. Its presence is the fact; the words are for a detail line.
+ */
+export interface ConnectionCheckFault {
+  reason?: string;
+  message?: string;
+}
+
 // ── Account (connector sign-ins) ────────────────────────────────────────────
 
 /**
@@ -633,12 +659,19 @@ export interface AccountConnectionLike {
   /** The card's own sync failed (strip state `failed`). */
   syncFailed?: boolean | null;
   lastSyncedAt?: string | Date | null;
+  /**
+   * The pod could not read the account (`CapabilityCardConnection.unverified`):
+   * the status is the connectable default, not a verdict.
+   */
+  unverified?: ConnectionCheckFault | boolean | null;
 }
 
 /**
  * Order: revoked → asking (admin must approve the install) → needs sign-in →
- * failing → setting up → available → ready/quiet. An UNKNOWN status is
- * `failing`, never `ready`: calm must be earned by a status we can read.
+ * failing → setting up → unverified → available → ready/quiet. An UNKNOWN
+ * status is `failing`, never `ready`: calm must be earned by a status we can
+ * read. A status the pod could not CHECK (`unverified`, or a capability-card
+ * connection carrying `unverified`) is `unverified`, never `available`.
  */
 export function resolveAccountConnectionState(
   a: AccountConnectionLike,
@@ -661,8 +694,11 @@ export function resolveAccountConnectionState(
     return "needs_signin";
   if (s === "failed" || a.syncFailed) return "failing";
   if (s === "syncing") return a.everSynced ? "ready" : "setting_up";
+  // Only a negative verdict can be unverified: a status that says connected
+  // was read, so it stands.
+  if (s === "unverified" || (!s && a.unverified)) return "unverified";
   if (s === "missing" || s === "unavailable" || s === "not_connected")
-    return "available";
+    return a.unverified ? "unverified" : "available";
   if (s === "connected")
     return isQuiet(a.lastSyncedAt, now) ? "quiet" : "ready";
   return "failing";
@@ -719,7 +755,12 @@ export interface ToolConnectionLike {
   /** The operator's switch (integration `enabled`). */
   enabled?: boolean | null;
   /** The capability-card connection, when the tool needs one. */
-  connection?: { required?: boolean; state?: string | null } | null;
+  connection?: {
+    required?: boolean;
+    state?: string | null;
+    /** Set when the pod could not read the connection; `state` is then only the connectable default. */
+    unverified?: ConnectionCheckFault | null;
+  } | null;
   /** The surface knows this tool's provider needs a reconnect (health mirror). */
   reconnect?: boolean | null;
   lastUsedAt?: string | Date | null;
@@ -727,8 +768,13 @@ export interface ToolConnectionLike {
 
 /**
  * Order: off (you turned it off — nothing else matters until it is on) →
- * asking (not approved) → needs sign-in → failing → available (needs an
- * account it does not have) → ready/quiet.
+ * asking (not approved) → needs sign-in → failing → unverified (its required
+ * connection could not be read) → available (needs an account it does not
+ * have) → ready/quiet.
+ *
+ * Known facts outrank a can't-check: an operator switch, an approval, a
+ * health-mirror reconnect and a tool error are each read from the pod itself,
+ * so they stand even when the broker list did not answer.
  */
 export function resolveToolConnectionState(
   t: ToolConnectionLike,
@@ -736,10 +782,15 @@ export function resolveToolConnectionState(
 ): ConnectionState {
   if (t.enabled === false || t.status === "inactive") return "off";
   if (t.approved === false) return "asking";
-  const conn = t.connection?.required ? t.connection.state : null;
+  const required = t.connection?.required === true;
+  const conn = required ? t.connection?.state : null;
   if (t.reconnect || conn === "expired") return "needs_signin";
   if (t.status === "error") return "failing";
-  if (conn === "missing" || conn === "unavailable") return "available";
+  // A required connection with no readable state is unmeasured; calling it
+  // ready would claim an account nobody saw.
+  if (required && !conn) return "unverified";
+  if (conn === "missing" || conn === "unavailable")
+    return t.connection?.unverified ? "unverified" : "available";
   return isQuiet(t.lastUsedAt, now) ? "quiet" : "ready";
 }
 
@@ -748,6 +799,102 @@ export function resolveToolConnection(
   opts: ConnectionViewOptions & { now?: number } = {}
 ): ConnectionView {
   return connectionView("tool", resolveToolConnectionState(t, opts.now), opts);
+}
+
+// ── Capability (a catalog card) ─────────────────────────────────────────────
+
+/**
+ * What the capability rule reads — any `capabilities.catalog` card
+ * (`CapabilityCard`) satisfies it. `status` is the card's one computed status.
+ */
+export interface CapabilityConnectionLike {
+  /** `installed` | `available` (a template not on the pod yet). */
+  source?: string | null;
+  /** `CapabilityCardStatus`: available · needs_connection · connected · draft · ready · partial · unavailable. */
+  status?: string | null;
+  connection?: ToolConnectionLike["connection"];
+  lastUsedAt?: string | Date | null;
+}
+
+/**
+ * A capability is a tool, so it reads the tool rule. Two card facts translate
+ * into that rule's inputs: a template not on the pod yet is `available`
+ * (adding it is how you connect it), and an installed pack with no verb
+ * turned on (`connected` / `draft`) is waiting for the person's approval,
+ * exactly as an unapproved tool is.
+ */
+export function resolveCapabilityConnectionState(
+  card: CapabilityConnectionLike,
+  now: number = Date.now()
+): ConnectionState {
+  if (card.source === "available") return "available";
+  const awaitingApproval =
+    card.status === "connected" || card.status === "draft";
+  return resolveToolConnectionState(
+    {
+      connection: card.connection,
+      ...(awaitingApproval ? { approved: false } : {}),
+      lastUsedAt: card.lastUsedAt,
+    },
+    now
+  );
+}
+
+export function resolveCapabilityConnection(
+  card: CapabilityConnectionLike,
+  opts: ConnectionViewOptions & { now?: number } = {}
+): ConnectionView {
+  return connectionView(
+    "tool",
+    resolveCapabilityConnectionState(card, opts.now),
+    opts
+  );
+}
+
+// ── Connection card (a broker account with its sync rows) ───────────────────
+
+/**
+ * The card states `@synap-core/headless/connectors` derives from the broker
+ * status and the card's own sync rows (`connectionCardStatus`). Spelled here so
+ * the headless type can be pinned equal to it.
+ */
+export const CONNECTION_CARD_STATES = [
+  "pending",
+  "needs_reauth",
+  "failed",
+  "syncing",
+  "connected",
+] as const;
+export type ConnectionCardStateToken = (typeof CONNECTION_CARD_STATES)[number];
+
+/**
+ * A connection card is an account, so it reads the account rule: pending →
+ * asking, needs_reauth → needs_signin, failed → failing, syncing →
+ * setting_up (ready once it has synced before), connected → ready (quiet past
+ * the window). Phone and desktop both map through here, so a card's header
+ * can never disagree with the same account's row on Connected.
+ */
+export function resolveConnectionCardState(
+  state: ConnectionCardStateToken,
+  facts: Pick<AccountConnectionLike, "everSynced" | "lastSyncedAt"> = {},
+  now: number = Date.now()
+): ConnectionState {
+  return resolveAccountConnectionState({ status: state, ...facts }, now);
+}
+
+export function resolveConnectionCardConnection(
+  state: ConnectionCardStateToken,
+  opts: ConnectionViewOptions &
+    Pick<AccountConnectionLike, "everSynced" | "lastSyncedAt"> & {
+      now?: number;
+    } = {}
+): ConnectionView {
+  const { everSynced, lastSyncedAt, now, ...viewOpts } = opts;
+  return connectionView(
+    "account",
+    resolveConnectionCardState(state, { everSynced, lastSyncedAt }, now),
+    viewOpts
+  );
 }
 
 // ── AI model provider ───────────────────────────────────────────────────────

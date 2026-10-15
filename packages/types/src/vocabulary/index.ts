@@ -1167,6 +1167,9 @@ export const CONNECTION_STATE_LABELS = {
   quiet: "Not seen in 30 days",
   off: "Off",
   revoked: "Access removed",
+  // The pod could not read the connection (its broker faulted), so it states
+  // the gap rather than guessing "Not connected".
+  unverified: "Couldn't check",
   available: "Not connected",
 } as const;
 

@@ -10,6 +10,7 @@ import {
   CONNECTION_NOTIFY_LEVELS,
   CONNECTION_NOTIFY_OPTIONS,
   CONNECTION_QUIET_AFTER_DAYS,
+  CONNECTION_CARD_STATES,
   CONNECTION_STATES,
   connectionView,
   isAppPublicId,
@@ -20,17 +21,23 @@ import {
   resolveAppConnectionState,
   resolveAgentEndConsequence,
   resolveAppEndConsequence,
+  resolveCapabilityConnection,
+  resolveCapabilityConnectionState,
   resolveChannelConnectionState,
   resolveConnectionAction,
+  resolveConnectionCardConnection,
+  resolveConnectionCardState,
   resolveKeyEndConsequence,
   resolveModelConnectionState,
   resolveToolConnectionState,
   resolveWebhookConnectionState,
+  type ConnectionCardStateToken,
   type ConnectionKind,
   type ConnectionState,
 } from "./index.js";
 
 const NOW = Date.parse("2026-10-07T12:00:00Z");
+const FAULT = { reason: "broker_fault", message: "list failed" };
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 const daysAhead = (n: number) => new Date(NOW + n * 86_400_000).toISOString();
 const GRANT = [{ permissions: ["entity.person.create"], workspaceIds: ["w1"] }];
@@ -249,6 +256,32 @@ const ROWS: Row[] = [
         NOW
       ),
   },
+  {
+    kind: "account",
+    state: "unverified",
+    rulesOut: "an unread capability-card connection reads Not connected",
+    resolve: () =>
+      resolveAccountConnectionState(
+        { status: "missing", unverified: FAULT },
+        NOW
+      ),
+  },
+  {
+    kind: "account",
+    state: "unverified",
+    rulesOut: "the 'unverified' token is an unknown status, so failing",
+    resolve: () => resolveAccountConnectionState({ status: "unverified" }, NOW),
+  },
+  {
+    kind: "account",
+    state: "ready",
+    rulesOut: "a fault overrides a connected status the pod did read",
+    resolve: () =>
+      resolveAccountConnectionState(
+        { status: "connected", unverified: FAULT },
+        NOW
+      ),
+  },
   // ── account ──
   {
     kind: "account",
@@ -395,6 +428,57 @@ const ROWS: Row[] = [
         NOW
       ),
   },
+  // ── can't-check: the old rule folded every row below into available/ready/failing ──
+  {
+    kind: "tool",
+    state: "unverified",
+    rulesOut: "a broker fault offers Connect (the connectable default read as a verdict)",
+    resolve: () =>
+      resolveToolConnectionState(
+        {
+          approved: true,
+          connection: { required: true, state: "missing", unverified: FAULT },
+        },
+        NOW
+      ),
+  },
+  {
+    kind: "tool",
+    state: "unverified",
+    rulesOut: "a required connection with no readable state reads ready",
+    resolve: () =>
+      resolveToolConnectionState(
+        { approved: true, connection: { required: true, state: null } },
+        NOW
+      ),
+  },
+  {
+    kind: "tool",
+    state: "needs_signin",
+    rulesOut: "a can't-check hides a reconnect the health mirror already knows",
+    resolve: () =>
+      resolveToolConnectionState(
+        {
+          approved: true,
+          reconnect: true,
+          connection: { required: true, state: "missing", unverified: FAULT },
+        },
+        NOW
+      ),
+  },
+  {
+    kind: "tool",
+    state: "ready",
+    rulesOut: "a fault on a connection the tool does not need is surfaced",
+    resolve: () =>
+      resolveToolConnectionState(
+        {
+          approved: true,
+          connection: { required: false, state: "missing", unverified: FAULT },
+        },
+        NOW
+      ),
+  },
   // ── model ──
   {
     kind: "model",
@@ -489,6 +573,7 @@ describe("the states table — one primary action per state", () => {
     quiet: "open",
     off: "turn_on",
     revoked: "remove",
+    unverified: "retry",
     available: "connect",
   };
   for (const state of CONNECTION_STATES) {
@@ -632,6 +717,145 @@ describe("action rules", () => {
       pastLabel: "Declined",
     });
     expect(resolveConnectionAction("revoke").pastLabel).toBe("Revoked");
+  });
+});
+
+describe("resolveCapabilityConnection — a catalog card on the tool rule", () => {
+  const cases: Array<{
+    name: string;
+    card: Parameters<typeof resolveCapabilityConnectionState>[0];
+    state: ConnectionState;
+  }> = [
+    {
+      name: "a template not on the pod is available, whatever its connection says",
+      card: {
+        source: "available",
+        status: "available",
+        connection: { required: true, state: "connected" },
+      },
+      state: "available",
+    },
+    {
+      name: "an unread broker list is unverified, never Connect",
+      card: {
+        source: "installed",
+        status: "needs_connection",
+        connection: { required: true, state: "missing", unverified: FAULT },
+      },
+      state: "unverified",
+    },
+    {
+      name: "a missing account with the list read is available",
+      card: {
+        source: "installed",
+        status: "needs_connection",
+        connection: { required: true, state: "missing" },
+      },
+      state: "available",
+    },
+    {
+      name: "an expired sign-in needs the person",
+      card: {
+        source: "installed",
+        status: "needs_connection",
+        connection: { required: true, state: "expired" },
+      },
+      state: "needs_signin",
+    },
+    {
+      name: "connected but no verb on waits for approval (not ready)",
+      card: {
+        source: "installed",
+        status: "connected",
+        connection: { required: true, state: "connected" },
+      },
+      state: "asking",
+    },
+    {
+      name: "a local draft pack waits for approval (not ready)",
+      card: { source: "installed", status: "draft" },
+      state: "asking",
+    },
+    {
+      name: "a partly enabled pack works",
+      card: {
+        source: "installed",
+        status: "partial",
+        connection: { required: true, state: "connected" },
+      },
+      state: "ready",
+    },
+  ];
+  for (const c of cases) {
+    it(c.name, () => {
+      expect(resolveCapabilityConnectionState(c.card, NOW)).toBe(c.state);
+    });
+  }
+
+  it("the view is a tool's view, with Retry as the one step when unverified", () => {
+    const v = resolveCapabilityConnection(
+      {
+        source: "installed",
+        status: "needs_connection",
+        connection: { required: true, state: "missing", unverified: FAULT },
+      },
+      { now: NOW }
+    );
+    expect(v).toMatchObject({
+      kind: "tool",
+      state: "unverified",
+      tone: "textSecondary",
+      glyph: "question",
+      label: "Couldn't check",
+      needsYou: false,
+      showChip: true,
+      primaryAction: "retry",
+      actions: ["retry"],
+    });
+    expect(resolveConnectionAction("retry").label).toBe("Retry");
+  });
+});
+
+describe("resolveConnectionCardState — the connection card on the account rule", () => {
+  const MAP: Record<ConnectionCardStateToken, ConnectionState> = {
+    pending: "asking",
+    needs_reauth: "needs_signin",
+    failed: "failing",
+    syncing: "setting_up",
+    connected: "ready",
+  };
+  for (const token of CONNECTION_CARD_STATES) {
+    it(`${token} → ${MAP[token]}`, () => {
+      expect(resolveConnectionCardState(token, {}, NOW)).toBe(MAP[token]);
+      expect(resolveConnectionCardConnection(token, { now: NOW }).state).toBe(
+        MAP[token]
+      );
+    });
+  }
+
+  it("a re-sync of an account that synced before stays ready", () => {
+    expect(resolveConnectionCardState("syncing", { everSynced: true }, NOW)).toBe(
+      "ready"
+    );
+  });
+
+  it("a connected card unsynced for the quiet window is quiet", () => {
+    expect(
+      resolveConnectionCardState(
+        "connected",
+        { lastSyncedAt: daysAgo(CONNECTION_QUIET_AFTER_DAYS + 1) },
+        NOW
+      )
+    ).toBe("quiet");
+  });
+
+  it("the view is an account's, and keeps view options", () => {
+    const v = resolveConnectionCardConnection("connected", {
+      now: NOW,
+      pinned: true,
+    });
+    expect(v.kind).toBe("account");
+    expect(v.actions).toContain("unpin");
   });
 });
 
