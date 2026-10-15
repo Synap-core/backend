@@ -61,6 +61,7 @@ const MIGRATIONS = [
   "0283_capability_intents.sql",
   "0284_publish_post_intent.sql",
   "0314_delegate_agent_task_intent.sql",
+  "0329_read_webpage_intent.sql",
 ];
 const HERE = dirname(fileURLToPath(import.meta.url));
 // src/__tripwires__ → src → api → packages → synap-backend
@@ -230,26 +231,26 @@ void _seedArityFloor;
 
 /**
  * The post-seed registry rows' declared size. Same independence, same purpose.
- * `publish_post` (0284) and `delegate_agent_task` (0314) today; adding a third
- * post-seed slug stops the build here.
+ * `publish_post` (0284), `delegate_agent_task` (0314) and `read_webpage` (0329)
+ * today; adding a fourth post-seed slug stops the build here.
  */
-const EXTRA_SLUG_ARITY: 2 = REGISTERED_EXTRAS.length;
+const EXTRA_SLUG_ARITY: 3 = REGISTERED_EXTRAS.length;
 
 /** The same floor for the post-seed registry rows (see above for the trap). */
-const _extraArityFloor: typeof REGISTERED_EXTRAS extends { length: 2 }
+const _extraArityFloor: typeof REGISTERED_EXTRAS extends { length: 3 }
   ? true
   : false = true;
 void _extraArityFloor;
 
 describe("intent vocabulary — a new slug cannot land without a deliberate edit", () => {
-  it("the arity floors hold: the seed is 13 and there are exactly 2 post-seed rows", () => {
+  it("the arity floors hold: the seed is 13 and there are exactly 3 post-seed rows", () => {
     // Runtime twin of the two constants above. Vitest transpiles WITHOUT
     // typechecking, so a floor that already failed the build would still let
     // this file run green; these assertions make the failure legible in a test
     // run too. The arity is ALSO cross-checked against the migration-derived
     // counts in the describes above, so this cannot drift alone.
     expect(SEED_SLUG_ARITY).toBe(13);
-    expect(EXTRA_SLUG_ARITY).toBe(2);
+    expect(EXTRA_SLUG_ARITY).toBe(3);
     expect(ABSTRACT_VERBS).toHaveLength(SEED_SLUG_ARITY);
     expect(REGISTERED_EXTRAS).toHaveLength(EXTRA_SLUG_ARITY);
   });
@@ -263,11 +264,11 @@ describe("intent vocabulary — a new slug cannot land without a deliberate edit
       mirror === declared;
     // The real state passes.
     expect(arityFloorHolds(ABSTRACT_VERBS.length, 13)).toBe(true);
-    expect(arityFloorHolds(REGISTERED_EXTRAS.length, 2)).toBe(true);
+    expect(arityFloorHolds(REGISTERED_EXTRAS.length, 3)).toBe(true);
     // The mutated states fail — this is the control that makes the two above
     // meaningful rather than a pair of assertions that can only pass.
     expect(arityFloorHolds(ABSTRACT_VERBS.length + 1, 13)).toBe(false);
-    expect(arityFloorHolds(REGISTERED_EXTRAS.length + 1, 2)).toBe(false);
+    expect(arityFloorHolds(REGISTERED_EXTRAS.length + 1, 3)).toBe(false);
   });
 
   it("the mirrors are readonly tuples, so a mirror cannot be widened in place", () => {
