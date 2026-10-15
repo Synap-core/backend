@@ -1080,6 +1080,20 @@ export function registerFocusSessionExecutors(): void {
         });
       }
 
+      // THE route again, at approval: the agent may have been paused (or
+      // lost its link to the owner) since the hand-off was proposed.
+      const { handOffRefusal } =
+        await import("../../../services/focus-sessions/agent-hand-off.js");
+      const refused = await handOffRefusal({
+        ownerId: session.userId,
+        agentId,
+        agentName:
+          typeof innerData.agentName === "string" ? innerData.agentName : null,
+      });
+      if (refused) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: refused });
+      }
+
       const { attachSessionAgent } =
         await import("../../../services/focus-sessions/attach-session-agent.js");
       const attached = await attachSessionAgent({

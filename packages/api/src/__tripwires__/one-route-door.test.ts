@@ -18,15 +18,28 @@ import { join, relative } from "path";
  *      route.ts. A door that calls them is re-deriving the pick.
  *   2. Nothing calls `.routeTeammate(` — the AI picker stays gone.
  *
+ *   3. An AI handing a SESSION to another agent asks the route first: the
+ *      hand-off gate (`agent-hand-off.ts`) calls `route()` with
+ *      `HAND_OFF_ACCEPT` BEFORE governance, the approval executor re-asks it
+ *      before the roster write, and the roster an AI reads to choose
+ *      (`agents-for-handoff.ts`) answers with the same accept through
+ *      `namedVerdicts` (the selector rung `route()` itself uses).
+ *
  * What it does NOT see: a door that re-implements a pick from raw SQL without
  * these helpers, and pickers outside api/src. `agentsOperatedBy` is not pinned:
  * it also answers "who can see this roster" for display (give-to-agent's line,
- * the agent-users router, the answer loop), which is not a pick.
+ * the agent-users router, the answer loop), which is not a pick. For (3): a
+ * staffing door that writes the roster without `gateAgentHandOff` — the
+ * person's own doors (tRPC `attachAgent`, relay) do that on purpose and are
+ * not routed.
  */
 
 const ROUTE = "services/agent-dispatch/route.ts";
 /** Where the floors are DEFINED (the definition line is not a call). */
 const DEFINITIONS = "services/agent-dispatch/agent-binding.ts";
+
+const HAND_OFF_GATE = "services/focus-sessions/agent-hand-off.ts";
+const HAND_OFF_ROSTER = "services/agent-dispatch/agents-for-handoff.ts";
 
 const PICK_CALL = /\b(listDispatchableAgentIds|ownedAgentIds)\s*\(/g;
 const DEFINITION = /\bfunction\s+(listDispatchableAgentIds|ownedAgentIds)\s*\(/g;
@@ -88,5 +101,53 @@ describe("tripwire: one route door", () => {
       .filter((f) => AI_PICKER.test(f.src))
       .map((f) => f.rel);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("tripwire: handing a session to an agent asks the route", () => {
+  const src = (rel: string) => {
+    const f = files.find((x) => x.rel === rel);
+    expect(f, `${rel} is missing`).toBeDefined();
+    return f!.src;
+  };
+
+  it("the gate asks route() with the hand-off reaches, before governance", () => {
+    const gate = src(HAND_OFF_GATE);
+    const refusal = gate.slice(
+      gate.indexOf("export async function handOffRefusal")
+    );
+    expect(refusal).toMatch(/^export async function handOffRefusal/);
+    expect(refusal).toMatch(/await route\(\{[^}]*accept: HAND_OFF_ACCEPT/);
+    const body = gate.slice(
+      gate.indexOf("export async function gateAgentHandOff")
+    );
+    expect(body).toMatch(/^export async function gateAgentHandOff/);
+    const asked = body.indexOf("handOffRefusal(");
+    expect(asked).toBeGreaterThan(-1);
+    expect(asked).toBeLessThan(body.indexOf("checkPermissionOrPropose("));
+  });
+
+  it("approving a hand-off re-asks it before the roster write", () => {
+    // Derived: every executor registered for the hand-off proposal.
+    const approvers = files.filter((f) =>
+      /key:\s*"focus_session\/assign_agent"/.test(f.src)
+    );
+    expect(approvers.map((f) => f.rel)).toHaveLength(1);
+    const body = approvers[0]!.src.slice(
+      approvers[0]!.src.search(/key:\s*"focus_session\/assign_agent"/)
+    );
+    const asked = body.indexOf("handOffRefusal(");
+    expect(asked).toBeGreaterThan(-1);
+    expect(asked).toBeLessThan(body.indexOf("attachSessionAgent("));
+  });
+
+  it("the roster an AI chooses from answers with the same accept and rung", () => {
+    expect(src(HAND_OFF_ROSTER)).toMatch(
+      /namedVerdicts\(\s*\{[^}]*accept: HAND_OFF_ACCEPT/
+    );
+    // The selector rung of route() IS namedVerdicts.
+    expect(src(ROUTE)).toMatch(
+      /await namedVerdicts\(work, \[id\], roomMembers\)/
+    );
   });
 });

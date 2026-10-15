@@ -95,6 +95,12 @@ beforeAll(async () => {
       ($3, 'h@x.test', 'Helper', 'agent')`,
     [USER, RAYCAST, HELPER]
   );
+  // HELPER acts for USER (its key is linked to them), so THE route lets an
+  // agent hand USER's session to it (`agent-hand-off.ts` → `route()`).
+  await h.client!.query(
+    `insert into api_keys (id, user_id, key_type, linked_user_id, is_active) values ($1, $2, 'hub_inbound', $3, true)`,
+    [randomUUID(), HELPER, USER]
+  );
 }, 120_000);
 
 describe("createFocusSession — the starting agent is on the roster", () => {

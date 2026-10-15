@@ -21,9 +21,41 @@
  * agent's start naming other agents). Each asks per added agent, so a proposal
  * names exactly one hand-off and approving it attaches exactly that agent
  * (`focus_session/assign_agent` executor → `attachSessionAgent`).
+ *
+ * WHICH agent may take it is THE route's answer, asked first
+ * (`handOffRefusal` → `route()` with the agent as selector): a paused agent,
+ * or one that does not act for the session's owner, is refused by name —
+ * otherwise it lands on the roster and never picks the work up, while the AI
+ * that handed it reports it handed. A `pod` agent is not refused: on a roster
+ * it is a room member that answers when mentioned, and the room's own route
+ * (`route-room.ts`) floors it then.
  */
 import { db, users, eq } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { HAND_OFF_ACCEPT, route } from "../agent-dispatch/route.js";
+
+/**
+ * Why `agentId` cannot take `ownerId`'s work, as one sentence the caller can
+ * relay — or `null` when the route admits it (or it is a pod agent, see
+ * above). An unknown id reads as "does not act for you", like a foreign one.
+ */
+export async function handOffRefusal(p: {
+  ownerId: string;
+  agentId: string;
+  agentName?: string | null;
+}): Promise<string | null> {
+  const r = await route({
+    ownerId: p.ownerId,
+    accept: HAND_OFF_ACCEPT,
+    selector: { agentUserId: p.agentId },
+    pool: "owned",
+  });
+  if (r.kind !== "refused" || r.reason === "wrong_reach") return null;
+  const who = p.agentName?.trim() || "This agent";
+  return r.reason === "paused"
+    ? `${who} is paused: it takes no new work until a person resumes it. Say so, or hand this to another agent (synap_list_agents).`
+    : `${who} does not act for the person whose session this is, so it would never pick it up. Hand it to one of their agents (synap_list_agents).`;
+}
 
 /** The agents in `agentIds` that are NOT the acting agent (a hand-off), deduped. */
 export function handedOffAgentIds(
@@ -74,6 +106,12 @@ export async function gateAgentHandOff(p: {
     .from(users)
     .where(eq(users.id, p.agentId))
     .limit(1);
+  const refused = await handOffRefusal({
+    ownerId: p.userId,
+    agentId: p.agentId,
+    agentName: agent?.name,
+  });
+  if (refused) return { status: "denied", agentId: p.agentId, reason: refused };
   const perm = await checkPermissionOrPropose({
     userId: p.userId,
     agentUserId: p.agentUserId,
