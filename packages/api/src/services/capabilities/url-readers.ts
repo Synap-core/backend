@@ -46,6 +46,7 @@ export { installOffersForUrl } from "./url-reader-offers.js";
 export {
   listReadersForUrl,
   readsAllSpaces,
+  urlReaderLookup,
   type UrlReadersContext,
 } from "./url-reader-sources.js";
 export { invalidateUrlReaderCache } from "./url-reader-cache.js";

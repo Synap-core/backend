@@ -75,6 +75,7 @@ import {
   invalidateUrlReaderCache,
   listReadersForUrl,
   readUrl,
+  urlReaderLookup,
 } from "./url-readers.js";
 import { setSkillApproved } from "./set-skill-approved.js";
 
@@ -238,6 +239,33 @@ describe("the url-reader door over real rows", () => {
       ["reel_read", "install", "none"],
     ]);
     expect(offers[1]!.installSlug).toBe("reel-reader");
+  });
+
+  it("urlReaderLookup (a Library page's rows): ONE source load, then the door's exact offers per link", async () => {
+    const ctx = { userId: U, workspaceId: WS };
+    invalidateUrlReaderCache();
+    const lookup = await urlReaderLookup(ctx);
+    // The sources are in hand: the registry can go away and every row still answers.
+    await q(`alter table skills rename to skills_away`);
+    let offline: Array<Array<[string, string]>>;
+    try {
+      offline = [IG, REEL, "https://example.com/a"].map((url) =>
+        lookup(url).map((o) => [o.readerId, o.state])
+      );
+    } finally {
+      await q(`alter table skills_away rename to skills`);
+    }
+    invalidateUrlReaderCache();
+    const door = await Promise.all(
+      [IG, REEL, "https://example.com/a"].map(async (url) =>
+        (await listReadersForUrl(ctx, url)).map((o) => [o.readerId, o.state])
+      )
+    );
+    expect(offline).toEqual(door);
+    expect(offline[1]).toEqual([
+      ["capture_social_post", "enable"],
+      ["reel_read", "install"],
+    ]);
   });
 
   it("readUrl on an IG link with no free reader: blocked needs_reader, offers carried", async () => {

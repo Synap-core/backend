@@ -129,11 +129,12 @@ export interface ResolvedReaders {
   contentHashByContainer: Map<string, string>;
 }
 
-export async function resolveReaders(
+/** The PURE fold of one URL over loaded sources: installed (ranked) then to install. */
+function foldSources(
+  sources: ReaderSources,
   ctx: UrlReadersContext,
   url: string
-): Promise<ResolvedReaders> {
-  const sources = await loadReaderSources(ctx);
+): ResolvedReaders {
   const installed = rankedFold(sources.rows, url, ctx.workspaceId);
   const seen = new Set(installed.map((r) => r.offer.readerId));
   const install = rankedInstallOffers(
@@ -145,6 +146,28 @@ export async function resolveReaders(
     ranked: [...installed, ...install],
     contentHashByContainer: sources.contentHashByContainer,
   };
+}
+
+export async function resolveReaders(
+  ctx: UrlReadersContext,
+  url: string
+): Promise<ResolvedReaders> {
+  return foldSources(await loadReaderSources(ctx), ctx, url);
+}
+
+/**
+ * ONE source load for this person + lens, then a PURE fold per URL — for a
+ * caller that asks about many links at once (a Library page's rows): N links
+ * cost one (cached) registry + catalog read, never N. Same offers as
+ * {@link listReadersForUrl} for each URL.
+ *
+ * @throws when the sources cannot be read (a failed lookup is not "no readers").
+ */
+export async function urlReaderLookup(
+  ctx: UrlReadersContext
+): Promise<(url: string) => UrlReaderOffer[]> {
+  const sources = await loadReaderSources(ctx);
+  return (url) => foldSources(sources, ctx, url).ranked.map((r) => r.offer);
 }
 
 /**
