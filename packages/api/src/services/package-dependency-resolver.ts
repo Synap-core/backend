@@ -132,7 +132,7 @@ async function seedDependencyLayers(
   }
 ): Promise<DependencySeedOutcome> {
   const { applyCatalogLayerTwo } = await import("./template-apply/index.js");
-  const { layer2 } = await applyCatalogLayerTwo({
+  const layer2 = await applyCatalogLayerTwo({
     workspaceId,
     userId,
     agentUserId,

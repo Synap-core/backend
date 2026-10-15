@@ -40,6 +40,10 @@ import {
 } from "@synap/database";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
+  refusalCodeInCause,
+  type RefusalTrpcCode,
+} from "../utils/trpc-cause-code.js";
+import {
   applyDefinitionSeeds,
   definitionSeedEntities,
   type DefinitionSeedRelation,
@@ -96,32 +100,12 @@ export class ComposeOverlayError extends Error {
     this.name = "ComposeOverlayError";
   }
 
-  /** The tRPC code of a refusal in the cause chain, or null (a server fault). */
-  get refusalCode():
-    | "BAD_REQUEST"
-    | "UNAUTHORIZED"
-    | "FORBIDDEN"
-    | "NOT_FOUND"
-    | "CONFLICT"
-    | null {
-    let cursor: unknown = this.cause;
-    for (
-      let depth = 0;
-      cursor && typeof cursor === "object" && depth < 4;
-      depth++
-    ) {
-      const code = (cursor as { code?: unknown }).code;
-      if (
-        code === "BAD_REQUEST" ||
-        code === "UNAUTHORIZED" ||
-        code === "FORBIDDEN" ||
-        code === "NOT_FOUND" ||
-        code === "CONFLICT"
-      )
-        return code;
-      cursor = (cursor as { cause?: unknown }).cause;
-    }
-    return null;
+  /**
+   * The tRPC code of a refusal in the cause chain, or null (a server fault) —
+   * the same walk and code set the Hub maps to HTTP (`refusalCodeInCause`).
+   */
+  get refusalCode(): RefusalTrpcCode | null {
+    return refusalCodeInCause(this.cause);
   }
 }
 
