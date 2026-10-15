@@ -81,6 +81,7 @@ import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
 import {
   skillsRouter,
+  SKILL_DEFINITION_APPLIER,
   assertSkillGlobalsAllowed,
 } from "../../routers/skills.js";
 import {
@@ -882,7 +883,12 @@ export async function createCapabilityFromDefinition(
   // 3. Skills — through the GOVERNED skillsRouter caller. Resolve each `requires`
   //    template-local tool NAME to the created tool id and wire it via the SAME
   //    router's setRequiredTools (which writes `skill → requires → tool` links).
-  const skillsCaller = skillsRouter.createCaller(ctx as never);
+  // Marked as THE applier: the one caller `skills.create` lets set `intent`
+  // and `urlPatterns` (a member's create is refused them).
+  const skillsCaller = skillsRouter.createCaller({
+    ...(ctx as object),
+    [SKILL_DEFINITION_APPLIER]: true,
+  } as never);
   const createdSkills: CreateCapabilityResult["created"]["skills"] = [];
   for (const s of def.skills) {
     // Idempotent: reuse an existing skill with the same name in scope, refreshing

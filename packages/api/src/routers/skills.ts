@@ -372,6 +372,25 @@ export async function insertSkillGoverned(
   return { status: "installed", skill };
 }
 
+/**
+ * Marks a `skills.create` caller context as THE capability-definition applier
+ * (`create-from-definition.ts`) — the one writer of a verb's routing `intent`
+ * and of a reader's `urlPatterns`. A Symbol: no HTTP body, header or JSON can
+ * carry it, so a member's `skills.create` cannot claim to be the applier.
+ */
+export const SKILL_DEFINITION_APPLIER: unique symbol = Symbol(
+  "skills.definitionApplier"
+);
+
+/** Did the definition applier build this caller context? */
+function isDefinitionApplier(ctx: unknown): boolean {
+  return (
+    typeof ctx === "object" &&
+    ctx !== null &&
+    (ctx as Record<symbol, unknown>)[SKILL_DEFINITION_APPLIER] === true
+  );
+}
+
 export const skillsRouter = router({
   /**
    * List skills for the current user
@@ -1120,6 +1139,20 @@ export const skillsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const skillId = randomUUID();
+
+      // `intent` and `urlPatterns` are the applier's alone: a reader pattern
+      // decides which kept links a verb receives, so a member-authored skill
+      // must never declare one through this door (only a definition does).
+      if (
+        (input.intent !== undefined || input.urlPatterns !== undefined) &&
+        !isDefinitionApplier(ctx)
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "intent and urlPatterns come only from a capability definition; install or update its package instead.",
+        });
+      }
 
       // Documentation + optional Code. Derive `kind` from code presence (explicit
       // input.kind still honored). A skill must carry documentation or code.
