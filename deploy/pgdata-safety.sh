@@ -58,7 +58,7 @@
 PGDATA_MOUNT_TARGET="/home/postgres/pgdata"
 PGDATA_CLUSTER_DIR="/home/postgres/pgdata/data"
 # Services that write to postgres; stopped before the cluster is moved.
-_PGS_WRITERS="backend backend-canary realtime pod-admin pod-agent kratos hydra"
+_PGS_WRITERS="backend backend-canary realtime pod-admin pod-agent kratos"
 
 _pgs_deploy_dir() { echo "${SYNAP_DEPLOY_DIR:-$(pwd)}"; }
 # Where dumps and the init marker live. The host defaults are the deploy dir's
@@ -305,8 +305,8 @@ pgdata_guard() {
 # Doors (the `synap` CLI and the compose `postgres-backup` service call these;
 # nothing else implements a backup):
 #   backup_init               create the repo, password → state/backup (0600),
-#                             print the recovery kit ONCE (--non-interactive:
-#                             kit file 0600 + state/recovery-kit marker instead)
+#                             kit → state/kit (0600, "pending" until the owner
+#                             types back its last 6; printed too when interactive)
 #   backup_run                dump → fingerprint gate → publish/rotate → push
 #   backup_loop               backup_run every BACKUP_INTERVAL_SECONDS (+ drill)
 #   backup_drill [snap]       restore a snapshot into a THROWAWAY postgres and
@@ -614,7 +614,7 @@ _bk_push() {
         set -- "$@" "$stage"
     fi
     out="$(_bk_restic backup --json --host "$_BK_HOST" --tag synap --tag "fp:$fp" --tag "dump:$(basename "$d")" \
-        --exclude "$(_bk_state_dir)/bin" --exclude "$(_bk_state_dir)/backup" --exclude "$(_bk_state_dir)/update.lock" \
+        --exclude "$(_bk_state_dir)/bin" --exclude "$(_bk_state_dir)/backup" --exclude "$(_bk_kit_dir)" --exclude "$(_bk_state_dir)/update.lock" \
         "$@")" || { _bk_push_failed "$c" "$started" "$fp" "restic backup failed"; return 1; }
     sid="$(printf '%s\n' "$out" | sed -n 's/.*"message_type": *"summary".*"snapshot_id": *"\([0-9a-f]*\)".*/\1/p' | tail -n 1)"
     size="$(printf '%s\n' "$out" | sed -n 's/.*"message_type": *"summary".*"total_bytes_processed": *\([0-9]*\).*/\1/p' | tail -n 1)"
@@ -716,6 +716,7 @@ backup_loop() {
     # not held by anyone now; flock needs no such cleanup.
     _bk_lock_flock || rm -rf "$(_bk_backups_dir)/.backup.lock"
     while :; do
+        _bk_kit_layout || true
         if _bk_auto_init_due; then backup_init --non-interactive || true; fi
         if backup_run && [ -n "$(_bk_cfg BACKUP_REPOSITORY)" ] && _bk_drill_due; then
             _bk_lock drill && { backup_drill latest; _bk_unlock; }
@@ -728,7 +729,7 @@ backup_loop() {
 # terminal once, or to a 0600 file — never to a log.
 _bk_kit_print() {
     local repo="$1" pw="$2" v kv
-    printf '\n%s\n' "════════════════ SYNAP BACKUP RECOVERY KIT — shown ONCE ════════════════"
+    printf '\n%s\n' "═══════════════════════ SYNAP BACKUP RECOVERY KIT ═══════════════════════"
     printf '%s\n' "Repository : $repo"
     printf '%s\n' "Password   : $(cat "$pw")"
     for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_REST_USERNAME RESTIC_REST_PASSWORD; do
@@ -739,31 +740,83 @@ _bk_kit_print() {
     printf '%s\n' "  2. BACKUP_REPOSITORY='$repo' [BACKUP_* credentials above] \\"
     printf '%s\n' "     ./synap restore --from-snapshot latest --password-file /root/synap-kit-password"
     printf '%s\n' "SAVE THIS IN TWO PLACES YOU CONTROL (e.g. your password manager AND a second"
-    printf '%s\n' "device or a printed copy). Synap does not keep it: not in the snapshots, not at"
-    printf '%s\n' "the control plane, not in any log. Without it the backups cannot be read."
+    printf '%s\n' "device or a printed copy). It is not in the snapshots, not at the control plane"
+    printf '%s\n' "and not in any log. This pod keeps one copy so its owner can download it again"
+    printf '%s\n' "after a fresh sign-in. Without it the backups cannot be read."
     printf '%s\n\n' "═════════════════════════════════════════════════════════════════════════"
 }
 
-# state/recovery-kit: "pending" (kit generated, owner has not saved it) or
-# "saved". 0644 and directly in state/ — NOT in the 0700 backup/ dir — so the
-# backend can read the one word through its read-only deploy mount and report a
-# boolean on /status/backup. It holds no secret.
-_bk_kit_marker() { echo "$(_bk_state_dir)/recovery-kit"; }
-_bk_kit_mark() {  # pending|saved
-    local f; f="$(_bk_kit_marker)"
-    (umask 022 && mkdir -p "$(dirname "$f")" && printf '%s\n' "$1" > "$f.new" && mv -f "$f.new" "$f") 2>/dev/null \
-        || _pgs_err "could not write $f"
+# The recovery kit lives in state/kit/, the ONE place the backend may touch
+# (compose mounts it read-write at /opt/synap/deploy/state/kit, nested over the
+# read-only deploy mount):
+#   state/kit/recovery-kit.txt  the kit (0600). The owner downloads it again
+#                               through POST /api/backup/recovery-kit (owner,
+#                               fresh sign-in) — re-downloadable by design.
+#   state/kit/status            "pending" (generated, not yet saved) or "saved"
+#                               (the owner typed back the password's last 6
+#                               characters, in the app or at `synap backup init`).
+# The dir is 0700 and owned by the backend's uid (deploy/Dockerfile: adduser
+# nodejs -u 10001; backup-offhost.test.sh pins the two). Never in a snapshot:
+# the kit holds the password that opens the snapshots.
+_BK_BACKEND_UID=10001
+_bk_kit_dir()    { echo "$(_bk_state_dir)/kit"; }
+_bk_kit_file()   { echo "$(_bk_kit_dir)/recovery-kit.txt"; }
+_bk_kit_marker() { echo "$(_bk_kit_dir)/status"; }
+
+# Create state/kit with its owner and modes, and move the W7 layout into it
+# (state/backup/recovery-kit.txt + state/recovery-kit). Idempotent: every
+# backup-loop pass and every init runs it, so an updated pod converges on its
+# next pass. chown only as root (a test, or the operator's own shell, is not).
+_bk_kit_layout() {
+    local d f legacy
+    d="$(_bk_kit_dir)"; f="$(_bk_kit_file)"
+    (umask 077 && mkdir -p "$d") 2>/dev/null || { _pgs_err "could not create $d"; return 1; }
+    chmod 700 "$d" 2>/dev/null
+    legacy="$(_bk_state_dir)/backup/recovery-kit.txt"
+    if [ -f "$legacy" ]; then
+        if [ -e "$f" ]; then rm -f "$legacy"; else mv -f "$legacy" "$f" || return 1; fi
+    fi
+    legacy="$(_bk_state_dir)/recovery-kit"
+    if [ -f "$legacy" ]; then
+        if [ -e "$(_bk_kit_marker)" ]; then rm -f "$legacy"; else mv -f "$legacy" "$(_bk_kit_marker)" || return 1; fi
+    fi
+    [ -e "$f" ] && chmod 600 "$f" 2>/dev/null
+    if [ "$(id -u)" = 0 ]; then
+        chown -R "$_BK_BACKEND_UID" "$d" 2>/dev/null || _pgs_err "could not give $d to uid $_BK_BACKEND_UID — the app cannot offer the recovery kit"
+    fi
+    return 0
 }
 
-# Create the repository and its password.
-#   interactive (default): print the recovery kit ONCE to the terminal.
+_bk_kit_mark() {  # pending|saved
+    local f; f="$(_bk_kit_marker)"
+    _bk_kit_layout || return 1
+    (umask 022 && printf '%s\n' "$1" > "$f.new" && mv -f "$f.new" "$f") 2>/dev/null \
+        || { _pgs_err "could not write $f"; return 1; }
+    [ "$(id -u)" = 0 ] && chown "$_BK_BACKEND_UID" "$f" 2>/dev/null
+    return 0
+}
+
+# The read-back: does <typed> equal the last 6 characters of the password in
+# <password file>? Case and surrounding blanks are ignored (the password is hex).
+_bk_kit_readback_ok() {
+    local typed pw
+    typed="$(printf '%s' "$1" | tr -d ' \t\r\n' | tr 'A-F' 'a-f')"
+    pw="$(tr -d ' \t\r\n' < "$2" 2>/dev/null)"
+    [ "${#typed}" = 6 ] && [ "${#pw}" -ge 6 ] && [ "$typed" = "${pw#"${pw%??????}"}" ]
+}
+
+# Create the repository and its password. Either way the kit is written to
+# state/kit/recovery-kit.txt (0600) and marked "pending": printing a kit is not
+# saving it. Only the read-back (the password's last 6 characters, typed by the
+# owner) marks it "saved".
+#   interactive (default): also print the kit to the terminal, then ask for the
+#     read-back when stdin is a terminal (Enter skips: it stays pending, and the
+#     app keeps asking).
 #   --non-interactive (or SYNAP_BACKUP_NONINTERACTIVE=1): for the hourly loop and
-#     the Control Plane's vault delivery — no TTY needed. The kit goes to
-#     state/backup/recovery-kit.txt (0600), never to stdout or any log, the
-#     state/recovery-kit marker says "pending" until the owner saves it, and a
-#     re-run once initialised is a no-op (exit 0).
+#     the Control Plane's vault delivery — no TTY needed. The kit never reaches
+#     stdout or any log, and a re-run once initialised is a no-op (exit 0).
 backup_init() {
-    local repo pw dir auto="" kit
+    local repo pw dir auto="" kit typed
     case "${1:-}" in --non-interactive) auto=1 ;; esac
     [ "${SYNAP_BACKUP_NONINTERACTIVE:-}" = 1 ] && auto=1
     repo="$(_bk_cfg BACKUP_REPOSITORY)"
@@ -774,11 +827,11 @@ backup_init() {
     pw="$(_bk_password_file)"
     if [ -e "$pw" ]; then
         if [ -n "$auto" ]; then _pgs_log "backup repository already initialised — nothing to do"; return 0; fi
-        _pgs_err "already initialised: $pw exists. The recovery kit is shown only once; that root-only file holds the password."
+        _pgs_err "already initialised: $pw exists. The recovery kit is $(_bk_kit_file); the owner downloads it again in the app (Settings → Pod → Backups)."
         return 1
     fi
     if [ -z "$auto" ] && [ ! -t 1 ] && [ "${SYNAP_BACKUP_KIT_STDOUT:-}" != 1 ]; then
-        _pgs_err "the recovery kit is printed once, to a terminal — run this interactively (or set SYNAP_BACKUP_KIT_STDOUT=1 if stdout is somewhere private, or use --non-interactive to write a 0600 kit file)"
+        _pgs_err "the recovery kit is printed to a terminal — run this interactively (or set SYNAP_BACKUP_KIT_STDOUT=1 if stdout is somewhere private, or use --non-interactive to write a 0600 kit file)"
         return 1
     fi
     _bk_ensure_restic || return 1
@@ -792,20 +845,28 @@ backup_init() {
         _pgs_err "restic init failed (see above). Nothing was kept. An existing repository needs its own password: restore with --password-file, not init."
         return 1
     fi
+    # The kit file first: a password that exists nowhere but the pod's own
+    # password file is the state we are avoiding.
+    kit="$(_bk_kit_file)"
+    (_bk_kit_layout && umask 077 && _bk_kit_print "$repo" "$pw.new" > "$kit.new" && chmod 600 "$kit.new" && mv -f "$kit.new" "$kit") \
+        || { rm -f "$pw.new" "$kit.new"; _pgs_err "cannot write the recovery kit file — nothing was kept"; return 1; }
+    mv "$pw.new" "$pw" || return 1
+    _bk_kit_mark pending
     if [ -n "$auto" ]; then
-        # The kit file first: a password that exists nowhere but the pod's own
-        # password file is the state we are avoiding.
-        kit="$dir/recovery-kit.txt"
-        (umask 077 && _bk_kit_print "$repo" "$pw.new" > "$kit.new" && chmod 600 "$kit.new" && mv -f "$kit.new" "$kit") \
-            || { rm -f "$pw.new" "$kit.new"; _pgs_err "cannot write the recovery kit file — nothing was kept"; return 1; }
-        mv "$pw.new" "$pw" || return 1
-        _bk_kit_mark pending
         _pgs_log "repository initialised; recovery kit written to $kit (0600) — the owner must save it" >&2
         return 0
     fi
-    mv "$pw.new" "$pw" || return 1
     _bk_kit_print "$repo" "$pw"
-    _bk_kit_mark saved
+    if [ -t 0 ]; then
+        printf '%s' "Saved it? Type the last 6 characters of the password to confirm (Enter to do it later): " >&2
+        read -r typed || typed=""
+        if [ -n "$typed" ] && _bk_kit_readback_ok "$typed" "$pw"; then
+            _bk_kit_mark saved
+            _pgs_log "recovery kit confirmed" >&2
+        elif [ -n "$typed" ]; then
+            _pgs_err "those are not the last 6 characters — the kit stays NOT SAVED. Confirm it in the app (Settings → Pod → Backups)."
+        fi
+    fi
     _pgs_log "repository initialised; the hourly backup service pushes from its next run (or: synap backup push)" >&2
 }
 
@@ -829,6 +890,10 @@ backup_status() {
     else printf '%s\n' "Off-host repository : not configured (set BACKUP_REPOSITORY in .env)"; fi
     if [ -s "$(_bk_password_file)" ]; then printf '%s\n' "Initialised         : yes (password in $(_bk_password_file))"
     else printf '%s\n' "Initialised         : no — run: synap backup init"; fi
+    case "$(cat "$(_bk_kit_marker)" 2>/dev/null)" in
+        saved)   printf '%s\n' "Recovery kit        : saved by the owner" ;;
+        pending) printf '%s\n' "Recovery kit        : NOT SAVED — Settings → Pod → Backups in the app, or $(_bk_kit_file)" ;;
+    esac
     printf '%s\n' "Tools               : restic ${RESTIC_VERSION} $([ -n "$(_bk_bin restic)" ] && echo present || echo missing), mc $([ -n "$(_bk_bin mc)" ] && echo present || echo missing)"
     last="$(_bk_good_dumps | tail -n 1)"
     if [ -n "$last" ]; then printf '%s\n' "Latest local dump   : $(basename "$last") ($(cat "$last/fingerprint" 2>/dev/null))"

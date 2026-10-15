@@ -10,7 +10,7 @@
  * Routes:
  *   POST /api/provision/register-intelligence — Intelligence service registration
  *   POST /api/provision/reset-intelligence    — Clear stale intelligence registration
- *   GET  /api/provision/status                — Public status check (includes IS credential probe)
+ *   GET  /api/provision/status                — Liveness for anyone; details for the CP or a pod admin
  *   POST /api/provision/disconnect            — Remove a provisioning connection
  *
  * Retired compatibility endpoints:
@@ -27,6 +27,7 @@ import { z } from "zod";
 import { randomBytes, createHash } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
+import { getSession } from "@synap/auth";
 import {
   attachFullAccessGrant,
   encryptServiceKey,
@@ -48,6 +49,7 @@ import {
 import { courierStatus } from "../courier-status.js";
 import { buildPodUpdatesStatus, readLastUpdate } from "../pod-updates/index.js";
 import { readPodUpdateSettingsRaw } from "./pod-updates-deps.js";
+import { findAccountByIdentity, isPodAdmin } from "./account-recovery-deps.js";
 
 /** The id (and serviceId) of the CP-provisioned intelligence service row. */
 const SYNAP_HUB_SERVICE_ID = "synap-hub";
@@ -724,8 +726,15 @@ provisionRouter.post("/validate-credentials", async (c) => {
 
 // ─── GET /api/provision/status ────────────────────────────────────────────────
 //
-// Public endpoint — returns current CP connection status + IS registration state.
-// Does NOT return any secrets (cpApiKey, IS apiKey).
+// Anyone gets the LIVENESS answer: connection state, issue codes, whether the
+// IS credential is valid and the IS row's status — `restricted: true`, no
+// identifier, no URL, no live probe (an anonymous caller cannot make the pod
+// call out). The DETAILS (the pod's CP id, the IS URLs and the live probe,
+// version, update history, courier host, split-brain) go to its approved
+// Control Plane (a CP-signed JWT through the one trusted-issuer door, type
+// `pod-status`, or `provision` from older CP callers) or a pod admin's
+// session. A Bearer token that fails verification is a 401, as before.
+// Never returns a secret (cpApiKey, IS apiKey) to anyone.
 //
 // `credentialsValid` is derived from the cached `intelligenceServices.status` in the
 // DB — NOT from a live IS probe. Use POST /api/provision/validate-credentials
@@ -735,6 +744,43 @@ provisionRouter.post("/validate-credentials", async (c) => {
 //   "connected"   — CP connection + IS registered + credentials valid
 //   "partial"     — CP connection exists but IS missing OR credentials invalid
 //   "disconnected"— No CP connection
+
+/**
+ * Who reads the status: "details" for the pod's approved Control Plane (a
+ * CP-signed JWT, verified and consumed by the one trusted-issuer door) or a
+ * pod admin's session; "public" for anyone else; "denied" when a Bearer token
+ * was presented and refused. A session that is not a pod admin's is public.
+ */
+async function statusReader(
+  c: Context,
+  cpUrl: string | undefined
+): Promise<"details" | "public" | "denied"> {
+  const authHeader = c.req.header("Authorization");
+  if (authHeader?.startsWith("Bearer ")) {
+    const audience = podAudience();
+    if (!audience) return "denied";
+    const payload = await verifyTrustedIssuerJwt(authHeader.slice(7), {
+      pinnedIssuer: cpUrl,
+      audience,
+      expectedType: ["pod-status", "provision"],
+    });
+    return payload ? "details" : "denied";
+  }
+  if (!c.req.header("cookie") && !c.req.header("x-session-token")) {
+    return "public";
+  }
+  try {
+    const session = await getSession(c.req.raw.headers);
+    const identityId = session?.identity?.id as string | undefined;
+    if (!identityId) return "public";
+    const account = await findAccountByIdentity(identityId);
+    return account && (await isPodAdmin(account.userId)) ? "details" : "public";
+  } catch (err) {
+    // A failed session read is not an admin; the caller still gets liveness.
+    logger.warn({ err }, "provision status: session read failed");
+    return "public";
+  }
+}
 
 provisionRouter.get("/status", async (c) => {
   try {
@@ -751,23 +797,15 @@ provisionRouter.get("/status", async (c) => {
       })) ??
       (await db.query.workspaces.findFirst({ columns: { settings: true } }));
 
-    // Optional trusted-issuer auth. Public callers without Authorization always
-    // get the response; an untrusted issuer receives 401.
-    const authHeader = c.req.header("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.slice(7);
-      const cpUrl = (ws?.settings as Record<string, unknown> | null)
-        ?.controlPlane as { url?: string } | undefined;
-      const podPublicUrl = podAudience();
-      if (podPublicUrl) {
-        const payload = await verifyTrustedIssuerJwt(token, {
-          pinnedIssuer: cpUrl?.url,
-          audience: podPublicUrl,
-        });
-        if (!payload) {
-          return c.json({ error: "Issuer is not approved for this Pod" }, 401);
-        }
-      }
+    const reader = await statusReader(
+      c,
+      (
+        (ws?.settings as Record<string, unknown> | null)?.controlPlane as
+          { url?: string } | undefined
+      )?.url
+    );
+    if (reader === "denied") {
+      return c.json({ error: "Issuer is not approved for this Pod" }, 401);
     }
 
     const settings = (ws?.settings as Record<string, unknown>) ?? {};
@@ -862,17 +900,6 @@ provisionRouter.get("/status", async (c) => {
         ? "connected"
         : "partial";
 
-    // The URL the runtime actually uses — the resolver's own answer.
-    const resolvedIsUrl: string = serving.url;
-    const resolvedIsSource: "database" | "env_fallback" =
-      serving.source === "registered" ? "database" : "env_fallback";
-
-    // LIVE reachability of the URL the runtime would actually use. Every field
-    // above this line is a cached DB row; this one asks the service. Both are
-    // reported, because they answer different questions and a pod can be
-    // unregistered-but-serving (env fallback) or registered-but-down.
-    const serviceProbe = await probeIntelligenceService(resolvedIsUrl);
-
     // Build detailed issue descriptions for each connection issue
     const connectionIssueDetails: Array<{ code: string; hint: string }> = [];
     const issueHints: Record<string, string> = {
@@ -890,6 +917,34 @@ provisionRouter.get("/status", async (c) => {
         connectionIssueDetails.push({ code: issue, hint: issueHints[issue] });
       }
     }
+
+    if (reader === "public") {
+      return c.json({
+        restricted: true,
+        connected: !!cp,
+        connectionState,
+        connectionIssues,
+        connectionIssueDetails:
+          connectionIssueDetails.length > 0
+            ? connectionIssueDetails
+            : undefined,
+        credentialsValid,
+        intelligenceService: intelligenceService
+          ? { status: intelligenceService.status }
+          : null,
+      });
+    }
+
+    // The URL the runtime actually uses — the resolver's own answer.
+    const resolvedIsUrl: string = serving.url;
+    const resolvedIsSource: "database" | "env_fallback" =
+      serving.source === "registered" ? "database" : "env_fallback";
+
+    // LIVE reachability of the URL the runtime would actually use. Every field
+    // above this line is a cached DB row; this one asks the service. Both are
+    // reported, because they answer different questions and a pod can be
+    // unregistered-but-serving (env fallback) or registered-but-down.
+    const serviceProbe = await probeIntelligenceService(resolvedIsUrl);
 
     return c.json({
       connected: !!cp,
@@ -1309,161 +1364,4 @@ provisionRouter.post("/disconnect", async (c) => {
     logger.error({ err }, "Failed to remove Control Plane connection");
     return c.json({ error: "Internal server error" }, 500);
   }
-});
-
-// ─── POST /api/provision/trigger-update ──────────────────────────────────────
-//
-// Pod update trigger. CP calls this with a signed JWT containing the target
-// version. The backend spawns a detached `updater` container (docker:cli)
-// that pulls images, runs migrations, restarts services, and calls back
-// to the CP with the result. The updater survives the backend restart.
-//
-// Auth: CP-signed ES256 JWT (verified via JWKS).
-// Replay protection: nonce in JWT, rejected if already seen.
-// Rate limiting: rejects if an update is already in progress.
-//
-// Returns immediately: { accepted: true } — update runs asynchronously.
-
-// Nonce cache for replay protection (10 min TTL, matching JWT expiry)
-const seenNonces = new Map<string, number>();
-setInterval(() => {
-  const cutoff = Date.now() - 10 * 60 * 1000;
-  for (const [nonce, ts] of seenNonces) {
-    if (ts < cutoff) seenNonces.delete(nonce);
-  }
-}, 60_000);
-
-// In-memory update lock
-let updateInProgress = false;
-
-provisionRouter.post("/trigger-update", async (c) => {
-  const authHeader = c.req.header("Authorization") ?? "";
-  if (!authHeader.startsWith("Bearer ")) {
-    return c.json({ error: "Missing Authorization header" }, 401);
-  }
-  const token = authHeader.slice(7);
-
-  let cpUrl: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string } | undefined;
-    cpUrl = cp?.url;
-  } catch {
-    /* fall through */
-  }
-
-  if (!cpUrl) {
-    return c.json(
-      { error: "No approved provisioning issuer is connected to this Pod" },
-      403
-    );
-  }
-
-  const podPublicUrl = podAudience();
-  if (!podPublicUrl) {
-    logger.error(
-      "trigger-update refused: PUBLIC_URL not configured — audience check is mandatory"
-    );
-    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
-  }
-
-  const payload = await verifyTrustedIssuerJwt<{
-    type: string;
-    targetVersion?: string;
-    updateId?: string;
-    podId?: string;
-    nonce?: string;
-    callbackUrl?: string;
-    callbackJwt?: string;
-  }>(token, {
-    pinnedIssuer: cpUrl,
-    audience: podPublicUrl,
-  });
-  if (!payload || payload.type !== "provision") {
-    return c.json({ error: "Invalid or expired JWT" }, 401);
-  }
-
-  const targetVersion = payload.targetVersion;
-  if (!targetVersion) {
-    return c.json({ error: "targetVersion is required in JWT claims" }, 400);
-  }
-
-  // Replay protection: reject seen nonces
-  if (payload.nonce) {
-    if (seenNonces.has(payload.nonce)) {
-      return c.json(
-        { error: "Duplicate nonce — update already triggered" },
-        409
-      );
-    }
-    seenNonces.set(payload.nonce, Date.now());
-  }
-
-  // Rate limiting: reject if update already running
-  if (updateInProgress) {
-    return c.json({ error: "Update already in progress" }, 409);
-  }
-
-  logger.info(
-    { targetVersion, updateId: payload.updateId, nonce: payload.nonce },
-    "Received update trigger from CP"
-  );
-
-  // Sanitize version tag (defense in depth — JWT is trusted, but shell injection is bad)
-  const sanitizedVersion = targetVersion.replace(/[^a-zA-Z0-9._-]/g, "");
-
-  // Spawn detached updater container via Docker socket.
-  // The updater runs update-pod.sh which: pulls, migrates, restarts, health-checks,
-  // and calls back to CP with the result. It survives the backend container restart.
-  const { execFile } = await import("child_process");
-
-  const callbackUrl = payload.callbackUrl || "";
-  const callbackJwt = payload.callbackJwt || "";
-  const updateId = payload.updateId || "";
-
-  // install.sh places docker-compose.yml directly at $INSTALL_DIR (e.g. /opt/synap/docker-compose.yml)
-  // without a deploy/ subdir. Use the systemd WorkingDirectory (/opt/synap) as the implicit dir.
-  // Pass each value as a discrete argv element (no shell) so callbackUrl/callbackJwt/updateId
-  // can never break out via `$(...)`, backticks, or quotes.
-  const args = [
-    "compose",
-    "-f",
-    "/opt/synap/docker-compose.yml",
-    "--profile",
-    "updater",
-    "run",
-    "-d",
-    "--rm",
-    "updater",
-    sanitizedVersion,
-    updateId,
-    callbackUrl,
-    callbackJwt,
-  ];
-
-  updateInProgress = true;
-  execFile("docker", args, { timeout: 30_000 }, (err, stdout, stderr) => {
-    if (err) {
-      logger.error(
-        { err: err.message, stderr },
-        "Failed to spawn updater container"
-      );
-      updateInProgress = false;
-    } else {
-      logger.info({ stdout: stdout.trim() }, "Updater container spawned");
-      // Release the lock after 15 min max (safety net if callback never fires)
-      setTimeout(
-        () => {
-          updateInProgress = false;
-        },
-        15 * 60 * 1000
-      );
-    }
-  });
-
-  return c.json({ accepted: true, targetVersion, updateId });
 });

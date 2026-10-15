@@ -1041,6 +1041,11 @@ import { readLastUpdate } from "./pod-updates/index.js";
 import { podUpdatesDeps } from "./routers/pod-updates-deps.js";
 app.route("/api/pod-updates", createPodUpdatesRouter(podUpdatesDeps));
 
+// The owner's restic recovery kit: download (fresh sign-in) + read-back confirm.
+import { createBackupKitRouter } from "./routers/backup-kit.js";
+import { backupKitDeps } from "./routers/backup-kit-deps.js";
+app.route("/api/backup", createBackupKitRouter(backupKitDeps));
+
 // Connector sync endpoint (ES256 JWT from CP, pulls records from Nango)
 import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
 app.route("/api/connectors", connectorsRestRouter);

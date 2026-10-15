@@ -153,7 +153,10 @@ for f in fails:
 if not fails:
     print(f"  ✓ sandbox {sorted(untrusted)} shares no network with {sorted(protected)}; "
           f"{len(edges)} call paths all on a shared network; admin {sorted(admin)} alone on {sorted(admin_nets)} with their callers")
-nv = len(untrusted) >= 2 and len(protected) >= 4 and len(admin) >= 2 and len(edges) >= 20 and ncaddy >= 5 and nhook >= 1
+# Floors by known members, not only counts: Hydra left on 2026-10-15 (admin 2→1,
+# protected 4→3), and a count alone cannot tell "fewer services" from "blind scan".
+nv = (len(untrusted) >= 2 and "kratos" in admin and {"postgres", "minio"} <= protected
+      and len(protected) >= 3 and len(edges) >= 20 and ncaddy >= 5 and nhook >= 1)
 print(("  ✓ " if nv else "  ✗ ") + f"non-vacuity: {len(untrusted)} sandbox, {len(protected)} protected, "
       f"{len(admin)} admin, {len(edges)} edges, {ncaddy} caddy upstreams, {nhook} kratos webhooks")
 sys.exit(1 if fails or not nv else 0)

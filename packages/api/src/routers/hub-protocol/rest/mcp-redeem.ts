@@ -37,13 +37,10 @@ import {
   EventRepository,
   sql,
 } from "@synap/database";
-import {
-  apiKeys,
-  isValidScope,
-  type ApiKeyScope,
-} from "@synap/database/schema";
+import { apiKeys } from "@synap/database/schema";
 
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
+import { mapCpScopesToPodScopes } from "../../oauth/config.js";
 import {
   podAudience,
   verifyTrustedIssuerJwt,
@@ -103,53 +100,6 @@ async function verifyCpAssertion(
     return c.json({ error: "unauthorized", reason: "wrong_purpose" }, 401);
   }
   return null;
-}
-
-/**
- * Functional default scope set for a claude-web MCP agent key — the same
- * capability surface as `INTEGRATION_HUB_SCOPES.custom`. An MCP agent drives the
- * pod's `/mcp` endpoint, which dispatches through the hub, so it needs both the
- * `mcp.*` scopes AND their `hub-protocol.*` peers to function end-to-end.
- */
-const MCP_CONNECT_DEFAULT_SCOPES: readonly ApiKeyScope[] = [
-  "hub-protocol.read",
-  "hub-protocol.write",
-  "mcp.read",
-  "mcp.write",
-];
-
-/**
- * Map incoming CP-grammar scopes (`mcp:read` / `mcp:write`, colon-separated) to
- * valid pod `api_keys` scopes (`mcp.read` / `mcp.write`, dot-separated), and
- * ensure the hub-protocol peer of each mcp scope is present so the minted key can
- * actually drive the pod's `/mcp` endpoint (MCP tool dispatch gates on the
- * matching `hub-protocol.*` scope). Unknown/invalid scopes are dropped; an empty
- * result falls back to the functional default set.
- *
- * Exported for unit testing (scope-grammar mapping is part of the CP↔pod contract).
- */
-export function mapCpScopesToPodScopes(
-  raw: readonly string[] | null | undefined
-): ApiKeyScope[] {
-  if (!raw || raw.length === 0) return [...MCP_CONNECT_DEFAULT_SCOPES];
-
-  const mapped = new Set<ApiKeyScope>();
-  for (const s of raw) {
-    // CP grammar separates with ':' (mcp:read); pod grammar uses '.' (mcp.read).
-    const normalized = s.replace(/:/g, ".").trim();
-    if (isValidScope(normalized)) mapped.add(normalized);
-  }
-
-  // An MCP grant needs the matching hub-protocol scope to function (tool dispatch
-  // rides the hub). Read implies hub-protocol.read; write implies both.
-  if (mapped.has("mcp.read")) mapped.add("hub-protocol.read");
-  if (mapped.has("mcp.write")) {
-    mapped.add("hub-protocol.write");
-    mapped.add("hub-protocol.read");
-  }
-
-  if (mapped.size === 0) return [...MCP_CONNECT_DEFAULT_SCOPES];
-  return Array.from(mapped);
 }
 
 export function registerMcpRedeemRoutes(app: HubHono): void {

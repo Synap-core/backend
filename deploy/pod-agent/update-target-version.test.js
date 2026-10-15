@@ -28,7 +28,8 @@ test("missing / empty / non-string targetVersion is a 400", () => {
   assert.equal(statusFor({ targetVersion: 42 }), 400);
 });
 
-test("a tag that could break out of update-pod.sh's sed is a 400", () => {
+test("a tag that is not a release id is a 400 (path, shell, option, mutable tag)", () => {
+  assert.equal(statusFor({ targetVersion: "latest" }), 400);
   assert.equal(statusFor({ targetVersion: "v1/../../x" }), 400);
   assert.equal(statusFor({ targetVersion: "v1;rm -rf /" }), 400);
   assert.equal(statusFor({ targetVersion: "-v1" }), 400);
@@ -45,16 +46,21 @@ test("other errors keep their status", () => {
 });
 
 // server.js listens on load, so assert its wiring at the source: the update
-// command validates BEFORE the receipt is consumed and the script is spawned,
-// the catch maps errors through commandErrorStatus, and no `|| "latest"` fallback
-// survives anywhere in the file.
+// command validates (prepareCommand → validateCommandPayload) BEFORE a pushed
+// receipt is consumed, a push is refused (pull-only), a pulled update becomes
+// a request for the host engine (never a script), and no `|| "latest"`
+// fallback survives anywhere in the file.
 test("server.js wires the validation into the command door", () => {
   const src = fs.readFileSync(path.join(__dirname, "server.js"), "utf8");
   assert.doesNotMatch(src, /\|\|\s*["']latest["']/);
   const validate = src.slice(src.indexOf("function validateCommandPayload"));
   assert.match(validate.slice(0, 300), /commandName === "update"[\s\S]*validateUpdateTargetVersion\(payload\)/);
-  const door = src.slice(src.indexOf("validateCommandPayload(commandName, payload);"));
-  assert.ok(door.indexOf("consumeSignedCommandReceipt") > 0, "validation runs before the receipt is consumed");
+  const door = src.slice(src.indexOf("const policy = prepareCommand(commandName, payload);"));
+  const refuse = door.indexOf('if (commandName === "update")');
+  assert.ok(refuse > 0 && refuse < door.indexOf("consumeSignedCommandReceipt"), "a pushed update is refused before the receipt is consumed");
   assert.match(door, /respond\(res, commandErrorStatus\(e\)/);
-  assert.match(src, /args: \(p\) => \[validateUpdateTargetVersion\(p\)\]/);
+  const commands = src.slice(src.indexOf("const COMMANDS = {"), src.indexOf("};", src.indexOf("const COMMANDS = {")));
+  assert.doesNotMatch(commands, /^\s+update:/m, "update is never a script the agent runs");
+  const pulled = src.slice(src.indexOf("async function runPulledCommand"));
+  assert.ok(pulled.indexOf("prepareCommand(commandName, payload)") < pulled.indexOf("queueUpdateRequest("), "a pulled update is validated before its request is written");
 });

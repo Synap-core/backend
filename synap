@@ -98,8 +98,8 @@ _pin_compose_project_name() {
 }
 
 # ─── Shared Ory database bootstrap ────────────────────────────────────────────
-# Sourced once so every command (install, update, and the alternate
-# update-pod.sh) uses ONE fail-closed, non-destructive bootstrap. Resolved
+# Sourced once so every command (install, update) uses ONE fail-closed,
+# non-destructive bootstrap. Resolved
 # relative to this script's own location so it works from the repo root,
 # from deploy/, or when invoked as `bash synap` from anywhere.
 _ory_bootstrap_script="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/deploy/ensure-ory-databases.sh"
@@ -132,7 +132,7 @@ unset _pgdata_safety_script
 
 # ─── Update lock (deploy/update-lock.sh) ──────────────────────────────────────
 # install/update/rebuild/reset/restore take <deploy_dir>/state/update.lock in
-# the router below, so eve, pod-agent's update-pod.sh and an operator can never
+# the router below, so eve, synap-update.service and an operator can never
 # run two of them against one pod at the same time.
 _update_lock_script="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/deploy/update-lock.sh"
 if [ -f "$_update_lock_script" ]; then
@@ -576,7 +576,6 @@ generate_and_create_env() {
     local MINIO_SECRET_KEY=$(openssl rand -hex 24)
     local TYPESENSE_KEY=$(openssl rand -hex 24)
     local TYPESENSE_ADMIN_KEY=$(openssl rand -hex 24)
-    local HYDRA_SECRETS_SYSTEM=$(openssl rand -hex 24)
     local SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)
     # PROVISIONING_TOKEN authorizes agent-key minting via POST /v1/agents/provision.
     # Backend reads it from compose env; .env.example documents it as required.
@@ -642,7 +641,6 @@ MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
 MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
 TYPESENSE_API_KEY=${TYPESENSE_KEY}
 TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
-ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
 SYNAP_SERVICE_ENCRYPTION_KEY=${SYNAP_SERVICE_ENCRYPTION_KEY}
 PROVISIONING_TOKEN=${PROVISIONING_TOKEN}
 VAULT_SERVER_KEY=${VAULT_SERVER_KEY}
@@ -2921,10 +2919,10 @@ EOF
         if [ "$install_edge" = traefik ]; then
             echo -e "${BLUE}  (SYNAP_EDGE=traefik: skipping Caddy — Traefik is the edge)${NC}"
             docker compose "${profile_args[@]}" up -d --remove-orphans \
-                postgres redis minio typesense "${pod_agent_args[@]}" pod-admin hydra kratos
+                postgres redis minio typesense "${pod_agent_args[@]}" pod-admin kratos
         else
             docker compose "${profile_args[@]}" up -d --remove-orphans \
-                postgres redis minio typesense "${pod_agent_args[@]}" pod-admin hydra kratos caddy
+                postgres redis minio typesense "${pod_agent_args[@]}" pod-admin kratos caddy
         fi
         if ! _swap_backend_canary; then
             echo -e "${RED}❌ Backend update aborted — the previous version is still running.${NC}"
@@ -2934,20 +2932,20 @@ EOF
         echo -e "${BLUE}  (SYNAP_EDGE=traefik: skipping Caddy — Traefik is the edge)${NC}"
         docker compose "${profile_args[@]}" up -d --remove-orphans \
             postgres redis minio typesense \
-            backend realtime "${pod_agent_args[@]}" pod-admin hydra kratos
+            backend realtime "${pod_agent_args[@]}" pod-admin kratos
     else
         docker compose "${profile_args[@]}" up -d --remove-orphans
     fi
 
     # Reapply auth schema. On a brand-new volume this is a no-op (compose's
-    # depends_on already ran kratos-migrate / hydra-migrate to completion).
+    # depends_on already ran kratos-migrate to completion).
     # On a rerun against an existing project this is the SAFETY NET — see
     # cmd_update for the full rationale (compose's `service_completed_successfully`
     # short-circuit + any volume drift = empty kratos DB + 500s on auth).
     #
     # The shared bootstrap runs first so the Ory databases are guaranteed to
     # exist before either migration. Previously these migrations were swallowed
-    # with `|| true`, which hid a missing kratos/hydra database behind the same
+    # with `|| true`, which hid a missing kratos database behind the same
     # "database does not exist" error that now surfaces at the bootstrap step.
     #
     # Read-only preflight first: confirm the Compose project and Postgres
@@ -2965,20 +2963,6 @@ EOF
     echo -e "${BLUE}🔄 Running Kratos migrations...${NC}"
     if ! docker compose run --rm kratos-migrate; then
         echo -e "${RED}❌ Kratos migrations failed${NC}"
-        if synap_assume_yes; then
-            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run${NC}"
-            exit 1
-        fi
-        read -p "Continue anyway? (y/N): " CONTINUE
-        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
-            echo "Install cancelled"
-            exit 1
-        fi
-    fi
-
-    echo -e "${BLUE}🔄 Running Hydra migrations...${NC}"
-    if ! docker compose run --rm hydra-migrate; then
-        echo -e "${RED}❌ Hydra migrations failed${NC}"
         if synap_assume_yes; then
             echo -e "${RED}Aborting in non-interactive mode — investigate and re-run${NC}"
             exit 1
@@ -3184,7 +3168,6 @@ cmd_health() {
     check_service "minio" "Storage"
     check_service "typesense" "Search"
     check_service "kratos" "Authentication"
-    check_service "hydra" "OAuth2"
     check_service "caddy" "Reverse Proxy"
     
     echo ""
@@ -3576,12 +3559,12 @@ _ue_edge_preflight() {
 
 # Long-running services the update (re)creates AFTER the backend swap — derived
 # from the compose file's active services, never a hand list. One-shots
-# (*-migrate), the canary, the updater, the swapped backend/realtime, and Caddy
+# (*-migrate), the canary, the swapped backend/realtime, and Caddy
 # when another proxy is the edge are excluded.
 _ue_services() { # <edge> [profile args...]
     local edge="$1"; shift
     docker compose "$@" config --services 2>/dev/null \
-        | grep -vxE 'backend|realtime|backend-canary|updater|.*-migrate' \
+        | grep -vxE 'backend|realtime|backend-canary|.*-migrate' \
         | { if [ "$edge" = traefik ]; then grep -vx caddy; else cat; fi; } || true
 }
 
@@ -3611,11 +3594,15 @@ _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_
 # `backend.volumes`), so state/last-update.json is readable in-pod — wiring it
 # into /status/release + notif-center is the wave-2 seam. SYNAP_UPDATE_NOTIFY_CMD
 # (env or .env) receives the JSON on stdin, best-effort.
+# An unattended run started by a request carries the request's `id` as
+# `request` (UE_REQUEST_ID, set by _ue_unattended_plan / _ue_unattended_busy):
+# pod-agent matches it to report the outcome of the order it queued.
 _ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup]
     local ev
     ev="$(jq -cn --arg status "$1" --arg from "$2" --arg to "$3" \
-        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" \
-        '{kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup}')"
+        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg req "${UE_REQUEST_ID:-}" \
+        '{kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup}
+         + (if $req == "" then {} else {request:$req} end)')"
     _synap_event "$ev" 1 state/last-update.json
 }
 
@@ -3736,7 +3723,7 @@ _ue_build_from_source() { # <out-manifest>
 }
 
 # ── release bundle (U5: the deploy dir is a release bundle, not a checkout) ──
-# The bundle holds the release's `synap`, deploy/, kratos/, hydra/ and
+# The bundle holds the release's `synap`, deploy/, kratos/ and
 # docker/postgres/ files. It is STAGED (downloaded, sha-verified, extracted)
 # before anything changes, INSTALLED after the backup (each file swapped in
 # with an atomic rename, so the running `synap` keeps reading its old inode),
@@ -4169,11 +4156,10 @@ synap_update_engine() {
     generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed" 0
     COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed" 0
 
-    # 6. migrations (backend, kratos, hydra) — a throw restores the dump
+    # 6. migrations (backend, kratos) — a throw restores the dump
     _ue_log "Running migrations..."
     docker compose run --rm backend-migrate || _ue_rollback "backend migration failed" 1
     docker compose run --rm kratos-migrate  || _ue_rollback "kratos migration failed" 1
-    docker compose run --rm hydra-migrate   || _ue_rollback "hydra migration failed" 1
     level_after="$(_ue_migration_level)"
     [ "$level_after" != "$level_before" ] && moved=1
     _ue_log "Migration level: ${level_before:-none} → ${level_after:-none}"
@@ -4227,8 +4213,10 @@ synap_update_engine() {
 # `release` follows pod-agent's validateUpdateTargetVersion: ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$,
 # never "latest". The engine TAKES the file (renames it to update.taken.json)
 # before anything else, so the .path unit can never loop on it, and the outcome
-# lands in state/last-update.json like every update's — an invalid request, or
-# one that met a busy lock, is recorded `aborted` and is not retried.
+# lands in state/last-update.json like every update's, with `request: <id>` —
+# an invalid request, or one that met a busy lock, is recorded `aborted` and is
+# not retried. pod-agent (update-request.js) is the writer and reads that record
+# back to report the order's outcome to the CP.
 #
 # POLICY, state/update-policy.json (every key optional):
 #   {"auto": true, "channel": "stable" | "fast" | "source", "window": "03:00-05:00", "pinned": false}
@@ -4262,6 +4250,7 @@ _ue_unattended_plan() {
     if [ -n "$req" ]; then
         rel="$(jq -r '.release // empty' "$req" 2>/dev/null || true)"
         rid="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+        export UE_REQUEST_ID="$rid"
         if [ "$(jq -r '.schema // empty' "$req" 2>/dev/null || true)" != 1 ] || ! [[ "$rel" =~ $_UE_RELEASE_RE ]] || [ "$rel" = latest ]; then
             _ue_err "update request ${rid:-<no id>} refused: it must be {\"schema\":1, \"release\":\"<release id|fast|stable>\"} (got release '${rel}'). Nothing was changed."
             _ue_record aborted "$(_ue_current_release_id)" "${rel:-?}" "invalid update request ${rid:-<no id>}" false
@@ -4300,6 +4289,7 @@ _ue_unattended_busy() { # cwd = deploy dir
     local req
     req="$(_ue_take_request)"
     [ -n "$req" ] || return 0
+    UE_REQUEST_ID="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
     _ue_record aborted "$(_ue_current_release_id)" "$(jq -r '.release // "?"' "$req" 2>/dev/null || echo '?')" \
         "another pod operation held the update lock — request $(jq -r '.id // "?"' "$req" 2>/dev/null || echo '?') was not run; send it again" false
 }
@@ -4361,6 +4351,8 @@ USAGE
         _ue_unattended_plan || plan_rc=$?
         [ "$plan_rc" = 1 ] && return 0
         [ "$plan_rc" = 0 ] || exit 1
+    else
+        unset UE_REQUEST_ID   # a person's run answers no request
     fi
     [ "$ref" = latest ] && ref=""
     # --from-source: sync the checkout FIRST, then run the synced installer. A
@@ -4557,7 +4549,7 @@ cmd_start() {
     # `allowed_origins` and the browser sees CORS rejections — exactly the
     # failure mode that previously required a full `synap update` to fix.
     # We only regen when bringing up "all" services or kratos specifically,
-    # to keep `start backend` / `start hydra` cheap.
+    # to keep `start backend` / `start redis` cheap.
     if [ -z "$service" ] || [ "$service" = "kratos" ]; then
         local domain="$(grep '^DOMAIN=' .env 2>/dev/null | cut -d= -f2)"
         if [ -n "$domain" ]; then
@@ -4783,11 +4775,12 @@ cmd_backup() {
             cat <<'USAGE'
 Usage:
   synap backup [label]          local dump of every database (backups/postgres/<ts>-<label>)
-  synap backup init             create the off-host repository (BACKUP_REPOSITORY in .env)
-                                and print the recovery kit ONCE
+  synap backup init             create the off-host repository (BACKUP_REPOSITORY in .env), print
+                                the recovery kit and ask you to type back the password's last 6
   synap backup init --non-interactive
-                                no TTY: the kit goes to state/backup/recovery-kit.txt (0600), marked
-                                "not yet saved" until: synap backup kit-saved
+                                no TTY: the kit goes to state/kit/recovery-kit.txt (0600). It is "not
+                                yet saved" until the owner confirms it in the app (Settings → Pod →
+                                Backups) or runs: synap backup kit-saved
   synap backup push             dump + push an encrypted snapshot now (the service does it hourly)
   synap backup drill [snap]     restore a snapshot into a throwaway postgres, compare fingerprints
   synap backup status           repository, last runs, alarms
@@ -4796,7 +4789,7 @@ USAGE
             ;;
     esac
 
-    # A local dump: EVERY database — synap AND the kratos/hydra identity
+    # A local dump: EVERY database — synap AND the kratos identity
     # stores — each read back before it is kept. Secrets are not copied next
     # to it any more (the plaintext env.backup is retired): they travel inside
     # the encrypted off-host snapshot (`synap backup init` / `push`).

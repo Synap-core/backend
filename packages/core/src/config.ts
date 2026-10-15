@@ -93,9 +93,6 @@ const AuthConfigSchema = z.object({
   // Ory Stack
   kratosPublicUrl: z.string().optional(),
   kratosAdminUrl: z.string().optional(),
-  hydraPublicUrl: z.string().optional(),
-  hydraAdminUrl: z.string().optional(),
-  hydraSecretsSystem: z.string().optional(),
   // OAuth Providers (optional)
   googleClientId: z.string().optional(),
   googleClientSecret: z.string().optional(),
@@ -121,7 +118,7 @@ const ServerConfigSchema = z.object({
   /** Disable pgvector semantic search (use on shared pods where workspace isolation is impractical). */
   vectorSearchEnabled: z.coerce.boolean().default(true),
   /**
-   * Local Mode: embedded single-user pod with no Kratos/Hydra.
+   * Local Mode: embedded single-user pod with no Kratos.
    * Requires LOCAL_AUTH_TOKEN to be set. Incompatible with KRATOS_PUBLIC_URL
    * (if both are set the process exits at startup with a loud error).
    */
@@ -260,9 +257,6 @@ function loadConfig(): Config {
         // Ory Stack
         kratosPublicUrl: process.env.KRATOS_PUBLIC_URL,
         kratosAdminUrl: process.env.KRATOS_ADMIN_URL,
-        hydraPublicUrl: process.env.HYDRA_PUBLIC_URL,
-        hydraAdminUrl: process.env.HYDRA_ADMIN_URL,
-        hydraSecretsSystem: process.env.ORY_HYDRA_SECRETS_SYSTEM,
         // OAuth Providers
         googleClientId: process.env.GOOGLE_CLIENT_ID,
         googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -392,18 +386,13 @@ export function validateConfig(
 
     case "ory":
       // LOCAL_MODE bypasses all Ory requirements — the embedded pod uses
-      // fixed-identity auth (LOCAL_AUTH_TOKEN) instead of Kratos/Hydra.
+      // fixed-identity auth (LOCAL_AUTH_TOKEN) instead of Kratos.
       if (config.server.localMode) {
         break;
       }
-      if (!config.auth.kratosPublicUrl || !config.auth.hydraPublicUrl) {
+      if (!config.auth.kratosPublicUrl) {
         throw new Error(
-          "Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables"
-        );
-      }
-      if (!config.auth.hydraSecretsSystem) {
-        throw new Error(
-          "Ory Hydra requires ORY_HYDRA_SECRETS_SYSTEM environment variable"
+          "Ory Stack requires the KRATOS_PUBLIC_URL environment variable"
         );
       }
       break;

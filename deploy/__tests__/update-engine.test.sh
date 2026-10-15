@@ -76,9 +76,9 @@ stamp_of() { case "$1" in *"$NEW_DIGEST"*) [ -n "${FAKE_STAMP_WRONG:-}" ] && ech
 is_new() { case "$1" in *"$NEW_DIGEST"*|synap-dev/*) return 0;; esac; return 1; }
 case "$*" in
   "compose config --services"*|"compose --profile pod-agent config --services"*)
-    printf '%s\n' postgres postgres-backup redis minio typesense kratos-migrate kratos hydra-migrate hydra backend-migrate backend realtime pod-admin caddy; exit 0 ;;
+    printf '%s\n' postgres postgres-backup redis minio typesense kratos-migrate kratos backend-migrate backend realtime pod-admin caddy; exit 0 ;;
   "compose ps --status running --services"*)
-    printf '%s\n' postgres postgres-backup redis minio typesense kratos hydra backend realtime pod-admin; [ -s "$F/caddy_up" ] && echo caddy; exit 0 ;;
+    printf '%s\n' postgres postgres-backup redis minio typesense kratos backend realtime pod-admin; [ -s "$F/caddy_up" ] && echo caddy; exit 0 ;;
   "compose ps -q backend"*) echo be1; exit 0 ;;
   "compose ps -q pod-admin"*) echo pa1; exit 0 ;;
   "compose ps"*postgres*) echo pg1; exit 0 ;;
@@ -408,7 +408,7 @@ grep -E " up .*caddy|caddy .* up" "$FAKE/log" && bad "traefik: caddy was brought
 swap=$(grep -n "force-recreate --remove-orphans backend realtime" "$FAKE/log" | head -1 | cut -d: -f1)
 rest=$(grep -n "up -d --remove-orphans .*redis" "$FAKE/log" | tail -1 | cut -d: -f1)
 [ -n "$swap" ] && [ -n "$rest" ] && [ "$rest" -gt "$swap" ] && ok "traefik: the other services come up after the swap" || bad "traefik: swap=$swap rest=$rest"
-for svc in postgres redis minio typesense kratos hydra pod-admin postgres-backup; do
+for svc in postgres redis minio typesense kratos pod-admin postgres-backup; do
   sed -n "${rest:-0}p" "$FAKE/log" | grep -qw -- "$svc" || bad "traefik: $svc missing from the post-swap bring-up"
 done
 grep -q "up -d --force-recreate kratos" "$FAKE/log" && grep -q "up -d --force-recreate pod-admin" "$FAKE/log" && ok "traefik: kratos + pod-admin recreated" || bad "traefik: kratos/pod-admin not recreated"

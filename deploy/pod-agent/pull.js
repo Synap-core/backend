@@ -15,6 +15,9 @@
  *
  * A pulled command never carries a callback URL: its result goes back to the
  * CP that served it, signed by the pod (`POST /pods/me/commands/:id/result`).
+ * An `update` reports twice on that route: "queued" when its request is
+ * written for the host engine, then its outcome, which `collectOutcomes`
+ * (update-request.js) reads back on a later tick.
  * Nothing here runs a command itself — `runCommand` is the pod-agent's one
  * dispatcher (owner policy, payload validation, scripts), shared with push.
  */
@@ -28,6 +31,14 @@ const POD_COMMANDS_RESULT_PURPOSE = "pod-commands.result";
 const DEFAULT_POLL_INTERVAL_MS = 15_000;
 const RESULT_OUTPUT_MAX = 16_000;
 const MAX_PENDING_RESULTS = 50;
+/** "queued" is not terminal (an update waiting for the host engine). */
+const RESULT_STATUSES = [
+  "completed",
+  "failed",
+  "refused",
+  "queued",
+  "rolled_back",
+];
 
 function typedError(code, message) {
   const error = new Error(message);
@@ -79,7 +90,7 @@ function refusalResult(error) {
 
 function normalizeResult(result) {
   const status =
-    result && ["completed", "failed", "refused"].includes(result.status)
+    result && RESULT_STATUSES.includes(result.status)
       ? result.status
       : "failed";
   const out = { status };
@@ -144,6 +155,9 @@ function requestJson(method, url, { token, body, timeoutMs = 15_000 } = {}) {
  * @param consumeReceipt (payload) => "consumed" | "replayed"
  * @param resolveCommand (payload) => command name (trust.js)
  * @param runCommand     (name, payload) => Promise<result> — the dispatcher
+ * @param collectOutcomes () => [{commandId, result, settle}] — results of
+ *                       commands that finished after they answered (an update
+ *                       the host engine ran); `settle` once the CP has it
  */
 function createCommandPuller({
   cpUrl,
@@ -153,6 +167,7 @@ function createCommandPuller({
   consumeReceipt,
   resolveCommand,
   runCommand,
+  collectOutcomes = () => [],
   request = requestJson,
   log = () => {},
 }) {
@@ -193,6 +208,26 @@ function createCommandPuller({
     for (const { commandId, result } of queued) await report(commandId, result);
   }
 
+  // Not through `report`: an outcome stays with its collector (on disk) until
+  // the CP has it, so an agent restart cannot lose it.
+  async function reportOutcomes() {
+    let outcomes;
+    try {
+      outcomes = collectOutcomes();
+    } catch (error) {
+      log(`outcome read failed: ${error.message}`);
+      return;
+    }
+    for (const { commandId, result, settle } of outcomes) {
+      try {
+        await postResult(commandId, result);
+        settle();
+      } catch (error) {
+        log(`outcome for ${commandId} deferred: ${error.message}`);
+      }
+    }
+  }
+
   async function handle(entry) {
     let result;
     try {
@@ -220,6 +255,7 @@ function createCommandPuller({
     if (!isEnrolled())
       return { skipped: "not-enrolled", ids: [], settled: Promise.resolve([]) };
     await flushPendingResults();
+    await reportOutcomes();
     const token = signPodToken(POD_COMMANDS_POLL_PURPOSE, {});
     const res = await request("GET", `${base}/pods/me/commands`, { token });
     if (res.status !== 200 || !res.body || !Array.isArray(res.body.commands)) {

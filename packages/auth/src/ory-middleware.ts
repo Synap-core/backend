@@ -1,16 +1,11 @@
 /**
  * Ory Auth Middleware for Hono
  *
- * Validates OAuth2 tokens from Hydra and extracts user identity from Kratos
+ * Authenticates a request by its Kratos session (cookie or X-Session-Token).
  */
 
 import type { MiddlewareHandler } from "hono";
-import { introspectToken } from "./ory-hydra.js";
-import {
-  getIdentityById,
-  getKratosSession,
-  getKratosSessionByToken,
-} from "./ory-kratos.js";
+import { getKratosSession, getKratosSessionByToken } from "./ory-kratos.js";
 import {
   buildLocalUser,
   buildLocalSession,
@@ -18,47 +13,6 @@ import {
   getLocalAuthToken,
   safeTokenEqual,
 } from "./local-mode.js";
-
-/**
- * Middleware for OAuth2 token authentication (Bearer tokens)
- *
- * Used for API requests with OAuth2 tokens (from Hydra)
- */
-export const oryAuthMiddleware: MiddlewareHandler = async (c, next) => {
-  const authHeader = c.req.header("Authorization");
-
-  if (!authHeader?.startsWith("Bearer ")) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-
-  const token = authHeader.substring(7);
-
-  // Introspect token with Hydra
-  const tokenInfo = await introspectToken(token);
-
-  if (!tokenInfo || !tokenInfo.active) {
-    return c.json({ error: "Invalid or expired token" }, 401);
-  }
-
-  // Get identity from Kratos
-  const identity = await getIdentityById(tokenInfo.sub);
-
-  if (!identity) {
-    return c.json({ error: "Identity not found" }, 401);
-  }
-
-  // Add to context
-  c.set("user", {
-    id: identity.id,
-    email: identity.traits.email,
-    name: identity.traits.name,
-  });
-  c.set("userId", identity.id);
-  c.set("scopes", tokenInfo.scope?.split(" ") || []);
-  c.set("authenticated", true);
-
-  return next();
-};
 
 /**
  * Middleware for session-based authentication (Kratos sessions)

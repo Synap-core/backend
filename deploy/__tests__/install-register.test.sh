@@ -243,8 +243,8 @@ run_install "${REG[@]}"; rc=$?
   && [ "$(req pods_register '.body|fromjson|.podPublicJwk.x')" = "$(jq -r .x "$DEPLOY/state/pod-identity.pub.json")" ] \
   && ok "happy: §8 the register body carries the pod's PUBLIC JWK only (no d)" || bad "happy: podPublicJwk $(req pods_register '.body|fromjson|.podPublicJwk')"
 KEYF="$DEPLOY/state/pod-identity/pod-key.pem"
-[ "$(stat -f %Lp "$KEYF" 2>/dev/null || stat -c %a "$KEYF")" = 600 ] && grep -q 'BEGIN PRIVATE KEY' "$KEYF" \
-  && [ "$(stat -f %Lp "$DEPLOY/state/pod-identity" 2>/dev/null || stat -c %a "$DEPLOY/state/pod-identity")" = 700 ] \
+[ "$(stat -c %a "$KEYF" 2>/dev/null || stat -f %Lp "$KEYF")" = 600 ] && grep -q 'BEGIN PRIVATE KEY' "$KEYF" \
+  && [ "$(stat -c %a "$DEPLOY/state/pod-identity" 2>/dev/null || stat -f %Lp "$DEPLOY/state/pod-identity")" = 700 ] \
   && ok "happy: the private key is a 0600 file in a 0700 dir under state/ (not the DB)" || bad "happy: key file mode/contents"
 grep -q 'PRIVATE KEY' "$TMP/req-pods_register.json" "$S/out" && bad "happy: private key material left the host / reached the log" || ok "happy: no private key material in the request or the log"
 [ "$(cat "$TMP/nonce-seen")" = "{\"nonce\":\"$NONCE\"}" ] && ok "happy: the nonce (sha256 of synap-registration:<code>) was served DURING the call" || bad "happy: nonce during call: '$(cat "$TMP/nonce-seen")'"
@@ -331,7 +331,7 @@ run_install "${REG[@]}"; rc=$?
 setup resume; cp_response "$OIDC" "$INTEL"; echo register-intelligence > "$TMP/pod-fail"
 run_install "${REG[@]}"; rc=$?
 [ "$rc" != 0 ] && grep -q 're-run the same command to retry' "$S/out" && [ -f "$DEPLOY/state/registration/response.json" ] \
-  && [ "$(stat -f %Lp "$DEPLOY/state/registration/response.json" 2>/dev/null || stat -c %a "$DEPLOY/state/registration/response.json")" = 600 ] \
+  && [ "$(stat -c %a "$DEPLOY/state/registration/response.json" 2>/dev/null || stat -f %Lp "$DEPLOY/state/registration/response.json")" = 600 ] \
   && ok "resume: a failed step keeps the response (0600) and fails loudly" || { bad "resume: first run rc=$rc"; show; }
 rm -f "$TMP/calls.log"
 run_install "${REG[@]}"; rc=$?
@@ -350,7 +350,7 @@ calls="$(grep -v '^/pods/register$' "$TMP/calls.log" | tr '\n' ' ')"
 
 # ── policy: the pod-agent's owner-consent file is seeded from deploymentMode ──
 POLF="state/pod-agent-policy.json"
-mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 setup polmanaged; cp_response "$OIDC" "$INTEL" managed
 run_install "${REG[@]}"; rc=$?
 [ "$rc" = 0 ] && [ "$(jq -c . "$DEPLOY/$POLF" 2>/dev/null)" = '{"mode":"managed","archiveRecipients":[]}' ] && [ "$(mode_of "$DEPLOY/$POLF")" = 644 ] \
@@ -403,7 +403,7 @@ boot "$B/opt" --name lab1 --register-token "$TOKEN" --edge caddy; rc=$?
 expected="$(printf '%s\n' "$B/opt" "SYNAP_DEPLOY_DIR=$B/opt/deploy" install --non-interactive --release "$BREL" --name lab1 --register-token "$TOKEN" --edge caddy)"
 [ "$rc" = 0 ] && [ "$(cat "$B/fake/exec-args" 2>/dev/null)" = "$expected" ] \
   && ok "bootstrap: stable → $BREL, unpacked, execs synap install --non-interactive --release $BREL + the flags" || { bad "bootstrap: rc=$rc"; cat "$B/out"; diff <(echo "$expected") "$B/fake/exec-args"; }
-[ "$(readlink "$B/bin/synap")" = "$B/opt/synap" ] && ok "bootstrap: the CLI is linked onto PATH (pod-agent update-pod.sh finds it)" || bad "bootstrap: $B/bin/synap → $(readlink "$B/bin/synap")"
+[ "$(readlink "$B/bin/synap")" = "$B/opt/synap" ] && ok "bootstrap: the CLI is linked onto PATH (operators find it)" || bad "bootstrap: $B/bin/synap → $(readlink "$B/bin/synap")"
 grep -q "$TOKEN" "$B/out" && bad "bootstrap: the code was printed" || ok "bootstrap: the code is never printed"
 
 exit $fail

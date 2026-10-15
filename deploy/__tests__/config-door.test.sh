@@ -56,7 +56,7 @@ grep -qE '^[^#]*exec bash "\$INSTALL_DIR/synap" install --non-interactive' "$HER
 # self-check of the matcher: it must see a literal sample of each source
 echo "$example_keys" | grep -qx BACKUP_REPOSITORY && echo "$example_keys" | grep -qx PG_BACKUP_KEEP && echo "$example_keys" | grep -qx CONTROL_PLANE_URL \
   && ok "self-check: active, commented and indented .env.example keys are seen" || bad "self-check: .env.example matcher misses keys"
-echo "$compose_keys" | grep -qx POSTGRES_PASSWORD && echo "$cli_written" | grep -qx SYNAP_EDGE && echo "$install_keys" | grep -qx ORY_HYDRA_SECRETS_SYSTEM \
+echo "$compose_keys" | grep -qx POSTGRES_PASSWORD && echo "$cli_written" | grep -qx SYNAP_EDGE && echo "$install_keys" | grep -qx KRATOS_SECRETS_CIPHER \
   && ok "self-check: compose / CLI-written / install matchers see known keys" || bad "self-check: a key matcher went blind"
 
 for src in example compose install cli; do
@@ -75,7 +75,8 @@ if [ -f "$contract" ]; then
   for k in $podsec; do
     f="$(flags_of "$k")"
     case ",$f," in *,secret,*) ;; *) bad "POD_SECRET_FIELDS $k is not flagged secret in env.schema ('$f')"; continue ;; esac
-    case ",$f," in *,immutable,*) ;; *) bad "POD_SECRET_FIELDS $k is not flagged immutable in env.schema ('$f')"; continue ;; esac
+    # A retired key indexes nothing any more (eve's list may still name it).
+    case ",$f," in *,immutable,*|*,retired,*) ;; *) bad "POD_SECRET_FIELDS $k is not flagged immutable in env.schema ('$f')"; continue ;; esac
   done
   ok "POD_SECRET_FIELDS checked against secret+immutable"
 else

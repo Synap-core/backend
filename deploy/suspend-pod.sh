@@ -28,7 +28,7 @@ report() {
 log "=== Suspending pod services ==="
 
 # Stop data and application services, keep caddy + pod-agent running
-$COMPOSE stop backend realtime postgres redis minio typesense kratos hydra 2>&1 || true
+$COMPOSE stop backend realtime postgres redis minio typesense kratos 2>&1 || true
 
 log "Services stopped"
 report "completed" ""

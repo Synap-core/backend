@@ -10,7 +10,7 @@ import { fileURLToPath } from "url";
  * customer's own host: it holds the Docker socket, it is reachable over the
  * public internet at `/api/pod-agent/command`, and its ONLY gate is an ES256
  * JWT. Every legitimate command it exposes is a NAMED SCRIPT in the deploy
- * directory (`update-pod.sh`, `configure-pod.sh`, …) invoked as
+ * directory (`configure-pod.sh`, `suspend-pod.sh`, …) invoked as
  * `execFile("/bin/sh", [<script path>, ...positional args])` — argv, not a
  * command line. That shape is safe by construction: a hostile `payload` field
  * lands in `argv[n]`, never in a string the shell parses.
@@ -30,7 +30,7 @@ import { fileURLToPath } from "url";
  * nothing about the next verb someone adds. The real rule is narrower and
  * permanent: **no argv array in this file may pass `-c` to a shell.** A new
  * command is welcome — as a script file with positional arguments, the way all
- * seven existing ones are written.
+ * existing ones are written.
  *
  * NOTE ON `/bin/sh`: its mere presence is NOT the violation and is deliberately
  * not banned here. `execFile("/bin/sh", [script, ...args])` is the legitimate

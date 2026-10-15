@@ -1,4 +1,7 @@
-# Rotate the Ory secrets (`KRATOS_SECRETS_COOKIE`, `KRATOS_SECRETS_CIPHER`, `ORY_HYDRA_SECRETS_SYSTEM`)
+# Rotate the Ory secrets (`KRATOS_SECRETS_COOKIE`, `KRATOS_SECRETS_CIPHER`)
+
+(Hydra left pods on 2026-10-15; `ORY_HYDRA_SECRETS_SYSTEM` is a retired key that
+`synap update` drops from `.env`, keeping a backup.)
 
 Each of these `deploy/.env` keys is an **ordered, comma-separated list**:
 
@@ -35,11 +38,10 @@ spaces.
 
 ## How long the old secret must stay
 
-| Key                        | What the old item still protects                            | Remove it when                                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KRATOS_SECRETS_COOKIE`    | session cookies issued before the rotation                  | after `session.lifespan` has elapsed (**720h = 30 days**, in the installer's `kratos.yml`), or right away if you accept that everyone signs in again       |
-| `KRATOS_SECRETS_CIPHER`    | OIDC provider tokens Kratos stored encrypted on identities  | **keep it indefinitely.** Kratos does not re-encrypt, and a stored token only moves to the new key when that user signs in again with that provider        |
-| `ORY_HYDRA_SECRETS_SYSTEM` | Hydra's data encrypted at rest (its JSON Web Keys among it) | **keep it indefinitely.** Hydra never re-encrypts existing data. Removing the old item makes that data unreadable. This runbook does not cover removing it |
+| Key                     | What the old item still protects                           | Remove it when                                                                                                                                       |
+| ----------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KRATOS_SECRETS_COOKIE` | session cookies issued before the rotation                 | after `session.lifespan` has elapsed (**720h = 30 days**, in the installer's `kratos.yml`), or right away if you accept that everyone signs in again |
+| `KRATOS_SECRETS_CIPHER` | OIDC provider tokens Kratos stored encrypted on identities | **keep it indefinitely.** Kratos does not re-encrypt, and a stored token only moves to the new key when that user signs in again with that provider  |
 
 The env schema marks these keys `immutable`, so every change needs `--force`. That is
 on purpose: dropping an item too early is data loss.
@@ -68,11 +70,6 @@ printf 'KRATOS_SECRETS_CIPHER=%s,%s\n' "$(openssl rand -hex 16)" "$OLD" \
   | synap config set --force --stdin
 unset OLD
 
-# Hydra system: 48 hex chars
-OLD=$(synap config get ORY_HYDRA_SECRETS_SYSTEM --reveal)
-printf 'ORY_HYDRA_SECRETS_SYSTEM=%s,%s\n' "$(openssl rand -hex 24)" "$OLD" \
-  | synap config set --force --stdin
-unset OLD
 ```
 
 The config door writes a `.env.bak.<timestamp>` before each change. That backup holds
@@ -81,20 +78,19 @@ the previous list.
 ### 3. Check the shape (prints item lengths only)
 
 ```bash
-for k in KRATOS_SECRETS_COOKIE KRATOS_SECRETS_CIPHER ORY_HYDRA_SECRETS_SYSTEM; do
+for k in KRATOS_SECRETS_COOKIE KRATOS_SECRETS_CIPHER; do
   printf '%s: ' "$k"
   synap config get "$k" --reveal | awk -F, '{for (i=1;i<=NF;i++) printf "%d ", length($i); print ""}'
 done
-# Expect: cookie 48 + older lengths; cipher 32 32 …; hydra 48 + older lengths.
+# Expect: cookie 48 + older lengths; cipher 32 32 ….
 ```
 
 ### 4. Recreate the services that read them
 
 ```bash
 synap apply                                      # validates .env, recreates what changed
-docker compose ps kratos hydra backend           # all Up / healthy
+docker compose ps kratos backend                 # all Up / healthy
 curl -fsS http://127.0.0.1:4433/health/ready && echo kratos ok
-curl -fsS http://127.0.0.1:4445/health/ready && echo hydra ok
 ```
 
 ### 5. Prove both keys work
@@ -116,14 +112,14 @@ unset CUR
 synap apply
 ```
 
-Never do this for the cipher or the Hydra system secret (see the table above).
+Never do this for the cipher (see the table above).
 
 ## Hard cut (the old value is exposed)
 
 For the cookie, set the new value **alone** (no `,old`). Every session ends and users
 sign in again. That is the point.
 
-The cipher and Hydra items cannot be hard-cut without losing the data they encrypt.
+The cipher items cannot be hard-cut without losing the data they encrypt.
 Rotate as above to stop new data using the exposed key, then treat the remaining
 exposure as a data-at-rest exposure of what they protect. That decision belongs to the
 founder.

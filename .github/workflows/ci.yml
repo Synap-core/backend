@@ -167,15 +167,20 @@ jobs:
       - name: Deploy safety tests
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
-          bash deploy/__tests__/pgdata-safety.test.sh
-          bash deploy/__tests__/ensure-ory-databases.test.sh
-          bash deploy/__tests__/port-exposure.test.sh
-          bash deploy/__tests__/backup-loop.test.sh
-          bash deploy/__tests__/backup-offhost.test.sh </dev/null
-          bash deploy/__tests__/archive-restore-failure.test.sh
-          bash deploy/__tests__/kratos-recovery-config.test.sh
-          for t in no-volume-prune compose-project update-lock reset-door users-password; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done && node --test deploy/pod-agent/*.test.js
-          for t in update-engine release-manifest config-door doctor one-env-writer caddy-routes cloud-init-template install-register; do bash "deploy/__tests__/$t.test.sh" </dev/null || exit 1; done
+          # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
+          # by existing (no hand list to fall behind — 12 tests were missing from
+          # the old one). stdin is closed: a test that reads it would hang the job.
+          # No test is skipped here; the ones that need an absent sibling repo
+          # (hestia-cli, other checkouts) print their own `skip -` line.
+          failed=""; n=0
+          for t in deploy/__tests__/*.test.sh; do
+            n=$((n+1)); echo "::group::$t"
+            bash "$t" </dev/null || failed="$failed $t"
+            echo "::endgroup::"
+          done
+          [ "$n" -ge 30 ] || { echo "::error::only $n deploy tests found (glob moved?)"; exit 1; }
+          node --test deploy/pod-agent/*.test.js || failed="$failed deploy/pod-agent"
+          [ -z "$failed" ] || { echo "::error::deploy tests failed:$failed"; exit 1; }
 
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs

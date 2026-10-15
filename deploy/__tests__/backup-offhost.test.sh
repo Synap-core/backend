@@ -23,7 +23,11 @@
 #   R. restore  — fresh host: secrets → DBs → MinIO → fingerprint, in that
 #                 order; a mismatch is RED and leaves the staging dir.
 #   I2. init --non-interactive — no TTY: kit file 0600 (never stdout/argv), marker
-#                 state/recovery-kit=pending, re-run no-op; loop auto-init predicate.
+#                 state/kit/status=pending, re-run no-op; loop auto-init predicate.
+#   K. kit      — printing is not saving (interactive init stays pending); the
+#                 read-back compares the password's last 6; the W7 layout
+#                 migrates into state/kit; the kit dir's owner uid equals the
+#                 backend image's user (deploy/Dockerfile).
 #   L. layout   — the compose service's paths equal the script's _BK_CT_*.
 #
 # NOT covered (needs a daemon / network): real restic/mc/pg binaries, the
@@ -235,26 +239,50 @@ ct BACKUP_REPOSITORY="$REPO" SYNAP_BACKUP_KIT_STDOUT=1 sh "$SAFETY" init >"$T/ou
 [ "$rc" = 1 ] && ! grep -q -- "$PW" "$T/out" && [ "$(cat "$T/state/backup/restic-password")" = "$PW" ] \
     && ok "second init refuses, prints no secret, keeps the password" || bad "re-init: rc=$rc"
 cp "$T/state/bin/mc" "$T/state/bin/mc.real" 2>/dev/null; cp "$T/bin/mc" "$T/state/bin/mc"   # the copied mc → our fake
-[ "$(cat "$T/state/recovery-kit" 2>/dev/null)" = saved ] && [ "$(perm "$T/state/recovery-kit")" = 644 ] \
-    && ok "interactive init → state/recovery-kit = saved (0644, outside the 0700 dir)" || bad "interactive init marker: $(cat "$T/state/recovery-kit" 2>/dev/null)"
+[ "$(cat "$T/state/kit/status" 2>/dev/null)" = pending ] && [ "$(perm "$T/state/kit/status")" = 644 ] \
+    && ok "interactive init PRINTS the kit but leaves state/kit/status = pending (printing is not saving)" || bad "interactive init marker: $(cat "$T/state/kit/status" 2>/dev/null)"
+[ "$(perm "$T/state/kit/recovery-kit.txt")" = 600 ] && [ "$(perm "$T/state/kit")" = 700 ] && grep -q -- "$PW" "$T/state/kit/recovery-kit.txt" \
+    && ok "interactive init also writes the kit to state/kit/recovery-kit.txt (0600 in a 0700 dir) for the app's download" || bad "interactive kit file: $(perm "$T/state/kit/recovery-kit.txt" 2>/dev/null)"
 
 echo "── I2. init --non-interactive (no TTY: the hourly loop / the CP vault delivery)"
 S2="$T/state2"; REPO2="$T/repo2"; B2KEY="b2-application-key-9f3a"; mkdir -p "$S2/bin" && cp "$T/bin/restic" "$S2/bin/restic"
 ni() { ct SYNAP_STATE_DIR="$S2" BACKUP_REPOSITORY="$REPO2" BACKUP_B2_ACCOUNT_KEY="$B2KEY" COMPOSE_CMD="$T/bin/fake-compose" SYNAP_DEPLOY_DIR="$T/deploy" "$@"; }
 ni sh "$SAFETY" init --non-interactive >"$T/ni.out" 2>"$T/ni.err" </dev/null; rc=$?
-PW2="$(cat "$S2/backup/restic-password" 2>/dev/null)"; KIT="$S2/backup/recovery-kit.txt"
-[ "$rc" = 0 ] && [ "${#PW2}" -ge 32 ] && [ "$(perm "$KIT")" = 600 ] && [ "$(perm "$S2/backup")" = 700 ] \
+PW2="$(cat "$S2/backup/restic-password" 2>/dev/null)"; KIT="$S2/kit/recovery-kit.txt"
+[ "$rc" = 0 ] && [ "${#PW2}" -ge 32 ] && [ "$(perm "$KIT")" = 600 ] && [ "$(perm "$S2/kit")" = 700 ] && [ "$(perm "$S2/backup")" = 700 ] \
     && grep -q -- "$PW2" "$KIT" && grep -q "Repository : $REPO2" "$KIT" && grep -q "restore --from-snapshot" "$KIT" && grep -q "BACKUP_B2_ACCOUNT_KEY=$B2KEY" "$KIT" \
     && ok "non-interactive init → kit file 0600 (repo, password, B2 key, restore steps) without a TTY" || bad "ni init: rc=$rc kit=$(perm "$KIT" 2>/dev/null) $(cat "$T/ni.err")"
 ! grep -q -- "$PW2" "$T/ni.out" "$T/ni.err" && ! grep -q -- "$B2KEY" "$T/ni.out" "$T/ni.err" && ! grep -q -- "$PW2" "$CALLS" \
     && ok "the password and keys never reach stdout, stderr or any command line" || bad "secret leaked: $(cat "$T/ni.out" "$T/ni.err")"
-[ "$(cat "$S2/recovery-kit" 2>/dev/null)" = pending ] && ok "marker state/recovery-kit = pending (recovery kit not yet saved)" || bad "marker: $(cat "$S2/recovery-kit" 2>/dev/null)"
+[ "$(cat "$S2/kit/status" 2>/dev/null)" = pending ] && ok "marker state/kit/status = pending (recovery kit not yet saved)" || bad "marker: $(cat "$S2/kit/status" 2>/dev/null)"
 sum1="$(cat "$KIT" "$S2/backup/restic-password" | cksum)"; m=$(mark)
 ni sh "$SAFETY" init --non-interactive >"$T/ni.out" 2>"$T/ni.err" </dev/null; rc=$?
 [ "$rc" = 0 ] && ! calls_since "$m" | grep -q "^restic" && [ "$(cat "$KIT" "$S2/backup/restic-password" | cksum)" = "$sum1" ] && ! grep -q -- "$PW2" "$T/ni.out" "$T/ni.err" \
     && ok "re-run is a no-op (rc 0, no restic call, kit + password unchanged, nothing printed)" || bad "ni re-run: rc=$rc $(calls_since "$m" | head -3)"
 ni sh -c '. "$1"; _bk_kit_mark saved' _ "$SAFETY"
-[ "$(cat "$S2/recovery-kit")" = saved ] && ok "kit-saved clears the pending marker" || bad "kit-saved: $(cat "$S2/recovery-kit")"
+[ "$(cat "$S2/kit/status")" = saved ] && ok "kit-saved clears the pending marker" || bad "kit-saved: $(cat "$S2/kit/status")"
+
+echo "── K. recovery kit: read-back, W7 layout migration, owner uid"
+rb() { ni sh -c '. "$1"; _bk_kit_readback_ok "$2" "$3" && echo yes || echo no' _ "$SAFETY" "$1" "$S2/backup/restic-password"; }
+TAIL6="${PW2: -6}"; WRONG6="$(printf '%s' "$TAIL6" | tr '0-9a-f' '1-9a-f0')"
+[ "$(rb "$TAIL6")" = yes ] && [ "$(rb " $(printf '%s' "$TAIL6" | tr 'a-f' 'A-F') ")" = yes ] \
+    && ok "read-back: the password's last 6 match (case and blanks ignored)" || bad "read-back refused the right tail"
+[ "$(rb "$WRONG6")" = no ] && [ "$(rb "${PW2:0:6}")" = no ] && [ "$(rb "${TAIL6:1}")" = no ] && [ "$(rb "")" = no ] \
+    && ok "read-back: a wrong tail, the FIRST 6, 5 characters and nothing are all refused" || bad "read-back accepted a wrong answer"
+L="$T/state3"; mkdir -p "$L/backup"; echo "kit-v7" > "$L/backup/recovery-kit.txt"; echo saved > "$L/recovery-kit"
+ct SYNAP_STATE_DIR="$L" sh -c '. "$1"; _bk_kit_layout' _ "$SAFETY"
+[ "$(cat "$L/kit/recovery-kit.txt" 2>/dev/null)" = kit-v7 ] && [ "$(cat "$L/kit/status" 2>/dev/null)" = saved ] \
+    && [ ! -e "$L/backup/recovery-kit.txt" ] && [ ! -e "$L/recovery-kit" ] && [ "$(perm "$L/kit/recovery-kit.txt")" = 600 ] && [ "$(perm "$L/kit")" = 700 ] \
+    && ok "a W7 pod's kit + marker move into state/kit (0600 / 0700), old paths gone" || bad "layout migration: $(ls -la "$L" "$L/kit" 2>&1 | tr '\n' ' ')"
+ct SYNAP_STATE_DIR="$L" sh -c '. "$1"; _bk_kit_layout' _ "$SAFETY"
+[ "$(cat "$L/kit/recovery-kit.txt")" = kit-v7 ] && [ "$(cat "$L/kit/status")" = saved ] && ok "layout is idempotent" || bad "layout re-run changed the kit"
+grep -q "_bk_kit_layout || true" "$SAFETY" && sed -n '/^backup_loop()/,/^}/p' "$SAFETY" | grep -q "_bk_kit_layout" \
+    && ok "the backup loop converges the layout on every pass" || bad "backup_loop does not run _bk_kit_layout"
+img_uid="$(sed -n 's/.*adduser -S nodejs -u \([0-9][0-9]*\).*/\1/p' "$SCRIPT_DIR/../Dockerfile")"
+kit_uid="$(sed -n 's/^_BK_BACKEND_UID=\([0-9][0-9]*\)$/\1/p' "$SAFETY")"
+[ -n "$img_uid" ] && [ "$img_uid" = "$kit_uid" ] && ok "state/kit is given to the backend image's uid ($kit_uid = deploy/Dockerfile)" || bad "uid drift: Dockerfile=$img_uid script=$kit_uid"
+grep -q '\./state/kit:/opt/synap/deploy/state/kit:rw' "$COMPOSE_FILE" \
+    && ok "compose mounts state/kit read-write into the backend" || bad "compose does not mount ./state/kit:/opt/synap/deploy/state/kit:rw into the backend"
 rm -rf "$S2" "$REPO2"; mkdir -p "$S2/bin" && cp "$T/bin/restic" "$S2/bin/restic"
 due() { ct SYNAP_STATE_DIR="$S2" "$@" sh -c '. "$1"; _bk_auto_init_due && echo due || echo no' _ "$SAFETY"; }
 B2ENV=(BACKUP_REPOSITORY=b2:bucket:pods/x BACKUP_B2_ACCOUNT_ID=id BACKUP_B2_ACCOUNT_KEY=k)
@@ -277,7 +305,8 @@ S="$REPO/snaps/$snap1"
 calls_since "$m" | grep "^restic backup" | grep -q -- "--tag fp:5|100|1" && ok "snapshot tagged with the dump's fingerprint" || bad "no fp tag: $(calls_since "$m" | grep '^restic backup')"
 ls "$S/backups/"*-auto/synap.dump >/dev/null 2>&1 && [ -f "$S/synap-deploy/.env" ] && [ -f "$S/synap-state/release" ] && [ -f "$S/backups/.minio-mirror/files/obj.txt" ] \
     && ok "snapshot holds dumps + .env + state/ + MinIO export (at the container paths)" || bad "snapshot content: $(cd "$S" && find . | head -20)"
-[ ! -e "$S/synap-state/bin" ] && [ ! -e "$S/synap-state/backup" ] && ok "state/bin and the password are excluded from the snapshot" || bad "excluded paths present"
+[ ! -e "$S/synap-state/bin" ] && [ ! -e "$S/synap-state/backup" ] && [ ! -e "$S/synap-state/kit" ] && [ -d "$T/state/kit" ] \
+    && ok "state/bin, the password and the recovery kit are excluded from the snapshot" || bad "excluded paths present"
 grep -q "'backup', 'ok'.*'$snap1'" "$RUNS" && ok "backup_runs row: ok + snapshot id + fingerprint" || bad "runs: $(tail -1 "$RUNS")"
 calls_since "$m" | grep -q "^curl .*https://hc.example/ping/abc" && ok "heartbeat pinged on success" || bad "no heartbeat"
 

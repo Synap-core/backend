@@ -166,9 +166,6 @@ jobs:
             -e ALLOWED_ORIGINS=http://localhost:3000 \
             -e KRATOS_PUBLIC_URL=http://localhost:9999 \
             -e KRATOS_ADMIN_URL=http://localhost:9999 \
-            -e HYDRA_PUBLIC_URL=http://localhost:9999 \
-            -e HYDRA_ADMIN_URL=http://localhost:9999 \
-            -e ORY_HYDRA_SECRETS_SYSTEM=smoke-test \
             -e MINIO_ACCESS_KEY_ID=smoke-test \
             -e MINIO_SECRET_ACCESS_KEY=smoke-test-secret \
             synap-backend:smoke-test
@@ -448,7 +445,7 @@ jobs:
       - name: Deploy bundle (synap + deploy files of this commit)
         run: |
           git archive --format=tar.gz -o "synap-deploy-${{ steps.id.outputs.id }}.tar.gz" HEAD \
-            synap deploy kratos hydra docker/postgres ':(exclude)deploy/__tests__'
+            synap deploy kratos docker/postgres ':(exclude)deploy/__tests__'
 
       - name: Build release.json (third-party images resolved to digests)
         run: |

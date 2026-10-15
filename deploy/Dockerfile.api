@@ -92,7 +92,6 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 
 # Copy configuration files needed at runtime (from build context, not builder stage)
 COPY --chown=nodejs:nodejs kratos ./kratos
-COPY --chown=nodejs:nodejs hydra ./hydra
 
 
 # Copy migrations (SQL files not included in pnpm deploy)

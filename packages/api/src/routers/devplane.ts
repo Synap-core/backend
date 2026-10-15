@@ -421,11 +421,6 @@ export const devplaneRouter = router({
         servicePort: 4433,
         healthUrl: "http://localhost:4433/health/alive",
       });
-      await ins("devplane_service", "Hydra", {
-        serviceType: "oauth2",
-        servicePort: 4444,
-        healthUrl: "http://localhost:4444/health/alive",
-      });
       await ins("devplane_service", "Caddy", {
         serviceType: "reverse-proxy",
         servicePort: 443,
@@ -814,7 +809,7 @@ export const devplaneRouter = router({
       await ins("devplane_recipe", "Deploy Data Pod", {
         recipeName: "Deploy Data Pod",
         recipeDescription:
-          "Pull new backend image, run DB migrations, canary-validate, then swap production. Uses update-pod.sh canary-first strategy.",
+          "Pull new backend image, run DB migrations, canary-validate, then swap production. Uses `synap update` (backup, canary, automatic rollback).",
         recipeTemplate: "docker-compose",
         onFailure: "stop",
         recipeSteps: JSON.stringify([
@@ -830,7 +825,7 @@ export const devplaneRouter = router({
           },
           {
             name: "Full canary update",
-            command: "./deploy/update-pod.sh latest",
+            command: "synap update --release stable",
           },
           {
             name: "Health check",

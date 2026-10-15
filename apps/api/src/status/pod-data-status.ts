@@ -3,11 +3,12 @@
  * A data alarm is a body field, never a non-200 — canary swaps and healthchecks gate on HTTP status.
  * Both routes are public: error detail goes to the server log, never the body.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "@synap-core/core";
 import type { BackupStatus, BackupRunSummary } from "@synap/database";
 import type { AuthHealth } from "./pod-auth-status.js";
+import { readKitMarker } from "../backup-kit/kit-store.js";
 
 /** Where a public route's error detail goes instead of its response body. */
 export type ErrorLog = (err: unknown, msg: string) => void;
@@ -51,16 +52,12 @@ const publicRun = (r: BackupRunSummary | null): PublicBackupRun | null =>
       }
     : null;
 
-/** deploy/state/recovery-kit holds one word, `pending` or `saved` (pgdata-safety.sh _bk_kit_mark). */
+/** deploy/state/kit/status: `pending` or `saved` (pgdata-safety.sh _bk_kit_mark). */
 export function readRecoveryKitSaved(
-  stateDir: string = process.env.SYNAP_POD_STATE_DIR || DEFAULT_POD_STATE_DIR
+  stateDir: string = podStateDir()
 ): boolean | null {
-  try {
-    const word = readFileSync(join(stateDir, "recovery-kit"), "utf8").trim();
-    return word === "saved" ? true : word === "pending" ? false : null;
-  } catch {
-    return null;
-  }
+  const marker = readKitMarker(stateDir);
+  return marker === "saved" ? true : marker === "pending" ? false : null;
 }
 
 export function toPublicBackupStatus(
@@ -114,6 +111,8 @@ export async function backupStatusBody(
 
 /** Where deploy/state is visible inside the backend (compose mounts deploy/ ro). */
 export const DEFAULT_POD_STATE_DIR = "/opt/synap/deploy/state";
+export const podStateDir = () =>
+  process.env.SYNAP_POD_STATE_DIR || DEFAULT_POD_STATE_DIR;
 
 export interface DataHealth {
   /** ok · empty (had users, now none — ALARM) · unknown (could not check) */

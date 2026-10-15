@@ -22,9 +22,9 @@ it.
    asserts `/status/release`'s `migrations.lastApplied` matches the newest
    `packages/database/migrations/*.sql` file in the checkout (works today,
    no image change needed), and — when the image reports a non-null
-   `buildStamp` — asserts it equals `git rev-parse HEAD`. Wired into
-   `deploy/update-pod.sh` (Step 6b, right after the production health check,
-   before image cleanup).
+   `buildStamp` — asserts it equals `git rev-parse HEAD`. (It was wired
+   into `deploy/update-pod.sh`, removed 2026-10-15; `synap update` verifies
+   buildStamp + migration level itself.)
 5. **`synap` CLI (`sync_git_before_build`, ~line 92)** — every from-source
    `docker compose build` call (in both `cmd_install` and `cmd_update`,
    including the pull-failure fallback paths) is now preceded by

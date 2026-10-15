@@ -97,7 +97,7 @@ awk -F'|' '$3 !~ /(\.test\.|\.spec\.|(^|\/)test\/|__tests__\/)/' "$SCAN" > "$SCA
 # ── non-vacuity: the set must contain the doors this exists for ───────────────
 backend_n=$(grep -c '^backend|' "$SCAN")
 [ "$backend_n" -ge 30 ] && ok "scanned $backend_n backend files" || bad "only $backend_n backend files scanned (expected >= 30)"
-for must in "backend|$HERE|synap" "backend|$HERE|deploy/update-pod.sh" "backend|$HERE|deploy/pgdata-safety.sh"; do
+for must in "backend|$HERE|synap" "backend|$HERE|deploy/archive-pod.sh" "backend|$HERE|deploy/pgdata-safety.sh"; do
   grep -qxF "$must" "$SCAN" && ok "scan includes ${must##*|}" || bad "scan is missing ${must##*|}"
 done
 

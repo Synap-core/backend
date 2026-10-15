@@ -6,8 +6,7 @@
  *       empty atomic-claim → generic 400).
  *   (c) redeem on a valid code marks it consumed AND mints the claude-web key with
  *       linkedUserId = createdByUserId = podUserId, returning the contract shape.
- *   (d) scope-grammar mapping: mcp:read → mcp.read, mcp:write → mcp.write (+ the
- *       hub-protocol peers), unknown dropped, empty → functional default set.
+ *   (d) scope-grammar mapping moved with its helper to routers/oauth/config.test.ts.
  *   (e) revoke shares the SAME CP-trusted-issuer auth block as redeem, but scoped
  *       to its own `mcp_revoke` purpose claim — a `mcp_redeem`-scoped assertion
  *       must NOT work here (cross-purpose replay), and vice-versa.
@@ -119,10 +118,7 @@ vi.mock("../../../utils/jwks-client.js", async (importOriginal) => ({
 }));
 
 // Import AFTER mocks are registered.
-import {
-  registerMcpRedeemRoutes,
-  mapCpScopesToPodScopes,
-} from "./mcp-redeem.js";
+import { registerMcpRedeemRoutes } from "./mcp-redeem.js";
 
 function buildApp() {
   const app = new Hono();
@@ -166,50 +162,6 @@ async function postRevoke(app: Hono, body: unknown) {
     body: JSON.stringify(body),
   });
 }
-
-// ─── (d) scope-grammar mapping ────────────────────────────────────────────────
-
-describe("mapCpScopesToPodScopes", () => {
-  it("maps CP colon grammar to pod dot grammar (mcp:read → mcp.read)", () => {
-    const out = mapCpScopesToPodScopes(["mcp:read"]);
-    expect(out).toContain("mcp.read");
-    expect(out).not.toContain("mcp:read");
-    // read implies the hub-protocol peer so the key can drive /mcp
-    expect(out).toContain("hub-protocol.read");
-  });
-
-  it("maps mcp:write → mcp.write and pulls in hub-protocol read+write", () => {
-    const out = mapCpScopesToPodScopes(["mcp:write"]);
-    expect(out).toContain("mcp.write");
-    expect(out).toContain("hub-protocol.write");
-    expect(out).toContain("hub-protocol.read");
-  });
-
-  it("drops unknown scopes", () => {
-    const out = mapCpScopesToPodScopes(["totally:bogus"]);
-    // nothing valid mapped → falls back to the functional default set
-    expect(out).toEqual(
-      expect.arrayContaining([
-        "hub-protocol.read",
-        "hub-protocol.write",
-        "mcp.read",
-        "mcp.write",
-      ])
-    );
-  });
-
-  it("empty / null → functional default set", () => {
-    for (const input of [[], null, undefined] as const) {
-      const out = mapCpScopesToPodScopes(input);
-      expect(out).toEqual([
-        "hub-protocol.read",
-        "hub-protocol.write",
-        "mcp.read",
-        "mcp.write",
-      ]);
-    }
-  });
-});
 
 // ─── (b) reject invalid codes ─────────────────────────────────────────────────
 

@@ -136,6 +136,9 @@ export function buildAuthorizationServerMetadata(
     authorization_endpoint: `${issuer}/authorize`,
     token_endpoint: `${issuer}/token`,
     registration_endpoint: `${issuer}/register`,
+    // RFC 7009 / RFC 8414 §2. Public clients only, so possession is the auth.
+    revocation_endpoint: `${issuer}/revoke`,
+    revocation_endpoint_auth_methods_supported: ["none"],
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code"],
     code_challenge_methods_supported: ["S256"],

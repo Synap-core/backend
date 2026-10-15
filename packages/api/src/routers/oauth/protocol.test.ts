@@ -97,6 +97,11 @@ describe("buildAuthorizationServerMetadata", () => {
     expect(doc.authorization_endpoint).toBe(`${issuer}/authorize`);
     expect(doc.token_endpoint).toBe(`${issuer}/token`);
     expect(doc.registration_endpoint).toBe(`${issuer}/register`);
+    expect(doc.revocation_endpoint).toBe(`${issuer}/revoke`);
+  });
+
+  it("advertises RFC 7009 revocation for public clients only", () => {
+    expect(doc.revocation_endpoint_auth_methods_supported).toEqual(["none"]);
   });
 
   it("advertises S256 ONLY — OAuth 2.1 removes `plain`", () => {

@@ -48,6 +48,10 @@ const {
   signPodJwt,
 } = require("./pod-identity");
 const { createCommandPuller } = require("./pull");
+const {
+  collectUpdateOutcome,
+  queueUpdateRequest,
+} = require("./update-request");
 
 const PORT = parseInt(process.env.POD_AGENT_PORT || "4002", 10);
 const DEPLOY_DIR = process.env.DEPLOY_DIR || "/deploy";
@@ -160,15 +164,9 @@ function consumeSignedCommandReceipt(payload) {
 
 // ── Commands ──
 
+// `update` is not here: the agent never runs it. A pulled update becomes a
+// request for the host engine (update-request.js, decision 7).
 const COMMANDS = {
-  update: {
-    script: "update-pod.sh",
-    args: (p) => [validateUpdateTargetVersion(p)],
-    // Canary (3 min) + production health (2 min) + image pull (variable).
-    // On first pull of a multi-hundred-MB image this can exceed 10 min, causing
-    // a false-failed callback even though the containers kept running. 25 min.
-    timeout: 25 * 60 * 1000,
-  },
   suspend: {
     script: "suspend-pod.sh",
     args: (p) => [p.callbackUrl || "", p.callbackJwt || ""],
@@ -362,7 +360,7 @@ function respond(res, code, body) {
 function buildResultPacket(payload, commandName, status, err) {
   const errorSummary = err ? err.message : null;
   const base = {
-    phase: commandName === "update" ? "update" : "operation",
+    phase: "operation",
     step: "terminal",
     status,
     commandType: commandName,
@@ -582,6 +580,13 @@ http
       assertPushable(payload);
       const commandName = resolveCommandName(payload);
       const policy = prepareCommand(commandName, payload);
+      // Its outcome can only reach the CP that served it (pull); a push has
+      // nowhere to report it, so it is refused before the receipt is spent.
+      if (commandName === "update")
+        return respond(res, 412, {
+          error: "update is pull-only: enroll this pod so its agent pulls",
+          code: "POD_AGENT_PULL_REQUIRED",
+        });
 
       if (consumeSignedCommandReceipt(payload) === "replayed")
         return respond(res, 409, { error: "replay" });
@@ -663,6 +668,19 @@ async function runPulledCommand(commandName, payload) {
         };
   }
   const policy = prepareCommand(commandName, payload);
+  if (commandName === "update") {
+    try {
+      return queueUpdateRequest({
+        deployDir: DEPLOY_DIR,
+        stateDir: POD_AGENT_STATE_DIR,
+        commandId: payload.commandId,
+        payload,
+      });
+    } catch (error) {
+      if (error.code !== "POD_AGENT_BUSY") throw error;
+      return { status: "failed", code: error.code, error: error.message };
+    }
+  }
   if (!COMMANDS[commandName]) {
     return {
       status: "failed",
@@ -680,14 +698,7 @@ async function runPulledCommand(commandName, payload) {
     payload,
     policy
   );
-  return {
-    status,
-    output,
-    ...(err ? { error: err.message } : {}),
-    ...(typeof payload.targetVersion === "string"
-      ? { version: payload.targetVersion }
-      : {}),
-  };
+  return { status, output, ...(err ? { error: err.message } : {}) };
 }
 
 if (POD_AGENT_TRUST.configured) {
@@ -711,6 +722,13 @@ if (POD_AGENT_TRUST.configured) {
     consumeReceipt: consumeSignedCommandReceipt,
     resolveCommand: resolveCommandName,
     runCommand: runPulledCommand,
+    collectOutcomes: () => {
+      const outcome = collectUpdateOutcome({
+        deployDir: DEPLOY_DIR,
+        stateDir: POD_AGENT_STATE_DIR,
+      });
+      return outcome ? [outcome] : [];
+    },
     log,
   });
   puller.start();

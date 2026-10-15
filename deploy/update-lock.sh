@@ -2,13 +2,13 @@
 # ============================================================================
 # Update lock — ONE pod-mutating operation at a time (POSIX sh, sourced)
 # ============================================================================
-# WHY: `synap update`, eve, pod-agent (update-pod.sh) and an operator could all
+# WHY: `synap update`, eve, the update unit and an operator could all
 # run an install/update/rebuild/reset/restore against the same deploy dir at
 # the same time — two migrations, two canary swaps, a reset racing an update.
 # Nothing serialised them (update-door plan 2026-10-04, §1 contradiction 7).
 #
-# Sourced by `synap` (install/update/rebuild/reset/restore) and
-# deploy/update-pod.sh. The lock lives at <deploy_dir>/state/update.lock; a
+# Sourced by `synap` (install/update/rebuild/reset/restore). The lock lives
+# at <deploy_dir>/state/update.lock; a
 # second invocation fails FAST with the holder's identity — it never waits,
 # so an automation retry cannot queue a stale update behind a live one.
 #
@@ -25,7 +25,7 @@ _synap_lock_busy() {
     echo "❌ Another Synap pod operation is already running against this deploy dir." >&2
     echo "   Holder: ${2:-unknown}" >&2
     echo "   Refusing to start '${1}' concurrently — wait for it to finish, then re-run." >&2
-    [ -n "${3:-}" ] && echo "   If no synap / eve / update-pod process is running, remove ${3} and re-run." >&2
+    [ -n "${3:-}" ] && echo "   If no synap / eve process is running, remove ${3} and re-run." >&2
     return 0
 }
 

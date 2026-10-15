@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,17 +83,18 @@ describe("GET /status/backup body", () => {
     });
   });
 
-  it("recoveryKitSaved is read from the state/recovery-kit word the pod script writes — a bare boolean", async () => {
+  it("recoveryKitSaved is read from the state/kit/status word the pod script writes — a bare boolean", async () => {
     const dir = mkdtempSync(join(tmpdir(), "kit-"));
     expect(readRecoveryKitSaved(dir)).toBeNull(); // no kit to save
-    writeFileSync(join(dir, "recovery-kit"), "pending\n");
+    mkdirSync(join(dir, "kit"));
+    writeFileSync(join(dir, "kit", "status"), "pending\n");
     expect(readRecoveryKitSaved(dir)).toBe(false);
-    writeFileSync(join(dir, "recovery-kit"), "saved\n");
+    writeFileSync(join(dir, "kit", "status"), "saved\n");
     expect(readRecoveryKitSaved(dir)).toBe(true);
-    writeFileSync(join(dir, "recovery-kit"), "garbage");
+    writeFileSync(join(dir, "kit", "status"), "garbage");
     expect(readRecoveryKitSaved(dir)).toBeNull();
     // through the real route body: the field arrives, and nothing else of the kit does
-    writeFileSync(join(dir, "recovery-kit"), "pending\n");
+    writeFileSync(join(dir, "kit", "status"), "pending\n");
     const body = await backupStatusBody(
       async () => full,
       NOW,
@@ -104,17 +105,14 @@ describe("GET /status/backup body", () => {
     expect(typeof body.recoveryKitSaved).toBe("boolean");
   });
 
-  it("the script and the reader agree on the marker (file name + words)", () => {
-    const sh = readFileSync(
-      resolve(
-        dirname(fileURLToPath(import.meta.url)),
-        "../../../../deploy/pgdata-safety.sh"
-      ),
-      "utf8"
-    );
-    expect(sh).toContain('echo "$(_bk_state_dir)/recovery-kit"');
-    expect(sh).toContain("_bk_kit_mark pending");
-    expect(sh).toContain("_bk_kit_mark saved");
+  it("a W7 pod's marker (state/recovery-kit) still reads until the backup loop moves it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kit-legacy-"));
+    writeFileSync(join(dir, "recovery-kit"), "pending\n");
+    expect(readRecoveryKitSaved(dir)).toBe(false);
+    // the new place wins once it exists
+    mkdirSync(join(dir, "kit"));
+    writeFileSync(join(dir, "kit", "status"), "saved\n");
+    expect(readRecoveryKitSaved(dir)).toBe(true);
   });
 
   it("never exposes row counts, reasons or anything credential-shaped", async () => {

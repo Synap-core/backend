@@ -267,9 +267,10 @@ publish() { mkdir -p "$TMP/rel/$1"; manifest "$1" 3 > "$TMP/rel/$1/release.json"
 publish main-3333333
 setup preflight
 echo 512000 > "$FAKE/free_kb"; echo 0 > "$FAKE/cache"   # 500 MB free; the prune frees ≥ 1.5 GB (old release images)
-SYNAP_UPDATE_MIN_FREE_MB=1500 SYNAP_RELEASE_VERIFY=off run_synap update --release main-3333333; rc=$?
+UE_REQUEST_ID=stale-env SYNAP_UPDATE_MIN_FREE_MB=1500 SYNAP_RELEASE_VERIFY=off run_synap update --release main-3333333; rc=$?
 r="$(grep -n "^rmi " "$FAKE/log" | head -1 | cut -d: -f1)"; p="$(grep -n "^pull " "$FAKE/log" | head -1 | cut -d: -f1)"
 [ -n "$r" ] && [ -n "$p" ] && [ "$r" -lt "$p" ] && ok "(d) the update pruned before anything else (rmi before the first pull)" || { bad "(d) order rmi=$r pull=$p"; show; }
+[ "$(jq -r 'has("request")' "$DEPLOY/state/last-update.json")" = false ] && ok "a person's update answers no request (no request field)" || bad "manual record carries a request: $(cat "$DEPLOY/state/last-update.json")"
 [ "$(jq -r .reason "$DEPLOY/state/last-update.json")" = "image pull failed" ] && ! grep -q "MB free on" "$S/out" \
   && ok "(d) 500 MB free + an old release to prune ⇒ the disk check passed (stopped later at the injected pull failure)" || { bad "(d) record: $(cat "$DEPLOY/state/last-update.json")"; show; }
 setup refuse
@@ -349,15 +350,19 @@ grep -q "main-4444444/release.json" "$FAKE/curl_log" && ok "request: honoured ev
 [ "$rc" != 0 ] && [ "$(jq -r '.status + "|" + .to + "|" + .reason' "$DEPLOY/state/last-update.json")" = "aborted|main-4444444|manifest signature refused" ] \
   && grep -q "SYNAP_RELEASE_VERIFY=enforce" "$S/out" && ok "request: the unattended path ENFORCES the release signature (unsigned ⇒ refused, recorded)" || { bad "unattended enforce: $(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 ! grep -q "SYNAP_RELEASE_VERIFY" "$DEPLOY/.env" && ok "request: enforce comes from the unattended path, not a .env change" || bad ".env carries SYNAP_RELEASE_VERIFY"
+[ "$(jq -r .request "$DEPLOY/state/last-update.json")" = jti-1 ] && grep -q '"request":"jti-1"' "$DEPLOY/state/events.jsonl" \
+  && ok "request: the outcome names the request it answers (pod-agent reports it back)" || bad "record lacks request jti-1: $(cat "$DEPLOY/state/last-update.json")"
 echo '{"schema":1,"release":"latest","id":"jti-2"}' > "$DEPLOY/state/requests/update.json"
 : > "$FAKE/curl_log"; run_synap update --unattended; rc=$?
 [ "$rc" != 0 ] && [ ! -e "$DEPLOY/state/requests/update.json" ] && [ ! -s "$FAKE/curl_log" ] && jq -e '.status == "aborted" and (.reason | test("invalid update request jti-2"))' "$DEPLOY/state/last-update.json" >/dev/null \
   && ok "request: 'latest' refused (no implicit latest), taken, recorded" || { bad "invalid request rc=$rc"; show; }
+[ "$(jq -r .request "$DEPLOY/state/last-update.json")" = jti-2 ] && ok "request: a refused request's record names it too" || bad "invalid record lacks request jti-2"
 echo '{"schema":1,"release":"main-4444444","id":"jti-3"}' > "$DEPLOY/state/requests/update.json"
 mkdir -p "$DEPLOY/state/update.lock.d"; echo "synap apply pid=$$ since=2026-10-15T00:00:00Z" > "$DEPLOY/state/update.lock.d/owner"
 : > "$FAKE/curl_log"; run_synap update --unattended; rc=$?
 [ "$rc" != 0 ] && [ ! -e "$DEPLOY/state/requests/update.json" ] && [ ! -s "$FAKE/curl_log" ] && jq -e '.reason | test("held the update lock — request jti-3")' "$DEPLOY/state/last-update.json" >/dev/null \
   && ok "request + busy lock: taken and recorded as not run (no loop, no silent drop)" || { bad "busy request rc=$rc: $(cat "$DEPLOY/state/last-update.json")"; show; }
+[ "$(jq -r .request "$DEPLOY/state/last-update.json")" = jti-3 ] && ok "request + busy lock: the record names the request" || bad "busy record lacks request jti-3"
 rm -rf "$DEPLOY/state/update.lock.d"
 
 # ═══ 6. units ════════════════════════════════════════════════════════════════

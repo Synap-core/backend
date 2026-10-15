@@ -230,8 +230,8 @@ function verifyCommandToken(
  * An `update` command must name the release it installs. A missing version
  * used to become `latest` — a mutable tag that silently changes meaning, so a
  * bare update command could install anything (update-door plan P0,
- * 2026-10-04). The value lands in update-pod.sh's `sed` and in a docker tag,
- * so it must also be a valid docker tag.
+ * 2026-10-04). The value becomes the host engine's release id (the update
+ * request, update-request.js) and a docker tag, so it must be a valid tag.
  */
 const DOCKER_TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
@@ -248,6 +248,13 @@ function validateUpdateTargetVersion(payload) {
   }
   if (!DOCKER_TAG_PATTERN.test(version)) {
     throw invalidPayload("targetVersion is not a valid image tag");
+  }
+  // The host engine refuses it too (synap _ue_unattended_plan): a mutable tag
+  // is never a release.
+  if (version === "latest") {
+    throw invalidPayload(
+      "targetVersion 'latest' is not a release (no implicit latest)"
+    );
   }
   return version;
 }

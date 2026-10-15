@@ -49,10 +49,6 @@
     # this block). Every TLS `handle` path must reach the same upstream here —
     # explicitly, or through the backend catch-all; caddy-routes.test.sh fails
     # on drift.
-    handle /.ory/hydra/* {
-        reverse_proxy hydra:4444
-    }
-
     handle /storage/* {
         reverse_proxy minio:9001
     }
@@ -137,11 +133,6 @@
     # unauthenticated by design, so a public route = account takeover. The
     # backend reaches it on the compose network; port-exposure.test.sh fails
     # if a reverse_proxy to an admin upstream comes back.
-
-    # Ory Hydra (OAuth2)
-    handle /.ory/hydra/* {
-        reverse_proxy hydra:4444
-    }
 
     # MinIO (Object Storage) - Admin UI
     handle /storage/* {

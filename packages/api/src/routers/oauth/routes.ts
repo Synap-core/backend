@@ -1,12 +1,15 @@
 /**
  * The pod as its OWN OAuth 2.1 authorization server — HTTP surface (Path B).
  *
- * Path A puts the control plane in claude.ai's trust path: the CP is the AS, and
- * a consent code redeemed server-to-server mints the pod key (see
- * hub-protocol/rest/mcp-redeem.ts). Path B removes the CP entirely — a pod owner
- * points claude.ai straight at `https://<pod>/mcp` and this module serves the
- * whole flow. Both paths stay live; they are separable by the agentType they
- * mint (`claude-web` vs `claude-web-direct`).
+ * Founder decision 6 (2026-10-15): this AS is the ONE door that mints MCP
+ * credentials for this pod. Two kinds of client use it:
+ *   - a direct client (claude.ai, Cursor…) pointed at `https://<pod>/mcp`
+ *     → agentType `claude-web-direct`;
+ *   - the Control Plane's MCP connector, an OAuth client of this AS whose
+ *     redirect_uri sits on the approved Control Plane's origin → `claude-web`
+ *     (see `resolveOAuthAgentType`, config.ts).
+ * The legacy consent-code path (hub-protocol/rest/mcp-redeem.ts) still mints
+ * `claude-web` until the CP moves onto this AS; it is retired after that.
  *
  * Discovery chain claude.ai walks:
  *   1. POST <pod>/mcp with no token         → 401 + WWW-Authenticate:
@@ -16,6 +19,7 @@
  *   4. POST /register                       (RFC 7591 DCR)
  *   5. GET  /authorize  → pod-admin consent → back with ?code=
  *   6. POST /token      (PKCE S256 verifier enforced)
+ *   7. POST /revoke     (RFC 7009 — the holder of a key retires it)
  *
  * NOTE: the SDK's own OAuth helpers (`@modelcontextprotocol/sdk` 1.29.0,
  * `server/auth/*`) are Express-shaped — they take `express.RequestHandler` and
@@ -34,15 +38,21 @@
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
 
+import { db, eq, users } from "@synap/database";
+
 import { provisionSurfaceAgentKey } from "../../services/agent-identity-service.js";
+import { apiKeyService } from "../../services/api-keys.js";
 import { AGENT_KEY_TTL_DAYS } from "../../services/hub-integration-registration.js";
-import { mapCpScopesToPodScopes } from "../hub-protocol/rest/mcp-redeem.js";
 import { configuredPodAdminConsentUrl } from "../../utils/pod-admin-url.js";
 import {
-  OAUTH_AGENT_TYPE,
+  CP_CONNECTOR_AGENT_TYPE,
   OAUTH_DEFAULT_SCOPES,
+  OAUTH_REVOCABLE_AGENT_TYPES,
   OAUTH_SUPPORTED_SCOPES,
+  mapCpScopesToPodScopes,
   resolveIssuer,
+  resolveOAuthAgentType,
+  type OAuthAgentType,
 } from "./config.js";
 import {
   AuthorizeUserError,
@@ -63,6 +73,37 @@ import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
 
 /** See the `: any` rationale in hub-protocol/rest/_shared.ts (TS2742). */
 const logger: any = createLogger({ module: "pod-oauth" });
+
+/**
+ * What the minted agent and key are called, per agentType. The CP connector's
+ * labels are the ones the legacy consent-code path writes, so the agent user
+ * (singleton per human × agentType) reads the same whichever door minted it.
+ */
+const MINT_LABELS: Record<
+  OAuthAgentType,
+  {
+    agentLabel: string;
+    keyName: string;
+    keyDescription: string;
+    agentDescription: string;
+  }
+> = {
+  "claude-web-direct": {
+    agentLabel: "Claude (Web, direct)",
+    keyName: "Claude Web Direct Hub Key",
+    keyDescription:
+      "Hub Protocol auth token for claude-web-direct MCP agent — issued by the pod's own OAuth authorization server",
+    agentDescription:
+      "Claude (claude.ai web) — external MCP agent, connected directly to this pod",
+  },
+  [CP_CONNECTOR_AGENT_TYPE]: {
+    agentLabel: "Claude (Web)",
+    keyName: "Claude Web Hub Key",
+    keyDescription:
+      "Hub Protocol auth token for claude-web MCP agent — issued by the pod's own OAuth authorization server to the Synap Control Plane connector",
+    agentDescription: "Claude (claude.ai web) — external MCP agent",
+  },
+};
 
 const oauthApp = new Hono();
 
@@ -349,14 +390,17 @@ oauthApp.post("/token", async (c) => {
     // bookkeeping: `http-handler.ts` resolves identity via `resolveKeyIdentity`
     // (access/key-identity.ts), which derives `agentUserId` from the key
     // principal's `users.userType === 'agent'` — this OAuth-minted key's
-    // principal IS an agent (`OAUTH_AGENT_TYPE`), so `agentUserId` is always
+    // principal IS an agent (a `claude-web*` agentType), so `agentUserId` is always
     // set. `linkedUserId` instead feeds `effectiveUserId` (`linkedUserId ??
     // userId`), the data floor the agent reads/writes as. Drop it here and
     // every Claude write silently acts as the AGENT's own identity instead of
     // the consenting human's — no error, no signal.
     const scopes = mapCpScopesToPodScopes(claimed.scopes);
+    // CP connector vs direct client, by the origin the code was delivered to.
+    // A registry read failure throws → server_error, never a silent guess.
+    const agentType = await resolveOAuthAgentType(claimed.redirectUri);
     const provisioned = await provisionSurfaceAgentKey({
-      agentType: OAUTH_AGENT_TYPE,
+      agentType,
       createdByUserId: claimed.userId,
       linkedUserId: claimed.userId,
       // Sibling revocation inside provisionSurfaceAgentKey is instance-scoped.
@@ -367,12 +411,7 @@ oauthApp.post("/token", async (c) => {
       instanceId: `oauth:${claimed.clientId}:${claimed.userId}`,
       scopes,
       ensureRegistryRow: true,
-      agentLabel: "Claude (Web, direct)",
-      keyName: "Claude Web Direct Hub Key",
-      keyDescription:
-        "Hub Protocol auth token for claude-web-direct MCP agent — issued by the pod's own OAuth authorization server",
-      agentDescription:
-        "Claude (claude.ai web) — external MCP agent, connected directly to this pod",
+      ...MINT_LABELS[agentType],
       logger,
     });
 
@@ -412,6 +451,7 @@ oauthApp.post("/token", async (c) => {
         podUserId: claimed.userId,
         keyId: provisioned.keyId,
         agentUserId: provisioned.agentUserId,
+        agentType,
         scopes,
       },
       "pod-oauth: access token issued"
@@ -436,6 +476,110 @@ oauthApp.post("/token", async (c) => {
       return c.json(err.toJSON(), status);
     }
     logger.error({ err }, "pod-oauth: token endpoint failed");
+    return c.json(
+      { error: "server_error", error_description: "Internal server error" },
+      500
+    );
+  }
+});
+
+// ─── /revoke (RFC 7009) ──────────────────────────────────────────────────────
+//
+// The holder of an access token retires it. Every client of this AS is public
+// (no client secret), so POSSESSION of the token is the authority — the same
+// authority that lets the holder use it. What it may reach is floored to the
+// keys this AS mints: a token whose owner is not a `claude-web*` agent is
+// treated as unknown, so presenting a human PAT, an IS key or any other key
+// here can never kill it.
+//
+// RFC 7009 §2.2: an invalid, unknown, expired or already-revoked token is a
+// 200 too — the client's goal (the token is dead) is met, and the answer is no
+// oracle for which tokens exist. A `client_id` that contradicts the client the
+// key was minted for (`oauth:<clientId>:<user>` instance) is refused (§2.1).
+// Keys minted by the legacy consent-code path (`mcp:` instance) carry no
+// client binding, so possession alone retires them — that is how the Control
+// Plane retires a grant it holds whichever door minted it.
+
+oauthApp.post("/revoke", async (c) => {
+  c.header("Cache-Control", "no-store");
+  if (!issuerOr503()) return c.json(ISSUER_UNCONFIGURED, 503);
+
+  let params: Record<string, string>;
+  try {
+    params = await readTokenParams(
+      await c.req.text(),
+      c.req.header("content-type") ?? ""
+    );
+  } catch {
+    return c.json(
+      { error: "invalid_request", error_description: "Malformed request body" },
+      400
+    );
+  }
+  const presented = params.token?.trim();
+  if (!presented) {
+    return c.json(
+      { error: "invalid_request", error_description: "token is required" },
+      400
+    );
+  }
+
+  try {
+    const status = await apiKeyService.getApiKeyStatus(presented);
+    // Only a LIVE key has anything to revoke; every other state is already the
+    // outcome the client asked for.
+    if (status.status !== "valid") return c.body(null, 200);
+    const key = status.record;
+
+    const owner = await db.query.users.findFirst({
+      where: eq(users.id, key.userId),
+      columns: { userType: true, agentType: true },
+    });
+    const revocable =
+      owner?.userType === "agent" &&
+      (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
+        owner.agentType ?? ""
+      );
+    if (!revocable) {
+      logger.warn(
+        { keyId: key.id },
+        "pod-oauth: /revoke presented a key this AS does not mint — ignored"
+      );
+      return c.body(null, 200);
+    }
+
+    const boundClient = key.instanceId?.startsWith("oauth:")
+      ? key.instanceId.slice("oauth:".length).split(":")[0]
+      : null;
+    if (boundClient && params.client_id && params.client_id !== boundClient) {
+      logger.warn(
+        { keyId: key.id, clientId: params.client_id },
+        "pod-oauth: /revoke by a client the token was not issued to"
+      );
+      return c.json(
+        {
+          error: "unauthorized_client",
+          error_description: "The token was not issued to this client",
+        },
+        400
+      );
+    }
+
+    // The ONE revoke door (drops the verification cache, so the key stops
+    // validating now). revokedBy = the key's own agent owner — no human acts
+    // here, the same convention the legacy /mcp/revoke uses.
+    await apiKeyService.revokeApiKey(
+      key.id,
+      key.userId,
+      "OAuth token revocation (RFC 7009)"
+    );
+    logger.info(
+      { keyId: key.id, agentType: owner?.agentType },
+      "pod-oauth: access token revoked"
+    );
+    return c.body(null, 200);
+  } catch (err) {
+    logger.error({ err }, "pod-oauth: revoke endpoint failed");
     return c.json(
       { error: "server_error", error_description: "Internal server error" },
       500

@@ -90,6 +90,25 @@ export function decideCredentialChange(input: {
   return { allow: false, reason: "cloud_session_not_allowed" };
 }
 
+/**
+ * May this session READ a secret the pod holds for its owner (the restic
+ * recovery kit, which opens every backup)? Same Cloud rule as a credential
+ * change, minus the `first_factor` exception: handing a Cloud-only session
+ * its first pod factor gives the Cloud nothing it did not have, but handing
+ * it the kit would let the Control Plane read the backups it must never read.
+ * With `sign_in_recovery` the owner already trusts the Cloud to take the
+ * account over, so the kit adds nothing.
+ */
+export function decideOwnerSecretRead(input: {
+  trust: CloudTrustMode;
+  cloudOnly: boolean;
+}): { allow: true } | { allow: false; reason: "cloud_session_not_allowed" } {
+  if (!input.cloudOnly || input.trust === "sign_in_recovery") {
+    return { allow: true };
+  }
+  return { allow: false, reason: "cloud_session_not_allowed" };
+}
+
 /** Kratos identity credential types that are a pod-held way in. */
 const POD_HELD_CREDENTIAL_TYPES = new Set(["password", "passkey", "webauthn"]);
 

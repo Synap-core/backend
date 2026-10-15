@@ -6,20 +6,47 @@
  * is willing to grant.
  */
 
+import {
+  CONTROL_PLANE_ISSUER_SCOPES,
+  TrustedIssuerService,
+  type TrustedIssuer,
+} from "@synap/database";
+import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
+
 import { canonicalizeIssuerUrl } from "./protocol.js";
 
 /**
- * Agent type for a Path-B (pod-as-AS) grant.
+ * Agent type for a grant to any client OTHER than this pod's approved Control
+ * Plane — claude.ai, Cursor, anything that points straight at `<pod>/mcp`.
  *
- * Deliberately distinct from Path A's `claude-web` (CP-as-AS + consent code, see
- * hub-protocol/rest/mcp-redeem.ts). Both paths mint the same KIND of thing — an
- * `api_keys` row owned by a pod-wide agent user — but keeping the agentType
- * separate means the two trust paths are separable in the data: a pod owner can
- * see, audit and revoke "Claude talked to me directly" independently of "Claude
- * talked to me through the control plane", and /mcp/revoke's `agentType ===
- * "claude-web"` security floor can never reach a Path-B key.
+ * Distinct from {@link CP_CONNECTOR_AGENT_TYPE} so the two trust paths stay
+ * separable in the data: a pod owner can see, audit and revoke "Claude talked to
+ * me directly" independently of "Claude talked to me through the control plane",
+ * and /mcp/revoke's `agentType === "claude-web"` security floor can never reach
+ * a direct key.
  */
 export const OAUTH_AGENT_TYPE = "claude-web-direct";
+
+/**
+ * Agent type for the Control Plane's MCP connector (`api.synap.live/mcp`), which
+ * proxies `pod__*` tools on a pod key it holds. Founder decision 6 (2026-10-15):
+ * this pod's own AS mints that key too — the CP is just an OAuth client whose
+ * redirect origin is the approved Control Plane's (see
+ * {@link resolveOAuthAgentType}). The SAME agentType the legacy consent-code
+ * path (hub-protocol/rest/mcp-redeem.ts) mints, because readers key on it:
+ * `services/capability-briefs/door-tool-render.ts` renders `pod__`-prefixed tool
+ * names for exactly this agentType.
+ */
+export const CP_CONNECTOR_AGENT_TYPE = "claude-web";
+
+export type OAuthAgentType =
+  typeof OAUTH_AGENT_TYPE | typeof CP_CONNECTOR_AGENT_TYPE;
+
+/** The only agent types whose keys `/revoke` (RFC 7009) may revoke. */
+export const OAUTH_REVOCABLE_AGENT_TYPES: readonly OAuthAgentType[] = [
+  OAUTH_AGENT_TYPE,
+  CP_CONNECTOR_AGENT_TYPE,
+];
 
 /**
  * Scopes this AS advertises and is willing to grant, in POD grammar.
@@ -75,4 +102,97 @@ export function normalizeRequestedScopes(
   requested: readonly string[]
 ): string[] {
   return requested.map((s) => s.replace(/:/g, "."));
+}
+
+/**
+ * Functional default scope set for an MCP agent key — the same capability
+ * surface as `INTEGRATION_HUB_SCOPES.custom`. An MCP agent drives the pod's
+ * `/mcp` endpoint, which dispatches through the hub, so it needs both the
+ * `mcp.*` scopes AND their `hub-protocol.*` peers to function end-to-end.
+ */
+export const MCP_CONNECT_DEFAULT_SCOPES: readonly ApiKeyScope[] = [
+  "hub-protocol.read",
+  "hub-protocol.write",
+  "mcp.read",
+  "mcp.write",
+];
+
+/**
+ * Map requested scopes in either grammar — the CP's (`mcp:read`, colon) or the
+ * pod's (`mcp.read`, dot) — to valid pod `api_keys` scopes, and ensure the
+ * hub-protocol peer of each mcp scope is present so the minted key can actually
+ * drive the pod's `/mcp` endpoint (MCP tool dispatch gates on the matching
+ * `hub-protocol.*` scope). Unknown/invalid scopes are dropped; an empty result
+ * falls back to the functional default set.
+ *
+ * Shared by both mint doors: `/token` (this AS) and the legacy `/mcp/redeem`.
+ */
+export function mapCpScopesToPodScopes(
+  raw: readonly string[] | null | undefined
+): ApiKeyScope[] {
+  if (!raw || raw.length === 0) return [...MCP_CONNECT_DEFAULT_SCOPES];
+
+  const mapped = new Set<ApiKeyScope>();
+  for (const s of raw) {
+    // CP grammar separates with ':' (mcp:read); pod grammar uses '.' (mcp.read).
+    const normalized = s.replace(/:/g, ".").trim();
+    if (isValidScope(normalized)) mapped.add(normalized);
+  }
+
+  // An MCP grant needs the matching hub-protocol scope to function (tool dispatch
+  // rides the hub). Read implies hub-protocol.read; write implies both.
+  if (mapped.has("mcp.read")) mapped.add("hub-protocol.read");
+  if (mapped.has("mcp.write")) {
+    mapped.add("hub-protocol.write");
+    mapped.add("hub-protocol.read");
+  }
+
+  if (mapped.size === 0) return [...MCP_CONNECT_DEFAULT_SCOPES];
+  return Array.from(mapped);
+}
+
+/** True when the registry row is this pod's APPROVED Control Plane. */
+function isApprovedControlPlane(issuer: TrustedIssuer): boolean {
+  return (
+    issuer.status === "approved" &&
+    Array.isArray(issuer.allowedScopes) &&
+    CONTROL_PLANE_ISSUER_SCOPES.every((s) => issuer.allowedScopes.includes(s))
+  );
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which agent a `/token` grant mints for, decided by WHERE the code was
+ * delivered: a redirect_uri on the origin of this pod's approved Control Plane
+ * (`trusted_issuers`, status approved, holding the full
+ * `CONTROL_PLANE_ISSUER_SCOPES` set — the same test every CP-only door uses)
+ * is the CP connector; every other client is a direct one.
+ *
+ * Why the redirect origin and not the client's self-declared name: DCR is
+ * public, so `client_name` is attacker-chosen, but the code is only ever
+ * delivered to a registered https redirect_uri. A client that registers a CP
+ * callback can never see its own code — the CP receives it and refuses the
+ * unknown `state` — so claiming the CP's origin buys nothing.
+ *
+ * A failed registry read THROWS (the caller answers server_error): guessing
+ * "direct" on a read error would silently mint the CP connector a key its
+ * readers mis-render — the failure must stay visible.
+ */
+export async function resolveOAuthAgentType(
+  redirectUri: string,
+  issuers: Pick<TrustedIssuerService, "list"> = new TrustedIssuerService()
+): Promise<OAuthAgentType> {
+  const redirectOrigin = originOf(redirectUri);
+  if (!redirectOrigin) return OAUTH_AGENT_TYPE;
+  const approved = (await issuers.list()).filter(isApprovedControlPlane);
+  return approved.some((i) => originOf(i.issuerUrl) === redirectOrigin)
+    ? CP_CONNECTOR_AGENT_TYPE
+    : OAUTH_AGENT_TYPE;
 }

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Tripwire: two pod-mutating operations can never run at once.
 #
-# update-door plan P0 (2026-10-04): eve, pod-agent (update-pod.sh) and an
-# operator could run install/update/rebuild/reset/restore against one deploy
-# dir concurrently. All of them now take <deploy>/state/update.lock
+# update-door plan P0 (2026-10-04): eve, the update unit and an operator
+# could run install/update/rebuild/reset/restore against one deploy dir
+# concurrently. (pod-agent runs none of them: it writes a request that
+# synap-update.service takes under this same lock — prune-heal.test.sh.) All of them now take <deploy>/state/update.lock
 # (deploy/update-lock.sh); a second invocation fails FAST and touches nothing.
 #
-# Daemon-free: the REAL `synap` script and the REAL update-pod.sh (since P2 a
-# shim that execs `synap update --release`), with a fake
+# Daemon-free: the REAL `synap` script, with a fake
 # `docker` on PATH that can be made to block (FAKE_DOCKER_SLEEP) so one
 # operation holds the lock while another tries. Runs once per lock
 # implementation: flock (when installed — every Linux CI runner / pod host) and
@@ -22,7 +22,7 @@ bad() { echo "FAIL - $1"; fail=1; }
 REPO="$TMP/repo"; DEPLOY="$REPO/deploy"
 mkdir -p "$TMP/bin" "$DEPLOY"
 cp "$HERE/synap" "$REPO/synap"
-cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" "$HERE/deploy/update-pod.sh" "$HERE/deploy/env-config.sh" "$HERE/deploy/env.schema" "$DEPLOY/"
+cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" "$HERE/deploy/env-config.sh" "$HERE/deploy/env.schema" "$DEPLOY/"
 printf 'services:\n  postgres:\n    image: x\n' > "$DEPLOY/docker-compose.yml"
 
 cat > "$TMP/bin/docker" <<'D'
@@ -68,18 +68,6 @@ for impl in $impls; do
     && ok "[$impl] refusal names the holder" || bad "[$impl] refusal message: $(head -3 "$TMP/second.out")"
   [ ! -s "$TMP/second.log" ] && ok "[$impl] refused update invoked no docker command" || bad "[$impl] docker invoked: $(cat "$TMP/second.log")"
 
-  # update-pod.sh (pod-agent's door) is a shim to `synap update --release`: the
-  # engine's router takes the same lock, before touching .env
-  : > "$TMP/pod.log"
-  ( PATH="$TMP/bin:$PATH" FAKE_LOG="$TMP/pod.log" sh "$DEPLOY/update-pod.sh" main-abc1234 ) </dev/null >"$TMP/pod.out" 2>&1; rc=$?
-  [ "$rc" != 0 ] && grep -q "delegating to: synap update --release main-abc1234" "$TMP/pod.out" && grep -q "already running" "$TMP/pod.out" \
-    && ok "[$impl] concurrent update-pod.sh (shim) refused by the engine's lock" || bad "[$impl] update-pod.sh not refused by the lock (rc=$rc): $(tail -2 "$TMP/pod.out")"
-  [ "$(cat "$DEPLOY/.env")" = "BACKEND_VERSION=before" ] && ok "[$impl] update-pod.sh left .env untouched" || bad "[$impl] .env changed: $(cat "$DEPLOY/.env")"
-  # The router resolves the compose project (read-only `docker ps` / `volume ls`)
-  # before the lock; nothing else may run.
-  mut="$(grep -vE '^(ps -a --filter label=com.docker.compose.service=postgres|volume ls)' "$TMP/pod.log")"
-  [ -z "$mut" ] && ok "[$impl] refused update-pod.sh ran only read-only project resolution" || bad "[$impl] docker invoked: $mut"
-
   wait "$HOLDER_PID"; hrc=$?; HOLDER_PID=""
   [ "$hrc" = 0 ] && ok "[$impl] holder completed" || bad "[$impl] holder failed ($hrc): $(tail -3 "$TMP/holder.out")"
 
@@ -98,37 +86,6 @@ echo "synap update pid=$dead since=then" > "$DEPLOY/state/update.lock.d/owner"
 synap "$TMP/stale.log" rebuild pod-agent >"$TMP/stale.out" 2>&1 && grep -q "stale update lock" "$TMP/stale.out" \
   && ok "[mkdir] stale lock (dead pid) is reclaimed" || bad "[mkdir] stale lock: $(tail -3 "$TMP/stale.out")"
 [ ! -e "$DEPLOY/state/update.lock.d" ] && ok "[mkdir] lock dir removed on exit" || bad "[mkdir] lock dir left behind"
-
-# update-pod.sh runs under /bin/sh (busybox ash in the pod-agent image): every
-# file it sources must parse as POSIX sh, or it dies before reaching the lock.
-# The sourced set is derived from update-pod.sh itself.
-# A real POSIX shell is REQUIRED: macOS `sh` is bash-in-posix-mode and accepts
-# bashisms (`${c:0:12}`, `${BASH_SOURCE[0]}`) that dash/ash reject — a fallback to
-# `sh` passed vacuously and shipped a broken update-pod.sh (2026-10-04). In CI
-# (dash is on ubuntu) a missing dash is a FAILURE; locally it is a loud SKIP.
-POSIX_SH="$(command -v dash || true)"
-# Since P2 update-pod.sh is a shim that sources nothing and execs the engine;
-# if it ever sources a helper again, that helper joins this check by existing.
-sourced=$(sed -n 's|^\. "\$CD/\([^"]*\)".*|\1|p' "$HERE/deploy/update-pod.sh")
-if [ -z "$sourced" ]; then
-  grep -qE '^[^#]*exec bash "\$SYNAP" update --release' "$HERE/deploy/update-pod.sh" \
-    && ok "update-pod.sh sources nothing: it is a shim exec-ing synap update --release" \
-    || bad "update-pod.sh sources nothing AND does not delegate to synap update --release"
-else
-  ok "update-pod.sh sources $(echo $sourced)"
-fi
-if [ -z "$POSIX_SH" ]; then
-  if [ -n "${CI:-}" ]; then bad "dash not found in CI — POSIX check cannot run"; else echo "SKIP - POSIX checks: dash not installed (CI runs them)"; fi
-else
-  for f in update-pod.sh $sourced; do
-    "$POSIX_SH" -n "$HERE/deploy/$f" 2>"$TMP/sh.err" && ok "$f parses under dash" || bad "$f is not POSIX sh: $(head -1 "$TMP/sh.err")"
-  done
-  # Parsing is not enough: dash reports "Bad substitution" only when it EXPANDS,
-  # and a sourced file's top level runs at source time. Source each one for real.
-  for f in $sourced; do
-    ( cd "$HERE/deploy" && "$POSIX_SH" -c ". ./$f" ) 2>"$TMP/sh.err" && ok "$f sources under dash" || bad "$f fails when sourced by dash: $(head -1 "$TMP/sh.err")"
-  done
-fi
 
 # every door the plan names takes the lock (derived from the router, not a list here)
 for cmd in install update rebuild reset restore; do

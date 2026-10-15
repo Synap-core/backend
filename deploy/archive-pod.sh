@@ -81,7 +81,7 @@ log "=== Starting pod archive ==="
 
 # ── Step 1: Stop application services (keep postgres for dump, keep caddy + pod-agent) ──
 log "Stopping application services..."
-$COMPOSE stop backend realtime redis minio typesense kratos hydra 2>&1 || true
+$COMPOSE stop backend realtime redis minio typesense kratos 2>&1 || true
 
 # ── Step 2: Dump database ──
 log "Dumping database..."

@@ -2,9 +2,9 @@
 # ============================================================================
 # Shared Ory database bootstrap (fail-closed, non-destructive)
 # ============================================================================
-# Sourced by both the canonical `synap` CLI and `deploy/update-pod.sh`. Ensures
-# the `kratos` and `hydra` databases exist on the deployment's own PostgreSQL
-# volume before any Ory migration runs.
+# Sourced by the canonical `synap` CLI. Ensures the `kratos` database exists on
+# the deployment's own PostgreSQL volume before the Kratos migration runs.
+# (Hydra left pods on 2026-10-15; an existing `hydra` database is never touched.)
 #
 # This is the ONLY path that repairs a missing database on an existing volume.
 # PostgreSQL's init-databases.sh only fires when PostgreSQL initializes a
@@ -23,8 +23,7 @@
 #     resolved by `_resolve_compose_project_name` and pinned in `.env`.
 #
 # Callers must set:
-#   • COMPOSE_CMD — the docker compose invocation to use
-#     (canonical CLI: `docker compose`; update-pod.sh: its `$COMPOSE`).
+#   • COMPOSE_CMD — the docker compose invocation to use (`docker compose`).
 #   • COMPOSE_PROJECT_NAME — for the read-only project-label sanity check.
 # ============================================================================
 : "${COMPOSE_CMD:=docker compose}"
@@ -40,7 +39,7 @@ _ensure_ory_database() {
     local database="$1"
 
     case "$database" in
-        kratos|hydra) ;;
+        kratos) ;;
         *)
             echo -e "${RED}❌ Refusing to ensure unknown database '${database}'${NC}"
             return 1
@@ -124,8 +123,7 @@ ensure_ory_databases() {
     fi
 
     _ensure_ory_database kratos || return 1
-    _ensure_ory_database hydra || return 1
 
-    echo -e "${GREEN}✅ Ory databases (kratos, hydra) are available${NC}"
+    echo -e "${GREEN}✅ Ory database (kratos) is available${NC}"
     return 0
 }

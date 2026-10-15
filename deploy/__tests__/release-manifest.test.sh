@@ -22,7 +22,7 @@ D() { printf "$1%.0s" $(seq 1 64); }
 KEYS="$(grep -oE '\$\{SYNAP_IMAGE_[A-Z0-9_]+' "$HERE/deploy/docker-compose.yml" | sed 's/^\${//' | sort -u)"
 n=$(echo "$KEYS" | grep -c .)
 [ "$n" -ge 8 ] && ok "compose consumes $n SYNAP_IMAGE_* (contract derived from the file)" || bad "only $n image keys found"
-for must in SYNAP_IMAGE_BACKEND SYNAP_IMAGE_POD_ADMIN SYNAP_IMAGE_POD_AGENT SYNAP_IMAGE_POSTGRES SYNAP_IMAGE_MINIO SYNAP_IMAGE_KRATOS SYNAP_IMAGE_HYDRA SYNAP_IMAGE_CADDY SYNAP_IMAGE_REDIS SYNAP_IMAGE_TYPESENSE; do
+for must in SYNAP_IMAGE_BACKEND SYNAP_IMAGE_POD_ADMIN SYNAP_IMAGE_POD_AGENT SYNAP_IMAGE_POSTGRES SYNAP_IMAGE_MINIO SYNAP_IMAGE_KRATOS SYNAP_IMAGE_CADDY SYNAP_IMAGE_REDIS SYNAP_IMAGE_TYPESENSE; do
   grep -qx "$must" <<<"$KEYS" || bad "compose does not pin $must"
 done
 

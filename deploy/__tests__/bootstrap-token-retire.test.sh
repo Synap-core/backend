@@ -64,7 +64,7 @@ fresh; run _bootstrap_token_retire; rc=$?
 grep -q "$SECRET" "$TMP/out" && bad "retire: the token VALUE was printed" || ok "retire: the value is never printed"
 run _bootstrap_token_retire; rc=$?
 [ "$rc" = 0 ] && ! has_token && marker && ok "retire: idempotent (second run, token already gone)" || bad "retire: not idempotent rc=$rc"
-[ "$(stat -f %Lp "$D/.env" 2>/dev/null || stat -c %a "$D/.env")" = 600 ] && ok "retire: .env keeps its 0600 mode" || bad "retire: .env mode changed"
+[ "$(stat -c %a "$D/.env" 2>/dev/null || stat -f %Lp "$D/.env")" = 600 ] && ok "retire: .env keeps its 0600 mode" || bad "retire: .env mode changed"
 
 # ── backfill ──────────────────────────────────────────────────────────────────
 fresh; sed -i.bak '/^PROVISIONING_TOKEN=/d' "$D/.env"; rm -f "$D/.env.bak"

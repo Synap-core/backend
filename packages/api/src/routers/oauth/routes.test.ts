@@ -17,6 +17,13 @@
  *       undefined` (mcp/http-handler.ts), and a DEFINED agentUserId is the only
  *       thing that routes an MCP write into a proposal. Omit linkedUserId and
  *       every Claude write silently auto-applies as the operator.
+ *   (g) the agentType is decided by WHERE the code goes: a redirect_uri on the
+ *       approved Control Plane's origin mints `claude-web` (the CP connector,
+ *       whose readers render `pod__` names); any other origin — including an
+ *       https look-alike and a CP that is only PENDING — mints
+ *       `claude-web-direct`.
+ *   (h) RFC 7009 /revoke retires a `claude-web*` key on possession, and is a
+ *       no-op 200 for any other key (a human PAT presented is NOT revoked).
  *
  * Strategy: an IN-MEMORY store that implements the real `db` semantics the code
  * relies on — in particular the atomic `UPDATE … WHERE consumed_at IS NULL …
@@ -40,10 +47,30 @@ interface CodeRow {
   consumedAt: Date | null;
 }
 
+interface KeyRow {
+  id: string;
+  userId: string;
+  instanceId: string | null;
+  status: "valid" | "revoked" | "expired";
+}
+
 const store = {
   clients: new Map<string, Record<string, unknown>>(),
   codes: new Map<string, CodeRow>(),
-  users: new Map<string, { id: string; userType: string }>(),
+  users: new Map<
+    string,
+    { id: string; userType: string; agentType?: string | null }
+  >(),
+  /** trusted_issuers rows, as `TrustedIssuerService.list()` returns them. */
+  issuers: [] as Array<{
+    issuerUrl: string;
+    status: string;
+    allowedScopes: string[];
+  }>,
+  /** api_keys by PLAINTEXT, as `apiKeyService.getApiKeyStatus` resolves them. */
+  keys: new Map<string, KeyRow>(),
+  /** Make the registry read FAIL (a DB fault), to prove it is not swallowed. */
+  issuersFail: false,
 };
 
 /**
@@ -69,7 +96,12 @@ function firstEqValue(cond: any): unknown {
   return undefined;
 }
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async () => {
+  // The REAL Control Plane scope set — the resolver must match it exactly, so a
+  // hand-copied list here would let the two drift without a red test.
+  const schema = await vi.importActual<typeof import("@synap/database/schema")>(
+    "@synap/database/schema"
+  );
   return {
     db: {
       insert: (_table: any) => ({
@@ -127,26 +159,39 @@ vi.mock("@synap/database", () => {
       },
     },
     users: { id: "users.id" },
-    mcpConnectCodes: {},
     and: (...args: unknown[]) => ({ _and: args }),
     eq: (a: unknown, b: unknown) => ({ _eq: [a, b] }),
     isNull: (a: unknown) => ({ _isNull: a }),
     gt: (a: unknown, b: unknown) => ({ _gt: [a, b] }),
-    ApiKeyRepository: class {},
-    EventRepository: class {},
-    sql: {},
+    CONTROL_PLANE_ISSUER_SCOPES: schema.CONTROL_PLANE_ISSUER_SCOPES,
+    TrustedIssuerService: class {
+      list() {
+        return store.issuersFail
+          ? Promise.reject(new Error("registry read failed"))
+          : Promise.resolve(store.issuers);
+      }
+    },
   };
 });
 
-// `mapCpScopesToPodScopes` (the mcp→hub-protocol peering rule /token reuses)
-// lives in mcp-redeem.ts, whose `_shared.js` import drags in the whole hub
-// router + access registry. Stub that ONE module so the real scope mapper still
-// runs against the real `isValidScope` without booting the tRPC tree.
-vi.mock("../hub-protocol/rest/_shared.js", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
-vi.mock("../../utils/jwks-client.js", () => ({
-  verifyTrustedIssuerJwt: vi.fn(),
+// The key service /revoke reads and revokes through. Backed by `store.keys`
+// so a revoke is OBSERVABLE (the key's status flips), not merely a spy call.
+const revokeSpy = vi.fn();
+vi.mock("../../services/api-keys.js", () => ({
+  apiKeyService: {
+    getApiKeyStatus: (plaintext: string) => {
+      const row = store.keys.get(plaintext);
+      if (!row) return Promise.resolve({ status: "not_found" });
+      return Promise.resolve({ status: row.status, record: row });
+    },
+    revokeApiKey: (keyId: string, revokedBy: string, reason?: string) => {
+      revokeSpy(keyId, revokedBy, reason);
+      for (const row of store.keys.values()) {
+        if (row.id === keyId) row.status = "revoked";
+      }
+      return Promise.resolve();
+    },
+  },
 }));
 
 // The ONE key-minting door. Captured so we can assert exactly what /token asks
@@ -176,6 +221,10 @@ beforeEach(() => {
   store.clients.clear();
   store.codes.clear();
   store.users.clear();
+  store.issuers.length = 0;
+  store.issuersFail = false;
+  store.keys.clear();
+  revokeSpy.mockReset();
   claimWhere.length = 0;
   store.users.set(HUMAN_ID, { id: HUMAN_ID, userType: "human" });
   provisionSpy.mockReset();
@@ -213,11 +262,15 @@ function authorizeUrl(params: Record<string, string>) {
 }
 
 /** Run the consent decision the pod-admin screen would make, returning the code. */
-async function consentAndExtractCode(clientId: string, state?: string) {
+async function consentAndExtractCode(
+  clientId: string,
+  state?: string,
+  redirectUri: string = CALLBACK
+) {
   const { redirectTo } = await decideOAuthAuthorization(
     {
       clientId,
-      redirectUri: CALLBACK,
+      redirectUri,
       responseType: "code",
       scope: "mcp.read mcp.write",
       codeChallenge: CHALLENGE,
@@ -846,5 +899,216 @@ describe("full authorization code flow", () => {
     expect(res.status).toBe(200);
     expect(body.access_token).toBeTruthy();
     expect(provisionSpy.mock.calls[0][0].linkedUserId).toBe(HUMAN_ID);
+  });
+});
+
+// ─── (g) CP connector vs direct client ───────────────────────────────────────
+
+const CP_ORIGIN = "https://api.synap.live";
+const CP_CALLBACK = `${CP_ORIGIN}/pods/pod-1/connect-mcp/callback`;
+
+async function controlPlaneIssuerScopes(): Promise<string[]> {
+  const schema = await vi.importActual<typeof import("@synap/database/schema")>(
+    "@synap/database/schema"
+  );
+  return [...schema.CONTROL_PLANE_ISSUER_SCOPES];
+}
+
+/** DCR → consent → /token for one redirect_uri; returns the mint options. */
+async function mintFor(redirectUri: string) {
+  const { body: client } = await register({ redirect_uris: [redirectUri] });
+  const { code } = await consentAndExtractCode(
+    client.client_id,
+    undefined,
+    redirectUri
+  );
+  const result = await token({
+    grant_type: "authorization_code",
+    code,
+    client_id: client.client_id,
+    redirect_uri: redirectUri,
+    code_verifier: VERIFIER,
+  });
+  return { ...result, opts: provisionSpy.mock.calls[0]?.[0] };
+}
+
+describe("POST /token — agentType by redirect origin", () => {
+  it("mints claude-web for a redirect on the APPROVED Control Plane's origin", async () => {
+    store.issuers.push({
+      issuerUrl: CP_ORIGIN,
+      status: "approved",
+      allowedScopes: await controlPlaneIssuerScopes(),
+    });
+    const { res, opts } = await mintFor(CP_CALLBACK);
+    expect(res.status).toBe(200);
+    expect(opts.agentType).toBe("claude-web");
+    // The legacy door's labels, so the agent user reads the same either way.
+    expect(opts.agentLabel).toBe("Claude (Web)");
+    expect(opts.keyName).toBe("Claude Web Hub Key");
+    expect(opts.linkedUserId).toBe(HUMAN_ID);
+  });
+
+  it("mints claude-web-direct when the Control Plane is only PENDING", async () => {
+    store.issuers.push({
+      issuerUrl: CP_ORIGIN,
+      status: "pending",
+      allowedScopes: await controlPlaneIssuerScopes(),
+    });
+    const { opts } = await mintFor(CP_CALLBACK);
+    expect(opts.agentType).toBe("claude-web-direct");
+  });
+
+  it("mints claude-web-direct for an approved issuer WITHOUT the Control Plane scopes", async () => {
+    // A third-party application issuer is approved with no issuer-wide scope.
+    store.issuers.push({
+      issuerUrl: CP_ORIGIN,
+      status: "approved",
+      allowedScopes: [],
+    });
+    const { opts } = await mintFor(CP_CALLBACK);
+    expect(opts.agentType).toBe("claude-web-direct");
+  });
+
+  it("mints claude-web-direct for an https look-alike of the CP origin", async () => {
+    store.issuers.push({
+      issuerUrl: CP_ORIGIN,
+      status: "approved",
+      allowedScopes: await controlPlaneIssuerScopes(),
+    });
+    const { opts } = await mintFor(
+      "https://api.synap.live.evil.example/pods/pod-1/connect-mcp/callback"
+    );
+    expect(opts.agentType).toBe("claude-web-direct");
+    expect(opts.agentLabel).toBe("Claude (Web, direct)");
+  });
+
+  it("fails loudly (500) and mints nothing when the registry read FAILS", async () => {
+    store.issuersFail = true;
+    const { res, body } = await mintFor(CP_CALLBACK);
+    expect(res.status).toBe(500);
+    expect(body.error).toBe("server_error");
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+});
+
+// ─── (h) RFC 7009 /revoke ────────────────────────────────────────────────────
+
+const DIRECT_AGENT = "agent-direct";
+const CP_AGENT = "agent-cp";
+const OTHER_AGENT = "agent-raycast";
+
+function seedKeys() {
+  store.users.set(DIRECT_AGENT, {
+    id: DIRECT_AGENT,
+    userType: "agent",
+    agentType: "claude-web-direct",
+  });
+  store.users.set(CP_AGENT, {
+    id: CP_AGENT,
+    userType: "agent",
+    agentType: "claude-web",
+  });
+  store.users.set(OTHER_AGENT, {
+    id: OTHER_AGENT,
+    userType: "agent",
+    agentType: "raycast",
+  });
+  store.keys.set("synap_direct", {
+    id: "key-direct",
+    userId: DIRECT_AGENT,
+    instanceId: `oauth:client-a:${HUMAN_ID}`,
+    status: "valid",
+  });
+  store.keys.set("synap_legacy_cp", {
+    id: "key-legacy-cp",
+    userId: CP_AGENT,
+    instanceId: `mcp:cp-user:pod-1`,
+    status: "valid",
+  });
+  store.keys.set("synap_human_pat", {
+    id: "key-human",
+    userId: HUMAN_ID,
+    instanceId: null,
+    status: "valid",
+  });
+  store.keys.set("synap_raycast", {
+    id: "key-raycast",
+    userId: OTHER_AGENT,
+    instanceId: null,
+    status: "valid",
+  });
+}
+
+async function revoke(params: Record<string, string>) {
+  return oauthApp.request("/revoke", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+  });
+}
+
+describe("POST /revoke (RFC 7009)", () => {
+  beforeEach(seedKeys);
+
+  it("is advertised in the AS metadata", async () => {
+    const doc = (await (
+      await oauthApp.request("/.well-known/oauth-authorization-server")
+    ).json()) as any;
+    expect(doc.revocation_endpoint).toBe(`${ISSUER}/revoke`);
+  });
+
+  it("revokes a claude-web-direct key presented by its holder", async () => {
+    const res = await revoke({ token: "synap_direct", client_id: "client-a" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(revokeSpy).toHaveBeenCalledWith(
+      "key-direct",
+      DIRECT_AGENT,
+      expect.any(String)
+    );
+    expect(store.keys.get("synap_direct")!.status).toBe("revoked");
+  });
+
+  it("revokes a LEGACY consent-code claude-web key on possession (no client binding)", async () => {
+    const res = await revoke({
+      token: "synap_legacy_cp",
+      client_id: "the-cp-client",
+    });
+    expect(res.status).toBe(200);
+    expect(store.keys.get("synap_legacy_cp")!.status).toBe("revoked");
+  });
+
+  it("does NOT revoke a human PAT presented here — 200, key still live", async () => {
+    const res = await revoke({ token: "synap_human_pat" });
+    expect(res.status).toBe(200);
+    expect(revokeSpy).not.toHaveBeenCalled();
+    expect(store.keys.get("synap_human_pat")!.status).toBe("valid");
+  });
+
+  it("does NOT revoke another agent's key (raycast) — 200, key still live", async () => {
+    const res = await revoke({ token: "synap_raycast" });
+    expect(res.status).toBe(200);
+    expect(revokeSpy).not.toHaveBeenCalled();
+    expect(store.keys.get("synap_raycast")!.status).toBe("valid");
+  });
+
+  it("refuses a client the key was not issued to, and keeps the key", async () => {
+    const res = await revoke({ token: "synap_direct", client_id: "client-b" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toBe("unauthorized_client");
+    expect(store.keys.get("synap_direct")!.status).toBe("valid");
+  });
+
+  it("answers 200 for an unknown or already-revoked token (no existence oracle)", async () => {
+    expect((await revoke({ token: "synap_nope" })).status).toBe(200);
+    store.keys.get("synap_direct")!.status = "revoked";
+    expect((await revoke({ token: "synap_direct" })).status).toBe(200);
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("400s when no token is presented", async () => {
+    const res = await revoke({});
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error).toBe("invalid_request");
   });
 });

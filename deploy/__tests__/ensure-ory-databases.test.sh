@@ -23,7 +23,7 @@
 #   B. No swallowed psql in the helper
 #   C. No caller swallows `ensure_ory_databases` (`|| true` / `2>/dev/null`)
 #   D. No destructive command near ANY Ory bootstrap call site across
-#      synap / update-pod.sh (install.sh is a bootstrapper that execs `synap install`)
+#      synap (install.sh is a bootstrapper that execs `synap install`)
 #
 # Scoped deliberately: `synap` retains its explicit destructive `reset` and
 # `clean` commands, which the issue leaves untouched. Those are separate
@@ -111,7 +111,7 @@ fi
 run_test "Ory bootstrap callers do not swallow failures"
 # Every call site must fail closed. A `|| true` or `2>/dev/null` on an
 # ensure_ory_databases call would resurrect the original bug.
-_swallowed_callers=$(grep -rn "ensure_ory_databases" "$REPO_ROOT/synap" "$DEPLOY_DIR/update-pod.sh" 2>/dev/null \
+_swallowed_callers=$(grep -rn "ensure_ory_databases" "$REPO_ROOT/synap" 2>/dev/null \
   | grep -E "\|\|[[:space:]]*true|2>/dev/null" || true)
 if [ -n "$_swallowed_callers" ]; then
   fail "Swallowed ensure_ory_databases call found: $_swallowed_callers"
@@ -123,7 +123,7 @@ run_test "Ory bootstrap callers abort on failure"
 # Each caller must guard the call with `|| { ... exit 1 }` / `|| die`.
 # Two call sites: `synap install` and `synap update`. install.sh carried a third
 # until PODPROV W2 made it a bootstrapper that execs `synap install`.
-_total_calls=$(grep -rc "ensure_ory_databases" "$REPO_ROOT/synap" "$DEPLOY_DIR/update-pod.sh" 2>/dev/null \
+_total_calls=$(grep -rc "ensure_ory_databases" "$REPO_ROOT/synap" 2>/dev/null \
   | awk -F: '{s+=$2} END {print s+0}')
 # subtract the definitions/references themselves: every remaining occurrence is
 # a call site that must be guarded.
@@ -138,7 +138,7 @@ run_test "Update/install Ory regions contain no volume or database destruction"
 # the callers, then assert none of them destroy data. Derived from the call
 # sites rather than hand-listed so a new caller is covered automatically.
 _destroy_hits=""
-for _f in "$REPO_ROOT/synap" "$DEPLOY_DIR/update-pod.sh"; do
+for _f in "$REPO_ROOT/synap"; do
   # For each line mentioning ensure_ory_databases, scan a window around it.
   while IFS=: read -r _ln _rest; do
     [ -z "$_ln" ] && continue
@@ -366,6 +366,26 @@ if ensure_ory_databases >/dev/null 2>&1; then
   fi
 else
   fail "Expected exit 0"
+fi
+FAKE_DB_KRATOS_EXISTS=0
+FAKE_DB_HYDRA_EXISTS=0
+
+# Hydra left pods (2026-10-15): an absent `hydra` database is never created
+# again, and never probed — only kratos is the bootstrap's business.
+run_test "Hydra database absent → left absent (no probe, no CREATE), exit 0"
+FAKE_DB_KRATOS_EXISTS=1
+FAKE_DB_HYDRA_EXISTS=0
+FAKE_PG_READY_COUNTER=0
+FAKE_CREATE_FAIL=""
+FAKE_COMPOSE_LOG=""
+if ensure_ory_databases >/dev/null 2>&1; then
+  if echo "$FAKE_COMPOSE_LOG" | grep -q "hydra"; then
+    fail "the bootstrap still touched the hydra database: $(echo "$FAKE_COMPOSE_LOG" | grep hydra | head -1)"
+  else
+    pass "hydra absent and untouched"
+  fi
+else
+  fail "Expected exit 0 with kratos present and hydra absent"
 fi
 FAKE_DB_KRATOS_EXISTS=0
 FAKE_DB_HYDRA_EXISTS=0

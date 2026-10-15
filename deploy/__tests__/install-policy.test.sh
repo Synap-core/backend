@@ -21,7 +21,7 @@ mkdir -p "$DEPLOY/state"; cp "$HERE/synap" "$ROOT/synap"
 cp "$HERE/deploy/"*.sh "$HERE/deploy/env.schema" "$HERE/deploy/docker-compose.yml" "$HERE/deploy/Caddyfile" "$DEPLOY/"
 R1="age1$(printf 'q%.0s' $(seq 1 58))"; R2="age1$(printf 'p%.0s' $(seq 1 58))"
 pol() { ( cd "$ROOT" && SYNAP_DEPLOY_DIR="$DEPLOY" bash "$ROOT/synap" policy "$@" ) >"$TMP/out" 2>&1 </dev/null; }
-filemode() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+filemode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 
 pol show; rc=$?
 [ "$rc" = 0 ] && grep -q 'mode: self-hosted' "$TMP/out" && grep -q 'archive, restore-archive, configure (mode default)' "$TMP/out" && [ ! -e "$F" ] \

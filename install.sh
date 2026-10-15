@@ -8,10 +8,10 @@
 #
 #   1. Docker (+ compose v2), curl, jq, openssl present — installed if missing
 #   2. the release manifest for --release (default: the stable channel)
-#   3. that release's deploy bundle (`synap` + deploy/ + kratos/ + hydra/),
+#   3. that release's deploy bundle (`synap` + deploy/ + kratos/),
 #      checked against the manifest's sha256, unpacked into --dir (/opt/synap)
-#   4. the CLI linked onto PATH (/usr/local/bin/synap), so pod-agent updates
-#      (deploy/update-pod.sh) and an operator in a shell find the same engine
+#   4. the CLI linked onto PATH (/usr/local/bin/synap), so an operator in a
+#      shell finds the same engine the systemd units run
 #   5. exec synap install --non-interactive --release <resolved id> [flags…]
 #
 # Images are pulled by digest by the engine, never built on the host.
@@ -195,7 +195,7 @@ else
   chmod 755 "$INSTALL_DIR/synap"
 fi
 
-# ─── 4. The engine on PATH (update-pod.sh, operators) ─────────────────────────
+# ─── 4. The engine on PATH (operators) ────────────────────────────────────────
 if [ -d "$BIN_DIR" ] && [ -w "$BIN_DIR" ]; then
   ln -sfn "$INSTALL_DIR/synap" "$BIN_DIR/synap"
 else

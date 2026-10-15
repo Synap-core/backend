@@ -751,7 +751,6 @@ export const systemRouter = router({
    * - Postgres (Database)
    * - Typesense (Search)
    * - MinIO (Storage)
-   * - Hydra (OAuth Provider)
    * - Kratos (Identity Provider)
    */
   getServiceHealth: protectedProcedure.query(async () => {
@@ -817,26 +816,7 @@ export const systemRouter = router({
       });
     }
 
-    // 4. Hydra Check
-    try {
-      const start = Date.now();
-      const endpoint = process.env.HYDRA_ADMIN_URL || "http://hydra:4445";
-      const res = await fetch(`${endpoint}/health/ready`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      services.push({
-        name: "Hydra",
-        status: "healthy",
-        latency: Date.now() - start,
-      });
-    } catch (e) {
-      services.push({
-        name: "Hydra",
-        status: "unhealthy",
-        message: String(e),
-      });
-    }
-
-    // 5. Kratos Check
+    // 4. Kratos Check
     try {
       const start = Date.now();
       const endpoint = process.env.KRATOS_ADMIN_URL || "http://kratos:4434";
@@ -855,7 +835,7 @@ export const systemRouter = router({
       });
     }
 
-    // 6. Trusted issuers startup seed check
+    // 5. Trusted issuers startup seed check
     const issuerSeed = getTrustedIssuerSeedHealth();
     services.push({
       name: "TrustedIssuersSeed",

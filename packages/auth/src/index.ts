@@ -1,7 +1,7 @@
 /**
  * Authentication Package
  *
- * Ory Stack (Kratos + Hydra) for PostgreSQL
+ * Ory Kratos for PostgreSQL
  *
  * PostgreSQL-only authentication using Ory for multi-user support.
  */
@@ -18,21 +18,8 @@ export {
   attachOidcCredentialToIdentity,
 } from "./ory-kratos.js";
 
-// Re-export Ory Hydra (OAuth2 Server)
-export {
-  hydraPublic,
-  hydraAdmin,
-  introspectToken,
-  createOAuth2Client,
-  getOAuth2Client,
-  exchangeToken as hydraExchangeToken,
-} from "./ory-hydra.js";
-
 // Re-export Ory middleware
-export { oryAuthMiddleware, orySessionMiddleware } from "./ory-middleware.js";
-
-// Re-export Token Exchange
-export { exchangeToken, exchangeBetterAuthToken } from "./token-exchange.js";
+export { orySessionMiddleware } from "./ory-middleware.js";
 
 // Default exports (for PostgreSQL)
 // These are used by the API server
@@ -42,7 +29,7 @@ export { orySessionMiddleware as authMiddleware } from "./ory-middleware.js";
 // Type exports (for compatibility)
 export type { Session, User } from "./types.js";
 
-// Local mode helpers (used by the embedded local pod — no Kratos/Hydra)
+// Local mode helpers (used by the embedded local pod — no Kratos)
 export {
   LOCAL_USER_ID,
   buildLocalUser,

@@ -118,11 +118,6 @@ echo "── D. doors call the guard before compose may recreate postgres"
 first_compose_line() {
     grep -nE '(docker compose|\$COMPOSE)[^#]*[[:space:]](up|run)([[:space:]]|$)' "$1" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1
 }
-# deploy/update-pod.sh is a shim to `synap update --release` since update-door
-# P2 (it runs no compose itself) — it is covered by the synap checks below.
-grep -qE '^[^#]*exec bash "\$SYNAP" update --release' "$DEPLOY_DIR/update-pod.sh" \
-    && ok "deploy/update-pod.sh delegates to synap update (the guarded engine)" \
-    || bad "deploy/update-pod.sh neither delegates to synap update nor is scanned as a door"
 # install.sh is a bootstrapper since PODPROV W2: it runs no compose itself and
 # execs `synap install` (the guarded engine, covered by the synap checks below).
 # A compose up/run coming back into it would be an unguarded door.

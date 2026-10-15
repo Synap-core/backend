@@ -9,7 +9,7 @@ LABEL io.synap.first-party="true"
 RUN apk add --no-cache docker-cli docker-cli-compose wget age
 
 WORKDIR /app
-COPY server.js trust.js replay-receipts.js policy.js pod-identity.js pull.js package.json ./
+COPY server.js trust.js replay-receipts.js policy.js pod-identity.js pull.js update-request.js package.json ./
 
 EXPOSE 4002
 CMD ["node", "server.js"]

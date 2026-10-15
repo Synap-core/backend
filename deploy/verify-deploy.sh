@@ -35,8 +35,8 @@
 #                           which publishes no host port)
 #
 # pod-url defaults to http://localhost:4000 (in-cluster / on-host use). Exits
-# non-zero on ANY mismatch or unreachable pod — callers (update-pod.sh, the
-# synap CLI, CI) should treat a non-zero exit as "deploy did not actually
+# non-zero on ANY mismatch or unreachable pod — callers (the synap CLI, CI)
+# should treat a non-zero exit as "deploy did not actually
 # land, do not consider it successful."
 #
 set -eu

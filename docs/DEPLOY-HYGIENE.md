@@ -7,9 +7,9 @@ Learned 2026-07-28: an `rsync --delete` without env excludes **wiped** `/opt/syn
 
 1. **`rsync --delete` without excluding secrets**
    - Always exclude at least: `deploy/.env`, `.env`, and any other host-local secret files.
-   - Prefer image pull / `update-pod.sh` over full-tree rsync for production pods.
+   - Prefer `synap update` over full-tree rsync for production pods.
 2. **`docker compose down -v`**
-   - Destroys named volumes (Postgres, Kratos, Hydra data). Never on a live pod.
+   - Destroys named volumes (Postgres, Kratos data). Never on a live pod.
    - Use `docker compose -p synap-backend stop` / recreate a single service if needed.
 3. **Bare `docker compose` without project name**
    - Wrong project name orphans volumes and can look like “empty DB” after “fix”.
@@ -17,7 +17,7 @@ Learned 2026-07-28: an `rsync --delete` without env excludes **wiped** `/opt/syn
 ## Always
 
 1. **`docker compose -p synap-backend`**
-   - Canonical project name (matches `synap` CLI and `deploy/update-pod.sh`).
+   - Canonical project name (matches the `synap` CLI).
    - Example:
      ```bash
      cd /opt/synap-backend/deploy
@@ -45,5 +45,5 @@ Learned 2026-07-28: an `rsync --delete` without env excludes **wiped** `/opt/syn
 ## Safe recovery notes
 
 - If `deploy/.env` is missing: restore from backup, or reconstruct from **running container env** + known derived fields (`POSTGRES_PASSWORD`, `DOMAIN`) — then **backup immediately**.
-- Preferred update path: `deploy/update-pod.sh <tag>` (canary-first; no volume wipe).
+- Preferred update path: `synap update --release <id>` (canary-first; no volume wipe).
 - See also: `deploy/DEPLOY-INTEGRITY.md`, root `DEPLOY-AND-TEST-GUIDE-2026-07-28.md`.

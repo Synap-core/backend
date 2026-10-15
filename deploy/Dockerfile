@@ -121,7 +121,6 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy/realtime ./realtime/
 
 # Config files (API needs these at runtime)
 COPY --chown=nodejs:nodejs kratos ./api/kratos
-COPY --chown=nodejs:nodejs hydra ./api/hydra
 
 # Migrations (used by backend-migrate service)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sql ./api/migrations/
