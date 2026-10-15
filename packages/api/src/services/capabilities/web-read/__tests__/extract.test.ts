@@ -6,6 +6,8 @@
  *  - challenge pages                → rules out "200 + some text ⇒ ok"
  *  - an article ABOUT challenges    → rules out a naive keyword match
  *  - a sign-in wall                 → rules out "short ⇒ partial" for walls
+ *  - a short page whose paragraph holds a date → rules out "defuddle's body
+ *    always wins" (its clutter pass dropped that paragraph as a byline)
  */
 import { describe, expect, it } from "vitest";
 import { extractFromHtml } from "../extract.js";
@@ -111,6 +113,17 @@ describe("extractFromHtml", () => {
 });
 
 describe("readSentPage (the page the person's browser sent)", () => {
+  it("a SHORT page keeps the paragraph that holds a date (the readable pass wins when it holds more)", () => {
+    const html = `<!doctype html><html><head><title>Plan</title></head><body>
+<nav>Home · Pricing</nav><article><h1>Quarterly plan</h1>
+<p>We ship the offline sync engine in November. The team meets on 20 November 2026 at 10:00 to review it.</p>
+<p>Bring the numbers.</p></article><footer>© Acme</footer></body></html>`;
+    const r = extractFromHtml(html, "https://intranet.acme.example/plan");
+    expect(r.text).toContain("We ship the offline sync engine in November.");
+    expect(r.text).toContain("Bring the numbers.");
+    expect(r.text).not.toMatch(/Pricing|© Acme/);
+  });
+
   it("is stamped builtin:page, normalized, and makes no request", () => {
     const r = readSentPage(
       ARTICLE_HTML,

@@ -137,8 +137,15 @@ export function extractFromHtml(rawHtml: string, url: string): SiteRead {
   const html = rawHtml.slice(0, WEB_READ_PAGE_BYTES_MAX);
   const fallback = withFallback(html);
   const parsed = withDefuddle(html, url);
-  // defuddle's body when it found one, else the pod's own readable pass.
-  const body = parsed?.body || fallback.body;
+  // defuddle's body when it found an adequate one; on a SHORT page its
+  // clutter pass can drop a real paragraph (one holding a date reads as a
+  // byline), so the pod's own readable pass wins there when it holds more.
+  const body =
+    parsed?.body &&
+    (parsed.body.length >= ADEQUATE_BODY_CHARS ||
+      parsed.body.length >= fallback.body.length)
+      ? parsed.body
+      : fallback.body;
   const meta: Parsed = {
     ...fallback,
     ...(parsed ? stripUndefined(parsed) : {}),
