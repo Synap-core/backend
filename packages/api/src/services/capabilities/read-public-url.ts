@@ -46,20 +46,6 @@ export type PublicUrlRead =
       sourceUrl: string;
     };
 
-/** Additive field on `capture.structure`. Absent when the text is not a lone URL,
- *  or when the installed-verb lookup failed (that is not "nothing installed"). */
-export type CaptureUrlReader =
-  | {
-      status: "enriched";
-      title: string;
-      author: string | null;
-      text: string;
-      imageUrl: string | null;
-      sourceUrl: string;
-    }
-  | { status: "unavailable"; sourceUrl: string }
-  | { status: "install"; installSlug: "web.read"; sourceUrl: string };
-
 export type PublicUrlFetcher = (
   url: string,
   init?: RequestInit,
@@ -273,61 +259,4 @@ export async function readPublicUrl(
   const page = await guardedGet(sourceUrl, validate, fetchImpl);
   if (!page) return { kind: "unavailable", sourceUrl };
   return mapHtml(page.body, sourceUrl) ?? { kind: "unavailable", sourceUrl };
-}
-
-/**
- * Capture's additive reader. A lone URL with no installed `fetch_record` or
- * `capture_into_pod` verb is an install invite — the URL is still captured by
- * the caller. A verb that IS installed still uses this in-process reader
- * (the marketplace template may not be on the pod yet). A lookup failure
- * omits the field; it is not "nothing installed".
- */
-export async function readInstalledPublicUrl(opts: {
-  text: string;
-  userId: string;
-  workspaceId: string | null;
-  onLookupError?: (err: unknown) => void;
-}): Promise<CaptureUrlReader | undefined> {
-  const sourceUrl = lonePublicHttpUrl(opts.text);
-  if (!sourceUrl) return undefined;
-
-  let installed: boolean;
-  try {
-    const { capabilitiesByIntent } =
-      await import("./capability-intent-index.js");
-    const ctx = { userId: opts.userId, workspaceId: opts.workspaceId };
-    const [fetchRecord, captureIntoPod] = await Promise.all([
-      capabilitiesByIntent(ctx, "fetch_record"),
-      capabilitiesByIntent(ctx, "capture_into_pod"),
-    ]);
-    installed = fetchRecord.length > 0 || captureIntoPod.length > 0;
-  } catch (err) {
-    opts.onLookupError?.(err);
-    return undefined;
-  }
-
-  if (!installed) {
-    return { status: "install", installSlug: "web.read", sourceUrl };
-  }
-
-  try {
-    const read = await readPublicUrl(sourceUrl);
-    if (read.kind === "skip") return undefined;
-    if (read.kind === "unavailable") {
-      return { status: "unavailable", sourceUrl: read.sourceUrl };
-    }
-    if (!read.title.trim() && !read.text.trim()) {
-      return { status: "unavailable", sourceUrl: read.sourceUrl };
-    }
-    return {
-      status: "enriched",
-      title: read.title,
-      author: read.author,
-      text: read.text,
-      imageUrl: read.imageUrl,
-      sourceUrl: read.sourceUrl,
-    };
-  } catch {
-    return { status: "unavailable", sourceUrl };
-  }
 }
