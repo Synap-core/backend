@@ -13,6 +13,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 const h = vi.hoisted(() => ({
   ran: [] as string[],
   fail: false,
+  args: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("../middleware/read-only-guard.js", async () => {
@@ -24,8 +25,9 @@ vi.mock("../middleware/audit-log.js", async () => {
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
 vi.mock("../services/library/readers.js", () => ({
-  libraryReaders: async () => {
+  libraryReaders: async (args: Record<string, unknown>) => {
     h.ran.push("readers");
+    h.args.push(args);
     if (h.fail) throw new Error("registry down");
     return {
       offers: [
@@ -68,6 +70,7 @@ function appAs(vars: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  h.args.length = 0;
   h.ran.length = 0;
   h.fail = false;
 });
@@ -89,6 +92,17 @@ describe("library.readWith is the person's tap only", () => {
       expect(h.ran).toEqual(["readers"]);
     });
   }
+
+  it("tRPC threads the caller: an agent's offers stay lensed (R2-M1)", async () => {
+    await caller({ agentUserId: "agent-1" }).readers({ itemId: ITEM });
+    await caller({ keyType: "is_internal" }).readers({ itemId: ITEM });
+    await caller().readers({ itemId: ITEM });
+    expect(h.args.map((a) => a.caller)).toEqual([
+      { agentUserId: "agent-1", keyType: undefined },
+      { agentUserId: undefined, keyType: "is_internal" },
+      { agentUserId: undefined, keyType: undefined },
+    ]);
+  });
 
   it("a person reaches readWith", async () => {
     expect(
@@ -130,6 +144,19 @@ describe("Hub REST /library/readers", () => {
     expect(await res.json()).toMatchObject({
       offers: [{ readerId: "builtin" }],
     });
+  });
+
+  it("threads the caller: an agent's offers stay lensed (R2-M1)", async () => {
+    await appAs({ agentUserId: "agent-1" }).request(
+      `/library/readers?itemId=${ITEM}`
+    );
+    await appAs({ keyType: "is_internal" }).request(
+      `/library/readers?groupId=${ITEM}`
+    );
+    expect(h.args.map((a) => a.caller)).toEqual([
+      { agentUserId: "agent-1", keyType: undefined },
+      { agentUserId: undefined, keyType: "is_internal" },
+    ]);
   });
 
   it("has no write: spending a reader is never a REST call", async () => {

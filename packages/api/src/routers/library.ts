@@ -412,6 +412,7 @@ export const libraryRouter = router({
       const userId = requireUserId(ctx.userId);
       return libraryReaders({
         userId,
+        caller: { agentUserId: ctx.agentUserId, keyType: ctx.keyType },
         ...(input.itemId ? { itemId: input.itemId } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
       });

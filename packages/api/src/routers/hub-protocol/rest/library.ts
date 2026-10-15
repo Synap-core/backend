@@ -191,6 +191,10 @@ export function registerLibraryRoutes(app: HubHono): void {
     try {
       const result: LibraryReadersResult = await libraryReaders({
         userId: c.get("userId"),
+        caller: {
+          agentUserId: c.get("agentUserId") as string | undefined,
+          keyType: c.get("keyType") as string | undefined,
+        },
         ...(parsed.data.itemId ? { itemId: parsed.data.itemId } : {}),
         ...(parsed.data.groupId ? { groupId: parsed.data.groupId } : {}),
       });

@@ -48,6 +48,7 @@ import {
 } from "./read-model.js";
 import { loadLibraryGroup } from "./groups.js";
 import { libraryReadAiPerDay, libraryReadAiUsedToday } from "./read-budget.js";
+import { isAgentCaller } from "./agent-door.js";
 
 /** Read statuses a list's "Read N waiting with X" acts on. */
 export const LIBRARY_WAITING_READ_STATUSES = [
@@ -90,12 +91,33 @@ function urlOf(row: ReadableRow): string | null {
   return typeof url === "string" && url.trim() ? url.trim() : null;
 }
 
+/** Who is asking: an agent key / the IS internal key, or the person. */
+export interface LibraryReadersCaller {
+  agentUserId?: string | null;
+  keyType?: string | null;
+}
+
 /**
- * A Library item is the PERSON's, whatever space it was kept in: its readers
- * are every reader the person can see (`allSpaces`), each run in its own
- * space — a pack installed in a space reads a pod-wide kept post.
+ * A Library item is the PERSON's, whatever space it was kept in: for the
+ * person its readers are every reader they can see (`allSpaces`), each run in
+ * its own space — a pack installed in a space reads a pod-wide kept post. An
+ * AGENT caller keeps the item's own lens: the acting agent is threaded and
+ * `allSpaces` is off, so `readsAllSpaces` is false and an agent is never
+ * offered readers from spaces it cannot run in.
  */
-function ctxOf(userId: string, row: ReadableRow): UrlReadersContext {
+function ctxOf(
+  userId: string,
+  row: ReadableRow,
+  caller: LibraryReadersCaller | undefined
+): UrlReadersContext {
+  if (caller && isAgentCaller(caller)) {
+    return {
+      userId,
+      workspaceId: row.workspaceId,
+      agentUserId: caller.agentUserId ?? null,
+      allSpaces: false,
+    };
+  }
   return { userId, workspaceId: row.workspaceId, allSpaces: true };
 }
 
@@ -162,6 +184,8 @@ export async function libraryReaders(args: {
   userId: string;
   itemId?: string;
   groupId?: string;
+  /** The caller's identity — an agent's offers stay in the item's lens. */
+  caller?: LibraryReadersCaller;
   deps?: Partial<LibraryReadersDeps>;
 }): Promise<LibraryReadersResult> {
   const database = args.database ?? defaultDb;
@@ -175,7 +199,10 @@ export async function libraryReaders(args: {
     // Nothing reads a typed note or a file: an empty answer that is TRUE.
     if (!url) return { offers: [] };
     const current = readerIdOfStamp(row.metadata);
-    const offers = await deps.listReaders(ctxOf(args.userId, row), url);
+    const offers = await deps.listReaders(
+      ctxOf(args.userId, row, args.caller),
+      url
+    );
     return {
       offers: offers.map((o) =>
         current && o.readerId === current ? { ...o, current: true } : o
@@ -194,7 +221,10 @@ export async function libraryReaders(args: {
   const byReader = new Map<string, LibraryReaderOffer>();
   for (const row of rows) {
     // Throws on a failed lookup — never folded into "no readers".
-    const offers = await deps.listReaders(ctxOf(args.userId, row), urlOf(row)!);
+    const offers = await deps.listReaders(
+      ctxOf(args.userId, row, args.caller),
+      urlOf(row)!
+    );
     for (const o of offers) {
       const seen = byReader.get(o.readerId);
       if (seen) seen.count = (seen.count ?? 0) + 1;
@@ -252,9 +282,10 @@ export async function libraryReadWith(args: {
       skipped++;
       continue;
     }
-    const offer = (await deps.listReaders(ctxOf(args.userId, row), url)).find(
-      (o) => o.readerId === args.readerId
-    );
+    // readWith is person-only (the tRPC door refuses an agent first).
+    const offer = (
+      await deps.listReaders(ctxOf(args.userId, row, undefined), url)
+    ).find((o) => o.readerId === args.readerId);
     // Only a reader that can run now: install / connect / enable are their
     // own doors (the offer says which), not N jobs that would each say so.
     if (!offer || offer.state !== "ready") {

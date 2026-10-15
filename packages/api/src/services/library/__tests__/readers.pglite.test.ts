@@ -34,6 +34,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { documents, libraryGroups } from "@synap/database";
 import type { UrlReaderOffer } from "@synap-core/types/url-read";
+import {
+  readsAllSpaces,
+  type UrlReadersContext,
+} from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 import {
   libraryReaders,
@@ -212,6 +216,42 @@ describe("library.readers — one item", () => {
       { userId: USER, workspaceId: null, allSpaces: true },
       { userId: USER, workspaceId: null, allSpaces: true },
     ]);
+  });
+
+  it("an AGENT caller keeps the item's lens: never every space (item AND group)", async () => {
+    // R2-M1: `readsAllSpaces` is false for an agent — the ctx the door gets
+    // must carry the agent and must not ask for every space.
+    const g = await group();
+    const ig = await item({
+      url: "https://www.instagram.com/p/a",
+      status: "needs_file",
+      groupIds: [g],
+    });
+    const ctxs: UrlReadersContext[] = [];
+    const { deps } = fakeDeps({
+      listReaders: async (ctx, url) => {
+        ctxs.push(ctx);
+        return offersFor(url);
+      },
+    });
+    for (const caller of [
+      { agentUserId: "agent-1" },
+      { keyType: "is_internal" },
+    ]) {
+      ctxs.length = 0;
+      await libraryReaders({ userId: USER, itemId: ig, caller, deps });
+      await libraryReaders({ userId: USER, groupId: g, caller, deps });
+      expect(ctxs).toHaveLength(2);
+      for (const ctx of ctxs) {
+        expect(readsAllSpaces(ctx)).toBe(false);
+        expect(ctx).toMatchObject({ userId: USER, workspaceId: null });
+      }
+    }
+    expect(ctxs[0]).toMatchObject({ allSpaces: false });
+    // The person (no agent) still sees every space.
+    ctxs.length = 0;
+    await libraryReaders({ userId: USER, itemId: ig, caller: {}, deps });
+    expect(readsAllSpaces(ctxs[0]!)).toBe(true);
   });
 
   it("a failed reader lookup is an ERROR, never an empty list", async () => {
