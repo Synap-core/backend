@@ -2246,7 +2246,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json(rest, 200);
     } catch (err) {
       logger.error({ err }, "POST /files/uploads failed");
-      return c.json({ error: "Failed to prepare upload" }, 500);
+      return c.json(
+        { error: "Failed to prepare upload" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -2422,9 +2425,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
         userId,
         sessionId: body.sessionId ?? c.get("sessionId") ?? null,
       });
+      // body.agentUserId wins; fall back to the auto-injected context value so
+      // agents using their own API key get proposal attribution without passing it.
+      const resolvedAgentUserId =
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined);
       const result = await caller.entities.updateEntities({
         userId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         items: body.items as Parameters<
           typeof caller.entities.updateEntities
         >[0]["items"],

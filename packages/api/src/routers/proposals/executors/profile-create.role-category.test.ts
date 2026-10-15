@@ -43,6 +43,20 @@ vi.mock("@synap/database", async (importOriginal) => {
     async getBySlug() {
       return null;
     }
+    // The lookups resolveProfileForApply makes before it creates — none find
+    // a row, so the proposal's role is created fresh.
+    async getBySlugForWorkspace() {
+      return null;
+    }
+    async findActiveBySlugAnyScope() {
+      return [];
+    }
+    async findPodWideBySlugIncludingInactive() {
+      return [];
+    }
+    async findWorkspaceScopedBySlugIncludingInactive() {
+      return [];
+    }
     async create(input: Record<string, unknown>) {
       h.created.push(input);
       return { ...input };

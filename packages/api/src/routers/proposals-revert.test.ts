@@ -138,7 +138,8 @@ vi.mock("../utils/intelligence-routing.js", () => ({
 vi.mock("../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: vi.fn(),
 }));
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

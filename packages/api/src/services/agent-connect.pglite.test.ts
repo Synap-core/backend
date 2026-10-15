@@ -819,3 +819,32 @@ describe("a pending connection never switches the agent's working keys off", () 
     ).toBe("devbox");
   });
 });
+
+describe("the idempotent re-provision counts only a LIVE key", () => {
+  it("a key awaiting approval is not alreadyValid; an active one is", async () => {
+    const base = {
+      agentType: "idem-surface",
+      createdByUserId: OWNER,
+      linkedUserId: OWNER,
+      instanceId: "m-idem",
+    };
+    const first = await provisionSurfaceAgentKey(base);
+    const waiting = (first as { keyId: string }).keyId;
+    // What /setup/agent does for a key that needs approval: it waits inactive,
+    // never revoked — `awaiting_approval` (key-holder-state.ts).
+    await q(`update api_keys set is_active = false where id = $1`, [waiting]);
+
+    const again = await provisionSurfaceAgentKey({ ...base, idempotent: true });
+    expect(again).not.toHaveProperty("alreadyValid");
+    const minted = (again as { keyId: string }).keyId;
+    expect(minted).not.toBe(waiting);
+    expect(await keyRow(minted)).toMatchObject({
+      is_active: true,
+      revoked_at: null,
+    });
+
+    expect(
+      await provisionSurfaceAgentKey({ ...base, idempotent: true })
+    ).toMatchObject({ alreadyValid: true });
+  });
+});

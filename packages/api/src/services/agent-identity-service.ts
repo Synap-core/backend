@@ -909,7 +909,7 @@ export interface ProvisionSurfaceAgentKeyOpts {
    */
   podWide?: boolean;
   /**
-   * Idempotency: when true, if a live (non-revoked) hub_inbound key already exists
+   * Idempotency: when true, if a live (active, non-revoked) hub_inbound key already exists
    * for this agent-user (scoped to instanceId when set), skip revoke+mint and
    * return `{ alreadyValid: true }`.
    */
@@ -1057,13 +1057,17 @@ export async function provisionSurfaceAgentKey(
   }
 
   // ── 4. Idempotent short-circuit ─────────────────────────────────────────
-  // When requested, skip revoke+mint if a valid (non-revoked) key already
-  // exists — scoped to THIS instance when instanceId is set.
+  // When requested, skip revoke+mint if a LIVE key already exists — scoped to
+  // THIS instance when instanceId is set. Live = active AND not revoked: a key
+  // that is inactive but never revoked is still AWAITING its owner's approval
+  // (key-holder-state.ts), and answering `alreadyValid` for it would hand the
+  // caller a key that does not authenticate.
   if (opts.idempotent === true) {
     const existingKey = await db.query.apiKeys.findFirst({
       where: and(
         eq(apiKeys.userId, agentUserId),
         eq(apiKeys.keyType, "hub_inbound"),
+        eq(apiKeys.isActive, true),
         isNull(apiKeys.revokedAt),
         instanceId ? eq(apiKeys.instanceId, instanceId) : undefined
       ),

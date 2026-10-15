@@ -12,6 +12,11 @@ import { sanitizeStoredViewFilters } from "@synap-core/types";
 import { viewsRouter } from "../../views.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  isViewContentProposalApproved,
+  loadViewContentTarget,
+  markViewContentProposalApproved,
+} from "../../../services/views/view-content-proposal.js";
 import { reportApproved } from "./shared.js";
 
 const logger = createLogger({ module: "proposal-executor-view" });
@@ -191,6 +196,89 @@ export function registerViewExecutors(): void {
         userId
       );
       return { success: true };
+    },
+  });
+
+  // ── view / updateContent ─────────────────────────────────────────────────────
+  // The hub door (hub-protocol/views.ts `updateContent`) gates an agent's canvas
+  // content write and files the FULL write payload
+  // `{ id, version, store, elements, embeddedEntities }`. Without this executor
+  // the `*/*` catch-all flipped the proposal APPROVED, emitted `.validated`, and
+  // the materializer's `materializeView` matched no action: a green approval
+  // that wrote nothing.
+  //
+  // Replays through the SAME viewsRouter.updateContent the direct path calls,
+  // as the APPROVER (mirrors view/create above): `assertViewAccess(…, "write")`
+  // inside it is the floor, and the content validation, document version
+  // snapshot and whiteboard reload broadcast all match the direct write.
+  registerProposalExecutor({
+    key: "view/updateContent",
+    async execute({ proposal, userId, input, ctx, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const viewId =
+        (typeof innerData.id === "string" && innerData.id) ||
+        (typeof proposal.targetId === "string" && proposal.targetId) ||
+        undefined;
+      const version = innerData.version;
+      if (!viewId || typeof version !== "number") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "View content proposal is missing the view id or version",
+        });
+      }
+
+      // Idempotency: every replay writes a new document version, so a second
+      // approve must not re-apply.
+      if (await isViewContentProposalApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // The workspace comes from the VIEW ROW, never from the proposal.
+      const view = await loadViewContentTarget(viewId);
+      if (!view) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "View to update no longer exists",
+        });
+      }
+      const membership = view.workspaceId
+        ? await getWorkspaceMembership(db, view.workspaceId, userId)
+        : null;
+      if (view.workspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const viewCaller = viewsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: view.workspaceId ?? null,
+        workspaceRole: membership?.role ?? "owner",
+        socketIO: ctx.socketIO,
+      } as unknown as Context);
+      await viewCaller.updateContent({
+        viewId,
+        version,
+        store: innerData.store as Record<string, unknown> | undefined,
+        elements: innerData.elements as unknown[] | undefined,
+        embeddedEntities: innerData.embeddedEntities as string[] | undefined,
+      });
+
+      await markViewContentProposalApproved(input.proposalId, userId);
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: viewId };
     },
   });
 }

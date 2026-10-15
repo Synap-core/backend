@@ -43,10 +43,10 @@ import {
   drizzleSql,
   type TrustedIssuer,
 } from "@synap/database";
-import { emitSideEffects } from "@synap/events";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { resolvePodOwnerUserId } from "../capabilities/pod-owner.js";
-import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
+import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
+import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import {
   TRUSTED_ISSUER_TARGET_TYPE,
@@ -171,7 +171,7 @@ export async function syncTrustedIssuerScopeRequest(
     );
     if (stale.length > 0) {
       const ids = stale.map((r) => r.id);
-      await tx
+      const withdrawn = await tx
         .update(proposals)
         .set({
           status: ProposalStatus.WITHDRAWN,
@@ -183,8 +183,19 @@ export async function syncTrustedIssuerScopeRequest(
             inArray(proposals.id, ids),
             eq(proposals.status, ProposalStatus.PENDING)
           )
-        );
+        )
+        .returning({ id: proposals.id, data: proposals.data });
       markProposalNotificationsActioned(ids);
+      // WITHDRAWN is terminal: the same discard every terminal door makes. A
+      // no-op for a scope request (it stages no source blob); `null` because,
+      // like the expiry scanners, the boot sync acts as no user.
+      for (const row of withdrawn) {
+        await discardProposalSourceBlob({
+          database: db,
+          userId: null,
+          proposalData: row.data,
+        });
+      }
     }
 
     if (pending.length === 0) return null;
@@ -229,26 +240,30 @@ export async function syncTrustedIssuerScopeRequest(
   if (filed.action !== "filed") return filed;
 
   const summary = buildWidenScopesData(issuer, pending).summary;
-  void emitSideEffects({
-    subjectType: "proposal",
-    action: "created",
-    subjectId: filed.proposalId,
-    userId: filed.owner,
-    data: {
-      proposalStatus: "created",
-      targetType: TRUSTED_ISSUER_TARGET_TYPE,
-      changeType: TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
+  // The ONE ordered door: the pod-wide fan-out completes before the
+  // `proposal.created` emit, so the reactor arm finds the row and the owner is
+  // told once.
+  await notifyProposalCreatedOrdered({
+    podWide: {
+      proposalId: filed.proposalId,
+      proposalType: TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
+      description: summary,
     },
-  }).catch((err) => {
-    logger.warn(
-      { err, proposalId: filed.proposalId },
-      "trusted-issuer scope request: emitSideEffects failed (non-fatal)"
-    );
-  });
-  void notifyPodWideProposal({
-    proposalId: filed.proposalId,
-    proposalType: TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
-    description: summary,
+    sideEffect: {
+      subjectId: filed.proposalId,
+      userId: filed.owner,
+      data: {
+        proposalStatus: "created",
+        targetType: TRUSTED_ISSUER_TARGET_TYPE,
+        changeType: TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE,
+      },
+    },
+    onEmitError: (err) => {
+      logger.warn(
+        { err, proposalId: filed.proposalId },
+        "trusted-issuer scope request: emitSideEffects failed (non-fatal)"
+      );
+    },
   });
   return { action: "filed", proposalId: filed.proposalId };
 }
