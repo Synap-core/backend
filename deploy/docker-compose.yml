@@ -108,6 +108,13 @@ x-backend-env: &backend-env
   CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
   RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
   RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
+  # Library reads & media copies. Empty = the code's default (shared-utils
+  # envInt): video copy 1 GiB, 4 light reads at once, 60-min job expiry,
+  # 200 AI / billed reads per person per 24h.
+  LIBRARY_MEDIA_VIDEO_MAX_BYTES: ${LIBRARY_MEDIA_VIDEO_MAX_BYTES:-}
+  SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY: ${SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY:-}
+  SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: ${SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES:-}
+  SYNAP_LIBRARY_READ_AI_PER_DAY: ${SYNAP_LIBRARY_READ_AI_PER_DAY:-}
   # Mirrored only so the backend can introspect its own courier (SMTP) config
   # in /api/provision/status. Kratos reads this directly via its own service env
   # block below — the backend never sends mail itself; it just reports status.
