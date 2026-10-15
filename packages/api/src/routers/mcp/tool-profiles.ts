@@ -182,6 +182,7 @@ export function toolGroupRef(group: ToolGroup | "builder"): string {
 const SKILL_STEM_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
   "focus-sessions": ["sessions"],
   "work-flow": ["sessions"],
+  "hand-off": ["sessions", "read"],
   writes: ["data"],
   capture: ["data"],
   "multi-entity-capture": ["data"],
