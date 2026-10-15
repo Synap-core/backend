@@ -10,15 +10,13 @@ import {
   type SiteAdapter,
   type SiteRead,
 } from "../adapter.js";
-import { decodeEntities } from "../html.js";
+import { decodeEntities, innerOf } from "../html.js";
 import { BUILTIN_READ_TEXT_MAX } from "../limits.js";
 
 function tag(xml: string, name: string): string | undefined {
-  const m = new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`, "i").exec(
-    xml
-  );
-  if (!m) return undefined;
-  const v = decodeEntities(m[1]!.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1"))
+  const raw = innerOf(xml, name);
+  if (raw === undefined) return undefined;
+  const v = decodeEntities(raw.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1"))
     .replace(/\s+/g, " ")
     .trim();
   return v || undefined;
@@ -46,7 +44,7 @@ export const arxivAdapter: SiteAdapter = {
       { accept: "application/atom+xml" }
     );
     if (!got.ok) return fromGetFailure(got, "arXiv");
-    const entry = /<entry\b[^>]*>([\s\S]*?)<\/entry>/i.exec(got.body)?.[1];
+    const entry = innerOf(got.body, "entry");
     const title = entry ? tag(entry, "title") : undefined;
     // An unknown id answers an empty feed, or an entry titled "Error".
     if (!entry || !title || title === "Error") {

@@ -12,6 +12,10 @@ export default defineConfig({
     // The path-secret redactor — zero imports, shared by the 5xx error-egress
     // sanitizer here and `apps/api`'s request logger / error handler.
     "redact-secret-path": "src/middleware/redact-secret-path.ts",
+    // The page extractor's worker thread — spawned by
+    // services/capabilities/web-read/extract-pool.ts as `./extract-worker.js`
+    // NEXT TO the bundle (dist root), so it must be its own entry here.
+    "extract-worker": "src/services/capabilities/web-read/extract-worker.ts",
   },
   format: ["esm"],
   sourcemap: true,

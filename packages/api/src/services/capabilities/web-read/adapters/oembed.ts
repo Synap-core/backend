@@ -101,7 +101,6 @@ export const youtubeAdapter: SiteAdapter = {
     "*.youtube.com/playlist",
     "youtu.be/*",
   ],
-  oembed: youtubeOembed,
   async read(url, ctx) {
     const r = await readOembed(youtubeOembed(new URL(url)), ctx, "YouTube");
     if (!isMapped(r)) return r;
@@ -123,7 +122,6 @@ export const tiktokAdapter: SiteAdapter = {
     "vm.tiktok.com/*",
     "vt.tiktok.com/*",
   ],
-  oembed: tiktokOembed,
   async read(url, ctx) {
     const r = await readOembed(tiktokOembed(new URL(url)), ctx, "TikTok");
     if (r === null) {
@@ -150,7 +148,6 @@ export const vimeoAdapter: SiteAdapter = {
   id: "vimeo",
   name: "Vimeo",
   urls: ["vimeo.com/*", "player.vimeo.com/video/*"],
-  oembed: vimeoOembed,
   async read(url, ctx) {
     const r = await readOembed(vimeoOembed(new URL(url)), ctx, "Vimeo");
     if (!isMapped(r)) return r;

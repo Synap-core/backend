@@ -270,7 +270,7 @@ async function readItemContent(
   const page = readLibraryPageMeta(row.metadata);
   if (page && s.url) {
     const html = (await deps.readBytes(page.htmlKey)).toString("utf-8");
-    const read = readSentPage(html, s.url);
+    const read = await readSentPage(html, s.url);
     const text =
       read.status === "ok" || read.status === "partial"
         ? [read.title, read.text].filter((t) => t?.trim()).join("\n\n")

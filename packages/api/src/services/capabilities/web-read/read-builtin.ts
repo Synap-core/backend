@@ -28,10 +28,15 @@ import {
   type SiteAdapterContext,
   type SiteRead,
 } from "./adapter.js";
-import { extractFromHtml } from "./extract.js";
-import { WEB_READ_PAGE_BYTES_MAX, webGet, type WebFetcher } from "./fetch.js";
+import { extractPage } from "./extract-pool.js";
+import { webGet, type WebFetcher } from "./fetch.js";
+import { loneHttpUrl } from "./html.js";
 import { findSiteAdapter, podNeverFetches } from "./registry.js";
-import { BUILTIN_READ_TEXT_MAX, ADEQUATE_BODY_CHARS } from "./limits.js";
+import {
+  ADEQUATE_BODY_CHARS,
+  BUILTIN_READ_TEXT_MAX,
+  WEB_READ_PAGE_BYTES_MAX,
+} from "./limits.js";
 
 export interface ReadBuiltinOptions {
   /** Inject a recorded-response fake in tests. Default: `safePublicFetch`. */
@@ -71,18 +76,6 @@ export function builtinStamp(
   };
 }
 
-/** The lone http(s) URL in `input`, or null. */
-function httpUrl(input: string): string | null {
-  const trimmed = input.trim();
-  if (!trimmed || /\s/.test(trimmed)) return null;
-  try {
-    const u = new URL(trimmed);
-    return u.protocol === "http:" || u.protocol === "https:" ? trimmed : null;
-  } catch {
-    return null; // not a URL
-  }
-}
-
 const READABLE_TEXT_TYPES = /^(text\/plain|text\/markdown|text\/x-markdown)\b/i;
 const HTML_TYPES = /^(text\/html|application\/xhtml\+xml)\b/i;
 
@@ -97,7 +90,7 @@ async function readPage(
   });
   if (!got.ok) return fromGetFailure(got, "the page");
   const ct = got.contentType.trim();
-  if (!ct || HTML_TYPES.test(ct)) return extractFromHtml(got.body, url);
+  if (!ct || HTML_TYPES.test(ct)) return extractPage(got.body, url);
   if (READABLE_TEXT_TYPES.test(ct)) {
     const text = got.body.trim().slice(0, BUILTIN_READ_TEXT_MAX);
     if (!text) return siteBlocked("not_found", undefined, "the file is empty");
@@ -132,7 +125,7 @@ export async function readBuiltin(
   opts: ReadBuiltinOptions = {}
 ): Promise<UrlRead> {
   const now = (opts.now ?? (() => new Date()))();
-  const url = httpUrl(input);
+  const url = loneHttpUrl(input);
   const sourceUrl = url ?? input.trim();
   if (!url) {
     return normalizeUrlRead(
@@ -197,15 +190,16 @@ export async function readBuiltin(
 
 /**
  * The page the person's own browser sent (rendered, possibly signed in),
- * extracted with the same rules and stamped `builtin:page`. No request.
+ * extracted with the same rules (in the worker, under the same deadline) and
+ * stamped `builtin:page`. No request. Never throws.
  */
-export function readSentPage(
+export async function readSentPage(
   html: string,
   sourceUrl: string,
   now: Date = new Date()
-): UrlRead {
+): Promise<UrlRead> {
   return normalizeUrlRead(
-    extractFromHtml(html, sourceUrl),
+    await extractPage(html, sourceUrl),
     sourceUrl,
     builtinStamp("page", now)
   );

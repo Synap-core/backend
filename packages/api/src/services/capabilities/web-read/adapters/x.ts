@@ -19,7 +19,12 @@ import {
   type SiteRead,
 } from "../adapter.js";
 import { parseJson, type WebGetResult } from "../fetch.js";
-import { decodeEntities, fragmentText, httpUrlOrNull } from "../html.js";
+import {
+  decodeEntities,
+  fragmentText,
+  httpUrlOrNull,
+  innerOf,
+} from "../html.js";
 import { BUILTIN_READ_TEXT_MAX } from "../limits.js";
 
 const xOembed = (url: URL) =>
@@ -48,7 +53,7 @@ function fromOembed(got: WebGetResult): Part | null {
   const rec = parseJson(got.body);
   if (!isRecord(rec)) return null;
   const html = str(rec.html) ?? "";
-  const p = /<p\b[^>]*>([\s\S]*?)<\/p>/i.exec(html)?.[1];
+  const p = innerOf(html, "p");
   const text = p ? fragmentText(p, BUILTIN_READ_TEXT_MAX) : undefined;
   const author = str(rec.author_name);
   const authorUrl = httpUrlOrNull(str(rec.author_url)) ?? undefined;
@@ -203,6 +208,5 @@ export const xAdapter: SiteAdapter = {
     "*.x.com/i/web/status/*",
     "*.twitter.com/i/web/status/*",
   ],
-  oembed: xOembed,
   read: readX,
 };

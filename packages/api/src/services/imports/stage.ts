@@ -4,9 +4,12 @@
  * Each item becomes ONE intake-source document (`stageIntakeSource`, the one
  * door that turns an intake input into a document) WITHOUT reading content:
  *   - a link keeps its URL as the body and a preview CARD on
- *     `metadata.importItem` (oEmbed / OpenGraph via `readPublicUrl` — title,
- *     a SHORT description, image, author). The page body is never stored here:
- *     Build reads it later, only for kept items;
+ *     `metadata.importItem` (title, a SHORT description, cover image, author)
+ *     from the pod's built-in reader ladder (`readBuiltin`: site adapters, then
+ *     the page through the DNS-pinned SSRF door — never a host the pod does
+ *     not fetch, decision P1) or from the page the person's browser sent
+ *     (`readSentPage`, no request). The page body is never stored here: the
+ *     light read reads it later;
  *   - typed text keeps the text (the person wrote it — it is the item);
  *   - a file keeps its bytes (inline ≤ `IMPORT_LIMITS.inlineFileBytesMax`), or
  *     ADOPTS a document the presigned upload lane already stored.
@@ -56,12 +59,12 @@ import {
   keepLibraryPageHtml,
   readLibraryPageMeta,
 } from "../library/page-html.js";
+import type { UrlRead } from "@synap-core/types/url-read";
 import {
-  lonePublicHttpUrl,
-  readHtmlPage,
-  readPublicUrl,
-  type PublicUrlRead,
-} from "../capabilities/read-public-url.js";
+  readBuiltin,
+  readSentPage,
+} from "../capabilities/web-read/read-builtin.js";
+import { loneHttpUrl } from "../capabilities/web-read/html.js";
 import {
   IMPORT_ITEM_CURATION_KEY,
   IMPORT_ITEM_KEY,
@@ -98,8 +101,8 @@ export interface ImportStageOutcome {
 }
 
 export interface ImportStageDeps {
-  /** Injected in tests; defaults to the SSRF-guarded public reader. */
-  readUrl?: (url: string) => Promise<PublicUrlRead>;
+  /** Injected in tests; defaults to the built-in reader ladder (`readBuiltin`). */
+  readUrl?: (url: string) => Promise<UrlRead>;
   /**
    * `library`: a link, text or file already kept ANYWHERE in the person's
    * Library is the same item (the Library door). Default `session`.
@@ -119,18 +122,26 @@ function clip(
   return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trim();
 }
 
-/** A preview card from a public read — never the body. */
+/** A read that holds something to show (not blocked, not failed). */
+function usable(read: UrlRead | null): read is UrlRead {
+  return read?.status === "ok" || read?.status === "partial";
+}
+
+/** A preview card from a read — never the body. */
 export function cardFromRead(
-  read: PublicUrlRead,
+  read: UrlRead | null,
   host: string | null
 ): ImportItemCard | undefined {
-  if (read.kind !== "read") return host ? { siteName: host } : undefined;
+  if (!usable(read)) return host ? { siteName: host } : undefined;
+  const image =
+    read.media?.find((m) => m.kind === "image" && m.role === "cover") ??
+    read.media?.find((m) => m.kind === "image");
   const card: ImportItemCard = {
     ...(read.title ? { title: clip(read.title, TITLE_MAX) } : {}),
     ...(read.text
       ? { description: clip(read.text, CARD_DESCRIPTION_MAX) }
       : {}),
-    ...(read.imageUrl ? { imageUrl: read.imageUrl } : {}),
+    ...(image ? { imageUrl: image.url } : {}),
     ...(read.author ? { authorName: read.author } : {}),
     ...(host ? { siteName: host } : {}),
   };
@@ -202,7 +213,7 @@ async function prepare(item: ImportStageItemInput): Promise<Prepared> {
     return { kind: "refuse", reason: "note_too_long" };
   }
   if (item.kind === "url") {
-    const url = lonePublicHttpUrl(item.url ?? "");
+    const url = loneHttpUrl(item.url ?? "");
     if (!url) return { kind: "refuse", reason: "invalid_url" };
     if ((item.html?.length ?? 0) > IMPORT_LIMITS.pageHtmlMax) {
       return { kind: "refuse", reason: "page_too_large" };
@@ -304,7 +315,7 @@ async function stageOne(args: {
   userId: string;
   session: ImportSessionRow;
   prepared: Extract<Prepared, { kind: "stage" }>;
-  readUrl: (url: string) => Promise<PublicUrlRead>;
+  readUrl: (url: string) => Promise<UrlRead>;
   dedupScope?: "session" | "library";
   /** Take one slot of the import's item cap; false = the import is full. */
   claimRoom: () => boolean;
@@ -331,12 +342,12 @@ async function stageOne(args: {
   let card = prepared.card;
   let title = prepared.title;
   if (prepared.needsCard && prepared.url) {
-    let read: PublicUrlRead = { kind: "unavailable", sourceUrl: prepared.url };
+    let read: UrlRead | null = null;
     try {
       // The page the person sent is read first: no request, and it is the
       // page they saw (a login-only page fetched by the pod is a login wall).
-      if (prepared.html) read = readHtmlPage(prepared.html, prepared.url);
-      if (read.kind !== "read") read = await args.readUrl(prepared.url);
+      if (prepared.html) read = await readSentPage(prepared.html, prepared.url);
+      if (!usable(read)) read = await args.readUrl(prepared.url);
     } catch (err) {
       // A preview that could not be read is a card-less item, not a failure.
       logger.warn(
@@ -544,7 +555,7 @@ export async function stageImportItems(args: {
   deps?: ImportStageDeps;
 }): Promise<ImportStageOutcome> {
   const database = args.database ?? defaultDb;
-  const readUrl = args.deps?.readUrl ?? ((url: string) => readPublicUrl(url));
+  const readUrl = args.deps?.readUrl ?? ((url: string) => readBuiltin(url));
   const out: ImportStageOutcome = { staged: [], refused: [] };
   const results: Array<
     | { index: number; itemId: string; deduplicated: boolean }

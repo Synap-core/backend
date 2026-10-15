@@ -1,16 +1,13 @@
 /**
- * THE host table of the pod's built-in reader: every site adapter, the URLs
- * it declares, and the hosts the pod never fetches itself. It replaces the
- * old `oembedEndpoint` switch (read-public-url.ts asks {@link oembedEndpointFor}).
+ * THE host table of the pod's built-in reader: every site adapter and the
+ * URLs it declares. The hosts the pod never fetches itself are policy, stated
+ * once in `@synap-core/types/url-read` (`POD_NEVER_FETCHES`).
  *
  * Routing is by declared pattern (`@synap-core/types/url-read` grammar), most
  * specific first — the same rule installed reader verbs are routed by.
  */
 
-import {
-  matchUrlPattern,
-  urlPatternSpecificity,
-} from "@synap-core/types/url-read";
+import { bestUrlPatternSpecificity } from "@synap-core/types/url-read";
 import type { SiteAdapter } from "./adapter.js";
 import { arxivAdapter } from "./adapters/arxiv.js";
 import { blueskyAdapter } from "./adapters/bluesky.js";
@@ -27,6 +24,9 @@ import { wikipediaAdapter } from "./adapters/wikipedia.js";
 import { xAdapter } from "./adapters/x.js";
 
 /** Every built-in site adapter. A new site joins routing by being listed here. */
+// The fetch policy (decision P1) lives in the url-read leaf, stated once.
+export { POD_NEVER_FETCHES, podNeverFetches } from "@synap-core/types/url-read";
+
 export const SITE_ADAPTERS: readonly SiteAdapter[] = [
   youtubeAdapter,
   tiktokAdapter,
@@ -41,32 +41,6 @@ export const SITE_ADAPTERS: readonly SiteAdapter[] = [
   googleDocsAdapter,
 ];
 
-/**
- * Hosts whose PAGES the pod never fetches (decision P1): Instagram and
- * TikTok. A reader the person installed may read them, on their account,
- * after their tap — never the pod's own fetch. (TikTok's official oEmbed
- * endpoint is not a page fetch; the TikTok adapter uses it.)
- */
-export const POD_NEVER_FETCHES: readonly string[] = [
-  "*.instagram.com",
-  "instagr.am",
-  "*.tiktok.com",
-];
-
-export function podNeverFetches(url: string): boolean {
-  return POD_NEVER_FETCHES.some((p) => matchUrlPattern(p, url));
-}
-
-/** Specificity of the adapter's best pattern for `url`, or -1. */
-function bestMatch(adapter: SiteAdapter, url: string): number {
-  let best = -1;
-  for (const p of adapter.urls) {
-    if (matchUrlPattern(p, url))
-      best = Math.max(best, urlPatternSpecificity(p));
-  }
-  return best;
-}
-
 /** The most specific adapter that declares `url`, or null. */
 export function findSiteAdapter(
   url: string,
@@ -75,27 +49,11 @@ export function findSiteAdapter(
   let found: SiteAdapter | null = null;
   let score = -1;
   for (const a of adapters) {
-    const s = bestMatch(a, url);
+    const s = bestUrlPatternSpecificity(a.urls, url);
     if (s > score) {
       found = a;
       score = s;
     }
   }
   return found;
-}
-
-/**
- * The official oEmbed endpoint for `pageUrl` (no API key), from the adapter
- * that declares the URL — or null when no oEmbed site declares it.
- */
-export function oembedEndpointFor(pageUrl: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(pageUrl);
-  } catch {
-    return null; // not a URL: no endpoint
-  }
-  const withOembed = SITE_ADAPTERS.filter((a) => a.oembed);
-  const adapter = findSiteAdapter(pageUrl, withOembed);
-  return adapter?.oembed ? adapter.oembed(url) : null;
 }

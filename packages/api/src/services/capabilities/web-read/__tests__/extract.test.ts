@@ -124,8 +124,8 @@ describe("readSentPage (the page the person's browser sent)", () => {
     expect(r.text).not.toMatch(/Pricing|© Acme/);
   });
 
-  it("is stamped builtin:page, normalized, and makes no request", () => {
-    const r = readSentPage(
+  it("is stamped builtin:page, normalized, and makes no request", async () => {
+    const r = await readSentPage(
       ARTICLE_HTML,
       URL_,
       new Date("2026-10-15T00:00:00Z")

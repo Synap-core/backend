@@ -36,7 +36,7 @@ import {
   type CaptureFiledOutcomeInput,
 } from "../services/intake/capture-filed-part.js";
 import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
-import { lonePublicHttpUrl } from "../services/capabilities/read-public-url.js";
+import { loneHttpUrl } from "../services/capabilities/web-read/html.js";
 import {
   captureLinkReader,
   readUrl,
@@ -1314,7 +1314,7 @@ const captureBaseRouter = router({
       // Additive. A lone URL is read through the ONE url-reader door
       // (`readUrl`): the best free ready reader, else the built-in ladder.
       // Capture never bills (`allowBilled: false`). The read feeds the
-      // structurer (Web Access W0, below) and the `reader` adjunct; a blocked
+      // structurer (below) and the `reader` adjunct; a blocked
       // read names an install invite when a catalog reader would read it.
       // Never fails the capture: a reader-list failure omits the adjunct.
       /**
@@ -1324,7 +1324,7 @@ const captureBaseRouter = router({
        *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
        *   capture with an agent key) is kept — founder 2026-10-13.
        */
-      const linkUrl = lonePublicHttpUrl(inputText);
+      const linkUrl = loneHttpUrl(inputText);
       const linkRead: Promise<ReadUrlResult | undefined> = linkUrl
         ? readUrl(
             {
@@ -1942,9 +1942,9 @@ const captureBaseRouter = router({
       const previousEntities =
         input.previousEntities ?? roomRound?.previousEntities;
 
-      // Web Access W0 — capture reads for real: the linked page's text and
-      // title reach the structurer as QUOTED DATA (fenced, labelled, hidden
-      // text already stripped by the extractor), not only the client echo.
+      // Capture reads for real: the linked page's text and title reach the
+      // structurer as QUOTED DATA (fenced and labelled — hidden text is NOT
+      // reliably stripped, so the fence is the defence), not only the echo.
       const linkReadResult = await linkRead;
       const pageContext = linkReadResult
         ? structurerPageContext(linkReadResult.read)

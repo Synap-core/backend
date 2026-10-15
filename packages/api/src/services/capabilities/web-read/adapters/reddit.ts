@@ -13,14 +13,16 @@ import {
   type SiteAdapter,
   type SiteRead,
 } from "../adapter.js";
-import { decodeEntities, fragmentText, httpUrlOrNull } from "../html.js";
+import {
+  decodeEntities,
+  fragmentText,
+  httpUrlOrNull,
+  innerOf,
+} from "../html.js";
 import { BUILTIN_READ_TEXT_MAX, DISCUSSION_COMMENTS_MAX } from "../limits.js";
 
 function inner(xml: string, name: string): string | undefined {
-  const m = new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`, "i").exec(
-    xml
-  );
-  return m ? m[1] : undefined;
+  return innerOf(xml, name);
 }
 
 function plain(xml: string | undefined): string | undefined {
@@ -52,7 +54,7 @@ export const redditAdapter: SiteAdapter = {
     });
     if (!got.ok) return fromGetFailure(got, "Reddit");
     const entries = [
-      ...got.body.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/gi),
+      ...got.body.matchAll(/<entry\b[^<>]*>([\s\S]*?)<\/entry>/gi),
     ].map((m) => m[1]!);
     const post = entries.find((e) => /<id>\s*t3_/i.test(e)) ?? entries[0];
     if (!post) {

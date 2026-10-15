@@ -39,11 +39,6 @@ export interface SiteAdapter {
   /** URL patterns (url-read grammar) this adapter reads. */
   readonly urls: readonly string[];
   /**
-   * The site's official oEmbed endpoint for `url`, when it has one. The ONE
-   * oEmbed host table: `read-public-url.ts` asks the registry for it.
-   */
-  readonly oembed?: (url: URL) => string;
-  /**
    * Read `url`. `null` = "matched the pattern but this is not something I
    * read" (the ladder moves on to the page). A failure is a `failed` /
    * `blocked` read, never null and never an empty `ok`.

@@ -5,6 +5,12 @@
  * the pod's `readableTextFromHtml` as the fallback. Metadata (title, author,
  * date, site, image) comes from defuddle's JSON-LD + Open Graph reading.
  *
+ * CPU: this module is PURE and SYNCHRONOUS — callers never run it on the
+ * pod's event loop. They go through `extractPage` (extract-pool.ts), which
+ * runs it in a worker thread under a deadline. A page too deep or too large
+ * for the DOM extractor ({@link EXTRACT_DOM_DEPTH_MAX},
+ * {@link EXTRACT_DOM_ELEMENTS_MAX}) is read by the linear pass alone.
+ *
  * Adequacy, honestly:
  *  - a bot-check interstitial → `blocked: challenge`;
  *  - a sign-in form with no prose → `blocked: login_wall`;
@@ -19,14 +25,20 @@ import { parseHTML } from "linkedom";
 import type { UrlReadMedia } from "@synap-core/types/url-read";
 import { looksLikeChallenge, siteBlocked, type SiteRead } from "./adapter.js";
 import {
+  asciiLower,
   fragmentText,
   httpUrlOrNull,
   metaContent,
   readableTextFromHtml,
   titleTag,
 } from "./html.js";
-import { ADEQUATE_BODY_CHARS, BUILTIN_READ_TEXT_MAX } from "./limits.js";
-import { WEB_READ_PAGE_BYTES_MAX } from "./fetch.js";
+import {
+  ADEQUATE_BODY_CHARS,
+  BUILTIN_READ_TEXT_MAX,
+  EXTRACT_DOM_DEPTH_MAX,
+  EXTRACT_DOM_ELEMENTS_MAX,
+  WEB_READ_PAGE_BYTES_MAX,
+} from "./limits.js";
 
 interface Parsed {
   title?: string;
@@ -60,7 +72,84 @@ function nonEmpty(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
-function withDefuddle(html: string, url: string): Parsed | null {
+/** Elements with no content and no close tag. */
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+/** Elements whose content is text, not markup (skipped by the shape scan). */
+const RAW_TEXT_ELEMENTS = new Set(["script", "style", "textarea", "title"]);
+
+/**
+ * Element count and maximum nesting depth of `html`, from a linear tag scan
+ * (stops counting once either cap is passed). Approximate the way a tag
+ * scanner is — it never parses — and errs on the side of "too complex".
+ */
+export function domShape(html: string): { elements: number; depth: number } {
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^<>]*>/g;
+  let elements = 0;
+  let depth = 0;
+  let maxDepth = 0;
+  let lower: string | null = null;
+  /** raw-text elements with no close after some earlier point: none later either */
+  const unclosed = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html))) {
+    const name = match[2]!.toLowerCase();
+    if (match[1]) {
+      if (!VOID_ELEMENTS.has(name)) depth = Math.max(0, depth - 1);
+      continue;
+    }
+    elements += 1;
+    if (RAW_TEXT_ELEMENTS.has(name)) {
+      // Jump over the element's text: a script holding "<div" is not markup.
+      if (unclosed.has(name)) continue;
+      lower ??= asciiLower(html);
+      const close = lower.indexOf(`</${name}`, re.lastIndex);
+      if (close >= 0) re.lastIndex = close;
+      else unclosed.add(name);
+      continue;
+    }
+    if (!VOID_ELEMENTS.has(name) && !match[0].endsWith("/>")) {
+      depth += 1;
+      maxDepth = Math.max(maxDepth, depth);
+    }
+    if (elements > EXTRACT_DOM_ELEMENTS_MAX || maxDepth > EXTRACT_DOM_DEPTH_MAX)
+      break;
+  }
+  return { elements, depth: maxDepth };
+}
+
+/** Is `html` within what the DOM extractor may be handed? */
+export function domExtractable(html: string): boolean {
+  const shape = domShape(html);
+  return (
+    shape.elements <= EXTRACT_DOM_ELEMENTS_MAX &&
+    shape.depth <= EXTRACT_DOM_DEPTH_MAX
+  );
+}
+
+/** What defuddle produced, or why it produced nothing (logged by the caller). */
+type DefuddleOutcome =
+  | { parsed: Parsed }
+  | { parsed: null; skipped: "dom_too_complex" }
+  | { parsed: null; error: string };
+
+function withDefuddle(html: string, url: string): DefuddleOutcome {
+  if (!domExtractable(html))
+    return { parsed: null, skipped: "dom_too_complex" };
   try {
     const { document } = parseHTML(html);
     const doc = document as unknown as Document & {
@@ -97,17 +186,24 @@ function withDefuddle(html: string, url: string): Parsed | null {
       ? fragmentText(result.content, BUILTIN_READ_TEXT_MAX)
       : "";
     return {
-      title: nonEmpty(result.title),
-      author: nonEmpty(result.author),
-      siteName: nonEmpty(result.site),
-      published: nonEmpty(result.published),
-      image: nonEmpty(result.image),
-      canonical,
-      body,
-      freeAccess: accessibleForFree(result.schemaOrgData),
+      parsed: {
+        title: nonEmpty(result.title),
+        author: nonEmpty(result.author),
+        siteName: nonEmpty(result.site),
+        published: nonEmpty(result.published),
+        image: nonEmpty(result.image),
+        canonical,
+        body,
+        freeAccess: accessibleForFree(result.schemaOrgData),
+      },
     };
-  } catch {
-    return null; // defuddle or the DOM choked on this page: the fallback reads it
+  } catch (err) {
+    // defuddle or the DOM choked on this page: the fallback reads it, and the
+    // error name travels back so a systematic break is logged, not silent.
+    return {
+      parsed: null,
+      error: err instanceof Error ? err.name || "Error" : typeof err,
+    };
   }
 }
 
@@ -124,19 +220,47 @@ function withFallback(html: string): Parsed {
   };
 }
 
-const PASSWORD_FIELD = /<input\b[^>]*type\s*=\s*["']?password/i;
+const PASSWORD_FIELD = /<input\b[^<>]*type\s*=\s*["']?password/i;
 const LOGIN_PATH =
   /\/(login|signin|sign-in|sign_in|authwall|accounts\/login|uas\/login)\b/i;
+
+/** An extraction plus why the DOM extractor did not contribute, if it did not. */
+export interface ExtractOutcome {
+  read: SiteRead;
+  /** The DOM extractor threw (its error NAME — never page content). */
+  defuddleError?: string;
+  /** The DOM extractor was not run: the page is too deep or too large. */
+  defuddleSkipped?: "dom_too_complex";
+}
 
 /**
  * Extract a page into a read (no `via`, no `sourceUrl` — the caller stamps).
  * Pure: no network. Used for the page the pod fetched AND for the page the
- * person's browser sent.
+ * person's browser sent. Synchronous and CPU-bound: production callers use
+ * `extractPage` (worker + deadline), never this on the event loop.
  */
 export function extractFromHtml(rawHtml: string, url: string): SiteRead {
+  return extractDetailed(rawHtml, url).read;
+}
+
+export function extractDetailed(rawHtml: string, url: string): ExtractOutcome {
   const html = rawHtml.slice(0, WEB_READ_PAGE_BYTES_MAX);
+  const outcome = withDefuddle(html, url);
+  const why: Omit<ExtractOutcome, "read"> =
+    "error" in outcome
+      ? { defuddleError: outcome.error }
+      : "skipped" in outcome
+        ? { defuddleSkipped: outcome.skipped }
+        : {};
+  return { read: extractWith(html, url, outcome.parsed), ...why };
+}
+
+function extractWith(
+  html: string,
+  url: string,
+  parsed: Parsed | null
+): SiteRead {
   const fallback = withFallback(html);
-  const parsed = withDefuddle(html, url);
   // defuddle's body when it found an adequate one; on a SHORT page its
   // clutter pass can drop a real paragraph (one holding a date reads as a
   // byline), so the pod's own readable pass wins there when it holds more.

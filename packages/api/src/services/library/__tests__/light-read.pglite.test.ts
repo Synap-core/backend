@@ -1394,7 +1394,17 @@ describe("page HTML from the browser", () => {
       deps: {
         readUrl: async (url) => {
           fetched++;
-          return { kind: "unavailable", sourceUrl: url };
+          return {
+            status: "failed",
+            sourceUrl: url,
+            error: "not reachable in this test",
+            via: {
+              id: "builtin:article",
+              name: "test",
+              billed: false,
+              readAt: "2026-10-15T00:00:00.000Z",
+            },
+          };
         },
       },
     });

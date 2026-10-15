@@ -30,19 +30,22 @@ const h = vi.hoisted(() => ({
   objects: new Map<string, Buffer>(),
   /** URL reads attempted from Build — there must be none. */
   urlReads: [] as string[],
+  /** Outbound requests through the SSRF doors. */
+  netRequests: [] as string[],
 }));
 
-// Build never reads a URL: it reads the STORED read. Both URL doors count.
-vi.mock("../../capabilities/read-public-url.js", async (importOriginal) => {
+// The pod's network, seen from the SSRF doors: staging's default reader
+// (`readBuiltin`) must never request an Instagram/TikTok page (decision P1).
+// Every request is recorded and refused, so nothing leaves the test.
+vi.mock("@synap/shared-utils", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    readPublicUrl: async (url: string) => {
-      h.urlReads.push(url);
-      throw new Error("Build must not fetch the URL");
-    },
+  const refuse = async (url: string) => {
+    h.netRequests.push(url);
+    throw new Error("no network in this test");
   };
+  return { ...actual, safePublicFetch: refuse, safeExternalFetch: refuse };
 });
+// Build never reads a URL: it reads the STORED read.
 vi.mock("../../capabilities/url-readers.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -161,6 +164,7 @@ import { buildImportGroup, type ImportBuildDeps } from "../build.js";
 import { discardImport } from "../discard.js";
 import { attachImportItemFile } from "../attach.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
+import type { UrlRead } from "@synap-core/types/url-read";
 
 const USER = "user-import-1";
 const OTHER = "user-import-2";
@@ -168,13 +172,18 @@ const OTHER = "user-import-2";
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-const readUrl = async (url: string) => ({
-  kind: "read" as const,
+const readUrl = async (url: string): Promise<UrlRead> => ({
+  status: "ok",
+  sourceUrl: url,
   title: `Title of ${new URL(url).pathname.slice(1) || url}`,
   author: "Ada",
   text: "A".repeat(2000),
-  imageUrl: null,
-  sourceUrl: url,
+  via: {
+    id: "builtin:article",
+    name: "Synap page reader",
+    billed: false,
+    readAt: new Date().toISOString(),
+  },
 });
 
 async function openAndStage(
@@ -272,6 +281,40 @@ describe("an import is a RUN, never the ambient work session", () => {
 });
 
 describe("stage", () => {
+  it("the default staging read never requests an Instagram or TikTok page (P1), and reads other pages through the pinned door", async () => {
+    h.netRequests.length = 0;
+    const { sessionId: _s } = await openImportSession({
+      userId: USER,
+      origin: "relay",
+    });
+    const session = await loadImportSession({ userId: USER, sessionId: _s });
+    const out = await stageImportItems({
+      userId: USER,
+      session,
+      // No `readUrl` dep: the production default runs.
+      items: [
+        { kind: "url", url: "https://www.instagram.com/p/Cxyz123/" },
+        { kind: "url", url: "https://www.tiktok.com/@ada/photo/123" },
+        { kind: "url", url: "https://plain.example.net/post" },
+      ],
+    });
+    expect(out.staged).toHaveLength(3);
+    const requested = h.netRequests.map((u) => new URL(u));
+    // Reachability: the default reader DID go to the network for the plain page…
+    expect(requested.map((u) => u.hostname)).toContain("plain.example.net");
+    // …and never for an Instagram/TikTok PAGE (TikTok's official oEmbed
+    // endpoint is an API call the TikTok adapter makes, not the page).
+    const platformPages = requested.filter(
+      (u) =>
+        /(^|\.)(instagram\.com|tiktok\.com)$/.test(u.hostname) &&
+        u.pathname !== "/oembed"
+    );
+    expect(platformPages.map(String)).toEqual([]);
+    const items = (await view(_s)).items;
+    const ig = items.find((i) => i.source.platform === "instagram")!;
+    expect(ig.card).toEqual({ siteName: "instagram.com" });
+  });
+
   it("stages links, text and files with a preview card only, and lists them in the run", async () => {
     const pdf = Buffer.from("%PDF-1.4 fake");
     const { sessionId, outcome } = await openAndStage([

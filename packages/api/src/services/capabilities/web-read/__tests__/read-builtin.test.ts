@@ -18,7 +18,6 @@ import {
   POD_NEVER_FETCHES,
   SITE_ADAPTERS,
   findSiteAdapter,
-  oembedEndpointFor,
 } from "../registry.js";
 import {
   ARTICLE_HTML,
@@ -272,23 +271,6 @@ describe("the registry (the ONE host table)", () => {
     for (const [url, id] of cases) {
       expect([url, findSiteAdapter(url)?.id ?? null]).toEqual([url, id]);
     }
-  });
-
-  it("oEmbed endpoints come from the registry (readPublicUrl's old table)", () => {
-    expect(oembedEndpointFor("https://youtu.be/abc")).toMatch(
-      /^https:\/\/www\.youtube\.com\/oembed\?format=json&url=/
-    );
-    expect(oembedEndpointFor("https://www.tiktok.com/@a/video/1")).toMatch(
-      /^https:\/\/www\.tiktok\.com\/oembed\?url=/
-    );
-    expect(oembedEndpointFor("https://x.com/a/status/1")).toMatch(
-      /^https:\/\/publish\.twitter\.com\/oembed\?url=/
-    );
-    expect(oembedEndpointFor("https://vimeo.com/1")).toMatch(
-      /^https:\/\/vimeo\.com\/api\/oembed\.json\?url=/
-    );
-    expect(oembedEndpointFor("https://example.com/a")).toBeNull();
-    expect(oembedEndpointFor("https://en.wikipedia.org/wiki/A")).toBeNull();
   });
 
   it("Instagram and TikTok pages are on the never-fetched list", () => {

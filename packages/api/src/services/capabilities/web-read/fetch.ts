@@ -18,8 +18,7 @@ import {
 export const WEB_READ_TIMEOUT_MS = 10_000;
 /** Public pages and short links redirect (http→https, locale, slug). */
 export const WEB_READ_REDIRECT_HOPS = 3;
-/** Bytes of a page's HTML read at most (an article fits; a JS bundle need not). */
-export const WEB_READ_PAGE_BYTES_MAX = 1_500_000;
+export { WEB_READ_PAGE_BYTES_MAX } from "./limits.js";
 /** Bytes of one API answer read at most. */
 export const WEB_READ_API_BYTES_MAX = 1_000_000;
 /** Bytes of a non-2xx body kept — enough to recognise a challenge page. */

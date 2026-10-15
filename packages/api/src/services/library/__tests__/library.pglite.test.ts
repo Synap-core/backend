@@ -149,6 +149,7 @@ import {
 } from "../groups.js";
 import { libraryHealth, searchLibrary } from "../search.js";
 import { buildLibraryGroup, readNowLibraryItem } from "../build.js";
+import type { UrlRead } from "@synap-core/types/url-read";
 
 const USER = "user-library-1";
 const OTHER = "user-library-2";
@@ -156,13 +157,18 @@ const OTHER = "user-library-2";
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-const readUrl = async (url: string) => ({
-  kind: "read" as const,
+const readUrl = async (url: string): Promise<UrlRead> => ({
+  status: "ok",
+  sourceUrl: url,
   title: `Title of ${new URL(url).pathname.slice(1) || url}`,
   author: "Ada",
   text: "Preview text",
-  imageUrl: null,
-  sourceUrl: url,
+  via: {
+    id: "builtin:article",
+    name: "test",
+    billed: false,
+    readAt: "2026-10-15T00:00:00.000Z",
+  },
 });
 
 async function keep(
