@@ -1070,9 +1070,10 @@ export function registerWorkspaceExecutors(): void {
         },
         source: "approve:workspace/adopt",
         adoptWorkspaceId: workspaceId,
+        // The server resolved this body from the catalog: its version names it.
+        catalogVersion: resolved.version ?? undefined,
         identity: {
           packageSlug: templateSlug,
-          packageVersion: resolved.version ?? undefined,
           proposalId: templateSlug,
         },
       });

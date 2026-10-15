@@ -636,7 +636,9 @@ export async function templateApplyWarningFor(
   if (!row || !slug) return null;
   const waiting = await awaitingApprovalByWorkspace([row]);
   return templateApplyWarning(slug, row.settings, waiting.get(row.id) ?? [], {
-    dataChangesHeld: heldDataChangeKeys(row.settings).length > 0,
+    dataChangesHeld:
+      heldDataChangeKeys(row.settings).length > 0 ||
+      heldDataChangesUnreadable(row.settings),
   });
 }
 
@@ -647,10 +649,22 @@ export async function templateApplyWarningFor(
  * `null` on the row = nothing held.
  */
 export interface PendingDataChanges {
-  /** How many changes the update waits on. Never 0 (that is `null`). */
+  /**
+   * How many changes the update waits on. 0 only when `unreadable` (the hold
+   * is known, its list is not); otherwise never 0 (nothing held is `null`).
+   */
   count: number;
-  /** One plain sentence per change (`describeConversionOp`). */
+  /**
+   * One plain sentence per change (`describeConversionOp`); when `unreadable`,
+   * the one sentence saying the list could not be read.
+   */
   sentences: string[];
+  /**
+   * The apply HELD its stamp because it could not read which data changes it
+   * waits on (`settings.template.heldForDataChangesUnreadable`). Held all the
+   * same — never folded into "nothing held".
+   */
+  unreadable: boolean;
   /**
    * Agreeing takes a pod owner or admin (an op rewrites every row of its kind,
    * pod-wide: the `/packages/apply` door answers 403
@@ -668,14 +682,7 @@ export interface PendingDataChanges {
  * array of strings is nothing held.
  */
 export function heldDataChangeKeys(settings: unknown): string[] {
-  const template =
-    settings && typeof settings === "object" && !Array.isArray(settings)
-      ? (settings as { template?: unknown }).template
-      : undefined;
-  const held =
-    template && typeof template === "object" && !Array.isArray(template)
-      ? (template as { heldForDataChanges?: unknown }).heldForDataChanges
-      : undefined;
+  const held = rawTemplateRecord(settings)?.heldForDataChanges;
   return Array.isArray(held)
     ? [
         ...new Set(
@@ -684,6 +691,32 @@ export function heldDataChangeKeys(settings: unknown): string[] {
       ]
     : [];
 }
+
+/**
+ * The finisher held the stamp WITHOUT knowing which data changes (the pending
+ * list could not be read): `settings.template.heldForDataChangesUnreadable`.
+ * Its `heldForDataChanges` is then `[]`, which alone would read as nothing held.
+ */
+export function heldDataChangesUnreadable(settings: unknown): boolean {
+  return rawTemplateRecord(settings)?.heldForDataChangesUnreadable === true;
+}
+
+/** `settings.template` as raw JSON — the held fields are read defensively. */
+function rawTemplateRecord(
+  settings: unknown
+): Record<string, unknown> | undefined {
+  const template =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? (settings as { template?: unknown }).template
+      : undefined;
+  return template && typeof template === "object" && !Array.isArray(template)
+    ? (template as Record<string, unknown>)
+    : undefined;
+}
+
+/** The one sentence when the held list itself could not be read. */
+export const DATA_CHANGES_UNREADABLE_SENTENCE =
+  "This update changes existing data, but which changes could not be read. Run `synap templates update` to review them.";
 
 /** The plain sentence for one held opKey. */
 function heldChangeSentence(opKey: string): string {
@@ -722,8 +755,12 @@ export async function pendingDataChangesByWorkspace(
   unchecked: boolean;
 }> {
   const held = rows
-    .map((r) => ({ id: r.id, keys: heldDataChangeKeys(r.settings) }))
-    .filter((r) => r.keys.length > 0);
+    .map((r) => ({
+      id: r.id,
+      keys: heldDataChangeKeys(r.settings),
+      unreadable: heldDataChangesUnreadable(r.settings),
+    }))
+    .filter((r) => r.keys.length > 0 || r.unreadable);
   const byWorkspace = new Map<string, PendingDataChanges>();
   if (held.length === 0) return { byWorkspace, unchecked: false };
   let applied: Set<string> | null = null;
@@ -738,10 +775,25 @@ export async function pendingDataChangesByWorkspace(
   const needsPodAdmin = viewerUserId ? !(await isPodAdmin(viewerUserId)) : true;
   for (const r of held) {
     const keys = applied ? r.keys.filter((k) => !applied.has(k)) : r.keys;
+    if (r.unreadable) {
+      // Held, list unknown: never "nothing held" — the person reviews it at
+      // the update door, which reads the list afresh.
+      byWorkspace.set(r.id, {
+        count: keys.length,
+        sentences: [
+          ...keys.map(heldChangeSentence),
+          DATA_CHANGES_UNREADABLE_SENTENCE,
+        ],
+        unreadable: true,
+        needsPodAdmin,
+      });
+      continue;
+    }
     if (keys.length === 0) continue;
     byWorkspace.set(r.id, {
       count: keys.length,
       sentences: keys.map(heldChangeSentence),
+      unreadable: false,
       needsPodAdmin,
     });
   }

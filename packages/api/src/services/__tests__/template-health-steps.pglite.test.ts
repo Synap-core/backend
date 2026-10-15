@@ -45,6 +45,7 @@ import { CONVERSION_MANIFEST, describeConversionOp } from "@synap/database";
 import { pgliteTableDdl } from "../../__tests__/pglite-ddl.js";
 import {
   DATA_CHANGES_UNCHECKED_WARNING,
+  DATA_CHANGES_UNREADABLE_SENTENCE,
   dataChangesHeldSentence,
   listWorkspaceTemplateHealth,
 } from "../template-health.js";
@@ -144,6 +145,7 @@ describe("pendingDataChanges — what the update waits on the person to agree to
     expect(r.pendingDataChanges).toEqual({
       count: 2,
       sentences: [describeConversionOp(OP_A!), describeConversionOp(OP_B!)],
+      unreadable: false,
       needsPodAdmin: false,
     });
     expect(r.applyWarning).toBe(dataChangesHeldSentence("builder"));
@@ -172,6 +174,22 @@ describe("pendingDataChanges — what the update waits on the person to agree to
     const done = await space({ heldForDataChanges: [OP_A!.opKey] });
     expect((await row(done)).pendingDataChanges).toBeNull();
     await h.client!.exec(`delete from "_conversions"`);
+  });
+
+  it("a stamp held over an UNREADABLE pending list is held, never nothing", async () => {
+    // be-stamp's encoding: `[]` + the unreadable flag (never `[]` alone).
+    const id = await space({
+      heldForDataChanges: [],
+      heldForDataChangesUnreadable: true,
+    });
+    const r = await row(id);
+    expect(r.pendingDataChanges).toEqual({
+      count: 0,
+      sentences: [DATA_CHANGES_UNREADABLE_SENTENCE],
+      unreadable: true,
+      needsPodAdmin: false,
+    });
+    expect(r.applyWarning).toBe(dataChangesHeldSentence("builder"));
   });
 
   it("a FAILED ledger read keeps the recorded list and says so — never zero", async () => {
