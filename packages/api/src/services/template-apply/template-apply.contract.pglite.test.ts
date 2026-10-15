@@ -52,6 +52,8 @@ const h = vi.hoisted(() => ({
   pendingDataChanges: [] as Array<Record<string, unknown>>,
   /** Make the pending-changes read throw. */
   pendingUnreadable: false,
+  /** The profile slugs each pending-changes read was asked about. */
+  pendingAsked: [] as string[][],
   /** When layer 2 throws, the next N template-state writes fail (a DB blip). */
   blipWritesAfterLayerTwo: 0,
   failNextWrites: 0,
@@ -102,9 +104,13 @@ vi.mock("@synap/database", async (importOriginal) => {
         ...args
       );
     },
-    pendingTemplateDataChanges: async () => {
+    // Answers pending changes ONLY for the profile they touch (`lead`), the
+    // way the real read matches on the template's profile slugs — so a hold
+    // that asks about the wrong profiles (or none) is seen.
+    pendingTemplateDataChanges: async (_sql: unknown, slugs: string[]) => {
+      h.pendingAsked.push(slugs);
       if (h.pendingUnreadable) throw new Error("ledger unreadable");
-      return h.pendingDataChanges;
+      return slugs.includes("lead") ? h.pendingDataChanges : [];
     },
     // The create/resume core, following its contract (pinned on the REAL core
     // by @synap/database `create-workspace-hands-back-stamp.pglite.test.ts`):
@@ -324,13 +330,15 @@ interface Pkg {
   version: string;
   playbooks: string[];
   workspaceName?: string;
+  /** Profile slugs the template declares. */
+  profiles?: string[];
 }
 
 function body(pkg: Pkg): Record<string, unknown> {
   return {
     _meta: { slug: pkg.slug, version: pkg.version },
     workspaceName: pkg.workspaceName ?? `Space ${pkg.slug}`,
-    profiles: [],
+    profiles: (pkg.profiles ?? []).map((slug) => ({ slug, name: slug })),
     playbooks: pkg.playbooks.map(PLAYBOOK),
   };
 }
@@ -1337,10 +1345,17 @@ describe("a space left 'building' is moved on, never terminal", () => {
 describe("a pending template data change holds the stamp on every door", () => {
   it("tRPC installFromCatalog (the banner update) re-syncs and lands layer 2, but holds the version and says why", async () => {
     const slug = "data-change-held";
-    publish({ slug, version: "d-1", playbooks: ["Qualify"] });
+    const profiles = ["lead"];
+    publish({ slug, version: "d-1", playbooks: ["Qualify"], profiles });
     await catalogTrpc().installFromCatalog({ slug });
     const { id } = await theSpace(slug);
-    publish({ slug, version: "d-2", playbooks: ["Qualify", "Close"] });
+    publish({
+      slug,
+      version: "d-2",
+      playbooks: ["Qualify", "Close"],
+      profiles,
+    });
+    h.pendingAsked.length = 0;
     h.pendingDataChanges = [
       {
         opKey: "lead-to-facet",
@@ -1360,6 +1375,8 @@ describe("a pending template data change holds the stamp on every door", () => {
       h.pendingDataChanges = [];
     }
     expect(await playbooksIn(id)).toEqual(["Close", "Qualify"]);
+    // The seam: the hold asked about the re-synced template's own profiles.
+    expect(h.pendingAsked).toContainEqual(["lead"]);
     const held = await theSpace(slug);
     expect(held.state?.version).toBe("d-1");
     // The hold is recorded on the space: what health names (be-health).
@@ -1395,7 +1412,8 @@ describe("a pending template data change holds the stamp on every door", () => {
 
   it("the dependency resolver (a `require`d space re-synced) holds its stamp too", async () => {
     const slug = "dep-held";
-    publish({ slug, version: "r-1", playbooks: ["Qualify"] });
+    const profiles = ["lead"];
+    publish({ slug, version: "r-1", playbooks: ["Qualify"], profiles });
     const resolve = async () => {
       const { resolvePackageDependencies } =
         await import("../package-dependency-resolver.js");
@@ -1414,7 +1432,12 @@ describe("a pending template data change holds the stamp on every door", () => {
     await resolve();
     const { id, state } = await theSpace(slug);
     expect(state).toMatchObject({ state: "active", version: "r-1" });
-    publish({ slug, version: "r-2", playbooks: ["Qualify", "Close"] });
+    publish({
+      slug,
+      version: "r-2",
+      playbooks: ["Qualify", "Close"],
+      profiles,
+    });
     h.pendingDataChanges = [
       {
         opKey: "lead-to-facet",
