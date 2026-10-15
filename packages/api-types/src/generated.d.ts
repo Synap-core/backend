@@ -14539,6 +14539,12 @@ export interface MatrixAgentRow {
 	agentType: string | null;
 	hostUserId: string | null;
 	paused: boolean;
+	/**
+	 * The reader owns this agent. Widening an agent you own writes the rule;
+	 * widening anyone else's files a proposal to its owner (founder decision 8,
+	 * 2026-10-14), so a surface says which before the click.
+	 */
+	ownedByViewer: boolean;
 	cells: Record<string, MatrixCell>;
 }
 export interface MatrixComputerGroup {
@@ -14640,6 +14646,19 @@ export type FileNextRungResult = {
 	outcome: "needs_admin";
 	proposalId: string;
 	offer: NextRungOffer;
+};
+export type RuleGrantResult = {
+	outcome: "created";
+	ruleId: string;
+} | {
+	outcome: "already_covered";
+	ruleId: string;
+} | {
+	outcome: "proposed";
+	proposalId: string;
+} | {
+	outcome: "needs_admin";
+	proposalId: string;
 };
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
@@ -33874,6 +33893,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 			output: FileNextRungResult;
+			meta: object;
+		}>;
+		widenCell: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				workspaceId: string | null;
+				action: string;
+				profileSlug: string | null;
+			};
+			output: RuleGrantResult;
 			meta: object;
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
