@@ -32,7 +32,11 @@
  */
 import { db, users, eq } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { HAND_OFF_ACCEPT, route } from "../agent-dispatch/route.js";
+import {
+  HAND_OFF_ACCEPT,
+  route,
+  routeRefusalLine,
+} from "../agent-dispatch/route.js";
 
 /**
  * Why `agentId` cannot take `ownerId`'s work, as one sentence the caller can
@@ -52,9 +56,11 @@ export async function handOffRefusal(p: {
   });
   if (r.kind !== "refused" || r.reason === "wrong_reach") return null;
   const who = p.agentName?.trim() || "This agent";
-  return r.reason === "paused"
-    ? `${who} is paused: it takes no new work until a person resumes it. Say so, or hand this to another agent (synap_list_agents).`
-    : `${who} does not act for the person whose session this is, so it would never pick it up. Hand it to one of their agents (synap_list_agents).`;
+  return `${routeRefusalLine(r.reason, who)} ${
+    r.reason === "paused"
+      ? "Say so, or hand this to another agent (synap_list_agents)."
+      : "Hand it to one of their agents (synap_list_agents)."
+  }`;
 }
 
 /** The agents in `agentIds` that are NOT the acting agent (a hand-off), deduped. */

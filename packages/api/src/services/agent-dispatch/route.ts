@@ -105,6 +105,20 @@ export interface Routed {
  */
 export type RouteRefusal = "wrong_reach" | "not_owned" | "not_member" | "paused";
 
+/** A refusal as the sentence a person (or the AI relaying it) reads. */
+export function routeRefusalLine(reason: RouteRefusal, who: string): string {
+  switch (reason) {
+    case "paused":
+      return `${who} is paused: it takes no new work until a person resumes it.`;
+    case "not_owned":
+      return `${who} does not act for the person whose work this is, so it would never pick it up.`;
+    case "wrong_reach":
+      return `${who} is run by the pod: it answers in rooms when asked, it never picks work up.`;
+    case "not_member":
+      return `${who} is not in this room.`;
+  }
+}
+
 export type RouteResult =
   | Routed
   | {

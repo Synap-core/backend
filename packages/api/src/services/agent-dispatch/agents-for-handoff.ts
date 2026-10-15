@@ -14,6 +14,17 @@
  *                      with `HAND_OFF_ACCEPT`. So `canTakeYourWork` is exactly
  *                      what a hand-off naming this agent would be told.
  *
+ * `handOff` previews what a hand-off FROM THE CALLING AGENT would do right now:
+ * the route's answer first (`blocked` when it cannot take the work), then the
+ * ONE governance resolver's dry run for the gate's own write
+ * (`focus_session.assign_agent`, door "chat" — what `gateAgentHandOff` asks
+ * `checkPermissionOrPropose`): auto → `direct`, propose → `asks_you`, deny →
+ * `blocked`. Two things the preview cannot see, by construction: the session's
+ * space (it previews pod-wide, `workspaceId: null` — a space-scoped rule may
+ * answer differently), and the per-agent PROPOSAL LIMIT, which
+ * `createProposal` checks only when a proposal is filed — so an `asks_you` can
+ * still come back refused at the limit; the reply's reason says so.
+ *
  * Computers are not rows: an agent of type `machine` is the computer itself.
  * They are listed once under `computers`, with how many listed agents run on
  * each. An agent's computer is its `host_user_id` (the machine it was created
@@ -25,12 +36,18 @@
  */
 
 import { db, inArray, users } from "@synap/database";
+import { dryRunAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { MACHINE_AGENT_TYPE, type AgentReach } from "@synap-core/types/agents";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import { loadAgentPresence } from "../agent-presence.js";
 import { machineName } from "../machine-roster.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
-import { HAND_OFF_ACCEPT, namedVerdicts, type RouteRefusal } from "./route.js";
+import {
+  HAND_OFF_ACCEPT,
+  namedVerdicts,
+  routeRefusalLine,
+  type RouteRefusal,
+} from "./route.js";
 
 /**
  * A pulling agent counts as LIVE when it called the pod within this window.
@@ -45,6 +62,9 @@ export interface HandoffComputer {
   agentUserId: string | null;
   name: string;
 }
+
+/** What a hand-off from the calling agent would do right now. */
+export type HandOffPreview = "direct" | "asks_you" | "blocked";
 
 export interface HandoffAgent {
   agentUserId: string;
@@ -63,6 +83,10 @@ export interface HandoffAgent {
   live: boolean;
   paused: boolean;
   lastSeenAt: string | null;
+  /** direct = lands on the roster now; asks_you = the person approves first. */
+  handOff: HandOffPreview;
+  /** Why it asks or is blocked (the resolver's or the route's words). */
+  handOffReason: string | null;
 }
 
 export interface HandoffRoster {
@@ -72,8 +96,14 @@ export interface HandoffRoster {
 
 export async function readAgentsForHandoff(
   userId: string,
-  now: Date = new Date()
+  opts: {
+    /** The agent that would do the handing (the MCP key's agent). */
+    callerAgentUserId?: string | null;
+    now?: Date;
+  } = {}
 ): Promise<HandoffRoster> {
+  const now = opts.now ?? new Date();
+  const caller = opts.callerAgentUserId ?? null;
   const visible = await queryAgentUsers({ userId }, undefined);
   const ids = visible.map((r) => r.id);
   const identity = ids.length
@@ -124,10 +154,22 @@ export async function readAgentsForHandoff(
     machineRows.map((m) => [m.id, machineName(m)] as const)
   );
 
-  const [presence, dispatch, verdicts] = await Promise.all([
+  const [presence, dispatch, verdicts, gate] = await Promise.all([
     loadAgentPresence(agentIds, now),
     loadAgentDispatchSummaries(agentIds),
     namedVerdicts({ ownerId: userId, accept: HAND_OFF_ACCEPT }, agentIds),
+    // A person staffing their own session is never gated (agent-hand-off.ts).
+    caller
+      ? dryRunAgentGovernanceDecision({
+          db,
+          userId,
+          agentUserId: caller,
+          workspaceId: null,
+          subjectType: "focus_session",
+          action: "assign_agent",
+          door: "chat",
+        })
+      : null,
   ]);
 
   const agents: HandoffAgent[] = agentRows.map((r) => {
@@ -150,6 +192,16 @@ export async function readAgentsForHandoff(
             now.getTime() - Date.parse(lastSeenAt) <= PULL_LIVE_WINDOW_MS
           : true;
     const whyNot = verdicts.get(r.id)?.refusal ?? null;
+    // An agent adding ITSELF is joining, not a hand-off: never gated.
+    const preview: { handOff: HandOffPreview; handOffReason: string | null } =
+      whyNot
+        ? { handOff: "blocked", handOffReason: routeRefusalLine(whyNot, "It") }
+        : !gate || r.id === caller || gate.outcome === "auto"
+          ? { handOff: "direct", handOffReason: null }
+          : {
+              handOff: gate.outcome === "propose" ? "asks_you" : "blocked",
+              handOffReason: gate.reason,
+            };
     return {
       agentUserId: r.id,
       name: r.name,
@@ -161,6 +213,7 @@ export async function readAgentsForHandoff(
       live,
       paused: r.pausedAt != null,
       lastSeenAt,
+      ...preview,
     };
   });
 

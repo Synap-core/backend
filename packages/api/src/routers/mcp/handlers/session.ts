@@ -664,11 +664,14 @@ export const sessionHandlers: McpHandlerMap = {
     });
   },
   synap_list_agents: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, userId, apiKeyScopes } = ctx;
+    const { toolName, userId, agentUserId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // The roster for the PERSON the key acts for: whose work it is decides
-    // which agents may take it (the route's floor), not the calling agent.
-    return ok(await readAgentsForHandoff(userId));
+    // which agents may take it (the route's floor). The calling agent decides
+    // only `handOff` — what ITS hand-off would do (direct / asks you).
+    return ok(
+      await readAgentsForHandoff(userId, { callerAgentUserId: agentUserId })
+    );
   },
   synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;

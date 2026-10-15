@@ -3251,7 +3251,7 @@ a server would need to be public to be reached, it needs `auth` first.
 
 The person says "start this on my devbox", "have my Mac's Claude Code do it", "give this session to Codex". You find the agent, hand it the work through a session, follow the session's room, and report back. You never run their machine yourself: an agent they connected there (`synap worker`, Claude Code, Codex) picks the work up.
 
-**1. Find it — `synap_list_agents`.** One read: `computers[]` (the person's own) and `agents[]`, each with `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`. Ready agents come first.
+**1. Find it — `synap_list_agents`.** One read: `computers[]` (the person's own) and `agents[]`, each with `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, and `handOff`: what YOUR hand-off would do right now (`direct`, `asks_you`, `blocked` + `handOffReason`). Ready agents come first.
 
 - **Match the person's words against computer names first** ("my devbox" → the computer named `devbox`, any case), **then agent names and types** ("Codex", "claude-code"). Take the agents on that computer that can take the work.
 - **Two or more fit → ask the person** which one, by name ("Claude Code on devbox, or Codex on devbox?"). Never pick for them.
@@ -3264,7 +3264,9 @@ The person says "start this on my devbox", "have my Mac's Claude Code do it", "g
 
 - New work: `synap_start_session` with a `title`, a one-sentence `goal`, 2–5 `criteria` the person can check, and `agentIds: [agentUserId]`.
 - Work in flight ("this session"): `synap_update_session` with `addAgentId: agentUserId`.
-- Read the reply. `handOffs[].status` (start) or `handOff.status` (update): `granted` = on the roster now; `proposed` = waiting for the person's approval (say so, with the review link; it is success, do not retry); `denied` = say the `reason` as given.
+- Read the reply. `handOffs[].status` (start) or `handOff.status` (update): `granted` = on the roster now; `proposed` = waiting for the person's approval; `denied` = say the `reason` as given.
+- **`asks_you` / `proposed`: the person approves the hand-off first.** Tell them plainly: "approve the hand-off on your phone", with the `reviewUrl` from the reply. It is success, do not retry. Then wait: `synap_get_session` until the agent is on its roster (or `synap_wait_for_answer` if you also asked them something), and go on to step 3.
+- **`blocked` / `denied`: say why, in the reason's words.** Never retry it as is. One case the list cannot predict: your own proposal limit ("Agent proposal limit reached") — the reply carries a link to raise it; pass that to the person.
 
 **3. Follow the room.** Everything the agent says lands in the session's room (`session.channelId`). Read it with `synap_get_thread_context { threadId: channelId }`; read the session's outcomes with `synap_get_session`. A `synap worker` on that computer follows this protocol:
 

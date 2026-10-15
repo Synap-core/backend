@@ -13,6 +13,10 @@
  *   - paused is said, and a paused agent cannot take your work;
  *   - live: a pull agent inside `PULL_LIVE_WINDOW_MS`, not outside it; a
  *     dispatch agent only when its binding resolves;
+ *   - handOff: what a hand-off FROM THE CALLING AGENT would do — the route's
+ *     refusal ⇒ blocked; else the governance dry run for
+ *     `focus_session.assign_agent` (no rule ⇒ proposes ⇒ asks_you); the
+ *     caller itself and a person (no caller) ⇒ direct;
  *   - PARITY: for every row, `canTakeYourWork` is exactly what the real
  *     `route()` answers when a hand-off NAMES that agent for this person.
  */
@@ -201,7 +205,7 @@ beforeAll(async () => {
   await agent(LAPTOP_1, OWNER_B, "laptop", "machine");
   await agent(LAPTOP_2, OWNER_B, "laptop", "machine");
 
-  roster = await readAgentsForHandoff(OWNER, NOW);
+  roster = await readAgentsForHandoff(OWNER, { now: NOW });
 }, 120_000);
 
 afterAll(async () => {
@@ -264,7 +268,7 @@ describe("readAgentsForHandoff — which computer", () => {
   });
 
   it("two of your computers with one name stay two (the person picks); others' labels never count", async () => {
-    const b = await readAgentsForHandoff(OWNER_B, NOW);
+    const b = await readAgentsForHandoff(OWNER_B, { now: NOW });
     expect(b.computers).toEqual(
       expect.arrayContaining([
         { agentUserId: LAPTOP_1, name: "laptop", agents: 0 },
@@ -333,6 +337,35 @@ describe("readAgentsForHandoff — can it take your work, now", () => {
     const ranks = roster.agents.map(rank);
     expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
     expect(roster.agents[0]!.agentUserId).toBe(ON_DEVBOX);
+  });
+});
+
+describe("readAgentsForHandoff — what YOUR hand-off would do", () => {
+  it("from an agent, with no rule: the gate proposes, so it asks you; the caller itself is direct; the route's refusal is blocked", async () => {
+    const r = await readAgentsForHandoff(OWNER, {
+      callerAgentUserId: ON_LABEL,
+      now: NOW,
+    });
+    const by = (id: string) => r.agents.find((a) => a.agentUserId === id)!;
+    expect(by(ON_DEVBOX)).toMatchObject({ handOff: "asks_you" });
+    expect(by(ON_DEVBOX).handOffReason).toBeTruthy();
+    expect(by(ON_LABEL)).toMatchObject({
+      handOff: "direct",
+      handOffReason: null,
+    });
+    expect(by(PAUSED)).toMatchObject({
+      handOff: "blocked",
+      handOffReason: expect.stringMatching(/^It is paused/),
+    });
+    expect(by(THEIRS)).toMatchObject({ handOff: "blocked" });
+  });
+
+  it("a person (no calling agent) staffs directly", () => {
+    expect(row(ON_DEVBOX)).toMatchObject({
+      handOff: "direct",
+      handOffReason: null,
+    });
+    expect(row(PAUSED)).toMatchObject({ handOff: "blocked" });
   });
 });
 
