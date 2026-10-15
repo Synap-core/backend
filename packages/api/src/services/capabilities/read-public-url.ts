@@ -1,7 +1,8 @@
 /**
  * Read one public http(s) URL into title, author, text, and one image.
  *
- * Official oEmbed (no API key) for YouTube, TikTok, and X/Twitter; otherwise
+ * Official oEmbed (no API key) for the hosts the built-in reader registry
+ * declares (YouTube, TikTok, Vimeo, X/Twitter — `web-read/registry.ts`); otherwise
  * the page's Open Graph tags. Outbound fetches go through `validateExternalUrl`
  * + `safeExternalFetch` — the same SSRF guard as the jobs fetch step. No
  * cookies, no screenshots. A failure is `unavailable`, never a throw.
@@ -12,6 +13,15 @@ import {
   validateExternalUrl,
   type ValidateUrlResult,
 } from "@synap/shared-utils";
+import {
+  decodeEntities,
+  httpUrlOrNull as httpUrl,
+  metaContent,
+  readableTextFromHtml,
+} from "./web-read/html.js";
+import { oembedEndpointFor } from "./web-read/registry.js";
+
+export { readableTextFromHtml };
 
 const TIMEOUT_MS = 8_000;
 /** Public pages redirect (http→https, short links). No credentials are sent. */
@@ -75,50 +85,13 @@ export function lonePublicHttpUrl(input: string): string | null {
   return trimmed;
 }
 
-function bareHost(hostname: string): string {
-  return hostname.toLowerCase().replace(/^www\./, "");
-}
-
-/** Public oEmbed endpoint for the known hosts, or null. No API key. */
+/**
+ * Public oEmbed endpoint for the known hosts, or null. No API key. The host
+ * table is the built-in reader's site-adapter registry (`web-read/registry.ts`)
+ * — one table, not a copy.
+ */
 export function oembedEndpoint(pageUrl: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(pageUrl);
-  } catch {
-    return null;
-  }
-  const host = bareHost(url.hostname);
-  const encoded = encodeURIComponent(url.toString());
-  if (host === "youtube.com" || host === "youtu.be") {
-    return `https://www.youtube.com/oembed?format=json&url=${encoded}`;
-  }
-  if (host === "tiktok.com") {
-    return `https://www.tiktok.com/oembed?url=${encoded}`;
-  }
-  if (host === "twitter.com" || host === "x.com") {
-    return `https://publish.twitter.com/oembed?url=${encoded}`;
-  }
-  return null;
-}
-
-function decodeEntities(raw: string): string {
-  return raw
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#(\d+);/g, (all, n) => {
-      const code = Number(n);
-      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : all;
-    })
-    .replace(/&#x([0-9a-f]+);/gi, (all, n) => {
-      const code = Number.parseInt(n, 16);
-      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
-        ? String.fromCodePoint(code)
-        : all;
-    });
+  return oembedEndpointFor(pageUrl);
 }
 
 function htmlToText(html: string): string {
@@ -131,41 +104,6 @@ function htmlToText(html: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, TEXT_CAP);
-}
-
-function metaAttrs(tag: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  const re = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(tag))) {
-    const key = match[1]!.toLowerCase();
-    attrs[key] = decodeEntities(match[2] ?? match[3] ?? match[4] ?? "");
-  }
-  return attrs;
-}
-
-function metaContent(html: string, key: string): string | null {
-  const re = /<meta\b[^>]*>/gi;
-  const want = key.toLowerCase();
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html))) {
-    const attrs = metaAttrs(match[0]);
-    const name = (attrs.property ?? attrs.name ?? "").toLowerCase();
-    const content = attrs.content?.trim();
-    if (name === want && content) return content;
-  }
-  return null;
-}
-
-function httpUrl(raw: string | null, base: string): string | null {
-  if (!raw?.trim()) return null;
-  try {
-    const url = new URL(raw.trim(), base);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
 }
 
 function unreadable(contentType: string): boolean {
@@ -303,36 +241,6 @@ export function readHtmlPage(html: string, sourceUrl: string): PublicUrlRead {
       sourceUrl,
     }
   );
-}
-
-/** Elements that are never the page's reading text. */
-const CHROME_ELEMENTS =
-  /<(script|style|noscript|svg|template|iframe|nav|header|footer|aside|form|button|select)\b[^>]*>[\s\S]*?<\/\1>/gi;
-
-/**
- * The READABLE text of an HTML page: the `<article>` (else `<main>`, else the
- * `<body>`), without scripts, styles and site chrome (nav, header, footer,
- * aside, forms), block elements as line breaks, entities decoded, capped at
- * `max` characters. It is DATA the page holds — never instructions.
- */
-export function readableTextFromHtml(html: string, max: number): string {
-  const pick = (tag: string) =>
-    new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i").exec(html)?.[1];
-  const scope = pick("article") ?? pick("main") ?? pick("body") ?? html;
-  const text = scope
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(CHROME_ELEMENTS, " ")
-    .replace(
-      /<\/?(p|div|section|li|ul|ol|h[1-6]|br|tr|table|blockquote|pre|dd|dt|figcaption)\b[^>]*>/gi,
-      "\n"
-    )
-    .replace(/<[^>]+>/g, " ");
-  return decodeEntities(text)
-    .split("\n")
-    .map((line) => line.replace(/[ \t\u00a0]+/g, " ").trim())
-    .filter(Boolean)
-    .join("\n")
-    .slice(0, max);
 }
 
 /**
