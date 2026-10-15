@@ -27,6 +27,7 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   type HubHono,
@@ -217,7 +218,7 @@ export function registerResolveRoutes(app: HubHono): void {
           code: RESOLVE_FAILED_CODE,
           id,
         },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

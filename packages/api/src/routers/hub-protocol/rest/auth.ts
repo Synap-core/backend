@@ -210,7 +210,10 @@ export function registerAuthRoutes(app: HubHono): void {
       return c.json(await describeKeyForHolder(token, c.req.url, status), 200);
     } catch (err) {
       logger.error({ err }, "/auth/key-state lookup failed");
-      return c.json({ error: "Could not read this key's state" }, 500);
+      return c.json(
+        { error: "Could not read this key's state" },
+        httpStatusForTrpcError(err)
+      ) as never;
     }
   });
 }

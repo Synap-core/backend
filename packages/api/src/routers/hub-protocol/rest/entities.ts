@@ -2246,7 +2246,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json(rest, 200);
     } catch (err) {
       logger.error({ err }, "POST /files/uploads failed");
-      return c.json({ error: "Failed to prepare upload" }, 500);
+      return c.json(
+        { error: "Failed to prepare upload" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
