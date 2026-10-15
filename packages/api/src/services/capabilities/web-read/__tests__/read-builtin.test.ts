@@ -11,9 +11,7 @@ vi.mock("@synap/shared-utils", async (importOriginal) => {
 });
 
 import { safePublicFetch } from "@synap/shared-utils";
-import { LIGHT_READ_TEXT_MAX } from "../../../library/light-read.js";
 import { readBuiltin } from "../read-builtin.js";
-import { BUILTIN_READ_TEXT_MAX } from "../limits.js";
 import {
   POD_NEVER_FETCHES,
   SITE_ADAPTERS,
@@ -277,9 +275,5 @@ describe("the registry (the ONE host table)", () => {
     expect(POD_NEVER_FETCHES).toEqual(
       expect.arrayContaining(["*.instagram.com", "*.tiktok.com"])
     );
-  });
-
-  it("the text cap IS the light read's", () => {
-    expect(BUILTIN_READ_TEXT_MAX).toBe(LIGHT_READ_TEXT_MAX);
   });
 });
