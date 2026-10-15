@@ -4,8 +4,11 @@
  * Classifies the query's substrate intent, then queries the right store(s) in
  * parallel and returns ONE provenance-tagged answer: SEMANTIC via the Synap
  * Retrieval Engine (entities), PROCEDURAL via knowledge_keys (how-to docs),
- * EPISODIC via knowledge_facts (raw captures). Semantic always runs (the
- * backbone); the others only when cued, so the common case is a single SRE call.
+ * EPISODIC via knowledge_facts (raw captures), LIBRARY via the person's kept
+ * links/files/pages (found by title, URL, note, summary and the words of what
+ * was read — `services/library/ask-lane.ts`). Semantic always runs (the
+ * backbone); procedural and library are cheap and always queried; the others
+ * only when cued.
  *
  * Glass-box, like the SRE: the result says WHICH substrates were queried, which
  * is primary, which DEGRADED (errored vs genuinely-empty — we never present a
@@ -49,15 +52,20 @@ const PROCEDURAL_IGNORED_TERMS: ReadonlySet<string> = new Set([
   ...QUESTION_WORDS,
 ]);
 import { structuredLookup } from "./structured.js";
+import { searchLibraryForAsk } from "../library/ask-lane.js";
 import type { AskSpacesHint } from "../discover/space-catalog.js";
 
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
  * the semantic backbone additionally reports `"semantic:vector-down"` when its
  * vector leg was EXPECTED but ran keyword-only (the embedding provider failed) —
- * a partial degradation distinct from a whole-substrate error.
+ * a partial degradation distinct from a whole-substrate error. The Library lane
+ * likewise reports `"library:text-down"` when its SQL matches answered but the
+ * read-text index could not be asked (items findable only by what was read may
+ * be missing).
  */
-export type DegradedTag = SubstrateKind | "semantic:vector-down";
+export type DegradedTag =
+  SubstrateKind | "semantic:vector-down" | "library:text-down";
 
 export interface AskParams {
   query: string;
@@ -264,6 +272,22 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const episodicP = substrates.includes("episodic")
     ? settle(knowledgeRepository.searchFacts({ userId, query, limit }))
     : Promise.resolve(null);
+  // LIBRARY — what the person kept (owner-floored, same rows as the Library).
+  // A failed read is `status:"error"` + `degraded:["library"]`, never an empty
+  // block; an index-only failure is `library:text-down` (partial, see above).
+  const libraryP: Promise<(Settled & { textDown?: boolean }) | null> =
+    substrates.includes("library")
+      ? searchLibraryForAsk({ userId, query, limit, projectId })
+          .then((lane): Settled & { textDown?: boolean } => ({
+            status: "ok",
+            items: lane.items as unknown as Record<string, unknown>[],
+            ...(lane.readTextSearch === "down" ? { textDown: true } : {}),
+          }))
+          .catch((err): Settled => {
+            console.error("[ask] library lane failed:", err);
+            return { status: "error", items: [] };
+          })
+      : Promise.resolve(null);
 
   // PENDING lane — always runs (the review queue is invisible to every
   // substrate, so no substrate cue could route to it). Best-effort: a scan
@@ -339,12 +363,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
       )
       .catch((): AskSpacesHint => ({ status: "unavailable" }));
 
-  const [procedural, episodic, pendingMatches, spaces] = await Promise.all([
-    proceduralP,
-    episodicP,
-    pendingP,
-    spacesP,
-  ]);
+  const [procedural, episodic, library, pendingMatches, spaces] =
+    await Promise.all([proceduralP, episodicP, libraryP, pendingP, spacesP]);
 
   const answers: AskAnswer[] = [
     { substrate: "semantic", items: semantic.entities, status: semanticStatus },
@@ -380,6 +400,15 @@ export async function ask(params: AskParams): Promise<AskResult> {
     });
     if (episodic.status === "error") degraded.push("episodic");
   }
+  if (library) {
+    answers.push({
+      substrate: "library",
+      items: library.items,
+      status: library.status,
+    });
+    if (library.status === "error") degraded.push("library");
+    else if (library.textDown) degraded.push("library:text-down");
+  }
   // EFFECTIVE primary = the substrate that actually answered (never one that
   // came back empty). Prefer the cued `intent`; if it's empty, fall back to
   // whatever did answer (procedural → episodic → semantic). Caught by dogfood:
@@ -391,13 +420,13 @@ export async function ask(params: AskParams): Promise<AskResult> {
     );
   const primary: SubstrateKind = answered(intent)
     ? intent
-    : ((["structured", "procedural", "episodic", "semantic"] as const).find(
-        answered
-      ) ?? intent);
+    : ((
+        ["structured", "procedural", "episodic", "semantic", "library"] as const
+      ).find(answered) ?? intent);
 
   // Surface the most-relevant substrate first. Total-order comparator
   // (primary → 0, others → 1); stable sort preserves the natural
-  // semantic→procedural→episodic order among the rest.
+  // semantic→structured→procedural→episodic→library order among the rest.
   answers.sort(
     (a, b) =>
       (a.substrate === primary ? 0 : 1) - (b.substrate === primary ? 0 : 1)

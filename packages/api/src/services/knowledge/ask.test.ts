@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const retrieveMock = vi.fn();
 const searchFullTextMock = vi.fn();
 const searchFactsMock = vi.fn();
+const libraryLaneMock = vi.fn();
 
 vi.mock("../retrieval/retrieve.js", () => ({
   retrieve: (...args: unknown[]) => retrieveMock(...args),
@@ -19,6 +20,11 @@ vi.mock("@synap/database", () => ({
   knowledgeKeysRepository: {
     searchFullText: (...args: unknown[]) => searchFullTextMock(...args),
   },
+}));
+// The Library lane has its own suite (library/__tests__/ask-lane.pglite.test.ts);
+// here it is a stub so these tests stay on classify → route → fuse → degrade.
+vi.mock("../library/ask-lane.js", () => ({
+  searchLibraryForAsk: (...args: unknown[]) => libraryLaneMock(...args),
 }));
 // The Wave-3 pending lane is covered by pending-text-match.test.ts; here it is a
 // no-op so these tests stay focused on classify → route → fuse.
@@ -50,6 +56,9 @@ beforeEach(() => {
   searchFactsMock
     .mockReset()
     .mockResolvedValue([{ id: "f1", fact: "noted X" }]);
+  libraryLaneMock
+    .mockReset()
+    .mockResolvedValue({ items: [], readTextSearch: "ok" });
 });
 
 describe("ask router", () => {
@@ -61,14 +70,15 @@ describe("ask router", () => {
     // say "how to". Episodic stays cue-gated: it is narrative recall.
     expect(searchFullTextMock).toHaveBeenCalledTimes(1);
     expect(searchFactsMock).not.toHaveBeenCalled();
-    expect(r.routedTo).toEqual(["semantic", "procedural"]);
+    expect(r.routedTo).toEqual(["semantic", "procedural", "library"]);
     expect(r.primary).toBe("semantic");
-    expect(r.answers).toHaveLength(2);
+    expect(r.answers).toHaveLength(3);
     // Semantic still LEADS — the answer a user reads first is unchanged.
     expect(r.answers[0].substrate).toBe("semantic");
     expect(r.answers[0].items).toEqual(semanticResult.entities);
     expect(r.answers[0].status).toBe("ok");
     expect(r.answers[1].substrate).toBe("procedural");
+    expect(r.answers[2].substrate).toBe("library");
     expect(r.degraded).toEqual([]);
   });
 
@@ -101,11 +111,17 @@ describe("ask router", () => {
   it("orders three substrates primary-first, semantic-before-episodic for the rest", async () => {
     const r = await ask({ ...baseParams, query: "remember how to deploy" });
     // classifier: procedural primary, also episodic. semantic always runs.
-    expect(r.routedTo).toEqual(["semantic", "procedural", "episodic"]);
+    expect(r.routedTo).toEqual([
+      "semantic",
+      "procedural",
+      "episodic",
+      "library",
+    ]);
     expect(r.answers.map((a) => a.substrate)).toEqual([
       "procedural", // primary
       "semantic", // then natural order
       "episodic",
+      "library",
     ]);
   });
 
@@ -233,8 +249,12 @@ describe("ask router — procedural lane vs project lens (X1)", () => {
       query: "what is the revenue model for the business",
     });
     expect(searchFullTextMock).not.toHaveBeenCalled();
-    expect(r.routedTo).toEqual(["semantic"]);
-    expect(r.answers.map((a) => a.substrate)).toEqual(["semantic"]);
+    // The Library lane runs, NARROWED to the project's runs (it forwards the lens).
+    expect(r.routedTo).toEqual(["semantic", "library"]);
+    expect(r.answers.map((a) => a.substrate)).toEqual(["semantic", "library"]);
+    expect(libraryLaneMock.mock.calls[0]![0]).toMatchObject({
+      projectId: "872bbecc-0000-4000-8000-000000000000",
+    });
     // Semantic still receives the project lens.
     expect(retrieveMock.mock.calls[0]![0]).toMatchObject({
       projectId: "872bbecc-0000-4000-8000-000000000000",
@@ -261,5 +281,66 @@ describe("ask router — procedural lane vs project lens (X1)", () => {
     expect(opts.ignoreTerms.has("the")).toBe(true);
     expect(opts.ignoreTerms.has("what")).toBe(true);
     expect(opts.ignoreTerms.has("revenue")).toBe(false);
+  });
+});
+
+// ── The Library lane: found / degraded / never "found nothing" ─────────────
+describe("ask router — library lane", () => {
+  const hit = {
+    id: "item-1",
+    title: "Carousel by @studio",
+    sourceUrl: "https://example.com/p/abc",
+    snippet: "…terracotta and bone…",
+    snippetFrom: "read_text",
+    readStatus: "read",
+    keptAt: "2026-10-14T08:00:00.000Z",
+  };
+
+  it("a kept item rides in a library block, with the owner + query handed to the lane", async () => {
+    libraryLaneMock.mockResolvedValue({ items: [hit], readTextSearch: "ok" });
+    const r = await ask({ ...baseParams, query: "terracotta palette" });
+    const lib = r.answers.find((a) => a.substrate === "library");
+    expect(lib).toEqual({ substrate: "library", items: [hit], status: "ok" });
+    expect(r.degraded).toEqual([]);
+    expect(libraryLaneMock.mock.calls[0]![0]).toMatchObject({
+      userId: "user-1",
+      query: "terracotta palette",
+    });
+  });
+
+  it("a FAILED Library read is degraded:['library'] with status:'error' — never an empty ok block", async () => {
+    libraryLaneMock.mockRejectedValue(new Error("library db down"));
+    const r = await ask({ ...baseParams, query: "terracotta palette" });
+    const lib = r.answers.find((a) => a.substrate === "library");
+    expect(lib).toEqual({ substrate: "library", items: [], status: "error" });
+    expect(r.degraded).toContain("library");
+    // The rest of the answer survives.
+    expect(r.answers.find((a) => a.substrate === "semantic")?.status).toBe(
+      "ok"
+    );
+  });
+
+  it("an unreachable read-text index is `library:text-down`: hits still stand, the gap is said", async () => {
+    libraryLaneMock.mockResolvedValue({ items: [hit], readTextSearch: "down" });
+    const r = await ask({ ...baseParams, query: "terracotta palette" });
+    expect(r.answers.find((a) => a.substrate === "library")).toMatchObject({
+      status: "ok",
+      items: [hit],
+    });
+    expect(r.degraded).toEqual(["library:text-down"]);
+  });
+
+  it("a Library-only answer makes the Library primary (semantic came back empty)", async () => {
+    retrieveMock.mockResolvedValue({ ...semanticResult, entities: [] });
+    searchFullTextMock.mockResolvedValue([]);
+    libraryLaneMock.mockResolvedValue({ items: [hit], readTextSearch: "ok" });
+    const r = await ask({ ...baseParams, query: "terracotta palette" });
+    expect(r.primary).toBe("library");
+    expect(r.answers[0]!.substrate).toBe("library");
+  });
+
+  it("parseOnly never touches the Library", async () => {
+    await ask({ ...baseParams, query: "terracotta palette", parseOnly: true });
+    expect(libraryLaneMock).not.toHaveBeenCalled();
   });
 });

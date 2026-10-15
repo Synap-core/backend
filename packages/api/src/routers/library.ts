@@ -62,7 +62,10 @@ import {
   LibraryActionError,
   runLibraryAction,
 } from "../services/library/run-action.js";
-import { libraryHealth, searchLibrary } from "../services/library/search.js";
+import {
+  libraryHealth,
+  searchLibraryWithReadText,
+} from "../services/library/search.js";
 import {
   buildLibraryGroup,
   readNowLibraryItem,
@@ -310,7 +313,14 @@ export const libraryRouter = router({
     .input(LibrarySearchInputSchema)
     .query(async ({ ctx, input }): Promise<LibrarySearchResult> => {
       const userId = requireUserId(ctx.userId);
-      return searchLibrary({ userId, q: input.q, limit: input.limit });
+      // The captures + the Library's own fields + the READ TEXT (through the
+      // search index). `readTextSearch: "down"` rides along when the index
+      // could not be asked (additive; the declared result type is unchanged).
+      return searchLibraryWithReadText({
+        userId,
+        q: input.q,
+        limit: input.limit,
+      });
     }),
 
   /** One item, structured now and filed alone (governed). */

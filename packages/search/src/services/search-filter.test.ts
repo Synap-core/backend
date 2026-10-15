@@ -37,6 +37,15 @@ describe("search filter_by: caller strings cannot alter the filter", () => {
     );
   });
 
+  it("libraryOnly narrows `documents` to Library items, after the floor, and only there", () => {
+    expect(
+      build({ userId: USER, collection: "documents", libraryOnly: true })
+    ).toBe(`(userId:=\`${USER}\`) && (libraryItem:=true)`);
+    expect(
+      build({ userId: USER, collection: "entities", libraryOnly: true })
+    ).toBe(`(userId:=\`${USER}\`)`);
+  });
+
   it.each([
     ["tags", { tags: [HOSTILE] }],
     ["entityTypes", { collection: "entities", entityTypes: [HOSTILE] }],

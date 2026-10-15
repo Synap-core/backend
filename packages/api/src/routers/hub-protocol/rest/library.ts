@@ -30,7 +30,7 @@ import {
 import { addToLibrary } from "../../../services/library/add.js";
 import { adoptImportGroups } from "../../../services/library/groups.js";
 import { listLibraryItems } from "../../../services/library/read-model.js";
-import { searchLibrary } from "../../../services/library/search.js";
+import { searchLibraryWithReadText } from "../../../services/library/search.js";
 import {
   AGENT_USE_CAPTURE,
   AGENT_USE_CAPTURE_MESSAGE,
@@ -154,7 +154,7 @@ export function registerLibraryRoutes(app: HubHono): void {
       );
     }
     try {
-      const result: LibrarySearchResult = await searchLibrary({
+      const result: LibrarySearchResult = await searchLibraryWithReadText({
         userId: c.get("userId"),
         q: parsed.data.q,
         limit: parsed.data.limit,

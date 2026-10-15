@@ -226,6 +226,8 @@ export class SearchService {
       viewTypes?: string[];
       tags?: string[];
       status?: string[];
+      /** `documents` only: keep Library items (`libraryItem:=true`) and nothing else. */
+      libraryOnly?: boolean;
       prefix?: boolean;
       facetBy?: string[];
     }
@@ -385,6 +387,7 @@ export class SearchService {
     viewTypes?: string[];
     tags?: string[];
     status?: string[];
+    libraryOnly?: boolean;
   }): string {
     // Channel-scoped message search: the caller has already proven channel
     // visibility via the DB channel-access gate, so we pin to the single channel
@@ -413,6 +416,10 @@ export class SearchService {
       filters.push(
         `documentType:=${anyOf(options.documentTypes, "documentTypes")}`
       );
+    }
+
+    if (collection === "documents" && options.libraryOnly) {
+      filters.push("libraryItem:=true");
     }
 
     if (collection === "views" && options.viewTypes?.length) {
