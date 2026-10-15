@@ -590,6 +590,16 @@ export interface TemplateState {
 	proposals?: string[];
 	failures?: string[];
 	packs?: TemplatePackEntry[];
+	/**
+	 * The template data changes (conversion opKeys) the last stamp is HELD for
+	 * (TEMPLATE-LIFECYCLE Contract C): layer 1 and layer 2 converged, but a
+	 * consentable change still touches the template's profiles, so the version
+	 * (or a pack's) was not stamped. `[]` only with `heldForDataChangesUnreadable`
+	 * (the pending list could not be read — held, never guessed "none"). Absent =
+	 * nothing held; cleared by the next stamp. Written only by the finisher.
+	 */
+	heldForDataChanges?: string[];
+	heldForDataChangesUnreadable?: true;
 	/** When this state was last written ("" = unknown, a legacy record). */
 	at: string;
 }
