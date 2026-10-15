@@ -90,6 +90,9 @@ vi.mock("../../utils/split-brain-service.js", async (importOriginal) => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  artifacts,
+  channelMembers,
+  channels,
   chatTurns,
   documents,
   documentVersions,
@@ -100,6 +103,7 @@ import {
   messages,
   podMembers,
   profiles,
+  profileWorkspaceAccess,
   projectMembers,
   proposals,
   relations,
@@ -268,9 +272,13 @@ describe("captures.structureAgain", () => {
       links,
       messages,
       profiles,
+      profileWorkspaceAccess,
       proposals,
       chatTurns,
       users,
+      artifacts,
+      channels,
+      channelMembers,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
