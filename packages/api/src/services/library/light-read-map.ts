@@ -7,7 +7,11 @@ import type {
   LibraryReadBlocked,
   LibraryReadStatus,
 } from "@synap-core/types/imports";
-import type { ReaderStamp, UrlRead } from "@synap-core/types/url-read";
+import type {
+  ReaderStamp,
+  UrlRead,
+  UrlReadFailureClass,
+} from "@synap-core/types/url-read";
 
 /** What the door said about the read, kept on the stored read. */
 export interface DoorFacts {
@@ -27,8 +31,18 @@ export type Got = DoorFacts &
         summary?: string;
       }
     | { kind: "status"; status: LibraryReadStatus; usedAi?: boolean }
-    /** The IS / the reader failed: retry later (counts an attempt). */
-    | { kind: "retry"; usedAi: boolean }
+    /**
+     * The IS / the reader failed: try again later. Its CLASS decides how
+     * (light-read.ts `finishUnread`): transient waits with backoff and never
+     * ends `unreadable`; anything else counts an attempt.
+     */
+    | {
+        kind: "retry";
+        usedAi: boolean;
+        failure: UrlReadFailureClass;
+        /** Seconds the site / vendor asked to wait. */
+        retryAfterSec?: number;
+      }
   );
 
 const TRANSCRIPT_LABEL = {
@@ -98,7 +112,14 @@ export function mapDoorRead(
       ...(read.blocked.detail ? { detail: read.blocked.detail } : {}),
     };
     if (blocked.nextStep === "retry_later") {
-      return { ...facts, blocked, kind: "retry", usedAi: false };
+      return {
+        ...facts,
+        blocked,
+        kind: "retry",
+        usedAi: false,
+        failure: "rate_limited",
+        ...(read.retryAfterSec ? { retryAfterSec: read.retryAfterSec } : {}),
+      };
     }
     if (stagedTitleOnly) {
       return { ...facts, blocked, kind: "status", status: "title_only" };
@@ -125,5 +146,7 @@ export function mapDoorRead(
     ...(read.error ? { error: read.error } : {}),
     kind: "retry",
     usedAi: false,
+    failure: read.errorClass ?? "unknown",
+    ...(read.retryAfterSec ? { retryAfterSec: read.retryAfterSec } : {}),
   };
 }

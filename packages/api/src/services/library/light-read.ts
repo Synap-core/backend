@@ -33,8 +33,11 @@
  *               ip_reputation → `unreadable`, WITH the reason kept
  *               (`importRead.blocked`) — except a blocked read that says
  *               `retry_later` (rate limited), which is retried like a failure;
- *   - failed  → retried (attempts, {@link LIGHT_READ_MAX_ATTEMPTS}), then
- *               `unreadable` with the error kept (`lastError`) — never silent.
+ *   - failed  → retried by its CLASS (`importRead.failure`, see `retryPlan`):
+ *               a transient one waits with backoff and never ends
+ *               `unreadable`; anything else counts toward
+ *               {@link LIGHT_READ_MAX_ATTEMPTS}, then `unreadable` with the
+ *               class kept — never silent.
  * A staged `title_only` link (x, linkedin) that the door cannot read stays
  * `title_only`. Media a read returns is copied into the pod IN THE SAME JOB
  * (`copyLibraryItemMedia`: CDN links expire); a copied video is transcribed
@@ -89,6 +92,7 @@ import {
   type LibraryAction,
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
+import { isTransientUrlReadFailure } from "@synap-core/types/url-read";
 import {
   groupIdsFromNames,
   loadGroupProfiles,
@@ -109,6 +113,7 @@ import {
   LIGHT_READ_GROUPS_OFFERED,
   LIGHT_READ_MAX_ATTEMPTS,
   LIGHT_READ_SHORT_TEXT,
+  lightReadRetryDelayMs,
   LIGHT_READ_SUGGEST_TEXT_MAX,
   LIGHT_READ_SUMMARY_INPUT_MAX,
   LIGHT_READ_SUMMARY_MAX,
@@ -255,6 +260,63 @@ async function suggestGroups(
   }
 }
 
+/**
+ * What a failed try does to the item, by its CLASS (never by its prose):
+ *   - transient (site / vendor / IS down, rate limited, extractor busy) of a
+ *     reader that bills nothing → `not_read`, the attempt budget untouched,
+ *     tried again after an exponential wait (`failure.nextAttemptAt`, which
+ *     the sweep honours). It never ends `unreadable`;
+ *   - transient of a BILLED reader → each try may cost, so it counts; at the
+ *     cap the pod stops trying by itself and the item waits for the person
+ *     (`needs_file`: "needs a reader", the reader's door offered again) —
+ *     still never `unreadable`;
+ *   - anything else (refused, bad output, unknown) counts; at the cap
+ *     `unreadable`, the class kept.
+ */
+function retryPlan(
+  prev: StoredLibraryRead,
+  got: Extract<Got, { kind: "retry" }>,
+  now: Date
+): {
+  status: LibraryReadStatus;
+  attempts: number;
+  transientFailures: number;
+  failure: NonNullable<StoredLibraryRead["failure"]>;
+} {
+  const transient = isTransientUrlReadFailure(got.failure);
+  const billed = got.reader?.billed === true;
+  if (transient && !billed) {
+    const transientFailures = (prev.transientFailures ?? 0) + 1;
+    const nextAttemptAt = new Date(
+      now.getTime() +
+        lightReadRetryDelayMs(transientFailures, got.retryAfterSec)
+    ).toISOString();
+    return {
+      status: "not_read",
+      attempts: prev.attempts ?? 0,
+      transientFailures,
+      failure: { class: got.failure, transient, nextAttemptAt },
+    };
+  }
+  const attempts = (prev.attempts ?? 0) + 1;
+  const spent = attempts >= LIGHT_READ_MAX_ATTEMPTS;
+  const nextAttemptAt = spent
+    ? undefined
+    : new Date(
+        now.getTime() + lightReadRetryDelayMs(attempts, got.retryAfterSec)
+      ).toISOString();
+  return {
+    status: spent ? (transient ? "needs_file" : "unreadable") : "not_read",
+    attempts,
+    transientFailures: 0,
+    failure: {
+      class: got.failure,
+      transient,
+      ...(nextAttemptAt ? { nextAttemptAt } : {}),
+    },
+  };
+}
+
 /** The content did not read (a status, or a retry): write that, honestly. */
 async function finishUnread(
   job: ReadJob,
@@ -265,23 +327,21 @@ async function finishUnread(
     ...(got.reader ? { reader: got.reader } : {}),
     ...(got.blocked ? { blocked: got.blocked } : {}),
   };
-  const attempts = (prev.attempts ?? 0) + (got.kind === "retry" ? 1 : 0);
+  const retry = got.kind === "retry" ? retryPlan(prev, got, now) : null;
+  const attempts = retry?.attempts ?? prev.attempts ?? 0;
   const status: LibraryReadStatus =
-    got.kind === "status"
-      ? got.status
-      : attempts >= LIGHT_READ_MAX_ATTEMPTS
-        ? "unreadable"
-        : "not_read";
+    got.kind === "status" ? got.status : retry!.status;
   if (reader && prev.status === "read") {
     // An explicit RE-read that did not read: the read the item has stays,
     // the attempt is recorded (never silent, never an erased read).
-    await recordLastAttempt(database, itemId, {
+    const noted = await recordLastAttempt(database, itemId, {
       readerId: reader,
       status,
       ...(got.blocked ? { blocked: got.blocked } : {}),
       ...(got.error ? { error: got.error } : {}),
       at: now.toISOString(),
     });
+    if (!noted) return { itemId, status: "skipped" };
     return { itemId, status, usedAi: got.usedAi ?? false };
   }
   // The person's choice waits with the item until it can run.
@@ -301,6 +361,10 @@ async function finishUnread(
       suggestedActions: actions,
       ...facts,
       ...(attempts ? { attempts } : {}),
+      ...(retry?.transientFailures
+        ? { transientFailures: retry.transientFailures }
+        : {}),
+      ...(retry ? { failure: retry.failure } : {}),
       ...(got.error ? { lastError: got.error.slice(0, 500) } : {}),
       ...(reader && waiting ? { requestedReader: reader } : {}),
       ...(status !== "not_read" && status !== "over_budget"
@@ -396,9 +460,11 @@ async function finishRead(
   );
 
   const textKey = libraryReadTextKey(userId, itemId);
+  // A text written for an item deleted meanwhile is not indexed (below) and
+  // goes with the item's purge (same key).
   await deps.writeText(textKey, text);
   const actions = mergeLibraryActions(ruleActions, aiActions);
-  await writeRead(database, itemId, {
+  const written = await writeRead(database, itemId, {
     status: "read",
     summary,
     chars: text.length,
@@ -409,6 +475,7 @@ async function finishRead(
     ...(got.blocked ? { blocked: got.blocked } : {}),
     ...(got.transcript ? { transcript: got.transcript } : {}),
   });
+  if (!written) return { itemId, status: "skipped" };
   await indexQuietly(deps, itemId);
   const suggested = await suggestGroups(
     job,
@@ -509,6 +576,8 @@ export async function lightReadLibraryItem(args: {
     got = {
       kind: "retry",
       usedAi: false,
+      // The pod's own dependency (storage, the IS transport): transient.
+      failure: "unavailable",
       error: err instanceof Error ? err.message : String(err),
     };
   }

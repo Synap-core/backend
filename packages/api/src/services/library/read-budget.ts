@@ -20,7 +20,7 @@
  * hourly sweep reads it once the window has room again.
  */
 
-import { documents, drizzleSql, and, eq } from "@synap/database";
+import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import type { db as DbType } from "@synap/database";
 import { envInt } from "@synap/shared-utils";
 
@@ -91,7 +91,12 @@ export async function reserveLibraryReadAi(
       })
       .from(documents)
       .where(
-        and(eq(documents.id, args.itemId), eq(documents.userId, args.userId))
+        and(
+          eq(documents.id, args.itemId),
+          eq(documents.userId, args.userId),
+          // A deleted item spends nothing (and is never written again).
+          isNull(documents.deletedAt)
+        )
       )
       .limit(1);
     if (!own) return false;

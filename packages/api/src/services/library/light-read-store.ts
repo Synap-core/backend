@@ -1,11 +1,14 @@
 /**
  * The light read's stored state: `documents.metadata.importRead` as the pod
- * keeps it (the contract plus bookkeeping), and its three writers — the
+ * keeps it (the contract plus bookkeeping), its three writers — the
  * billed-read checkpoint, the read itself (under a row lock, keeping chips run
- * meanwhile) and an explicit re-read's last attempt.
+ * meanwhile) and an explicit re-read's last attempt — and the item's job
+ * LEASE (`metadata.importReadLease`), which keeps two jobs from reading one
+ * item at once. Every writer leaves a deleted item alone.
  */
 
-import { documents, drizzleSql, eq } from "@synap/database";
+import { randomUUID } from "node:crypto";
+import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import {
   carryRunLibraryActions,
   type LibraryItemRead,
@@ -29,8 +32,13 @@ export interface StoredLibraryRead extends LibraryItemRead {
   textKey?: string;
   /** When the AI budget was spent for this item (read-budget.ts). */
   aiAt?: string;
-  /** IS / reader failures so far. */
+  /**
+   * Failures that count toward `unreadable` so far: permanent classes, and
+   * every failure of a billed reader (see `LIGHT_READ_MAX_ATTEMPTS`).
+   */
   attempts?: number;
+  /** Consecutive transient failures (the backoff exponent); never counts toward `unreadable`. */
+  transientFailures?: number;
   /** The last failed read's error (kept when it ends `unreadable`). */
   lastError?: string;
   /**
@@ -115,10 +123,15 @@ export async function saveReadCheckpoint(
       metadata: drizzleSql`jsonb_set(coalesce(${documents.metadata}, '{}'::jsonb), '{importRead}', coalesce(${documents.metadata} -> 'importRead', '{"status":"not_read","suggestedActions":[]}'::jsonb) || jsonb_build_object('readCheckpoint', ${JSON.stringify({ ...checkpoint, read })}::jsonb))`,
       updatedAt: new Date(),
     })
-    .where(eq(documents.id, itemId));
+    .where(and(eq(documents.id, itemId), isNull(documents.deletedAt)));
 }
 
-/** Write the new read into the bag, keeping chips run meanwhile. */
+/**
+ * Write the new read into the bag, keeping chips run meanwhile. `false` =
+ * nothing written: the item was deleted (checked under the same row lock, so
+ * a read finishing after the delete never re-writes nor re-indexes it), or an
+ * automatic read yielded to one that landed meanwhile.
+ */
 export async function writeRead(
   database: LibraryReadDb,
   itemId: string,
@@ -135,9 +148,10 @@ export async function writeRead(
     const [locked] = await tx
       .select({ metadata: documents.metadata })
       .from(documents)
-      .where(eq(documents.id, itemId))
+      .where(and(eq(documents.id, itemId), isNull(documents.deletedAt)))
       .for("update");
-    const current = ((locked?.metadata as Record<string, unknown> | null)
+    if (!locked) return false;
+    const current = ((locked.metadata as Record<string, unknown> | null)
       ?.importRead ?? {}) as StoredLibraryRead;
     if (yieldToRead && current.status === "read") return false;
     const previous = Array.isArray(current.suggestedActions)
@@ -164,17 +178,118 @@ export async function writeRead(
   });
 }
 
-/** Note an explicit re-read that did not read, beside the read the item keeps. */
+/**
+ * Note an explicit re-read that did not read, beside the read the item keeps.
+ * `false` = the item was deleted meanwhile (nothing written).
+ */
 export async function recordLastAttempt(
   database: LibraryReadDb,
   itemId: string,
   attempt: NonNullable<StoredLibraryRead["lastAttempt"]>
-): Promise<void> {
-  await database
+): Promise<boolean> {
+  const rows = await database
     .update(documents)
     .set({
       metadata: drizzleSql`jsonb_set(coalesce(${documents.metadata}, '{}'::jsonb), '{importRead,lastAttempt}', ${JSON.stringify(attempt)}::jsonb, true)`,
       updatedAt: new Date(),
     })
-    .where(eq(documents.id, itemId));
+    .where(and(eq(documents.id, itemId), isNull(documents.deletedAt)))
+    .returning({ id: documents.id });
+  return rows.length > 0;
+}
+
+// ───────────────────────────── the item lease ─────────────────────────────
+
+/** Where the lease lives on the item (beside `importRead`, which writers replace whole). */
+const LEASE_KEY = "importReadLease";
+
+/** What a job holds the item for: a read (with its reader), or a media retry. */
+export interface ItemLeaseHolder {
+  kind: "read" | "media";
+  /** The reader an explicit read runs (absent = automatic). */
+  reader?: string;
+}
+
+export type ItemLeaseClaim =
+  | { ok: true; token: string }
+  /** Another live job holds the item (`holder`), or the item is gone (`null`). */
+  | { ok: false; holder: ItemLeaseHolder | null };
+
+/**
+ * Take the item's job LEASE, or learn who holds it. One conditional UPDATE
+ * under the row lock: it succeeds only when no lease is held or the held one
+ * has expired, so two jobs of one item never both win — the loser runs no
+ * reader (no second vendor bill) and copies nothing. Times are the
+ * database's own (`now()`), so pod clocks never disagree. `ttlSeconds` must
+ * outlive the job's pg-boss expiry: a job pg-boss re-delivers while the first
+ * still runs finds the lease held.
+ */
+export async function claimItemLease(
+  database: LibraryReadDb,
+  args: {
+    itemId: string;
+    userId: string;
+    holder: ItemLeaseHolder;
+    ttlSeconds: number;
+  }
+): Promise<ItemLeaseClaim> {
+  const token = randomUUID();
+  const lease = JSON.stringify({ token, ...args.holder });
+  const won = await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`jsonb_set(coalesce(${documents.metadata}, '{}'::jsonb), ${`{${LEASE_KEY}}`}::text[], ${lease}::jsonb || jsonb_build_object('until', (now() + make_interval(secs => ${args.ttlSeconds}))::text))`,
+    })
+    .where(
+      and(
+        eq(documents.id, args.itemId),
+        eq(documents.userId, args.userId),
+        isNull(documents.deletedAt),
+        drizzleSql`(${documents.metadata} -> ${LEASE_KEY} IS NULL OR (${documents.metadata} #>> ${`{${LEASE_KEY},until}`}::text[])::timestamptz <= now())`
+      )
+    )
+    .returning({ id: documents.id });
+  if (won.length > 0) return { ok: true, token };
+  const [row] = await database
+    .select({
+      lease: drizzleSql<unknown>`${documents.metadata} -> ${LEASE_KEY}`,
+    })
+    .from(documents)
+    .where(
+      and(
+        eq(documents.id, args.itemId),
+        eq(documents.userId, args.userId),
+        isNull(documents.deletedAt)
+      )
+    )
+    .limit(1);
+  const held = row?.lease as Record<string, unknown> | null | undefined;
+  if (!row || !held || typeof held !== "object")
+    return { ok: false, holder: null };
+  return {
+    ok: false,
+    holder: {
+      kind: held.kind === "media" ? "media" : "read",
+      ...(typeof held.reader === "string" ? { reader: held.reader } : {}),
+    },
+  };
+}
+
+/** Give the lease back — only the holder's own token releases it. */
+export async function releaseItemLease(
+  database: LibraryReadDb,
+  itemId: string,
+  token: string
+): Promise<void> {
+  await database
+    .update(documents)
+    .set({
+      metadata: drizzleSql`${documents.metadata} - ${LEASE_KEY}`,
+    })
+    .where(
+      and(
+        eq(documents.id, itemId),
+        drizzleSql`${documents.metadata} #>> ${`{${LEASE_KEY},token}`}::text[] = ${token}`
+      )
+    );
 }

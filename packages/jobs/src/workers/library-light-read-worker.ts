@@ -71,8 +71,10 @@ export function libraryLightReadConcurrency(
 /** What one read did — stored as the pg-boss job `output`. */
 export interface LibraryLightReadResult {
   itemId: string;
-  /** `skipped` = nothing to do (gone, not a Library item, already read). */
+  /** `skipped` = nothing to do (gone, not a Library item, already read, busy). */
   status: string;
+  /** Another job held the item (its lease): nothing was run. */
+  busy?: boolean;
   chars?: number;
   actions?: number;
   usedAi?: boolean;

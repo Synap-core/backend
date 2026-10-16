@@ -138,7 +138,9 @@ async function readFileContent(args: ReadContentArgs): Promise<Got> {
   const content = bytes.toString("base64");
   if (/^(audio|video)\//i.test(mimeType)) {
     const got = await deps.transcribe({ content, mimeType });
-    if (got === null) return { kind: "retry", usedAi: true };
+    if (got === null) {
+      return { kind: "retry", usedAi: true, failure: "unavailable" };
+    }
     return got.ok && got.text.trim()
       ? { kind: "text", text: got.text, usedAi: true }
       : { kind: "status", status: "unreadable", usedAi: true };
@@ -149,7 +151,9 @@ async function readFileContent(args: ReadContentArgs): Promise<Got> {
     ...(s.filename ? { filename: s.filename } : {}),
     title: item.title,
   });
-  if (got === null) return { kind: "retry", usedAi: true };
+  if (got === null) {
+    return { kind: "retry", usedAi: true, failure: "unavailable" };
+  }
   return !got.degraded && got.text?.trim()
     ? {
         kind: "text",

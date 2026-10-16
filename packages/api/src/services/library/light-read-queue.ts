@@ -34,6 +34,11 @@ import {
   type LightReadDeps,
 } from "./light-read.js";
 import {
+  claimItemLease,
+  releaseItemLease,
+  type ItemLeaseHolder,
+} from "./light-read-store.js";
+import {
   libraryReadAiPerDay,
   libraryReadAiUsedToday,
   type LibraryReadDb,
@@ -72,8 +77,26 @@ export function lightReadJobExpireSeconds(
 type Send = (
   queue: string,
   data: LibraryLightReadPayload,
-  options: { singletonKey: string; expireInSeconds: number }
+  options: {
+    singletonKey: string;
+    expireInSeconds: number;
+    /** Seconds to wait before the job may start (a re-queued explicit read). */
+    startAfter?: number;
+  }
 ) => Promise<unknown>;
+
+/**
+ * How long a job's item lease lives: past the job's own pg-boss expiry, so a
+ * job pg-boss re-delivers while the first still runs finds the item held.
+ */
+export function lightReadLeaseSeconds(
+  env: Record<string, string | undefined> = process.env
+): number {
+  return lightReadJobExpireSeconds(env) + LEASE_MARGIN_SECONDS;
+}
+const LEASE_MARGIN_SECONDS = 5 * 60;
+/** Wait before an explicit read that found its item busy with ANOTHER reader runs. */
+export const LIGHT_READ_BUSY_REQUEUE_SECONDS = 60;
 
 async function defaultSend(): Promise<Send> {
   const { getBoss } = await import("@synap/jobs");
@@ -82,9 +105,14 @@ async function defaultSend(): Promise<Send> {
 }
 
 /**
- * Queue a light read per item. One job per item at a time (`singletonKey`).
- * Returns how many were queued; a failed enqueue is logged and left to the
- * hourly sweep — the item is still `not_read`, never lost.
+ * Queue a light read per item. Returns how many were queued; a failed
+ * enqueue is logged and left to the hourly sweep — the item is still
+ * `not_read`, never lost.
+ *
+ * The `singletonKey` does NOT make it one job per item: on a standard pg-boss
+ * v10 queue a bare singletonKey is never enforced. What keeps two jobs of one
+ * item from reading it at once is the item LEASE the handler takes
+ * (`claimItemLease`, {@link runLibraryLightReadJob}).
  */
 export async function enqueueLibraryLightRead(
   items: ReadonlyArray<{
@@ -96,7 +124,8 @@ export async function enqueueLibraryLightRead(
     /** Copy the item's failed media again, nothing else (`library.retryMedia`). */
     media?: "retry";
   }>,
-  send?: Send
+  send?: Send,
+  opts: { startAfter?: number } = {}
 ): Promise<number> {
   if (items.length === 0) return 0;
   let sendFn: Send;
@@ -125,6 +154,7 @@ export async function enqueueLibraryLightRead(
         {
           singletonKey: `library-${item.media ? "media-retry" : "light-read"}:${item.itemId}`,
           expireInSeconds,
+          ...(opts.startAfter ? { startAfter: opts.startAfter } : {}),
         }
       );
       queued++;
@@ -138,18 +168,91 @@ export async function enqueueLibraryLightRead(
   return queued;
 }
 
-/** The handler the api registers in the jobs slot at boot. */
+/**
+ * The handler the api puts in the jobs slot at boot.
+ *
+ * ONE job per item at a time, for real: the job first takes the item's lease
+ * (`claimItemLease`, a row-level claim that outlives the job's expiry). A job
+ * that finds the item held runs nothing — no reader, no vendor bill, no
+ * download — and answers `skipped` + `busy`:
+ *   - the same work is already running (an automatic read, the same reader
+ *     tapped twice, a list tap overlapping an item tap, a media retry tapped
+ *     twice): nothing more to do;
+ *   - an explicit read with a DIFFERENT reader than the holder's: the person
+ *     asked for it, so it is queued again shortly
+ *     ({@link LIGHT_READ_BUSY_REQUEUE_SECONDS}) and runs after the holder.
+ */
 export async function runLibraryLightReadJob(
   payload: LibraryLightReadPayload,
-  opts: {
-    database?: Pick<typeof DbType, "select"> & LibraryReadDb;
-    deps?: LightReadDeps;
-    /** Test seam: the media retry (`retryLibraryItemMedia`). */
-    retryMedia?: (input: {
-      userId: string;
-      itemId: string;
-    }) => Promise<{ status: string }>;
-  } = {}
+  opts: LightReadJobOptions = {}
+): Promise<LibraryLightReadResult> {
+  const database =
+    opts.database ?? ((await import("@synap/database")).db as never);
+  const holder: ItemLeaseHolder =
+    payload.media === "retry"
+      ? { kind: "media" }
+      : { kind: "read", ...(payload.reader ? { reader: payload.reader } : {}) };
+  const claim = await claimItemLease(database, {
+    itemId: payload.itemId,
+    userId: payload.userId,
+    holder,
+    ttlSeconds: lightReadLeaseSeconds(),
+  });
+  if (!claim.ok) {
+    if (!claim.holder) return { itemId: payload.itemId, status: "skipped" };
+    const otherReader =
+      holder.kind === "read" &&
+      !!holder.reader &&
+      (claim.holder.kind !== "read" || claim.holder.reader !== holder.reader);
+    if (otherReader) {
+      await enqueueLibraryLightRead(
+        [
+          {
+            userId: payload.userId,
+            itemId: payload.itemId,
+            ...(payload.force ? { force: true } : {}),
+            reader: holder.reader,
+          },
+        ],
+        opts.send,
+        { startAfter: LIGHT_READ_BUSY_REQUEUE_SECONDS }
+      );
+    }
+    logger.info(
+      { itemId: payload.itemId, holder: claim.holder, requeued: otherReader },
+      "library light read: item busy with another job — nothing run"
+    );
+    return { itemId: payload.itemId, status: "skipped", busy: true };
+  }
+  try {
+    return await runClaimedJob(payload, database, opts);
+  } finally {
+    await releaseItemLease(database, payload.itemId, claim.token).catch(
+      (err: unknown) =>
+        logger.warn(
+          { err, itemId: payload.itemId },
+          "library light read: lease NOT released — it lapses on its own"
+        )
+    );
+  }
+}
+
+interface LightReadJobOptions {
+  database?: Pick<typeof DbType, "select"> & LibraryReadDb;
+  deps?: LightReadDeps;
+  /** Test seam: the media retry (`retryLibraryItemMedia`). */
+  retryMedia?: (input: {
+    userId: string;
+    itemId: string;
+  }) => Promise<{ status: string }>;
+  /** Test seam: the re-queue of an explicit read that found the item busy. */
+  send?: Send;
+}
+
+async function runClaimedJob(
+  payload: LibraryLightReadPayload,
+  database: Pick<typeof DbType, "select"> & LibraryReadDb,
+  opts: LightReadJobOptions
 ): Promise<LibraryLightReadResult> {
   if (payload.media === "retry") {
     // The person's "Try again" on the pictures: the copy door only.
@@ -165,8 +268,6 @@ export async function runLibraryLightReadJob(
       status: `media_${out.status}`,
     };
   }
-  const database =
-    opts.database ?? ((await import("@synap/database")).db as never);
   let deps = opts.deps;
   if (!deps) {
     const [row] = await database
@@ -229,7 +330,9 @@ export async function sweepLibraryLightReads(
     .where(
       and(
         base,
-        drizzleSql`(coalesce(${documents.metadata} #>> '{importRead,status}', 'not_read') = 'not_read' OR (${documents.metadata} #>> '{importRead,status}' = 'needs_file' AND ${documents.metadata} #>> '{importItem,source,documentId}' IS NOT NULL))`
+        // A read waiting after a failure is due once its wait is over
+        // (`failure.nextAttemptAt`: transient failures back off).
+        drizzleSql`((coalesce(${documents.metadata} #>> '{importRead,status}', 'not_read') = 'not_read' AND (${documents.metadata} #>> '{importRead,failure,nextAttemptAt}' IS NULL OR (${documents.metadata} #>> '{importRead,failure,nextAttemptAt}')::timestamptz <= now())) OR (${documents.metadata} #>> '{importRead,status}' = 'needs_file' AND ${documents.metadata} #>> '{importItem,source,documentId}' IS NOT NULL))`
       )
     )
     .orderBy(documents.createdAt)

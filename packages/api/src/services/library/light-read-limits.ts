@@ -30,8 +30,35 @@ export const LIGHT_READ_EXTRACT_TIMEOUT_MS = 60_000;
 export const LIGHT_READ_SUMMARY_MAX_TOKENS = 600;
 /** Bytes of a text-like file (txt, csv, json, md…) a light read buffers at most. */
 export const LIGHT_READ_TEXT_FILE_BYTES_MAX = 4 * 1024 * 1024;
-/** IS failures before an item is marked `unreadable`. */
+/**
+ * Failed reads that count toward giving up on an item (`unreadable`): a
+ * PERMANENT failure class, or any failure of a reader billed on the person's
+ * account (every try may cost). A transient failure of a free reader (the
+ * site, the vendor or the IS down, the extractor busy) never counts: it waits
+ * {@link lightReadRetryDelayMs} and is tried again.
+ */
 export const LIGHT_READ_MAX_ATTEMPTS = 3;
+/** First wait after a transient failure; doubles per consecutive failure. */
+export const LIGHT_READ_RETRY_BASE_MS = 15 * 60 * 1000;
+/** Longest wait between two tries of a transient failure. */
+export const LIGHT_READ_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long to wait before trying again after the `n`-th consecutive transient
+ * failure (n ≥ 1): exponential from {@link LIGHT_READ_RETRY_BASE_MS}, capped
+ * at {@link LIGHT_READ_RETRY_MAX_MS}, never shorter than what the site or
+ * vendor asked (`retryAfterSec`).
+ */
+export function lightReadRetryDelayMs(
+  n: number,
+  retryAfterSec?: number
+): number {
+  const exp = Math.min(
+    LIGHT_READ_RETRY_BASE_MS * 2 ** Math.max(0, Math.min(n, 20) - 1),
+    LIGHT_READ_RETRY_MAX_MS
+  );
+  return Math.max(exp, (retryAfterSec ?? 0) * 1000);
+}
 /** Bytes of a copied video the STT step sends (the transcriber's own ceiling). */
 export const LIGHT_READ_TRANSCRIBE_BYTES_MAX =
   TRANSCRIBE_STORED_MEDIA_MAX_BYTES;

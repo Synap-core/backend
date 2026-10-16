@@ -68,9 +68,10 @@ import {
   libraryReadTextKey,
 } from "@synap/database";
 import { documentVersions, focusSessions } from "@synap/database/schema";
-import type {
-  ImportItemMetadata,
-  LibraryItemRead,
+import {
+  readLibraryItemRead,
+  type ImportItemMetadata,
+  type LibraryItemRead,
 } from "@synap-core/types/imports";
 import type { ReaderStamp, UrlRead } from "@synap-core/types/url-read";
 import type { ReadUrlOptions } from "../../capabilities/url-readers.js";
@@ -144,6 +145,14 @@ async function stageItem(over: {
     ]
   );
   return rows[0]!.id;
+}
+
+async function metaOfItem(id: string) {
+  const { rows } = await q<{ metadata: Record<string, any> }>(
+    `select metadata from documents where id = $1`,
+    [id]
+  );
+  return rows[0]!.metadata;
 }
 
 async function readOf(id: string) {
@@ -490,7 +499,7 @@ describe("light read", () => {
     });
   });
 
-  it("an IS failure stays not_read, then unreadable after the last attempt", async () => {
+  it("an IS OUTAGE (transient) never spends attempts nor ends unreadable: it waits, longer each time", async () => {
     const id = await stageItem({
       item: {
         source: { kind: "file", mimeType: "application/pdf" },
@@ -500,10 +509,63 @@ describe("light read", () => {
       mimeType: "application/pdf",
     });
     const { deps } = makeDeps({ extractFile: async () => null });
+    const waits: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      expect(await read(id, deps)).toMatchObject({ status: "not_read" });
+      const r = (await readOf(id))!;
+      expect(r.attempts).toBeUndefined();
+      expect(r.transientFailures).toBe(i + 1);
+      expect(r.failure).toMatchObject({
+        class: "unavailable",
+        transient: true,
+      });
+      waits.push(Date.parse(r.failure.nextAttemptAt) - NOW.getTime());
+    }
+    // 15 min, 30 min, 1 h, 2 h, 4 h — exponential, never "unreadable".
+    expect(waits).toEqual([15, 30, 60, 120, 240].map((m) => m * 60_000));
+    // The class reaches the item view.
+    expect(readLibraryItemRead(await metaOfItem(id)).failure).toMatchObject({
+      class: "unavailable",
+      transient: true,
+    });
+  });
+
+  it("a PERMANENT failure counts attempts, then unreadable with its class kept", async () => {
+    const url = "https://conf.example/refused";
+    const id = await stageItem({ item: { source: { kind: "url", url } } });
+    const { deps } = makeDeps({
+      readUrl: async (u) => ({
+        status: "failed",
+        sourceUrl: u,
+        via: STAMP(),
+        error: "the page answered HTTP 400",
+        errorClass: "refused",
+      }),
+    });
     expect(await read(id, deps)).toMatchObject({ status: "not_read" });
     expect(await read(id, deps)).toMatchObject({ status: "not_read" });
     expect(await read(id, deps)).toMatchObject({ status: "unreadable" });
-    expect((await readOf(id))!.attempts).toBe(3);
+    const r = (await readOf(id))!;
+    expect(r.attempts).toBe(3);
+    expect(r.failure).toEqual({ class: "refused", transient: false });
+  });
+
+  it("a Retry-After longer than the backoff is honoured", async () => {
+    const url = "https://conf.example/limited";
+    const id = await stageItem({ item: { source: { kind: "url", url } } });
+    const { deps } = makeDeps({
+      readUrl: async (u) => ({
+        status: "blocked",
+        sourceUrl: u,
+        via: STAMP(),
+        blocked: { reason: "ip_reputation", nextStep: "retry_later" },
+        retryAfterSec: 7200,
+      }),
+    });
+    await read(id, deps);
+    const r = (await readOf(id))!;
+    expect(r.failure.class).toBe("rate_limited");
+    expect(Date.parse(r.failure.nextAttemptAt) - NOW.getTime()).toBe(7_200_000);
   });
 
   it("another person's item is skipped", async () => {
@@ -1082,27 +1144,176 @@ describe("the pictures' Try again rides the light-read queue as a media-only job
         },
       },
     ]);
+    const id = await stageItem({
+      item: { source: { kind: "url", url: "https://conf.example/m" } },
+    });
     const retried: unknown[] = [];
+    // A reader or the budget touched here would throw: the job is media only.
+    const { deps } = makeDeps({
+      readUrl: async () => {
+        throw new Error("a media retry must not read the item");
+      },
+      reserveAi: async () => {
+        throw new Error("a media retry must not spend the budget");
+      },
+    });
     const out = await runLibraryLightReadJob(
-      { userId: USER, itemId: "i2", media: "retry" },
+      { userId: USER, itemId: id, media: "retry" },
       {
-        // A database or reader touched here would throw: the job is media only.
-        database: new Proxy(
-          {},
-          {
-            get() {
-              throw new Error("a media retry must not read the item");
-            },
-          }
-        ) as never,
+        database: db as never,
+        deps,
         retryMedia: async (input) => {
           retried.push(input);
           return { status: "copied" };
         },
       }
     );
-    expect(retried).toEqual([{ userId: USER, itemId: "i2" }]);
-    expect(out).toEqual({ itemId: "i2", status: "media_copied" });
+    expect(retried).toEqual([{ userId: USER, itemId: id }]);
+    expect(out).toEqual({ itemId: id, status: "media_copied" });
+    expect(await readOf(id)).toBeUndefined();
+  });
+});
+
+describe("one job per item (the lease), billed retries, deleted items", () => {
+  /** A reader that waits for `go` — the first job is still reading. */
+  function slowApify(calls: Calls) {
+    let release!: () => void;
+    const go = new Promise<void>((r) => (release = r));
+    const readUrl: LightReadDeps["readUrl"] = async (url) => {
+      calls.readUrl++;
+      await go;
+      return doorRead(url, { via: APIFY_STAMP, text: "Caption." });
+    };
+    return { readUrl, release };
+  }
+
+  it("two explicit jobs for one item run the billed reader ONCE: the second runs nothing", async () => {
+    const ig = await stageLink(IG);
+    const { deps, calls } = makeDeps({ readers: async () => [APIFY_OFFER] });
+    const slow = slowApify(calls);
+    deps.readUrl = slow.readUrl;
+    const sent: unknown[] = [];
+    const job = () =>
+      runLibraryLightReadJob(
+        { userId: USER, itemId: ig, reader: APIFY },
+        {
+          database: db as never,
+          deps,
+          send: async (_q, data, options) => void sent.push({ data, options }),
+        }
+      );
+    const first = job();
+    // Let the first job take the lease and reach the reader.
+    await vi.waitFor(() => expect(calls.readUrl).toBe(1));
+    const secondP = job();
+    await new Promise((r) => setTimeout(r, 50));
+    // The second job did not reach the reader while the first held the item.
+    expect(calls.readUrl).toBe(1);
+    slow.release();
+    expect(await secondP).toEqual({
+      itemId: ig,
+      status: "skipped",
+      busy: true,
+    });
+    expect(await first).toMatchObject({ status: "read" });
+    expect(calls.readUrl).toBe(1);
+    // The same reader was already running: nothing is queued again.
+    expect(sent).toEqual([]);
+    // The lease is given back: a later job runs.
+    expect((await metaOfItem(ig)).importReadLease).toBeUndefined();
+  });
+
+  it("an explicit read with ANOTHER reader than the running one is queued again, never dropped", async () => {
+    const ig = await stageLink(IG);
+    const { deps, calls } = makeDeps({ readers: async () => [APIFY_OFFER] });
+    const slow = slowApify(calls);
+    deps.readUrl = slow.readUrl;
+    const sent: Array<{ data: unknown; options: any }> = [];
+    const first = runLibraryLightReadJob(
+      { userId: USER, itemId: ig },
+      { database: db as never, deps }
+    );
+    await vi.waitFor(() => expect(calls.readUrl).toBe(1));
+    const tapped = await runLibraryLightReadJob(
+      { userId: USER, itemId: ig, reader: APIFY },
+      {
+        database: db as never,
+        deps,
+        send: async (_q, data, options) => void sent.push({ data, options }),
+      }
+    );
+    slow.release();
+    await first;
+    expect(tapped).toMatchObject({ status: "skipped", busy: true });
+    expect(calls.readUrl).toBe(1);
+    expect(sent).toEqual([
+      {
+        data: { userId: USER, itemId: ig, reader: APIFY },
+        options: expect.objectContaining({ startAfter: 60 }),
+      },
+    ]);
+  });
+
+  it("a lease past its time is taken over (a crashed job never blocks the item)", async () => {
+    const id = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "Note to self",
+    });
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importReadLease}', '{"token":"dead","kind":"read","until":"2000-01-01T00:00:00Z"}'::jsonb) where id = $1`,
+      [id]
+    );
+    const { deps } = makeDeps();
+    expect(
+      await runLibraryLightReadJob(
+        { userId: USER, itemId: id },
+        { database: db as never, deps }
+      )
+    ).toMatchObject({ status: "read" });
+  });
+
+  it("a BILLED reader's transient failures count (each may bill), then it waits for the person — never unreadable", async () => {
+    const ig = await stageLink(IG);
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        return {
+          status: "failed",
+          sourceUrl: u,
+          via: APIFY_STAMP,
+          error: "Apify answered 503",
+          errorClass: "unavailable",
+        };
+      },
+    });
+    const tap = () => read(ig, deps, { reader: APIFY });
+    expect(await tap()).toMatchObject({ status: "not_read" });
+    expect((await readOf(ig))!.requestedReader).toBe(APIFY);
+    expect(await tap()).toMatchObject({ status: "not_read" });
+    expect(await tap()).toMatchObject({ status: "needs_file" });
+    const r = (await readOf(ig))!;
+    expect(r.attempts).toBe(3);
+    expect(r.failure).toEqual({ class: "unavailable", transient: true });
+    // The pod stops trying by itself: the person's reader is not remembered.
+    expect(r.requestedReader).toBeUndefined();
+    expect(calls.readUrl).toBe(3);
+  });
+
+  it("a read finishing AFTER its item was deleted writes nothing and indexes nothing", async () => {
+    const url = "https://conf.example/deleted";
+    const id = await stageItem({ item: { source: { kind: "url", url } } });
+    const { deps, calls } = makeDeps({
+      async readUrl(u) {
+        // The person deletes the item while it is read.
+        await q(`update documents set deleted_at = now() where id = $1`, [id]);
+        return doorRead(u);
+      },
+    });
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect(await readOf(id)).toBeUndefined();
+    expect(calls.indexed).toEqual([]);
+    expect(calls.notified).toEqual([]);
   });
 });
 
@@ -1168,6 +1379,30 @@ describe("sweep", () => {
     await sweepLibraryLightReads({ database: db as never, send, perDay: 5 });
     expect(sent.sort()).toEqual([old, held, attached].sort());
     expect(sent).not.toContain(fresh);
+  });
+});
+
+describe("the sweep honours a failed read's wait", () => {
+  it("a read waiting after a failure is re-enqueued only once its next try is due", async () => {
+    const wait = (nextAttemptAt: string) =>
+      stageItem({
+        item: { source: { kind: "text" } },
+        body: "x",
+        ageMinutes: 30,
+        read: {
+          status: "not_read",
+          suggestedActions: [],
+          failure: { class: "unavailable", transient: true, nextAttemptAt },
+        },
+      });
+    const later = await wait("2999-01-01T00:00:00.000Z");
+    const due = await wait("2000-01-01T00:00:00.000Z");
+    const sent: string[] = [];
+    const send = async (_q: string, data: { itemId: string }) =>
+      void sent.push(data.itemId);
+    await sweepLibraryLightReads({ database: db as never, send, perDay: 5 });
+    expect(sent).toContain(due);
+    expect(sent).not.toContain(later);
   });
 });
 
