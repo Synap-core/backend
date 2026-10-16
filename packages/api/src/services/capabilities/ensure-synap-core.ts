@@ -52,6 +52,14 @@ import { resolvePodOwnerUserId } from "./pod-owner.js";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
+import { SITE_ADAPTERS } from "./web-read/registry.js";
+
+/**
+ * The sites the built-in reader has its own reader for — DERIVED from the
+ * adapter registry, so `web.read`'s description never names a site the pod
+ * cannot read or misses one it can.
+ */
+const BUILTIN_SITE_NAMES = SITE_ADAPTERS.map((a) => a.name).join(", ");
 import { capabilityDefinitionDrift } from "./capability-drift.js";
 import type { Context } from "../../context.js";
 
@@ -838,7 +846,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
-    // ── Read one link (Web Access W0) — the agent's door onto `readUrl` ──────
+    // ── Read one link — the agent's door onto `readUrl` ─────────────────────
     {
       name: "web.read",
       kind: "builtin",
@@ -848,9 +856,9 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         "Read one web page or post into clean text + metadata + media, through the pod's one link reader. " +
         "Use when: the user gives a link, or you need a search result in full. " +
         "Don't use when: filling entity fields from a page (capture it), or to click, log in or post (no verb does that). " +
-        "Cost: free with the pod's built-in reader (articles, YouTube, X, Bluesky, GitHub, Wikipedia, arXiv, Reddit, HN, Google Docs); a reader on the user's own account (e.g. Instagram, TikTok) runs ONLY when you name it in `reader`, and then through that reader's own approval. " +
+        `Cost: free with the pod's built-in reader (any public article, and ${BUILTIN_SITE_NAMES}); an installed reader (e.g. one on the user's own account for Instagram) runs ONLY when you name it in \`reader\`, and then through that reader's own approval. ` +
         "Returns { read: { status: ok|partial|blocked|failed, via, title, text, media, blocked? }, offers[] }. `blocked` is a wall, not an empty page: tell the user blocked.reason and offer blocked.nextStep (install/enable/connect a reader from `offers`, open it in their browser, attach the file) — never retry blindly. `failed` may be retried later. " +
-        'Args: url (required, http/https); reader (optional: an offers[].readerId — "builtin" or a reader verb id).',
+        'Args: url (required, http/https); reader (optional: an offers[].readerId — "builtin" or a reader verb id; omitted = the built-in reader).',
       parameters: {
         type: "object",
         required: ["url"],

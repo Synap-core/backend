@@ -23,6 +23,12 @@ import { join } from "path";
  *      the set (including when the set doesn't exist) is the same bug from
  *      the read side.
  *
+ * The two rules themselves live in `provider-availability.ts` (shared with
+ * the reader offers): `declaredProviders` builds the set, and
+ * `isProviderUnavailable` refuses to call anything unavailable when the set
+ * is `null` — asserted BEHAVIOURALLY below; the scans then pin that the
+ * catalog reaches them only the guarded way.
+ *
  * Neither function is exported (loadConnState touches the `secrets` table —
  * not unit-testable without DB mocks; deriveConnection is pure but kept
  * private) so this is source-level static analysis, matching the style of
@@ -84,13 +90,13 @@ describe("tripwire: connector availability degrades unknown → missing, never u
 
     // All reassignments (not the `let providerAvailable = null` init, which
     // uses `:` for the type annotation right before `=`).
-    const allAssignments =
-      body.match(/(?<!let\s)providerAvailable\s*=\s*new Set/g) ?? [];
+    const ASSIGN =
+      /(?<!let\s)providerAvailable\s*=\s*(?:new Set|declaredProviders\()/g;
+    const allAssignments = body.match(ASSIGN) ?? [];
     expect(allAssignments.length).toBe(1);
 
     const ifBlock = extractFunctionBody(body, /if\s*\(declared\.ok\)/);
-    const assignmentsInGuard =
-      ifBlock.match(/providerAvailable\s*=\s*new Set/g) ?? [];
+    const assignmentsInGuard = ifBlock.match(ASSIGN) ?? [];
     expect(assignmentsInGuard.length).toBe(1);
   });
 
@@ -103,10 +109,27 @@ describe("tripwire: connector availability degrades unknown → missing, never u
     const unavailableUsages = [...body.matchAll(/"unavailable"/g)];
     expect(unavailableUsages.length).toBeGreaterThan(0); // regex is alive
 
+    // The guard is either inline, or the shared `isProviderUnavailable`
+    // (whose null-guard the behavioural test below pins).
     for (const usage of unavailableUsages) {
       const before = body.slice(0, usage.index);
-      expect(before).toMatch(/providerAvailable\s*!==\s*null/);
+      expect(before).toMatch(
+        /providerAvailable\s*!==\s*null|isProviderUnavailable\(\s*conn\.providerAvailable/
+      );
     }
+  });
+
+  it("the shared rule: unknown availability (null) is NEVER unavailable", async () => {
+    const { isProviderUnavailable, declaredProviders } =
+      await import("../services/capabilities/provider-availability.js");
+    expect(isProviderUnavailable(null, "google")).toBe(false);
+    expect(isProviderUnavailable(new Set(), "google")).toBe(true);
+    const offered = declaredProviders([
+      { uniqueKey: "Google-Mail", provider: "google" },
+    ]);
+    expect(isProviderUnavailable(offered, "GOOGLE")).toBe(false);
+    expect(isProviderUnavailable(offered, "google-mail")).toBe(false);
+    expect(isProviderUnavailable(offered, "slack")).toBe(true);
   });
 
   it("the guard-check regex actually bites (fails on an unguarded fixture)", () => {
