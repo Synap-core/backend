@@ -268,6 +268,9 @@ export function toLibraryItemView(row: {
     ...(media.media.length ? { media: media.media } : {}),
     ...(media.failed ? { mediaFailed: media.failed } : {}),
     ...(media.failedAt ? { mediaFailedAt: media.failedAt } : {}),
+    ...(media.failedReasons.length
+      ? { mediaFailedReasons: media.failedReasons }
+      : {}),
   };
 }
 

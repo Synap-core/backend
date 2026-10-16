@@ -178,15 +178,39 @@ describe("readBuiltin — the ladder", () => {
       ]),
       now: NOW,
     });
+    // Each failure carries its CLASS through the one parse door: a server
+    // that is down and an unreachable host are transient, a 4xx is not.
     expect(broken).toMatchObject({
       status: "failed",
       error: expect.stringMatching(/500/),
+      errorClass: "unavailable",
     });
     const down = await readBuiltin("https://example.com/x", {
       fetch: fakeWeb([]),
       now: NOW,
     });
-    expect(down.status).toBe("failed");
+    expect(down).toMatchObject({ status: "failed", errorClass: "network" });
+    const refused = await readBuiltin("https://example.com/x", {
+      fetch: fakeWeb([
+        ["https://example.com/", () => respond("", { status: 400 })],
+      ]),
+      now: NOW,
+    });
+    expect(refused).toMatchObject({ status: "failed", errorClass: "refused" });
+    const limited = await readBuiltin("https://example.com/x", {
+      fetch: fakeWeb([
+        [
+          "https://example.com/",
+          () => respond("", { status: 429, headers: { "retry-after": "120" } }),
+        ],
+      ]),
+      now: NOW,
+    });
+    expect(limited).toMatchObject({
+      status: "blocked",
+      blocked: { nextStep: "retry_later" },
+      retryAfterSec: 120,
+    });
   });
 
   it("a PDF link → blocked unsupported with attach_file (the page reader does not read files)", async () => {

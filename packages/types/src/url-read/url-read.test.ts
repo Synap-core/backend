@@ -7,6 +7,9 @@ import {
   readReaderStamp,
   urlPatternSpecificity,
   type ReaderStamp,
+  isTransientUrlReadFailure,
+  URL_READ_FAILURE_CLASSES,
+  URL_READ_RETRY_AFTER_MAX_SEC,
 } from "./index.js";
 
 const VIA: ReaderStamp = {
@@ -441,7 +444,69 @@ describe("normalizeUrlRead", () => {
       sourceUrl: SRC,
       via: VIA,
       error: "502 from vendor",
+      // A reader that names no class is `unknown` — never guessed transient.
+      errorClass: "unknown",
     });
+  });
+
+  it("keeps a known failure class and a bounded Retry-After; drops the rest", () => {
+    const r = normalizeUrlRead(
+      {
+        status: "failed",
+        error: "x",
+        errorClass: "rate_limited",
+        retryAfterSec: 1e9,
+      },
+      SRC,
+      VIA
+    );
+    expect(r).toMatchObject({
+      errorClass: "rate_limited",
+      retryAfterSec: URL_READ_RETRY_AFTER_MAX_SEC,
+    });
+    const junk = normalizeUrlRead(
+      { status: "failed", error: "x", errorClass: "teapot", retryAfterSec: -5 },
+      SRC,
+      VIA
+    );
+    expect(junk.errorClass).toBe("unknown");
+    expect(junk.retryAfterSec).toBeUndefined();
+    // The door's own refusal of unusable output is `bad_output`.
+    expect(normalizeUrlRead(42, SRC, VIA).errorClass).toBe("bad_output");
+    // Retry-After rides a blocked read only when it says retry_later.
+    expect(
+      normalizeUrlRead(
+        {
+          status: "blocked",
+          blocked: { reason: "ip_reputation", nextStep: "retry_later" },
+          retryAfterSec: 30,
+        },
+        SRC,
+        VIA
+      ).retryAfterSec
+    ).toBe(30);
+    expect(
+      normalizeUrlRead(
+        {
+          status: "blocked",
+          blocked: { reason: "paywall" },
+          retryAfterSec: 30,
+        },
+        SRC,
+        VIA
+      ).retryAfterSec
+    ).toBeUndefined();
+  });
+
+  it("the transient classes are exactly the ones a later try can fix", () => {
+    expect(URL_READ_FAILURE_CLASSES.filter(isTransientUrlReadFailure)).toEqual([
+      "rate_limited",
+      "unavailable",
+      "network",
+      "extract_busy",
+      "extract_timeout",
+      "extract_failed",
+    ]);
   });
 
   it("never throws, even on a hostile getter", () => {

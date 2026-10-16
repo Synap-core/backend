@@ -93,7 +93,12 @@ describe("extraction stays bounded on hostile markup", () => {
     const t = performance.now();
     const read = await extractPage(slow, URL_, { deadlineMs: 300 });
     expect(performance.now() - t).toBeLessThan(1_000);
-    expect(read).toEqual({ status: "failed", error: EXTRACT_TIMEOUT_ERROR });
+    // Classed transient: a later try reads the page, the item is never unreadable for it.
+    expect(read).toEqual({
+      status: "failed",
+      error: EXTRACT_TIMEOUT_ERROR,
+      errorClass: "extract_timeout",
+    });
 
     const next = await extractPage(ARTICLE_HTML, URL_);
     expect(next.status).toBe("ok");

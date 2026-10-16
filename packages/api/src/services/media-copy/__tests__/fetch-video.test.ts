@@ -242,7 +242,8 @@ describe("fetchExternalVideoToSink", () => {
   it("maps statuses like images (404 permanent, 503 transient)", async () => {
     const c = collectingSink();
     for (const [status, reason] of [
-      [404, "http_4xx"],
+      [404, "expired"],
+      [400, "http_4xx"],
       [503, "http_5xx"],
       [429, "http_retry_later"],
     ] as const) {

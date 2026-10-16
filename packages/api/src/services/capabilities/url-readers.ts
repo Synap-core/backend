@@ -28,6 +28,7 @@ import {
   type ReaderStamp,
   type UrlRead,
   type UrlReadBlockReason,
+  type UrlReadFailureClass,
   type UrlReaderOffer,
   type UrlReadNextStep,
 } from "@synap-core/types/url-read";
@@ -92,6 +93,37 @@ export interface ReadUrlDeps {
     >[0]
   ) => ReturnType<typeof import("./execute-capability.js").executeCapability>;
   now?: () => Date;
+}
+
+/**
+ * A failed verb run's dispatch class → the read's failure class (the retry
+ * question the light read asks). Exhaustive: a new dispatch class stops the build.
+ */
+const READ_FAILURE_OF: Record<FailureErrorClass, UrlReadFailureClass> = {
+  transient: "unavailable",
+  auth: "auth",
+  no_connection: "auth",
+  permission: "refused",
+  target_missing: "refused",
+  provider: "refused",
+  missing_field: "refused",
+  validation: "refused",
+  conflict: "refused",
+  unknown: "unknown",
+};
+
+/** A failed read through the one parse door, with its class. */
+function failedRead(
+  sourceUrl: string,
+  via: ReaderStamp,
+  error: string,
+  errorClass: UrlReadFailureClass
+): UrlRead {
+  return normalizeUrlRead(
+    { status: "failed", error, errorClass },
+    sourceUrl,
+    via
+  );
 }
 
 function blockedRead(
@@ -179,18 +211,16 @@ export async function readUrl(
     chosen = ranked.find((r) => r.offer.readerId === opts.reader);
     if (!chosen) {
       return {
-        read: normalizeUrlRead(
-          {
-            status: "failed",
-            error: `"${opts.reader}" does not read this link`,
-          },
+        read: failedRead(
           sourceUrl,
           {
             id: opts.reader,
             name: opts.reader,
             billed: false,
             readAt: now.toISOString(),
-          }
+          },
+          `"${opts.reader}" does not read this link`,
+          "refused"
         ),
         offers: ranked.map((r) => r.offer),
       };
@@ -261,13 +291,11 @@ export async function readUrl(
     });
   } catch (err) {
     return {
-      read: normalizeUrlRead(
-        {
-          status: "failed",
-          error: `${chosen.offer.name} could not run: ${err instanceof Error ? err.message : String(err)}`,
-        },
+      read: failedRead(
         sourceUrl,
-        stamp
+        stamp,
+        `${chosen.offer.name} could not run: ${err instanceof Error ? err.message : String(err)}`,
+        "unknown"
       ),
       offers: withCurrent(ranked, chosen.offer.readerId),
     };
@@ -330,20 +358,22 @@ export async function readUrl(
       };
     case "error":
       return {
-        read: normalizeUrlRead(
-          { status: "failed", error: outcome.message },
+        read: failedRead(
           sourceUrl,
-          stamp
+          stamp,
+          outcome.message,
+          READ_FAILURE_OF[outcome.errorClass ?? "unknown"]
         ),
         offers: withCurrent(ranked, chosen.offer.readerId),
         ...(outcome.errorClass ? { errorClass: outcome.errorClass } : {}),
       };
     case "not_found":
       return {
-        read: normalizeUrlRead(
-          { status: "failed", error: outcome.message },
+        read: failedRead(
           sourceUrl,
-          { ...stamp, billed: false }
+          { ...stamp, billed: false },
+          outcome.message,
+          "refused"
         ),
         offers,
       };

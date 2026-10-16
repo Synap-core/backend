@@ -571,6 +571,31 @@ describe("readUrl — runs the chosen reader, honestly", () => {
     expect(r.read.status).toBe("failed");
     expect(r.read.error).toContain("503");
     expect(r.errorClass).toBe("transient");
+    // …and the READ carries it as its own class: what the light read stores.
+    expect(r.read.errorClass).toBe("unavailable");
+  });
+
+  it("a vendor that refuses the request is `refused`, an unclassed one `unknown` — never transient", async () => {
+    for (const [dispatch, read] of [
+      ["validation", "refused"],
+      ["auth", "auth"],
+      [undefined, "unknown"],
+    ] as const) {
+      const { d } = deps([apifyReady], [], {
+        execute: (async () => ({
+          kind: "error",
+          message: "no",
+          ...(dispatch ? { errorClass: dispatch } : {}),
+        })) as never,
+      });
+      const r = await readUrl(
+        CTX,
+        IG,
+        { reader: "capture_social_post", allowBilled: true },
+        d
+      );
+      expect(r.read.errorClass).toBe(read);
+    }
   });
 
   it("a thrown run is `failed` with the reason", async () => {

@@ -11,6 +11,7 @@
 import type {
   UrlRead,
   UrlReadBlockReason,
+  UrlReadFailureClass,
   UrlReadNextStep,
 } from "@synap-core/types/url-read";
 import type { ServiceId } from "@synap-core/types/service-marks";
@@ -46,8 +47,25 @@ export interface SiteAdapter {
   read(url: string, ctx: SiteAdapterContext): Promise<SiteRead | null>;
 }
 
-export function siteFailed(error: string): SiteRead {
-  return { status: "failed", error };
+export function siteFailed(
+  error: string,
+  errorClass: UrlReadFailureClass = "unknown"
+): SiteRead {
+  return { status: "failed", error, errorClass };
+}
+
+/** `Retry-After` as seconds (delta-seconds or an HTTP date); undefined when unusable. */
+export function retryAfterSeconds(
+  header: string | undefined,
+  now: number = Date.now()
+): number | undefined {
+  if (!header?.trim()) return undefined;
+  const v = header.trim();
+  if (/^\d+$/.test(v)) return Number(v) > 0 ? Number(v) : undefined;
+  const at = Date.parse(v);
+  if (Number.isNaN(at)) return undefined;
+  const sec = Math.ceil((at - now) / 1000);
+  return sec > 0 ? sec : undefined;
 }
 
 export function siteBlocked(
@@ -143,14 +161,22 @@ export function fromHttpFailure(
         "open_in_my_browser",
         `${what} refused the pod's request (HTTP 403)`
       );
-    case 429:
-      return siteBlocked(
-        "ip_reputation",
-        "retry_later",
-        `${what} is rate-limiting the pod (HTTP 429)${res.retryAfter ? `, retry after ${res.retryAfter}` : ""}`
-      );
+    case 429: {
+      const retryAfterSec = retryAfterSeconds(res.retryAfter);
+      return {
+        ...siteBlocked(
+          "ip_reputation",
+          "retry_later",
+          `${what} is rate-limiting the pod (HTTP 429)${res.retryAfter ? `, retry after ${res.retryAfter}` : ""}`
+        ),
+        ...(retryAfterSec ? { retryAfterSec } : {}),
+      };
+    }
     default:
-      return siteFailed(`${what} answered HTTP ${res.status}`);
+      return siteFailed(
+        `${what} answered HTTP ${res.status}`,
+        res.status >= 500 || res.status === 408 ? "unavailable" : "refused"
+      );
   }
 }
 
@@ -167,7 +193,7 @@ export function fromGetFailure(
       `not a public web address (${res.detail})`
     );
   }
-  return siteFailed(`${what} could not be reached: ${res.detail}`);
+  return siteFailed(`${what} could not be reached: ${res.detail}`, "network");
 }
 
 // ── small parsing helpers adapters share ──

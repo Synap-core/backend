@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readLibraryItemMedia, readLibraryItemRead } from "./library.js";
+import {
+  isPermanentLibraryMediaFailure,
+  readLibraryItemMedia,
+  readLibraryItemRead,
+} from "./library.js";
 
 const STAMP = {
   id: "builtin:article",
@@ -126,12 +130,69 @@ describe("readLibraryItemMedia", () => {
   });
 
   it("absent → empty, zero (never throws)", () => {
-    expect(readLibraryItemMedia(null)).toEqual({ media: [], failed: 0 });
+    expect(readLibraryItemMedia(null)).toEqual({
+      media: [],
+      failed: 0,
+      failedReasons: [],
+    });
     expect(
       readLibraryItemMedia({ importMedia: "x", importMediaFailed: -1 })
     ).toEqual({
       media: [],
       failed: 0,
+      failedReasons: [],
     });
+  });
+
+  it("names each known failure reason once; permanence is the shared rule", () => {
+    const got = readLibraryItemMedia({
+      importMediaFailed: 3,
+      importMediaFailures: [
+        { sourceUrl: "a", reason: "timeout", attempts: 1 },
+        { sourceUrl: "b", reason: "expired", attempts: 1 },
+        { sourceUrl: "c", reason: "expired", attempts: 2 },
+        { sourceUrl: "d", reason: "made_up", attempts: 1 },
+      ],
+    });
+    expect(got.failedReasons).toEqual(["expired", "timeout"]);
+    expect(isPermanentLibraryMediaFailure("expired")).toBe(true);
+    expect(isPermanentLibraryMediaFailure("timeout")).toBe(false);
+    expect(isPermanentLibraryMediaFailure("made_up")).toBe(false);
+  });
+
+  it("a stored read failure: class kept, `transient` derived (never trusted), a malformed next try dropped", () => {
+    const meta = (failure: unknown) => ({
+      importRead: { status: "not_read", suggestedActions: [], failure },
+    });
+    expect(
+      readLibraryItemRead(
+        meta({
+          class: "unavailable",
+          transient: false,
+          nextAttemptAt: "2026-10-16T10:00:00.000Z",
+        })
+      ).failure
+    ).toEqual({
+      class: "unavailable",
+      transient: true,
+      nextAttemptAt: "2026-10-16T10:00:00.000Z",
+    });
+    expect(
+      readLibraryItemRead(
+        meta({ class: "refused", transient: true, nextAttemptAt: "x" })
+      ).failure
+    ).toEqual({ class: "refused", transient: false });
+    expect(
+      readLibraryItemRead(
+        meta({ class: "refused", nextAttemptAt: "2026-10-16T10:00:00.000Z" })
+      ).failure
+    ).toEqual({
+      class: "refused",
+      transient: false,
+      nextAttemptAt: "2026-10-16T10:00:00.000Z",
+    });
+    expect(
+      readLibraryItemRead(meta({ class: "nope" })).failure
+    ).toBeUndefined();
   });
 });

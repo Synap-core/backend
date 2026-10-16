@@ -25,11 +25,14 @@ import type {
 } from "./curate.js";
 import type { EntityMediaCopy } from "../presentation/index.js";
 import {
+  isTransientUrlReadFailure,
+  isUrlReadFailureClass,
   readReaderStamp,
   URL_READ_BLOCK_REASONS,
   URL_READ_NEXT_STEPS,
   type ReaderStamp,
   type UrlReadBlockReason,
+  type UrlReadFailureClass,
   type UrlReadNextStep,
   type UrlReaderOffer,
 } from "../url-read/index.js";
@@ -104,6 +107,28 @@ export interface LibraryItemRead {
    * the site's own captions; `stt` = speech-to-text of the stored video (AI).
    */
   transcript?: { source: "platform" | "stt"; lang?: string };
+  /**
+   * Why the last try did not read, as a class — set while a read waits to be
+   * tried again (`not_read`), on an `unreadable` item, and on a `needs_file`
+   * item a billed reader gave up on. Absent = the last try did not fail.
+   */
+  failure?: LibraryReadFailure;
+}
+
+/** A failed read's class, as kept on the item. */
+export interface LibraryReadFailure {
+  class: UrlReadFailureClass;
+  /**
+   * The failure was temporary (`isTransientUrlReadFailure`: the site, the
+   * vendor or the pod's AI was down, busy or rate limiting) — a later try may
+   * read it, so never say "could not be read" for it.
+   */
+  transient: boolean;
+  /**
+   * When the pod tries again BY ITSELF (ISO). Absent = it will not: the
+   * person's "Read again" / "Read with X" is the way on.
+   */
+  nextAttemptAt?: string;
 }
 
 /** A blocked read's reason, as kept on the item. */
@@ -111,6 +136,85 @@ export interface LibraryReadBlocked {
   reason: UrlReadBlockReason;
   nextStep?: UrlReadNextStep;
   detail?: string;
+}
+
+/**
+ * Why one media file was NOT copied (`metadata.importMediaFailures[].reason`):
+ *   blocked          — not a public address (SSRF refusal)
+ *   expired          — the link no longer serves the file (HTTP 403 / 404 /
+ *                      410): signed CDN links die within days
+ *   http_4xx         — any other refusal of the request
+ *   http_retry_later — the server said later (408 / 429)
+ *   http_5xx         — the server failed
+ *   too_large        — over the size cap (or a decoder-bomb image)
+ *   not_image / not_video — the bytes are not an allowed image / video
+ *   empty            — no bytes
+ *   timeout / fetch_failed — the download did not finish
+ *   store_failed     — the bytes were fine; storing them failed
+ *   store_unavailable — the pod has no storage configured
+ */
+export const LIBRARY_MEDIA_FAILURE_REASONS = [
+  "blocked",
+  "expired",
+  "http_4xx",
+  "http_retry_later",
+  "http_5xx",
+  "too_large",
+  "not_image",
+  "not_video",
+  "empty",
+  "timeout",
+  "fetch_failed",
+  "store_failed",
+  "store_unavailable",
+] as const;
+export type LibraryMediaFailureReason =
+  (typeof LIBRARY_MEDIA_FAILURE_REASONS)[number];
+
+/**
+ * Reasons trying again cannot change: the pod never re-fetches them on its
+ * own, and a client offers no "Try again" when EVERY failed copy has one
+ * (lead with "Read again with X" or the plain tile instead).
+ */
+export const PERMANENT_LIBRARY_MEDIA_FAILURES = [
+  "blocked",
+  "expired",
+  "http_4xx",
+  "too_large",
+  "not_image",
+  "not_video",
+  "empty",
+] as const satisfies readonly LibraryMediaFailureReason[];
+
+/** Reasons a later copy may fix (the pod retries them a few times by itself). */
+export const RETRYABLE_LIBRARY_MEDIA_FAILURES = [
+  "http_retry_later",
+  "http_5xx",
+  "timeout",
+  "fetch_failed",
+  "store_failed",
+  "store_unavailable",
+] as const satisfies readonly LibraryMediaFailureReason[];
+
+// Coverage floor: every reason is classified permanent OR retryable — a new
+// reason that is neither stops the build.
+type _MediaFailureClassified =
+  Exclude<
+    LibraryMediaFailureReason,
+    | (typeof PERMANENT_LIBRARY_MEDIA_FAILURES)[number]
+    | (typeof RETRYABLE_LIBRARY_MEDIA_FAILURES)[number]
+  > extends never
+    ? true
+    : never;
+const _mediaFailureClassified: _MediaFailureClassified = true;
+void _mediaFailureClassified;
+
+/** Can "Try again" never fix a copy that failed for `reason`? */
+export function isPermanentLibraryMediaFailure(reason: unknown): boolean {
+  return (
+    typeof reason === "string" &&
+    (PERMANENT_LIBRARY_MEDIA_FAILURES as readonly string[]).includes(reason)
+  );
 }
 
 /**
@@ -145,6 +249,12 @@ export interface LibraryItemView extends ImportItemView {
   media?: LibraryItemMedia[];
   /** Media files whose copy failed (absent when none) — shown, never silent. */
   mediaFailed?: number;
+  /**
+   * Why they failed, each reason once (absent when none failed). When every
+   * reason `isPermanentLibraryMediaFailure` (an expired CDN link…), "Try
+   * again" cannot succeed: do not offer it.
+   */
+  mediaFailedReasons?: LibraryMediaFailureReason[];
   /**
    * When the newest failed copy was last tried (absent when none failed). A
    * `library.retryMedia` landed when this moved: tried again, kept or not.
@@ -471,6 +581,7 @@ export function readLibraryItemRead(
   const reader = readReaderStamp(r.reader);
   const blocked = readBlocked(r.blocked);
   const transcript = readTranscript(r.transcript);
+  const failure = readFailure(r.failure);
   return {
     status: r.status,
     summary: typeof r.summary === "string" ? r.summary : undefined,
@@ -480,6 +591,22 @@ export function readLibraryItemRead(
     ...(reader ? { reader } : {}),
     ...(blocked ? { blocked } : {}),
     ...(transcript ? { transcript } : {}),
+    ...(failure ? { failure } : {}),
+  };
+}
+
+function readFailure(raw: unknown): LibraryReadFailure | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const f = raw as Record<string, unknown>;
+  if (!isUrlReadFailureClass(f.class)) return undefined;
+  // `transient` is derived from the class, never trusted as stored.
+  return {
+    class: f.class,
+    transient: isTransientUrlReadFailure(f.class),
+    ...(typeof f.nextAttemptAt === "string" &&
+    !Number.isNaN(Date.parse(f.nextAttemptAt))
+      ? { nextAttemptAt: f.nextAttemptAt }
+      : {}),
   };
 }
 
@@ -519,6 +646,8 @@ export function readLibraryItemMedia(metadata: unknown): {
   failed: number;
   /** The newest `lastAttemptAt` of the failed copies (`importMediaFailures`), when any. */
   failedAt?: string;
+  /** Each known reason of the failed copies once, in vocabulary order (empty when none). */
+  failedReasons: LibraryMediaFailureReason[];
 } {
   const m =
     metadata && typeof metadata === "object"
@@ -545,16 +674,25 @@ export function readLibraryItemMedia(metadata: unknown): {
       ? Math.floor(m.importMediaFailed)
       : 0;
   let failedAt: string | undefined;
+  const reasons = new Set<string>();
   for (const f of Array.isArray(m.importMediaFailures)
     ? m.importMediaFailures
     : []) {
-    const at =
-      f && typeof f === "object"
-        ? (f as Record<string, unknown>).lastAttemptAt
-        : undefined;
+    if (!f || typeof f !== "object") continue;
+    const at = (f as Record<string, unknown>).lastAttemptAt;
     if (typeof at === "string" && (!failedAt || at > failedAt)) failedAt = at;
+    const reason = (f as Record<string, unknown>).reason;
+    if (typeof reason === "string") reasons.add(reason);
   }
-  return { media, failed, ...(failed && failedAt ? { failedAt } : {}) };
+  const failedReasons = failed
+    ? LIBRARY_MEDIA_FAILURE_REASONS.filter((r) => reasons.has(r))
+    : [];
+  return {
+    media,
+    failed,
+    ...(failed && failedAt ? { failedAt } : {}),
+    failedReasons,
+  };
 }
 
 /** True when the item still waits for the light read. */

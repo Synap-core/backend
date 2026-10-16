@@ -66,6 +66,72 @@ export const URL_READ_NEXT_STEPS = [
 ] as const;
 export type UrlReadNextStep = (typeof URL_READ_NEXT_STEPS)[number];
 
+/**
+ * Why a read FAILED (status `failed`), as a closed class — the retry question,
+ * never prose. Transient classes ({@link TRANSIENT_URL_READ_FAILURES}) are
+ * worth trying again later and never make an item unreadable; the rest are
+ * this reader's answer for this link.
+ *
+ *   rate_limited     — the site or vendor said "later" (HTTP 429 / 408)
+ *   unavailable      — the site, vendor or a pod dependency (the IS) is down
+ *                      or answered 5xx
+ *   network          — the request never got an answer (DNS, connect, timeout)
+ *   extract_busy     — the pod's page extractor was full
+ *   extract_timeout  — extraction ran past its deadline
+ *   extract_failed   — the extractor worker crashed or could not start
+ *   auth             — the reader's account was refused (reconnect it)
+ *   refused          — the site or reader refused THIS request (a 4xx,
+ *                      a permission, an invalid input)
+ *   bad_output       — the reader answered with nothing usable
+ *   unknown          — classified by nobody (never guessed transient)
+ */
+export const URL_READ_FAILURE_CLASSES = [
+  "rate_limited",
+  "unavailable",
+  "network",
+  "extract_busy",
+  "extract_timeout",
+  "extract_failed",
+  "auth",
+  "refused",
+  "bad_output",
+  "unknown",
+] as const;
+export type UrlReadFailureClass = (typeof URL_READ_FAILURE_CLASSES)[number];
+
+/** The failure classes a later try can fix. */
+export const TRANSIENT_URL_READ_FAILURES = [
+  "rate_limited",
+  "unavailable",
+  "network",
+  "extract_busy",
+  "extract_timeout",
+  "extract_failed",
+] as const satisfies readonly UrlReadFailureClass[];
+
+/** Is this failure class worth trying again later (never "unreadable")? */
+export function isTransientUrlReadFailure(
+  value: unknown
+): value is (typeof TRANSIENT_URL_READ_FAILURES)[number] {
+  return (
+    typeof value === "string" &&
+    (TRANSIENT_URL_READ_FAILURES as readonly string[]).includes(value)
+  );
+}
+
+/** Is this raw value a {@link UrlReadFailureClass} this build knows? */
+export function isUrlReadFailureClass(
+  value: unknown
+): value is UrlReadFailureClass {
+  return (
+    typeof value === "string" &&
+    (URL_READ_FAILURE_CLASSES as readonly string[]).includes(value)
+  );
+}
+
+/** Longest wait a reader may ask for (`retryAfterSec`), one day. */
+export const URL_READ_RETRY_AFTER_MAX_SEC = 86_400;
+
 /** Who read it. Stamped by the door that ran the reader — a reader never self-stamps. */
 export interface ReaderStamp {
   /** `builtin:<rung>` (builtin:oembed, builtin:article, builtin:page, builtin:adapter:<site>) or a verb id */
@@ -103,6 +169,13 @@ export interface UrlRead {
   };
   /** status "failed" only */
   error?: string;
+  /** status "failed" only: why, as a class (absent = unclassified, read as `unknown`). */
+  errorClass?: UrlReadFailureClass;
+  /**
+   * Seconds the site or vendor asked the pod to wait before trying again
+   * (`Retry-After`), on a `failed` read or a `blocked … retry_later` one.
+   */
+  retryAfterSec?: number;
 }
 
 // ───────────────────────────── normalize ─────────────────────────────
@@ -166,12 +239,20 @@ function normalizeUnsafe(
     );
   }
 
+  const retryAfterSec = retryAfter(raw.retryAfterSec);
   if (status === "failed") {
-    return failed(
-      sourceUrl,
-      via,
-      str(raw.error, DETAIL_MAX) ?? "reader failed without saying why"
-    );
+    const errorClass = isUrlReadFailureClass(raw.errorClass)
+      ? raw.errorClass
+      : undefined;
+    return {
+      ...failed(
+        sourceUrl,
+        via,
+        str(raw.error, DETAIL_MAX) ?? "reader failed without saying why",
+        errorClass ?? "unknown"
+      ),
+      ...(retryAfterSec ? { retryAfterSec } : {}),
+    };
   }
 
   const out: UrlRead = { status, sourceUrl, via };
@@ -195,6 +276,9 @@ function normalizeUnsafe(
       ...(nextStep ? { nextStep } : {}),
       ...(detail ? { detail } : {}),
     };
+    if (retryAfterSec && nextStep === "retry_later") {
+      out.retryAfterSec = retryAfterSec;
+    }
     return out;
   }
 
@@ -314,8 +398,19 @@ function normalizeFields(raw: unknown): UrlRead["fields"] | undefined {
   return n ? out : undefined;
 }
 
-function failed(sourceUrl: string, via: ReaderStamp, error: string): UrlRead {
-  return { status: "failed", sourceUrl, via, error };
+function failed(
+  sourceUrl: string,
+  via: ReaderStamp,
+  error: string,
+  errorClass: UrlReadFailureClass = "bad_output"
+): UrlRead {
+  return { status: "failed", sourceUrl, via, error, errorClass };
+}
+
+function retryAfter(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(Math.ceil(value), URL_READ_RETRY_AFTER_MAX_SEC)
+    : undefined;
 }
 
 // ───────────────────────────── URL patterns ─────────────────────────────

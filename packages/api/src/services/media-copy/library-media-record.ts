@@ -13,18 +13,29 @@ import {
   type UrlReadMedia,
 } from "@synap-core/types/url-read";
 import {
+  isPermanentLibraryMediaFailure,
   readLibraryItemMedia,
   type LibraryItemMedia,
+  type LibraryMediaFailureReason,
 } from "@synap-core/types/imports";
-import {
-  PERMANENT_FETCH_FAILURES,
-  type ImageFetchFailure,
-} from "./fetch-image.js";
+import type { ImageFetchFailure } from "./fetch-image.js";
 import type { VideoFetchFailure } from "./fetch-video.js";
 import { MAX_TRANSIENT_ATTEMPTS } from "./media-plan.js";
 
-export type LibraryMediaFailureReason =
-  ImageFetchFailure | VideoFetchFailure | "store_unavailable";
+export type { LibraryMediaFailureReason };
+
+// Every reason a fetch can return is in the stored vocabulary
+// (`LIBRARY_MEDIA_FAILURE_REASONS`, which clients read): a new fetch reason
+// that is not stops the build.
+type _FetchReasonsStored =
+  Exclude<
+    ImageFetchFailure | VideoFetchFailure | "store_unavailable",
+    LibraryMediaFailureReason
+  > extends never
+    ? true
+    : never;
+const _fetchReasonsStored: _FetchReasonsStored = true;
+void _fetchReasonsStored;
 
 /** One URL the item could not copy (`metadata.importMediaFailures[]`). */
 export interface LibraryMediaFailure {
@@ -37,12 +48,6 @@ export interface LibraryMediaFailure {
   order?: number;
   role?: UrlReadMedia["role"];
 }
-
-/** Refusals a retry cannot change — never fetched again for this item. */
-export const PERMANENT_LIBRARY_MEDIA_FAILURES: ReadonlySet<string> = new Set([
-  ...PERMANENT_FETCH_FAILURES,
-  "not_video",
-]);
 
 /** The reader's media, cleaned: http(s), one per URL, ordered, capped. */
 export function planLibraryMedia(
@@ -101,7 +106,7 @@ export function owedLibraryMedia(
     if (copied.has(m.url)) return false;
     const f = failed.get(m.url);
     if (!f || f.reason === "store_unavailable") return true;
-    if (PERMANENT_LIBRARY_MEDIA_FAILURES.has(f.reason)) return false;
+    if (isPermanentLibraryMediaFailure(f.reason)) return false;
     return f.attempts < MAX_TRANSIENT_ATTEMPTS;
   });
 }

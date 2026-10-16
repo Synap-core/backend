@@ -701,10 +701,13 @@ describe("retryLibraryItemMedia (the person's Try again)", () => {
     const view = await viewOf(id);
     expect(view?.mediaFailed).toBe(1);
     expect(view?.mediaFailedAt).toBe(at);
+    // The reason reaches the client: an expired link is permanent, so a
+    // client offers no "Try again" that cannot work.
+    expect(view?.mediaFailedReasons).toEqual(["expired"]);
     expect((await metaOf(id)).importMediaFailures).toMatchObject([
       {
         sourceUrl: IMG1,
-        reason: "http_4xx",
+        reason: "expired",
         attempts: 2,
         order: 0,
         role: "cover",

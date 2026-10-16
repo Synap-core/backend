@@ -116,6 +116,7 @@ function safeRead(
   return adapter.read(url, ctx).catch((err: unknown): SiteRead => ({
     status: "failed",
     error: `${adapter.name} reader crashed: ${err instanceof Error ? err.message : String(err)}`,
+    errorClass: "unknown",
   }));
 }
 
@@ -129,7 +130,7 @@ export async function readBuiltin(
   const sourceUrl = url ?? input.trim();
   if (!url) {
     return normalizeUrlRead(
-      { status: "failed", error: "not an http(s) URL" },
+      { status: "failed", error: "not an http(s) URL", errorClass: "refused" },
       sourceUrl,
       builtinStamp("policy", now)
     );

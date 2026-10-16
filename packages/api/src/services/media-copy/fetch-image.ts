@@ -32,6 +32,7 @@ import {
   sniffImageType,
   type CopiedImageMime,
 } from "./image-sniff.js";
+import { PERMANENT_LIBRARY_MEDIA_FAILURES } from "@synap-core/types/imports";
 
 /** Images up to 25 MB: a large photo fits, a video or a dump does not. */
 export const MEDIA_COPY_MAX_BYTES = 25 * 1024 * 1024;
@@ -47,6 +48,8 @@ const REDIRECT_HOPS = 3;
 
 export type ImageFetchFailure =
   | "blocked"
+  /** 403 / 404 / 410: the link no longer serves the file (an expired CDN signature). */
+  | "expired"
   | "http_4xx"
   /** 408 Request Timeout / 429 Too Many Requests: the server says "later". */
   | "http_retry_later"
@@ -57,9 +60,13 @@ export type ImageFetchFailure =
   | "timeout"
   | "fetch_failed";
 
-/** Reasons a retry cannot change — recorded once, never fetched again. */
-export const PERMANENT_FETCH_FAILURES: ReadonlySet<ImageFetchFailure> = new Set(
-  ["blocked", "http_4xx", "too_large", "not_image", "empty"]
+/**
+ * Reasons a retry cannot change — recorded once, never fetched again. THE
+ * list is the stored vocabulary's (`PERMANENT_LIBRARY_MEDIA_FAILURES`, which
+ * clients read to hide a "Try again" that cannot work).
+ */
+export const PERMANENT_FETCH_FAILURES: ReadonlySet<string> = new Set(
+  PERMANENT_LIBRARY_MEDIA_FAILURES
 );
 
 export type ImageFetchResult =
@@ -192,7 +199,9 @@ export async function openGuardedMedia(
           ? "http_5xx"
           : res.status === 408 || res.status === 429
             ? "http_retry_later"
-            : "http_4xx",
+            : res.status === 403 || res.status === 404 || res.status === 410
+              ? "expired"
+              : "http_4xx",
     };
   }
   const declared = Number(res.headers.get("content-length"));

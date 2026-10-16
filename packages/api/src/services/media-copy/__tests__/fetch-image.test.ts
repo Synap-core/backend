@@ -150,11 +150,21 @@ describe("fetchExternalImage", () => {
   });
 
   it("classifies HTTP errors", async () => {
+    // A link that no longer serves the file (an expired CDN signature) is
+    // `expired`, not the generic 4xx — a client hides "Try again" for it.
+    for (const status of [403, 404, 410]) {
+      expect(
+        await fetchExternalImage(URL_OK, {
+          fetch: streamed([], { status }).fetch,
+        })
+      ).toEqual({ ok: false, reason: "expired" });
+    }
     expect(
       await fetchExternalImage(URL_OK, {
-        fetch: streamed([], { status: 404 }).fetch,
+        fetch: streamed([], { status: 400 }).fetch,
       })
     ).toEqual({ ok: false, reason: "http_4xx" });
+    expect(PERMANENT_FETCH_FAILURES.has("expired")).toBe(true);
     expect(
       await fetchExternalImage(URL_OK, {
         fetch: streamed([], { status: 503 }).fetch,
@@ -249,7 +259,7 @@ describe("fetchGuardedBytes (any file through the same guarded door)", () => {
         timeoutMs: 5_000,
         fetch: streamed([PDF], { status: 404 }).fetch,
       })
-    ).toEqual({ ok: false, reason: "http_4xx" });
+    ).toEqual({ ok: false, reason: "expired" });
   });
 
   it("a private address never reaches the fetcher (the real SSRF guard)", async () => {
