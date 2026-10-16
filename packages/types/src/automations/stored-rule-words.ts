@@ -21,6 +21,7 @@
 
 import {
   humanizeToken,
+  nounInSentence,
   resolveActionLabel,
   resolveObjectNoun,
 } from "../vocabulary/index.js";
@@ -45,11 +46,26 @@ function sentenceStart(s: string): string {
 }
 
 /**
+ * The object a WHEN names, mid-sentence ("person or company"), or null when it
+ * names no kind. `entity` is the pod's word for "a record of any kind": it
+ * tells a person nothing, so a rule watching every kind names no object and
+ * reads "Something was moved" instead of "An entity was moved".
+ */
+function whenNoun(kinds: readonly string[], subject: string): string | null {
+  const named = (kinds.length ? kinds : [subject]).filter(
+    (k) => k && k.toLowerCase() !== "entity"
+  );
+  if (!named.length) return null;
+  return named.map((k) => nounInSentence(resolveObjectNoun(k))).join(" or ");
+}
+
+/**
  * The WHEN a first-party event pattern reads as, PAST mood.
  *
  *   ("entity.create.completed", ["person"])      → "A person was created"
  *   ("entity.*", ["task"])                        → "Any task activity"
  *   ("invoice.update.completed", ["invoice"])     → "An invoice was updated"
+ *   ("entity.transition.completed", [])           → "Something was moved"
  *
  * `kinds` are the object kinds the rule concerns (profile slugs, else the
  * pattern's subject); several read "a person or company". Empty → the
@@ -60,13 +76,12 @@ export function eventPatternWhenText(
   kinds: readonly string[] = []
 ): string {
   const [subject = "", action = ""] = pattern.split(".");
-  const noun = (kinds.length ? kinds : [subject || "entity"])
-    .map((k) => resolveObjectNoun(k).toLowerCase())
-    .join(" or ");
+  const noun = whenNoun(kinds, subject);
   // Full/action wildcard ("<subject>.*", "<subject>.<action>.*") — no single verb.
-  if (!action || action === "*") return `Any ${noun} activity`;
+  if (!action || action === "*")
+    return noun ? `Any ${noun} activity` : "Any activity";
   const past = resolveActionLabel(action, "past").toLowerCase();
-  return `${sentenceStart(withArticle(noun))} was ${past}`;
+  return `${noun ? sentenceStart(withArticle(noun)) : "Something"} was ${past}`;
 }
 
 /**
@@ -212,9 +227,7 @@ export function ruleWhenWords(
     : subject && subject !== "entity"
       ? [subject]
       : [];
-  const noun = (watches.length ? watches : [subject || "entity"])
-    .map((k) => resolveObjectNoun(k).toLowerCase())
-    .join(" or ");
+  const noun = whenNoun(watches, subject);
   return {
     text: eventPatternWhenText(pattern, watches),
     noun,
