@@ -1935,7 +1935,7 @@ try {
 
           // IoC: after each official catalog sync (10 min), converge the
           // installed capabilities whose template a publish changed — the
-          // boot reconcile's door, narrowed (OV-05). Deferred drift surfaces
+          // boot reconcile's door, narrowed. Deferred drift surfaces
           // as the same grouped bell item.
           {
             const { registerOfficialCatalogSyncedHandler } =

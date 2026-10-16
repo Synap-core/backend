@@ -612,7 +612,7 @@ export function bestUrlPatternSpecificity(
 // ───────────────────────────── fetch policy ──────────────────────────────
 
 /**
- * Hosts whose PAGES the pod never fetches itself (decision P1): Instagram
+ * Hosts whose PAGES the pod never fetches itself (a product decision): Instagram
  * and TikTok. A reader the person installed may read them, on their account,
  * after their tap — never the pod's own page fetch. (TikTok's official oEmbed
  * endpoint is an API call, not a page fetch; the pod's TikTok adapter uses

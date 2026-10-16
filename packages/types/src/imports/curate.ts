@@ -320,7 +320,7 @@ export function importPlatformOf(url: string): ImportPlatform | null {
 
 /**
  * What Build can read for a source, decided from metadata only.
- * A page the pod never fetches itself (`POD_NEVER_FETCHES`, decision P1:
+ * A page the pod never fetches itself (`POD_NEVER_FETCHES`:
  * Instagram, TikTok) is `needs_file`: its content arrives as a file the
  * person provides, or through a reader the person installed, on their
  * account, after their tap. `platform` is the mark/label table only; the

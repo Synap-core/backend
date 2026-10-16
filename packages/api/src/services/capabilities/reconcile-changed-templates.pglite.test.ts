@@ -1,5 +1,5 @@
 /**
- * OV-05: a catalog publish reaches pods that already installed the pack.
+ * A catalog publish reaches pods that already installed the pack.
  *
  * After each official catalog sync the api converges the installed
  * containers whose template the cache now holds at a DIFFERENT content hash
@@ -133,7 +133,7 @@ beforeEach(async () => {
   await container(GONE, { templateKey: "retired-pack", contentHash: "h-x" });
 });
 
-describe("after a catalog publish, installed templates converge (OV-05)", () => {
+describe("after a catalog publish, installed templates converge", () => {
   it("picks only the container whose template changed", async () => {
     expect((await containersWithChangedTemplates()).map((c) => c.id)).toEqual([
       CHANGED,

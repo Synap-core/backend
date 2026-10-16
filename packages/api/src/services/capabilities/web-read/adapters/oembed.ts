@@ -125,7 +125,7 @@ export const tiktokAdapter: SiteAdapter = {
   async read(url, ctx) {
     const r = await readOembed(tiktokOembed(new URL(url)), ctx, "TikTok");
     if (r === null) {
-      // The pod never fetches the TikTok page itself (P1): a reader the
+      // The pod never fetches the TikTok page itself (`POD_NEVER_FETCHES`): a reader the
       // person installs can.
       return siteBlocked(
         "needs_reader",

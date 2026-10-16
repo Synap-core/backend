@@ -294,7 +294,7 @@ describe("the url-reader door over real rows", () => {
 
   // LAST: it turns the pack on. The offers are cached briefly; the door that
   // turns a verb on must drop that cache, or the person who just tapped
-  // "Turn on" is told "Turn on" again (R1 M2).
+  // "Turn on" is told "Turn on" again.
   it("turning the reader on through its door is seen by the very next resolve", async () => {
     await q(
       `update workspace_members set role = 'owner' where workspace_id = $1 and user_id = $2`,

@@ -30,7 +30,13 @@ export type PresentationFamily = (typeof PRESENTATION_FAMILIES)[number];
  * embeds and media tiles are NOT altitudes: they are the `card` altitude drawn
  * at the size the host gives it.
  */
-export const ENTITY_ALTITUDES = ["chip", "row", "card", "peek", "page"] as const;
+export const ENTITY_ALTITUDES = [
+  "chip",
+  "row",
+  "card",
+  "peek",
+  "page",
+] as const;
 export type EntityAltitude = (typeof ENTITY_ALTITUDES)[number];
 
 /** Density of the `card` altitude. */
@@ -109,7 +115,7 @@ export const INLINE_IMAGE_MIME_TYPES = [
 ] as const;
 
 /**
- * Video containers played inline in a `<video>` (founder decision D5). A
+ * Video containers played inline in a `<video>`. A
  * SEPARATE list from {@link INLINE_IMAGE_MIME_TYPES} on purpose: that list gates
  * `<img>`, and a video mime must never reach an `<img>` (or vice versa). A
  * `<video>` only ever DECODES its bytes as frames — it never renders its source
@@ -143,16 +149,22 @@ export type PresentationIssue = { path: string; message: string };
  * the issues. Unknown keys are dropped.
  */
 export function parseProfilePresentation(
-  value: unknown,
+  value: unknown
 ):
   | { ok: true; value: ProfilePresentation }
   | { ok: false; issues: PresentationIssue[] } {
   const issues: PresentationIssue[] = [];
   if (!isRecord(value)) {
-    return { ok: false, issues: [{ path: "presentation", message: "must be an object" }] };
+    return {
+      ok: false,
+      issues: [{ path: "presentation", message: "must be an object" }],
+    };
   }
   const family = value.family;
-  if (typeof family !== "string" || !(PRESENTATION_FAMILIES as readonly string[]).includes(family)) {
+  if (
+    typeof family !== "string" ||
+    !(PRESENTATION_FAMILIES as readonly string[]).includes(family)
+  ) {
     issues.push({
       path: "presentation.family",
       message: `must be one of ${PRESENTATION_FAMILIES.join(", ")}`,
@@ -163,25 +175,44 @@ export function parseProfilePresentation(
   if (value.media !== undefined) {
     const media = value.media;
     if (!isRecord(media) || !isRecord(media.source)) {
-      issues.push({ path: "presentation.media.source", message: "must be an object" });
+      issues.push({
+        path: "presentation.media.source",
+        message: "must be an object",
+      });
     } else {
-      const source = parseMediaSource(media.source, "presentation.media.source", issues);
+      const source = parseMediaSource(
+        media.source,
+        "presentation.media.source",
+        issues
+      );
       let fallbacks: PresentationMediaSource[] | undefined;
       if (media.fallbacks !== undefined) {
         if (!Array.isArray(media.fallbacks) || media.fallbacks.length === 0) {
-          issues.push({ path: "presentation.media.fallbacks", message: "must be a non-empty list of sources" });
+          issues.push({
+            path: "presentation.media.fallbacks",
+            message: "must be a non-empty list of sources",
+          });
         } else if (media.fallbacks.length > MAX_MEDIA_FALLBACKS) {
-          issues.push({ path: "presentation.media.fallbacks", message: `at most ${MAX_MEDIA_FALLBACKS} fallbacks` });
+          issues.push({
+            path: "presentation.media.fallbacks",
+            message: `at most ${MAX_MEDIA_FALLBACKS} fallbacks`,
+          });
         } else {
           fallbacks = [];
           const seen = new Set(source ? [mediaSourceKey(source)] : []);
           media.fallbacks.forEach((f, i) => {
             const path = `presentation.media.fallbacks.${i}`;
-            const parsed = isRecord(f) ? parseMediaSource(f, path, issues) : undefined;
-            if (!isRecord(f)) issues.push({ path, message: "must be an object" });
+            const parsed = isRecord(f)
+              ? parseMediaSource(f, path, issues)
+              : undefined;
+            if (!isRecord(f))
+              issues.push({ path, message: "must be an object" });
             if (!parsed) return;
             if (seen.has(mediaSourceKey(parsed))) {
-              issues.push({ path, message: "repeats a source already declared" });
+              issues.push({
+                path,
+                message: "repeats a source already declared",
+              });
               return;
             }
             seen.add(mediaSourceKey(parsed));
@@ -191,7 +222,10 @@ export function parseProfilePresentation(
       }
       const kind = media.kind ?? "auto";
       if (kind !== "image" && kind !== "video" && kind !== "auto") {
-        issues.push({ path: "presentation.media.kind", message: "must be image, video or auto" });
+        issues.push({
+          path: "presentation.media.kind",
+          message: "must be image, video or auto",
+        });
       }
       if (source)
         out.media = {
@@ -205,14 +239,20 @@ export function parseProfilePresentation(
   if (value.fields !== undefined) {
     const fields = value.fields;
     if (!isRecord(fields)) {
-      issues.push({ path: "presentation.fields", message: "must be an object" });
+      issues.push({
+        path: "presentation.fields",
+        message: "must be an object",
+      });
     } else {
       const outFields: { card?: string[]; row?: string[] } = {};
       for (const alt of ["card", "row"] as const) {
         const list = fields[alt];
         if (list === undefined) continue;
         if (!Array.isArray(list) || !list.every(nonEmpty)) {
-          issues.push({ path: `presentation.fields.${alt}`, message: "must be a list of property slugs" });
+          issues.push({
+            path: `presentation.fields.${alt}`,
+            message: "must be a list of property slugs",
+          });
           continue;
         }
         if (list.length > PRESENTATION_FIELD_CAPS[alt]) {
@@ -238,7 +278,7 @@ export function parseProfilePresentation(
  * through here, so "what does this kind declare" has one answer.
  */
 export function presentationFromUiHints(
-  uiHints: unknown,
+  uiHints: unknown
 ): ProfilePresentation | null {
   if (!isRecord(uiHints) || uiHints.presentation === undefined) return null;
   const parsed = parseProfilePresentation(uiHints.presentation);
@@ -255,7 +295,7 @@ export const MAX_MEDIA_FALLBACKS = 3;
  * validator all read it).
  */
 export function declaredMediaSources(
-  presentation: ProfilePresentation | null | undefined,
+  presentation: ProfilePresentation | null | undefined
 ): PresentationMediaSource[] {
   const media = presentation?.media;
   return media ? [media.source, ...(media.fallbacks ?? [])] : [];
@@ -264,19 +304,30 @@ export function declaredMediaSources(
 function parseMediaSource(
   src: Record<string, unknown>,
   path: string,
-  issues: PresentationIssue[],
+  issues: PresentationIssue[]
 ): PresentationMediaSource | undefined {
-  const keys = ["property", "documentId", "entityRef"].filter((k) => src[k] !== undefined);
+  const keys = ["property", "documentId", "entityRef"].filter(
+    (k) => src[k] !== undefined
+  );
   if (keys.length !== 1) {
-    issues.push({ path, message: "must have exactly one of property, documentId, entityRef" });
+    issues.push({
+      path,
+      message: "must have exactly one of property, documentId, entityRef",
+    });
     return undefined;
   }
-  if (keys[0] === "property" && nonEmpty(src.property)) return { property: src.property };
-  if (keys[0] === "documentId" && src.documentId === true) return { documentId: true };
-  if (keys[0] === "entityRef" && nonEmpty(src.entityRef)) return { entityRef: src.entityRef };
+  if (keys[0] === "property" && nonEmpty(src.property))
+    return { property: src.property };
+  if (keys[0] === "documentId" && src.documentId === true)
+    return { documentId: true };
+  if (keys[0] === "entityRef" && nonEmpty(src.entityRef))
+    return { entityRef: src.entityRef };
   issues.push({
     path: `${path}.${keys[0]}`,
-    message: keys[0] === "documentId" ? "must be true" : "must be a non-empty property slug",
+    message:
+      keys[0] === "documentId"
+        ? "must be true"
+        : "must be a non-empty property slug",
   });
   return undefined;
 }
@@ -292,7 +343,10 @@ export function readEntityMediaCopies(systemData: unknown): EntityMediaCopy[] {
   if (!isRecord(systemData) || !Array.isArray(systemData.media)) return [];
   return systemData.media.filter(
     (m): m is EntityMediaCopy =>
-      isRecord(m) && nonEmpty(m.documentId) && nonEmpty(m.mime) && nonEmpty(m.sourceUrl),
+      isRecord(m) &&
+      nonEmpty(m.documentId) &&
+      nonEmpty(m.mime) &&
+      nonEmpty(m.sourceUrl)
   );
 }
 

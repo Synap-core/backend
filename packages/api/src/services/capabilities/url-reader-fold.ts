@@ -85,7 +85,7 @@ export function compareReaders(a: RankedReader, b: RankedReader): number {
 
 /**
  * The built-in candidate for `url`, or null for a URL the pod never fetches
- * and no built-in site adapter declares (Instagram — decision P1). TikTok
+ * and no built-in site adapter declares (Instagram — see `POD_NEVER_FETCHES`). TikTok
  * keeps it: its official oEmbed is an adapter, not a page fetch.
  */
 function builtinCandidate(url: string): RankedReader | null {

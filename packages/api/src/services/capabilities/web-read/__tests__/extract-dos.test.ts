@@ -1,5 +1,5 @@
 /**
- * Hostile pages cannot pin the pod's CPU (R2-B1). Each case was measured on
+ * Hostile pages cannot pin the pod's CPU. Each case was measured on
  * the pre-fix code; the bound asserted is WALL time on the caller's side.
  *
  *  - 2 000 nested `<div>` (10 KB): defuddle took 25.7 s → now the DOM shape

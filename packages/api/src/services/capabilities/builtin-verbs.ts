@@ -3808,7 +3808,7 @@ const propertyDefProposeRetireHandler: BuiltinVerbHandler = async (
   });
 };
 
-// ── Read one link (Web Access W0 · "Any link → data") ─────────────────────────
+// ── Read one link ("Any link → data") ──────────────────────────────────────────
 //
 // `web.read` is the AGENT's door onto the ONE url-reader door (`readUrl`,
 // url-readers.ts): the pod's free built-in ladder, or a reader verb the person

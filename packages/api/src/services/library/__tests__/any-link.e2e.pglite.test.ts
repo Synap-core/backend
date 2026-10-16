@@ -1,5 +1,5 @@
 /**
- * "ANY LINK → DATA", end to end — the founder's acceptance criterion as ONE
+ * "ANY LINK → DATA", end to end — what a kept link must become, as ONE
  * chain on a real Postgres (PGlite, every table of the Drizzle schema):
  *
  *   An Instagram carousel kept from the phone ends in the Library with its

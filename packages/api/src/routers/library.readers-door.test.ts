@@ -101,7 +101,7 @@ describe("library.readWith is the person's tap only", () => {
     });
   }
 
-  it("tRPC threads the caller: an agent's offers stay lensed (R2-M1)", async () => {
+  it("tRPC threads the caller: an agent's offers stay lensed", async () => {
     await caller({ agentUserId: "agent-1" }).readers({ itemId: ITEM });
     await caller({ keyType: "is_internal" }).readers({ itemId: ITEM });
     await caller().readers({ itemId: ITEM });
@@ -171,7 +171,7 @@ describe("Hub REST /library/readers", () => {
     });
   });
 
-  it("threads the caller: an agent's offers stay lensed (R2-M1)", async () => {
+  it("threads the caller: an agent's offers stay lensed", async () => {
     await appAs({ agentUserId: "agent-1" }).request(
       `/library/readers?itemId=${ITEM}`
     );
@@ -220,7 +220,7 @@ describe("Hub REST /library/readers", () => {
   });
 });
 
-describe("per-person rate limits on the reader doors (S1)", () => {
+describe("per-person rate limits on the reader doors", () => {
   it("retryMedia: the person's taps past the limit are TOO_MANY_REQUESTS before the service; another person is untouched", async () => {
     const { LIBRARY_READER_DOOR_LIMITS } =
       await import("../services/library/door-limits.js");

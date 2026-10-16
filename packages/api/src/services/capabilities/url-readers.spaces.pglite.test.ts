@@ -210,7 +210,7 @@ describe("the reader door sees every space the person can see", () => {
     ]);
   });
 
-  // The person's tap names the reader: automatic reads never run an installed one (OV-04).
+  // The person's tap names the reader: automatic reads never run an installed one.
   it("a pod-wide Library item (allSpaces, workspaceId null) reads with S's reader, run IN S", async () => {
     const { d, execute } = spyDeps();
     const r = await readUrl(

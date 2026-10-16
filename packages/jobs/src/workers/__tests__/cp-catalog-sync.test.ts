@@ -890,7 +890,7 @@ describe("handleCpCatalogSync — sources", () => {
   });
 });
 
-describe("handleCpCatalogSync — installed capabilities converge after a publish (OV-05)", () => {
+describe("handleCpCatalogSync — installed capabilities converge after a publish", () => {
   it("runs the registered after-sync handler once the official source synced; its failure never fails the sync", async () => {
     fetchMock.mockResolvedValue({
       ok: true,

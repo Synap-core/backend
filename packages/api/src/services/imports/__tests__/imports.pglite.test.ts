@@ -35,7 +35,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // The pod's network, seen from the SSRF doors: staging's default reader
-// (`readBuiltin`) must never request an Instagram/TikTok page (decision P1).
+// (`readBuiltin`) must never request an Instagram/TikTok page (`POD_NEVER_FETCHES`).
 // Every request is recorded and refused, so nothing leaves the test.
 vi.mock("@synap/shared-utils", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -281,7 +281,7 @@ describe("an import is a RUN, never the ambient work session", () => {
 });
 
 describe("stage", () => {
-  it("the default staging read never requests an Instagram or TikTok page (P1), and reads other pages through the pinned door", async () => {
+  it("the default staging read never requests an Instagram or TikTok page, and reads other pages through the pinned door", async () => {
     h.netRequests.length = 0;
     const { sessionId: _s } = await openImportSession({
       userId: USER,

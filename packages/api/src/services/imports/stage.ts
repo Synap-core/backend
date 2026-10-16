@@ -7,7 +7,7 @@
  *     `metadata.importItem` (title, a SHORT description, cover image, author)
  *     from the pod's built-in reader ladder (`readBuiltin`: site adapters, then
  *     the page through the DNS-pinned SSRF door — never a host the pod does
- *     not fetch, decision P1) or from the page the person's browser sent
+ *     not fetch, `POD_NEVER_FETCHES`) or from the page the person's browser sent
  *     (`readSentPage`, no request). The page body is never stored here: the
  *     light read reads it later;
  *   - typed text keeps the text (the person wrote it — it is the item);

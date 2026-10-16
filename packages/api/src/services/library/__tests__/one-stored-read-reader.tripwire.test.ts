@@ -5,7 +5,7 @@
  * pod, the sweep, Build and every client. Hand-parsing it at a call site
  * (`(metadata as …).importRead as …`) is how `storedReadTextKey` and
  * `awaitsLightRead` came to disagree with `isFinal` about what "not read"
- * means (Q1 MAJOR 1). The readers are `libraryItemOf` / `libraryItemUrl` /
+ * means. The readers are `libraryItemOf` / `libraryItemUrl` /
  * `readLibraryItemRead` / `readLibraryItemMedia` (`@synap-core/types/imports`)
  * and, for the pod's bookkeeping, `readStoredLibraryRead`
  * (`light-read-store.ts`, the one file allowed to touch the bag — it holds

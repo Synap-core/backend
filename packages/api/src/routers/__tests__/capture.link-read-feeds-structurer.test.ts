@@ -1,12 +1,12 @@
 /**
- * Web Access W0 — "capture reads for real": capturing an article URL hands the
+ * "Capture reads for real": capturing an article URL hands the
  * page's TEXT to the structurer, through the one url-reader door.
  *
  * Driven through the REAL `capture.structure` procedure → the real `readUrl`
  * (real `listCapabilities` over an empty registry, real catalog-cache read) →
  * the real built-in ladder (`readBuiltin` → article extraction). Only the
  * network (`safePublicFetch`) answers from a fixture, and the IS client records
- * the input it is handed. Before W0 the read was only echoed back to the client
+ * the input it is handed. Before, the read was only echoed back to the client
  * as `reader`; the structurer saw the bare URL.
  *
  * Stubbed at module boundaries otherwise (same harness as

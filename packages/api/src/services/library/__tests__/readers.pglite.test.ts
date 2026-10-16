@@ -241,7 +241,7 @@ describe("library.readers — one item", () => {
   });
 
   it("an AGENT caller keeps the item's lens: never every space (item AND group)", async () => {
-    // R2-M1: `readsAllSpaces` is false for an agent — the ctx the door gets
+    // `readsAllSpaces` is false for an agent — the ctx the door gets
     // must carry the agent and must not ask for every space.
     const g = await group();
     const ig = await item({

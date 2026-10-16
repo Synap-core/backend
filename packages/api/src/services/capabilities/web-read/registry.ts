@@ -24,7 +24,7 @@ import { wikipediaAdapter } from "./adapters/wikipedia.js";
 import { xAdapter } from "./adapters/x.js";
 
 /** Every built-in site adapter. A new site joins routing by being listed here. */
-// The fetch policy (decision P1) lives in the url-read leaf, stated once.
+// The fetch policy (`POD_NEVER_FETCHES`) lives in the url-read leaf, stated once.
 export { POD_NEVER_FETCHES, podNeverFetches } from "@synap-core/types/url-read";
 
 export const SITE_ADAPTERS: readonly SiteAdapter[] = [

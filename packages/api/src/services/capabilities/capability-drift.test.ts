@@ -238,7 +238,7 @@ describe("projectUrlPatterns — the reader URLs the applier writes", () => {
     ).toBeNull();
   });
 
-  // OV-04: the gate holds at the POD, whatever a third-party catalog sent.
+  // The gate holds at the POD, whatever a third-party catalog sent.
   it("a verb that is not a readOnly read_webpage verb is never a reader", () => {
     const urls = ["instagram.com/p/*"];
     expect(

@@ -1,5 +1,5 @@
 /**
- * OV-04 at the APPLIER: what a definition may make a reader.
+ * At the APPLIER: what a definition may make a reader.
  *
  * A pack from any catalog source installs through `createCapabilityFromDefinition`.
  * Driven through it against PGlite (every schema table), asserting the stored
@@ -139,7 +139,7 @@ beforeEach(async () => {
   await h.client!.exec(`delete from skills;`);
 });
 
-describe("the applier decides what may become a reader (OV-04)", () => {
+describe("the applier decides what may become a reader", () => {
   it("a third-party reader keeps only its narrow patterns; the official vendor keeps all", async () => {
     await apply("third-party", { name: "tp_read", ...READER, urls: URLS });
     expect(await patternsOf("tp_read")).toEqual([["news.example.org/a/*"]]);

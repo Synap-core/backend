@@ -296,7 +296,7 @@ describe("foldUrlReaders — who can read this link", () => {
     expect(offer!.state).toBe("connect");
   });
 
-  it("a provider this pod's broker does not offer is `unavailable` — no Connect door (OV-07)", () => {
+  it("a provider this pod's broker does not offer is `unavailable` — no Connect door", () => {
     const row = toolRow(
       "Provider",
       [verb("prov_read", { urlPatterns: ["*"] })],
@@ -670,7 +670,7 @@ describe("readUrl — runs the chosen reader, honestly", () => {
     expect(r.read.error).toContain("sandbox gone");
   });
 
-  it("an installed FREE reader that outranks the built-in is OFFERED, never run automatically (OV-04)", async () => {
+  it("an installed FREE reader that outranks the built-in is OFFERED, never run automatically", async () => {
     // The discriminating row: "best free ready reader runs automatically"
     // would hand this pack every kept link on its domain.
     const blog = toolRow("Blog reader", [
