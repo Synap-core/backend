@@ -22,7 +22,7 @@ vi.mock("../../capabilities/url-readers.js", () => ({
   },
 }));
 
-import { defaultLightReadDeps } from "../light-read.js";
+import { defaultLightReadDeps } from "../light-read-deps.js";
 
 describe("defaultLightReadDeps — the reader door context", () => {
   it("reads and lists with every space the person can see", async () => {

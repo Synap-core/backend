@@ -1,6 +1,20 @@
 /**
  * PURE: what a read produced (`Got`) and how the reader door's answer maps
- * onto the stored read (see the `light-read.ts` header for the table).
+ * onto the stored read ({@link mapDoorRead}):
+ *   - ok      → `read` (title, author, text, transcript);
+ *   - partial → `read` when it carries body text (caption, text, transcript),
+ *               else `title_only` (a title alone is not a read of the thing);
+ *   - blocked needs_reader / unsupported → `needs_file` (no reader yet, or a
+ *               file type no reader handles); its label and door come from
+ *               the live offers;
+ *   - blocked login_wall / paywall / challenge / private / not_found /
+ *               ip_reputation → `unreadable`, WITH the reason kept
+ *               (`importRead.blocked`) — except `retry_later` (rate limited),
+ *               a retry of class `rate_limited`;
+ *   - failed  → a retry carrying the read's failure CLASS (the light read's
+ *               `retryPlan` decides: transient waits, the rest counts).
+ * A staged `title_only` link (x, linkedin) the door cannot read stays
+ * `title_only`.
  */
 
 import type {

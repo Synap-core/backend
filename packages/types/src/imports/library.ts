@@ -514,6 +514,12 @@ export interface LibraryCaptureHit {
 export interface LibrarySearchResult {
   captures: LibraryCaptureHit[];
   items: LibraryItemView[];
+  /**
+   * Whether the search over items' READ TEXT ran: `"down"` = the index could
+   * not be asked, so items found only by their read text may be missing —
+   * say so, never present the list as complete. Absent = not reported.
+   */
+  readTextSearch?: "ok" | "down";
 }
 
 /** Hard limits shared by every Library door. */

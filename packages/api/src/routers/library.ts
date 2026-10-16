@@ -375,8 +375,8 @@ export const libraryRouter = router({
     .query(async ({ ctx, input }): Promise<LibrarySearchResult> => {
       const userId = requireUserId(ctx.userId);
       // The captures + the Library's own fields + the READ TEXT (through the
-      // search index). `readTextSearch: "down"` rides along when the index
-      // could not be asked (additive; the declared result type is unchanged).
+      // search index). `readTextSearch` says whether that index answered
+      // (`"down"`: items found only by their read text may be missing).
       return searchLibraryWithReadText({
         userId,
         q: input.q,

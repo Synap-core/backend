@@ -28,11 +28,8 @@ import {
   type LibraryLightReadPayload,
   type LibraryLightReadResult,
 } from "@synap/jobs/workers/library-light-read-worker.js";
-import {
-  defaultLightReadDeps,
-  lightReadLibraryItem,
-  type LightReadDeps,
-} from "./light-read.js";
+import { lightReadLibraryItem } from "./light-read.js";
+import { defaultLightReadDeps, type LightReadDeps } from "./light-read-deps.js";
 import {
   claimItemLease,
   releaseItemLease,

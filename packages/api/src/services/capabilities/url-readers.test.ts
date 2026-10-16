@@ -759,3 +759,19 @@ describe("capture adjunct + structurer feed", () => {
     expect(ctx.match(/^URL: /gm)).toHaveLength(1);
   });
 });
+
+describe("offerIdOfStamp — every built-in rung's stamp is the one `builtin` offer", () => {
+  it("derived from what builtinStamp writes (every rung, every adapter)", async () => {
+    const { builtinStamp, SITE_ADAPTERS } = await import("./web-read/index.js");
+    const { offerIdOfStamp } = await import("./url-readers.js");
+    const stamps = [
+      ...(["article", "page", "policy"] as const).map((r) => builtinStamp(r)),
+      ...SITE_ADAPTERS.map((adapter) => builtinStamp({ adapter })),
+    ];
+    expect(stamps.length).toBeGreaterThan(5);
+    for (const s of stamps)
+      expect(offerIdOfStamp(s.id)).toBe(BUILTIN_READER_ID);
+    expect(offerIdOfStamp("capture_social_post")).toBe("capture_social_post");
+    expect(offerIdOfStamp("builtinish_reader")).toBe("builtinish_reader");
+  });
+});

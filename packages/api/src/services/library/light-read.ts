@@ -15,70 +15,24 @@
  *   | file: audio / video          | IS transcript                          | yes |
  *
  * A link is read through the ONE door (`services/capabilities/url-readers.ts`):
- * automatically (on keep, the sweep, Build's inline read) the best FREE ready
- * reader — the pod's built-in ladder unless an installed free reader outranks
- * it; the pod never fetches an Instagram/TikTok page itself, so those come
- * back `blocked needs_reader`. EXPLICITLY (`reader` on the job: the person's
- * "Read with X" tap, `library.readWith`) the named reader, billed or not — a
- * billed read (*) first takes the item's ONE unit of the daily budget.
- * Every door read stamps `importRead.reader`. The door's answer maps onto the
- * stored read ({@link mapDoorRead}):
- *   - ok      → `read` (title, author, text, transcript);
- *   - partial → `read` when it carries body text (caption, text, transcript),
- *               else `title_only` (a title alone is not a read of the thing);
- *   - blocked needs_reader / unsupported → `needs_file` (no reader yet, or a
- *               file type no reader handles): the stored status is unchanged
- *               by design, its label and door come from the live offers;
- *   - blocked login_wall / paywall / challenge / private / not_found /
- *               ip_reputation → `unreadable`, WITH the reason kept
- *               (`importRead.blocked`) — except a blocked read that says
- *               `retry_later` (rate limited), which is retried like a failure;
- *   - failed  → retried by its CLASS (`importRead.failure`, see `retryPlan`):
- *               a transient one waits with backoff and never ends
- *               `unreadable`; anything else counts toward
- *               {@link LIGHT_READ_MAX_ATTEMPTS}, then `unreadable` with the
- *               class kept — never silent.
- * A staged `title_only` link (x, linkedin) that the door cannot read stays
- * `title_only`. Media a read returns is copied into the pod IN THE SAME JOB
- * (`copyLibraryItemMedia`: CDN links expire); a copied video is transcribed
- * (`transcribeStoredMedia`, one AI unit, the item's own) when the reader gave
- * no transcript. An explicit read that was over budget or failed remembers its
- * reader (`requestedReader`), so the sweep retries it with THAT reader. An
- * explicit RE-read of an item already read never erases the read it has: a
- * failed one is recorded on `lastAttempt`. A BILLED read that succeeded is
- * checkpointed on the item before its media is copied
- * (`importRead.readCheckpoint`): a job that runs the same reader again for
- * the item — pg-boss redelivering an expired job while the first still
- * copies a video, or the sweep after a crash — resumes from the stored read
- * (media copy, transcript, summary) and never bills the account twice.
+ * automatically (keep, sweep, Build's inline read) by the pod's built-in
+ * ladder only; EXPLICITLY (`reader` on the job: "Read with X",
+ * `library.readWith`) by the named reader — a billed one (*) first takes the
+ * item's ONE unit of the daily budget and is checkpointed before its media is
+ * copied, so a re-run never bills twice. How the door's answer becomes the
+ * stored read is `light-read-map.ts`; how a failed try is retried (by its
+ * class, with backoff) is `retryPlan` below. Media a read returns is copied in
+ * the same job; a copied video is transcribed when the reader gave none.
  *
- * Then: a summary — for a file, the one extraction call's own summary (ONE AI
- * call per file); otherwise AI when the budget allows and the text is long,
- * else the first sentences — and the action chips: the deterministic
- * detectors first, the AI's suggestions merged after when a summary call ran.
- * A text-like file (txt, csv, json…) larger than
- * `LIGHT_READ_TEXT_FILE_BYTES_MAX` is never buffered.
- *
- * Writes (the only writes):
- *   - the text, to its own storage object beside the item
- *     (`libraryReadTextKey`) — never over the item's body, which stays the raw
- *     it was kept as (a URL, a file's bytes) for Build;
- *   - `documents.metadata.importRead` (merged into the bag under a row lock,
- *     so a chip run meanwhile keeps its `proposalId`);
- *   - one `search-index` job for the document.
- *
- * Over budget ⇒ `over_budget`, read later by the hourly sweep. An IS that
- * failed ⇒ stays `not_read` and is retried by the sweep, then marked
- * `unreadable` after {@link LIGHT_READ_MAX_ATTEMPTS}. Never a silent drop.
- *
- * Embeddings are DEFERRED: the pod has no document vector store
- * (`entity_vectors` is keyed by entity), so a Library item is found by
- * full-text search over its read text until it is built.
+ * Writes: the read text beside the item (`libraryReadTextKey`, never over its
+ * body), `metadata.importRead` (under a row lock, never on a deleted item),
+ * one `search-index` job — and the owner is told (`library:item:updated`).
  *
  * Modules: this file is the job (`lightReadLibraryItem`); the content read is
  * `light-read-content.ts`, the door → stored-read mapping `light-read-map.ts`,
- * the stored state and its writers `light-read-store.ts`, the deps and their
- * real wiring `light-read-deps.ts`, the bounds `light-read-limits.ts`.
+ * the stored state, its reader, writers and the job lease `light-read-store.ts`,
+ * the deps and their real wiring `light-read-deps.ts`, the bounds
+ * `light-read-limits.ts`.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -120,24 +74,6 @@ import {
   LIGHT_READ_SUMMARY_MAX,
   LIGHT_READ_TEXT_MAX,
 } from "./light-read-limits.js";
-
-export {
-  LIGHT_READ_TEXT_MAX,
-  LIGHT_READ_SUMMARY_INPUT_MAX,
-  LIGHT_READ_SUMMARY_MAX,
-  LIGHT_READ_SHORT_TEXT,
-  LIGHT_READ_FILE_BYTES_MAX,
-  LIGHT_READ_TEXT_FILE_BYTES_MAX,
-  LIGHT_READ_MAX_ATTEMPTS,
-  READ_CHECKPOINT_TTL_MS,
-} from "./light-read-limits.js";
-export {
-  resumableRead,
-  type StoredLibraryRead,
-  type ReadCheckpoint,
-} from "./light-read-store.js";
-export { composeDoorReadText, mapDoorRead } from "./light-read-map.js";
-export { defaultLightReadDeps, type LightReadDeps } from "./light-read-deps.js";
 
 const logger = createLogger({ module: "library/light-read" });
 

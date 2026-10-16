@@ -134,7 +134,12 @@ export const URL_READ_RETRY_AFTER_MAX_SEC = 86_400;
 
 /** Who read it. Stamped by the door that ran the reader — a reader never self-stamps. */
 export interface ReaderStamp {
-  /** `builtin:<rung>` (builtin:oembed, builtin:article, builtin:page, builtin:adapter:<site>) or a verb id */
+  /**
+   * `builtin:<rung>` — `builtin:article` (the pod fetched the page),
+   * `builtin:page` (the page the person's browser sent), `builtin:policy`
+   * (refused before any request), `builtin:adapter:<site>` (a site adapter,
+   * e.g. `builtin:adapter:youtube` for its oEmbed) — or a reader verb id.
+   */
   id: string;
   name: string;
   capabilityId?: string;

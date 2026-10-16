@@ -26,6 +26,18 @@ import {
 /** The built-in ladder's reader id (offers, explicit `reader`). */
 export const BUILTIN_READER_ID = "builtin";
 
+/**
+ * The OFFER id a stored read's stamp belongs to: every built-in rung
+ * (`builtinStamp` writes `builtin:<rung>` / `builtin:adapter:<site>`) is the
+ * one `builtin` offer; a verb reader's stamp id is its offer id.
+ */
+export function offerIdOfStamp(stampId: string): string {
+  return stampId === BUILTIN_READER_ID ||
+    stampId.startsWith(`${BUILTIN_READER_ID}:`)
+    ? BUILTIN_READER_ID
+    : stampId;
+}
+
 /** A ranked offer plus the facts the door needs to run and stamp it. */
 export interface RankedReader {
   offer: UrlReaderOffer;

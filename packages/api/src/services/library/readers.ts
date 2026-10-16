@@ -41,7 +41,7 @@ import { createLogger } from "@synap-core/core";
 import type { UrlReaderOffer } from "@synap-core/types/url-read";
 import { readStoredLibraryRead } from "./light-read-store.js";
 import {
-  BUILTIN_READER_ID as BUILTIN,
+  offerIdOfStamp,
   type UrlReadersContext,
 } from "../capabilities/url-readers.js";
 import {
@@ -183,10 +183,7 @@ async function waitingRows(
 /** The offer id that produced a stored read (`builtin:<rung>` → `builtin`). */
 function readerIdOfStamp(metadata: unknown): string | null {
   const stamp = readStoredLibraryRead(metadata).read.reader;
-  if (!stamp) return null;
-  return stamp.id === BUILTIN || stamp.id.startsWith(`${BUILTIN}:`)
-    ? BUILTIN
-    : stamp.id;
+  return stamp ? offerIdOfStamp(stamp.id) : null;
 }
 
 /**

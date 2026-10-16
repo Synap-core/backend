@@ -54,7 +54,11 @@ import {
 } from "./url-reader-sources.js";
 
 // The door's whole surface, from its focused modules.
-export { BUILTIN_READER_ID, foldUrlReaders } from "./url-reader-fold.js";
+export {
+  BUILTIN_READER_ID,
+  foldUrlReaders,
+  offerIdOfStamp,
+} from "./url-reader-fold.js";
 export { installOffersForUrl } from "./url-reader-offers.js";
 export {
   listReadersForUrl,
@@ -141,6 +145,10 @@ function failedRead(
   );
 }
 
+/**
+ * A read that did not happen: nothing ran on the person's account, so the
+ * stamp is never `billed` (the ONE place that says so).
+ */
 function blockedRead(
   sourceUrl: string,
   via: ReaderStamp,
@@ -151,7 +159,7 @@ function blockedRead(
   return normalizeUrlRead(
     { status: "blocked", blocked: { reason, nextStep, detail } },
     sourceUrl,
-    via
+    { ...via, billed: false }
   );
 }
 
@@ -246,7 +254,7 @@ export async function readUrl(
     return {
       read: blockedRead(
         sourceUrl,
-        { ...stamp, billed: false },
+        stamp,
         "needs_reader",
         "install_reader",
         chosen.offer.hint ?? `Install ${chosen.offer.name} to read this link.`
@@ -259,7 +267,7 @@ export async function readUrl(
     return {
       read: blockedRead(
         sourceUrl,
-        { ...stamp, billed: false },
+        stamp,
         "needs_reader",
         undefined,
         chosen.offer.hint ??
@@ -272,7 +280,7 @@ export async function readUrl(
     return {
       read: blockedRead(
         sourceUrl,
-        { ...stamp, billed: false },
+        stamp,
         "needs_reader",
         "connect_reader",
         chosen.offer.hint ?? `Connect ${chosen.offer.name} to read this link.`
@@ -284,7 +292,7 @@ export async function readUrl(
     return {
       read: blockedRead(
         sourceUrl,
-        { ...stamp, billed: false },
+        stamp,
         "needs_reader",
         undefined,
         `${chosen.offer.name} runs on your account, so it reads only when you choose it.`
@@ -341,7 +349,7 @@ export async function readUrl(
       return {
         read: blockedRead(
           sourceUrl,
-          { ...stamp, billed: false },
+          stamp,
           "needs_reader",
           "enable_reader",
           outcome.enable?.hint ?? outcome.reason
@@ -364,7 +372,7 @@ export async function readUrl(
       return {
         read: blockedRead(
           sourceUrl,
-          { ...stamp, billed: false },
+          stamp,
           "needs_reader",
           "enable_reader",
           outcome.kind === "proposed"

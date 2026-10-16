@@ -16,8 +16,8 @@ export const LIGHT_READ_SUMMARY_INPUT_MAX = 6_000;
 export const LIGHT_READ_SUMMARY_MAX = 400;
 /** Text this short IS its own summary (no AI). */
 export const LIGHT_READ_SHORT_TEXT = 280;
-/** Bytes the pod sends the IS for one file. */
-export const LIGHT_READ_FILE_BYTES_MAX = 20 * 1024 * 1024;
+/** Bytes the pod sends the IS for one file — the IS's one-upload ceiling. */
+export const LIGHT_READ_FILE_BYTES_MAX = TRANSCRIBE_STORED_MEDIA_MAX_BYTES;
 /** Group names offered to the summary call to pick from. */
 export const LIGHT_READ_GROUPS_OFFERED = 20;
 /** Groups the summary call may pick for one item. */

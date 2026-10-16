@@ -13,7 +13,6 @@ import {
   transcribeStoredMedia,
   TRANSCRIBE_STORED_MEDIA_MAX_BYTES,
 } from "../transcribe-stored-media.js";
-import { LIGHT_READ_FILE_BYTES_MAX } from "../../library/light-read.js";
 
 let client: PGlite;
 let database: typeof DatabaseHandle;
@@ -155,9 +154,5 @@ describe("transcribeStoredMedia", () => {
         },
       })
     ).toEqual({ failed: "unavailable", detail: "ECONNREFUSED" });
-  });
-
-  it("its ceiling is the light read's own", () => {
-    expect(TRANSCRIBE_STORED_MEDIA_MAX_BYTES).toBe(LIGHT_READ_FILE_BYTES_MAX);
   });
 });

@@ -6,8 +6,9 @@
  * as the light read sends a kept video file.
  *
  * Limits (why some videos answer `too_large`): the IS / provider take one
- * upload of ≤ 20 MB here ({@link TRANSCRIBE_STORED_MEDIA_MAX_BYTES}), whole — no audio extraction or chunking happens on the
- * pod. A short reel fits; a long video does not.
+ * upload of ≤ 20 MB ({@link TRANSCRIBE_STORED_MEDIA_MAX_BYTES}), whole — no
+ * audio extraction or chunking happens on the pod. A short reel fits; a long
+ * video does not.
  *
  * Budget: this function SPENDS (one transcription call) and does not reserve
  * the person's light-read budget itself — the caller does, as the light read
@@ -18,9 +19,9 @@ import { db as defaultDb, documents, and, eq, isNull } from "@synap/database";
 import { INLINE_VIDEO_MIME_TYPES } from "@synap-core/types/presentation";
 
 /**
- * One upload's ceiling — the light read's own (`LIGHT_READ_FILE_BYTES_MAX`,
- * pinned equal by a test; not imported, so the light read can import THIS
- * module without a cycle), under the 25 MB provider limit.
+ * One upload's ceiling to the IS, under the 25 MB provider limit. THE number:
+ * the light read's own file ceiling (`LIGHT_READ_FILE_BYTES_MAX`) is defined
+ * as this constant.
  */
 export const TRANSCRIBE_STORED_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 

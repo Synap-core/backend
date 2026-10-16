@@ -76,12 +76,10 @@ import {
 import type { ReaderStamp, UrlRead } from "@synap-core/types/url-read";
 import type { ReadUrlOptions } from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
-import {
-  lightReadLibraryItem,
-  resumableRead,
-  READ_CHECKPOINT_TTL_MS,
-  type LightReadDeps,
-} from "../light-read.js";
+import { lightReadLibraryItem } from "../light-read.js";
+import { resumableRead } from "../light-read-store.js";
+import { READ_CHECKPOINT_TTL_MS } from "../light-read-limits.js";
+import type { LightReadDeps } from "../light-read-deps.js";
 import { reserveLibraryReadAi } from "../read-budget.js";
 import {
   enqueueLibraryLightRead,
