@@ -47,6 +47,8 @@ interface ReaderSources {
   installedSlugs: Set<string>;
   /** container id → its template's content hash, when stamped. */
   contentHashByContainer: Map<string, string>;
+  /** Providers the broker offers; `null` = unknown (or nothing to ask about). */
+  providerAvailable: Set<string> | null;
 }
 
 async function loadReaderSources(
@@ -110,15 +112,28 @@ async function loadReaderSources(
     }
   }
 
+  const readerRows = rows.filter((r) =>
+    (r.verbs ?? []).some((v) => (v.urlPatterns?.length ?? 0) > 0)
+  );
+  // Only a reader still waiting for its account makes the broker question
+  // worth asking. A broker that does not answer → unknown (stays `connect`).
+  let providerAvailable: Set<string> | null = null;
+  if (
+    readerRows.some((r) => r.connection?.required && !r.connection.connected)
+  ) {
+    const { loadProviderAvailability } =
+      await import("./provider-availability.js");
+    providerAvailable = await loadProviderAvailability().catch(() => null);
+  }
+
   const sources: ReaderSources = {
-    rows: rows.filter((r) =>
-      (r.verbs ?? []).some((v) => (v.urlPatterns?.length ?? 0) > 0)
-    ),
+    rows: readerRows,
     catalog: entries.filter(
       (e) => (catalogReaderSkills(e.definition)?.skills.length ?? 0) > 0
     ),
     installedSlugs,
     contentHashByContainer,
+    providerAvailable,
   };
   readerCacheSet(key, sources);
   return sources;
@@ -135,7 +150,9 @@ function foldSources(
   ctx: UrlReadersContext,
   url: string
 ): ResolvedReaders {
-  const installed = rankedFold(sources.rows, url, ctx.workspaceId);
+  const installed = rankedFold(sources.rows, url, ctx.workspaceId, {
+    providerAvailable: sources.providerAvailable,
+  });
   const seen = new Set(installed.map((r) => r.offer.readerId));
   const install = rankedInstallOffers(
     sources.catalog,

@@ -296,6 +296,61 @@ describe("foldUrlReaders — who can read this link", () => {
     expect(offer!.state).toBe("connect");
   });
 
+  it("a provider this pod's broker does not offer is `unavailable` — no Connect door (OV-07)", () => {
+    const row = toolRow(
+      "Provider",
+      [verb("prov_read", { urlPatterns: ["*"] })],
+      {
+        kind: "source-provider",
+        connection: { required: true, connected: false, provider: "acme" },
+      }
+    );
+    const offerWith = (providerAvailable: Set<string> | null) =>
+      foldUrlReaders([row], ARTICLE, null, { providerAvailable }).find(
+        (o) => o.readerId === "prov_read"
+      )!;
+    const gone = offerWith(new Set(["google-mail"]));
+    expect(gone.state).toBe("unavailable");
+    expect(gone.hint).toMatch(/doesn't offer/);
+    // Offered by the broker (any case), or availability UNKNOWN → connectable.
+    expect(offerWith(new Set(["ACME".toLowerCase()])).state).toBe("connect");
+    expect(offerWith(null).state).toBe("connect");
+  });
+
+  it("a named `unavailable` reader never runs: blocked, no next step", async () => {
+    const { d, execute } = deps([], [], {
+      resolve: async () => ({
+        ranked: [
+          {
+            offer: {
+              readerId: "prov_read",
+              name: "Provider",
+              verbId: "prov_read",
+              billing: "none",
+              state: "unavailable",
+              hint: "not here",
+            },
+            specificity: 1,
+            builtin: false,
+          },
+        ],
+        contentHashByContainer: new Map(),
+      }),
+    });
+    const r = await readUrl(
+      CTX,
+      ARTICLE,
+      { reader: "prov_read", allowBilled: true },
+      d
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(r.read).toMatchObject({
+      status: "blocked",
+      blocked: { reason: "needs_reader", detail: "not here" },
+    });
+    expect(r.read.blocked?.nextStep).toBeUndefined();
+  });
+
   it("a verb on its tool row AND its skill row is ONE offer (the tool row's)", () => {
     const skillRow = {
       ...toolRow("capture_social_post", [

@@ -254,6 +254,20 @@ export async function readUrl(
       offers,
     };
   }
+  if (chosen.offer.state === "unavailable") {
+    // No door at all: the pod cannot offer this reader's provider.
+    return {
+      read: blockedRead(
+        sourceUrl,
+        { ...stamp, billed: false },
+        "needs_reader",
+        undefined,
+        chosen.offer.hint ??
+          `${chosen.offer.name} is not available on this pod.`
+      ),
+      offers,
+    };
+  }
   if (chosen.offer.state === "connect") {
     return {
       read: blockedRead(

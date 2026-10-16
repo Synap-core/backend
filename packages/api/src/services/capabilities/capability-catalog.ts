@@ -37,6 +37,10 @@ import {
 } from "./capability-enable-link.js";
 import { resolveBroker } from "../../connectors/index.js";
 import {
+  declaredProviders,
+  isProviderUnavailable,
+} from "./provider-availability.js";
+import {
   fetchCPCapabilityTemplates,
   fetchCPCapabilityTemplateByKey,
 } from "./cp-template-client.js";
@@ -486,9 +490,10 @@ export function deriveConnection(
       }
       // Only downgrade to `unavailable` when availability is KNOWN (non-null) and
       // the provider is absent from it. Unknown → `missing`, the connectable state.
-      const unavailable =
-        conn.providerAvailable !== null &&
-        !conn.providerAvailable.has(provider.toLowerCase());
+      const unavailable = isProviderUnavailable(
+        conn.providerAvailable,
+        provider
+      );
       return {
         required: true,
         kind: "provider",
@@ -633,12 +638,7 @@ export async function loadConnState(
     }
     // Availability stays null unless the broker actually ANSWERED — see ConnState.
     if (declared.ok) {
-      providerAvailable = new Set(
-        declared.integrations.flatMap((i) => [
-          i.uniqueKey.toLowerCase(),
-          i.provider.toLowerCase(),
-        ])
-      );
+      providerAvailable = declaredProviders(declared.integrations);
     }
   }
 

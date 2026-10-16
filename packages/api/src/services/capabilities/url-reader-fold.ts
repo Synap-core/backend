@@ -12,7 +12,11 @@ import {
 import { normalizeServiceId } from "@synap-core/types/service-marks";
 import { isHttpUrl } from "@synap-core/types/navigation";
 import type { RegistryCapability } from "./capability-registry.js";
-import { resolveCapabilityBlock } from "./capability-enable-link.js";
+import {
+  capabilityNextAction,
+  resolveCapabilityBlock,
+} from "./capability-enable-link.js";
+import { isProviderUnavailable } from "./provider-availability.js";
 import {
   builtinStamp,
   findSiteAdapter,
@@ -106,10 +110,20 @@ function verbRunnable(
  * the copy that can run wins, then the copy in the caller's own lens
  * (`lensWorkspaceId`, pod-wide rows included), then registry order.
  */
+/** What the fold knows beyond the rows. */
+export interface FoldFacts {
+  /**
+   * The providers this pod's broker offers (`loadProviderAvailability`);
+   * `null` / absent = unknown — a missing connection then stays `connect`.
+   */
+  providerAvailable?: ReadonlySet<string> | null;
+}
+
 function verbReaders(
   rows: readonly RegistryCapability[],
   url: string,
-  lensWorkspaceId: string | null = null
+  lensWorkspaceId: string | null = null,
+  facts: FoldFacts = {}
 ): RankedReader[] {
   const local = (row: RegistryCapability) =>
     row.workspaceId === undefined ||
@@ -174,11 +188,36 @@ function verbReaders(
       connection,
       enabled: verbRunnable(row, v),
     });
+    // A provider this pod cannot offer is no Connect door (main's membrane
+    // state `unavailable`, the same derivation as the capability card).
+    const unavailable =
+      block?.kind === "connect" &&
+      !row.connection?.connected &&
+      isProviderUnavailable(
+        facts.providerAvailable ?? null,
+        row.connection?.provider
+      );
     const state: UrlReaderOffer["state"] = !block
       ? "ready"
-      : block.kind === "connect"
-        ? "connect"
-        : "enable";
+      : unavailable
+        ? "unavailable"
+        : block.kind === "connect"
+          ? "connect"
+          : "enable";
+    const hint = unavailable
+      ? capabilityNextAction(
+          "unavailable",
+          row.containerName ?? row.name,
+          row.connection?.provider
+            ? {
+                required: true,
+                kind: "provider",
+                provider: row.connection.provider,
+                state: "unavailable",
+              }
+            : undefined
+        ).hint
+      : block?.hint;
     const serviceId = serviceIdFor(row.containerName, row.name);
     const capabilityId = row.containerId ?? row.id;
     const skillId = backingSkillId(rows, verbId, row, lensWorkspaceId);
@@ -192,7 +231,7 @@ function verbReaders(
         ...(skillId ? { skillId } : {}),
         billing: v.credentialed ? "account" : "none",
         state,
-        ...(block ? { hint: block.hint } : {}),
+        ...(hint ? { hint } : {}),
       },
       specificity: spec,
       builtin: false,
@@ -231,10 +270,11 @@ function backingSkillId(
 export function rankedFold(
   rows: readonly RegistryCapability[],
   url: string,
-  lensWorkspaceId: string | null = null
+  lensWorkspaceId: string | null = null,
+  facts: FoldFacts = {}
 ): RankedReader[] {
   if (!isHttpUrl(url.trim())) return [];
-  const all = verbReaders(rows, url, lensWorkspaceId);
+  const all = verbReaders(rows, url, lensWorkspaceId, facts);
   const builtin = builtinCandidate(url);
   if (builtin) all.push(builtin);
   return all.sort(compareReaders);
@@ -251,7 +291,8 @@ export function rankedFold(
 export function foldUrlReaders(
   rows: readonly RegistryCapability[],
   url: string,
-  lensWorkspaceId: string | null = null
+  lensWorkspaceId: string | null = null,
+  facts: FoldFacts = {}
 ): UrlReaderOffer[] {
-  return rankedFold(rows, url, lensWorkspaceId).map((r) => r.offer);
+  return rankedFold(rows, url, lensWorkspaceId, facts).map((r) => r.offer);
 }

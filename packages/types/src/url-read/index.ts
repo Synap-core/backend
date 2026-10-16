@@ -657,13 +657,16 @@ export function readReaderStamp(raw: unknown): ReaderStamp | undefined {
 /**
  * Where a reader stands for THIS person: `ready` (runs now), `enable` (installed,
  * switched off or awaiting approval), `connect` (needs an account/key),
- * `install` (in the catalog, not on the pod).
+ * `install` (in the catalog, not on the pod), `unavailable` (installed, but its
+ * provider is one this pod's broker does not offer — there is NO door: no
+ * Connect, nothing to install; `hint` says why).
  */
 export const READER_OFFER_STATES = [
   "ready",
   "enable",
   "connect",
   "install",
+  "unavailable",
 ] as const;
 export type ReaderOfferState = (typeof READER_OFFER_STATES)[number];
 
