@@ -39,6 +39,11 @@ import {
   type UrlReadersContext,
 } from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
+import type {
+  ImportItemMetadata,
+  LibraryItemRead,
+} from "@synap-core/types/imports";
+import { libraryItemMetadata } from "./fixtures.js";
 import {
   libraryReaderAvailability,
   libraryReaders,
@@ -84,29 +89,28 @@ async function item(over: {
   read?: Record<string, unknown>;
 }): Promise<string> {
   seq++;
-  const meta = {
-    importItem: {
-      version: 1,
+  const meta = libraryItemMetadata({
+    item: {
       title: `Item ${seq}`,
-      contentStatus: "readable",
       stagedAt: NOW.toISOString(),
-      source: over.url ? { kind: "url", url: over.url } : { kind: "text" },
+      source: (over.url
+        ? { kind: "url", url: over.url }
+        : { kind: "text" }) as ImportItemMetadata["source"],
     },
-    importCuration: {
+    curation: {
       decision: "keep",
       groupIds: over.groupIds ?? [],
       ...(over.archived ? { archivedAt: NOW.toISOString() } : {}),
     },
     ...(over.status || over.read
       ? {
-          importRead: {
-            status: over.status ?? "read",
-            suggestedActions: [],
+          read: {
+            status: (over.status ?? "read") as LibraryItemRead["status"],
             ...over.read,
           },
         }
       : {}),
-  };
+  });
   const { rows } = await q<{ id: string }>(
     `insert into documents (user_id, title, type, metadata) values ($1, $2, 'text', $3::jsonb) returning id`,
     [over.userId ?? USER, `Item ${seq}`, JSON.stringify(meta)]

@@ -76,6 +76,7 @@ import {
 import type { ReaderStamp, UrlRead } from "@synap-core/types/url-read";
 import type { ReadUrlOptions } from "../../capabilities/url-readers.js";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
+import { libraryItemMetadata } from "./fixtures.js";
 import { lightReadLibraryItem } from "../light-read.js";
 import { resumableRead } from "../light-read-store.js";
 import { READ_CHECKPOINT_TTL_MS } from "../light-read-limits.js";
@@ -117,15 +118,18 @@ async function stageItem(over: {
 }): Promise<string> {
   const key = `obj/${++seq}`;
   if (over.body !== undefined) h.objects.set(key, Buffer.from(over.body));
-  const item: ImportItemMetadata = {
-    version: 1,
-    title: over.item.title ?? `Item ${seq}`,
-    contentStatus: over.item.contentStatus ?? "readable",
-    stagedAt: NOW.toISOString(),
-    // Kept through a Library door (the rollout marker the sweep reads).
-    lightRead: true,
-    ...over.item,
-  } as ImportItemMetadata;
+  const metadata = libraryItemMetadata({
+    item: {
+      title: over.item.title ?? `Item ${seq}`,
+      stagedAt: NOW.toISOString(),
+      // Kept through a Library door (the rollout marker the sweep reads).
+      lightRead: true,
+      ...over.item,
+    },
+    curation: { decision: "keep", groupKeys: [] },
+    ...(over.read ? { read: over.read } : {}),
+  });
+  const item = metadata.importItem as ImportItemMetadata;
   const { rows } = await q<{ id: string }>(
     `insert into documents (user_id, title, type, storage_key, mime_type, metadata, created_at)
      values ($1, $2, 'text', $3, $4, $5::jsonb, now() - ($6 || ' minutes')::interval) returning id`,
@@ -134,11 +138,7 @@ async function stageItem(over: {
       item.title,
       over.body !== undefined ? key : null,
       over.mimeType ?? "text/plain",
-      JSON.stringify({
-        importItem: item,
-        importCuration: { decision: "keep", groupKeys: [] },
-        ...(over.read ? { importRead: over.read } : {}),
-      }),
+      JSON.stringify(metadata),
       String(over.ageMinutes ?? 0),
     ]
   );

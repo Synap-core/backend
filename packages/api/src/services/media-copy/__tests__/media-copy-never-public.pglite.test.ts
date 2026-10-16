@@ -43,6 +43,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import * as schema from "@synap/database/schema";
 import { registerPublicProjectionRoutes } from "../../../routers/hub-protocol/rest/public-projection.js";
 import { registerPublicSharesRoutes } from "../../../routers/hub-protocol/rest/public-shares.js";
@@ -87,24 +88,6 @@ const ALL_FIELDS = [
   "storageKey",
 ];
 
-const BASIC =
-  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
-function ddlFor(table: PgTable): string {
-  const cfg = getTableConfig(table);
-  const cols = cfg.columns.map((c) => {
-    const t = c.getSQLType();
-    const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
-    const pk = c.primary
-      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
-      : "";
-    const def =
-      c.name === "created_at" || c.name === "updated_at"
-        ? " default now()"
-        : "";
-    return `"${c.name}" ${type}${pk}${def}`;
-  });
-  return `create table "${cfg.name}" (${cols.join(", ")});`;
-}
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 let app: OpenAPIHono;
@@ -115,7 +98,7 @@ beforeAll(async () => {
       !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
-  for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  for (const t of byName.values()) await h.client!.exec(pgliteTableDdl(t));
 
   await q(
     `insert into workspaces (id, name, owner_id, settings) values ($1,'Site',$2,$3::jsonb)`,

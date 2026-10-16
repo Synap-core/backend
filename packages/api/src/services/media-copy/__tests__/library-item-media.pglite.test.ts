@@ -14,6 +14,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import * as schema from "@synap/database/schema";
 import type { db as DatabaseHandle } from "@synap/database";
 import type { UrlReadMedia } from "@synap-core/types/url-read";
@@ -28,25 +29,7 @@ import { imageFromLibraryCopy } from "../library-handoff.js";
 import { purgeDeletedLibraryItems } from "../../library/keep-alive.js";
 import { toLibraryItemView } from "../../library/read-model.js";
 import { mp4Head, png } from "./fixtures.js";
-
-const BASIC =
-  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
-function ddlFor(table: PgTable): string {
-  const cfg = getTableConfig(table);
-  const cols = cfg.columns.map((c) => {
-    const t = c.getSQLType();
-    const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
-    const pk = c.primary
-      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
-      : "";
-    const def =
-      c.name === "created_at" || c.name === "updated_at"
-        ? " default now()"
-        : "";
-    return `"${c.name}" ${type}${pk}${def}`;
-  });
-  return `create table "${cfg.name}" (${cols.join(", ")});`;
-}
+import { libraryItemMetadata } from "../../library/__tests__/fixtures.js";
 
 const A = "user-a";
 const B = "user-b";
@@ -60,7 +43,7 @@ beforeAll(async () => {
       !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
-  for (const t of byName.values()) await client.exec(ddlFor(t));
+  for (const t of byName.values()) await client.exec(pgliteTableDdl(t));
   database = drizzle(client, { schema }) as unknown as typeof DatabaseHandle;
 }, 120_000);
 
@@ -76,17 +59,18 @@ async function item(
     [
       id,
       user,
-      JSON.stringify({
-        importItem: {
-          version: 1,
-          title: "A kept post",
-          source: { kind: "url", url: "https://instagram.com/p/x" },
-          contentStatus: "needs_file",
-        },
-        importRead: { status: "read", summary: "kept" },
-        importCuration: { note: "the person's note" },
-        ...extra,
-      }),
+      JSON.stringify(
+        libraryItemMetadata({
+          item: {
+            title: "A kept post",
+            source: { kind: "url", url: "https://instagram.com/p/x" },
+            contentStatus: "needs_file",
+          },
+          read: { status: "read", summary: "kept" },
+          curation: { note: "the person's note" },
+          extra,
+        })
+      ),
       opts.deletedDaysAgo === undefined
         ? null
         : new Date(Date.now() - opts.deletedDaysAgo * 86_400_000).toISOString(),
@@ -316,7 +300,11 @@ describe("copyLibraryItemMedia", () => {
     expect(m.importMediaFailed).toBe(0);
     expect(m.importMediaFailures).toEqual([]);
     // Every other key untouched.
-    expect(m.importRead).toEqual({ status: "read", summary: "kept" });
+    expect(m.importRead).toEqual({
+      status: "read",
+      summary: "kept",
+      suggestedActions: [],
+    });
     expect(m.importCuration).toEqual({ note: "the person's note" });
     // The video was STREAMED into storage, byte-exact, and adopted.
     const [key, bytes] = [...h.uploads.entries()][0]!;

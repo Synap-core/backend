@@ -45,6 +45,7 @@ import {
   type CopyLibraryItemMediaResult,
 } from "../copy-library-item-media.js";
 import { png } from "./fixtures.js";
+import { libraryItemMetadata } from "../../library/__tests__/fixtures.js";
 
 const A = "user-backfill-a";
 const q = <T>(sql: string, params?: unknown[]) =>
@@ -60,16 +61,14 @@ async function doc(over: {
   const metadata = {
     ...(over.library === false
       ? { card: { imageUrl: over.card } }
-      : {
-          importItem: {
-            version: 1,
+      : libraryItemMetadata({
+          item: {
             title: "A kept post",
             source: { kind: "url", url: "https://example.com/p" },
-            contentStatus: "readable",
-            ...(over.card ? { card: { imageUrl: over.card } } : {}),
+            ...(over.card ? { card: { imageUrl: over.card } as never } : {}),
           },
-          importRead: { status: "read", suggestedActions: [] },
-        }),
+          read: { status: "read" },
+        })),
     ...(over.media ? { importMedia: over.media } : {}),
   };
   await q(

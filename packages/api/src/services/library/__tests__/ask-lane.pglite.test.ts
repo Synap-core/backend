@@ -46,6 +46,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { documents, libraryReadTextKey } from "@synap/database";
 import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
+import { libraryItemMetadata } from "./fixtures.js";
 import {
   ASK_LIBRARY_SNIPPET_MAX,
   ASK_LIBRARY_TEXT_FETCH_MAX,
@@ -79,24 +80,22 @@ async function keepRead(over: {
       userId,
       over.title,
       JSON.stringify({
-        importItem: {
-          version: 1,
-          title: over.title,
-          source: { kind: "url", url: over.url ?? "https://example.com/x" },
-          contentStatus: "readable",
-          stagedAt: "2026-10-14T08:00:00.000Z",
-          lightRead: true,
-        },
-        importCuration: {
-          decision: "keep",
-          groupKeys: [],
-          ...(over.note ? { note: over.note } : {}),
-        },
-        importRead: {
-          status: over.status ?? "read",
-          ...(over.summary ? { summary: over.summary } : {}),
-          suggestedActions: [],
-        },
+        ...libraryItemMetadata({
+          item: {
+            title: over.title,
+            source: { kind: "url", url: over.url ?? "https://example.com/x" },
+            lightRead: true,
+          },
+          curation: {
+            decision: "keep",
+            groupKeys: [],
+            ...(over.note ? { note: over.note } : {}),
+          },
+          read: {
+            status: (over.status ?? "read") as never,
+            ...(over.summary ? { summary: over.summary } : {}),
+          },
+        }),
       }),
     ]
   );
