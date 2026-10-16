@@ -39,6 +39,32 @@ describe("the ONE WHEN / THEN phrasing", () => {
     expect(eventPatternWhenText("task.*", [])).toBe("Any task activity");
   });
 
+  it("never names the generic `entity` kind to a person", () => {
+    // The pod's own picker passes the pattern's subject as the kind.
+    expect(eventPatternWhenText("entity.transition.completed", ["entity"])).toBe(
+      "Something was moved"
+    );
+    expect(eventPatternWhenText("entity.create.completed", [])).toBe(
+      "Something was created"
+    );
+    expect(eventPatternWhenText("entity.*", [])).toBe("Any activity");
+    const words = ruleWhenWords("event", {
+      eventPattern: "entity.transition.completed",
+    });
+    expect(words.text).toBe("Something was moved");
+    expect(words.noun).toBeNull();
+    // A named kind beside it still reads by its own noun.
+    expect(
+      eventPatternWhenText("entity.create.completed", ["entity", "person"])
+    ).toBe("A person was created");
+  });
+
+  it("keeps a kind's deliberate casing mid-sentence", () => {
+    expect(eventPatternWhenText("ui-design.*", [])).toBe(
+      "Any UI design activity"
+    );
+  });
+
   it("phrases a THEN imperatively", () => {
     expect(actionPhrase("create", "report")).toBe("Create a report");
   });
