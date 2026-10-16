@@ -512,5 +512,12 @@ export async function lightReadLibraryItem(args: {
       error: err instanceof Error ? err.message : String(err),
     };
   }
-  return got.kind === "text" ? finishRead(job, got) : finishUnread(job, got);
+  const result =
+    got.kind === "text"
+      ? await finishRead(job, got)
+      : await finishUnread(job, got);
+  if (result.status !== "skipped") {
+    deps.notify?.({ userId, itemId, metadata: meta });
+  }
+  return result;
 }

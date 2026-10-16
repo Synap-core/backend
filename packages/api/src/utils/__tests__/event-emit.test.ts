@@ -17,7 +17,59 @@ vi.mock("../chat-realtime-broadcast.js", () => ({
   emitChatEvent: emitChatEventMock,
 }));
 
-import { emitTyped } from "../event-emit.js";
+import { emitLibraryItemUpdated, emitTyped } from "../event-emit.js";
+
+describe("emitLibraryItemUpdated — a Library item finished in the background", () => {
+  beforeEach(() => {
+    emitChatEventMock.mockClear();
+  });
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("goes to the OWNER's room only, naming the item, what finished and its groups", async () => {
+    emitLibraryItemUpdated({
+      userId: "user_1",
+      itemId: "item_1",
+      what: "read",
+      metadata: {
+        importItem: {},
+        importCuration: { groupIds: ["g1", 7, "", "g2"] },
+      },
+    });
+    await flush();
+    expect(emitChatEventMock).toHaveBeenCalledOnce();
+    const call = emitChatEventMock.mock.calls[0][0];
+    expect(call).toMatchObject({
+      event: "library:item:updated",
+      userId: "user_1",
+      workspaceId: null,
+      channelId: null,
+      viewId: null,
+      data: { itemId: "item_1", what: "read", groupIds: ["g1", "g2"] },
+    });
+  });
+
+  it("an item in no group carries no groupIds; a bad payload is dropped, never thrown", async () => {
+    emitLibraryItemUpdated({ userId: "u", itemId: "i", what: "media" });
+    await flush();
+    expect(emitChatEventMock.mock.calls[0][0].data).toEqual({
+      itemId: "i",
+      what: "media",
+    });
+    emitChatEventMock.mockClear();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(() =>
+      emitLibraryItemUpdated({
+        userId: "u",
+        itemId: "",
+        what: "read",
+      })
+    ).not.toThrow();
+    await flush();
+    expect(emitChatEventMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
 
 describe("emitTyped — runtime behavior", () => {
   beforeEach(() => {

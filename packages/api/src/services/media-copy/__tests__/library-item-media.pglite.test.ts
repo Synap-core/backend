@@ -178,6 +178,8 @@ interface Harness {
   removed: string[];
   discarded: string[];
   stored: Array<Record<string, unknown>>;
+  /** Items whose owner was told the copy was recorded. */
+  notified: string[];
 }
 
 function harness(
@@ -188,8 +190,10 @@ function harness(
   const removed: string[] = [];
   const discarded: string[] = [];
   const stored: Array<Record<string, unknown>> = [];
+  const notified: string[] = [];
   const deps: CopyLibraryItemMediaDeps = {
     database,
+    notify: (n) => void notified.push(n.itemId),
     fetchImage: (u) => fetchExternalImage(u, { fetch: net.fetch }),
     fetchVideo: (u, sink) =>
       fetchExternalVideoToSink(u, sink, { fetch: net.fetch }),
@@ -243,7 +247,7 @@ function harness(
     now: () => new Date("2026-10-15T10:00:00Z"),
     ...over,
   };
-  return { deps, uploads, removed, discarded, stored };
+  return { deps, uploads, removed, discarded, stored, notified };
 }
 
 const IMG1 = "https://scontent.cdninstagram.com/slide1.jpg";
@@ -289,6 +293,8 @@ describe("copyLibraryItemMedia", () => {
       reused: 0,
       failed: 0,
     });
+    // The owner's clients are told once, after the record.
+    expect(h.notified).toEqual([id]);
     const m = await metaOf(id);
     expect(
       m.importMedia.map((x: any) => [x.sourceUrl, x.kind, x.order, x.role])
@@ -550,6 +556,8 @@ describe("copyLibraryItemMedia", () => {
     expect(r).toMatchObject({ copied: 0 });
     expect(h.discarded).toHaveLength(1);
     expect((await metaOf(id)).importMedia).toBeUndefined();
+    // Nothing recorded on a deleted item: nobody is told it changed.
+    expect(h.notified).toEqual([]);
   });
 
   it("unconfigured storage records every remaining URL as store_unavailable (never silent) and stops", async () => {

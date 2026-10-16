@@ -22,6 +22,7 @@ import type {
   EventName,
   EventPayloadFor,
   ImportFileProgressEvent,
+  LibraryItemUpdate,
 } from "@synap-core/types/events";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 
@@ -104,4 +105,46 @@ export async function emitImportFileProgress(
   userId: string
 ): Promise<void> {
   return emitTyped("import:file:progress", data, { userId });
+}
+
+/**
+ * Tell the OWNER's clients a Library item's read or media copy finished
+ * (`library:item:updated`, the `user:<id>` room only — never a workspace
+ * room: a kept item is the person's). Fire-and-forget: the item is already
+ * written, so a payload or bridge failure is logged, never thrown — a client
+ * that missed it still sees the item on its next read.
+ *
+ * `metadata` is the item's `documents.metadata` as the writer saw it: the
+ * groups it is in come from `importCuration.groupIds`.
+ */
+export function emitLibraryItemUpdated(args: {
+  userId: string;
+  itemId: string;
+  what: LibraryItemUpdate;
+  metadata?: unknown;
+}): void {
+  const curation =
+    args.metadata && typeof args.metadata === "object"
+      ? (args.metadata as { importCuration?: { groupIds?: unknown } })
+          .importCuration
+      : undefined;
+  const groupIds = Array.isArray(curation?.groupIds)
+    ? curation.groupIds.filter(
+        (g): g is string => typeof g === "string" && g.length > 0
+      )
+    : [];
+  void emitTyped(
+    "library:item:updated",
+    {
+      itemId: args.itemId,
+      what: args.what,
+      ...(groupIds.length ? { groupIds } : {}),
+    },
+    { userId: args.userId }
+  ).catch((err: unknown) =>
+    console.warn(
+      `[library] library:item:updated NOT emitted for ${args.itemId}:`,
+      err
+    )
+  );
 }

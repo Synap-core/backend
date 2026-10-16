@@ -18,7 +18,7 @@
  */
 
 import { z } from "zod";
-import type { EventName } from "@synap-core/types/events";
+import { LIBRARY_ITEM_UPDATES, type EventName } from "@synap-core/types/events";
 
 // ============================================================================
 // Pass-through schema for legacy events without a dedicated shape
@@ -68,6 +68,12 @@ const importFileProgressSchema = z.object({
   total: z.number().int().positive(),
   status: z.enum(["processing", "done", "error"]),
   error: z.string().optional(),
+});
+
+const libraryItemUpdatedSchema = z.object({
+  itemId: z.string().min(1),
+  groupIds: z.array(z.string().min(1)).optional(),
+  what: z.enum(LIBRARY_ITEM_UPDATES),
 });
 
 const uiFocusSurfaceSchema = z.object({
@@ -161,6 +167,7 @@ export const EventSchemas: Partial<Record<EventName, z.ZodType>> = {
   "openclaw:message:received": externalMessageReceivedSchema,
   "synap:reply:routed": synapReplyRoutedSchema,
   "import:file:progress": importFileProgressSchema,
+  "library:item:updated": libraryItemUpdatedSchema,
   "ui:focus": uiFocusSchema,
 
   // Legacy (locked-down)

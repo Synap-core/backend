@@ -80,6 +80,7 @@ import {
   type LibraryMediaFailureReason,
 } from "./library-media-record.js";
 import { libraryMediaCopyMetadata } from "./media-copy-documents.js";
+import { emitLibraryItemUpdated } from "../../utils/event-emit.js";
 import type { CopiedVideoMime } from "./video-sniff.js";
 
 const logger = createLogger({ module: "library-media-copy" });
@@ -133,6 +134,15 @@ export interface CopyLibraryItemMediaDeps {
   /** Delete a minted copy the item does not hold (default: `deleteBody`). */
   discard?: (documentId: string) => Promise<void>;
   liveDocuments?: (ids: string[]) => Promise<Set<string>>;
+  /**
+   * Tell the owner's clients the run was recorded on the item
+   * (`library:item:updated`, `what: "media"`). Default: the realtime bridge.
+   */
+  notify?: (input: {
+    userId: string;
+    itemId: string;
+    metadata: unknown;
+  }) => void;
   now?: () => Date;
 }
 
@@ -206,6 +216,9 @@ function resolveCopyDeps(deps: CopyLibraryItemMediaDeps): ResolvedDeps {
           documentId,
         })),
     liveDocuments: deps.liveDocuments ?? liveDocumentIds,
+    notify:
+      deps.notify ??
+      ((input) => emitLibraryItemUpdated({ ...input, what: "media" })),
     now: deps.now ?? (() => new Date()),
   };
 }
@@ -472,7 +485,8 @@ interface FailedCopy {
 /**
  * Record the run on the item under a row lock — exactly the three media keys,
  * so a person's curation edit or the light read landing meanwhile is kept.
- * Returns the document ids the item now holds.
+ * Returns the document ids the item now holds (none when the item is gone),
+ * and tells the owner's clients once the record is committed.
  */
 async function recordLibraryItemMedia(
   d: ResolvedDeps,
@@ -480,7 +494,7 @@ async function recordLibraryItemMedia(
   run: { copied: LibraryItemMedia[]; failed: FailedCopy[] },
   dead: Set<string>
 ): Promise<Set<string>> {
-  return d.database.transaction(async (tx) => {
+  const recorded = await d.database.transaction(async (tx) => {
     const [current] = await tx
       .select({ metadata: documents.metadata })
       .from(documents)
@@ -492,7 +506,7 @@ async function recordLibraryItemMedia(
         )
       )
       .for("update");
-    if (!current) return new Set<string>();
+    if (!current) return null;
     const next = mergeLibraryMedia(
       current.metadata,
       { ...run, at: d.now().toISOString() },
@@ -504,8 +518,14 @@ async function recordLibraryItemMedia(
         metadata: drizzleSql`COALESCE(${documents.metadata}, '{}'::jsonb) || jsonb_build_object('importMedia', ${JSON.stringify(next.importMedia)}::jsonb, 'importMediaFailed', ${next.importMediaFailed}::int, 'importMediaFailures', ${JSON.stringify(next.importMediaFailures)}::jsonb)`,
       })
       .where(eq(documents.id, row.id));
-    return new Set(next.importMedia.map((m) => m.documentId));
+    return {
+      kept: new Set(next.importMedia.map((m) => m.documentId)),
+      metadata: current.metadata,
+    };
   });
+  if (!recorded) return new Set<string>();
+  d.notify({ userId: row.userId, itemId: row.id, metadata: recorded.metadata });
+  return recorded.kept;
 }
 
 async function copyLibraryItemMediaUnsafe(

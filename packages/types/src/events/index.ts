@@ -117,6 +117,28 @@ export interface ImportFileProgressEvent {
   error?: string;
 }
 
+/**
+ * What finished on a Library item: its read (`importRead` written — read, not
+ * read, blocked, waiting to retry) or its media copy (`importMedia*` written —
+ * a reader's copy or the person's "Try again").
+ */
+export const LIBRARY_ITEM_UPDATES = ["read", "media"] as const;
+export type LibraryItemUpdate = (typeof LIBRARY_ITEM_UPDATES)[number];
+
+/**
+ * A Library item changed in the background (a light-read job, a media copy):
+ * sent to the OWNER's room only (`user:<id>`). It names what to refetch and
+ * carries no content — a client invalidates its Library queries for the item
+ * (and the groups it is in) and reads the item through the Library doors.
+ */
+export interface LibraryItemUpdatedEvent {
+  /** The Library item (`documents.id`). */
+  itemId: string;
+  /** The groups the item is in, when it is in any (their counts may have moved). */
+  groupIds?: string[];
+  what: LibraryItemUpdate;
+}
+
 // =============================================================================
 // AI Events
 // =============================================================================
@@ -226,6 +248,7 @@ export interface DomainServerToClientEvents {
   "openclaw:message:received": (data: ExternalMessageReceivedEvent) => void;
   "synap:reply:routed": (data: SynapReplyRoutedEvent) => void;
   "import:file:progress": (data: ImportFileProgressEvent) => void;
+  "library:item:updated": (data: LibraryItemUpdatedEvent) => void;
 
   // UI gateway
   "ui:focus": (data: UiFocusEvent) => void;
@@ -321,6 +344,8 @@ export const EventNames = {
   EXTERNAL_MESSAGE_RECEIVED: "openclaw:message:received", // legacy wire name
   SYNAP_REPLY_ROUTED: "synap:reply:routed",
   IMPORT_FILE_PROGRESS: "import:file:progress",
+  /** A Library item's read or media copy finished (owner's room only). */
+  LIBRARY_ITEM_UPDATED: "library:item:updated",
 
   // UI gateway
   UI_FOCUS: "ui:focus",

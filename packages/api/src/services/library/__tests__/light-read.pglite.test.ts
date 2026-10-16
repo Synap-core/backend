@@ -164,6 +164,8 @@ interface Calls {
   copied: Array<{ itemId: string; urls: string[] }>;
   stt: string[];
   indexed: string[];
+  /** Items whose owner was told the read landed (`library:item:updated`). */
+  notified: Array<{ userId: string; itemId: string; metadata?: unknown }>;
 }
 
 const STAMP = (id = "builtin:article"): ReaderStamp => ({
@@ -198,6 +200,7 @@ function makeDeps(over: Partial<LightReadDeps> & { perDay?: number } = {}): {
     copied: [],
     stt: [],
     indexed: [],
+    notified: [],
   };
   const deps: LightReadDeps = {
     async readUrl(url, opts) {
@@ -252,6 +255,7 @@ function makeDeps(over: Partial<LightReadDeps> & { perDay?: number } = {}): {
     reserveAi: (r) =>
       reserveLibraryReadAi(db as never, { ...r, perDay: over.perDay ?? 50 }),
     index: async (id) => void calls.indexed.push(id),
+    notify: (n) => void calls.notified.push(n),
     now: () => NOW,
     ...over,
   };
@@ -332,6 +336,44 @@ describe("light read", () => {
     // A final read is not read twice.
     expect(await read(id, deps)).toMatchObject({ status: "skipped" });
     expect(calls.summarize).toBe(1);
+  });
+
+  it("the owner is told when the read is WRITTEN (with the item's groups), never for a skip", async () => {
+    const id = await stageItem({
+      item: { source: { kind: "text" } },
+      body: "Groceries\nTODO: buy oat milk",
+    });
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importCuration,groupIds}', '["g-1"]'::jsonb) where id = $1`,
+      [id]
+    );
+    const { deps, calls } = makeDeps();
+    await read(id, deps);
+    expect(calls.notified.map((n) => [n.userId, n.itemId])).toEqual([
+      [USER, id],
+    ]);
+    expect(
+      (calls.notified[0]!.metadata as any).importCuration.groupIds
+    ).toEqual(["g-1"]);
+  });
+
+  it("an automatic read that YIELDS to a read landing meanwhile writes nothing and tells nobody", async () => {
+    const url = "https://conf.example/yield";
+    const id = await stageItem({ item: { source: { kind: "url", url } } });
+    const { deps, calls } = makeDeps({
+      async readUrl(u) {
+        // An explicit "Read with X" job lands while this one runs…
+        await q(
+          `update documents set metadata = jsonb_set(metadata, '{importRead}', '{"status":"read","suggestedActions":[]}'::jsonb) where id = $1`,
+          [id]
+        );
+        // …and this automatic read fails.
+        return { status: "failed", sourceUrl: u, via: STAMP(), error: "x" };
+      },
+    });
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect((await readOf(id))!.status).toBe("read");
+    expect(calls.notified).toEqual([]);
   });
 
   it("an AI summary that fails keeps the first sentences, still read", async () => {

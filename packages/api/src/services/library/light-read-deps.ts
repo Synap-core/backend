@@ -62,6 +62,12 @@ export interface LightReadDeps {
   reserveAi(args: { userId: string; itemId: string }): Promise<boolean>;
   /** Queue the document for the search index. */
   index(itemId: string): Promise<void>;
+  /**
+   * Tell the owner's clients the item's read was written
+   * (`library:item:updated`, `what: "read"`). Fire-and-forget, never throws;
+   * absent = nobody is told (tests).
+   */
+  notify?(input: { userId: string; itemId: string; metadata?: unknown }): void;
   now(): Date;
 }
 
@@ -206,6 +212,12 @@ export function defaultLightReadDeps(args: {
         documentId: itemId,
         timestamp: Date.now(),
       });
+    },
+    notify(input) {
+      void import("../../utils/event-emit.js").then(
+        ({ emitLibraryItemUpdated }) =>
+          emitLibraryItemUpdated({ ...input, what: "read" })
+      );
     },
     now: () => new Date(),
   };
