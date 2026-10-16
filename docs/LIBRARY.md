@@ -56,11 +56,11 @@ A link is read through ONE door, `readUrl` (`services/capabilities/url-readers.t
 
 ### Media copies
 
-The light read copies the media the reader returned INTO the pod, in the same job (`services/media-copy/copy-library-item-media.ts`, the same guarded download door and marking as the entity media copy): images up to 25 MB, video (mp4/webm, sniffed from the bytes) streamed to storage up to `LIBRARY_MEDIA_VIDEO_MAX_BYTES` (default 1 GiB, never buffered in memory), at most 12 files per item, deduplicated by sha256. A copied video with no transcript is transcribed (IS `/api/transcribe`, one AI unit; files up to 20 MiB). Clients show the copies, never the platform's hot-linked image. Only NEW reads copy media: an item read before this shipped keeps the platform tile until read again.
+The light read copies the media the reader returned INTO the pod, in the same job (`services/media-copy/copy-library-item-media.ts`, the same guarded download door and marking as the entity media copy): images up to 25 MB, video (mp4/webm, sniffed from the bytes) streamed to storage up to `SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES` (default 1 GiB, never buffered in memory), at most 12 files per item, deduplicated by sha256. A copied video with no transcript is transcribed (IS `/api/transcribe`, one AI unit; files up to 20 MiB). Clients show the copies, never the platform's hot-linked image. Only NEW reads copy media: an item read before this shipped keeps the platform tile until read again.
 
 ### Env
 
-`SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY` (workers on the light-read queue, default 4), `SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES` (job expiry, default 60), `LIBRARY_MEDIA_VIDEO_MAX_BYTES`, `SYNAP_LIBRARY_READ_AI_PER_DAY`. Defaults apply unless set in the pod's environment.
+`SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY` (workers on the light-read queue, default 4), `SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES` (job expiry, default 60), `SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES` (the old name `LIBRARY_MEDIA_VIDEO_MAX_BYTES` is still read), `SYNAP_LIBRARY_READ_AI_PER_DAY`. Defaults apply unless set in the pod's environment.
 
 ## Groups made inside an import
 

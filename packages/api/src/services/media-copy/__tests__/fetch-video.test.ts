@@ -88,18 +88,39 @@ describe("libraryMediaVideoMaxBytes", () => {
     expect(libraryMediaVideoMaxBytes({})).toBe(1024 ** 3);
     expect(LIBRARY_MEDIA_VIDEO_MAX_BYTES_DEFAULT).toBe(1024 ** 3);
     expect(
-      libraryMediaVideoMaxBytes({ LIBRARY_MEDIA_VIDEO_MAX_BYTES: "5000" })
+      libraryMediaVideoMaxBytes({ SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES: "5000" })
     ).toBe(5000);
     expect(
-      libraryMediaVideoMaxBytes({ LIBRARY_MEDIA_VIDEO_MAX_BYTES: "-1" })
+      libraryMediaVideoMaxBytes({ SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES: "-1" })
     ).toBe(1024 ** 3);
     expect(
-      libraryMediaVideoMaxBytes({ LIBRARY_MEDIA_VIDEO_MAX_BYTES: "1e9" })
+      libraryMediaVideoMaxBytes({ SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES: "1e9" })
     ).toBe(1024 ** 3);
     // documents.size is an int4.
     expect(
-      libraryMediaVideoMaxBytes({ LIBRARY_MEDIA_VIDEO_MAX_BYTES: "9999999999" })
+      libraryMediaVideoMaxBytes({
+        SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES: "9999999999",
+      })
     ).toBe(2_147_483_647);
+  });
+
+  it("the name it shipped under is still read; the new name wins when both are set", () => {
+    expect(
+      libraryMediaVideoMaxBytes({ LIBRARY_MEDIA_VIDEO_MAX_BYTES: "7000" })
+    ).toBe(7000);
+    expect(
+      libraryMediaVideoMaxBytes({
+        LIBRARY_MEDIA_VIDEO_MAX_BYTES: "7000",
+        SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES: "9000",
+      })
+    ).toBe(9000);
+    // An empty new name (compose passes `''`) does not hide the old one.
+    expect(
+      libraryMediaVideoMaxBytes({
+        LIBRARY_MEDIA_VIDEO_MAX_BYTES: "7000",
+        SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES: "",
+      })
+    ).toBe(7000);
   });
 });
 

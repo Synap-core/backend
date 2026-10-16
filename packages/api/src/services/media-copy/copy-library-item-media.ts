@@ -17,7 +17,7 @@
  *             refusal, or a transient one tried `MAX_TRANSIENT_ATTEMPTS`).
  *   image   → `fetchExternalImage` (SSRF guard, ≤ 25 MB, magic bytes).
  *   video   → `fetchExternalVideoToSink` STREAMED into `storage.uploadStream`
- *             (mp4/webm sniffed from the bytes, ≤ `LIBRARY_MEDIA_VIDEO_MAX_BYTES`,
+ *             (mp4/webm sniffed from the bytes, ≤ `SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES`,
  *             default 1 GiB) — never buffered; its sha256 is the checksum the
  *             storage upload computes as the bytes pass (one hash pass).
  *   dedup   → the per-user bytes ledger (`metadata.intakeSource.fileSha256`,

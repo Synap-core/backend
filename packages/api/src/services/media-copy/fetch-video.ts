@@ -17,7 +17,7 @@
  *               the response, {@link VIDEO_IDLE_TIMEOUT_MS} of silence between
  *               chunks, {@link VIDEO_TOTAL_TIMEOUT_MS} overall.
  *
- * Cap: `LIBRARY_MEDIA_VIDEO_MAX_BYTES` (env, bytes), default 1 GiB.
+ * Cap: `SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES` (env, bytes), default 1 GiB.
  * Never throws: every refusal is a typed reason.
  */
 
@@ -43,13 +43,20 @@ export const VIDEO_TOTAL_TIMEOUT_MS = 30 * 60_000;
 const DOCUMENT_SIZE_MAX = 2_147_483_647;
 
 /**
- * The video byte cap: `LIBRARY_MEDIA_VIDEO_MAX_BYTES` when a positive integer
- * (at most what `documents.size` can hold), else 1 GiB.
+ * The video byte cap: `SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES` when a positive
+ * integer (at most what `documents.size` can hold), else 1 GiB. The name it
+ * first shipped under, `LIBRARY_MEDIA_VIDEO_MAX_BYTES`, is read when the new
+ * one is unset (a pod that set it keeps its cap).
  */
 export function libraryMediaVideoMaxBytes(
   env: Record<string, string | undefined> = process.env
 ): number {
-  return envInt(env, "LIBRARY_MEDIA_VIDEO_MAX_BYTES", {
+  const name =
+    env.SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES?.trim() ||
+    !env.LIBRARY_MEDIA_VIDEO_MAX_BYTES?.trim()
+      ? "SYNAP_LIBRARY_MEDIA_VIDEO_MAX_BYTES"
+      : "LIBRARY_MEDIA_VIDEO_MAX_BYTES";
+  return envInt(env, name, {
     default: LIBRARY_MEDIA_VIDEO_MAX_BYTES_DEFAULT,
     min: 1,
     max: DOCUMENT_SIZE_MAX,
