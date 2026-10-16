@@ -97,7 +97,7 @@ const RAW_TEXT_ELEMENTS = new Set(["script", "style", "textarea", "title"]);
  * (stops counting once either cap is passed). Approximate the way a tag
  * scanner is — it never parses — and errs on the side of "too complex".
  */
-export function domShape(html: string): { elements: number; depth: number } {
+function domShape(html: string): { elements: number; depth: number } {
   const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^<>]*>/g;
   let elements = 0;
   let depth = 0;
@@ -133,7 +133,7 @@ export function domShape(html: string): { elements: number; depth: number } {
 }
 
 /** Is `html` within what the DOM extractor may be handed? */
-export function domExtractable(html: string): boolean {
+function domExtractable(html: string): boolean {
   const shape = domShape(html);
   return (
     shape.elements <= EXTRACT_DOM_ELEMENTS_MAX &&

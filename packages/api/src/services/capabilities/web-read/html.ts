@@ -98,7 +98,7 @@ const CHROME_TAGS =
  * close is missing after position p is remembered as missing after any later
  * position.
  */
-export function stripChrome(html: string): string {
+function stripChrome(html: string): string {
   const lower = asciiLower(html);
   const re = new RegExp(`<!--|<(${CHROME_TAGS})\\b[^<>]*>`, "gi");
   const noCloseAfter = new Map<string, number>();

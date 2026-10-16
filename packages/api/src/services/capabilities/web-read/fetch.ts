@@ -23,12 +23,11 @@ import {
   type SafePublicFetchInit,
 } from "@synap/shared-utils";
 
-export const WEB_READ_TIMEOUT_MS = 10_000;
+const WEB_READ_TIMEOUT_MS = 10_000;
 /** Public pages and short links redirect (http→https, locale, slug) — the shared public-read budget. */
-export const WEB_READ_REDIRECT_HOPS = PUBLIC_FETCH_REDIRECT_HOPS;
-export { WEB_READ_PAGE_BYTES_MAX } from "./limits.js";
+const WEB_READ_REDIRECT_HOPS = PUBLIC_FETCH_REDIRECT_HOPS;
 /** Bytes of one API answer read at most. */
-export const WEB_READ_API_BYTES_MAX = 1_000_000;
+const WEB_READ_API_BYTES_MAX = 1_000_000;
 /** Bytes of a non-2xx body kept — enough to recognise a challenge page. */
 const ERROR_BODY_BYTES_MAX = 64_000;
 
@@ -36,8 +35,7 @@ const ERROR_BODY_BYTES_MAX = 64_000;
  * Identifies the reader honestly (Wikimedia's API policy asks for a contact
  * URL). Never a browser string: the pod does not pretend to be a person.
  */
-export const WEB_READ_USER_AGENT =
-  "SynapPublicReader/1.0 (+https://synap.live)";
+const WEB_READ_USER_AGENT = "SynapPublicReader/1.0 (+https://synap.live)";
 
 /** `safePublicFetch`'s shape — tests inject a recorded-response fake. */
 export type WebFetcher = (
@@ -77,7 +75,7 @@ export type WebGetResult =
   /** No answer: DNS, connection, TLS, timeout, too many redirects. */
   | { ok: false; kind: "network"; detail: string };
 
-export interface WebGetDeps {
+interface WebGetDeps {
   fetch?: WebFetcher;
   signal?: AbortSignal;
 }

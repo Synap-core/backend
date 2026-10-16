@@ -47,7 +47,7 @@ export interface SiteAdapter {
   read(url: string, ctx: SiteAdapterContext): Promise<SiteRead | null>;
 }
 
-export function siteFailed(
+function siteFailed(
   error: string,
   errorClass: UrlReadFailureClass = "unknown"
 ): SiteRead {
@@ -127,7 +127,7 @@ export function looksLikeChallenge(
  * A non-2xx answer as an honest read. `what` names the thing asked for in the
  * error text ("the page", "GitHub's API").
  */
-export function fromHttpFailure(
+function fromHttpFailure(
   res: Extract<WebGetResult, { ok: false; kind: "http" }>,
   what: string
 ): SiteRead {

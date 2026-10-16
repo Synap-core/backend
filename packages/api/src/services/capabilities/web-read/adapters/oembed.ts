@@ -31,7 +31,7 @@ const enc = (url: URL) => encodeURIComponent(url.toString());
  * page, a deleted video) — the page decides. 401/403 → the provider refuses
  * to describe it (private or not embeddable).
  */
-export async function readOembed(
+async function readOembed(
   endpoint: string,
   ctx: SiteAdapterContext,
   provider: string

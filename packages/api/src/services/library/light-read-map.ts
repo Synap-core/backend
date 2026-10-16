@@ -28,7 +28,7 @@ import type {
 } from "@synap-core/types/url-read";
 
 /** What the door said about the read, kept on the stored read. */
-export interface DoorFacts {
+interface DoorFacts {
   reader?: ReaderStamp;
   blocked?: LibraryReadBlocked;
   error?: string;

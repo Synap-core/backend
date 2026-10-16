@@ -36,7 +36,7 @@ const QUEUE_MAX = 16;
 const WORKER_HEAP_MB = 256;
 
 export const EXTRACT_TIMEOUT_ERROR = "extract_timeout";
-export const EXTRACT_BUSY_ERROR = "extract_busy";
+const EXTRACT_BUSY_ERROR = "extract_busy";
 
 export interface ExtractPageOptions {
   /** Default {@link EXTRACT_DEADLINE_MS}. */

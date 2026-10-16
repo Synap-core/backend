@@ -68,7 +68,7 @@ export const LIBRARY_WAITING_READ_STATUSES = [
 ] as const;
 
 /** Waiting items of one group a readers / readWith call looks at, at most. */
-export const LIBRARY_READERS_SCAN_MAX = 1000;
+const LIBRARY_READERS_SCAN_MAX = 1000;
 
 const logger = createLogger({ module: "library/readers" });
 
@@ -470,7 +470,7 @@ function holdsFreshUnit(metadata: unknown, now: number): boolean {
   return Number.isFinite(at) && at >= now - LIBRARY_READ_WINDOW_MS;
 }
 
-export function defaultLibraryReadersDeps(): LibraryReadersDeps {
+function defaultLibraryReadersDeps(): LibraryReadersDeps {
   return {
     async listReaders(ctx, url) {
       const { listReadersForUrl } =

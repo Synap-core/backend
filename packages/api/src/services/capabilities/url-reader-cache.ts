@@ -16,7 +16,7 @@
  * seconds, long enough to serve one request's loop over many items.
  */
 
-export const URL_READER_SOURCES_TTL_MS = 5_000;
+const URL_READER_SOURCES_TTL_MS = 5_000;
 const MAX_KEYS = 500;
 
 const entries = new Map<string, { at: number; value: unknown }>();

@@ -39,7 +39,7 @@ const logger = createLogger({ module: "library/ask-lane" });
 /** Characters of snippet a hit carries (a pointer to the item, not its body). */
 export const ASK_LIBRARY_SNIPPET_MAX = 280;
 /** Library hits one `ask` returns at most. */
-export const ASK_LIBRARY_LIMIT_MAX = 10;
+const ASK_LIBRARY_LIMIT_MAX = 10;
 /** Stored read texts one `ask` fetches at most (for the top hits only). */
 export const ASK_LIBRARY_TEXT_FETCH_MAX = 3;
 
