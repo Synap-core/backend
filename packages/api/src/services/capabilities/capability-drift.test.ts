@@ -203,25 +203,73 @@ describe("installTimePlaceholders", () => {
 });
 
 describe("projectUrlPatterns — the reader URLs the applier writes", () => {
+  /** A declared reader: read_webpage + readOnly, with these urls. */
+  const reader = (urls: unknown) =>
+    ({
+      urls,
+      intent: "read_webpage",
+      metadata: { readOnly: true },
+    }) as Parameters<typeof projectUrlPatterns>[0];
+  const OFFICIAL = { officialSource: true };
+  const OTHER = { officialSource: false };
+
   it("keeps valid patterns in declared order, trimmed and de-duplicated", () => {
     expect(
-      projectUrlPatterns([" instagram.com/p/* ", "instagram.com/p/*", "*"])
+      projectUrlPatterns(
+        reader([" instagram.com/p/* ", "instagram.com/p/*", "*"]),
+        OFFICIAL
+      )
     ).toEqual(["instagram.com/p/*", "*"]);
   });
   it("drops patterns the url-read grammar refuses", () => {
     expect(
-      projectUrlPatterns([
-        "https://x.com/*",
-        "x.com/p?x=1",
-        3,
-        "tiktok.com/@*/video/*",
-      ])
+      projectUrlPatterns(
+        reader(["https://x.com/*", "x.com/p?x=1", 3, "tiktok.com/@*/video/*"]),
+        OFFICIAL
+      )
     ).toEqual(["tiktok.com/@*/video/*"]);
   });
   it("nothing usable, or nothing declared → null (not a reader)", () => {
-    expect(projectUrlPatterns([])).toBeNull();
-    expect(projectUrlPatterns(["not a pattern"])).toBeNull();
-    expect(projectUrlPatterns(undefined)).toBeNull();
-    expect(projectUrlPatterns("instagram.com/p/*")).toBeNull();
+    expect(projectUrlPatterns(reader([]), OFFICIAL)).toBeNull();
+    expect(projectUrlPatterns(reader(["not a pattern"]), OFFICIAL)).toBeNull();
+    expect(projectUrlPatterns(reader(undefined), OFFICIAL)).toBeNull();
+    expect(
+      projectUrlPatterns(reader("instagram.com/p/*"), OFFICIAL)
+    ).toBeNull();
+  });
+
+  // OV-04: the gate holds at the POD, whatever a third-party catalog sent.
+  it("a verb that is not a readOnly read_webpage verb is never a reader", () => {
+    const urls = ["instagram.com/p/*"];
+    expect(
+      projectUrlPatterns({ urls, metadata: { readOnly: true } }, OFFICIAL)
+    ).toBeNull();
+    expect(
+      projectUrlPatterns(
+        { urls, intent: "send_message", metadata: { readOnly: true } },
+        OFFICIAL
+      )
+    ).toBeNull();
+    // Declares it writes (or says nothing): handed no links.
+    expect(
+      projectUrlPatterns(
+        { urls, intent: "read_webpage", metadata: { readOnly: false } },
+        OFFICIAL
+      )
+    ).toBeNull();
+    expect(
+      projectUrlPatterns({ urls, intent: "read_webpage" }, OFFICIAL)
+    ).toBeNull();
+    expect(projectUrlPatterns(reader(urls), OTHER)).toEqual(urls);
+  });
+  it("a pattern broader than one domain is kept only from the official vendor", () => {
+    const urls = ["*", "*.co.uk", "*.example.com", "news.example.org/a/*"];
+    expect(projectUrlPatterns(reader(urls), OFFICIAL)).toEqual(urls);
+    expect(projectUrlPatterns(reader(urls), OTHER)).toEqual([
+      "*.example.com",
+      "news.example.org/a/*",
+    ]);
+    // Nothing narrow left → not a reader at all.
+    expect(projectUrlPatterns(reader(["*"]), OTHER)).toBeNull();
   });
 });

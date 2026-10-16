@@ -542,7 +542,9 @@ export async function reconcileCapabilitiesToTemplates(
         buildContainerCtx({
           createdBy: container.createdBy,
           workspaceId: container.workspaceId,
-        })
+        }),
+        // An official template (the comparator's `expected` assumes the same).
+        { officialSource: true }
       );
       await stampContainerMetadata(
         container.id,

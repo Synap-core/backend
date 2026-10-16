@@ -28,7 +28,10 @@
 
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import { paramPlaceholderTokens } from "../_shared/interpolate.js";
-import { isValidUrlPattern } from "@synap-core/types/url-read";
+import {
+  isBroadUrlPattern,
+  isValidUrlPattern,
+} from "@synap-core/types/url-read";
 
 /** Canonical (key-sorted) JSON — jsonb does not preserve key insertion order, so a
  * plain JSON.stringify would report false drift on key order alone. Normalizes
@@ -64,6 +67,12 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v10 = v9 with the `url_patterns` projection GATED (`projectUrlPatterns`):
+ *      kept only for a `read_webpage` verb declared `readOnly: true`, and a
+ *      pattern broader than one registrable domain only from the official
+ *      vendor. A v9 stamp asserted convergence to the ungated projection; a
+ *      container it covered may hold patterns this comparator now expects to
+ *      be gone, so each re-diffs once.
  * v9 = v8 + the skill-row `url_patterns` COLUMN (migration 0330): the URLs a
  *      READER verb declares (`urls` in the catalog, projected by
  *      `projectUrlPatterns`). A v8 stamp says "clean under a comparator that
@@ -105,7 +114,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 9;
+export const DRIFT_COMPARATOR_VERSION = 10;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -211,17 +220,35 @@ export interface DefinitionSkillRow {
  * value, never `undefined`: a template that drops `urls` must clear the column,
  * because a stale pattern keeps routing URLs to a reader that no longer
  * declares them.
+ *
+ * GATED AT THE POD, whatever the catalog validator said (a third-party
+ * source never ran it): a skill is a reader only when it declares intent
+ * `read_webpage` AND `metadata.readOnly: true` — a verb that writes is never
+ * handed people's links — and a pattern broader than one registrable domain
+ * (`isBroadUrlPattern`: `*`, `*.co.uk`) is kept only from the official
+ * vendor (`officialSource`).
  */
-export function projectUrlPatterns(urls: unknown): string[] | null {
+export function projectUrlPatterns(
+  skill: Pick<DefinitionSkillRow, "urls" | "intent" | "metadata">,
+  opts: { officialSource: boolean }
+): string[] | null {
+  const urls: unknown = skill.urls;
   if (!Array.isArray(urls)) return null;
+  if (skill.intent !== READER_INTENT) return null;
+  if (declaredReadOnly(skill.metadata) !== true) return null;
   const out: string[] = [];
   for (const u of urls) {
     if (typeof u !== "string") continue;
     const p = u.trim();
-    if (p && isValidUrlPattern(p) && !out.includes(p)) out.push(p);
+    if (!p || !isValidUrlPattern(p) || out.includes(p)) continue;
+    if (!opts.officialSource && isBroadUrlPattern(p)) continue;
+    out.push(p);
   }
   return out.length > 0 ? out : null;
 }
+
+/** The routing intent a reader verb declares (catalog `intent`, migration 0329). */
+export const READER_INTENT = "read_webpage";
 
 /**
  * The FIRST of the two keys of a `skills.metadata` bag that a capability
@@ -477,7 +504,9 @@ export const PROJECTED_SKILL_FIELDS: Record<
    * column to null.
    */
   urlPatterns: {
-    expected: (d) => projectUrlPatterns(d.urls),
+    // The reconcile converges installed containers to OFFICIAL templates
+    // (`cp_catalog_cache`'s official source): their broad patterns are kept.
+    expected: (d) => projectUrlPatterns(d, { officialSource: true }),
     actual: (i) => i.urlPatterns ?? null,
   },
   // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly the

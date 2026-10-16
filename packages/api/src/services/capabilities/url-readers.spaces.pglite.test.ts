@@ -210,12 +210,13 @@ describe("the reader door sees every space the person can see", () => {
     ]);
   });
 
+  // The person's tap names the reader: automatic reads never run an installed one (OV-04).
   it("a pod-wide Library item (allSpaces, workspaceId null) reads with S's reader, run IN S", async () => {
     const { d, execute } = spyDeps();
     const r = await readUrl(
       { userId: U, workspaceId: null, allSpaces: true },
       IG,
-      { allowBilled: false },
+      { reader: "s_ig_read", allowBilled: false },
       d
     );
     expect(r.read.status).toBe("ok");
@@ -233,7 +234,7 @@ describe("the reader door sees every space the person can see", () => {
     const r = await readUrl(
       { userId: U, workspaceId: W, allSpaces: true },
       IG,
-      { allowBilled: false },
+      { reader: "s_ig_read", allowBilled: false },
       d
     );
     expect(r.read.status).toBe("ok");
@@ -278,7 +279,7 @@ describe("the reader door sees every space the person can see", () => {
     const r = await readUrl(
       { userId: U, workspaceId: S, agentUserId: AGENT },
       IG,
-      { allowBilled: false },
+      { reader: "s_ig_read", allowBilled: false },
       d
     );
     expect(r.read.status).toBe("ok");

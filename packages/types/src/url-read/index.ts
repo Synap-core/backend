@@ -547,6 +547,50 @@ export function urlPatternSpecificity(pattern: string): number {
   return 10 + p.host.length - (p.wildcardHost ? 5 : 0) + 2 * p.pathLiteral;
 }
 
+/**
+ * Second-level labels under which a two-label host is a PUBLIC suffix, not
+ * one owner's domain (`co.uk`, `com.au`, `gov.br`…). A heuristic, not the
+ * Public Suffix List: it catches the common ccTLD registries; an exotic
+ * suffix it misses (`*.github.io`-style shared hosts) is still a domain the
+ * pattern names, so routing it stays explicit.
+ */
+const PUBLIC_SECOND_LEVELS = new Set([
+  "co",
+  "com",
+  "net",
+  "org",
+  "gov",
+  "edu",
+  "ac",
+  "ne",
+  "or",
+  "go",
+  "gob",
+  "nic",
+  "mil",
+]);
+
+/**
+ * Does `pattern` reach past ONE registrable domain? `"*"` (every link) or a
+ * wildcard over a public second level (`*.co.uk`, `*.com.au`). Such a
+ * pattern would hand a reader every link a person keeps on a whole registry —
+ * the pod refuses it from any pack but the official vendor's. (A wildcard
+ * over a bare TLD, `*.com`, is not valid grammar at all: a host needs two
+ * labels.) Invalid → false (it routes nothing anyway).
+ */
+export function isBroadUrlPattern(pattern: string): boolean {
+  const p = parsePattern(pattern);
+  if (!p) return false;
+  if (p.any) return true;
+  if (!p.wildcardHost) return false;
+  const labels = p.host.split(".");
+  return (
+    labels.length === 2 &&
+    labels[1]!.length === 2 &&
+    PUBLIC_SECOND_LEVELS.has(labels[0]!)
+  );
+}
+
 /** Highest specificity among `patterns` that cover `url`, or -1 when none does. */
 export function bestUrlPatternSpecificity(
   patterns: readonly string[] | null | undefined,

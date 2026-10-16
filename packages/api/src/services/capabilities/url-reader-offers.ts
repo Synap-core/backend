@@ -43,10 +43,20 @@ export function catalogReaderSkills(
   }
   const out: CatalogReaderSkill[] = [];
   for (const s of skills) {
-    const skill = s as { name?: unknown; urls?: unknown; requires?: unknown };
+    const skill = s as {
+      name?: unknown;
+      urls?: unknown;
+      intent?: unknown;
+      metadata?: unknown;
+      requires?: unknown;
+    };
     if (typeof skill.name !== "string") continue;
-    // The applier's own projection: only patterns that parse, empty → null.
-    const urls = projectUrlPatterns(skill.urls);
+    // The applier's own projection (the gate included): these are OFFICIAL
+    // catalog entries (`cp_catalog_cache` read unscoped = the official source).
+    const urls = projectUrlPatterns(
+      skill as Parameters<typeof projectUrlPatterns>[0],
+      { officialSource: true }
+    );
     if (!urls) continue;
     out.push({
       name: skill.name,

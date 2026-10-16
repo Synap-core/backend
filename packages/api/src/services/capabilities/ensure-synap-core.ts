@@ -1185,7 +1185,8 @@ export async function ensureSynapCoreCapability(): Promise<void> {
     const result = await createCapabilityFromDefinition(
       SYNAP_CORE_DEFINITION,
       {},
-      ctx
+      ctx,
+      { officialSource: true }
     );
 
     // First-party system verbs are trusted by construction (pod-owner seeded) —

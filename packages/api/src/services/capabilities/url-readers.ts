@@ -10,6 +10,18 @@
  * own visibility floor — and the catalog entries `cp_catalog_cache` already
  * holds. Nothing here keeps a host table: a reader joins routing by declaring.
  *
+ * ── AUTOMATIC READS ARE THE POD'S OWN ───────────────────────────────────────
+ * A read nobody asked a reader for (`reader` absent: the Library's keep and
+ * sweep, capture, Build's inline read, an agent's `web.read` with no reader)
+ * runs the pod's BUILT-IN ladder only. An installed reader — free or billed,
+ * official or from another source — reads a link only when a person taps it
+ * ("Read with X") or an agent names it, and then through its own gate. A
+ * reader's `urls` decide what it is OFFERED for, never where links flow by
+ * themselves: approving a pack for one purpose never quietly sends it every
+ * link the person keeps. Its declaration is gated at the pod too
+ * (`projectUrlPatterns`: a readOnly `read_webpage` verb; a pattern broader
+ * than one domain only from the official vendor).
+ *
  * ── ROUTING, NEVER AUTHORIZATION ────────────────────────────────────────────
  * A verb reader runs through `executeCapability` — its own gate, its own
  * approval, its own agent posture. This module only picks WHICH verb; a deny
@@ -61,7 +73,10 @@ export {
 // ── readUrl ─────────────────────────────────────────────────────────────────
 
 export interface ReadUrlOptions {
-  /** `"builtin"` or a reader verb id from the offers. Absent = best free ready reader. */
+  /**
+   * `"builtin"` or a reader verb id from the offers. Absent = the pod's
+   * built-in ladder (never an installed reader: see AUTOMATIC READS).
+   */
   reader?: string;
   /**
    * May an `account`-billed reader run? Only an explicit choice (a person's
@@ -172,10 +187,10 @@ function withCurrent(
 /**
  * Read `url` through the one door.
  *
- * No `reader` → the best READY reader that bills nothing (the built-in when
- * none outranks it). `"builtin"` → the pod's free ladder. A verb id → that
- * verb, through `executeCapability` (its own gate; `observability:"mirror"` so
- * reads never flood recall).
+ * No `reader`, or `"builtin"` → the pod's free built-in ladder (blocked
+ * needs_reader for a link only a reader can read, with the offers that
+ * would). A verb id → that verb, through `executeCapability` (its own gate;
+ * `observability:"mirror"` so reads never flood recall).
  *
  * @throws only when the readers cannot be listed (see {@link listReadersForUrl}).
  */
@@ -197,34 +212,26 @@ export async function readUrl(
     return { read, offers: withCurrent(ranked, BUILTIN_READER_ID) };
   };
 
-  let chosen: RankedReader | undefined;
-  if (opts.reader === undefined) {
-    chosen = ranked.find(
-      (r) => r.offer.state === "ready" && r.offer.billing === "none"
-    );
-    // Nothing free and ready (e.g. an Instagram post): the built-in still
-    // answers — blocked needs_reader with the offers that would read it.
-    if (!chosen || chosen.builtin) return builtin();
-  } else if (opts.reader === BUILTIN_READER_ID) {
+  // Nobody named a reader: the pod's own ladder, never an installed one.
+  if (opts.reader === undefined || opts.reader === BUILTIN_READER_ID) {
     return builtin();
-  } else {
-    chosen = ranked.find((r) => r.offer.readerId === opts.reader);
-    if (!chosen) {
-      return {
-        read: failedRead(
-          sourceUrl,
-          {
-            id: opts.reader,
-            name: opts.reader,
-            billed: false,
-            readAt: now.toISOString(),
-          },
-          `"${opts.reader}" does not read this link`,
-          "refused"
-        ),
-        offers: ranked.map((r) => r.offer),
-      };
-    }
+  }
+  const chosen = ranked.find((r) => r.offer.readerId === opts.reader);
+  if (!chosen) {
+    return {
+      read: failedRead(
+        sourceUrl,
+        {
+          id: opts.reader,
+          name: opts.reader,
+          billed: false,
+          readAt: now.toISOString(),
+        },
+        `"${opts.reader}" does not read this link`,
+        "refused"
+      ),
+      offers: ranked.map((r) => r.offer),
+    };
   }
 
   const offers = ranked.map((r) => r.offer);

@@ -200,6 +200,8 @@ beforeAll(async () => {
     skills: [
       {
         name: "capture_social_post",
+        intent: "read_webpage",
+        metadata: { readOnly: true },
         urls: ["instagram.com/p/*"],
         requires: ["apify_api"],
       },
@@ -207,6 +209,8 @@ beforeAll(async () => {
       // the pack is installed, so it is an update, never an install offer.
       {
         name: "apify_reel_read",
+        intent: "read_webpage",
+        metadata: { readOnly: true },
         urls: ["instagram.com/reel/*"],
         requires: ["apify_api"],
       },
@@ -215,7 +219,14 @@ beforeAll(async () => {
   await catalogEntry("reel-reader", {
     key: "reel-reader",
     tools: [],
-    skills: [{ name: "reel_read", urls: ["instagram.com/reel/*"] }],
+    skills: [
+      {
+        name: "reel_read",
+        intent: "read_webpage",
+        urls: ["instagram.com/reel/*"],
+        metadata: { readOnly: true },
+      },
+    ],
   });
   invalidateUrlReaderCache();
 });

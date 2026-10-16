@@ -3825,7 +3825,7 @@ const webReadParams = z.object({
   url: z.string().trim().min(1).max(4096),
   /**
    * A reader id from a previous answer's `offers` (`"builtin"` or a verb id).
-   * Omit to let the pod pick its best free reader.
+   * Omit for the pod's own built-in reader (an installed reader runs only when named).
    */
   reader: z.string().trim().min(1).max(200).optional(),
 });

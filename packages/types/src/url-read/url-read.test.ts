@@ -7,6 +7,7 @@ import {
   readReaderStamp,
   urlPatternSpecificity,
   type ReaderStamp,
+  isBroadUrlPattern,
   isTransientUrlReadFailure,
   URL_READ_FAILURE_CLASSES,
   URL_READ_RETRY_AFTER_MAX_SEC,
@@ -539,5 +540,23 @@ describe("readReaderStamp", () => {
     expect(readReaderStamp({ id: "i", readAt: "t" })).toBeUndefined();
     expect(readReaderStamp({ id: "i", name: "n" })).toBeUndefined();
     expect(readReaderStamp(null)).toBeUndefined();
+  });
+});
+
+describe("isBroadUrlPattern — reaches past one registrable domain", () => {
+  it("`*` and a wildcard over a public second level are broad; one domain is not", () => {
+    expect(
+      [
+        "*",
+        "*.co.uk",
+        "*.com.au",
+        "*.example.com",
+        "example.com/a/*",
+        "*.github.io",
+      ].map(isBroadUrlPattern)
+    ).toEqual([true, true, true, false, false, false]);
+    // Not even grammar: a host needs two labels.
+    expect(isBroadUrlPattern("*.com")).toBe(false);
+    expect(isValidUrlPattern("*.com")).toBe(false);
   });
 });

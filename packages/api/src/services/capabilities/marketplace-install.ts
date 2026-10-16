@@ -105,6 +105,7 @@ import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import {
   createCapabilityFromDefinition,
+  type CreateCapabilityOptions,
   type CreateCapabilityResult,
 } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
@@ -531,7 +532,8 @@ export const capabilityInstallParamsSchema = z.record(z.string(), z.unknown());
 export async function applyCapabilityDefinition(
   definition: unknown,
   params: Record<string, unknown> | undefined,
-  ctx: Context
+  ctx: Context,
+  opts: CreateCapabilityOptions = {}
 ): Promise<CreateCapabilityResult> {
   return createCapabilityFromDefinition(
     // A CP capability PACKAGE arrives wrapped (`{capability:{…}}`): unwrap it
@@ -544,7 +546,8 @@ export async function applyCapabilityDefinition(
       typeof createCapabilityFromDefinition
     >[0],
     params ?? {},
-    ctx
+    ctx,
+    opts
   );
 }
 
@@ -1070,7 +1073,9 @@ export async function applyMarketInstall(
     const result = await applyCapabilityDefinition(
       definition,
       input.params,
-      ctx
+      ctx,
+      // Only Synap's own catalog may ship a reader for more than one domain.
+      { officialSource: source.official }
     );
     return {
       kind: "capability",

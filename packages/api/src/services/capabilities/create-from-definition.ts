@@ -452,6 +452,18 @@ async function stampSourceCapability(
   }
 }
 
+/** How far the applier trusts where a definition came from. */
+export interface CreateCapabilityOptions {
+  /**
+   * The definition comes from Synap's OFFICIAL vendor (the official catalog
+   * source, a reconcile to an official template, a built-in). Only then may a
+   * reader declare a pattern broader than one registrable domain
+   * (`projectUrlPatterns`). Absent = not official: an inline definition, a
+   * package dependency, a third-party source.
+   */
+  officialSource?: boolean;
+}
+
 /**
  * Apply a `CapabilityDefinition` (or a templateKey-loaded one), instantiating
  * its {vault · tools · skills} for the acting user/workspace in `ctx`.
@@ -459,8 +471,10 @@ async function stampSourceCapability(
 export async function createCapabilityFromDefinition(
   rawDef: CapabilityDefinitionWithPlaybooks,
   params: Record<string, unknown>,
-  ctx: Context
+  ctx: Context,
+  opts: CreateCapabilityOptions = {}
 ): Promise<CreateCapabilityResult> {
+  const readerTrust = { officialSource: opts.officialSource === true };
   const userId = ctx.userId;
   if (!userId)
     throw new Error("createCapabilityFromDefinition: missing userId");
@@ -958,7 +972,7 @@ export async function createCapabilityFromDefinition(
             parameters: s.parameters,
             executionMode: s.executionMode ?? "sync",
             timeoutSeconds: s.timeoutSeconds ?? 30,
-            urlPatterns: projectUrlPatterns(s.urls),
+            urlPatterns: projectUrlPatterns(s, readerTrust),
           },
           existingSkill as unknown as Record<string, unknown>
         ) ||
@@ -1034,7 +1048,7 @@ export async function createCapabilityFromDefinition(
           intent: resolveVerbIntent(s, knownIntents),
           // The URLs a READER verb reads (0330). Always written — `null` = not
           // a reader — so a template that drops `urls` stops routing to it.
-          urlPatterns: projectUrlPatterns(s.urls),
+          urlPatterns: projectUrlPatterns(s, readerTrust),
           // The ONLY definition-owned keys of this DB-owned bag. `undefined`
           // when the definition declares none, which Drizzle SKIPS — the
           // live bag (marketSource, rule, counters) is then untouched.
@@ -1084,7 +1098,7 @@ export async function createCapabilityFromDefinition(
       // itself instead of on a tool that does not exist.
       intent: resolveVerbIntent(s, knownIntents),
       // The URLs a READER verb reads (0330), same projection as the update.
-      urlPatterns: projectUrlPatterns(s.urls) ?? undefined,
+      urlPatterns: projectUrlPatterns(s, readerTrust) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
       // sandbox egress allowlist. Without it a published package could never
       // grant its own skill egress: the sandbox is default-deny, so the skill

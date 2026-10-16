@@ -138,7 +138,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(9);
+    ).toBe(10);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -196,9 +196,18 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     intent: { def: { intent: "send_message" }, live: { intent: null } },
     // A READER's declared URLs (0330): always written, so a declared list
     // against a live null is drift.
+    // (A reader is a readOnly read_webpage verb: the projection's gate.)
     urlPatterns: {
-      def: { urls: ["instagram.com/p/*"] },
-      live: { urlPatterns: null },
+      def: {
+        urls: ["instagram.com/p/*"],
+        intent: "read_webpage",
+        metadata: { readOnly: true },
+      },
+      live: {
+        urlPatterns: null,
+        intent: "read_webpage",
+        metadata: { readOnly: true },
+      },
     },
   };
 

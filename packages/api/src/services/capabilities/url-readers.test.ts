@@ -123,6 +123,7 @@ const APIFY_CATALOG: CatalogCacheEntry = {
         intent: "read_webpage",
         urls: APIFY_PATTERNS,
         requires: ["apify_api"],
+        metadata: { readOnly: true },
       },
       { name: "apify_run_actor", requires: ["apify_api"] },
     ],
@@ -614,17 +615,21 @@ describe("readUrl — runs the chosen reader, honestly", () => {
     expect(r.read.error).toContain("sandbox gone");
   });
 
-  it("a free ready reader that outranks the built-in is the automatic choice", async () => {
+  it("an installed FREE reader that outranks the built-in is OFFERED, never run automatically (OV-04)", async () => {
+    // The discriminating row: "best free ready reader runs automatically"
+    // would hand this pack every kept link on its domain.
     const blog = toolRow("Blog reader", [
       verb("blog_read", { urlPatterns: ["example.com/blog/*"] }),
     ]);
     const { d, execute, readBuiltin } = deps([blog]);
-    await readUrl(CTX, ARTICLE, { allowBilled: false }, d);
-    expect(readBuiltin).not.toHaveBeenCalled();
-    expect(execute).toHaveBeenCalledTimes(1);
+    const auto = await readUrl(CTX, ARTICLE, { allowBilled: false }, d);
+    expect(execute).not.toHaveBeenCalled();
+    expect(readBuiltin).toHaveBeenCalledWith(ARTICLE);
+    expect(auto.offers.map((o) => o.readerId)).toContain("blog_read");
+    // Named, it runs — through its own gate.
+    await readUrl(CTX, ARTICLE, { reader: "blog_read", allowBilled: false }, d);
     expect((execute.mock.calls[0] as unknown[])[0]).toMatchObject({
       verbId: "blog_read",
-      suppressProposal: true,
     });
   });
 });
