@@ -536,6 +536,13 @@ export interface UrlReaderOffer {
   serviceId?: string;
   verbId?: string;
   capabilityId?: string;
+  /**
+   * The `skills` row backing the verb (installed readers only): the id
+   * `capabilities.setToolEnabled({ skillId, enabled: true })` turns on for an
+   * `enable` offer. Absent when no backing skill row is visible to the person
+   * (open the capability's page instead) and on install / built-in offers.
+   */
+  skillId?: string;
   installSlug?: string;
   /** `account` = runs on the person's paid account */
   billing: "none" | "account";

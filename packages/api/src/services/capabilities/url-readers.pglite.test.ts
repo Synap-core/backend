@@ -300,11 +300,17 @@ describe("the url-reader door over real rows", () => {
     expect(
       (await listReadersForUrl({ userId: U, workspaceId: WS }, IG))[0]!.state
     ).toBe("enable");
-    // …until the verb is turned on through THE door.
+    // …until the verb is turned on through THE door — with the skill id the
+    // OFFER carries (the browser's enable door reads it; no catalog lookup).
     const { rows } = await q(
       `select id from skills where name = 'capture_social_post'`
     );
-    await setSkillApproved({ userId: U, skillId: rows[0]!.id, approved: true });
+    expect(before[0]!.skillId).toBe(rows[0]!.id);
+    await setSkillApproved({
+      userId: U,
+      skillId: before[0]!.skillId!,
+      approved: true,
+    });
     const after = await listReadersForUrl({ userId: U, workspaceId: WS }, IG);
     expect(after[0]).toMatchObject({
       readerId: "capture_social_post",

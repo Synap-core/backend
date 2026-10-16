@@ -181,6 +181,7 @@ function verbReaders(
         : "enable";
     const serviceId = serviceIdFor(row.containerName, row.name);
     const capabilityId = row.containerId ?? row.id;
+    const skillId = backingSkillId(rows, verbId, row, lensWorkspaceId);
     out.push({
       offer: {
         readerId: verbId,
@@ -188,6 +189,7 @@ function verbReaders(
         ...(serviceId ? { serviceId } : {}),
         verbId,
         capabilityId,
+        ...(skillId ? { skillId } : {}),
         billing: v.credentialed ? "account" : "none",
         state,
         ...(block ? { hint: block.hint } : {}),
@@ -199,6 +201,31 @@ function verbReaders(
     });
   }
   return out;
+}
+
+/**
+ * The `skills` row that backs verb `verbId` as chosen from `row` — the id
+ * `capabilities.setToolEnabled({skillId})` turns on. A skill row backs itself;
+ * for a tool row, the skill of that name in the SAME container, then the same
+ * space, then the caller's lens, then any visible one. `undefined` when no
+ * skill row of that name is visible (the client opens the capability page).
+ */
+function backingSkillId(
+  rows: readonly RegistryCapability[],
+  verbId: string,
+  row: RegistryCapability,
+  lensWorkspaceId: string | null
+): string | undefined {
+  if (row.kind === "skill") return row.id;
+  const named = rows.filter((r) => r.kind === "skill" && r.name === verbId);
+  const pick =
+    (row.containerId
+      ? named.find((r) => r.containerId === row.containerId)
+      : undefined) ??
+    named.find((r) => (r.workspaceId ?? null) === (row.workspaceId ?? null)) ??
+    named.find((r) => (r.workspaceId ?? null) === lensWorkspaceId) ??
+    named[0];
+  return pick?.id;
 }
 
 export function rankedFold(

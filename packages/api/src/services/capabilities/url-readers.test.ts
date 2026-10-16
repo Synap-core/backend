@@ -309,6 +309,53 @@ describe("foldUrlReaders — who can read this link", () => {
   });
 });
 
+describe("foldUrlReaders — the skill an `enable` offer turns on", () => {
+  const skill = (id: string, container: string, ws: string | null = null) =>
+    ({
+      kind: "skill",
+      id,
+      name: "capture_social_post",
+      inputSchema: {},
+      executor: "is-agent",
+      governance: "none",
+      enabled: false,
+      runnable: true,
+      containerId: container,
+      workspaceId: ws,
+      verbs: [],
+    }) as unknown as RegistryCapability;
+
+  it("a tool-row reader names the backing skill of ITS container, not the first of that name", () => {
+    // Another pack's copy of the same verb comes first: "first skill of the
+    // name" would hand the browser a switch for the wrong container.
+    const rows = [
+      skill("skill-other", "cap-other", "ws-other"),
+      skill("skill-apify", "cap-apify"),
+      apifyDisabled,
+    ];
+    const [offer] = foldUrlReaders(rows, IG);
+    expect(offer).toMatchObject({
+      readerId: "capture_social_post",
+      state: "enable",
+      skillId: "skill-apify",
+    });
+  });
+
+  it("a skill-row reader is its own backing skill; no skill row → no id", () => {
+    const own = {
+      ...skill("skill-own", "cap-own"),
+      verbs: [
+        verb("capture_social_post", {
+          urlPatterns: APIFY_PATTERNS,
+          backingSkillExecutable: false,
+        }),
+      ],
+    } as RegistryCapability;
+    expect(foldUrlReaders([own], IG)[0]!.skillId).toBe("skill-own");
+    expect(foldUrlReaders([apifyDisabled], IG)[0]!.skillId).toBeUndefined();
+  });
+});
+
 describe("foldUrlReaders — one verb seen in several spaces (allSpaces rows)", () => {
   const inSpace = (
     ws: string | null,
