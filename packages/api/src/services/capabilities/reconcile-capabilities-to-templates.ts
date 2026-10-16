@@ -586,3 +586,69 @@ export async function reconcileCapabilitiesToTemplates(
 
   return report;
 }
+
+/**
+ * Containers seen by {@link reconcileChangedCapabilityTemplates} at a template
+ * hash, so a container the reconcile cannot converge (a template needing an
+ * install-time param, a `notify` policy) is attempted ONCE per published
+ * version, not every ten minutes. Process-local: a restart re-diffs at boot.
+ */
+const attemptedAtHash = new Map<string, string>();
+
+/**
+ * The installed containers whose template the catalog now holds at a
+ * DIFFERENT content hash than the one they were last converged to — what a
+ * catalog publish changed. Read off the containers' own stamps
+ * (`metadata.templateKey` / `contentHash`) and the official cache; never a
+ * guess about a container with no template key.
+ */
+export async function containersWithChangedTemplates(): Promise<
+  Array<{ id: string; contentHash: string }>
+> {
+  const cache = await queryCatalogCache({ kind: "capability" });
+  const hashBySlug = new Map(
+    cache
+      .filter((r) => typeof r.contentHash === "string" && r.contentHash)
+      .map((r) => [r.slug, r.contentHash as string])
+  );
+  const rows = await db
+    .select({ id: capabilities.id, metadata: capabilities.metadata })
+    .from(capabilities);
+  const out: Array<{ id: string; contentHash: string }> = [];
+  for (const row of rows) {
+    const m = (row.metadata ?? {}) as Record<string, unknown>;
+    if (typeof m.templateKey !== "string") continue;
+    const hash = hashBySlug.get(m.templateKey);
+    if (!hash || m.contentHash === hash) continue;
+    out.push({ id: row.id, contentHash: hash });
+  }
+  return out;
+}
+
+/**
+ * Converge the containers a catalog publish changed — called after every
+ * official catalog sync (10 min), so an installed pack picks up a new
+ * template version (a reader's `urls`) without a restart. The SAME door as the
+ * boot reconcile (`reconcileCapabilitiesToTemplates`, narrowed to those
+ * containers): drift policy, re-approval demotion and stamps are its own.
+ * `null` = nothing changed since the last attempt.
+ */
+export async function reconcileChangedCapabilityTemplates(): Promise<CapabilityReconcileReport | null> {
+  const changed = (await containersWithChangedTemplates()).filter(
+    (c) => attemptedAtHash.get(c.id) !== c.contentHash
+  );
+  if (changed.length === 0) return null;
+  for (const c of changed) attemptedAtHash.set(c.id, c.contentHash);
+  logger.info(
+    { containers: changed.length },
+    "Capability reconcile: the catalog changed installed templates — converging them"
+  );
+  return reconcileCapabilitiesToTemplates({
+    containerIds: changed.map((c) => c.id),
+  });
+}
+
+/** Tests: forget which template versions were attempted. */
+export function resetChangedTemplateAttempts(): void {
+  attemptedAtHash.clear();
+}

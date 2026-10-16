@@ -807,10 +807,39 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
   }
 }
 
+type CatalogSyncedHandler = () => Promise<void>;
+let catalogSyncedHandler: CatalogSyncedHandler | null = null;
+
+/**
+ * IoC: what runs after the OFFICIAL catalog synced — the api converges the
+ * installed capability containers whose template changed (the reconcile lives
+ * in api; jobs cannot import it). Registered at boot.
+ */
+export function registerOfficialCatalogSyncedHandler(
+  fn: CatalogSyncedHandler
+): void {
+  catalogSyncedHandler = fn;
+}
+
+/** Run the after-sync handler; its failure never fails the sync (logged). */
+async function afterOfficialSync(): Promise<void> {
+  if (!catalogSyncedHandler) return;
+  try {
+    await catalogSyncedHandler();
+  } catch (err) {
+    logger.error(
+      { err },
+      "After the catalog sync, converging installed capabilities FAILED — they converge at the next sync or restart"
+    );
+  }
+}
+
 /**
  * Called by the cron scheduler (every 10 min) and once on startup. Refreshes
  * cp_catalog_cache for every configured source × every kind. Each (source,
- * kind) pair is independent: one failing never blocks the others.
+ * kind) pair is independent: one failing never blocks the others. After the
+ * official source synced, installed capabilities whose template changed are
+ * converged (`registerOfficialCatalogSyncedHandler`).
  */
 export async function handleCpCatalogSync(): Promise<void> {
   // A settings read that fails must not stop the official catalog: it syncs
@@ -835,6 +864,7 @@ export async function handleCpCatalogSync(): Promise<void> {
       for (const kind of CATALOG_KINDS) {
         await syncOne(source.cacheKey, kind);
       }
+      await afterOfficialSync();
     } else {
       await syncThirdPartySource(source, snapshot?.status[source.id]);
     }
@@ -857,6 +887,7 @@ export async function syncCatalogSourceNow(sourceId: string): Promise<void> {
   }
   if (source.official) {
     for (const kind of CATALOG_KINDS) await syncOne(source.cacheKey, kind);
+    await afterOfficialSync();
     return;
   }
   await syncThirdPartySource(source, snapshot.status[source.id]);

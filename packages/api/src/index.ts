@@ -89,6 +89,7 @@ export {
 } from "./services/capabilities/capability-drift.js";
 export {
   reconcileCapabilitiesToTemplates,
+  reconcileChangedCapabilityTemplates,
   type CapabilityReconcileReport,
   type CapabilityReconcileEntry,
 } from "./services/capabilities/reconcile-capabilities-to-templates.js";

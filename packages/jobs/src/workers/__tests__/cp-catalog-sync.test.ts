@@ -95,6 +95,7 @@ import {
   DEFAULT_CATALOG_SOURCE,
   describeCatalogSources,
   handleCpCatalogSync,
+  registerOfficialCatalogSyncedHandler,
 } from "../cp-catalog-sync.js";
 
 const CP = "https://cp.example.test";
@@ -886,5 +887,30 @@ describe("handleCpCatalogSync — sources", () => {
     await handleCpCatalogSync();
     expect(fetchedUrls().some((u) => u.startsWith(CP))).toBe(true);
     expect(sourcesMock.syncThirdParty).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleCpCatalogSync — installed capabilities converge after a publish (OV-05)", () => {
+  it("runs the registered after-sync handler once the official source synced; its failure never fails the sync", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ capabilities: [], packages: [], cells: [] }),
+    });
+    const ran: string[] = [];
+    registerOfficialCatalogSyncedHandler(async () => {
+      // The cache was written before the handler runs (it reads it).
+      ran.push(`after ${fetchMock.mock.calls.length} fetches`);
+    });
+    await handleCpCatalogSync();
+    expect(ran).toHaveLength(1);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+
+    registerOfficialCatalogSyncedHandler(async () => {
+      throw new Error("reconcile down");
+    });
+    await expect(handleCpCatalogSync()).resolves.toBeUndefined();
+    expect(loggerMock.error).toHaveBeenCalled();
+    registerOfficialCatalogSyncedHandler(async () => undefined);
   });
 });

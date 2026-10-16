@@ -1933,6 +1933,24 @@ try {
             apiLogger.info("Registered library light-read handlers (IoC)");
           }
 
+          // IoC: after each official catalog sync (10 min), converge the
+          // installed capabilities whose template a publish changed — the
+          // boot reconcile's door, narrowed (OV-05). Deferred drift surfaces
+          // as the same grouped bell item.
+          {
+            const { registerOfficialCatalogSyncedHandler } =
+              await import("@synap/jobs/workers/cp-catalog-sync.js");
+            const {
+              reconcileChangedCapabilityTemplates,
+              notifyCapabilityUpdatesAvailable,
+            } = await import("@synap/api");
+            registerOfficialCatalogSyncedHandler(async () => {
+              const report = await reconcileChangedCapabilityTemplates();
+              if (report) await notifyCapabilityUpdatesAvailable(report);
+            });
+            apiLogger.info("Registered catalog-synced reconcile handler (IoC)");
+          }
+
           // IoC: the Library keep-alive pass (daily). jobs owns the queue and
           // its cron; the pass writes notifications through NotificationService,
           // which lives in api, so the handler is filled here.
