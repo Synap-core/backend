@@ -218,3 +218,49 @@ describe("Hub REST /library/readers", () => {
     ).toBe(400);
   });
 });
+
+describe("per-person rate limits on the reader doors (S1)", () => {
+  it("retryMedia: the person's taps past the limit are TOO_MANY_REQUESTS before the service; another person is untouched", async () => {
+    const { LIBRARY_READER_DOOR_LIMITS } =
+      await import("../services/library/door-limits.js");
+    const max = LIBRARY_READER_DOOR_LIMITS.retryMedia.max;
+    const me = caller({ userId: "rate-person-a" });
+    for (let i = 0; i < max; i++) await me.retryMedia({ itemId: ITEM });
+    const ranBefore = h.ran.length;
+    await expect(me.retryMedia({ itemId: ITEM })).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+    });
+    expect(h.ran.length).toBe(ranBefore);
+    await expect(
+      caller({ userId: "rate-person-b" }).retryMedia({ itemId: ITEM })
+    ).resolves.toEqual({ queued: 2 });
+  });
+
+  it("readWith has its own limit; readers on tRPC and Hub REST share ONE budget (429 on REST)", async () => {
+    const { LIBRARY_READER_DOOR_LIMITS } =
+      await import("../services/library/door-limits.js");
+    const me = caller({ userId: "rate-person-c" });
+    for (let i = 0; i < LIBRARY_READER_DOOR_LIMITS.readWith.max; i++) {
+      await me.readWith({ itemIds: [ITEM], readerId: "builtin" });
+    }
+    await expect(
+      me.readWith({ itemIds: [ITEM], readerId: "builtin" })
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+
+    const app = appAs({ userId: "rate-person-d" });
+    const half = Math.floor(LIBRARY_READER_DOOR_LIMITS.readers.max / 2);
+    const viaTrpc = caller({ userId: "rate-person-d" });
+    for (let i = 0; i < half; i++) await viaTrpc.readers({ itemId: ITEM });
+    for (let i = half; i < LIBRARY_READER_DOOR_LIMITS.readers.max; i++) {
+      expect(
+        (await app.request(`/library/readers?itemId=${ITEM}`)).status
+      ).toBe(200);
+    }
+    expect((await app.request(`/library/readers?itemId=${ITEM}`)).status).toBe(
+      429
+    );
+    await expect(viaTrpc.readers({ itemId: ITEM })).rejects.toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+    });
+  });
+});

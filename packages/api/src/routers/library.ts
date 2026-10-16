@@ -30,6 +30,7 @@ import { router, podProcedure } from "../trpc.js";
 import {
   aiRateLimitMiddleware,
   assertAiRateLimit,
+  userRateLimitMiddleware,
 } from "../middleware/ai-rate-limit.js";
 import type { Context } from "../types/context.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -76,6 +77,7 @@ import {
   buildLibraryGroup,
   readNowLibraryItem,
 } from "../services/library/build.js";
+import { LIBRARY_READER_DOOR_LIMITS } from "../services/library/door-limits.js";
 import {
   libraryReaderAvailability,
   libraryReaders,
@@ -425,6 +427,7 @@ export const libraryRouter = router({
    * a count). Live, never stored; a failed lookup is an error, never [].
    */
   readers: podProcedure
+    .use(userRateLimitMiddleware(LIBRARY_READER_DOOR_LIMITS.readers))
     .input(LibraryReadersInputSchema)
     .query(async ({ ctx, input }): Promise<LibraryReadersResult> => {
       const userId = requireUserId(ctx.userId);
@@ -443,6 +446,7 @@ export const libraryRouter = router({
    * item; what today's budget cannot hold is counted `overBudget`, not queued.
    */
   readWith: personProcedure
+    .use(userRateLimitMiddleware(LIBRARY_READER_DOOR_LIMITS.readWith))
     .input(LibraryReadWithInputSchema)
     .mutation(async ({ ctx, input }): Promise<LibraryReadWithResult> => {
       const userId = requireUserId(ctx.userId);
@@ -460,6 +464,7 @@ export const libraryRouter = router({
    * tap only — an agent is refused, like `readWith`.
    */
   retryMedia: personProcedure
+    .use(userRateLimitMiddleware(LIBRARY_READER_DOOR_LIMITS.retryMedia))
     .input(z.object({ itemId: uuid }))
     .mutation(async ({ ctx, input }): Promise<LibraryRetryMediaResult> => {
       const userId = requireUserId(ctx.userId);

@@ -33,6 +33,8 @@ import {
   LibrarySearchInputSchema,
 } from "../../library.js";
 import { libraryReaders } from "../../../services/library/readers.js";
+import { LIBRARY_READER_DOOR_LIMITS } from "../../../services/library/door-limits.js";
+import { assertUserRateLimit } from "../../../middleware/ai-rate-limit.js";
 import { addToLibrary } from "../../../services/library/add.js";
 import { adoptImportGroups } from "../../../services/library/groups.js";
 import { listLibraryItems } from "../../../services/library/read-model.js";
@@ -186,6 +188,16 @@ export function registerLibraryRoutes(app: HubHono): void {
       return c.json(
         { error: "Invalid query params", issues: parsed.error.issues },
         400
+      );
+    }
+    try {
+      // The same per-person budget as `library.readers` (an agent folding a
+      // group in a loop meets it).
+      assertUserRateLimit(c.get("userId"), LIBRARY_READER_DOOR_LIMITS.readers);
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Too many requests" },
+        429
       );
     }
     try {

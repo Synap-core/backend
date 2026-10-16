@@ -41,7 +41,13 @@ setInterval(cleanupExpiredEntries, 60 * 1000);
 /**
  * Check if a request should be rate limited
  */
-function checkRateLimit(key: string): {
+function checkRateLimit(
+  key: string,
+  limit: { max: number; windowMs: number } = {
+    max: MAX_REQUESTS,
+    windowMs: WINDOW_MS,
+  }
+): {
   allowed: boolean;
   remaining: number;
   resetAt: number;
@@ -51,12 +57,12 @@ function checkRateLimit(key: string): {
 
   if (!entry || entry.resetAt < now) {
     // Create new entry or reset expired entry
-    const resetAt = now + WINDOW_MS;
+    const resetAt = now + limit.windowMs;
     rateLimitStore.set(key, { count: 1, resetAt });
-    return { allowed: true, remaining: MAX_REQUESTS - 1, resetAt };
+    return { allowed: true, remaining: limit.max - 1, resetAt };
   }
 
-  if (entry.count >= MAX_REQUESTS) {
+  if (entry.count >= limit.max) {
     // Rate limit exceeded
     return { allowed: false, remaining: 0, resetAt: entry.resetAt };
   }
@@ -65,9 +71,55 @@ function checkRateLimit(key: string): {
   entry.count++;
   return {
     allowed: true,
-    remaining: MAX_REQUESTS - entry.count,
+    remaining: limit.max - entry.count,
     resetAt: entry.resetAt,
   };
+}
+
+/**
+ * A per-person limit on ONE door that is not an AI call (its own counter, not
+ * the AI one): `name` keys the counter, `max` requests per `windowMs`.
+ */
+export interface UserRateLimit {
+  name: string;
+  max: number;
+  windowMs: number;
+}
+
+/**
+ * Throw TOO_MANY_REQUESTS when `userId` passed `limit` on its door — the same
+ * store and error as the AI limit, a counter of its own. Callable from a tRPC
+ * procedure and a Hub REST route alike, so both doors share one budget.
+ */
+export function assertUserRateLimit(
+  userId: string,
+  limit: UserRateLimit
+): void {
+  const result = checkRateLimit(`door:${limit.name}:user:${userId}`, limit);
+  if (!result.allowed) {
+    const resetIn = Math.max(
+      1,
+      Math.ceil((result.resetAt - Date.now()) / 1000)
+    );
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Too many requests to ${limit.name}. Please wait ${resetIn} seconds.`,
+      cause: {
+        limit: limit.max,
+        windowMs: limit.windowMs,
+        resetIn,
+        resetAt: new Date(result.resetAt).toISOString(),
+      },
+    });
+  }
+}
+
+/** {@link assertUserRateLimit} as tRPC middleware (keyed by `ctx.userId`). */
+export function userRateLimitMiddleware(limit: UserRateLimit) {
+  return t.middleware(async (opts) => {
+    assertUserRateLimit(opts.ctx.userId ?? "unknown", limit);
+    return opts.next({ ctx: opts.ctx });
+  });
 }
 
 /**
