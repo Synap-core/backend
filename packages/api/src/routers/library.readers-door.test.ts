@@ -35,8 +35,9 @@ vi.mock("../services/library/readers.js", () => ({
       ],
     };
   },
-  libraryReadWith: async () => {
+  libraryReadWith: async (args: Record<string, unknown>) => {
     h.ran.push("readWith");
+    h.args.push(args);
     return { queued: 1, overBudget: 0, skipped: 0 };
   },
   libraryReaderAvailability: () => async () => new Map(),
@@ -262,5 +263,51 @@ describe("per-person rate limits on the reader doors (S1)", () => {
     await expect(viaTrpc.readers({ itemId: ITEM })).rejects.toMatchObject({
       code: "TOO_MANY_REQUESTS",
     });
+  });
+});
+
+describe("the whole Library's waiting items (`waiting: true`)", () => {
+  it("readers / readWith accept `waiting` alone and hand it to the service; with a target too it is refused", async () => {
+    h.ran.length = 0;
+    h.args.length = 0;
+    const me = caller({ userId: "waiting-person" });
+    await me.readers({ waiting: true });
+    await me.readWith({ waiting: true, readerId: "builtin" });
+    expect(h.args).toEqual([
+      expect.objectContaining({ userId: "waiting-person", waiting: true }),
+      expect.objectContaining({
+        userId: "waiting-person",
+        waiting: true,
+        readerId: "builtin",
+      }),
+    ]);
+    h.ran.length = 0;
+    await expect(
+      me.readers({ waiting: true, itemId: ITEM })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      me.readWith({ waiting: true, groupId: ITEM, readerId: "builtin" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(h.ran).toEqual([]);
+  });
+
+  it("an agent may see the offers but never read the whole Library", async () => {
+    h.ran.length = 0;
+    await expect(
+      caller({ agentUserId: "agent-1" }).readWith({
+        waiting: true,
+        readerId: "builtin",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.ran).toEqual([]);
+  });
+
+  it("Hub REST: `?waiting=true` reaches the service", async () => {
+    h.args.length = 0;
+    const res = await appAs({ userId: "waiting-rest" }).request(
+      "/library/readers?waiting=true"
+    );
+    expect(res.status).toBe(200);
+    expect(h.args[0]).toMatchObject({ waiting: true });
   });
 });

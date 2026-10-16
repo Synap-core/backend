@@ -5,7 +5,7 @@
  *   POST /library/add     keep items (hub-protocol.write) — LibraryAddRequest
  *   GET  /library/list    items, newest first (hub-protocol.read) — LibraryListRequest as query
  *   GET  /library/search  one search over captures and the Library (hub-protocol.read)
- *   GET  /library/readers ?itemId= | ?groupId= — who can read it (hub-protocol.read).
+ *   GET  /library/readers ?itemId= | ?groupId= | ?waiting=true — who can read it (hub-protocol.read).
  *        Agents may SEE the offers; spending them (`library.readWith`) is the
  *        person's tap only, so there is no REST write for it.
  *
@@ -183,6 +183,7 @@ export function registerLibraryRoutes(app: HubHono): void {
     const parsed = LibraryReadersInputSchema.safeParse({
       ...(c.req.query("itemId") ? { itemId: c.req.query("itemId") } : {}),
       ...(c.req.query("groupId") ? { groupId: c.req.query("groupId") } : {}),
+      ...(c.req.query("waiting") === "true" ? { waiting: true } : {}),
     });
     if (!parsed.success) {
       return c.json(
@@ -209,6 +210,7 @@ export function registerLibraryRoutes(app: HubHono): void {
         },
         ...(parsed.data.itemId ? { itemId: parsed.data.itemId } : {}),
         ...(parsed.data.groupId ? { groupId: parsed.data.groupId } : {}),
+        ...(parsed.data.waiting ? { waiting: true } : {}),
       });
       return c.json(result, 200);
     } catch (err) {

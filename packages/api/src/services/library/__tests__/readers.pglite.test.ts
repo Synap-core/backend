@@ -122,13 +122,28 @@ async function group(userId = USER): Promise<string> {
   return rows[0]!.id;
 }
 
-function fakeDeps(over: Partial<LibraryReadersDeps> = {}) {
+function fakeDeps(
+  over: Partial<LibraryReadersDeps> & {
+    /** The door's offers per URL (default {@link offersFor}); may throw. */
+    offers?: (url: string) => UrlReaderOffer[];
+  } = {}
+) {
   const sent: unknown[] = [];
   const lookups: string[] = [];
+  /** One entry per SOURCE LOAD (`readerLookup`): the lens it was loaded for. */
+  const loads: UrlReadersContext[] = [];
+  const offers = over.offers ?? offersFor;
   const deps: Partial<LibraryReadersDeps> = {
     listReaders: async (_ctx, url) => {
       lookups.push(url);
-      return offersFor(url);
+      return offers(url);
+    },
+    readerLookup: async (ctx) => {
+      loads.push(ctx);
+      return (url) => {
+        lookups.push(url);
+        return offers(url);
+      };
     },
     enqueue: async (items) => {
       sent.push(...items);
@@ -139,7 +154,7 @@ function fakeDeps(over: Partial<LibraryReadersDeps> = {}) {
     now: () => NOW,
     ...over,
   };
-  return { deps, sent, lookups };
+  return { deps, sent, lookups, loads };
 }
 
 beforeAll(async () => {
@@ -207,6 +222,10 @@ describe("library.readers — one item", () => {
         ctxs.push(ctx);
         return offersFor(url);
       },
+      readerLookup: async (ctx) => {
+        ctxs.push(ctx);
+        return offersFor;
+      },
     });
     await libraryReaders({ userId: USER, itemId: ig, deps });
     await libraryReadWith({
@@ -235,6 +254,10 @@ describe("library.readers — one item", () => {
       listReaders: async (ctx, url) => {
         ctxs.push(ctx);
         return offersFor(url);
+      },
+      readerLookup: async (ctx) => {
+        ctxs.push(ctx);
+        return offersFor;
       },
     });
     for (const caller of [
@@ -335,7 +358,7 @@ describe("library.readers — a group's waiting items", () => {
       groupIds: [g],
     });
     const { deps } = fakeDeps({
-      listReaders: async (_c, url) => {
+      offers: (url) => {
         if (url.includes("instagram")) throw new Error("catalog cache down");
         return offersFor(url);
       },
@@ -343,6 +366,108 @@ describe("library.readers — a group's waiting items", () => {
     await expect(
       libraryReaders({ userId: USER, groupId: g, deps })
     ).rejects.toThrow(/catalog cache down/);
+    // A source load that fails is an error too.
+    await expect(
+      libraryReaders({
+        userId: USER,
+        groupId: g,
+        deps: fakeDeps({
+          readerLookup: async () => {
+            throw new Error("registry down");
+          },
+        }).deps,
+      })
+    ).rejects.toThrow(/registry down/);
+  });
+});
+
+describe("the whole Library's waiting items (`waiting: true`)", () => {
+  /** Waiting items across groups and none, plus the ones that never count. */
+  async function library() {
+    const g = await group();
+    const inGroup = await item({
+      url: "https://www.instagram.com/p/g1",
+      status: "needs_file",
+      groupIds: [g],
+    });
+    const loose = await item({
+      url: "https://www.instagram.com/p/l1",
+      status: "unreadable",
+    });
+    const page = await item({
+      url: "https://example.com/t",
+      status: "title_only",
+    });
+    // Never counted: read, not read yet, archived, no link, another person's.
+    await item({ url: "https://www.instagram.com/p/r", status: "read" });
+    await item({ url: "https://www.instagram.com/p/n" });
+    await item({
+      url: "https://www.instagram.com/p/z",
+      status: "needs_file",
+      archived: true,
+    });
+    await item({ status: "unreadable" });
+    await item({
+      userId: OTHER,
+      url: "https://www.instagram.com/p/o",
+      status: "needs_file",
+    });
+    return { inGroup, loose, page };
+  }
+
+  it("readers: one offer per reader with its count over EVERY waiting item, for ONE source load", async () => {
+    await library();
+    const { deps, loads } = fakeDeps({
+      listReaders: async () => {
+        throw new Error("never one door read per item");
+      },
+    });
+    expect(await libraryReaders({ userId: USER, waiting: true, deps })).toEqual(
+      {
+        offers: [
+          { ...APIFY, count: 2 },
+          { ...BUILTIN, count: 1 },
+        ],
+        waiting: 3,
+      }
+    );
+    expect(loads).toEqual([
+      { userId: USER, workspaceId: null, allSpaces: true },
+    ]);
+  });
+
+  it("readWith: queues every waiting item that reader serves, the budget rules held", async () => {
+    const { inGroup, loose } = await library();
+    const { deps, sent } = fakeDeps({
+      perDay: () => 200,
+      usedToday: async () => 199,
+    });
+    const res = await libraryReadWith({
+      userId: USER,
+      waiting: true,
+      readerId: APIFY.readerId,
+      deps,
+    });
+    // Oldest first: one unit of room → the first queued, the second waits;
+    // the page (not Apify's) and the note (no link) are skipped.
+    expect(res).toEqual({ queued: 1, overBudget: 1, skipped: 2 });
+    expect(sent).toEqual([
+      { userId: USER, itemId: inGroup, reader: APIFY.readerId, force: true },
+    ]);
+    expect((await readOf(loose)).status).toBe("over_budget");
+  });
+
+  it("names nothing → BAD_REQUEST, never every item by accident", async () => {
+    await expect(
+      libraryReaders({ userId: USER, deps: fakeDeps().deps })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      libraryReadWith({
+        userId: USER,
+        readerId: "builtin",
+        deps: fakeDeps().deps,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
 
@@ -418,7 +543,7 @@ describe("library.readWith", () => {
       url: "https://www.instagram.com/p/t",
     });
     const { deps, sent } = fakeDeps({
-      listReaders: async () => [{ ...APIFY, state: "install" }],
+      offers: () => [{ ...APIFY, state: "install" }],
     });
     expect(
       await libraryReadWith({
@@ -447,7 +572,7 @@ describe("library.readWith", () => {
   it("a failed reader lookup is an ERROR (nothing queued)", async () => {
     const a = await item({ url: "https://www.instagram.com/p/q" });
     const { deps, sent } = fakeDeps({
-      listReaders: async () => {
+      readerLookup: async () => {
         throw new Error("registry down");
       },
     });

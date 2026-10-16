@@ -190,23 +190,38 @@ export const LibrarySearchInputSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20),
 });
 
-/** `library.readers`: exactly one of an item or a group. */
+/** How many of the targets a request names (exactly one is allowed). */
+const named = (...targets: unknown[]) =>
+  targets.filter((t) => (Array.isArray(t) ? t.length > 0 : Boolean(t))).length;
+
+/**
+ * `library.readers`: exactly one of an item, a group, or `waiting: true`
+ * (every waiting item of the person's Library).
+ */
 export const LibraryReadersInputSchema = z
-  .object({ itemId: uuid.optional(), groupId: uuid.optional() })
-  .refine((v) => Boolean(v.itemId) !== Boolean(v.groupId), {
-    message: "Name one item or one group.",
+  .object({
+    itemId: uuid.optional(),
+    groupId: uuid.optional(),
+    waiting: z.literal(true).optional(),
+  })
+  .refine((v) => named(v.itemId, v.groupId, v.waiting) === 1, {
+    message: "Name one item, one group, or the waiting items.",
   });
 
-/** `library.readWith`: items or a group's waiting items, one reader. */
+/**
+ * `library.readWith`: items, a group's waiting items, or `waiting: true`
+ * (every waiting item of the Library) — one reader.
+ */
 export const LibraryReadWithInputSchema = z
   .object({
     itemIds: optIds,
     groupId: uuid.optional(),
+    waiting: z.literal(true).optional(),
     /** `"builtin"` or a reader verb id, from `library.readers`. */
     readerId: z.string().min(1).max(200),
   })
-  .refine((v) => Boolean(v.itemIds?.length) !== Boolean(v.groupId), {
-    message: "Name items or one group.",
+  .refine((v) => named(v.itemIds, v.groupId, v.waiting) === 1, {
+    message: "Name items, one group, or the waiting items.",
   });
 
 // ─── Build deps ─────────────────────────────────────────────────────────────
@@ -436,6 +451,7 @@ export const libraryRouter = router({
         caller: { agentUserId: ctx.agentUserId, keyType: ctx.keyType },
         ...(input.itemId ? { itemId: input.itemId } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
+        ...(input.waiting ? { waiting: true } : {}),
       });
     }),
 
@@ -455,6 +471,7 @@ export const libraryRouter = router({
         readerId: input.readerId,
         ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
+        ...(input.waiting ? { waiting: true } : {}),
       });
     }),
 

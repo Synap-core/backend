@@ -154,20 +154,25 @@ async function itemRows(
     .where(and(libraryItemsWhere(userId), inArray(documents.id, [...ids])));
 }
 
-/** A group's waiting items (owner-floored; NOT_FOUND for a foreign group). */
+/**
+ * WAITING items (needs a reader / title only / could not be read; not
+ * archived, not deleted), oldest first, at most {@link LIBRARY_READERS_SCAN_MAX}:
+ * a group's (owner-floored; NOT_FOUND for a foreign group), or — no group —
+ * the person's whole Library.
+ */
 async function waitingRows(
   database: LibraryDb,
   userId: string,
-  groupId: string
+  groupId?: string
 ): Promise<ReadableRow[]> {
-  await loadLibraryGroup({ database, userId, groupId });
+  if (groupId) await loadLibraryGroup({ database, userId, groupId });
   return database
     .select(COLUMNS)
     .from(documents)
     .where(
       and(
         libraryItemsWhere(userId),
-        inGroupSql(groupId),
+        ...(groupId ? [inGroupSql(groupId)] : []),
         drizzleSql`NOT ${isArchivedSql}`,
         drizzleSql`${readStatusSql} IN (${drizzleSql.join(
           LIBRARY_WAITING_READ_STATUSES.map((s) => drizzleSql`${s}`),
@@ -193,12 +198,45 @@ function readerIdOfStamp(metadata: unknown): string | null {
     : stamp.id;
 }
 
-/** `library.readers` — live offers for one item, or a group's waiting items. */
+/**
+ * The reader offers of many rows: the sources load ONCE per lens (the row's
+ * space — the person's lens and an agent's alike are keyed by it), then a
+ * pure fold per URL (`urlReaderLookup`: "N links cost one source load").
+ * A lookup that fails throws — never folded into "no readers".
+ */
+async function offersByRow(
+  rows: readonly ReadableRow[],
+  userId: string,
+  caller: LibraryReadersCaller | undefined,
+  deps: LibraryReadersDeps
+): Promise<Map<string, UrlReaderOffer[]>> {
+  const lookups = new Map<string | null, (url: string) => UrlReaderOffer[]>();
+  const out = new Map<string, UrlReaderOffer[]>();
+  for (const row of rows) {
+    const url = urlOf(row);
+    if (!url) continue;
+    let lookup = lookups.get(row.workspaceId);
+    if (!lookup) {
+      lookup = await deps.readerLookup(ctxOf(userId, row, caller));
+      lookups.set(row.workspaceId, lookup);
+    }
+    out.set(row.id, lookup(url));
+  }
+  return out;
+}
+
+/**
+ * `library.readers` — live offers for one item, or for many WAITING items
+ * (a group's, or with `waiting` the whole Library's), one offer per reader
+ * with the `count` of those items it reads.
+ */
 export async function libraryReaders(args: {
   database?: LibraryDb;
   userId: string;
   itemId?: string;
   groupId?: string;
+  /** Every waiting item of the person's Library (no group). */
+  waiting?: boolean;
   /** The caller's identity — an agent's offers stay in the item's lens. */
   caller?: LibraryReadersCaller;
   deps?: Partial<LibraryReadersDeps>;
@@ -224,23 +262,20 @@ export async function libraryReaders(args: {
       ),
     };
   }
-  if (!args.groupId) {
+  if (!args.groupId && !args.waiting) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Name an item or a group.",
+      message: "Name an item, a group, or the waiting items.",
     });
   }
   const rows = (await waitingRows(database, args.userId, args.groupId)).filter(
     (r) => urlOf(r) !== null
   );
+  // Throws on a failed lookup — never folded into "no readers".
+  const offersOf = await offersByRow(rows, args.userId, args.caller, deps);
   const byReader = new Map<string, LibraryReaderOffer>();
   for (const row of rows) {
-    // Throws on a failed lookup — never folded into "no readers".
-    const offers = await deps.listReaders(
-      ctxOf(args.userId, row, args.caller),
-      urlOf(row)!
-    );
-    for (const o of offers) {
+    for (const o of offersOf.get(row.id) ?? []) {
       const seen = byReader.get(o.readerId);
       if (seen) seen.count = (seen.count ?? 0) + 1;
       else {
@@ -327,6 +362,8 @@ export async function libraryReadWith(args: {
   userId: string;
   itemIds?: readonly string[];
   groupId?: string;
+  /** Every waiting item of the person's Library (no group). */
+  waiting?: boolean;
   readerId: string;
   deps?: Partial<LibraryReadersDeps>;
 }): Promise<LibraryReadWithResult> {
@@ -338,14 +375,16 @@ export async function libraryReadWith(args: {
     const ids = [...new Set(args.itemIds)];
     rows = await itemRows(database, args.userId, ids);
     skipped += ids.length - rows.length; // foreign, deleted or unknown
-  } else if (args.groupId) {
+  } else if (args.groupId || args.waiting) {
     rows = await waitingRows(database, args.userId, args.groupId);
   } else {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Name items or a group.",
+      message: "Name items, a group, or the waiting items.",
     });
   }
+  // readWith is person-only (the tRPC door refuses an agent first).
+  const offersOf = await offersByRow(rows, args.userId, undefined, deps);
 
   const now = deps.now().getTime();
   let room: number | null = null; // computed on the first billed item
@@ -363,10 +402,9 @@ export async function libraryReadWith(args: {
       skipped++;
       continue;
     }
-    // readWith is person-only (the tRPC door refuses an agent first).
-    const offer = (
-      await deps.listReaders(ctxOf(args.userId, row, undefined), url)
-    ).find((o) => o.readerId === args.readerId);
+    const offer = (offersOf.get(row.id) ?? []).find(
+      (o) => o.readerId === args.readerId
+    );
     // Only a reader that can run now: install / connect / enable are their
     // own doors (the offer says which), not N jobs that would each say so.
     if (!offer || offer.state !== "ready") {

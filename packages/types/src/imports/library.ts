@@ -430,16 +430,20 @@ export interface LibraryGroupsResult {
 }
 
 /**
- * One reader offer for an item or a group (`library.readers`). For a group,
- * `count` = how many of its WAITING items (needs a reader / title only /
- * could not be read) this reader reads.
+ * One reader offer for an item, a group or the whole Library's waiting items
+ * (`library.readers`). For many items, `count` = how many of the WAITING
+ * items (needs a reader / title only / could not be read) this reader reads.
  */
 export type LibraryReaderOffer = UrlReaderOffer & { count?: number };
 
 /** Result of `library.readers` — live, never stored. */
 export interface LibraryReadersResult {
   offers: LibraryReaderOffer[];
-  /** A group's waiting items with a link (absent for one item). */
+  /**
+   * The waiting items with a link that were looked at (a group's, or the
+   * whole Library's with `waiting: true`; at most 1 000, oldest first).
+   * Absent for one item.
+   */
   waiting?: number;
 }
 
