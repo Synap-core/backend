@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import {
   carryRunLibraryActions,
+  readLibraryItemRead,
   type LibraryItemRead,
   type LibraryReadBlocked,
   type LibraryReadStatus,
@@ -62,6 +63,65 @@ export interface StoredLibraryRead extends LibraryItemRead {
     blocked?: LibraryReadBlocked;
     error?: string;
     at: string;
+  };
+}
+
+/**
+ * THE pod-side reader of the stored `importRead`: the contract fields through
+ * `readLibraryItemRead` (validated, with its content-status fallback), plus
+ * the pod's bookkeeping as stored, each kept only with its own type. `exists`
+ * is false when the light read never wrote anything on the item. Every read
+ * of the stored shape in the pod goes through here; the writers below stay
+ * the only writers.
+ */
+export function readStoredLibraryRead(
+  metadata: unknown,
+  contentStatus?: string
+): { exists: boolean; read: StoredLibraryRead } {
+  const raw =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>).importRead
+      : undefined;
+  const bag =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : null;
+  const read: StoredLibraryRead = readLibraryItemRead(metadata, contentStatus);
+  if (!bag) return { exists: false, read };
+  const str = (k: string) =>
+    typeof bag[k] === "string" && bag[k] ? (bag[k] as string) : undefined;
+  const num = (k: string) =>
+    typeof bag[k] === "number" && Number.isFinite(bag[k])
+      ? (bag[k] as number)
+      : undefined;
+  const obj = (k: string) =>
+    bag[k] && typeof bag[k] === "object" ? bag[k] : undefined;
+  const textKey = str("textKey");
+  const aiAt = str("aiAt");
+  const lastError = str("lastError");
+  const requestedReader = str("requestedReader");
+  const attempts = num("attempts");
+  const transientFailures = num("transientFailures");
+  const readCheckpoint = obj("readCheckpoint");
+  const lastAttempt = obj("lastAttempt");
+  return {
+    exists: true,
+    read: {
+      ...read,
+      ...(textKey ? { textKey } : {}),
+      ...(aiAt ? { aiAt } : {}),
+      ...(lastError ? { lastError } : {}),
+      ...(requestedReader ? { requestedReader } : {}),
+      ...(attempts !== undefined ? { attempts } : {}),
+      ...(transientFailures !== undefined ? { transientFailures } : {}),
+      // Re-parsed where it is used (`resumableRead`), never trusted here.
+      ...(readCheckpoint
+        ? { readCheckpoint: readCheckpoint as ReadCheckpoint }
+        : {}),
+      ...(lastAttempt
+        ? { lastAttempt: lastAttempt as StoredLibraryRead["lastAttempt"] }
+        : {}),
+    },
   };
 }
 

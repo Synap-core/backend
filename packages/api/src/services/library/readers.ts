@@ -30,17 +30,16 @@ import {
   drizzleSql,
 } from "@synap/database";
 import {
+  libraryItemOf,
+  libraryItemUrl,
   readLibraryItemRead,
   type LibraryReaderOffer,
   type LibraryReadersResult,
   type LibraryReadWithResult,
-  type ImportItemMetadata,
 } from "@synap-core/types/imports";
 import { createLogger } from "@synap-core/core";
-import {
-  readReaderStamp,
-  type UrlReaderOffer,
-} from "@synap-core/types/url-read";
+import type { UrlReaderOffer } from "@synap-core/types/url-read";
+import { readStoredLibraryRead } from "./light-read-store.js";
 import {
   BUILTIN_READER_ID as BUILTIN,
   type UrlReadersContext,
@@ -100,10 +99,7 @@ interface ReadableRow {
 }
 
 function urlOf(row: ReadableRow): string | null {
-  const item = (row.metadata as Record<string, unknown> | null)?.importItem as
-    ImportItemMetadata | undefined;
-  const url = item?.source?.url;
-  return typeof url === "string" && url.trim() ? url.trim() : null;
+  return libraryItemUrl(row.metadata);
 }
 
 /** Who is asking: an agent key / the IS internal key, or the person. */
@@ -186,12 +182,7 @@ async function waitingRows(
 
 /** The offer id that produced a stored read (`builtin:<rung>` → `builtin`). */
 function readerIdOfStamp(metadata: unknown): string | null {
-  const stamp = readReaderStamp(
-    (
-      (metadata as Record<string, unknown> | null)?.importRead as
-        Record<string, unknown> | undefined
-    )?.reader
-  );
+  const stamp = readStoredLibraryRead(metadata).read.reader;
   if (!stamp) return null;
   return stamp.id === BUILTIN || stamp.id.startsWith(`${BUILTIN}:`)
     ? BUILTIN
@@ -316,11 +307,9 @@ export function libraryReaderAvailability(args: {
     for (const row of rows) {
       const url = urlOf(row);
       if (!url) continue;
-      const item = (row.metadata as Record<string, unknown> | null)
-        ?.importItem as ImportItemMetadata | undefined;
       const status = readLibraryItemRead(
         row.metadata,
-        item?.contentStatus
+        libraryItemOf(row.metadata)?.contentStatus
       ).status;
       if (
         !(LIBRARY_WAITING_READ_STATUSES as readonly string[]).includes(status)
@@ -478,11 +467,8 @@ async function holdOverBudget(
 
 /** An item already stamped inside the 24h window reuses its unit (read-budget.ts). */
 function holdsFreshUnit(metadata: unknown, now: number): boolean {
-  const aiAt = (
-    (metadata as Record<string, unknown> | null)?.importRead as
-      Record<string, unknown> | undefined
-  )?.aiAt;
-  if (typeof aiAt !== "string") return false;
+  const aiAt = readStoredLibraryRead(metadata).read.aiAt;
+  if (!aiAt) return false;
   const at = Date.parse(aiAt);
   return Number.isFinite(at) && at >= now - LIBRARY_READ_WINDOW_MS;
 }

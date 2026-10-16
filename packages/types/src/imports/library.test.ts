@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isPermanentLibraryMediaFailure,
+  libraryItemOf,
+  libraryItemUrl,
   readLibraryItemMedia,
   readLibraryItemRead,
 } from "./library.js";
@@ -194,5 +196,23 @@ describe("readLibraryItemMedia", () => {
     expect(
       readLibraryItemRead(meta({ class: "nope" })).failure
     ).toBeUndefined();
+  });
+});
+
+describe("libraryItemOf / libraryItemUrl — the one reader of the staged bag", () => {
+  it("an item needs a source; the url is trimmed; a note has none", () => {
+    const link = {
+      importItem: { source: { kind: "url", url: " https://a.b/c " } },
+    };
+    expect(libraryItemOf(link)?.source.kind).toBe("url");
+    expect(libraryItemUrl(link)).toBe("https://a.b/c");
+    expect(
+      libraryItemUrl({ importItem: { source: { kind: "text" } } })
+    ).toBeNull();
+    expect(
+      libraryItemOf({ importItem: { title: "no source" } })
+    ).toBeUndefined();
+    expect(libraryItemOf(null)).toBeUndefined();
+    expect(libraryItemUrl({ importItem: "x" })).toBeNull();
   });
 });

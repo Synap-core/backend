@@ -20,6 +20,7 @@
 import type {
   ImportGroupOutput,
   ImportItemDecision,
+  ImportItemMetadata,
   ImportItemView,
   ImportStageItemInput,
 } from "./curate.js";
@@ -533,6 +534,31 @@ export const LIBRARY_LIMITS = {
 } as const;
 
 // ── Pure readers (shared by pod, browser and relay) ─────────────────────────
+
+/**
+ * `documents.metadata.importItem` — the staged item — or undefined when the
+ * row is not a Library item (no bag, or a bag without a `source`). THE
+ * reader of the bag: never cast `metadata.importItem` at a call site.
+ */
+export function libraryItemOf(
+  metadata: unknown
+): ImportItemMetadata | undefined {
+  const raw =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>).importItem
+      : undefined;
+  if (!raw || typeof raw !== "object") return undefined;
+  const source = (raw as { source?: unknown }).source;
+  return source && typeof source === "object"
+    ? (raw as ImportItemMetadata)
+    : undefined;
+}
+
+/** The item's link (trimmed), or null for a typed note, a file, or no item. */
+export function libraryItemUrl(metadata: unknown): string | null {
+  const url = libraryItemOf(metadata)?.source.url;
+  return typeof url === "string" && url.trim() ? url.trim() : null;
+}
 
 /** The read of an item that was never touched by the light read. */
 export function libraryReadFallback(contentStatus?: string): LibraryItemRead {

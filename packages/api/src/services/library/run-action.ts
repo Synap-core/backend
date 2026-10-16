@@ -26,6 +26,7 @@ import { createLogger } from "@synap-core/core";
 import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import type { db as DbType } from "@synap/database";
 import {
+  libraryItemOf,
   readLibraryItemRead,
   type ImportItemMetadata,
   type LibraryAction,
@@ -174,7 +175,7 @@ async function withAction<T>(
       )
       .for("update");
     const meta = row?.metadata as Record<string, unknown> | null | undefined;
-    const item = meta?.importItem as ImportItemMetadata | undefined;
+    const item = libraryItemOf(meta);
     if (!row || !item) {
       throw new LibraryActionError("ITEM_NOT_FOUND", "Library item not found");
     }

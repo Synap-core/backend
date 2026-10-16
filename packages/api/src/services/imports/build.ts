@@ -81,6 +81,7 @@ import { captureStructureToGraph } from "../capture-agent/capture-structure-to-g
 import { readLibraryItemMedia } from "@synap-core/types/imports";
 import { readSentPage } from "../capabilities/web-read/read-builtin.js";
 import { readLibraryPageMeta } from "../library/page-html.js";
+import { readStoredLibraryRead } from "../library/light-read-store.js";
 import {
   CAPTURED_MEDIA_URLS_PROPERTY,
   MAX_MEDIA_URLS_PER_ENTITY,
@@ -283,22 +284,14 @@ async function readItemContent(
 
 /** The stored read text of an item the light read READ, else null. */
 export function storedReadTextKey(metadata: unknown): string | null {
-  const read = (metadata as Record<string, unknown> | null)?.importRead as
-    { status?: unknown; textKey?: unknown } | undefined;
-  return read?.status === "read" &&
-    typeof read.textKey === "string" &&
-    read.textKey
-    ? read.textKey
-    : null;
+  const { read } = readStoredLibraryRead(metadata);
+  return read.status === "read" && read.textKey ? read.textKey : null;
 }
 
 /** The light read never finished this item (no read, or not read yet). */
 function awaitsLightRead(metadata: unknown): boolean {
-  const status = (
-    (metadata as Record<string, unknown> | null)?.importRead as
-      { status?: unknown } | undefined
-  )?.status;
-  return status === undefined || status === "not_read";
+  const { exists, read } = readStoredLibraryRead(metadata);
+  return !exists || read.status === "not_read";
 }
 
 /**

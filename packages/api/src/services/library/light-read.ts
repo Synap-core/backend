@@ -86,8 +86,8 @@ import { libraryReadTextKey } from "@synap/database";
 import {
   detectLibraryActions,
   mergeLibraryActions,
+  libraryItemOf,
   normalizeLibraryActions,
-  readLibraryItemRead,
   type ImportItemMetadata,
   type LibraryAction,
   type LibraryReadStatus,
@@ -105,6 +105,7 @@ import type { LightReadDeps } from "./light-read-deps.js";
 import type { Got } from "./light-read-map.js";
 import { loadRow, readContent } from "./light-read-content.js";
 import {
+  readStoredLibraryRead,
   recordLastAttempt,
   writeRead,
   type StoredLibraryRead,
@@ -513,16 +514,12 @@ export async function lightReadLibraryItem(args: {
   const { database, userId, itemId, deps } = args;
   const row = await loadRow(database, userId, itemId);
   const meta = (row?.metadata ?? null) as Record<string, unknown> | null;
-  const item = meta?.importItem as ImportItemMetadata | undefined;
-  if (!row || !item || typeof item !== "object" || !item.source) {
-    return { itemId, status: "skipped" };
-  }
-  const prev = {
-    ...(meta?.importRead && typeof meta.importRead === "object"
-      ? (meta.importRead as StoredLibraryRead)
-      : {}),
-    ...readLibraryItemRead(meta, item.contentStatus),
-  } as StoredLibraryRead;
+  const item = libraryItemOf(meta);
+  if (!row || !item) return { itemId, status: "skipped" };
+  const { exists: everRead, read: prev } = readStoredLibraryRead(
+    meta,
+    item.contentStatus
+  );
   // An explicit read, or the retry of one (the sweep's job carries no reader:
   // the reader the person chose is remembered on the item).
   const reader =
@@ -530,7 +527,7 @@ export async function lightReadLibraryItem(args: {
     (typeof prev.requestedReader === "string" && prev.requestedReader
       ? prev.requestedReader
       : undefined);
-  if (!args.force && !args.reader && meta?.importRead && isFinal(prev, item)) {
+  if (!args.force && !args.reader && everRead && isFinal(prev, item)) {
     return { itemId, status: "skipped" };
   }
 
