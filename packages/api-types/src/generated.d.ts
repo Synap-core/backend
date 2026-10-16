@@ -7888,6 +7888,19 @@ declare const URL_READ_NEXT_STEPS: readonly [
 	"retry_later"
 ];
 export type UrlReadNextStep = (typeof URL_READ_NEXT_STEPS)[number];
+declare const URL_READ_FAILURE_CLASSES: readonly [
+	"rate_limited",
+	"unavailable",
+	"network",
+	"extract_busy",
+	"extract_timeout",
+	"extract_failed",
+	"auth",
+	"refused",
+	"bad_output",
+	"unknown"
+];
+export type UrlReadFailureClass = (typeof URL_READ_FAILURE_CLASSES)[number];
 /** Who read it. Stamped by the door that ran the reader — a reader never self-stamps. */
 export interface ReaderStamp {
 	/** `builtin:<rung>` (builtin:oembed, builtin:article, builtin:page, builtin:adapter:<site>) or a verb id */
@@ -7917,6 +7930,13 @@ export interface UrlReaderOffer {
 	serviceId?: string;
 	verbId?: string;
 	capabilityId?: string;
+	/**
+	 * The `skills` row backing the verb (installed readers only): the id
+	 * `capabilities.setToolEnabled({ skillId, enabled: true })` turns on for an
+	 * `enable` offer. Absent when no backing skill row is visible to the person
+	 * (open the capability's page instead) and on install / built-in offers.
+	 */
+	skillId?: string;
 	installSlug?: string;
 	/** `account` = runs on the person's paid account */
 	billing: "none" | "account";
@@ -7982,6 +8002,27 @@ export interface LibraryItemRead {
 		source: "platform" | "stt";
 		lang?: string;
 	};
+	/**
+	 * Why the last try did not read, as a class — set while a read waits to be
+	 * tried again (`not_read`), on an `unreadable` item, and on a `needs_file`
+	 * item a billed reader gave up on. Absent = the last try did not fail.
+	 */
+	failure?: LibraryReadFailure;
+}
+/** A failed read's class, as kept on the item. */
+export interface LibraryReadFailure {
+	class: UrlReadFailureClass;
+	/**
+	 * The failure was temporary (`isTransientUrlReadFailure`: the site, the
+	 * vendor or the pod's AI was down, busy or rate limiting) — a later try may
+	 * read it, so never say "could not be read" for it.
+	 */
+	transient: boolean;
+	/**
+	 * When the pod tries again BY ITSELF (ISO). Absent = it will not: the
+	 * person's "Read again" / "Read with X" is the way on.
+	 */
+	nextAttemptAt?: string;
 }
 /** A blocked read's reason, as kept on the item. */
 export interface LibraryReadBlocked {
@@ -7989,6 +8030,22 @@ export interface LibraryReadBlocked {
 	nextStep?: UrlReadNextStep;
 	detail?: string;
 }
+declare const LIBRARY_MEDIA_FAILURE_REASONS: readonly [
+	"blocked",
+	"expired",
+	"http_4xx",
+	"http_retry_later",
+	"http_5xx",
+	"too_large",
+	"not_image",
+	"not_video",
+	"empty",
+	"timeout",
+	"fetch_failed",
+	"store_failed",
+	"store_unavailable"
+];
+export type LibraryMediaFailureReason = (typeof LIBRARY_MEDIA_FAILURE_REASONS)[number];
 /**
  * One media file of an item the pod copied into itself (images, video), in
  * reading order. Stored on `documents.metadata.importMedia` (an array, written
@@ -8018,6 +8075,12 @@ export interface LibraryItemView extends ImportItemView {
 	media?: LibraryItemMedia[];
 	/** Media files whose copy failed (absent when none) — shown, never silent. */
 	mediaFailed?: number;
+	/**
+	 * Why they failed, each reason once (absent when none failed). When every
+	 * reason `isPermanentLibraryMediaFailure` (an expired CDN link…), "Try
+	 * again" cannot succeed: do not offer it.
+	 */
+	mediaFailedReasons?: LibraryMediaFailureReason[];
 	/**
 	 * When the newest failed copy was last tried (absent when none failed). A
 	 * `library.retryMedia` landed when this moved: tried again, kept or not.
@@ -8103,9 +8166,9 @@ export interface LibraryGroupsResult {
 	archived: number;
 }
 /**
- * One reader offer for an item or a group (`library.readers`). For a group,
- * `count` = how many of its WAITING items (needs a reader / title only /
- * could not be read) this reader reads.
+ * One reader offer for an item, a group or the whole Library's waiting items
+ * (`library.readers`). For many items, `count` = how many of the WAITING
+ * items (needs a reader / title only / could not be read) this reader reads.
  */
 export type LibraryReaderOffer = UrlReaderOffer & {
 	count?: number;
@@ -8113,7 +8176,11 @@ export type LibraryReaderOffer = UrlReaderOffer & {
 /** Result of `library.readers` — live, never stored. */
 export interface LibraryReadersResult {
 	offers: LibraryReaderOffer[];
-	/** A group's waiting items with a link (absent for one item). */
+	/**
+	 * The waiting items with a link that were looked at (a group's, or the
+	 * whole Library's with `waiting: true`; at most 1 000, oldest first).
+	 * Absent for one item.
+	 */
 	waiting?: number;
 }
 /** Result of `library.retryMedia`: the failed copies queued to be tried again (0 = none failed). */
@@ -36477,6 +36544,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				itemId?: string | undefined;
 				groupId?: string | undefined;
+				waiting?: true | undefined;
 			};
 			output: LibraryReadersResult;
 			meta: object;
@@ -36486,6 +36554,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				readerId: string;
 				itemIds?: string[] | undefined;
 				groupId?: string | undefined;
+				waiting?: true | undefined;
 			};
 			output: LibraryReadWithResult;
 			meta: object;
