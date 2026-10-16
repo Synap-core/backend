@@ -7903,7 +7903,12 @@ declare const URL_READ_FAILURE_CLASSES: readonly [
 export type UrlReadFailureClass = (typeof URL_READ_FAILURE_CLASSES)[number];
 /** Who read it. Stamped by the door that ran the reader — a reader never self-stamps. */
 export interface ReaderStamp {
-	/** `builtin:<rung>` (builtin:oembed, builtin:article, builtin:page, builtin:adapter:<site>) or a verb id */
+	/**
+	 * `builtin:<rung>` — `builtin:article` (the pod fetched the page),
+	 * `builtin:page` (the page the person's browser sent), `builtin:policy`
+	 * (refused before any request), `builtin:adapter:<site>` (a site adapter,
+	 * e.g. `builtin:adapter:youtube` for its oEmbed) — or a reader verb id.
+	 */
 	id: string;
 	name: string;
 	capabilityId?: string;
@@ -7919,7 +7924,8 @@ declare const READER_OFFER_STATES: readonly [
 	"ready",
 	"enable",
 	"connect",
-	"install"
+	"install",
+	"unavailable"
 ];
 export type ReaderOfferState = (typeof READER_OFFER_STATES)[number];
 /** One reader the Library can offer for an item. Computed live, never stored. */
@@ -8230,6 +8236,12 @@ export interface LibraryCaptureHit {
 export interface LibrarySearchResult {
 	captures: LibraryCaptureHit[];
 	items: LibraryItemView[];
+	/**
+	 * Whether the search over items' READ TEXT ran: `"down"` = the index could
+	 * not be asked, so items found only by their read text may be missing —
+	 * say so, never present the list as complete. Absent = not reported.
+	 */
+	readTextSearch?: "ok" | "down";
 }
 export interface ImportModelingSuggestion {
 	profileSlug: string;
