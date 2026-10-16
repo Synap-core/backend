@@ -261,6 +261,23 @@ only ever adds snapshots (no `forget`/`prune`): give it append-only credentials
 retention where the delete-capable credentials live, e.g.
 `restic forget --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`.
 
+### Interrupted uploads (object storage)
+
+Large files (a Library video copy, up to 1 GiB) are streamed to storage as a
+multipart upload. When the stream fails the pod aborts the upload; when the pod
+itself is killed mid-upload (a deploy, an OOM), the parts already sent stay on
+the bucket. **The pod does not install a bucket lifecycle rule.** What reaps them:
+
+- **MinIO (the default here):** MinIO removes stale multipart uploads by itself
+  (`api stale_uploads_expiry`, 24 h by default) — nothing to do.
+- **AWS S3:** add a lifecycle rule `AbortIncompleteMultipartUpload` (e.g. after
+  1 day) to the bucket — parts left without it are billed.
+- **Cloudflare R2 / other S3-compatible stores:** check the bucket's lifecycle
+  settings for incomplete multipart uploads and set one if none applies.
+
+The local storage provider writes a `*.part-<uuid>` temp file beside the target;
+one left by a killed pod is not swept automatically.
+
 ## Docker Compose profiles
 
 All optional services are gated behind Compose profiles. Enable with `--profile NAME`:

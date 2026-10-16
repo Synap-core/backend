@@ -137,7 +137,9 @@ export async function uploadStreamToS3(
           })
         );
       } catch {
-        // The bucket's lifecycle rule reaps an upload we could not abort.
+        // Not aborted: its parts stay on the bucket until the store reaps
+        // them — the pod installs no lifecycle rule (deploy/README.md,
+        // "Interrupted uploads").
       }
     }
     throw err;
