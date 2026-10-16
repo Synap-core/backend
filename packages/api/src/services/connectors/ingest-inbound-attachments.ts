@@ -30,7 +30,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { InboundAttachmentJobData } from "@synap/jobs/workers/inbound-attachment-worker.js";
-import { fetchGuardedBytes } from "../media-copy/fetch-image.js";
+import { fetchGuardedBytes } from "../media-copy/remote-fetch.js";
 import { createGovernedFileEntityFromBuffer } from "../../routers/create-governed-file-entity.js";
 import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 

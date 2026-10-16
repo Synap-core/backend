@@ -10,7 +10,7 @@ vi.mock("@synap/shared-utils", async (importOriginal) => {
   return { ...actual, safePublicFetch: vi.fn() };
 });
 
-import { safePublicFetch } from "@synap/shared-utils";
+import { BlockedOutboundError, safePublicFetch } from "@synap/shared-utils";
 import { readBuiltin } from "../read-builtin.js";
 import {
   POD_NEVER_FETCHES,
@@ -95,8 +95,8 @@ describe("readBuiltin — the ladder", () => {
     const doorRefusal = Object.assign(
       async (url: string) => {
         web.calls.push(url);
-        throw new Error(
-          "Blocked outbound request: URL '10.0.0.5' resolves to a private or reserved address"
+        throw new BlockedOutboundError(
+          "URL '10.0.0.5' resolves to a private or reserved address"
         );
       },
       { calls: [] as string[] }

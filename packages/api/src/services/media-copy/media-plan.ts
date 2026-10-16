@@ -29,10 +29,8 @@ import {
   type EntityMediaCopy,
   type ProfilePresentation,
 } from "@synap-core/types/presentation";
-import {
-  PERMANENT_FETCH_FAILURES,
-  type ImageFetchFailure,
-} from "./fetch-image.js";
+import type { ImageFetchFailure } from "./fetch-image.js";
+import { PERMANENT_FETCH_FAILURES } from "./remote-fetch.js";
 
 /** The property a producer writes capture-provided media URLs into. */
 export const CAPTURED_MEDIA_URLS_PROPERTY = "media-urls";

@@ -1,6 +1,12 @@
 /**
  * The built-in reader's ONE way onto the network.
  *
+ * Its body reader is its own on purpose: a page past its cap is cut and still
+ * read (`truncated`, decoded in its charset as it streams), where the media
+ * door (`media-copy/remote-fetch.ts`) refuses a file past its cap. The policy
+ * that must not differ is shared from `@synap/shared-utils`: the typed SSRF
+ * refusal and the redirect budget.
+ *
  * Every request — the page itself and every site adapter's API call — goes
  * through `validateExternalUrl` and then `safePublicFetch` (DNS-pinned SSRF
  * guard, every redirect hop re-vetted, web ports only). No cookies, no
@@ -10,14 +16,16 @@
  */
 
 import {
+  isBlockedOutboundError,
+  PUBLIC_FETCH_REDIRECT_HOPS,
   safePublicFetch,
   validateExternalUrl,
   type SafePublicFetchInit,
 } from "@synap/shared-utils";
 
 export const WEB_READ_TIMEOUT_MS = 10_000;
-/** Public pages and short links redirect (http→https, locale, slug). */
-export const WEB_READ_REDIRECT_HOPS = 3;
+/** Public pages and short links redirect (http→https, locale, slug) — the shared public-read budget. */
+export const WEB_READ_REDIRECT_HOPS = PUBLIC_FETCH_REDIRECT_HOPS;
 export { WEB_READ_PAGE_BYTES_MAX } from "./limits.js";
 /** Bytes of one API answer read at most. */
 export const WEB_READ_API_BYTES_MAX = 1_000_000;
@@ -183,7 +191,8 @@ export async function webGet(
     return { ok: true, status: res.status, contentType, body, truncated };
   } catch (err) {
     const detail = errorText(err);
-    if (detail.startsWith("Blocked outbound request")) {
+    // A refused hop is a TYPED error from the door, never a message match.
+    if (isBlockedOutboundError(err)) {
       return { ok: false, kind: "refused", detail };
     }
     return {

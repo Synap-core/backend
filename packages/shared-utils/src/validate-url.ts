@@ -124,6 +124,31 @@ export function validateExternalUrl(raw: string): ValidateUrlResult {
 }
 
 /**
+ * The SSRF guard refused an outbound request (a private / reserved address,
+ * a disallowed port or scheme, a redirect it may not follow). A TYPE, so a
+ * caller asks `isBlockedOutboundError(err)` instead of sniffing the message;
+ * the message stays `Blocked outbound request: <reason>` for logs.
+ */
+export class BlockedOutboundError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`Blocked outbound request: ${reason}`);
+    this.name = "BlockedOutboundError";
+    this.reason = reason;
+  }
+}
+
+/** Did the SSRF guard refuse this request? (By type; the name survives a realm hop.) */
+export function isBlockedOutboundError(
+  err: unknown
+): err is BlockedOutboundError {
+  return (
+    err instanceof BlockedOutboundError ||
+    (err instanceof Error && err.name === "BlockedOutboundError")
+  );
+}
+
+/**
  * fetch() wrapper that enforces the SSRF guard on the initial URL AND on every
  * redirect hop. `validateExternalUrl` alone only vets the first URL, so a
  * public host answering `302 Location: http://169.254.169.254/` would be
@@ -148,7 +173,7 @@ export async function safeExternalFetch(
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const check = validateExternalUrl(currentUrl);
     if (!check.valid) {
-      throw new Error(`Blocked outbound request: ${check.reason}`);
+      throw new BlockedOutboundError(check.reason);
     }
     const res = await fetch(check.url.toString(), {
       ...init,
@@ -163,7 +188,5 @@ export async function safeExternalFetch(
     }
     currentUrl = new URL(location, check.url).toString();
   }
-  throw new Error(
-    "Blocked outbound request: redirect to a new host is not allowed"
-  );
+  throw new BlockedOutboundError("redirect to a new host is not allowed");
 }

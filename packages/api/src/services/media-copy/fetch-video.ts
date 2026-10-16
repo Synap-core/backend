@@ -24,9 +24,9 @@
 import { envInt } from "@synap/shared-utils";
 import {
   openGuardedMedia,
-  type FetchImageDeps,
-  type ImageFetchFailure,
-} from "./fetch-image.js";
+  type GuardedFetchDeps,
+  type RemoteFetchFailure,
+} from "./remote-fetch.js";
 import {
   COPIED_VIDEO_ACCEPT,
   VIDEO_SNIFF_HEAD_BYTES,
@@ -57,7 +57,7 @@ export function libraryMediaVideoMaxBytes(
 }
 
 export type VideoFetchFailure =
-  | Exclude<ImageFetchFailure, "not_image">
+  | RemoteFetchFailure
   | "not_video"
   /** The bytes were fine; storing them failed (`cause` says why). */
   | "store_failed";
@@ -72,8 +72,8 @@ export type VideoFetchResult<T> =
   | { ok: false; reason: VideoFetchFailure; cause?: unknown };
 
 export interface FetchVideoDeps {
-  fetch?: FetchImageDeps["fetch"];
-  validate?: FetchImageDeps["validate"];
+  fetch?: GuardedFetchDeps["fetch"];
+  validate?: GuardedFetchDeps["validate"];
   maxBytes?: number;
   headersTimeoutMs?: number;
   idleTimeoutMs?: number;
@@ -121,12 +121,7 @@ export async function fetchExternalVideoToSink<T>(
       fetch: deps.fetch,
       validate: deps.validate,
     });
-    if (!opened.ok) {
-      return {
-        ok: false,
-        reason: opened.reason === "not_image" ? "not_video" : opened.reason,
-      };
-    }
+    if (!opened.ok) return { ok: false, reason: opened.reason };
     if (!opened.res.body) return { ok: false, reason: "empty" };
     reader = opened.res.body.getReader();
     const r = reader;

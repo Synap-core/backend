@@ -196,3 +196,27 @@ describe("safePublicFetch — ports and abort", () => {
     await expect(pending).rejects.toThrow(/timeout/);
   });
 });
+
+describe("a refused hop is a TYPED error", () => {
+  it("safePublicFetch and safeExternalFetch throw BlockedOutboundError (message kept for logs)", async () => {
+    const { BlockedOutboundError, isBlockedOutboundError, safeExternalFetch } =
+      await import("./validate-url.js");
+    const { safePublicFetch } = await import("./pinned-fetch.js");
+    for (const run of [
+      () => safePublicFetch("http://127.0.0.1/x"),
+      () => safeExternalFetch("http://10.0.0.5/x"),
+    ]) {
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(err).toBeInstanceOf(BlockedOutboundError);
+      expect(isBlockedOutboundError(err)).toBe(true);
+      expect((err as Error).message).toMatch(/^Blocked outbound request: /);
+    }
+    // A plain error with the same words is NOT a refusal: no sniffing.
+    expect(
+      isBlockedOutboundError(new Error("Blocked outbound request: x"))
+    ).toBe(false);
+  });
+});

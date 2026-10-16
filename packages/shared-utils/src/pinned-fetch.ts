@@ -29,7 +29,7 @@ import type { LookupFunction } from "node:net";
 import http from "node:http";
 import https from "node:https";
 import { Readable } from "node:stream";
-import { validateExternalUrl } from "./validate-url.js";
+import { BlockedOutboundError, validateExternalUrl } from "./validate-url.js";
 
 export interface ResolvedAddress {
   address: string;
@@ -135,7 +135,7 @@ const systemResolver: AddressResolver = async (hostname) => {
 };
 
 function blocked(reason: string): Error {
-  return new Error(`Blocked outbound request: ${reason}`);
+  return new BlockedOutboundError(reason);
 }
 
 /** Resolve + vet every address; the one to connect to. */
@@ -230,9 +230,16 @@ function toResponse(res: http.IncomingMessage, method: string): Response {
 }
 
 /**
+ * Redirect hops a public READ follows (a page, an API, a media file): http →
+ * https, a locale, a slug, a CDN hop. Shared by the web reader and the media
+ * copy so one policy change lands once.
+ */
+export const PUBLIC_FETCH_REDIRECT_HOPS = 3;
+
+/**
  * Fetch a URL that came from content. Redirects are followed manually up to
  * `maxRedirects` (default 0 — refused), every hop re-vetted and re-pinned.
- * Throws `Blocked outbound request: …` on a refused hop.
+ * Throws a `BlockedOutboundError` (`isBlockedOutboundError`) on a refused hop.
  */
 export async function safePublicFetch(
   rawUrl: string,

@@ -3,12 +3,11 @@
  * injected; the real SSRF validator is used unless a test says otherwise.
  */
 import { describe, expect, it, vi } from "vitest";
+import { fetchExternalImage, MEDIA_COPY_MAX_SIDE } from "../fetch-image.js";
 import {
-  fetchExternalImage,
   fetchGuardedBytes,
-  MEDIA_COPY_MAX_SIDE,
   PERMANENT_FETCH_FAILURES,
-} from "../fetch-image.js";
+} from "../remote-fetch.js";
 import { png } from "./fixtures.js";
 
 /** A body served chunk by chunk; counts how many chunks the reader pulled. */

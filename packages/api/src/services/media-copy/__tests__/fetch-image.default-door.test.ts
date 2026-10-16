@@ -9,8 +9,10 @@ import { describe, it, expect, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   publicFetch: vi.fn(async () => {
-    throw new Error(
-      "Blocked outbound request: 'rebind.example' resolves to a private or reserved address (169.254.169.254)"
+    // The door's own TYPED refusal (a message match no longer counts).
+    const { BlockedOutboundError } = await import("@synap/shared-utils");
+    throw new BlockedOutboundError(
+      "'rebind.example' resolves to a private or reserved address (169.254.169.254)"
     );
   }),
   externalFetch: vi.fn(),
