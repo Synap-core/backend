@@ -20,6 +20,7 @@
 import type { AppConnectRequestLike } from "../proposals/intent.js";
 import {
   resolveObjectNoun,
+  nounInSentence,
   resolveObjectNounPlural,
   resolveStatusLabel,
 } from "../vocabulary/index.js";
@@ -195,11 +196,11 @@ const rowRequest = (row: GrantSummaryRow, action: string): GrantRequest => ({
   action,
 });
 
-/** One tier's text from the candidate rows: a kind row hides under its subject's every-kind row. */
-function tierText(
+/** One tier's labels from the candidate rows: a kind row hides under its subject's every-kind row. */
+function tierLabels(
   rows: readonly GrantSummaryRow[],
   test: (row: GrantSummaryRow) => boolean
-): string | null {
+): string[] | null {
   const hit = rows.filter(test);
   const covered = new Set(
     hit.filter((r) => r.kind === "*").map((r) => r.subject)
@@ -209,13 +210,23 @@ function tierText(
     if (r.kind !== null && r.kind !== "*" && covered.has(r.subject)) continue;
     if (!labels.includes(r.label)) labels.push(r.label);
   }
-  return labels.length > 0 ? labels.join(", ") : null;
+  return labels.length > 0 ? labels : null;
 }
 
-const phrase = (tier: string) =>
-  tier === HOLDER_EVERYTHING || tier === HOLDER_NOTHING
-    ? tier.toLowerCase()
-    : tier;
+/** A tier as a VALUE (the "Can change" fact): its labels as listed. */
+const tierValue = (labels: readonly string[] | null) =>
+  labels ? labels.join(", ") : null;
+
+/**
+ * A tier inside the header SENTENCE: nouns mid-sentence ("changes notes and
+ * people"), never the listed labels' capitals ("changes Notes, People").
+ */
+const phrase = (labels: readonly string[] | "all" | "none") =>
+  labels === "all"
+    ? HOLDER_EVERYTHING.toLowerCase()
+    : labels === "none"
+      ? HOLDER_NOTHING.toLowerCase()
+      : and(labels.map(nounInSentence));
 
 function and(parts: readonly string[]): string {
   return parts.length > 1
@@ -422,21 +433,25 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
   });
 
   const readAll = catalog.every((s) => can(top(s.subject, "read")));
+  const readLabels = readAll
+    ? null
+    : tierLabels(candidates, (r) => can(rowRequest(r, "read")));
   const read = readAll
     ? HOLDER_EVERYTHING
-    : (tierText(candidates, (r) => can(rowRequest(r, "read"))) ??
-      HOLDER_NOTHING);
+    : (tierValue(readLabels) ?? HOLDER_NOTHING);
   const changeAll = catalog.every((s) =>
     s.actions.filter((a) => a !== "read").every((a) => can(top(s.subject, a)))
   );
-  const change = changeAll
-    ? HOLDER_EVERYTHING
-    : tierText(candidates, (r) =>
+  const changeLabels = changeAll
+    ? null
+    : tierLabels(candidates, (r) =>
         CHANGE_ACTIONS.some((a) => can(rowRequest(r, a)))
       );
-  const approve = full
-    ? HOLDER_EVERYTHING
-    : tierText(candidates, (r) => can(rowRequest(r, "approve")));
+  const change = changeAll ? HOLDER_EVERYTHING : tierValue(changeLabels);
+  const approveLabels = full
+    ? null
+    : tierLabels(candidates, (r) => can(rowRequest(r, "approve")));
+  const approve = full ? HOLDER_EVERYTHING : tierValue(approveLabels);
   const deletes = full || candidates.some((r) => can(rowRequest(r, "delete")));
 
   // ── where ───────────────────────────────────────────────────────────────
@@ -484,9 +499,13 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
         : HOLDER_NO_ACCESS_SENTENCE;
   else if (full) what = GRANT_FULL_ACCESS_SENTENCE;
   else {
-    const verbs = [`Reads ${phrase(read)}`];
-    if (change) verbs.push(`changes ${phrase(change)}`);
-    if (approve) verbs.push(`approves ${phrase(approve)}`);
+    const verbs = [
+      `Reads ${phrase(readAll ? "all" : (readLabels ?? "none"))}`,
+    ];
+    if (change)
+      verbs.push(`changes ${phrase(changeAll ? "all" : changeLabels!)}`);
+    if (approve)
+      verbs.push(`approves ${phrase(full ? "all" : approveLabels!)}`);
     what = verbs.join(", ");
     if (spaces.length > 0)
       what += ` in ${spacesPhrase(spaces.map((s) => s.name))}`;

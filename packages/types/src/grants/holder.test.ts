@@ -3,7 +3,7 @@
  * Each row names the wrong rule it rules out.
  */
 import { describe, expect, it } from "vitest";
-import { resolveObjectNounPlural } from "../vocabulary/index.js";
+import { nounInSentence, resolveObjectNounPlural } from "../vocabulary/index.js";
 import {
   agentCapabilitiesToDraft,
   GRANT_FULL_ACCESS_SENTENCE,
@@ -50,6 +50,8 @@ const agent = (
 
 const NOTES = resolveObjectNounPlural("note");
 const PROPOSALS = resolveObjectNounPlural("proposal");
+/** A tier inside the sentence reads mid-sentence: "changes notes", never "changes Notes". */
+const inSentence = nounInSentence;
 
 describe("resolveHolderAccess — keys", () => {
   // P5 — deny by default. Rules out: a never-granted key read as full access
@@ -96,6 +98,21 @@ describe("resolveHolderAccess — keys", () => {
     expect(key(limits, { expiresAt: FUTURE }).state).toBe("full");
   });
 
+  // Rules out: the tier VALUE ("Notes, People") pasted into the sentence —
+  // a list of capitalised labels mid-sentence.
+  it("two kinds in one tier: the value lists labels, the sentence joins nouns with 'and'", () => {
+    const h = key({
+      source: "grants",
+      access: "granted",
+      grants: [grant(["entity.note", "entity.person"])],
+    });
+    const people = resolveObjectNounPlural("person");
+    expect(h.tiers.change).toBe(`${NOTES}, ${people}`);
+    expect(h.sentence).toBe(
+      `Reads ${inSentence(NOTES)} and ${inSentence(people)}, changes ${inSentence(NOTES)} and ${inSentence(people)}.`
+    );
+  });
+
   it("a granted key: tiers, sentence, lifetime and its one grant as the draft", () => {
     const h = key(
       {
@@ -111,7 +128,7 @@ describe("resolveHolderAccess — keys", () => {
     expect(h.tiers.approve).toBeNull();
     // A bare kind covers delete.
     expect(h.danger).toEqual({ full: false, approves: false, deletes: true });
-    expect(h.sentence).toBe(`Reads ${NOTES}, changes ${NOTES} in Sales.`);
+    expect(h.sentence).toBe(`Reads ${inSentence(NOTES)}, changes ${inSentence(NOTES)} in Sales.`);
     expect(h.where).toEqual({
       anywhere: false,
       spaces: [{ id: "ws-sales", name: "Sales" }],
@@ -142,7 +159,7 @@ describe("resolveHolderAccess — keys", () => {
     expect(named.tiers.approve).toBe(PROPOSALS);
     expect(named.danger.approves).toBe(true);
     expect(named.danger.full).toBe(false);
-    expect(named.sentence).toBe(`Reads nothing, approves ${PROPOSALS}.`);
+    expect(named.sentence).toBe(`Reads nothing, approves ${inSentence(PROPOSALS)}.`);
   });
 
   it("`*` is full, approving included, in red", () => {
@@ -204,7 +221,7 @@ describe("resolveHolderAccess — agents", () => {
     expect(h.tiers.change).toBe(NOTES);
     expect(h.danger.deletes).toBe(false);
     expect(h.sentence).toBe(
-      `Reads everything, changes ${NOTES}. Acts without asking in Sales.`
+      `Reads everything, changes ${inSentence(NOTES)}. Acts without asking in Sales.`
     );
   });
 
@@ -306,7 +323,7 @@ describe("resolveHolderAccess — apps", () => {
     expect(h.tiers.read).toBe(NOTES);
     expect(h.tiers.change).toBe(resolveObjectNounPlural("person"));
     expect(h.sentence).toBe(
-      `Reads ${NOTES}, changes ${resolveObjectNounPlural("person")} in Sales and Finance. Asks you first.`
+      `Reads ${inSentence(NOTES)}, changes ${inSentence(resolveObjectNounPlural("person"))} in Sales and Finance. Asks you first.`
     );
   });
 });

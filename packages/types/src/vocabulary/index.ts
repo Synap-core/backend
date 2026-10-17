@@ -839,6 +839,29 @@ export function buildObjectActionTitle(params: {
 }
 
 /**
+ * A BUTTON's words: the verb, then the object's noun MID-SENTENCE — "Start
+ * work", "Create task", "Archive track", "Create UI design". Buttons are
+ * sentence case; {@link buildObjectActionTitle} composes a title that may name
+ * the object ("Create Task \"Brief\""), and pasting it onto a button gave
+ * "Start Work" beside a "Start work" heading. The generic `entity` kind adds no
+ * word, as in the title.
+ */
+export function buildActionLabel(params: {
+  action: string;
+  objectKind?: string | null;
+  mood?: VerbMood;
+}): string {
+  const { action, objectKind, mood } = params;
+  const verb = resolveActionLabel(action, mood ?? "imperative");
+  const noun =
+    objectKind && objectKind.toLowerCase() !== "entity"
+      ? nounInSentence(resolveObjectNoun(objectKind))
+      : "";
+  const preposition = noun ? resolveActionPreposition(action) : "";
+  return [verb, preposition, noun].filter(Boolean).join(" ");
+}
+
+/**
  * Proposal-KIND labels — the SHAPE of a proposed change ("what kind of
  * proposal is this"), shown as a chip on every proposal card/detail surface.
  * This is its OWN taxonomy: distinct from an object kind (what THING it acts

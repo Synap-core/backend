@@ -14,6 +14,7 @@ import {
   resolveActionPresent,
   resolveObjectNoun,
   OBJECT_NOUNS,
+  buildActionLabel,
   buildObjectActionTitle,
   ACTION_VERBS,
   OBJECT_KINDS,
@@ -550,6 +551,20 @@ describe("buildFallbackTitle — the regressions it shipped", () => {
       targetName: "X",
     });
     expect(title).not.toMatch(/ {2}/);
+  });
+});
+
+describe("buildActionLabel — a button's words", () => {
+  // Rules out: the title composer reused on a button ("Start Work").
+  it("is sentence case: the noun reads mid-sentence", () => {
+    expect(buildActionLabel({ action: "start", objectKind: "work" })).toBe("Start work");
+    expect(buildActionLabel({ action: "create", objectKind: "task" })).toBe("Create task");
+    expect(buildObjectActionTitle({ action: "start", objectKind: "work" })).toBe("Start Work");
+  });
+
+  it("keeps deliberate casing and drops the generic entity noun", () => {
+    expect(buildActionLabel({ action: "create", objectKind: "entity" })).toBe("Create");
+    expect(buildActionLabel({ action: "archive", objectKind: "track" })).toBe("Archive track");
   });
 });
 
