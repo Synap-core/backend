@@ -7,7 +7,8 @@
  *     `peopleCount` the people linked through it; a connection whose issuer
  *     never acted reads null / 0;
  *   - `get` names the people (newest link first) and is NOT_FOUND for an
- *     unknown id;
+ *     unknown id; its `requestIds` are the app's asks through the same
+ *     issuer, newest first — another app's or another issuer's are not;
  *   - both are pod-admin only.
  */
 
@@ -51,6 +52,8 @@ const QUIET_ISSUER = randomUUID();
 const USED = randomUUID();
 const QUIET = randomUUID();
 const SPACE = randomUUID();
+const ASK_OLD = randomUUID();
+const ASK_NEW = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -130,6 +133,24 @@ beforeAll(async () => {
             ($1, 'c2', 'sub-ben', $4, 'workspace', $3, 'editor', '2026-10-09T12:00:00Z')`,
     [USED_ISSUER, ANNA, SPACE, BEN]
   );
+  for (const [id, issuerUrl, clientId, at] of [
+    [ASK_OLD, "https://landing.example", "client-Synap Landing", "2026-10-01"],
+    [ASK_NEW, "https://landing.example", "client-Synap Landing", "2026-10-08"],
+    [randomUUID(), "https://landing.example", "client-Other", "2026-10-09"],
+    [
+      randomUUID(),
+      "https://quiet.example",
+      "client-Synap Landing",
+      "2026-10-09",
+    ],
+  ])
+    await q(
+      `insert into federated_application_connection_requests
+         (id, issuer_url, issuer_subject, client_id, display_name, requested_origin, requested_callback_url,
+          continuation_hash, redemption_hash, status, expires_at, created_at)
+       values ($1::uuid, $2, 'sub', $3, 'x', 'https://app.example', 'https://app.example/cb', $1::text, $1::text, 'rejected', now(), $4)`,
+      [id, issuerUrl, clientId, at]
+    );
 }, 120_000);
 
 describe("applicationConnections.list — usage", () => {
@@ -158,6 +179,13 @@ describe("applicationConnections.get", () => {
       peopleCount: 2,
     });
     expect(one.people.map((p) => p.name)).toEqual(["Ben", "Anna"]);
+  });
+
+  it("lists its own asks, newest first, for its Activity", async () => {
+    const one = await caller(ADMIN).get({ id: USED });
+    expect(one.requestIds).toEqual([ASK_NEW, ASK_OLD]);
+    const quiet = await caller(ADMIN).get({ id: QUIET });
+    expect(quiet.requestIds).toEqual([]);
   });
 
   it("an unknown connection is NOT_FOUND; a member is refused", async () => {
