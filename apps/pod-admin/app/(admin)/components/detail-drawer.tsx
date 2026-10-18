@@ -99,7 +99,7 @@ export function DetailDrawer({
                     {title}
                   </span>
                   {subtitle && (
-                    <span className="truncate text-[11.5px] text-foreground/55">
+                    <span className="truncate text-[11.5px] text-foreground/65">
                       {subtitle}
                     </span>
                   )}

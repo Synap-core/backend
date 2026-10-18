@@ -198,7 +198,7 @@ function NoAgents() {
       <Bot className="h-6 w-6 text-foreground/40" aria-hidden />
       <div className="flex flex-col gap-1">
         <p className="text-[14px] font-medium text-foreground">No agents yet</p>
-        <p className="max-w-md text-[12.5px] text-foreground/55">
+        <p className="max-w-md text-[12.5px] text-foreground/65">
           Connect one from a computer. Each agent it sets up shows here with
           what it may do in every space.
         </p>
@@ -222,7 +222,7 @@ function NoProcesses() {
         <p className="text-[13px] font-medium text-foreground">
           No processes yet
         </p>
-        <p className="text-[12px] text-foreground/55">
+        <p className="text-[12px] text-foreground/65">
           A process is a playbook that works a kind&apos;s lifecycle; each gets
           its own column here. Until then, Other work shows what each agent may
           do in each space.

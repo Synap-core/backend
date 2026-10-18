@@ -51,7 +51,7 @@ const palette: Record<
   },
   unknown: {
     dot: "bg-status-unknown",
-    text: "text-foreground/55",
+    text: "text-foreground/65",
     bg: "bg-foreground/5",
     ring: "ring-foreground/10",
   },

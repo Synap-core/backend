@@ -115,7 +115,7 @@ export function CreateKeyModal({
                 <span className="text-[12.5px] font-medium text-foreground capitalize">
                   {k}
                 </span>
-                <span className="text-[11px] text-foreground/55">
+                <span className="text-[11px] text-foreground/65">
                   {k === "personal"
                     ? "Your personal access token (synap_user_)"
                     : "For automation & scripts — CLI/Raycast use /admin/connect"}
@@ -279,7 +279,7 @@ export function RevealKeyModal({
           >
             {plaintext}
           </Snippet>
-          <p className="text-[11.5px] text-foreground/55">
+          <p className="text-[11.5px] text-foreground/65">
             Treat this like a password. Anyone with the key can act on this pod
             within its scopes.
           </p>

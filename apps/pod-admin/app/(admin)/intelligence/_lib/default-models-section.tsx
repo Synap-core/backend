@@ -140,10 +140,10 @@ export function DefaultModelsSection() {
                 <span className="text-[12.5px] font-medium text-foreground">
                   {slot.label}
                 </span>
-                <span className="text-[11px] text-foreground/55 truncate">
+                <span className="text-[11px] text-foreground/65 truncate">
                   {slot.hint}
                 </span>
-                <span className="mt-1 text-[11.5px] text-foreground/45 tabular truncate">
+                <span className="mt-1 text-[11.5px] text-foreground/65 tabular truncate">
                   {query.isLoading || isAuthRedirecting
                     ? "Loading…"
                     : value
@@ -210,7 +210,7 @@ function DefaultModelsModal({
           <span className="text-[14px] font-medium text-foreground">
             Edit pod-wide defaults
           </span>
-          <span className="text-[11.5px] text-foreground/55">
+          <span className="text-[11.5px] text-foreground/65">
             Leave a slot empty to inherit from the default IS.
           </span>
         </ModalHeader>

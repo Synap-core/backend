@@ -10,10 +10,7 @@ import { ArrowDownToLine, Bot, Database, Webhook } from "lucide-react";
 import { WEBHOOK_EVENTS } from "./add-connection-modal";
 
 export type Pattern =
-  | "rest-api"
-  | "hub-protocol"
-  | "webhook-outbound"
-  | "webhook-inbound";
+  "rest-api" | "hub-protocol" | "webhook-outbound" | "webhook-inbound";
 
 // ─── Step 1 ───────────────────────────────────────────────────────────────────
 
@@ -104,7 +101,7 @@ export function Step2Key({
 
   return (
     <>
-      <p className="text-[12.5px] text-foreground/55">
+      <p className="text-[12.5px] text-foreground/65">
         Your service calls{" "}
         <code className="font-mono text-[11.5px]">{endpoint}</code> with{" "}
         <code className="font-mono text-[11.5px]">
@@ -131,7 +128,7 @@ export function Step2Key({
                 <span className="font-mono text-[12px] font-medium text-foreground">
                   {s.label}
                 </span>
-                <span className="text-[11px] text-foreground/55">
+                <span className="text-[11px] text-foreground/65">
                   {s.description}
                 </span>
               </span>
@@ -180,7 +177,7 @@ export function Step2WebhookOutbound({
       <div className="flex flex-col gap-1.5">
         <p className="text-[12.5px] font-medium text-foreground">
           Events
-          <span className="ml-1 text-[11px] font-normal text-foreground/45">
+          <span className="ml-1 text-[11px] font-normal text-foreground/65">
             (select at least one)
           </span>
         </p>
@@ -235,7 +232,7 @@ export function PatternCard({
       <div className="mt-0.5 shrink-0">{icon}</div>
       <div className="flex flex-col gap-0.5">
         <span className="text-[13px] font-medium text-foreground">{title}</span>
-        <span className="text-[11.5px] text-foreground/55">{description}</span>
+        <span className="text-[11.5px] text-foreground/65">{description}</span>
       </div>
     </button>
   );

@@ -121,7 +121,7 @@ function WorkspaceDetailInner() {
       <button
         type="button"
         onClick={() => router.push("/workspaces")}
-        className="mb-5 flex items-center gap-1.5 text-[12.5px] text-foreground/55 hover:text-foreground transition-colors"
+        className="mb-5 flex items-center gap-1.5 text-[12.5px] text-foreground/65 hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         {navLabel("spaces")}
@@ -152,7 +152,7 @@ function WorkspaceDetailInner() {
                     <StatusPill kind={status.kind} label={status.label} />
                   ) : null}
                 </div>
-                <p className="font-mono text-[11.5px] text-foreground/40">
+                <p className="font-mono text-[11.5px] text-foreground/65">
                   {ws.id}
                 </p>
               </>
@@ -162,14 +162,14 @@ function WorkspaceDetailInner() {
                 <div className="h-3.5 w-72 rounded bg-foreground/[0.05] shimmer-pulse mt-1" />
               </>
             ) : (
-              <p className="text-[13px] text-foreground/55">Space not found.</p>
+              <p className="text-[13px] text-foreground/65">Space not found.</p>
             )}
           </div>
         </div>
 
         {ws ? (
           <div className="flex items-center gap-2 sm:shrink-0">
-            <span className="text-[11.5px] text-foreground/40">
+            <span className="text-[11.5px] text-foreground/65">
               updated {formatRelative(ws.updatedAt)}
             </span>
             {/* This page owns the space's admin surfaces; its CONTENTS

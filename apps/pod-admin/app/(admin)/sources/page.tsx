@@ -171,7 +171,7 @@ function ProviderHealthGrid() {
       hint="Connections per provider, across all spaces"
       actions={
         providersQuery.data ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {aggregates.length} providers
           </span>
         ) : null
@@ -328,7 +328,7 @@ function PodLevelConnectorsSection() {
       hint="Source configs the operator owns directly (RSS, ICS, HTTP pollers)"
       actions={
         rows.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {rows.length} configured
           </span>
         ) : null
@@ -443,7 +443,7 @@ function PerWorkspaceGridSection() {
         title="Connectors by space"
         hint="Grouped by space · open a row for detail"
         actions={
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {rows.length} rows
           </span>
         }
@@ -609,7 +609,7 @@ function Th({
   return (
     <th
       className={[
-        "px-3 py-2 text-[10.5px] font-medium uppercase tracking-wide text-foreground/55",
+        "px-3 py-2 text-[10.5px] font-medium uppercase tracking-wide text-foreground/65",
         className ?? "",
       ].join(" ")}
     >

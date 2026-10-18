@@ -537,7 +537,7 @@ function KeyRow({
             </DropdownMenu>
           </Dropdown>
         ) : (
-          <span className="px-2 text-[11px] text-foreground/45">read-only</span>
+          <span className="px-2 text-[11px] text-foreground/65">read-only</span>
         )
       }
     />

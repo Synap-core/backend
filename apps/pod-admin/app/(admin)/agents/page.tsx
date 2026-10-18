@@ -136,7 +136,7 @@ function AgentsInner() {
           hint="Agents people brought to this pod"
           actions={
             connected.length > 0 ? (
-              <span className="text-[11px] tabular text-foreground/55">
+              <span className="text-[11px] tabular text-foreground/65">
                 {connected.length}
               </span>
             ) : null

@@ -167,13 +167,13 @@ function RuleRow({
               "rounded-full px-2 py-0.5 text-[10.5px] font-medium",
               rule.verdict === "auto"
                 ? "bg-status-healthy/10 text-status-healthy ring-1 ring-inset ring-status-healthy/30"
-                : "bg-foreground/[0.06] text-foreground/55",
+                : "bg-foreground/[0.06] text-foreground/65",
             ].join(" ")}
           >
             {verdictLabel(rule)}
           </span>
           <span
-            className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/55"
+            className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/65"
             title={
               isProposalAuthored
                 ? "Created by approving a proposal"
@@ -183,7 +183,7 @@ function RuleRow({
             {provenanceLabel(rule)}
           </span>
         </div>
-        <span className="text-[11px] text-foreground/40">
+        <span className="text-[11px] text-foreground/65">
           {humanizePrincipal(rule)} · {humanizeScope(rule, workspaceName)} ·
           created {formatDate(rule.createdAt)}
           {rule.expiresAt ? ` · expires ${formatDate(rule.expiresAt)}` : ""}

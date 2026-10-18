@@ -254,7 +254,7 @@ function KeyRow({
           <span className="text-[13px] font-medium text-foreground">
             {apiKey.keyName}
           </span>
-          <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/55">
+          <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/65">
             {typeBadge(apiKey.keyType)}
           </span>
         </div>
@@ -262,13 +262,13 @@ function KeyRow({
           {scopes.slice(0, 3).map((s) => (
             <span
               key={s}
-              className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/55"
+              className="rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/65"
             >
               {s}
             </span>
           ))}
           {scopes.length > 3 ? (
-            <span className="text-[10.5px] text-foreground/40">
+            <span className="text-[10.5px] text-foreground/65">
               +{scopes.length - 3} more
             </span>
           ) : null}
@@ -592,7 +592,7 @@ function RevealKeyModal({
           >
             {plaintext}
           </Snippet>
-          <p className="text-[11.5px] text-foreground/55">
+          <p className="text-[11.5px] text-foreground/65">
             Treat this like a password. Anyone with the key can act on this
             space within its scopes.
           </p>

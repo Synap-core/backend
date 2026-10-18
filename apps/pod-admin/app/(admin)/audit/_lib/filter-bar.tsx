@@ -90,7 +90,7 @@ export function FilterBar({
       ].join(" ")}
     >
       <div className="flex flex-wrap items-end gap-2">
-        <div className="flex items-center gap-1.5 pr-1 text-foreground/55">
+        <div className="flex items-center gap-1.5 pr-1 text-foreground/65">
           <Filter className="h-3.5 w-3.5" />
           <span className="text-[12px] font-medium">Filters</span>
         </div>
@@ -240,7 +240,7 @@ export function FilterBar({
               size="sm"
               variant="flat"
               radius="sm"
-              className="bg-foreground/[0.06] text-[11px] text-foreground/55"
+              className="bg-foreground/[0.06] text-[11px] text-foreground/65"
             >
               Refreshing…
             </Chip>
@@ -277,7 +277,7 @@ function DateField({
   return (
     <label
       htmlFor={id}
-      className="flex flex-col gap-0.5 text-[10.5px] font-medium uppercase tracking-wide text-foreground/45"
+      className="flex flex-col gap-0.5 text-[10.5px] font-medium uppercase tracking-wide text-foreground/65"
     >
       {label}
       <input

@@ -106,7 +106,7 @@ export function ProviderHealthSection() {
       hint="Configured AI providers with cached health"
       actions={
         cards.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {cards.length} providers
           </span>
         ) : null
@@ -199,7 +199,7 @@ function ProviderCard({
             <span className="truncate text-[13px] font-medium text-foreground">
               {card.name}
             </span>
-            <span className="truncate text-[11px] text-foreground/45 tabular">
+            <span className="truncate text-[11px] text-foreground/65 tabular">
               {card.serviceId}
             </span>
           </div>
@@ -212,13 +212,13 @@ function ProviderCard({
           {card.capabilities.slice(0, 4).map((cap) => (
             <span
               key={cap}
-              className="rounded-sm bg-foreground/[0.06] px-1.5 py-0.5 text-[10.5px] text-foreground/55"
+              className="rounded-sm bg-foreground/[0.06] px-1.5 py-0.5 text-[10.5px] text-foreground/65"
             >
               {cap}
             </span>
           ))}
           {card.capabilities.length > 4 && (
-            <span className="text-[10.5px] text-foreground/45">
+            <span className="text-[10.5px] text-foreground/65">
               +{card.capabilities.length - 4}
             </span>
           )}

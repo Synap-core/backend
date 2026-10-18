@@ -53,7 +53,7 @@ export function UrlTabs({
         tab: "px-1 h-10",
         cursor: "bg-primary",
         tabContent:
-          "text-foreground/55 group-data-[selected=true]:text-foreground text-[12.5px] font-medium",
+          "text-foreground/65 group-data-[selected=true]:text-foreground text-[12.5px] font-medium",
       }}
     >
       {tabs.map((t) => (

@@ -52,7 +52,11 @@ import { CopyButton, ErrorNote, errorDetail } from "../_lib/copy-button";
 
 const RECOVERY_GROUPS = ["code", "link"] as const;
 
-export function RecoveryView({ initialFlowId }: { initialFlowId: string | null }) {
+export function RecoveryView({
+  initialFlowId,
+}: {
+  initialFlowId: string | null;
+}) {
   return (
     <main className="flex min-h-screen items-center justify-center px-6 py-16">
       <Card
@@ -173,11 +177,16 @@ function RecoveryHub() {
     setDoorError(null);
     try {
       const r = await createBrowserFlow("recovery");
-      if ("flow" in r) router.replace(`/recovery?flow=${encodeURIComponent(r.flow.id)}`);
+      if ("flow" in r)
+        router.replace(`/recovery?flow=${encodeURIComponent(r.flow.id)}`);
       else if ("existingSession" in r) router.replace("/settings/security");
-      else setDoorError({ message: "Couldn't start email recovery. Try again." });
+      else
+        setDoorError({ message: "Couldn't start email recovery. Try again." });
     } catch (err) {
-      setDoorError({ message: "Couldn't start email recovery. Try again.", detail: errorDetail(err) });
+      setDoorError({
+        message: "Couldn't start email recovery. Try again.",
+        detail: errorDetail(err),
+      });
     } finally {
       setBusy(null);
     }
@@ -187,19 +196,24 @@ function RecoveryHub() {
     setBusy("cloud");
     setDoorError(null);
     try {
-      const r = await createLoginFlow(`${window.location.origin}/settings/security`);
+      const r = await createLoginFlow(
+        `${window.location.origin}/settings/security`
+      );
       if (r.existingSession) {
         router.replace("/settings/security");
         return;
       }
       const flow = r.flow;
-      const csrf = flow?.ui.nodes.find((n) => n.attributes?.name === "csrf_token")
-        ?.attributes?.value;
+      const csrf = flow?.ui.nodes.find(
+        (n) => n.attributes?.name === "csrf_token"
+      )?.attributes?.value;
       const hasCloud = flow?.ui.nodes.some(
         (n) => n.group === "oidc" && n.attributes?.value === "cp"
       );
       if (!flow || !hasCloud) {
-        setDoorError({ message: "Synap Cloud sign-in isn't available on this pod right now." });
+        setDoorError({
+          message: "Synap Cloud sign-in isn't available on this pod right now.",
+        });
         return;
       }
       const sent = await submitSelfServiceFlow(flow, {
@@ -211,9 +225,14 @@ function RecoveryHub() {
         window.location.assign(sent.to);
         return;
       }
-      setDoorError({ message: "Synap Cloud sign-in couldn't start. Try again." });
+      setDoorError({
+        message: "Synap Cloud sign-in couldn't start. Try again.",
+      });
     } catch (err) {
-      setDoorError({ message: "Synap Cloud sign-in couldn't start. Try again.", detail: errorDetail(err) });
+      setDoorError({
+        message: "Synap Cloud sign-in couldn't start. Try again.",
+        detail: errorDetail(err),
+      });
     } finally {
       setBusy(null);
     }
@@ -225,7 +244,10 @@ function RecoveryHub() {
         <Header title="Can't sign in?" />
         <div className="flex flex-col gap-2" aria-busy>
           {[0, 1].map((i) => (
-            <div key={i} className="h-14 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
+            <div
+              key={i}
+              className="h-14 rounded-medium bg-foreground/[0.05] shimmer-pulse"
+            />
           ))}
         </div>
       </>
@@ -250,7 +272,9 @@ function RecoveryHub() {
   return (
     <>
       <Header title="Can't sign in?">Pick a way back in.</Header>
-      {doorError ? <ErrorNote message={doorError.message} detail={doorError.detail} /> : null}
+      {doorError ? (
+        <ErrorNote message={doorError.message} detail={doorError.detail} />
+      ) : null}
       <ul className="flex flex-col gap-2">
         {doors.map((door) => {
           const {
@@ -274,13 +298,20 @@ function RecoveryHub() {
                 }}
                 className="flex w-full items-center gap-3 rounded-medium px-3 py-3 text-left transition-colors hover:bg-foreground/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
               >
-                <Icon className="h-4 w-4 shrink-0 text-foreground/70" strokeWidth={2} />
+                <Icon
+                  className="h-4 w-4 shrink-0 text-foreground/70"
+                  strokeWidth={2}
+                />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-[13.5px] font-medium text-foreground">{title}</span>
-                  <span className="text-[12px] text-foreground/55">{hint}</span>
+                  <span className="text-[13.5px] font-medium text-foreground">
+                    {title}
+                  </span>
+                  <span className="text-[12px] text-foreground/65">{hint}</span>
                 </span>
                 {busy === door ? (
-                  <span className="text-[12px] text-foreground/55">Opening…</span>
+                  <span className="text-[12px] text-foreground/65">
+                    Opening…
+                  </span>
                 ) : null}
               </button>
               {door === "code" && expanded ? (
@@ -357,13 +388,18 @@ function RedeemForm() {
       return;
     }
     const view = redeemFailureMessage(r.error);
-    setError({ message: view.message, detail: view.failed ? recoveryCallDetail(r) : undefined });
+    setError({
+      message: view.message,
+      detail: view.failed ? recoveryCallDetail(r) : undefined,
+    });
     setSubmitting(false);
   };
 
   return (
     <form className="flex flex-col gap-3 pt-1" onSubmit={submit}>
-      {error ? <ErrorNote message={error.message} detail={error.detail} /> : null}
+      {error ? (
+        <ErrorNote message={error.message} detail={error.detail} />
+      ) : null}
       <Input
         label="Account email"
         labelPlacement="outside"
@@ -391,7 +427,7 @@ function RedeemForm() {
         variant="flat"
         classNames={{ input: "font-mono tracking-wide" }}
       />
-      <p className="text-[12px] text-foreground/55">
+      <p className="text-[12px] text-foreground/65">
         The code is used up, and your other devices are signed out.
       </p>
       <Button
@@ -418,7 +454,10 @@ type FlowState =
   | { kind: "flow"; flow: KratosFlow };
 
 function RecoveryFlowLoader({ flowId }: { flowId: string }) {
-  const [state, setState] = useState<FlowState>({ kind: "loading", finishing: false });
+  const [state, setState] = useState<FlowState>({
+    kind: "loading",
+    finishing: false,
+  });
   const [values, setValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -446,7 +485,8 @@ function RecoveryFlowLoader({ flowId }: { flowId: string }) {
         }
         if (r.kind === "flow") show(r.flow);
         else if (r.kind === "error") {
-          if (r.error.id === "self_service_flow_expired") setState({ kind: "expired" });
+          if (r.error.id === "self_service_flow_expired")
+            setState({ kind: "expired" });
           else setError("Recovery didn't go through. Try again.");
         } else setError("Recovery didn't go through. Try again.");
       } catch {
@@ -463,7 +503,11 @@ function RecoveryFlowLoader({ flowId }: { flowId: string }) {
     // Read the one-time code once, then scrub it from the address bar.
     const code = readRecoveryFragment(window.location.hash);
     if (window.location.hash) {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + window.location.search
+      );
     }
     void (async () => {
       try {
@@ -478,7 +522,12 @@ function RecoveryFlowLoader({ flowId }: { flowId: string }) {
         show(flow);
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof FlowLoadError && (err.status === 410 || err.status === 404 || err.id === "self_service_flow_expired")) {
+        if (
+          err instanceof FlowLoadError &&
+          (err.status === 410 ||
+            err.status === 404 ||
+            err.id === "self_service_flow_expired")
+        ) {
           setState({ kind: "expired" });
         } else {
           setState({ kind: "failed", detail: errorDetail(err) });
@@ -493,8 +542,15 @@ function RecoveryFlowLoader({ flowId }: { flowId: string }) {
   if (state.kind === "loading") {
     return (
       <>
-        <Header title={state.finishing ? "Recovering your account…" : "Can't sign in?"} />
-        <div className="h-24 rounded-medium bg-foreground/[0.05] shimmer-pulse" aria-busy />
+        <Header
+          title={
+            state.finishing ? "Recovering your account…" : "Can't sign in?"
+          }
+        />
+        <div
+          className="h-24 rounded-medium bg-foreground/[0.05] shimmer-pulse"
+          aria-busy
+        />
       </>
     );
   }
@@ -550,12 +606,16 @@ export function RecoveryFlowPanel({
 }: {
   flow: KratosFlow;
   values: Record<string, string>;
-  setValues: (u: (prev: Record<string, string>) => Record<string, string>) => void;
+  setValues: (
+    u: (prev: Record<string, string>) => Record<string, string>
+  ) => void;
   submitting: boolean;
   error: string | null;
   onSubmit: (body: Record<string, string>) => void;
 }) {
-  const codeStep = flow.state === "sent_email" || flow.ui.nodes.some((n) => n.attributes?.name === "code");
+  const codeStep =
+    flow.state === "sent_email" ||
+    flow.ui.nodes.some((n) => n.attributes?.name === "code");
   return (
     <>
       {codeStep ? (
@@ -564,7 +624,8 @@ export function RecoveryFlowPanel({
         </Header>
       ) : (
         <Header title="Email me a code">
-          Enter your account email. If it belongs to an account here, a code is on its way.
+          Enter your account email. If it belongs to an account here, a code is
+          on its way.
         </Header>
       )}
       <KratosFields

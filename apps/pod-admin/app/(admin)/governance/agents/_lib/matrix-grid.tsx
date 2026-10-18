@@ -120,7 +120,7 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
               role="columnheader"
               rowSpan={2}
               scope="col"
-              className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-r border-foreground/[0.08] bg-background px-3 text-left align-bottom font-medium text-foreground/55"
+              className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-r border-foreground/[0.08] bg-background px-3 text-left align-bottom font-medium text-foreground/65"
             >
               <span className="block pb-2">Agent</span>
             </th>
@@ -142,7 +142,7 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
                 key={column.id}
                 role="columnheader"
                 scope="col"
-                className="sticky top-8 z-20 min-w-[104px] max-w-[160px] border-b border-l border-foreground/[0.08] bg-background px-3 py-2 text-left align-bottom font-normal text-foreground/55"
+                className="sticky top-8 z-20 min-w-[104px] max-w-[160px] border-b border-l border-foreground/[0.08] bg-background px-3 py-2 text-left align-bottom font-normal text-foreground/65"
               >
                 <span className="flex items-center gap-1.5">
                   {column.kind === "floors" && (
@@ -239,7 +239,7 @@ function RowLabel({ row }: { row: MatrixRow }) {
         {row.label}
       </span>
       {row.kind !== "agent" && (
-        <span className="tabular shrink-0 text-[11px] text-foreground/40">
+        <span className="tabular shrink-0 text-[11px] text-foreground/65">
           {row.memberCount}
         </span>
       )}
@@ -264,7 +264,7 @@ function CellMark({ cell }: { cell: MatrixCell }) {
         {m.glyph}
       </span>
       {cell.mark === "mixed" && (
-        <span className="tabular flex gap-1.5 text-[11px] text-foreground/55">
+        <span className="tabular flex gap-1.5 text-[11px] text-foreground/65">
           {MATRIX_VERDICTS.filter((v) => cell.split[v] > 0).map((v) => (
             <span key={v} className={toneTextClass(MATRIX_MARKS[v].tone)}>
               {cell.split[v]}

@@ -59,7 +59,7 @@ function FieldFrame({
             )}
           </span>
           {spec.description && (
-            <span className="text-[11px] text-foreground/55">
+            <span className="text-[11px] text-foreground/65">
               {spec.description}
             </span>
           )}
@@ -81,7 +81,7 @@ function FieldFrame({
         )}
       </span>
       {spec.description && (
-        <span className="text-[11px] text-foreground/55">
+        <span className="text-[11px] text-foreground/65">
           {spec.description}
         </span>
       )}
@@ -124,7 +124,7 @@ function StringListField({
   return (
     <div className="flex flex-col gap-2">
       {value.length === 0 ? (
-        <span className="text-[11px] text-foreground/40 italic">
+        <span className="text-[11px] text-foreground/65 italic">
           No values yet
         </span>
       ) : (
@@ -508,7 +508,7 @@ export function ConfigForm({
             key="advanced"
             aria-label="Advanced settings"
             title={
-              <span className="text-[12px] text-foreground/55">Advanced</span>
+              <span className="text-[12px] text-foreground/65">Advanced</span>
             }
           >
             <div className="flex flex-col gap-3 pt-1 pb-2">
@@ -540,7 +540,7 @@ export function ConfigForm({
                 Saved
               </span>
             ) : (
-              <span className="text-foreground/55">Unsaved changes</span>
+              <span className="text-foreground/65">Unsaved changes</span>
             )}
           </span>
           <div className="flex items-center gap-2">
