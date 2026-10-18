@@ -51,12 +51,16 @@ export interface BrokerProbeResult {
  * One of the user's connections, read by id. `connection: null` = the broker
  * answered and the user has no such connection (absent, another user's, or
  * another provider's — one answer); a failed lookup is `ok:false`.
+ *
+ * `needs_reauth` = the connection exists but its credential is dead: Nango
+ * could not refresh it (revoked or expired refresh token), so only the user
+ * reconnecting it will help. Never `unreachable`, which reads as "retry later".
  */
 export type BrokerConnectionResult =
   | { ok: true; connection: SyncConnectorConnection | null }
   | {
       ok: false;
-      reason: "unreachable" | "unauthenticated" | "malformed";
+      reason: "unreachable" | "unauthenticated" | "malformed" | "needs_reauth";
       error: string;
     };
 
