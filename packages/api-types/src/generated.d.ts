@@ -8027,12 +8027,14 @@ export interface LibraryItemRead {
 	/**
 	 * The person's "Read with X" waits on this item (its read was over today's
 	 * budget, or failed and waits for its retry): the reader they chose and when
-	 * that consent ENDS. Projected by the pod's item views
-	 * (`library.list` / `group` / `search`), never by {@link readLibraryItemRead}
-	 * (the end depends on the pod's setting). After `expiresAt` the pod never
-	 * runs it: the item goes back to waiting for a reader and the choice is
-	 * forgotten. `library.cancelReadWith` ends it at once. Absent = no
-	 * remembered choice (or it already ended).
+	 * that consent ENDS. Also on a `read` item: a re-read (or "Get the
+	 * pictures") waiting BESIDE its read — the status stays `read`. Projected by
+	 * the pod's item views (`library.list` / `group` / `search`), never by
+	 * {@link readLibraryItemRead} (the end depends on the pod's setting). After
+	 * `expiresAt` the pod never runs it: the item goes back to waiting for a
+	 * reader (a read item keeps its read) and the choice is forgotten.
+	 * `library.cancelReadWith` ends it at once. Absent = no remembered choice
+	 * (or it already ended).
 	 */
 	consent?: LibraryReadConsent;
 }
@@ -8248,6 +8250,14 @@ export interface LibraryReadersResult {
 		serviceId: string;
 		count: number;
 	}>;
+	/**
+	 * `groupId` / `waiting` only: the items of that scope (the group's, or the
+	 * whole Library's; archived excluded) that hold a LIVE "Read with X" consent
+	 * — waiting for tomorrow's budget or a retry, each showing `read.consent`.
+	 * What `library.cancelReadWith` with the same scope ends: "Cancel 37
+	 * waiting reads". 0 when none.
+	 */
+	consented?: number;
 }
 /** Result of `library.cancelReadWith`. */
 export interface LibraryCancelReadWithResult {
