@@ -1508,8 +1508,8 @@ describe("an agent PROPOSES Library organisation; approval applies it through th
     (await q<{ n: number }>(`select count(*)::int as n from library_groups`))
       .rows[0]!.n;
 
-  /** Store the proposal the gate would have filed, then approve it for real. */
-  async function approveStored(data: Record<string, unknown>) {
+  /** Store the proposal the gate would have filed (pending). */
+  async function storeProposal(data: Record<string, unknown>) {
     const id = crypto.randomUUID();
     const stored = {
       requestId: id,
@@ -1522,35 +1522,54 @@ describe("an agent PROPOSES Library organisation; approval applies it through th
        values ($1, 'library', $5, 'organize', 'pending', $2::jsonb, $3, $4)`,
       [id, JSON.stringify(stored), USER, AGENT, USER]
     );
-    const { approveLibraryOrganize } =
-      await import("../../../routers/proposals/executors/library.js");
-    const res = await approveLibraryOrganize({
-      proposal: {
-        id,
-        targetType: "library",
-        targetId: id,
-        proposalType: "organize",
-        workspaceId: null,
-        agentUserId: AGENT,
-        subjectUserId: USER,
-        data: stored,
-      },
-      payload: stored,
-      userId: USER,
-      input: { proposalId: id },
-      ctx: {},
-      deps: {
-        reportProposalOutcome: () => undefined,
-        emitProposalReviewed: () => undefined,
-      },
-    } as never);
-    const status = (
+    return { id, stored };
+  }
+  const statusOf = async (id: string) =>
+    (
       await q<{ status: string }>(
         `select status from proposals where id = $1`,
         [id]
       )
     ).rows[0]!.status;
-    return { res, status };
+
+  /** Approve a stored proposal through the executor every approve door reaches. */
+  async function approveOnce(
+    p: { id: string; stored: Record<string, unknown> },
+    apply?: typeof applyLibraryOrganize
+  ) {
+    const { approveLibraryOrganize } =
+      await import("../../../routers/proposals/executors/library.js");
+    const { id, stored } = p;
+    return approveLibraryOrganize(
+      {
+        proposal: {
+          id,
+          targetType: "library",
+          targetId: id,
+          proposalType: "organize",
+          workspaceId: null,
+          agentUserId: AGENT,
+          subjectUserId: USER,
+          data: stored,
+        },
+        payload: stored,
+        userId: USER,
+        input: { proposalId: id },
+        ctx: {},
+        deps: {
+          reportProposalOutcome: () => undefined,
+          emitProposalReviewed: () => undefined,
+        },
+      } as never,
+      ...(apply ? [apply] : [])
+    );
+  }
+
+  /** Store the proposal the gate would have filed, then approve it for real. */
+  async function approveStored(data: Record<string, unknown>) {
+    const p = await storeProposal(data);
+    const res = await approveOnce(p);
+    return { res, status: await statusOf(p.id) };
   }
 
   it("files ONE governed proposal (forcePropose, library/organize) and changes NOTHING; approval creates the group with its items", async () => {
@@ -1646,7 +1665,9 @@ describe("an agent PROPOSES Library organisation; approval applies it through th
     const submitted: SubmitCaptureGraphInput[] = [];
     const out = await applyLibraryOrganize({
       ownerUserId: USER,
+      proposalId: crypto.randomUUID(),
       ops: [{ op: "group.build", groupId }],
+      claim: { take: async () => true, release: async () => undefined },
       depsFor: () => buildDeps(submitted),
     });
     expect(out.curate).toBeNull();
@@ -1689,6 +1710,113 @@ describe("an agent PROPOSES Library organisation; approval applies it through th
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(calls).toEqual([]);
+  });
+
+  describe("approval applies ONCE, whatever door approves it", () => {
+    /** The real apply, with a build that counts its runs (and may throw). */
+    function countingApply(builds: { n: number; fail?: boolean }) {
+      return ((args: Parameters<typeof applyLibraryOrganize>[0]) =>
+        applyLibraryOrganize({
+          ...args,
+          build: async () => {
+            builds.n++;
+            if (builds.fail) throw new Error("build store down");
+            return {
+              status: "proposed",
+              proposalId: crypto.randomUUID(),
+              read: 1,
+              skipped: 0,
+            } as never;
+          },
+        })) as typeof applyLibraryOrganize;
+    }
+    async function organizeOf(name: string) {
+      const kept = await keep([`https://example.com/${name}-1`]);
+      const existing = await newGroup(`${name} existing`, []);
+      return storeProposal({
+        ops: [
+          {
+            op: "group.create",
+            name: `${name} list`,
+            itemIds: kept.staged.map((s) => s.itemId),
+          },
+          { op: "group.build", groupId: existing },
+        ],
+        groups: [],
+        items: [],
+        summary: "",
+      });
+    }
+    const listsNamed = async (name: string) =>
+      (
+        await q<{ n: number }>(
+          `select count(*)::int as n from library_groups where name = $1`,
+          [name]
+        )
+      ).rows[0]!.n;
+
+    it("two approvals at once: ONE group, ONE build, the other answers alreadyApproved", async () => {
+      const p = await organizeOf("Race");
+      const builds = { n: 0 };
+      const apply = countingApply(builds);
+      const results = await Promise.all([
+        approveOnce(p, apply),
+        approveOnce(p, apply),
+      ]);
+      expect(await listsNamed("Race list")).toBe(1);
+      expect(builds.n).toBe(1);
+      expect(results.filter((r) => r.alreadyApproved)).toHaveLength(1);
+      expect(results.every((r) => r.success)).toBe(true);
+      expect(await statusOf(p.id)).toBe("approved");
+    });
+
+    it("a build that throws gives the claim back (approval_failed); the retry applies without a second list", async () => {
+      const p = await organizeOf("Retry");
+      const builds = { n: 0, fail: true };
+      await expect(approveOnce(p, countingApply(builds))).rejects.toThrow(
+        "build store down"
+      );
+      expect(await statusOf(p.id)).toBe("approval_failed");
+      expect(await listsNamed("Retry list")).toBe(1);
+      builds.fail = false;
+      const again = await approveOnce(p, countingApply(builds));
+      expect(again).toMatchObject({ success: true });
+      expect(again.alreadyApproved).toBeUndefined();
+      expect(await statusOf(p.id)).toBe("approved");
+      expect(await listsNamed("Retry list")).toBe(1);
+      expect(builds.n).toBe(2);
+    });
+
+    it("a curate op that fails rolls the claim back with it: still pending, nothing written", async () => {
+      const p = await storeProposal({
+        ops: [
+          { op: "group.create", name: "Doomed list" },
+          { op: "group.update", groupId: crypto.randomUUID(), note: "gone" },
+        ],
+        groups: [],
+        items: [],
+        summary: "",
+      });
+      await expect(approveOnce(p)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      expect(await statusOf(p.id)).toBe("pending");
+      expect(await listsNamed("Doomed list")).toBe(0);
+    });
+
+    it("a proposal decided otherwise (rejected) applies nothing", async () => {
+      const p = await organizeOf("Rejected");
+      await q(`update proposals set status = 'rejected' where id = $1`, [p.id]);
+      const builds = { n: 0 };
+      const res = await approveOnce(p, countingApply(builds));
+      expect(res).toMatchObject({
+        success: false,
+        effect: { applied: "none" },
+      });
+      expect(await listsNamed("Rejected list")).toBe(0);
+      expect(builds.n).toBe(0);
+      expect(await statusOf(p.id)).toBe("rejected");
+    });
   });
 
   it("a gate that would EXECUTE for an agent is refused, never applied", async () => {

@@ -46,6 +46,8 @@ import {
   type LibraryProposeResult,
 } from "@synap-core/types/imports";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
+import { proposalUnchangedSince } from "../proposals/proposal-cas.js";
 import type { ImportBuildDeps } from "../imports/build.js";
 import { isAgentCaller } from "./agent-door.js";
 import { libraryItemsWhere, type LibraryDb } from "./read-model.js";
@@ -315,18 +317,106 @@ export interface LibraryOrganizeApplied {
 }
 
 /**
- * Apply an APPROVED organise proposal for its owner: the curate ops in ONE
- * `curateLibrary` call (atomic — a bad op writes nothing), then each build
- * request through `buildLibraryGroup`. The approval half only.
+ * The id the `n`-th op of organise proposal `proposalId` gives the group it
+ * creates: derived from the proposal, so a retried apply finds the group the
+ * first run made instead of creating a second list.
+ */
+export function organizeGroupId(proposalId: string, opIndex: number): string {
+  return deterministicUuidFromKey(`library.organize:${proposalId}:${opIndex}`);
+}
+
+/** The approval was decided elsewhere (another approve won): nothing applied. */
+export class OrganizeApprovalTaken extends Error {
+  constructor() {
+    super("This Library proposal is no longer waiting for approval.");
+    this.name = "OrganizeApprovalTaken";
+  }
+}
+
+/**
+ * The approval's CLAIM: run inside the transaction the curate ops write in,
+ * so it commits or rolls back with them; `release` gives it back when a later
+ * step (a build) threw — the approval is then recorded failed and may be
+ * retried (the group creates are keyed by the proposal).
+ */
+export interface OrganizeApprovalClaim {
+  /** Pending (or approval_failed) → approved, atomically; false = taken. */
+  take(tx: LibraryDb): Promise<boolean>;
+  release(): Promise<void>;
+}
+
+/**
+ * THE once-only door of an organise approval: ONE conditional UPDATE
+ * (`status IN (pending, approval_failed)` → approved, RETURNING). Two approvals
+ * racing (approve, batch, REST, tRPC — every door reaches this executor) both
+ * try it; the row lock makes the second wait for the first to commit, and it
+ * then matches nothing. Released only by the run that took it (`updated_at`
+ * compare-and-set) and only from `approved`.
+ */
+export function organizeApprovalClaim(
+  proposalId: string,
+  approverUserId: string,
+  database: LibraryDb = defaultDb
+): OrganizeApprovalClaim {
+  const at = new Date();
+  return {
+    async take(tx) {
+      const rows = await tx
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: approverUserId,
+          reviewedAt: at,
+          updatedAt: at,
+        })
+        .where(
+          and(
+            eq(proposals.id, proposalId),
+            inArray(proposals.status, [
+              ProposalStatus.PENDING,
+              ProposalStatus.APPROVAL_FAILED,
+            ])
+          )
+        )
+        .returning({ id: proposals.id });
+      return rows.length > 0;
+    },
+    async release() {
+      await database
+        .update(proposals)
+        .set({ status: ProposalStatus.APPROVAL_FAILED, updatedAt: new Date() })
+        .where(
+          and(
+            eq(proposals.id, proposalId),
+            eq(proposals.status, ProposalStatus.APPROVED),
+            proposalUnchangedSince(at)
+          )
+        );
+    },
+  };
+}
+
+/**
+ * Apply an APPROVED organise proposal for its owner, ONCE: the claim and the
+ * curate ops in ONE transaction (`curateLibrary`: atomic — a bad op writes
+ * nothing, and the claim rolls back with it), then each build request through
+ * `buildLibraryGroup`. A build that throws releases the claim. `group.create`
+ * ops are keyed by the proposal ({@link organizeGroupId}): a retry never
+ * creates a second group. Throws {@link OrganizeApprovalTaken} when the claim
+ * is lost (nothing applied). The approval half only.
  */
 export async function applyLibraryOrganize(args: {
   ownerUserId: string;
+  proposalId: string;
   ops: readonly LibraryOrganizeOp[];
+  claim: OrganizeApprovalClaim;
   depsFor: (run: { workspaceId: string | null }) => ImportBuildDeps;
   /** Test seams: the person's own doors. */
   curate?: (input: {
     userId: string;
     ops: LibraryCurateOp[];
+    createIds: string[];
+    inTransaction: (tx: LibraryDb) => Promise<void>;
   }) => Promise<LibraryCurateResult>;
   build?: (input: {
     userId: string;
@@ -336,7 +426,12 @@ export async function applyLibraryOrganize(args: {
 }): Promise<LibraryOrganizeApplied> {
   const curate =
     args.curate ??
-    (async (input: { userId: string; ops: LibraryCurateOp[] }) => {
+    (async (input: {
+      userId: string;
+      ops: LibraryCurateOp[];
+      createIds: string[];
+      inTransaction: (tx: LibraryDb) => Promise<void>;
+    }) => {
       const { adoptImportGroups } = await import("./groups.js");
       const { curateLibrary } = await import("./curate.js");
       await adoptImportGroups({ userId: input.userId });
@@ -349,48 +444,52 @@ export async function applyLibraryOrganize(args: {
       groupId: string;
       depsFor: (run: { workspaceId: string | null }) => ImportBuildDeps;
     }) => (await import("./build.js")).buildLibraryGroup(input));
+  const take = async (tx: LibraryDb) => {
+    if (!(await args.claim.take(tx))) throw new OrganizeApprovalTaken();
+  };
   const ops = curateOpsOf(args.ops);
-  const curated = ops.length
-    ? await curate({ userId: args.ownerUserId, ops })
-    : null;
-  const builds: LibraryOrganizeApplied["builds"] = [];
-  for (const op of args.ops) {
-    if (op.op !== "group.build") continue;
-    builds.push({
-      groupId: op.groupId,
-      result: await build({
-        userId: args.ownerUserId,
-        groupId: op.groupId,
-        depsFor: args.depsFor,
-      }),
+  const createIds = args.ops.flatMap((op, i) =>
+    op.op === "group.create" ? [organizeGroupId(args.proposalId, i)] : []
+  );
+  let curated: LibraryCurateResult | null = null;
+  if (ops.length) {
+    curated = await curate({
+      userId: args.ownerUserId,
+      ops,
+      createIds,
+      inTransaction: take,
     });
+  } else {
+    // Builds only: the claim alone (one statement), before any build runs.
+    await take(defaultDb);
+  }
+  const builds: LibraryOrganizeApplied["builds"] = [];
+  try {
+    for (const op of args.ops) {
+      if (op.op !== "group.build") continue;
+      builds.push({
+        groupId: op.groupId,
+        result: await build({
+          userId: args.ownerUserId,
+          groupId: op.groupId,
+          depsFor: args.depsFor,
+        }),
+      });
+    }
+  } catch (err) {
+    await args.claim.release();
+    throw err;
   }
   return { curate: curated, builds };
 }
 
-/** True when this organise proposal was already approved (an approve retried). */
-export async function organizeProposalApproved(
+/** The proposal's status now (after a lost claim: who decided it). */
+export async function organizeProposalStatus(
   proposalId: string
-): Promise<boolean> {
+): Promise<string | null> {
   const [row] = await defaultDb
     .select({ status: proposals.status })
     .from(proposals)
     .where(eq(proposals.id, proposalId));
-  return row?.status === ProposalStatus.APPROVED;
-}
-
-/** Flip the organise proposal APPROVED once its ops have been applied. */
-export async function markOrganizeProposalApproved(
-  proposalId: string,
-  approverUserId: string
-): Promise<void> {
-  await defaultDb
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
-      reviewedBy: approverUserId,
-      reviewedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(proposals.id, proposalId));
+  return row?.status ?? null;
 }
