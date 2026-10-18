@@ -15,6 +15,7 @@ import {
   readLibraryItemRead,
   type LibraryItemRead,
   type LibraryReadBlocked,
+  type LibraryReadFailure,
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
 import {
@@ -76,6 +77,18 @@ export interface StoredLibraryRead extends LibraryItemRead {
     blocked?: LibraryReadBlocked;
     error?: string;
     at: string;
+    /**
+     * A REMEMBERED re-read (a consent waiting beside the read) that failed
+     * transiently and is tried again: the consent's `requestedAt` it ran
+     * under — the counters and wait below belong to that consent only — and
+     * the retry state an unread item keeps at the top level (`attempts`,
+     * `transientFailures`, `failure.nextAttemptAt`, which the sweep honours).
+     * Kept here, never on the read itself: the item's read stays as it is.
+     */
+    consentAt?: string;
+    attempts?: number;
+    transientFailures?: number;
+    failure?: LibraryReadFailure;
   };
 }
 

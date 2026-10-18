@@ -371,8 +371,10 @@ export async function sweepLibraryLightReads(
   const room = LIGHT_READ_SWEEP_BATCH - due.length;
   if (room > 0) {
     // Held: over today's budget, or a re-read waiting beside a read (live
-    // consents only: the ended ones were forgotten in step 0).
-    const overBudget = drizzleSql`(${documents.metadata} #>> '{importRead,status}' = 'over_budget' OR (${documents.metadata} #>> '{importRead,status}' = 'read' AND ${documents.metadata} -> 'importRead' ? 'requestedReader'))`;
+    // consents only: the ended ones were forgotten in step 0) — once the wait
+    // after its transient failure is over (`lastAttempt.failure.nextAttemptAt`,
+    // set under THIS consent only: one of an earlier consent never delays it).
+    const overBudget = drizzleSql`(${documents.metadata} #>> '{importRead,status}' = 'over_budget' OR (${documents.metadata} #>> '{importRead,status}' = 'read' AND ${documents.metadata} -> 'importRead' ? 'requestedReader' AND (${documents.metadata} #>> '{importRead,lastAttempt,consentAt}' IS DISTINCT FROM ${documents.metadata} #>> '{importRead,requestedAt}' OR ${documents.metadata} #>> '{importRead,lastAttempt,failure,nextAttemptAt}' IS NULL OR (${documents.metadata} #>> '{importRead,lastAttempt,failure,nextAttemptAt}')::timestamptz <= now())))`;
     const holders = await database
       .selectDistinct({ userId: documents.userId })
       .from(documents)
