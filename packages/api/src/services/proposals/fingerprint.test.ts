@@ -212,7 +212,9 @@ describe("collapseProposalsToClusters", () => {
       row({ id: "p2", sessionId: "T" }),
     ]);
     expect(spanning[0]!.sessionId).toBeNull();
-    expect(collapseProposalsToClusters([row({ id: "p1" })])[0]!.sessionId).toBeNull();
+    expect(
+      collapseProposalsToClusters([row({ id: "p1" })])[0]!.sessionId
+    ).toBeNull();
   });
 
   it("orders clusters newest-active first", () => {

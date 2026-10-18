@@ -12,7 +12,7 @@ import { ProfileResolutionService } from "../services/profile-resolution-service
 import * as schema from "../schema/index.js";
 
 let h: Awaited<ReturnType<typeof makeLifecyclePglite>>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 let taskId: string;
 let defId: string;

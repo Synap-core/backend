@@ -161,7 +161,6 @@ async function insertEntity(client: PGlite): Promise<string> {
   return id;
 }
 
-
 describe("entity.update payload carries previous values", () => {
   it("emits previous.<k> for every changed key (null for a key that did not exist)", async () => {
     const { client, database } = await freshDb();
@@ -184,10 +183,12 @@ describe("entity.update payload carries previous values", () => {
       .mock.calls.find(
         (c) =>
           (c[0] as { subjectType: string; action: string }).subjectType ===
-            "entity" &&
-          (c[0] as { action: string }).action === "update"
+            "entity" && (c[0] as { action: string }).action === "update"
       );
-    expect(call, "entities.update did not reach recordDomainMutation").toBeDefined();
+    expect(
+      call,
+      "entities.update did not reach recordDomainMutation"
+    ).toBeDefined();
     const data = (call![0] as { data: Record<string, unknown> }).data;
     // Unchanged `owner` is not a change: no flag, no previous.
     expect(data.changedKeys).toEqual(

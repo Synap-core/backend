@@ -70,7 +70,7 @@ import type {
   ProjectTrackKpi,
   ProjectTrackStatus,
 } from "@synap/database/schema";
-import { LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import { type LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -87,7 +87,7 @@ import {
   readTrackCheckGate,
   readTrackStageHistory,
   slotKeyBase,
-  CLOSED_TRACK_STATUSES,
+  type CLOSED_TRACK_STATUSES,
   trackKpiJustReached,
   trackPausedBy,
   TRACK_DIRECTION_MAX,

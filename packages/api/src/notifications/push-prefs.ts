@@ -68,8 +68,9 @@ export async function writePushPrefs(
   userId: string,
   patch: PushPrefsPatch
 ): Promise<PushPrefs> {
-  const categories = normalizePushPrefs({ categories: patch.categories })
-    .categories;
+  const categories = normalizePushPrefs({
+    categories: patch.categories,
+  }).categories;
 
   const catsJson = JSON.stringify(categories ?? {});
   const initial = { categories: categories ?? {} };

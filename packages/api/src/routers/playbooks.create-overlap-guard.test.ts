@@ -288,13 +288,11 @@ describe("playbooks.create refuses a near-duplicate for an AI caller", () => {
   it("a HUMAN caller is never second-guessed", async () => {
     // Template installs, reconcilers, marketplace applies and human authors all
     // create deliberately. Only the AI branch runs the check.
-    const res = await playbooksRouter
-      .createCaller(aiCtx())
-      .create({
-        ...THE_DUPLICATE,
-        agentUserId: undefined,
-        source: "user",
-      } as never);
+    const res = await playbooksRouter.createCaller(aiCtx()).create({
+      ...THE_DUPLICATE,
+      agentUserId: undefined,
+      source: "user",
+    } as never);
     expect(res.status).toBe("created");
   });
 

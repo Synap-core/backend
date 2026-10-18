@@ -254,7 +254,8 @@ const CreateInputSchema = z
     path: ["agentUserId"],
   })
   .refine((v) => (v.principalKind === "class") === !!v.principalClass, {
-    message: "principalClass is required when (and only when) principalKind is 'class'",
+    message:
+      "principalClass is required when (and only when) principalKind is 'class'",
     path: ["principalClass"],
   })
   .refine((v) => v.scopeKind !== "workspace" || !!v.workspaceId, {

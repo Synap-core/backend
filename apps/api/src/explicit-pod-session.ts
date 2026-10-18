@@ -10,10 +10,7 @@
 import { getKratosSessionByToken } from "@synap/auth";
 
 export type ExplicitPodSessionTokenStatus =
-  | "missing"
-  | "valid"
-  | "invalid"
-  | "unavailable";
+  "missing" | "valid" | "invalid" | "unavailable";
 
 export async function validateExplicitPodSessionToken(
   rawToken: string | undefined

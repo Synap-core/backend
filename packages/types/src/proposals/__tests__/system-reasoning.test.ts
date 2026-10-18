@@ -18,8 +18,12 @@ import {
 
 describe("isSystemReasoning", () => {
   it("recognises the placeholder and both role-exceed sentences", () => {
-    expect(isSystemReasoning(defaultApprovalSentence("create", "entity"))).toBe(true);
-    expect(isSystemReasoning(defaultApprovalSentence("renderer.set", "profile"))).toBe(true);
+    expect(isSystemReasoning(defaultApprovalSentence("create", "entity"))).toBe(
+      true
+    );
+    expect(
+      isSystemReasoning(defaultApprovalSentence("renderer.set", "profile"))
+    ).toBe(true);
     for (const proposer of ["agent", "person"] as const) {
       expect(
         isSystemReasoning(
@@ -43,7 +47,10 @@ describe("isSystemReasoning", () => {
   it("recognises the automation gate's defaults, built by the writers' builders", () => {
     const sentences = [
       ruleRunSentence(),
-      ruleBatchRunSentence({ who: "Ada, Grace + 2 more", what: '"Qualify a lead"' }),
+      ruleBatchRunSentence({
+        who: "Ada, Grace + 2 more",
+        what: '"Qualify a lead"',
+      }),
       ruleBatchRunSentence({ who: "4 new leads", what: "this playbook" }),
       automationWriteSentence(),
       automationProposedSentence("creating an entity"),
@@ -54,8 +61,12 @@ describe("isSystemReasoning", () => {
   });
 
   it("keeps a person's reason that only sounds like an automation", () => {
-    expect(isSystemReasoning("Automation proposed this because Ada asked twice")).toBe(false);
-    expect(isSystemReasoning("A rule matched, but I also want a second look")).toBe(false);
+    expect(
+      isSystemReasoning("Automation proposed this because Ada asked twice")
+    ).toBe(false);
+    expect(
+      isSystemReasoning("A rule matched, but I also want a second look")
+    ).toBe(false);
   });
 
   it("keeps a proposer's words — including ones that mention approval or roles", () => {

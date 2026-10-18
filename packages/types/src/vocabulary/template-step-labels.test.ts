@@ -14,7 +14,9 @@ describe("template step words (one mark, every surface)", () => {
     }
     expect(resolveTemplateStepLabel("update")).toBe("Update available");
     expect(resolveTemplateStepLabel("unfinished")).toBe("Not finished");
-    expect(resolveTemplateStepLabel("awaiting-approval")).toBe("Waiting for approval");
+    expect(resolveTemplateStepLabel("awaiting-approval")).toBe(
+      "Waiting for approval"
+    );
     expect(resolveTemplateStepLabel("needs-consent")).toBe("Needs your OK");
     expect(resolveTemplateStepLabel("agent-asked")).toBe("Asked by an agent");
     expect(resolveTemplateStepLabel("current")).toBe("Up to date");

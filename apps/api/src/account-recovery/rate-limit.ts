@@ -12,7 +12,10 @@
  */
 
 export class FixedWindowLimiter {
-  private readonly windows = new Map<string, { start: number; count: number }>();
+  private readonly windows = new Map<
+    string,
+    { start: number; count: number }
+  >();
 
   constructor(
     private readonly limit: number,

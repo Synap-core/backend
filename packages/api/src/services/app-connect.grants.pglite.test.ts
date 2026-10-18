@@ -66,8 +66,7 @@ function ddlFor(table: PgTable): string {
     const key = c.primary
       ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
       : "";
-    const def =
-      c.name === "created_at" ? " default now()" : "";
+    const def = c.name === "created_at" ? " default now()" : "";
     return `"${c.name}" ${type}${key}${def}`;
   });
   return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
@@ -112,9 +111,7 @@ const createPerson = (workspaceId: string) =>
   ).catch((e: unknown) => ({ thrown: String(e) }));
 
 const grantDenied = (r: unknown) =>
-  /grant does not allow/.test(
-    (r as { reason?: string }).reason ?? ""
-  );
+  /grant does not allow/.test((r as { reason?: string }).reason ?? "");
 
 const visible = async (workspace: string) => {
   const clause = keyGrantReadClause(schema.entities, keyGrant);

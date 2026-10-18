@@ -16,7 +16,9 @@ interface RecoveryPageProps {
   searchParams: Promise<{ flow?: string }>;
 }
 
-export default async function RecoveryPage({ searchParams }: RecoveryPageProps) {
+export default async function RecoveryPage({
+  searchParams,
+}: RecoveryPageProps) {
   const sp = await searchParams;
   return <RecoveryView initialFlowId={sp.flow ?? null} />;
 }

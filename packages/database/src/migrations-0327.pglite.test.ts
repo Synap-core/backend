@@ -24,7 +24,6 @@ const P_COMPANY = "00000000-0000-4000-8000-0000000000a3";
 
 let pg: PGlite;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const q = async <T = any>(sql: string) => (await pg.query<T>(sql)).rows;
 
 const props = async (title: string) =>

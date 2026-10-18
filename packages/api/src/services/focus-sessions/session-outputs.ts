@@ -26,7 +26,7 @@
  */
 
 import {
-  db,
+  type db,
   focusSessions,
   artifacts as artifactsTable,
   links,

@@ -204,12 +204,10 @@ describe("playbooks.create refuses a dangling subjectProfile", () => {
   it("THE CASE: a slug that resolves to nothing is REFUSED", async () => {
     slugDangles();
     await expect(
-      playbooksRouter
-        .createCaller(callerCtx())
-        .create({
-          ...base,
-          subjectProfile: { profileSlug: "crm-lead" },
-        } as never)
+      playbooksRouter.createCaller(callerCtx()).create({
+        ...base,
+        subjectProfile: { profileSlug: "crm-lead" },
+      } as never)
     ).rejects.toThrow(/crm-lead/);
   });
 
@@ -218,12 +216,10 @@ describe("playbooks.create refuses a dangling subjectProfile", () => {
     // item that could only ever fail at approve time.
     slugDangles();
     await expect(
-      playbooksRouter
-        .createCaller(callerCtx())
-        .create({
-          ...base,
-          subjectProfile: { profileSlug: "crm-lead" },
-        } as never)
+      playbooksRouter.createCaller(callerCtx()).create({
+        ...base,
+        subjectProfile: { profileSlug: "crm-lead" },
+      } as never)
     ).rejects.toThrow();
     expect(
       mockCheckPermission,

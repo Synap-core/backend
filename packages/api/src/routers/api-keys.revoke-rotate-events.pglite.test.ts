@@ -129,10 +129,7 @@ describe("API key lifecycle events say what happened", () => {
   it("revoke is recorded as apiKey.revoke (the gate keeps apiKey.delete)", async () => {
     const keyId = await addKey();
     await caller().revoke({ keyId });
-    expect(recorded()).toEqual([
-      "audit:apiKey.revoke",
-      "effect:apiKey.revoke",
-    ]);
+    expect(recorded()).toEqual(["audit:apiKey.revoke", "effect:apiKey.revoke"]);
     expect(h.gates.map((g) => `${g.subjectType}.${g.action}`)).toEqual([
       "apiKey.delete",
     ]);
@@ -141,10 +138,7 @@ describe("API key lifecycle events say what happened", () => {
   it("rotate is recorded as apiKey.rotate (the gate keeps apiKey.update)", async () => {
     const keyId = await addKey();
     await caller().rotate({ keyId });
-    expect(recorded()).toEqual([
-      "audit:apiKey.rotate",
-      "effect:apiKey.rotate",
-    ]);
+    expect(recorded()).toEqual(["audit:apiKey.rotate", "effect:apiKey.rotate"]);
     expect(h.gates.map((g) => `${g.subjectType}.${g.action}`)).toEqual([
       "apiKey.update",
     ]);

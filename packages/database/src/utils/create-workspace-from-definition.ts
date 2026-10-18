@@ -20,7 +20,7 @@ import {
   declaredProfilePresentation,
   setProfilePresentation,
 } from "../repositories/profile-repository.js";
-import { ProfileScope } from "../schema/profiles.js";
+import { type ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { SYSTEM_PROFILE_SLUGS } from "./ensure-system-profiles.js";
 import { resolvePropertyTargetProfiles } from "./resolve-property-target-profiles.js";

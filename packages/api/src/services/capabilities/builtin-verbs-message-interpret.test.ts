@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   structure: vi.fn(),
   submitCaptureGraph: vi.fn(),
   // The raw door (founder rule 2026-09-14): the message is kept on EVERY outcome.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   stageCaptureSources: vi.fn(async (_arg: any) => ({
     sourceDocumentIds: ["raw-doc-1"] as string[],
     attempted: 1,
@@ -21,15 +21,15 @@ const h = vi.hoisted(() => ({
   })),
   fetchRoutingMemory: vi.fn(async () => null),
   // The extractor's offered kinds. Default: none (no `availableProfiles` hint).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   buildAvailableProfiles: vi.fn((_p: any): any => undefined),
   // Default: no stored guidelines → merged instructions == explicit only, so the
   // pre-existing assertions (explicit `guidelines` → `instructions`) are unchanged.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   resolveGuidelines: vi.fn(async (_arg: any) => [] as Array<{ text: string }>),
   // Default: no producer edge → channelType/bridgeId both omitted (honest,
   // never fabricated), matching a channel with no derivable origin.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   getChannelOrigin: vi.fn(async (..._args: any[]) => ({
     channelId: "chan-1",
     workspaceId: null as string | null,

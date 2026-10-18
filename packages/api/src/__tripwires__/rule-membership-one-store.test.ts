@@ -38,7 +38,7 @@ function procedureBody(source: string, name: string): string {
   if (at === -1) throw new Error(`procedure not found: ${name}`);
   const next = source
     .slice(at + 1)
-    .search(/\n  [a-zA-Z]+: (?:protected|workspace|public)Procedure/);
+    .search(/\n {2}[a-zA-Z]+: (?:protected|workspace|public)Procedure/);
   const body = next === -1 ? source.slice(at) : source.slice(at, at + 1 + next);
   return stripComments(body, "ts");
 }

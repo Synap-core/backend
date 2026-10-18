@@ -60,8 +60,10 @@ export const LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ = {
   // One `webhooks.deliver.requested` row per delivery attempt and no
   // `.completed` fact — it would flood the page; a webhook's deliveries are
   // its own read (`webhooks.deliveries`).
-  webhooks: "one row per delivery attempt; the webhook's deliveries are its read",
-  webhook: "one row per delivery attempt; the webhook's deliveries are its read",
+  webhooks:
+    "one row per delivery attempt; the webhook's deliveries are its read",
+  webhook:
+    "one row per delivery attempt; the webhook's deliveries are its read",
   // Its progress ticks share one type; only `data.phase` tells a terminal row
   // from a tick, which SQL here cannot see — `connector_sync.complete` is the
   // run's fact.

@@ -18,7 +18,7 @@ import {
  * Fake db: the candidate rows are returned as if the SQL had already filtered
  * principal/scope (same convention as resolve-agent-governance-decision.test.ts).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function dbReturning(rows: unknown[]): any {
   return {
     select: () => ({
@@ -66,9 +66,9 @@ describe("action × profile rule", () => {
       action: "update",
       agentUserId: "agent-1",
     };
-    expect(draftRuleMatchesWrite(DRAFT, { ...write, profileSlug: "note" })).toBe(
-      true
-    );
+    expect(
+      draftRuleMatchesWrite(DRAFT, { ...write, profileSlug: "note" })
+    ).toBe(true);
     expect(
       draftRuleMatchesWrite(DRAFT, { ...write, profileSlug: "person" })
     ).toBe(false);
@@ -90,8 +90,19 @@ describe("action × profile rule", () => {
     const resolve = (postureAt: Date, grantAt: Date) =>
       resolveGovernanceRule({
         db: dbReturning([
-          row({ id: "posture", targetPattern: "entity.update", verdict: "propose", createdAt: postureAt }),
-          row({ id: "grant", targetPattern: "entity.update", targetProfile: "note", verdict: "auto", createdAt: grantAt }),
+          row({
+            id: "posture",
+            targetPattern: "entity.update",
+            verdict: "propose",
+            createdAt: postureAt,
+          }),
+          row({
+            id: "grant",
+            targetPattern: "entity.update",
+            targetProfile: "note",
+            verdict: "auto",
+            createdAt: grantAt,
+          }),
         ]),
         agentUserId: "agent-1",
         subjectType: "entity",

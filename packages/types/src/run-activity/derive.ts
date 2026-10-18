@@ -231,7 +231,9 @@ function phaseOf(
 }
 
 function labelOf(item: SessionActivityItem, phase: StepPhase): string {
-  const title = item.title?.trim() ? trimEllipsis(plainStepLabel(item.title)) : "";
+  const title = item.title?.trim()
+    ? trimEllipsis(plainStepLabel(item.title))
+    : "";
   switch (item.kind) {
     case "tool":
       return title || humanizeToken(item.action ?? "tool");

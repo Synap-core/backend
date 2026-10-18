@@ -77,12 +77,22 @@ function ddlFor(table: PgTable): string {
   return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
 }
 
-async function addUser(id: string, agentType: string | null, host: string | null) {
+async function addUser(
+  id: string,
+  agentType: string | null,
+  host: string | null
+) {
   await h.client!.query(
     `insert into users (id, email, user_type, agent_type, host_user_id, created_by_user_id,
        email_verified, timezone, locale, is_personal_agent, created_at, updated_at)
      values ($1, $1 || '@x', $2, $3, $4, $5, true, 'UTC', 'en', false, now(), now())`,
-    [id, agentType ? "agent" : "human", agentType, host, agentType ? HUMAN : null]
+    [
+      id,
+      agentType ? "agent" : "human",
+      agentType,
+      host,
+      agentType ? HUMAN : null,
+    ]
   );
 }
 async function addKey(userId: string): Promise<string> {
@@ -123,7 +133,11 @@ beforeAll(async () => {
   devboxKey = await addKey(DEVBOX);
   ccKey = await addKey(DEVBOX_CC);
   macKey = await addKey(MAC_CC);
-  await mint(devboxKey, DEVBOX, ["entity.read", "entity.create", "document.read"]);
+  await mint(devboxKey, DEVBOX, [
+    "entity.read",
+    "entity.create",
+    "document.read",
+  ]);
 }, 120_000);
 
 describe("an agent never exceeds its computer", () => {

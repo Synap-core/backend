@@ -30,7 +30,13 @@
  *   off        deliberately not in play. Last: it is the quietest state, and a
  *              thing the user turned off is the thing they least need to see.
  */
-export const ATTENTION_LEVELS = ['error', 'needs-you', 'pending', 'ready', 'off'] as const;
+export const ATTENTION_LEVELS = [
+  "error",
+  "needs-you",
+  "pending",
+  "ready",
+  "off",
+] as const;
 
 export type AttentionLevel = (typeof ATTENTION_LEVELS)[number];
 
@@ -49,7 +55,7 @@ export function compareAttention(a: AttentionLevel, b: AttentionLevel): number {
 
 /** True for the two rungs that ask something OF the reader (error, needs-you). */
 export function wantsAttention(level: AttentionLevel): boolean {
-  return level === 'error' || level === 'needs-you';
+  return level === "error" || level === "needs-you";
 }
 
 /**
@@ -60,7 +66,7 @@ export function wantsAttention(level: AttentionLevel): boolean {
  */
 export function sortByAttention<T>(
   items: readonly T[],
-  levelOf: (item: T) => AttentionLevel,
+  levelOf: (item: T) => AttentionLevel
 ): T[] {
   return items
     .map((item, index) => ({ item, index, level: levelOf(item) }))
@@ -75,7 +81,7 @@ export function sortByAttention<T>(
  * `null` for an empty set, so a caller never invents a state for nothing.
  */
 export function mostUrgentAttention(
-  levels: readonly AttentionLevel[],
+  levels: readonly AttentionLevel[]
 ): AttentionLevel | null {
   let worst: AttentionLevel | null = null;
   for (const level of levels) {

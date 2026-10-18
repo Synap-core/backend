@@ -126,7 +126,7 @@ export function registerToolExecutors(): void {
   // ── tool / delete ────────────────────────────────────────────────────────
   // `tools.delete` (routers/tools.ts:631) sits on the rung-2.5 DESTRUCTIVE
   // floor, which no rung can widen, so an agent deleting a tool ALWAYS
-  // proposes — and with no executor, approval fell to the `*​/*` catch-all,
+  // proposes — and with no executor, approval fell to the `*/*` catch-all,
   // which flips the row APPROVED and deletes nothing. Same unrecoverable-
   // approval defect `tool/create` above records, on the destructive side.
   //

@@ -214,13 +214,21 @@ describe("focusSessions.update — the ROOM is a pointer, not a grant", () => {
     await expect(
       caller().update({ id: SESSION, channelId: CHANNEL })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(roomReadable).toHaveBeenCalledWith(expect.anything(), CHANNEL, "user-1");
+    expect(roomReadable).toHaveBeenCalledWith(
+      expect.anything(),
+      CHANNEL,
+      "user-1"
+    );
     expect(sets).toHaveLength(0);
   });
 
   it("points the session at a room the caller CAN read", async () => {
     await caller().update({ id: SESSION, channelId: CHANNEL });
-    expect(roomReadable).toHaveBeenCalledWith(expect.anything(), CHANNEL, "user-1");
+    expect(roomReadable).toHaveBeenCalledWith(
+      expect.anything(),
+      CHANNEL,
+      "user-1"
+    );
     expect(lastSet()).toMatchObject({ channelId: CHANNEL });
   });
 });

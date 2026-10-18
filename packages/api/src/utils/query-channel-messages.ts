@@ -37,7 +37,7 @@
 import type { SQL } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
-  db,
+  type db,
   messages,
   channels,
   and,

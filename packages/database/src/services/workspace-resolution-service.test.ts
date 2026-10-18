@@ -85,7 +85,6 @@ function whereStrings(where: unknown): Set<string> {
   return out;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeDb(seed: Seed): any {
   return {
     query: {
@@ -96,7 +95,7 @@ function makeDb(seed: Seed): any {
       workspaces: {
         // Two callers: loadRoutableMemberWorkspaces asks for `name`;
         // loadRoutingMemberIds (rung-5 no-candidate floor) asks for `id` only.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
         findMany: async (args: any) => {
           if (args?.columns?.name) {
             return (seed.workspaces ?? []).map((w) => ({
@@ -146,7 +145,7 @@ function makeDb(seed: Seed): any {
       },
       links: {
         // Rung-4 feeds seam: `loadFeedsProviders` queries `to_id = consumer`.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
         findMany: async (args: any) => {
           const consumerId = args?.where; // opaque drizzle expr in prod; mock filters by seed
           void consumerId;

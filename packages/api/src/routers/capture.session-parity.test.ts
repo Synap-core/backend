@@ -194,7 +194,7 @@ describe("both doors reach the same verified handle", () => {
     expect(forwards.length).toBeGreaterThan(0);
     const enclosing = forwards.map((m) => {
       const before = captureSrc.slice(0, m.index!);
-      const decls = [...before.matchAll(/^  (\w+): podProcedure/gm)];
+      const decls = [...before.matchAll(/^ {2}(\w+): podProcedure/gm)];
       const name = decls[decls.length - 1]?.[1];
       expect(
         name,

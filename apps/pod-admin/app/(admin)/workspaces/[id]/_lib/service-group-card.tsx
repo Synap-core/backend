@@ -30,10 +30,7 @@ import { useState } from "react";
 // ─── Types (re-exported so connections-tab can import them) ───────────────────
 
 export type ConnectionType =
-  | "rest-api"
-  | "hub-protocol"
-  | "webhook-inbound"
-  | "webhook-outbound";
+  "rest-api" | "hub-protocol" | "webhook-inbound" | "webhook-outbound";
 
 export interface ServiceConnection {
   type: ConnectionType;

@@ -65,6 +65,9 @@ export default [
       // repo: a lint or format fix here would fork it from the canonical.
       "scripts/strip-comments.mjs",
       "scripts/strip-comments.d.mts",
+      // Same for the pre-commit checker: byte-identical in synap-app,
+      // synap-backend and synap-control-plane-api (see its header).
+      "scripts/precommit-check.mjs",
     ],
   },
   js.configs.recommended,
@@ -83,9 +86,18 @@ export default [
         "warn",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+      // `disallowTypeAnnotations: false`: inline `typeof import("./x")` types are
+      // the idiom here, not a lapse — vitest's documented
+      // `importOriginal<typeof import("./x")>()` in ~660 test files, and lazy
+      // `await import()` doors that type the module without a static edge. The
+      // rule still converts every static value import used only as a type.
       "@typescript-eslint/consistent-type-imports": [
         "warn",
-        { prefer: "type-imports", fixStyle: "inline-type-imports" },
+        {
+          prefer: "type-imports",
+          fixStyle: "inline-type-imports",
+          disallowTypeAnnotations: false,
+        },
       ],
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-empty-object-type": "warn", // Downgrade to warn (generated files use {})

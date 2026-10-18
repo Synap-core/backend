@@ -392,8 +392,7 @@ export class StalwartConnector implements MessagingConnector {
       (m) => m[0] === "EmailSubmission/set"
     );
     const notCreated = submission?.[1]?.notCreated as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (notCreated && Object.keys(notCreated).length > 0) {
       throw new Error(`Stalwart send failed: ${JSON.stringify(notCreated)}`);
     }

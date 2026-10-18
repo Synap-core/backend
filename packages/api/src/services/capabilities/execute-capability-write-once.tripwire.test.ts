@@ -53,7 +53,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
         capabilityVerbHasExternalEffect({
           kind: "declarative",
           name: "provider.read",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
           providerSpec: { method } as any,
           metadata: null,
         })
@@ -67,7 +67,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
         capabilityVerbHasExternalEffect({
           kind: "declarative",
           name: "provider.write",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
           providerSpec: { method } as any,
           metadata: null,
         })

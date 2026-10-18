@@ -245,7 +245,6 @@ export function requireUuidParam(
  * Tripwire: `__tripwires__/hub-json-body-malformed-is-400.test.ts`.
  */
 export async function readJsonBody(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   c: Context<any, any>
 ): Promise<{ ok: true; body: unknown } | { ok: false; res: Response }> {
   const text = await c.req.text();

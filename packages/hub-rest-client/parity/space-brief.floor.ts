@@ -34,19 +34,32 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 export const _brief: Same<HubSpaceBrief, SpaceBrief> = true;
 export const _briefKeys: Same<keyof HubSpaceBrief, keyof SpaceBrief> = true;
-export const _collect: Same<HubSpaceBriefCollectTarget, SpaceBriefCollectTarget> = true;
+export const _collect: Same<
+  HubSpaceBriefCollectTarget,
+  SpaceBriefCollectTarget
+> = true;
 export const _collectKeys: Same<
   keyof HubSpaceBriefCollectTarget,
   keyof SpaceBriefCollectTarget
 > = true;
-export const _expertise: Same<HubSpaceBriefExpertise, SpaceBriefExpertise> = true;
+export const _expertise: Same<HubSpaceBriefExpertise, SpaceBriefExpertise> =
+  true;
 export const _expertiseKeys: Same<
   keyof HubSpaceBriefExpertise,
   keyof SpaceBriefExpertise
 > = true;
 export const _anchor: Same<HubSpaceBriefAnchor, SpaceBriefAnchor> = true;
-export const _anchorKeys: Same<keyof HubSpaceBriefAnchor, keyof SpaceBriefAnchor> = true;
+export const _anchorKeys: Same<
+  keyof HubSpaceBriefAnchor,
+  keyof SpaceBriefAnchor
+> = true;
 export const _fetch: Same<HubSpaceBriefFetchHint, SpaceBriefFetchHint> = true;
-export const _fetchKeys: Same<keyof HubSpaceBriefFetchHint, keyof SpaceBriefFetchHint> = true;
+export const _fetchKeys: Same<
+  keyof HubSpaceBriefFetchHint,
+  keyof SpaceBriefFetchHint
+> = true;
 export const _rule: Same<HubSpaceBriefRuleRef, SpaceBriefRuleRef> = true;
-export const _ruleKeys: Same<keyof HubSpaceBriefRuleRef, keyof SpaceBriefRuleRef> = true;
+export const _ruleKeys: Same<
+  keyof HubSpaceBriefRuleRef,
+  keyof SpaceBriefRuleRef
+> = true;

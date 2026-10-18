@@ -114,7 +114,10 @@ describe("the request logger actually redacts (reachability)", () => {
     // nothing at all would look identical to a working redactor.
     const written: string[] = [];
     const app = new Hono();
-    app.use("*", logger((message) => written.push(message)));
+    app.use(
+      "*",
+      logger((message) => written.push(message))
+    );
     app.get("/api/hub/calendar/feed/:token", (c) => c.text("x"));
     return app.request(`/api/hub/calendar/feed/${TOKEN}.ics`).then(() => {
       expect(written.some((l) => l.includes(TOKEN))).toBe(true);

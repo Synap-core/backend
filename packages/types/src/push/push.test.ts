@@ -43,7 +43,11 @@ describe("classifyPush", () => {
   });
 
   it("named NO rows stay quiet", () => {
-    for (const t of ["connector.sync.failed", "inbox.mention", "chat.room_member_added"]) {
+    for (const t of [
+      "connector.sync.failed",
+      "inbox.mention",
+      "chat.room_member_added",
+    ]) {
       expect(PUSH_TYPE_RULES).toHaveProperty([t], null);
       expect(classifyPush(t)).toBeNull();
     }
@@ -61,9 +65,14 @@ describe("preferences", () => {
   it("unset reads as the default, never as off", () => {
     expect(isPushCategoryEnabled(null, "blocking-ask")).toBe(true);
     expect(isPushCategoryEnabled({}, "system")).toBe(false);
-    expect(isPushCategoryEnabled({ categories: { system: true } }, "system")).toBe(true);
     expect(
-      isPushCategoryEnabled({ categories: { "blocking-ask": false } }, "blocking-ask")
+      isPushCategoryEnabled({ categories: { system: true } }, "system")
+    ).toBe(true);
+    expect(
+      isPushCategoryEnabled(
+        { categories: { "blocking-ask": false } },
+        "blocking-ask"
+      )
     ).toBe(false);
   });
 
@@ -88,7 +97,6 @@ describe("preferences", () => {
       explicit: false,
     });
   });
-
 });
 
 describe("targets", () => {
@@ -98,7 +106,10 @@ describe("targets", () => {
       id: "s-1",
       slot: "Tone",
     });
-    expect(blockingAskTarget("s-1", [])).toEqual({ kind: "session", id: "s-1" });
+    expect(blockingAskTarget("s-1", [])).toEqual({
+      kind: "session",
+      id: "s-1",
+    });
     expect(blockingAskTarget("s-1", ["A", "B"])).toEqual({
       kind: "session",
       id: "s-1",
@@ -169,7 +180,10 @@ describe("quickAnswerFor", () => {
   });
 
   it("act → I did it, through the attest door", () => {
-    const q = quickAnswerFor(slot, ask({ mode: "act", steps: ["Rotate key"] }))!;
+    const q = quickAnswerFor(
+      slot,
+      ask({ mode: "act", steps: ["Rotate key"] })
+    )!;
     expect(q).toMatchObject({ category: "ask-act", door: "attest" });
     expect(q.actions).toEqual([{ id: "done" }]);
   });
@@ -201,7 +215,9 @@ describe("quickAnswerFor", () => {
     ];
     for (const a of asks) {
       const q = quickAnswerFor(slot, a)!;
-      const registered = PUSH_QUICK_ANSWER_CATEGORIES[q.category].map((x) => x.id);
+      const registered = PUSH_QUICK_ANSWER_CATEGORIES[q.category].map(
+        (x) => x.id
+      );
       for (const action of q.actions) expect(registered).toContain(action.id);
     }
   });
@@ -210,7 +226,9 @@ describe("quickAnswerFor", () => {
 describe("envelope", () => {
   it("a blocking ask is time-sensitive, threaded and carries its OS category", () => {
     const q = quickAnswerFor(slot, ask({ mode: "confirm" }));
-    expect(pushEnvelope("blocking-ask", { threadId: "s-1", quickAnswer: q })).toEqual({
+    expect(
+      pushEnvelope("blocking-ask", { threadId: "s-1", quickAnswer: q })
+    ).toEqual({
       interruptionLevel: "time-sensitive",
       sound: "default",
       threadId: "s-1",
@@ -222,7 +240,6 @@ describe("envelope", () => {
     expect(pushEnvelope("system").sound).toBeNull();
     expect(PUSH_CATEGORY_POLICY.system.level).toBe("passive");
   });
-
 });
 
 describe("labels", () => {
@@ -257,7 +274,10 @@ describe("quickAnswerPushBody — the push shows what the buttons answer", () =>
       )
     ).toBe("Scope: Include companies under 10 people?");
     expect(
-      quickAnswerPushBody({ label: "Scope", why: "keep small ones?" }, ask({ mode: "confirm" }))
+      quickAnswerPushBody(
+        { label: "Scope", why: "keep small ones?" },
+        ask({ mode: "confirm" })
+      )
     ).toBe("Scope: keep small ones?");
   });
 
@@ -274,7 +294,10 @@ describe("quickAnswerPushBody — the push shows what the buttons answer", () =>
 
   it("act falls back to its first step; no quick answer ⇒ null", () => {
     expect(
-      quickAnswerPushBody({ label: "Key" }, ask({ mode: "act", steps: ["Rotate the key"] }))
+      quickAnswerPushBody(
+        { label: "Key" },
+        ask({ mode: "act", steps: ["Rotate the key"] })
+      )
     ).toBe("Key: Rotate the key");
     expect(
       quickAnswerPushBody(

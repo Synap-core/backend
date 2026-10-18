@@ -50,8 +50,6 @@ const { podSettings } = await import("../schema/pod-settings.js");
 // Condition evaluator — runs a drizzle `SQL` predicate against a plain JS row.
 // ---------------------------------------------------------------------------
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 /** db-column-name → JS property name, per table. */
 const propMaps = new Map<unknown, Record<string, string>>();
 function propMap(table: PgTable): Record<string, string> {

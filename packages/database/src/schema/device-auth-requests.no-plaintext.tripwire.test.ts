@@ -20,16 +20,21 @@ import { deviceAuthRequests } from "./device-auth-requests.js";
 const SECRETISH = /code|token|secret|password|key|credential/i;
 /** Secret-sounding but not a secret — each with why. */
 const CLASSIFIED: Record<string, string> = {
-  minted_key_id: "the id of the computer's api_keys row — the key is hashed there",
+  minted_key_id:
+    "the id of the computer's api_keys row — the key is hashed there",
   failed_code_attempts: "a counter",
 };
 
 const MIGRATION = readFileSync(
-  fileURLToPath(new URL("../../migrations/0321_device_auth_requests.sql", import.meta.url)),
+  fileURLToPath(
+    new URL("../../migrations/0321_device_auth_requests.sql", import.meta.url)
+  ),
   "utf8"
 );
 const migrationColumns = [
-  ...MIGRATION.matchAll(/^\s+"([a-z_]+)"\s+(?:uuid|text|integer|timestamptz)/gm),
+  ...MIGRATION.matchAll(
+    /^\s+"([a-z_]+)"\s+(?:uuid|text|integer|timestamptz)/gm
+  ),
 ].map((m) => m[1]!);
 
 const offenders = (cols: string[]) =>
@@ -59,6 +64,8 @@ describe("device_auth_requests holds no plaintext secret", () => {
   });
 
   it("the drizzle table and the migration declare the same columns", () => {
-    expect([...schemaColumns].sort()).toEqual([...new Set(migrationColumns)].sort());
+    expect([...schemaColumns].sort()).toEqual(
+      [...new Set(migrationColumns)].sort()
+    );
   });
 });

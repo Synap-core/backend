@@ -16,13 +16,19 @@ import { systemDataPatchSql } from "../routers/entities/helpers.js";
 const client = new PGlite();
 const db = drizzle(client);
 const ID = "00000000-0000-4000-8000-000000000001";
-const COPY = { documentId: "d1", mime: "image/png", sourceUrl: "https://x/a.png" };
+const COPY = {
+  documentId: "d1",
+  mime: "image/png",
+  sourceUrl: "https://x/a.png",
+};
 
 const read = async () =>
-  (await client.query<{ system_data: unknown }>(
-    `select system_data from entities where id = $1`,
-    [ID]
-  )).rows[0]!.system_data;
+  (
+    await client.query<{ system_data: unknown }>(
+      `select system_data from entities where id = $1`,
+      [ID]
+    )
+  ).rows[0]!.system_data;
 const setRaw = (v: string | null) =>
   client.query(`update entities set system_data = $1::jsonb where id = $2`, [
     v,
@@ -35,7 +41,9 @@ beforeAll(async () => {
   );
   await client.query(`insert into entities (id) values ($1)`, [ID]);
 });
-beforeEach(() => setRaw(JSON.stringify({ renderer: { kind: "cell" }, other: 1 })));
+beforeEach(() =>
+  setRaw(JSON.stringify({ renderer: { kind: "cell" }, other: 1 }))
+);
 
 const patch = (p: Record<string, unknown>) =>
   db
@@ -49,9 +57,7 @@ describe("systemDataPatchSql", () => {
     const snapshot = await read();
     expect(snapshot).not.toHaveProperty("media");
     // …the media copy records a cover meanwhile…
-    await setRaw(
-      JSON.stringify({ ...(snapshot as object), media: [COPY] })
-    );
+    await setRaw(JSON.stringify({ ...(snapshot as object), media: [COPY] }));
     // …then the door writes its patch.
     await patch({ viewMode: "bento", bentoViewId: "v1" });
     expect(await read()).toEqual({
@@ -89,7 +95,9 @@ describe("entities/mutate.ts writes systemData only through the SQL patch", () =
   it("no whole-object `systemData: <value>` write remains", () => {
     // A `.set({ … systemData: x` where x is anything but the SQL patch. Cannot
     // see a write built elsewhere and spread in (`.set(obj)`).
-    const writes = src.match(/\.set\(\{[^}]*?systemData:(?!\s*systemDataPatchSql\()/gs) ?? [];
+    const writes =
+      src.match(/\.set\(\{[^}]*?systemData:(?!\s*systemDataPatchSql\()/gs) ??
+      [];
     expect(writes).toEqual([]);
     expect("x.set({ systemData: next })").toMatch(
       /\.set\(\{[^}]*?systemData:(?!\s*systemDataPatchSql\()/s

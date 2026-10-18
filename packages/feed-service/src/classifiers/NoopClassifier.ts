@@ -66,16 +66,14 @@ export class NoopClassifier implements IFeedClassifier {
     items: NormalizedRSSItem[],
     _context?: UserContext
   ): Promise<ClassifiedItem[]> {
-    return items.map(
-      (item): ClassifiedItem => ({
-        item,
-        category: this.defaultCategory,
-        confidence: this.defaultConfidence,
-        relevanceScore: this.defaultRelevance,
-        keywords: [],
-        suggestedAction: this.shouldPublish ? "publish" : "skip",
-        shouldPublish: this.shouldPublish,
-      })
-    );
+    return items.map((item): ClassifiedItem => ({
+      item,
+      category: this.defaultCategory,
+      confidence: this.defaultConfidence,
+      relevanceScore: this.defaultRelevance,
+      keywords: [],
+      suggestedAction: this.shouldPublish ? "publish" : "skip",
+      shouldPublish: this.shouldPublish,
+    }));
   }
 }

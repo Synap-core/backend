@@ -25,7 +25,7 @@ export function registerChannelExecutors(): void {
   // The ONLY non-destructive door in this batch, and the only one that is a
   // REAL write with no executor: `postToA2AIChannel`
   // (routers/hub-protocol/channels.ts:561) proposes when an UNKNOWN agent posts
-  // into an OPEN A2AI channel. Approving that proposal hit the `*​/*` catch-all,
+  // into an OPEN A2AI channel. Approving that proposal hit the `*/*` catch-all,
   // which flips the row APPROVED and inserts nothing — so the agent was told
   // "waiting for user approval", the user approved, and the agent was STILL not
   // a member. Every subsequent post re-proposed. The materializer is no

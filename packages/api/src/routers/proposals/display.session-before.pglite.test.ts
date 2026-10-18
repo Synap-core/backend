@@ -86,14 +86,31 @@ beforeAll(async () => {
   );
   await q(
     `insert into entities (id, user_id, workspace_id, type, title) values ($1,$4,$5,'lead','Acme Corp'),($2,$4,$5,'lead','Beta Ltd'),($3,$6,$7,'lead',$8)`,
-    [ACME, BETA, HIDDEN_LEAD, VIEWER, WS_SEEN, OTHER, WS_HIDDEN, HIDDEN_LEAD_NAME]
+    [
+      ACME,
+      BETA,
+      HIDDEN_LEAD,
+      VIEWER,
+      WS_SEEN,
+      OTHER,
+      WS_HIDDEN,
+      HIDDEN_LEAD_NAME,
+    ]
   );
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, criteria, expected_outputs) values ($1,$2,$3,'Ship the deck','Ship the deck','active',$4::jsonb,$5::jsonb),($6,$7,$8,'Their session','Their session','active','[]'::jsonb,'[]'::jsonb)`,
-    [MINE, VIEWER, WS_SEEN, JSON.stringify(CRITERIA_NOW), JSON.stringify(OUTPUTS_NOW), THEIRS, OTHER, WS_HIDDEN]
+    [
+      MINE,
+      VIEWER,
+      WS_SEEN,
+      JSON.stringify(CRITERIA_NOW),
+      JSON.stringify(OUTPUTS_NOW),
+      THEIRS,
+      OTHER,
+      WS_HIDDEN,
+    ]
   );
 });
-
 
 function updateRow(
   sessionId: string,

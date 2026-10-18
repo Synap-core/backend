@@ -17,7 +17,9 @@ interface SecurityPageProps {
   searchParams: Promise<{ flow?: string }>;
 }
 
-export default async function SecurityPage({ searchParams }: SecurityPageProps) {
+export default async function SecurityPage({
+  searchParams,
+}: SecurityPageProps) {
   const sp = await searchParams;
   const email = (await headers()).get("x-pod-admin-email");
   return <SecurityView initialFlowId={sp.flow ?? null} email={email || null} />;

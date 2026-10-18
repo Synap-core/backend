@@ -486,9 +486,7 @@ export function resolveOutputsResultLine(
   const rest = summary.byKind
     .slice(OUTPUTS_RESULT_KINDS_SHOWN)
     .reduce((n, g) => n + g.count, 0);
-  return rest > 0
-    ? `${shown.join(" · ")} · +${rest} more`
-    : shown.join(" · ");
+  return rest > 0 ? `${shown.join(" · ")} · +${rest} more` : shown.join(" · ");
 }
 
 /**

@@ -145,22 +145,34 @@ function syncedLine(
   extra: string | null = null
 ): ConnectionEventLine {
   const target = service ?? nounInLine("connection");
-  const detail =
-    extra ?? (created && created > 0 ? `${created} new` : null);
-  return line("sync", "connection", withDetail(`${past("sync")} ${target}`, detail), {
-    name: service,
-    detail,
-  });
+  const detail = extra ?? (created && created > 0 ? `${created} new` : null);
+  return line(
+    "sync",
+    "connection",
+    withDetail(`${past("sync")} ${target}`, detail),
+    {
+      name: service,
+      detail,
+    }
+  );
 }
 
 function syncFailedLine(service: string | null): ConnectionEventLine {
-  return line("sync", "connection", failedTo("sync", service ?? nounInLine("connection")), {
-    name: service,
-    failed: true,
-  });
+  return line(
+    "sync",
+    "connection",
+    failedTo("sync", service ?? nounInLine("connection")),
+    {
+      name: service,
+      failed: true,
+    }
+  );
 }
 
-function signInExpiredLine(kind: string, service: string | null): ConnectionEventLine {
+function signInExpiredLine(
+  kind: string,
+  service: string | null
+): ConnectionEventLine {
   const words = resolveConnectionStateLabel("needs_signin", "account");
   return line("expire", kind, withDetail(words, service), {
     name: service,
@@ -180,13 +192,17 @@ function appLine(action: string, data: EventData): ConnectionEventLine | null {
     case "issue_key":
       return line("issue_key", "app", past("issue_key"), { name });
     case "revoke":
-      return line("revoke", "app", resolveConnectionStateLabel("revoked"), { name });
+      return line("revoke", "app", resolveConnectionStateLabel("revoked"), {
+        name,
+      });
     case "rename": {
       const to = str(data, "to");
       return line(
         "rename",
         "app",
-        to ? `${past("rename")} to ${quoted(to)}` : verbNoun("rename", "app", null),
+        to
+          ? `${past("rename")} to ${quoted(to)}`
+          : verbNoun("rename", "app", null),
         { name: to ?? name }
       );
     }
@@ -214,14 +230,21 @@ function messagingAccountLine(
         { name: service }
       );
     case "disconnected":
-      return line("disconnect", "messaging_account", `${past("disconnect")} ${target}`, {
-        name: service,
-      });
+      return line(
+        "disconnect",
+        "messaging_account",
+        `${past("disconnect")} ${target}`,
+        {
+          name: service,
+        }
+      );
     case "reconnection_required":
       return signInExpiredLine("messaging_account", service);
     default:
       return action === "updated"
-        ? line("update", "messaging_account", `${past("update")} ${target}`, { name: service })
+        ? line("update", "messaging_account", `${past("update")} ${target}`, {
+            name: service,
+          })
         : null;
   }
 }
@@ -249,13 +272,17 @@ function sessionOrTrackLine(
   const label = str(data, "label", "slotLabel", "title");
   switch (action) {
     case "slot_asked":
-      return line("ask", "question", verbNoun("ask", "question", label), { name: label });
+      return line("ask", "question", verbNoun("ask", "question", label), {
+        name: label,
+      });
     case "slot_answered":
       return line("answer", "question", verbNoun("answer", "question", label), {
         name: label,
       });
     case "slot_attested": {
-      const text = label ? `${past("attest")} ${quoted(label)}` : past("attest");
+      const text = label
+        ? `${past("attest")} ${quoted(label)}`
+        : past("attest");
       return line("attest", "output", text, { name: label });
     }
     default:
@@ -294,7 +321,11 @@ export function parseConnectionEvent(
   // no completion event); every other family is read at `completed` or as the
   // bare two-segment connector form.
   const isWebhook = subject === "webhooks" || subject === "webhook";
-  if (phase !== undefined && !READ_PHASES.has(phase) && !(isWebhook && phase === "requested")) {
+  if (
+    phase !== undefined &&
+    !READ_PHASES.has(phase) &&
+    !(isWebhook && phase === "requested")
+  ) {
     return null;
   }
 
@@ -303,9 +334,14 @@ export function parseConnectionEvent(
     case "api_key":
     case "apikey":
       if (action !== "revoke" && action !== "rotate") return null;
-      return line(action, "apiKey", verbNoun(action, "apiKey", str(data, "keyName", "name")), {
-        name: str(data, "keyName", "name"),
-      });
+      return line(
+        action,
+        "apiKey",
+        verbNoun(action, "apiKey", str(data, "keyName", "name")),
+        {
+          name: str(data, "keyName", "name"),
+        }
+      );
 
     case "app":
       return appLine(action, data);
@@ -316,10 +352,19 @@ export function parseConnectionEvent(
     case "external_channel": {
       if (action !== "created" && action !== "create") return null;
       const service = serviceOf(data);
-      const text = verbNoun("create", "channel", str(data, "name", "channelName"));
-      return line("create", "channel", service ? `${text} on ${service}` : text, {
-        name: service,
-      });
+      const text = verbNoun(
+        "create",
+        "channel",
+        str(data, "name", "channelName")
+      );
+      return line(
+        "create",
+        "channel",
+        service ? `${text} on ${service}` : text,
+        {
+          name: service,
+        }
+      );
     }
 
     case "external_message": {
@@ -376,7 +421,10 @@ export function parseConnectionEvent(
       const target = dest ? `to ${dest}` : nounInLine("webhook");
       const status = str(data, "status");
       if (status === "failed") {
-        return line("send", "webhook", failedTo("send", target), { name: dest, failed: true });
+        return line("send", "webhook", failedTo("send", target), {
+          name: dest,
+          failed: true,
+        });
       }
       const verb =
         status === "success" ? past("send") : resolveActionProgressive("send");

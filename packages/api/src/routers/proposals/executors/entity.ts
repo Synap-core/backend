@@ -1256,7 +1256,7 @@ export function registerEntityExecutors(): void {
   //
   // `relations.delete` (routers/relations.ts:1437) sits on the rung-2.5
   // DESTRUCTIVE floor, which no rung can widen, so an agent unlinking two
-  // entities ALWAYS proposes. With no executor, approval fell to the `*​/*`
+  // entities ALWAYS proposes. With no executor, approval fell to the `*/*`
   // catch-all and the edge survived while the reviewer was told "approved".
   // The materializer is not a backstop here: `materializeRelation` handles only
   // `"create"`, so a `relation.delete.validated` event dies at its INNER guard.

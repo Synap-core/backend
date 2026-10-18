@@ -88,7 +88,6 @@ const TEST_DB_URL = process.env.REAPER_TEST_DATABASE_URL;
 const behavioural = TEST_DB_URL ? describe : describe.skip;
 
 behavioural("RUN_NOT_DELAY_SUSPENDED against a live Postgres", () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let sql: ReturnType<typeof postgres>;
   const SCHEMA = "reaper_predicate_test";
 

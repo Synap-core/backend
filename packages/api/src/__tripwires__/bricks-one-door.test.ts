@@ -75,7 +75,8 @@ function offenders(pattern: RegExp, allowlist: Set<string>): string[] {
 
 describe("tripwire: entity + facet writes have one door", () => {
   it("no file inserts entities outside EntityRepository + the sync-materializer", () => {
-    const ENTITY_INSERT = /\.insert\(\s*entities\s*\)|insert\s+into\s+"?entities"?\b/i;
+    const ENTITY_INSERT =
+      /\.insert\(\s*entities\s*\)|insert\s+into\s+"?entities"?\b/i;
     const ALLOW = new Set<string>([
       "packages/database/src/repositories/entity-repository.ts", // the create door
       "packages/database/src/utils/sync-materializer.ts", // CQRS push/pull replay

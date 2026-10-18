@@ -27,7 +27,11 @@
  *                      change a sign-in method or recovery codes.
  *   sign_in_recovery — Cloud signs you in AND can recover the account.
  */
-export const CLOUD_TRUST_MODES = ["off", "sign_in", "sign_in_recovery"] as const;
+export const CLOUD_TRUST_MODES = [
+  "off",
+  "sign_in",
+  "sign_in_recovery",
+] as const;
 export type CloudTrustMode = (typeof CLOUD_TRUST_MODES)[number];
 export const DEFAULT_CLOUD_TRUST: CloudTrustMode = "sign_in";
 

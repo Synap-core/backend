@@ -57,14 +57,16 @@ describe("0285 backfill agent created_via", () => {
   it("stamps only the pod's own NULL agents, and is idempotent", async () => {
     await pg.exec(MIGRATION);
     const first = await snapshot();
-    expect(Object.fromEntries(first.map((r) => [r.id, r.created_via]))).toEqual({
-      capture: "system",
-      form: "system",
-      twin: "system",
-      mine: null,
-      stamped: "cli",
-      human: null,
-    });
+    expect(Object.fromEntries(first.map((r) => [r.id, r.created_via]))).toEqual(
+      {
+        capture: "system",
+        form: "system",
+        twin: "system",
+        mine: null,
+        stamped: "cli",
+        human: null,
+      }
+    );
     await pg.exec(MIGRATION);
     expect(await snapshot()).toEqual(first);
   });

@@ -6,7 +6,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRecoveryCodesStateCache } from "./recovery-codes-nudge";
 
-const answer = (set: boolean) => ({ ok: true, data: { recoveryCodes: { set } } });
+const answer = (set: boolean) => ({
+  ok: true,
+  data: { recoveryCodes: { set } },
+});
 const failed = { ok: false };
 
 describe("recovery-codes state cache", () => {
@@ -42,7 +45,10 @@ describe("recovery-codes state cache", () => {
   });
 
   it("a failed read is never cached — the next mount retries", async () => {
-    const read = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(answer(true));
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(answer(true));
     const cache = createRecoveryCodesStateCache(read);
     expect(await cache.read()).toBe("unknown");
     expect(await cache.read()).toBe("set");

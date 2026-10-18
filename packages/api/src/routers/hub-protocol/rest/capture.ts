@@ -1645,7 +1645,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       }
       refs.add(e.ref);
     }
-    let relations = Array.isArray(body.relations) ? body.relations : [];
+    const relations = Array.isArray(body.relations) ? body.relations : [];
     // SHARED: ref-uniqueness + dangling-relation (fail loud — a dangling ref
     // would silently drop the link at materialization time). Rendered with this
     // door's exact wording + 400 shape.
@@ -1667,7 +1667,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         400
       );
     }
-    let bindings = Array.isArray(body.bindings) ? body.bindings : [];
+    const bindings = Array.isArray(body.bindings) ? body.bindings : [];
     for (const b of bindings) {
       if (!b.externalChannelId || !b.entityRef) {
         return c.json(

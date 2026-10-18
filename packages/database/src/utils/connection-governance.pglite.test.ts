@@ -27,7 +27,7 @@ import {
 } from "./connection-governance.js";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 const WS = "11111111-1111-4111-8111-111111111111";

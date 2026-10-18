@@ -102,8 +102,7 @@ import { checkPermissionOrPropose } from "./permission-check.js";
 
 const storedRow = () =>
   mockInsertPendingProposal.mock.calls.at(-1)?.[0] as
-    | { data: { reasoning?: string } }
-    | undefined;
+    { data: { reasoning?: string } } | undefined;
 
 const write = (over: Record<string, unknown>) => ({
   userId: "user-abc",

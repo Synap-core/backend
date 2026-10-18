@@ -26,7 +26,8 @@ vi.mock(
       >();
     return {
       ...actual,
-      createCapabilityFromDefinition: (...a: unknown[]) => applyCapability(...a),
+      createCapabilityFromDefinition: (...a: unknown[]) =>
+        applyCapability(...a),
     };
   }
 );

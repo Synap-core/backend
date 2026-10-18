@@ -19,7 +19,7 @@ import { CONFIG_SCOPE_KINDS } from "../schema/config-settings.js";
  * ALREADY filtered rows — the in-memory scope-match + specificity ordering is
  * what this exercises directly.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function makeDb(rows: any[]): { db: any; getWhere: () => any } {
   let captured: unknown;
   const db = {
@@ -425,7 +425,7 @@ describe("supersedeGuideline — an edit is a new version, never an in-place upd
         },
       },
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const db: any = {
       transaction: async (fn: (t: unknown) => unknown) => fn(tx),
     };

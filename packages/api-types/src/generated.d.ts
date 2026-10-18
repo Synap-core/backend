@@ -21858,7 +21858,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21929,7 +21929,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22611,7 +22611,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22671,7 +22671,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -22712,7 +22712,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22783,7 +22783,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22829,7 +22829,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22889,7 +22889,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;

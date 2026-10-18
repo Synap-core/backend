@@ -33,7 +33,8 @@ export type AppRow = Wire<RouterOutputs["apps"]["list"][number]>;
 /** One `apps.get` row — an `AppRow` plus its keys (key health is read from them). */
 export type AppDetailRow = Wire<RouterOutputs["apps"]["get"]>;
 
-export type ChipColor = "default" | "primary" | "success" | "warning" | "danger";
+export type ChipColor =
+  "default" | "primary" | "success" | "warning" | "danger";
 
 const CHIP_COLOR: Record<UnitTone, ChipColor> = {
   primary: "primary",

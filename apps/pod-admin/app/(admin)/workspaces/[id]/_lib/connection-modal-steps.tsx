@@ -10,10 +10,7 @@ import { ArrowDownToLine, Bot, Database, Webhook } from "lucide-react";
 import { WEBHOOK_EVENTS } from "./add-connection-modal";
 
 export type Pattern =
-  | "rest-api"
-  | "hub-protocol"
-  | "webhook-outbound"
-  | "webhook-inbound";
+  "rest-api" | "hub-protocol" | "webhook-outbound" | "webhook-inbound";
 
 // ─── Step 1 ───────────────────────────────────────────────────────────────────
 

@@ -19,7 +19,7 @@ import {
 } from "./resolve-agent-governance-decision.js";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 const HUMAN = "11111111-1111-4111-8111-111111111111";

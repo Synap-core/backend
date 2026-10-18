@@ -93,7 +93,9 @@ async function write(
         },
         tx as Parameters<typeof createPendingProposal>[1]
       );
-    row = (await (grant ? runWithGrant(grantOfScope(grant, grant.clientId ?? null), run) : run())) as {
+    row = (await (grant
+      ? runWithGrant(grantOfScope(grant, grant.clientId ?? null), run)
+      : run())) as {
       appId: string | null;
     };
   });

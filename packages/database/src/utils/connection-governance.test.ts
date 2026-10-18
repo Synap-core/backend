@@ -27,7 +27,7 @@ interface FakeDb {
   updates: number;
   executes: number;
   transactions: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   handle: any;
 }
 
@@ -356,7 +356,7 @@ describe("proposal-keyed seams (approval reactor + origin lookup)", () => {
         throw new Error("must not query");
       },
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await expect(
       isConnectionSyncProposal("receipt-123", handle as any)
     ).resolves.toBe(false);

@@ -30,7 +30,9 @@ const pair = { subjectType: "focus_session", action: "assign_agent" } as const;
 
 describe("focus_session.assign_agent — an agent handing work to another agent", () => {
   it("is a declared gate door, a write", () => {
-    expect(Object.keys(GATE_WRITE_DOORS)).toContain("focus_session/assign_agent");
+    expect(Object.keys(GATE_WRITE_DOORS)).toContain(
+      "focus_session/assign_agent"
+    );
     expect(requiredPermissionFor("assign_agent")).toBe("write");
   });
 
@@ -63,11 +65,9 @@ describe("focus_session.assign_agent — an agent handing work to another agent"
       action: "update",
     });
     expect(
-      agentHasCapability(
-        "focus_session.assign_agent",
-        "focus_session",
-        ["session.update"]
-      )
+      agentHasCapability("focus_session.assign_agent", "focus_session", [
+        "session.update",
+      ])
     ).toBe(true);
     expect(
       agentHasCapability("focus_session.assign_agent", "focus_session", [

@@ -68,7 +68,11 @@ describe("thingStatusStrips", () => {
     expect(kind.labelOf("proposal")).toBe(resolveStatusLabel("proposal"));
     expect(role.from).toBe("active");
     expect(role.label).toBe("Client");
-    expect(role.subject).toEqual({ kind: "role", entityId: "e1", facetId: "f1" });
+    expect(role.subject).toEqual({
+      kind: "role",
+      entityId: "e1",
+      facetId: "f1",
+    });
   });
 
   it("a failed read is a failed strip; undeclared, loading and option-less are omitted", () => {
@@ -103,7 +107,9 @@ describe("thingStatusStrips", () => {
       entityId: "e1",
       profileSlug: "deal",
       showKind: false,
-      roles: [{ slug: "client", facetId: null, label: "Customer", status: "churned" }],
+      roles: [
+        { slug: "client", facetId: null, label: "Customer", status: "churned" },
+      ],
       reads: { deal: ok(deal), client: ok(client) },
     });
     expect(strips).toHaveLength(1);
@@ -117,8 +123,6 @@ describe("thingStatusStrips", () => {
 
 describe("UNCLASSIFIED_STATUS", () => {
   it("has its own words in the vocabulary (never a humanized key)", () => {
-    expect(resolveStatusLabel(UNCLASSIFIED_STATUS)).toBe(
-      "No declared status"
-    );
+    expect(resolveStatusLabel(UNCLASSIFIED_STATUS)).toBe("No declared status");
   });
 });

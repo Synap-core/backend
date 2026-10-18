@@ -533,7 +533,6 @@ describe("tripwire (T3): every object × verb × door cell is present or acknowl
   // silently counted as clean.
   it("reports any door whose root is absent from this checkout", () => {
     for (const door of UNAVAILABLE) {
-      // eslint-disable-next-line no-console
       console.warn(
         `[T3] The "${door}" door's scan root is absent (${ROOTS[door].dir}) — ` +
           `its cells were NOT verified in this run. This is expected in a ` +

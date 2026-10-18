@@ -41,7 +41,11 @@ vi.mock("../utils/split-brain-service.js", async (importOriginal) => {
   return { ...actual, isPodReadOnly: async () => false };
 });
 
-import { getTableConfig, type PgTable, PgTable as PgTableClass } from "drizzle-orm/pg-core";
+import {
+  getTableConfig,
+  type PgTable,
+  PgTable as PgTableClass,
+} from "drizzle-orm/pg-core";
 import { is } from "drizzle-orm";
 import * as database from "@synap/database";
 import { notifCenterRouter } from "./notif-center.js";
@@ -102,7 +106,10 @@ describe("notification settings doors", () => {
        alter table notification_preferences alter column push_prefs set default '{}'::jsonb;
        create unique index notif_prefs_user_pod_unique on notification_preferences (user_id) where workspace_id is null;`
     );
-    await q(`insert into workspaces (id, name, owner_id) values ($1, 'W', $2)`, [WS, USER]);
+    await q(
+      `insert into workspaces (id, name, owner_id) values ($1, 'W', $2)`,
+      [WS, USER]
+    );
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
       [randomUUID(), WS, USER]

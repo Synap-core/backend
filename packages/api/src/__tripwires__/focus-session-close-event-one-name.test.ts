@@ -102,7 +102,7 @@ describe("tripwire: the focus-session close event has one name", () => {
     // emitted `subjectType.action.completed` and the persisted type cannot
     // diverge. Pinning both halves is the point: `emitSideEffects` builds the
     // type itself, so a literal here would be invisible to the check above.
-    const emit = src.match(/emitSideEffects\(\{[\s\S]*?\n  \}\);/);
+    const emit = src.match(/emitSideEffects\(\{[\s\S]*?\n {2}\}\);/);
     expect(
       emit,
       "no emitSideEffects call found in the close door"

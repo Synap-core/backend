@@ -83,7 +83,11 @@ describe("deriveTurnActivity — tool states", () => {
         id: "tool-call-1-1700000000000-abc",
         toolName: "search_unified",
         state: "done",
-        label: { progressive: "Searching your pod", past: "Searched your pod", imperative: "Search your pod" },
+        label: {
+          progressive: "Searching your pod",
+          past: "Searched your pod",
+          imperative: "Search your pod",
+        },
         detail: "2 results",
         durationMs: 400,
       },
@@ -181,8 +185,13 @@ describe("deriveTurnActivity — tool states", () => {
     expect(rowLabel("rejected")).toBe("Create entity");
     // Approved and applied: now it was.
     expect(rowLabel("applied")).toBe("Created entity");
-    const live = deriveTurnActivity({ steps: [call(1, "create_entity")], streaming: true }).items[0];
-    expect(live?.kind === "tool" ? turnToolRowLabel(live) : null).toBe("Creating entity");
+    const live = deriveTurnActivity({
+      steps: [call(1, "create_entity")],
+      streaming: true,
+    }).items[0];
+    expect(live?.kind === "tool" ? turnToolRowLabel(live) : null).toBe(
+      "Creating entity"
+    );
   });
 
   it("a FAILED bucket read reads its filed proposal as unknown — never calm awaiting", () => {
@@ -199,12 +208,18 @@ describe("deriveTurnActivity — tool states", () => {
     expect(tool?.kind === "tool" ? tool.state : null).toBe("unknown");
     expect(failed.summary.awaitingCount).toBe(0);
     // A bucket that WAS read still wins over the failed flag (partial knowledge).
-    const known = read({ proposalBucketsUnavailable: true, proposalBuckets: { p1: "applied" } }).items[0];
+    const known = read({
+      proposalBucketsUnavailable: true,
+      proposalBuckets: { p1: "applied" },
+    }).items[0];
     expect(known?.kind === "tool" ? known.state : null).toBe("done");
     // An unclassified status is not "your turn" either.
     const odd = read({ proposalBuckets: { p1: "unknown" } }).items[0];
     expect(odd?.kind === "tool" ? odd.state : null).toBe("unknown");
-    expect(turnMark("unknown")).toEqual({ tone: "textMuted", glyph: "question" });
+    expect(turnMark("unknown")).toEqual({
+      tone: "textMuted",
+      glyph: "question",
+    });
   });
 
   it("an unknown tool keeps the producer title before humanizing", () => {

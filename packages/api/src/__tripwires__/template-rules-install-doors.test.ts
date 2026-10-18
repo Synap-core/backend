@@ -25,7 +25,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const h = vi.hoisted(() => ({
-  applyTemplateRules: vi.fn(async (_input: Record<string, unknown>) => [] as unknown[]),
+  applyTemplateRules: vi.fn(
+    async (_input: Record<string, unknown>) => [] as unknown[]
+  ),
 }));
 
 vi.mock("../routers/hub-protocol/utils.js", async (importOriginal) => ({

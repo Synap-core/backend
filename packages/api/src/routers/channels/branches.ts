@@ -40,7 +40,7 @@ import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
 import type { Channel } from "@synap/database/schema";
 
-import { BranchNodeResult, buildBranchTree } from "./helpers.js";
+import { type BranchNodeResult, buildBranchTree } from "./helpers.js";
 
 export const branchesProcedures = {
   /**

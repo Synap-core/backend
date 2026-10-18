@@ -126,9 +126,8 @@ describe("TRIPWIRE: capability refusals carry an enable-link", () => {
     // own `decision.decision === "deny"` (its reason lives in @synap/capability-gate,
     // which cannot import this package's deep-links). The wrapper is where the link
     // must be attached, so assert the wrapper, not just the literals.
-    const wrapper = /decision\.decision === "deny"\)\s*\{([\s\S]*?)\n  \}/.exec(
-      executeSrc
-    );
+    const wrapper =
+      /decision\.decision === "deny"\)\s*\{([\s\S]*?)\n {2}\}/.exec(executeSrc);
     expect(
       wrapper,
       "gate-deny wrapper not found — did the branch move?"
@@ -268,7 +267,7 @@ describe("TRIPWIRE: capability refusals emit a human-facing record", () => {
     // reason, because the reason is the only channel every door forwards (the
     // narrow doors have no `synap_governance` tool to ask).
     const src = readFileSync(PERMISSION_CHECK, "utf-8");
-    const cap = /if \(pendingCount >= cap\) \{([\s\S]*?)\n    \}/.exec(src);
+    const cap = /if \(pendingCount >= cap\) \{([\s\S]*?)\n {4}\}/.exec(src);
     expect(cap, "proposal-cap branch not found — did it move?").not.toBeNull();
     expect(cap![1], WHY_EMIT_MATTERS).toMatch(/emitAiDecision\(/);
     expect(cap![1]).toMatch(/outcome: "refused"/);

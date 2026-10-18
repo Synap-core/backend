@@ -182,7 +182,9 @@ describe("rule expiry is enforced at the agent-facing doors", () => {
 
     // Procedure declarations, in source order: `  listRules: protectedProcedure`
     const procs = [
-      ...src.matchAll(/^  (\w+):\s*(?:protected|workspace|public)Procedure/gm),
+      ...src.matchAll(
+        /^ {2}(\w+):\s*(?:protected|workspace|public)Procedure/gm
+      ),
     ].map((m) => ({ name: m[1], at: m.index ?? 0 }));
     expect(
       procs.length,

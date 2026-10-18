@@ -172,7 +172,11 @@ async function freshDb() {
           throw new Error(`computeCounts ${op.opKey} returned non-object`);
       }
     }
-    console.log("PASS: computeCounts planned for all", CONVERSION_MANIFEST.ops.length, "ops x2");
+    console.log(
+      "PASS: computeCounts planned for all",
+      CONVERSION_MANIFEST.ops.length,
+      "ops x2"
+    );
   }
   // 2. apply run — boot shape (deferDestructive)
   {
@@ -183,9 +187,13 @@ async function freshDb() {
       destructiveTail: false,
       deferDestructive: true,
     });
-    console.log("PASS: runConversions deferDestructive hadError=", summary.hadError);
+    console.log(
+      "PASS: runConversions deferDestructive hadError=",
+      summary.hadError
+    );
     if (summary.hadError) {
-      for (const r of summary.results) if (r.error) console.log("  ERR", r.opKey, r.error);
+      for (const r of summary.results)
+        if (r.error) console.log("  ERR", r.opKey, r.error);
     }
   }
   // 3. apply run — destructiveTail (plans merge/dedupe applies + tails + remap)
@@ -197,9 +205,13 @@ async function freshDb() {
       destructiveTail: true,
       deferDestructive: false,
     });
-    console.log("PASS: runConversions destructiveTail hadError=", summary.hadError);
+    console.log(
+      "PASS: runConversions destructiveTail hadError=",
+      summary.hadError
+    );
     if (summary.hadError) {
-      for (const r of summary.results) if (r.error) console.log("  ERR", r.opKey, r.error);
+      for (const r of summary.results)
+        if (r.error) console.log("  ERR", r.opKey, r.error);
     }
   }
 
@@ -207,13 +219,41 @@ async function freshDb() {
   console.log("\n--- non-vacuity probes ---");
   const db = await freshDb();
   const probes: Array<[string, string, unknown[]]> = [
-    ["remap ? without ::jsonb (broken)", "SELECT count(*) FROM entities e WHERE $1 ? (e.properties->>$2)", ["{}", "k"]],
-    ["remap ? WITH ::jsonb (fixed)", "SELECT count(*) FROM entities e WHERE $1::jsonb ? (e.properties->>$2)", ["{}", "k"]],
-    ["applicable_kinds = $1 no cast (broken?)", "UPDATE profiles SET applicable_kinds = $1 WHERE slug='x'", [["a", "b"]]],
-    ["applicable_kinds = $1::text[] (fixed)", "UPDATE profiles SET applicable_kinds = $1::text[] WHERE slug='x'", [["a", "b"]]],
-    ["ANY($1) no cast (broken?)", "SELECT count(*) FROM profiles WHERE slug = ANY($1)", [["a", "b"]]],
-    ["ANY($1::text[]) (fixed)", "SELECT count(*) FROM profiles WHERE slug = ANY($1::text[])", [["a", "b"]]],
-    ["jsonb_object_agg bare binds (broken)", "SELECT jsonb_object_agg($1,$2) FROM entities", ["a", "b"]],
+    [
+      "remap ? without ::jsonb (broken)",
+      "SELECT count(*) FROM entities e WHERE $1 ? (e.properties->>$2)",
+      ["{}", "k"],
+    ],
+    [
+      "remap ? WITH ::jsonb (fixed)",
+      "SELECT count(*) FROM entities e WHERE $1::jsonb ? (e.properties->>$2)",
+      ["{}", "k"],
+    ],
+    [
+      "applicable_kinds = $1 no cast (broken?)",
+      "UPDATE profiles SET applicable_kinds = $1 WHERE slug='x'",
+      [["a", "b"]],
+    ],
+    [
+      "applicable_kinds = $1::text[] (fixed)",
+      "UPDATE profiles SET applicable_kinds = $1::text[] WHERE slug='x'",
+      [["a", "b"]],
+    ],
+    [
+      "ANY($1) no cast (broken?)",
+      "SELECT count(*) FROM profiles WHERE slug = ANY($1)",
+      [["a", "b"]],
+    ],
+    [
+      "ANY($1::text[]) (fixed)",
+      "SELECT count(*) FROM profiles WHERE slug = ANY($1::text[])",
+      [["a", "b"]],
+    ],
+    [
+      "jsonb_object_agg bare binds (broken)",
+      "SELECT jsonb_object_agg($1,$2) FROM entities",
+      ["a", "b"],
+    ],
   ];
   for (const [name, q, args] of probes) {
     try {

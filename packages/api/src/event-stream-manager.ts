@@ -157,9 +157,7 @@ class EventStreamManager {
     const evtWorkspaceId =
       typeof event.data === "object" && event.data !== null
         ? ((event.data as Record<string, unknown>).workspaceId as
-            | string
-            | undefined
-            | null)
+            string | undefined | null)
         : undefined;
 
     if (filter.workspaceIds && filter.workspaceIds.length > 0) {

@@ -16,7 +16,7 @@ import { buildStoredConstraints } from "../../../utils/property-enum.js";
 import * as schema from "../../../schema/index.js";
 
 let h: Awaited<ReturnType<typeof makeLifecyclePglite>>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 const events = { append: async () => ({ id: "ev" }) } as never;
 let personId: string;

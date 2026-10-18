@@ -465,13 +465,19 @@ describe("summary + cap", () => {
 
 describe("plainStepLabel — a producer title is ONE plain line (dogfood-2 #10)", () => {
   it("strips inline marks, links and a leading marker; keeps intraword underscores", () => {
-    expect(plainStepLabel("**Code lane — all 8 items committed.** Nothing pushed.")).toBe(
-      "Code lane — all 8 items committed. Nothing pushed.",
-    );
+    expect(
+      plainStepLabel("**Code lane — all 8 items committed.** Nothing pushed.")
+    ).toBe("Code lane — all 8 items committed. Nothing pushed.");
     expect(plainStepLabel("## Plan\nsecond line")).toBe("Plan");
-    expect(plainStepLabel("See [the doc](https://x.y) and `code`")).toBe("See the doc and code");
-    expect(plainStepLabel("Run capture_social_post")).toBe("Run capture_social_post");
-    expect(plainStepLabel("an *emphasis* and _this_")).toBe("an emphasis and this");
+    expect(plainStepLabel("See [the doc](https://x.y) and `code`")).toBe(
+      "See the doc and code"
+    );
+    expect(plainStepLabel("Run capture_social_post")).toBe(
+      "Run capture_social_post"
+    );
+    expect(plainStepLabel("an *emphasis* and _this_")).toBe(
+      "an emphasis and this"
+    );
     expect(plainStepLabel("unbalanced **bold")).toBe("unbalanced bold");
   });
 

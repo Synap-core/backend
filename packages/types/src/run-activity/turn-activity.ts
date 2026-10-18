@@ -286,7 +286,8 @@ function bucketState(
   bucket: TurnProposalBucket | undefined,
   unavailable: boolean
 ): TurnToolState {
-  if (bucket === undefined) return unavailable ? "unknown" : "awaiting_approval";
+  if (bucket === undefined)
+    return unavailable ? "unknown" : "awaiting_approval";
   switch (bucket) {
     case "applied":
     case "reverted": // it DID apply; the undo is the proposal's story, not the tool's

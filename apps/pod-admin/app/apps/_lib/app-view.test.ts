@@ -65,7 +65,9 @@ describe("pod-admin reads an app's standing from the membrane", () => {
       /const endAct: EndAct = revoked \? "remove" : "revoke";/
     );
     expect(src).toMatch(/onPress=\{\(\) => onEnd\(endAct\)\}/);
-    expect(src).toMatch(/body: JSON\.stringify\(\{ publicId: app\.public_id, action \}\)/);
+    expect(src).toMatch(
+      /body: JSON\.stringify\(\{ publicId: app\.public_id, action \}\)/
+    );
   });
 
   it("no app page derives standing locally any more", () => {

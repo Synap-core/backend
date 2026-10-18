@@ -66,7 +66,10 @@ describe("next rung never crosses a floor", () => {
       expect(projection.offer !== null, key).toBe(expected);
       if (projection.rule) {
         // The drafted rule is itself never behind a floor.
-        expect(nonWidenableFloorFor(projection.rule.targetPattern), key).toBeNull();
+        expect(
+          nonWidenableFloorFor(projection.rule.targetPattern),
+          key
+        ).toBeNull();
         expect(projection.rule.verdict).toBe("auto");
         expect(projection.rule.principalKind).toBe("agent");
         offered++;

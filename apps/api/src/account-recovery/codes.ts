@@ -70,7 +70,14 @@ export async function hashRecoveryCode(
   salt: string
 ): Promise<string> {
   const key = await derive(normalizedCode, salt);
-  return [PREFIX, SCRYPT_N, SCRYPT_R, SCRYPT_P, salt, key.toString("base64url")].join("$");
+  return [
+    PREFIX,
+    SCRYPT_N,
+    SCRYPT_R,
+    SCRYPT_P,
+    salt,
+    key.toString("base64url"),
+  ].join("$");
 }
 
 interface ParsedHash {

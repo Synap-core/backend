@@ -142,7 +142,7 @@ export function recoveryCodesFile(input: {
     `Created: ${input.createdAt}`,
     "",
     "Each code works once. Use one at the pod's sign-in page:",
-    "\"Can't sign in?\" → \"Use a recovery code\".",
+    '"Can\'t sign in?" → "Use a recovery code".',
     "Creating new codes makes these stop working.",
     "",
     ...input.codes,
@@ -164,7 +164,9 @@ export function recoveryCallDetail(r: {
  * was wrong (enumeration); the pod's own message is never shown — it can be a
  * bare `This pod answered 503.`
  */
-export function redeemFailureMessage(error: AccountRecoveryErrorCode | "network"): {
+export function redeemFailureMessage(
+  error: AccountRecoveryErrorCode | "network"
+): {
   message: string;
   /** The pod could not answer — worth offering the detail. */
   failed: boolean;
@@ -172,12 +174,26 @@ export function redeemFailureMessage(error: AccountRecoveryErrorCode | "network"
   switch (error) {
     case "invalid_code":
     case "invalid_request":
-      return { message: "That didn't work. Check the email and the code — each code works once.", failed: false };
+      return {
+        message:
+          "That didn't work. Check the email and the code — each code works once.",
+        failed: false,
+      };
     case "rate_limited":
-      return { message: "Too many tries. Wait a few minutes, then try again.", failed: false };
+      return {
+        message: "Too many tries. Wait a few minutes, then try again.",
+        failed: false,
+      };
     case "network":
-      return { message: "Couldn't reach this pod. Your code was not used.", failed: true };
+      return {
+        message: "Couldn't reach this pod. Your code was not used.",
+        failed: true,
+      };
     default:
-      return { message: "The pod couldn't check codes right now. Your code was not used.", failed: true };
+      return {
+        message:
+          "The pod couldn't check codes right now. Your code was not used.",
+        failed: true,
+      };
   }
 }

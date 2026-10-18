@@ -32,7 +32,7 @@ const DEVBOX = "33333333-3333-4333-8333-333333333333";
 const DEVBOX_CC = "44444444-4444-4444-8444-444444444444";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 beforeAll(async () => {
@@ -188,7 +188,9 @@ const decide = async (agentUserId: string) =>
 
 describe("host step — stricter wins", () => {
   beforeEach(async () => {
-    await pg.exec(`DELETE FROM governance_rules; DELETE FROM governance_ceilings;`);
+    await pg.exec(
+      `DELETE FROM governance_rules; DELETE FROM governance_ceilings;`
+    );
   });
 
   it("the computer asks first ⇒ its agent asks first, even with its own auto rule", async () => {
@@ -218,7 +220,9 @@ describe("host step — stricter wins", () => {
 
 describe("class rank — agent > class > any", () => {
   beforeEach(async () => {
-    await pg.exec(`DELETE FROM governance_rules; DELETE FROM governance_ceilings;`);
+    await pg.exec(
+      `DELETE FROM governance_rules; DELETE FROM governance_ceilings;`
+    );
   });
 
   it("'for all computers' outranks 'for all agents'", async () => {
@@ -253,7 +257,9 @@ describe("class rank — agent > class > any", () => {
       INSERT INTO governance_ceilings (axis, principal_kind, scope_kind, limit_value) VALUES ('daily_write_count', 'any', 'pod', 50);
     `);
     expect(await resolveDailyWriteCeiling({ db, agentUserId: DEVBOX })).toBe(7);
-    expect(await resolveDailyWriteCeiling({ db, agentUserId: LEGACY_CC })).toBe(50);
+    expect(await resolveDailyWriteCeiling({ db, agentUserId: LEGACY_CC })).toBe(
+      50
+    );
     await pg.exec(`
       INSERT INTO governance_ceilings (axis, principal_kind, agent_user_id, scope_kind, limit_value) VALUES ('daily_write_count', 'agent', '${DEVBOX}', 'pod', 3);
     `);

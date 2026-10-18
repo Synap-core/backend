@@ -3,7 +3,7 @@
  *
  * THE DEFECT THEY CLOSE: both doors were listed SEVERED in
  * `__tripwires__/governed-writes-have-approval-half.test.ts`. A gate-made
- * proposal on a severed door falls to the `*​/*` catch-all, which does NOT
+ * proposal on a severed door falls to the `*\/*` catch-all, which does NOT
  * throw for a request-shaped payload: it emits `.validated`, flips the row to
  * APPROVED and returns `{ success: true }`. The reviewer reads "granted" while
  * NO KEY IS MINTED (`create`) and the key they meant to replace STAYS LIVE

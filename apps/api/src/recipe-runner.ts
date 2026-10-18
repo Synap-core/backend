@@ -246,10 +246,7 @@ async function runRecipe(
       "Unnamed Recipe";
     const onFailure =
       (recipeProps["onFailure"] as
-        | "stop"
-        | "continue"
-        | "rollback"
-        | undefined) ?? "stop";
+        "stop" | "continue" | "rollback" | undefined) ?? "stop";
 
     let steps: RecipeStep[] = [];
     const rawSteps = recipeProps["recipeSteps"] as string | undefined;

@@ -222,9 +222,7 @@ export class KnowledgeRepository {
         ? confidenceValue
         : Number(confidenceValue ?? 0);
     const sourceEntityId = (raw.sourceEntityId ?? raw["source_entity_id"]) as
-      | string
-      | null
-      | undefined;
+      string | null | undefined;
     const sourceMessageId = (raw.sourceMessageId ??
       raw["source_message_id"]) as string | null | undefined;
     const createdAtRaw = raw.createdAt ?? raw["created_at"];

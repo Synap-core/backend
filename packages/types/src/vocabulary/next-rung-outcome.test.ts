@@ -12,21 +12,31 @@ describe("next-rung outcome words (one mark, every surface)", () => {
       expect(NEXT_RUNG_OUTCOME_LABELS[o]).toMatch(/\S/);
     }
     expect(resolveNextRungOutcomeLabel("created")).toBe("Rule added");
-    expect(resolveNextRungOutcomeLabel("already_covered")).toBe("Already a rule");
-    expect(resolveNextRungOutcomeLabel("proposed")).toBe("Sent to the agent's owner");
+    expect(resolveNextRungOutcomeLabel("already_covered")).toBe(
+      "Already a rule"
+    );
+    expect(resolveNextRungOutcomeLabel("proposed")).toBe(
+      "Sent to the agent's owner"
+    );
     expect(resolveNextRungOutcomeLabel("failed")).toBe("Not saved");
   });
 
   it("an unknown outcome humanizes, never leaks the token", () => {
-    expect(resolveNextRungOutcomeLabel("sent_elsewhere")).toBe("Sent elsewhere");
+    expect(resolveNextRungOutcomeLabel("sent_elsewhere")).toBe(
+      "Sent elsewhere"
+    );
   });
 });
 
 describe("the offer's words say how far the grant reaches", () => {
   it("a space grant is the rung's offer; a pod-wide one adds 'in every space'", async () => {
     const { resolveNextRungOfferLabel } = await import("./index.js");
-    expect(resolveNextRungOfferLabel("do_tell", "space")).toBe("Next time, do it and tell me");
-    expect(resolveNextRungOfferLabel("do_tell", "pod")).toBe("Next time, do it and tell me in every space");
+    expect(resolveNextRungOfferLabel("do_tell", "space")).toBe(
+      "Next time, do it and tell me"
+    );
+    expect(resolveNextRungOfferLabel("do_tell", "pod")).toBe(
+      "Next time, do it and tell me in every space"
+    );
     expect(resolveNextRungOfferLabel(null, "pod")).toBe("");
   });
 });

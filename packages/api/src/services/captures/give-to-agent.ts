@@ -53,7 +53,7 @@ import {
   users,
 } from "@synap/database";
 import { resolveAgentDirection } from "@synap-core/types/agents";
-import { AccessContext, scopedDb } from "../../access/index.js";
+import { type AccessContext, scopedDb } from "../../access/index.js";
 import { queryAgentUsers } from "../../routers/agent-users.js";
 import { agentsOperatedBy, loadAgentPresence } from "../agent-presence.js";
 import {

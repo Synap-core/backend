@@ -12,8 +12,8 @@
  */
 
 import {
-  AGENT_BINDING_ERROR_LABELS,
-  AGENT_REACH_LABELS,
+  type AGENT_BINDING_ERROR_LABELS,
+  type AGENT_REACH_LABELS,
   resolveAgentBindingErrorLabel,
   resolveAgentReachLabel,
 } from "../vocabulary/index.js";

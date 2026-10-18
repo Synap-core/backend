@@ -53,7 +53,9 @@ describe("getProperty", () => {
   it("returns the default when a segment is a non-object scalar", () => {
     // The hardened guard: without `typeof current !== "object"` this would
     // read `"abc".date` and yield undefined rather than the default.
-    expect(getProperty({ properties: "abc" }, "properties.date", "d")).toBe("d");
+    expect(getProperty({ properties: "abc" }, "properties.date", "d")).toBe(
+      "d"
+    );
     expect(getProperty({ properties: 7 }, "properties.date", "d")).toBe("d");
   });
 

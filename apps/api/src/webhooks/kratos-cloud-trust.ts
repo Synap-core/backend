@@ -93,7 +93,10 @@ export function createCloudTrustHookRouter(deps: CloudTrustHookDeps) {
         "[synap:auth] settings Cloud-trust guard"
       );
       if (!decision.allow) {
-        return c.json(refusalBody(CLOUD_SESSION_CANNOT_CHANGE_CREDENTIALS), 403);
+        return c.json(
+          refusalBody(CLOUD_SESSION_CANNOT_CHANGE_CREDENTIALS),
+          403
+        );
       }
       return c.body(null, 204);
     } catch (err) {

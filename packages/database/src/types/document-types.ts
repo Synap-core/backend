@@ -17,13 +17,7 @@
  * - whiteboard: Tldraw whiteboard documents (spatial canvas)
  */
 export type DocumentType =
-  | "text"
-  | "markdown"
-  | "code"
-  | "html"
-  | "pdf"
-  | "docx"
-  | "whiteboard";
+  "text" | "markdown" | "code" | "html" | "pdf" | "docx" | "whiteboard";
 
 /**
  * Document type metadata structure

@@ -102,7 +102,11 @@ const CORPUS: ReadonlyArray<
   ],
   [
     "request timeout (408)",
-    { status: 408, error: "upstream request timed out", errorCode: "unavailable" },
+    {
+      status: 408,
+      error: "upstream request timed out",
+      errorCode: "unavailable",
+    },
     "transient",
   ],
   [
@@ -112,7 +116,11 @@ const CORPUS: ReadonlyArray<
   ],
   [
     "outbound request failed (502)",
-    { status: 502, error: "Outbound request failed: ECONNRESET", errorCode: "unavailable" },
+    {
+      status: 502,
+      error: "Outbound request failed: ECONNRESET",
+      errorCode: "unavailable",
+    },
     "transient",
   ],
   [
@@ -126,7 +134,8 @@ const CORPUS: ReadonlyArray<
     "vault secret deleted (404)",
     {
       status: 404,
-      error: 'Vault secret "sec_123" could not be resolved (missing or deleted).',
+      error:
+        'Vault secret "sec_123" could not be resolved (missing or deleted).',
       errorCode: "not_found",
     },
     "target_missing",
@@ -135,31 +144,48 @@ const CORPUS: ReadonlyArray<
     "no MCP server registered (404)",
     {
       status: 404,
-      error: 'No MCP server found for "notion". Register it under Settings → MCP Servers first.',
+      error:
+        'No MCP server found for "notion". Register it under Settings → MCP Servers first.',
       errorCode: "not_found",
     },
     "target_missing",
   ],
   [
     "tool not found for provider (404)",
-    { status: 404, error: "Tool not found for provider: nango://gmail", errorCode: "not_found" },
+    {
+      status: 404,
+      error: "Tool not found for provider: nango://gmail",
+      errorCode: "not_found",
+    },
     "target_missing",
   ],
 
   // ── provider (genuine provider-side failure) ──────────────────────────────
   [
     "Apify invalid API token (401-agnostic 4xx business error)",
-    { status: 400, error: "Invalid API token provided.", errorCode: "bad_request" },
+    {
+      status: 400,
+      error: "Invalid API token provided.",
+      errorCode: "bad_request",
+    },
     "provider",
   ],
   [
     "unsupported provider scheme (400)",
-    { status: 400, error: "Unsupported provider scheme. Got: foo://bar", errorCode: "bad_request" },
+    {
+      status: 400,
+      error: "Unsupported provider scheme. Got: foo://bar",
+      errorCode: "bad_request",
+    },
     "provider",
   ],
   [
     "provider 422 validation error",
-    { status: 422, error: "Recipient email is malformed", errorCode: "bad_request" },
+    {
+      status: 422,
+      error: "Recipient email is malformed",
+      errorCode: "bad_request",
+    },
     "provider",
   ],
 ];
@@ -191,12 +217,17 @@ describe("classifyDispatchFailure — failure-class mapping over a real corpus",
 
   it("precedence: a 5xx outranks an incidental auth word (RETRY, not RECONNECT)", () => {
     expect(
-      classifyDispatchFailure({ status: 503, message: "token refresh service down" })
+      classifyDispatchFailure({
+        status: 503,
+        message: "token refresh service down",
+      })
     ).toBe("transient");
   });
 
   it("empty/absent message on a plain 4xx → provider", () => {
     expect(classifyDispatchFailure({ status: 400 })).toBe("provider");
-    expect(classifyDispatchFailure({ status: 400, message: "" })).toBe("provider");
+    expect(classifyDispatchFailure({ status: 400, message: "" })).toBe(
+      "provider"
+    );
   });
 });

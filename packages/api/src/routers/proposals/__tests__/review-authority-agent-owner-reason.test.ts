@@ -16,7 +16,9 @@ import {
 const HUMAN = "human-user-id";
 const AGENT = "agent-user-id";
 
-const facts = (over: Partial<ReviewAuthorityFacts> = {}): ReviewAuthorityFacts => ({
+const facts = (
+  over: Partial<ReviewAuthorityFacts> = {}
+): ReviewAuthorityFacts => ({
   policy: "owner_and_admins",
   memberRole: undefined,
   viewerIsAgent: false,
@@ -32,7 +34,11 @@ describe("review reason — an agent's proposal is never 'You proposed this'", (
 
     it(`${where}: sourceId = the human + agentUserId set ⇒ agent-owner`, () => {
       const v = computeCanReviewApprovalFromFacts({
-        proposal: { workspaceId, data: { sourceId: HUMAN }, agentUserId: AGENT },
+        proposal: {
+          workspaceId,
+          data: { sourceId: HUMAN },
+          agentUserId: AGENT,
+        },
         userId: HUMAN,
         purpose: "approve",
         facts: facts({ agentCreatedByUserId: HUMAN }),

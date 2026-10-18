@@ -260,15 +260,29 @@ describe("derived names never read as cut (c-auto-titles, plan 9992207a)", () =>
 describe("buildRunSessionStartTitle — the name a run will carry, said before it exists", () => {
   it("is the SAME name the run session gets (one derivation)", () => {
     expect(
-      buildRunSessionStartTitle({ playbookName: "Qualify a lead", subjectNames: ["Acme Corp"] })
-    ).toBe(buildDerivedSessionTitle({ kind: "run", name: "Qualify a lead", subject: "Acme Corp" }));
+      buildRunSessionStartTitle({
+        playbookName: "Qualify a lead",
+        subjectNames: ["Acme Corp"],
+      })
+    ).toBe(
+      buildDerivedSessionTitle({
+        kind: "run",
+        name: "Qualify a lead",
+        subject: "Acme Corp",
+      })
+    );
     expect(
-      buildRunSessionStartTitle({ playbookName: "Qualify a lead", subjectNames: ["Acme Corp"] })
+      buildRunSessionStartTitle({
+        playbookName: "Qualify a lead",
+        subjectNames: ["Acme Corp"],
+      })
     ).toBe("Qualify a lead · Acme Corp");
   });
 
   it("names a subject-less run by its playbook alone — never a guessed date", () => {
-    expect(buildRunSessionStartTitle({ playbookName: "Weekly review" })).toBe("Weekly review");
+    expect(buildRunSessionStartTitle({ playbookName: "Weekly review" })).toBe(
+      "Weekly review"
+    );
   });
 
   it("names a batch by its first subject and how many more, else by the count", () => {
@@ -280,7 +294,10 @@ describe("buildRunSessionStartTitle — the name a run will carry, said before i
       })
     ).toBe("Qualify a lead · Ada + 3 more");
     expect(
-      buildRunSessionStartTitle({ playbookName: "Qualify a lead", subjectCount: 4 })
+      buildRunSessionStartTitle({
+        playbookName: "Qualify a lead",
+        subjectCount: 4,
+      })
     ).toBe("Qualify a lead · 4 sessions");
   });
 

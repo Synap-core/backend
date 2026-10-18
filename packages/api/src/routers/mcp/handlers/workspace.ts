@@ -56,9 +56,9 @@ import {
   requireScope,
   readReasoning,
   rejectMissingWriteWorkspace,
-  McpToolContext,
-  CallToolResult,
-  McpHandlerMap,
+  type McpToolContext,
+  type CallToolResult,
+  type McpHandlerMap,
 } from "./shared.js";
 
 export const workspaceHandlers: McpHandlerMap = {

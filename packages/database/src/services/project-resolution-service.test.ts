@@ -26,7 +26,6 @@ interface Seed {
   membershipEdges?: string[];
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeDb(seed: Seed = {}): any {
   return {
     query: {
@@ -67,7 +66,7 @@ describe("resolveProjectPlacement — rung 2 and the DERIVED session (A1)", () =
   const SESSION = "cccccccc-cccc-cccc-cccc-cccccccccccc";
   // A session row that IS scoped to a project, so the fixture discriminates:
   // the derived and explicit cases differ ONLY in `sessionSource`.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   function sessionDb(): any {
     const db = makeDb();
     db.query.focusSessions = {
@@ -123,7 +122,7 @@ describe("resolveProjectPlacement — rung 2 and the DERIVED session (A1)", () =
 describe("resolveProjectPlacement — the request's GUESSED session (write context)", () => {
   const SESSION = "cccccccc-cccc-cccc-cccc-cccccccccccc";
   const OTHER = "dddddddd-dddd-dddd-dddd-dddddddddddd";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   function sessionDb(): any {
     const db = makeDb();
     db.query.focusSessions = {

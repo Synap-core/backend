@@ -5,7 +5,7 @@
  * THE DEFECT (measured, third occurrence in this repo): a gate calls
  * `checkPermissionOrPropose({subjectType, action})`; approval resolves
  * `` `${targetType}/${proposalType}` `` EXACTLY against the executor registry.
- * When nothing matches, approval falls to the `*​/*` catch-all — which for a
+ * When nothing matches, approval falls to the `*\/*` catch-all — which for a
  * gate-made proposal does NOT throw. It emits `.validated`, flips the row to
  * APPROVED and returns `{success: true}`. **The reviewer sees green and nothing
  * happens.** On a DELETE path that is the worst possible false-green.

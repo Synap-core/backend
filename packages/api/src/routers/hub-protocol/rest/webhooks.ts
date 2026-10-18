@@ -148,7 +148,6 @@ export function registerWebhooksRoutes(app: HubHono) {
         },
         201
       );
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
       return c.json(
         { error: "Failed to create webhook subscription" },
@@ -176,7 +175,6 @@ export function registerWebhooksRoutes(app: HubHono) {
           lastTriggeredAt: s.lastTriggeredAt,
         }))
       );
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
       return c.json(
         { error: "Failed to list webhook subscriptions" },
@@ -205,7 +203,6 @@ export function registerWebhooksRoutes(app: HubHono) {
       }
 
       return c.json({ success: true });
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
       return c.json(
         { error: "Failed to delete webhook subscription" },

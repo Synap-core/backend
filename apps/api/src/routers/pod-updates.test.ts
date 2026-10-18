@@ -6,7 +6,11 @@ import type { MiddlewareHandler } from "hono";
 import { createPodUpdatesRouter, type PodUpdatesDeps } from "./pod-updates.js";
 import type { PodUpdateSettings } from "../pod-updates/index.js";
 
-function harness(opts: { admin: boolean; stored?: unknown; readFails?: boolean }) {
+function harness(opts: {
+  admin: boolean;
+  stored?: unknown;
+  readFails?: boolean;
+}) {
   let stored: unknown = opts.stored;
   const writes: PodUpdateSettings[] = [];
   const audits: string[] = [];
@@ -45,7 +49,10 @@ describe("GET /", () => {
     const { app } = harness({ admin: false });
     const res = await app.request("/");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { settings: PodUpdateSettings; canEdit: boolean };
+    const body = (await res.json()) as {
+      settings: PodUpdateSettings;
+      canEdit: boolean;
+    };
     expect(body.settings.auto).toBe(true);
     expect(body.canEdit).toBe(false);
   });
@@ -60,7 +67,9 @@ describe("PUT /settings", () => {
   // Catches: any pod member turning off the owner's updates.
   it("refuses a non-admin", async () => {
     const { app, writes } = harness({ admin: false });
-    expect((await app.request("/settings", put({ auto: false }))).status).toBe(403);
+    expect((await app.request("/settings", put({ auto: false }))).status).toBe(
+      403
+    );
     expect(writes).toHaveLength(0);
   });
 
@@ -70,19 +79,30 @@ describe("PUT /settings", () => {
     expect(res.status).toBe(200);
     expect(writes).toEqual([{ auto: false, channel: "stable" }]);
     expect(audits).toEqual(["pod_updates.settings_changed"]);
-    const body = (await res.json()) as { settings: PodUpdateSettings & { explicit: boolean } };
-    expect(body.settings).toEqual({ auto: false, channel: "stable", explicit: true });
+    const body = (await res.json()) as {
+      settings: PodUpdateSettings & { explicit: boolean };
+    };
+    expect(body.settings).toEqual({
+      auto: false,
+      channel: "stable",
+      explicit: true,
+    });
   });
 
   // Catches: a channel-only patch resetting a stored auto:false back to the default.
   it("a partial patch keeps the other stored field", async () => {
-    const { app, writes } = harness({ admin: true, stored: { auto: false, channel: "stable" } });
+    const { app, writes } = harness({
+      admin: true,
+      stored: { auto: false, channel: "stable" },
+    });
     await app.request("/settings", put({ channel: "fast" }));
     expect(writes).toEqual([{ auto: false, channel: "fast" }]);
   });
 
   it("refuses a malformed body", async () => {
     const { app } = harness({ admin: true });
-    expect((await app.request("/settings", put({ auto: "no" }))).status).toBe(400);
+    expect((await app.request("/settings", put({ auto: "no" }))).status).toBe(
+      400
+    );
   });
 });

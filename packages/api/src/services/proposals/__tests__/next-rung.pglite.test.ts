@@ -34,9 +34,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     // The real SSOT insert, on the test database (it binds its own client by
     // default; the executor parameter is its documented seam).
     insertPendingProposal: (input: unknown) =>
-      (
-        actual.insertPendingProposal as (i: unknown, e: unknown) => unknown
-      )(input, holder.db),
+      (actual.insertPendingProposal as (i: unknown, e: unknown) => unknown)(
+        input,
+        holder.db
+      ),
   };
   Object.defineProperty(mocked, "db", {
     get: () => holder.db,
@@ -263,8 +264,11 @@ async function insertRule(o: {
 
 async function ruleCount(): Promise<number> {
   return Number(
-    (await client.query<{ n: number }>(`select count(*)::int as n from governance_rules`))
-      .rows[0]!.n
+    (
+      await client.query<{ n: number }>(
+        `select count(*)::int as n from governance_rules`
+      )
+    ).rows[0]!.n
   );
 }
 
@@ -416,7 +420,11 @@ describe("proposeNextRung — an update names no kind, so it is refused (never e
     expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
     // The formatter lifts the typed code the apps read (`isNoNextRungError`).
     const shape = t._config.errorFormatter({
-      shape: { message: "", code: -32600, data: { code: "PRECONDITION_FAILED", httpStatus: 412 } },
+      shape: {
+        message: "",
+        code: -32600,
+        data: { code: "PRECONDITION_FAILED", httpStatus: 412 },
+      },
       error: err as never,
       type: "mutation",
       path: "governanceRules.proposeNextRung",

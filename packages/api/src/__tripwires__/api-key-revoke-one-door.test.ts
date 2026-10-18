@@ -77,7 +77,8 @@ describe("one API-key revoke door", () => {
   it("scans real code and its parser sees a revoke (non-vacuity)", () => {
     // Non-revoke updates (lastUsedAt stamps, approval flips) still exist.
     expect(updates).toBeGreaterThanOrEqual(5);
-    const sample = "db\n  .update(apiKeys)\n  .set({\n    isActive: false,\n    revokedAt: new Date(),\n  })";
+    const sample =
+      "db\n  .update(apiKeys)\n  .set({\n    isActive: false,\n    revokedAt: new Date(),\n  })";
     const at = sample.indexOf(".update(apiKeys)") + ".update(apiKeys)".length;
     expect(setObjectAfter(sample, at)).toMatch(/revokedAt/);
     // The door itself is found — the scan reaches packages/database.

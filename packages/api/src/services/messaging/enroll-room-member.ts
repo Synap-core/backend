@@ -19,8 +19,11 @@
  * `routers/channels/crud.ts` (createForSession, createGroupChannel, addMember),
  * `routers/channels/membership.ts`, `utils/personal-channel.ts`.
  */
-import { db, channelMembers } from "@synap/database";
-import { ChannelMemberKind, ChannelMemberRole } from "@synap/database/schema";
+import { type db, channelMembers } from "@synap/database";
+import {
+  type ChannelMemberKind,
+  ChannelMemberRole,
+} from "@synap/database/schema";
 
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 

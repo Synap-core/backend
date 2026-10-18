@@ -21,7 +21,7 @@
  * rows are inserted inside `capture.execute`).
  */
 
-import { db, proposals, and, eq, or, inArray } from "@synap/database";
+import { type db, proposals, and, eq, or, inArray } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { authoredByUser } from "../agent-identity-service.js";
 

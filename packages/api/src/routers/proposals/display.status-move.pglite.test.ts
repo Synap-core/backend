@@ -26,7 +26,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     db: drizzle(client),
     // The lifecycle resolution is the move door's own (tested with it); here it
     // stands in for a "lead" kind whose lifecycle is declared on its profile.
-    resolveStatusMoveTarget: async (_db: unknown, t: { entityId: string; role?: string | null }) => ({
+    resolveStatusMoveTarget: async (
+      _db: unknown,
+      t: { entityId: string; role?: string | null }
+    ) => ({
       ok: true,
       target: {
         entityId: t.entityId,
@@ -106,14 +109,24 @@ beforeAll(async () => {
   );
   await q(
     `insert into entities (id, user_id, workspace_id, type, title) values ($1,$4,$5,'lead','Acme Corp'),($2,$4,$5,'lead','Beta Ltd'),($3,$6,$7,'lead',$8)`,
-    [ACME, BETA, HIDDEN_LEAD, VIEWER, WS_SEEN, OTHER, WS_HIDDEN, HIDDEN_LEAD_NAME]
+    [
+      ACME,
+      BETA,
+      HIDDEN_LEAD,
+      VIEWER,
+      WS_SEEN,
+      OTHER,
+      WS_HIDDEN,
+      HIDDEN_LEAD_NAME,
+    ]
   );
 });
 
-
-
-
-function moveRow(entityId: string, payload: Record<string, unknown>, proposalType = "entity.transition") {
+function moveRow(
+  entityId: string,
+  payload: Record<string, unknown>,
+  proposalType = "entity.transition"
+) {
   const now = new Date();
   return {
     id: randomUUID(),
@@ -125,7 +138,14 @@ function moveRow(entityId: string, payload: Record<string, unknown>, proposalTyp
       targetType: "entity",
       targetId: entityId,
       changeType: "transition",
-      data: { id: entityId, entityId, role: null, facetId: null, property: "leadStage", ...payload },
+      data: {
+        id: entityId,
+        entityId,
+        role: null,
+        facetId: null,
+        property: "leadStage",
+        ...payload,
+      },
     },
     workspaceId: WS_SEEN,
     projectId: null,

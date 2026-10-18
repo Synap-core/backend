@@ -57,13 +57,22 @@ try {
 // (https://no-color.org) and drop escapes entirely when stdout is not a TTY, so
 // `check.mjs > log` and CI log capture do not accumulate raw escape bytes.
 // Severity survives either way: ✓ / ! / ✗ are distinct glyphs, not colours.
-const COLOR = process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb";
-const G = COLOR ? "\x1b[32m" : "", R = COLOR ? "\x1b[31m" : "",
-      Y = COLOR ? "\x1b[33m" : "", D = COLOR ? "\x1b[2m" : "",
-      B = COLOR ? "\x1b[1m" : "", X = COLOR ? "\x1b[0m" : "";
+const COLOR =
+  process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb";
+const G = COLOR ? "\x1b[32m" : "",
+  R = COLOR ? "\x1b[31m" : "",
+  Y = COLOR ? "\x1b[33m" : "",
+  D = COLOR ? "\x1b[2m" : "",
+  B = COLOR ? "\x1b[1m" : "",
+  X = COLOR ? "\x1b[0m" : "";
 let failures = 0;
-const fail = (m) => { failures++; console.log(`${R}✗${X} ${m}`); };
-const pass = (m) => { if (!QUIET) console.log(`${G}✓${X} ${m}`); };
+const fail = (m) => {
+  failures++;
+  console.log(`${R}✗${X} ${m}`);
+};
+const pass = (m) => {
+  if (!QUIET) console.log(`${G}✓${X} ${m}`);
+};
 const warn = (m) => console.log(`${Y}!${X} ${m}`);
 
 const manifest = parseYaml(readFileSync(join(CI_DIR, "repos.yml"), "utf8"));
@@ -81,7 +90,11 @@ const NPM_PUBLISH_CMD =
   /(?<![-\w])(?:pnpm|npm|yarn|bun)\b[^#\n]*?(?<![-\w])publish\b|\bpnpm\s+run\s+release\b|\bchangeset\s+publish\b/i;
 const isPublishStep = (s) => {
   const cmd = s?.run ?? "";
-  if (typeof cmd === "string" && NPM_PUBLISH_CMD.test(cmd) && !/--dry-run|dry.run/i.test(cmd))
+  if (
+    typeof cmd === "string" &&
+    NPM_PUBLISH_CMD.test(cmd) &&
+    !/--dry-run|dry.run/i.test(cmd)
+  )
     return true;
   return /changesets\/action/.test(s?.uses ?? ""); // version+publish via the action
 };
@@ -91,14 +104,29 @@ function workflowFiles(repo) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => /\.ya?ml$/.test(f))
-    .map((f) => ({ name: f, path: join(dir, f), raw: readFileSync(join(dir, f), "utf8") }));
+    .map((f) => ({
+      name: f,
+      path: join(dir, f),
+      raw: readFileSync(join(dir, f), "utf8"),
+    }));
 }
 
 if (!QUIET) console.log(`\n${B}Synap CI/CD conformance${X}`);
 
 // ── Per-repo workflow rules ──────────────────────────────────────────────────
-const SKIP = new Set(["node_modules", ".git", "dist", ".next", ".turbo", "build",
-  ".claude", ".worktrees", ".eas-snapshot", "coverage", ".dist-staging"]);
+const SKIP = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  ".next",
+  ".turbo",
+  "build",
+  ".claude",
+  ".worktrees",
+  ".eas-snapshot",
+  "coverage",
+  ".dist-staging",
+]);
 
 // Scan EVERY repo that ships a workflow, not only the ones listed in the
 // manifest. An earlier version iterated manifest.repos and therefore never
@@ -106,18 +134,30 @@ const SKIP = new Set(["node_modules", ".git", "dist", ".next", ".turbo", "build"
 // undetected. A gate that only checks what someone remembered to register is
 // a gate that misses exactly the thing you forgot.
 function isWorktreeDir(dir) {
-  try { return statSync(join(dir, ".git")).isFile(); } catch { return false; }
+  try {
+    return statSync(join(dir, ".git")).isFile();
+  } catch {
+    return false;
+  }
 }
 const WORKFLOW_REPOS = readdirSync(ROOT, { withFileTypes: true })
-  .filter((e) => e.isDirectory() && !SKIP.has(e.name) && e.name.charAt(0) !== "."
-    && existsSync(join(ROOT, e.name, ".github", "workflows")))
+  .filter(
+    (e) =>
+      e.isDirectory() &&
+      !SKIP.has(e.name) &&
+      e.name.charAt(0) !== "." &&
+      existsSync(join(ROOT, e.name, ".github", "workflows"))
+  )
   .map((e) => e.name)
   .filter((r) => !isWorktreeDir(join(ROOT, r)));
 
 function packageManagerPinned(repo) {
   try {
-    return !!parseYaml(readFileSync(join(ROOT, repo, "package.json"), "utf8"))?.packageManager;
-  } catch { return false; }
+    return !!parseYaml(readFileSync(join(ROOT, repo, "package.json"), "utf8"))
+      ?.packageManager;
+  } catch {
+    return false;
+  }
 }
 
 // Non-vacuity guard. Every rule below filters over a scanned set. If that set is
@@ -125,8 +165,10 @@ function packageManagerPinned(repo) {
 // nothing — the worst possible failure for a guard. Prove the scan saw something
 // before trusting any "✓ no issues" below.
 if (!WORKFLOW_REPOS.length) {
-  fail(`no repo with .github/workflows was found under ${ROOT} — the scan is ` +
-    `vacuous, not passing`);
+  fail(
+    `no repo with .github/workflows was found under ${ROOT} — the scan is ` +
+      `vacuous, not passing`
+  );
 } else if (!QUIET) {
   pass(`scanned ${WORKFLOW_REPOS.length} repo(s) with workflows`);
 }
@@ -138,8 +180,12 @@ for (const repo of WORKFLOW_REPOS) {
   if (!QUIET) console.log(`\n${D}── ${repo} ──${X}`);
 
   for (const wf of wfs) {
-    let doc; try { doc = parseYaml(wf.raw); } catch (e) {
-      fail(`${wf.name} — invalid YAML: ${e.message}`); continue;
+    let doc;
+    try {
+      doc = parseYaml(wf.raw);
+    } catch (e) {
+      fail(`${wf.name} — invalid YAML: ${e.message}`);
+      continue;
     }
     const jobs = doc?.jobs ?? {};
     const steps = Object.values(jobs).flatMap((j) => j?.steps ?? []);
@@ -148,30 +194,47 @@ for (const repo of WORKFLOW_REPOS) {
     // 1. dual pnpm pin — check EVERY pnpm/action-setup step, not just the first.
     //    browser-release.yml had three separate ones; checking only the first
     //    would have reported a clean file while two stayed broken.
-    const pnpmSteps = steps.filter((s) => /pnpm\/action-setup/.test(s?.uses ?? ""));
+    const pnpmSteps = steps.filter((s) =>
+      /pnpm\/action-setup/.test(s?.uses ?? "")
+    );
     const dualPinned = pnpmSteps.filter((s) => s?.with?.version);
     if (dualPinned.length && pmPinned) {
-      fail(`${wf.name} — ${dualPinned.length} pnpm/action-setup step(s) pass 'version:' ` +
-        `(${dualPinned.map((s) => s.with.version).join(", ")}) AND the repo pins ` +
-        `packageManager ⇒ setup fails ("Multiple versions of pnpm specified")`);
+      fail(
+        `${wf.name} — ${dualPinned.length} pnpm/action-setup step(s) pass 'version:' ` +
+          `(${dualPinned.map((s) => s.with.version).join(", ")}) AND the repo pins ` +
+          `packageManager ⇒ setup fails ("Multiple versions of pnpm specified")`
+      );
     } else if (publishes && pnpmSteps.length) {
-      pass(`${wf.name} — pnpm version sourced from packageManager (no dual pin)`);
+      pass(
+        `${wf.name} — pnpm version sourced from packageManager (no dual pin)`
+      );
     }
 
     // 2. id-token for publishing
     if (publishes) {
-      const perms = Object.values(jobs).map((j) => j?.permissions ?? {}).find((p) => p["id-token"] === "write")
-        ?? doc?.permissions;
-      if (perms?.["id-token"] === "write") pass(`${wf.name} — id-token: write set for Trusted Publishing`);
-      else warn(`${wf.name} — publishes but no id-token: write (needed for Trusted Publishing)`);
+      const perms =
+        Object.values(jobs)
+          .map((j) => j?.permissions ?? {})
+          .find((p) => p["id-token"] === "write") ?? doc?.permissions;
+      if (perms?.["id-token"] === "write")
+        pass(`${wf.name} — id-token: write set for Trusted Publishing`);
+      else
+        warn(
+          `${wf.name} — publishes but no id-token: write (needed for Trusted Publishing)`
+        );
     }
 
     // 3. concurrency must not cancel a publish
     const conc = doc?.concurrency;
     if (publishes) {
-      if (!conc) warn(`${wf.name} — no concurrency block (concurrent publishes can race)`);
+      if (!conc)
+        warn(
+          `${wf.name} — no concurrency block (concurrent publishes can race)`
+        );
       else if (conc["cancel-in-progress"] === true)
-        fail(`${wf.name} — concurrency.cancel-in-progress: true can cancel a publish mid-flight`);
+        fail(
+          `${wf.name} — concurrency.cancel-in-progress: true can cancel a publish mid-flight`
+        );
       else pass(`${wf.name} — publish concurrency does not cancel`);
     }
 
@@ -181,13 +244,17 @@ for (const repo of WORKFLOW_REPOS) {
     if (publishes) {
       const wfEnv = doc?.env ?? {};
       if (wfEnv.NPM_TOKEN !== undefined) {
-        fail(`${wf.name} — workflow-level env sets NPM_TOKEN; npm reads NODE_AUTH_TOKEN ` +
-          `(NPM_TOKEN is ignored ⇒ anonymous publish ⇒ misleading E404)`);
+        fail(
+          `${wf.name} — workflow-level env sets NPM_TOKEN; npm reads NODE_AUTH_TOKEN ` +
+            `(NPM_TOKEN is ignored ⇒ anonymous publish ⇒ misleading E404)`
+        );
       }
       for (const s of steps) {
         if ((s?.env ?? {}).NPM_TOKEN !== undefined && isPublishStep(s)) {
-          fail(`${wf.name} — step "${s.name ?? "(unnamed)"}" uses env NPM_TOKEN; npm reads ` +
-            `NODE_AUTH_TOKEN (NPM_TOKEN is ignored ⇒ anonymous publish ⇒ misleading E404)`);
+          fail(
+            `${wf.name} — step "${s.name ?? "(unnamed)"}" uses env NPM_TOKEN; npm reads ` +
+              `NODE_AUTH_TOKEN (NPM_TOKEN is ignored ⇒ anonymous publish ⇒ misleading E404)`
+          );
         }
       }
     }
@@ -204,20 +271,40 @@ if (!QUIET) console.log(`\n${D}── cross-repo package names ──${X}`);
 // containing `gitdir: …/worktrees/<name>`, whereas a real repo's is a DIRECTORY.
 // Hardcoding worktree names would rot the moment someone creates a new one.
 function isWorktree(dir) {
-  try { return statSync(join(dir, ".git")).isFile(); } catch { return false; }
+  try {
+    return statSync(join(dir, ".git")).isFile();
+  } catch {
+    return false;
+  }
 }
 // Dot-directories and non-repo scratch trees are never publishers.
-const NON_REPOS = new Set([".eas-snapshot", ".vercel", "node_modules", "components", "typo"]);
+const NON_REPOS = new Set([
+  ".eas-snapshot",
+  ".vercel",
+  "node_modules",
+  "components",
+  "typo",
+]);
 const ALL_REPOS = readdirSync(ROOT, { withFileTypes: true })
-  .filter((e) => e.isDirectory() && !SKIP.has(e.name) && !NON_REPOS.has(e.name)
-    && existsSync(join(ROOT, e.name, "package.json")))
+  .filter(
+    (e) =>
+      e.isDirectory() &&
+      !SKIP.has(e.name) &&
+      !NON_REPOS.has(e.name) &&
+      existsSync(join(ROOT, e.name, "package.json"))
+  )
   .map((e) => e.name)
   .filter((r) => !isWorktree(join(ROOT, r)));
 const byName = new Map();
 for (const repo of ALL_REPOS) {
   const walk = (d, depth) => {
     if (depth > 4) return;
-    let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    let es;
+    try {
+      es = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
     for (const e of es) {
       if (SKIP.has(e.name)) continue;
       const f = join(d, e.name);
@@ -229,8 +316,12 @@ for (const repo of ALL_REPOS) {
           if (!byName.has(j.name)) byName.set(j.name, []);
           // `dir` is relative to the workspace root (e.g. "synap-app/apps/hub"),
           // and is what lets rule 6 decide whether changesets can reach a package.
-          byName.get(j.name).push({ repo, version: j.version, dir: relative(ROOT, d) });
-        } catch {}
+          byName
+            .get(j.name)
+            .push({ repo, version: j.version, dir: relative(ROOT, d) });
+        } catch {
+          // An unparseable package.json names no package: nothing to collide.
+        }
       }
     }
   };
@@ -240,8 +331,10 @@ for (const repo of ALL_REPOS) {
 // Same non-vacuity argument for the package scan: rules 5 and 6 filter over
 // `byName`. Zero entries means both rules pass while examining nothing.
 if (!byName.size) {
-  fail(`no public packages discovered under ${ROOT} — the package-name scan is ` +
-    `vacuous, not passing`);
+  fail(
+    `no public packages discovered under ${ROOT} — the package-name scan is ` +
+      `vacuous, not passing`
+  );
 } else if (!QUIET) {
   pass(`scanned ${byName.size} distinct public package name(s)`);
 }
@@ -263,11 +356,18 @@ function actuallyPublishedOnNpm(name, repo) {
     if (existsSync(dir)) {
       for (const f of readdirSync(dir).filter((x) => /\.ya?ml$/.test(x))) {
         const doc = parseYaml(readFileSync(join(dir, f), "utf8"));
-        const steps = Object.values(doc?.jobs ?? {}).flatMap((j) => j?.steps ?? []);
-        if (steps.some(isPublishStep)) { result = true; break; }
+        const steps = Object.values(doc?.jobs ?? {}).flatMap(
+          (j) => j?.steps ?? []
+        );
+        if (steps.some(isPublishStep)) {
+          result = true;
+          break;
+        }
       }
     }
-  } catch {}
+  } catch {
+    // Invalid workflow YAML already FAILS rule 1 above; here it publishes nothing.
+  }
   repoPublishesNpm.set(key, result);
   return result;
 }
@@ -283,13 +383,17 @@ for (const [name, hits] of byName) {
   const published = hits.filter((h) => actuallyPublishedOnNpm(name, h.repo));
   if (published.length > 1) {
     collisions++;
-    fail(`${name}: ${published.length} published copies — ` +
-      published.map((h) => `${h.repo}@${h.version}`).join(", ") +
-      " (whoever publishes last owns `latest`)");
+    fail(
+      `${name}: ${published.length} published copies — ` +
+        published.map((h) => `${h.repo}@${h.version}`).join(", ") +
+        " (whoever publishes last owns `latest`)"
+    );
   } else {
-    warn(`${name} exists in ${repos.length} repos (${repos.join(", ")}) but only ` +
-      `${published.length === 0 ? "none" : published[0].repo} reaches npm — ` +
-      "record it in ci/repos.yml open_conflicts to stop it becoming real");
+    warn(
+      `${name} exists in ${repos.length} repos (${repos.join(", ")}) but only ` +
+        `${published.length === 0 ? "none" : published[0].repo} reaches npm — ` +
+        "record it in ci/repos.yml open_conflicts to stop it becoming real"
+    );
   }
 }
 if (!collisions) pass("no package name is published from more than one repo");
@@ -297,17 +401,30 @@ if (!collisions) pass("no package name is published from more than one repo");
 // ── 6. changeset ignore coverage ─────────────────────────────────────────────
 if (!QUIET) console.log(`\n${D}── changeset ignore coverage ──${X}`);
 const cfgPath = join(ROOT, "synap-app", ".changeset", "config.json");
-if (!existsSync(cfgPath)) warn("synap-app/.changeset/config.json not found — skipped");
+if (!existsSync(cfgPath))
+  warn("synap-app/.changeset/config.json not found — skipped");
 else {
   const ignore = new Set(parseYaml(readFileSync(cfgPath, "utf8")).ignore ?? []);
-  const excused = new Map((manifest.changeset_exceptions ?? [])
-    .map((e) => [e.package, e.reason ?? ""]));
+  const excused = new Map(
+    (manifest.changeset_exceptions ?? []).map((e) => [
+      e.package,
+      e.reason ?? "",
+    ])
+  );
   const uncovered = [...byName.entries()]
-    .filter(([n, hits]) => hits.some((h) => h.repo === "synap-app") && !ignore.has(n) && !excused.has(n))
+    .filter(
+      ([n, hits]) =>
+        hits.some((h) => h.repo === "synap-app") &&
+        !ignore.has(n) &&
+        !excused.has(n)
+    )
     .map(([n]) => n);
   if (uncovered.length)
-    fail("public synap-app package(s) neither ignored nor excused (changesets would " +
-      "publish them with no decision): " + uncovered.join(", "));
+    fail(
+      "public synap-app package(s) neither ignored nor excused (changesets would " +
+        "publish them with no decision): " +
+        uncovered.join(", ")
+    );
   else pass("every public synap-app package is ignored or explicitly excused");
 
   // A `changeset_exceptions` entry is DOCUMENTATION, not enforcement. changesets
@@ -316,14 +433,21 @@ else {
   // writes a changeset naming it, both doors publish and `latest` is a race.
   // Packages outside every workspace glob cannot be versioned by changesets at
   // all, so for those the exception is genuinely sufficient.
-  const wsGlobs = parseYaml(readFileSync(join(ROOT, "synap-app", "pnpm-workspace.yaml"), "utf8"))
-    .packages ?? [];
+  const wsGlobs =
+    parseYaml(
+      readFileSync(join(ROOT, "synap-app", "pnpm-workspace.yaml"), "utf8")
+    ).packages ?? [];
   const globRe = (g) =>
-    new RegExp("^" + g.replace(/\./g, "\\.").replace(/\//g, "\\/").replace(/\*/g, "[^/]*") + "$");
+    new RegExp(
+      "^" +
+        g.replace(/\./g, "\\.").replace(/\//g, "\\/").replace(/\*/g, "[^/]*") +
+        "$"
+    );
   // Returns the matching glob, or null if the package is outside all of them.
   const workspaceGlobFor = (n) => {
-    const rel = (byName.get(n).find((h) => h.repo === "synap-app")?.dir ?? "")
-      .replace(/^synap-app\/?/, "");
+    const rel = (
+      byName.get(n).find((h) => h.repo === "synap-app")?.dir ?? ""
+    ).replace(/^synap-app\/?/, "");
     return wsGlobs.find((g) => globRe(g).test(rel)) ?? null;
   };
   // An excused package falls into one of two opposite classes, and guessing wrong
@@ -338,34 +462,49 @@ else {
   //
   // Class B is identified by the generator, not by prose. If the generator is
   // missing we cannot tell them apart, so say so instead of guessing.
-  const genPath = join(ROOT, "synap-app", "scripts", "sync-changeset-ignore.mjs");
+  const genPath = join(
+    ROOT,
+    "synap-app",
+    "scripts",
+    "sync-changeset-ignore.mjs"
+  );
   let allowlist = null;
   if (existsSync(genPath)) {
     const src = readFileSync(genPath, "utf8");
     const m = src.match(/const\s+PUBLISHABLE\s*=\s*\[([^\]]*)\]/);
-    if (m) allowlist = new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
+    if (m)
+      allowlist = new Set([...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
   }
 
   for (const [n] of excused) {
-    if (!byName.has(n)) continue;             // not a public package here
+    if (!byName.has(n)) continue; // not a public package here
     if (allowlist && allowlist.has(n)) {
       // Class B — being absent from `ignore` is the CORRECT state.
       if (ignore.has(n))
-        fail(`${n} is in sync-changeset-ignore.mjs PUBLISHABLE but also in the changeset ` +
-          `ignore list ⇒ changesets will never version it. Re-run: ` +
-          `node synap-app/scripts/sync-changeset-ignore.mjs`);
-      else pass(`${n} is allowlisted for changesets and correctly absent from ignore`);
+        fail(
+          `${n} is in sync-changeset-ignore.mjs PUBLISHABLE but also in the changeset ` +
+            `ignore list ⇒ changesets will never version it. Re-run: ` +
+            `node synap-app/scripts/sync-changeset-ignore.mjs`
+        );
+      else
+        pass(
+          `${n} is allowlisted for changesets and correctly absent from ignore`
+        );
       continue;
     }
-    if (ignore.has(n)) continue;              // class A, actually enforced — fine
+    if (ignore.has(n)) continue; // class A, actually enforced — fine
     const glob = workspaceGlobFor(n);
     if (glob) {
-      warn(`${n} is excused in ci/repos.yml but NOT in the changeset ignore list, and it IS ` +
-        `inside the pnpm workspace (glob "${glob}") ⇒ a changeset naming it would publish it ` +
-        `via BOTH doors. Add it to the ignore list (regenerate with ` +
-        `node synap-app/scripts/sync-changeset-ignore.mjs).`);
+      warn(
+        `${n} is excused in ci/repos.yml but NOT in the changeset ignore list, and it IS ` +
+          `inside the pnpm workspace (glob "${glob}") ⇒ a changeset naming it would publish it ` +
+          `via BOTH doors. Add it to the ignore list (regenerate with ` +
+          `node synap-app/scripts/sync-changeset-ignore.mjs).`
+      );
     } else {
-      pass(`${n} excused — outside every pnpm-workspace glob, so changesets cannot version it`);
+      pass(
+        `${n} excused — outside every pnpm-workspace glob, so changesets cannot version it`
+      );
     }
   }
 }
@@ -390,7 +529,12 @@ if (singleHome.length) {
   let manifestsRead = 0;
   const scan = (d, depth) => {
     if (depth > 6) return;
-    let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    let es;
+    try {
+      es = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
     for (const e of es) {
       if (SKIP.has(e.name)) continue;
       const f = join(d, e.name);
@@ -402,20 +546,30 @@ if (singleHome.length) {
         try {
           const name = JSON.parse(readFileSync(f, "utf8")).name;
           if (wanted.has(name)) wanted.get(name).push(relative(ROOT, d));
-        } catch {}
+        } catch {
+          // An unparseable package.json declares no name: not a copy.
+        }
       }
     }
   };
   for (const e of readdirSync(ROOT, { withFileTypes: true })) {
-    if (!e.isDirectory() || e.name.charAt(0) === "." || SKIP.has(e.name) || NON_REPOS.has(e.name)) continue;
+    if (
+      !e.isDirectory() ||
+      e.name.charAt(0) === "." ||
+      SKIP.has(e.name) ||
+      NON_REPOS.has(e.name)
+    )
+      continue;
     const top = join(ROOT, e.name);
     if (isWorktree(top)) continue;
     scan(top, 1);
   }
   // Non-vacuity: a walk that read almost nothing proves nothing.
   if (manifestsRead < 50) {
-    fail(`single-home scan read only ${manifestsRead} package.json file(s) under ${ROOT} — ` +
-      `vacuous, not passing`);
+    fail(
+      `single-home scan read only ${manifestsRead} package.json file(s) under ${ROOT} — ` +
+        `vacuous, not passing`
+    );
   } else {
     pass(`single-home scan read ${manifestsRead} package.json file(s)`);
   }
@@ -423,28 +577,39 @@ if (singleHome.length) {
     const found = wanted.get(name);
     const homeRepo = home.split("/")[0];
     if (!existsSync(join(ROOT, homeRepo))) {
-      warn(`${name}: home repo ${homeRepo}/ is not checked out under ${ROOT} — cannot check`);
+      warn(
+        `${name}: home repo ${homeRepo}/ is not checked out under ${ROOT} — cannot check`
+      );
       continue;
     }
     if (found.length === 1 && found[0] === home) {
       pass(`${name} has one home: ${home}`);
     } else if (!found.includes(home)) {
       // The self-check: the scan must see the copy it knows exists.
-      fail(`${name}: expected at ${home}, found ${found.length ? found.join(", ") : "nowhere"} ` +
-        `— the home moved or the scan went blind`);
+      fail(
+        `${name}: expected at ${home}, found ${found.length ? found.join(", ") : "nowhere"} ` +
+          `— the home moved or the scan went blind`
+      );
     } else {
-      fail(`${name}: ${found.length} package.json files declare this name — ` +
-        `${found.join(", ")}. Its ONE home is ${home}; delete the others ` +
-        `(see ci/repos.yml single_home)`);
+      fail(
+        `${name}: ${found.length} package.json files declare this name — ` +
+          `${found.join(", ")}. Its ONE home is ${home}; delete the others ` +
+          `(see ci/repos.yml single_home)`
+      );
     }
   }
 }
 
 // ── summary ──────────────────────────────────────────────────────────────────
 console.log("");
-if (failures) { console.error(`${R}✗ ${failures} CI/CD conformance failure(s)${X}\n`); process.exit(1); }
+if (failures) {
+  console.error(`${R}✗ ${failures} CI/CD conformance failure(s)${X}\n`);
+  process.exit(1);
+}
 console.log(`${G}✓ CI/CD conformance: all rules pass${X}`);
 for (const c of manifest.open_conflicts ?? []) {
-  console.log(`  ${Y}○${X} ${c.package}: ${c.issue.split("\n")[0]} (${c.status})`);
+  console.log(
+    `  ${Y}○${X} ${c.package}: ${c.issue.split("\n")[0]} (${c.status})`
+  );
 }
 console.log("");

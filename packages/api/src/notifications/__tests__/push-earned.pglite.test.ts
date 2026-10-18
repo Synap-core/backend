@@ -79,13 +79,18 @@ vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
 vi.mock("../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, checkPermissionOrPropose: async () => ({ granted: true }) };
+  return {
+    ...actual,
+    checkPermissionOrPropose: async () => ({ granted: true }),
+  };
 });
 vi.mock("../../utils/split-brain-service.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, isPodReadOnly: async () => false };
 });
-vi.mock("../../lib/event-helpers.js", () => ({ logEvent: async () => undefined }));
+vi.mock("../../lib/event-helpers.js", () => ({
+  logEvent: async () => undefined,
+}));
 vi.mock(
   "../../services/focus-sessions/block-guidelines.js",
   async (importOriginal) => {
@@ -286,12 +291,16 @@ describe("W8 — a push is earned", () => {
 
   it("an agent last seen 2h ago is not waiting — no push; seen 1 min ago — push", async () => {
     await agentSeen(120);
-    const stale = await seedProposal({ sessionId: await seedSession("active") });
+    const stale = await seedProposal({
+      sessionId: await seedSession("active"),
+    });
     await proposalCreated(stale);
     expect(h.pushes).toHaveLength(0);
 
     await agentSeen(1);
-    const fresh = await seedProposal({ sessionId: await seedSession("active") });
+    const fresh = await seedProposal({
+      sessionId: await seedSession("active"),
+    });
     await proposalCreated(fresh);
     expect(h.pushes).toHaveLength(1);
   });
@@ -337,7 +346,12 @@ describe("W8 — a push is earned", () => {
   it("a per-TYPE 'all' rule on a WORKSPACE override row does NOT force a push", async () => {
     await q(
       `insert into notification_preferences (id, user_id, workspace_id, enabled, routing_rules) values ($1, $2, $3, true, $4::jsonb)`,
-      [randomUUID(), USER, WORKSPACE, JSON.stringify({ "proposal.created": "all" })]
+      [
+        randomUUID(),
+        USER,
+        WORKSPACE,
+        JSON.stringify({ "proposal.created": "all" }),
+      ]
     );
     const p = await seedProposal({ sessionId: null });
     await proposalCreated(p);
@@ -396,7 +410,9 @@ describe("W8 — a push is earned", () => {
     };
     expect(push.interruptionLevel).toBe("time-sensitive");
     // The body shows the question Yes/No answers: the PROMPT, not the why.
-    expect((push as unknown as { body: string }).body).toBe("Tone: Casual tone?");
+    expect((push as unknown as { body: string }).body).toBe(
+      "Tone: Casual tone?"
+    );
     expect(push.threadId).toBe(sessionId);
     expect(push.categoryId).toBe("ask-confirm");
     expect(push.data).toMatchObject({

@@ -76,7 +76,6 @@ export function effectiveApplicationConnectionRequestStatus(
   return expiresAt > new Date() ? status : "expired";
 }
 
-
 /** Post-approval window for the requester browser to finish identity link. */
 const POST_APPROVAL_COMPLETION_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -116,10 +115,7 @@ export class FederatedApplicationConnectionService {
       .set({ status: "expired" })
       .where(
         and(
-          eq(
-            federatedApplicationConnectionRequests.clientId,
-            input.clientId
-          ),
+          eq(federatedApplicationConnectionRequests.clientId, input.clientId),
           eq(
             federatedApplicationConnectionRequests.requestedOrigin,
             input.requestedOrigin

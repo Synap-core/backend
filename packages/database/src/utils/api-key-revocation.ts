@@ -26,7 +26,7 @@ export function onApiKeysRevoked(fn: Invalidator): () => void {
 }
 
 /** Anything that can run the UPDATE — the pool, or a transaction. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type Executor = { update: (...args: any[]) => any };
 
 export interface RevokeApiKeysParams {

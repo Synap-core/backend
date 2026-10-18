@@ -117,16 +117,28 @@ describe("offPathChoices — the 'Other status…' picker (D2)", () => {
   it("lists the paused and lost options the strip does not draw, with their own marks", () => {
     const lost = {
       ...DEAL,
-      options: DEAL.options.map((o) => (o.key === "lost" ? { ...o, humanOnly: true } : o)),
+      options: DEAL.options.map((o) =>
+        o.key === "lost" ? { ...o, humanOnly: true } : o
+      ),
     };
-    expect(offPathChoices(lost, "lead").map((c) => [c.key, c.tone, c.humanOnly ?? false])).toEqual([
+    expect(
+      offPathChoices(lost, "lead").map((c) => [
+        c.key,
+        c.tone,
+        c.humanOnly ?? false,
+      ])
+    ).toEqual([
       ["on_hold", "warning", false],
       ["lost", "error", true],
     ]);
   });
   it("never lists the current status, nor a main-path one", () => {
-    expect(offPathChoices(DEAL, "on_hold").map((c) => c.key)).not.toContain("on_hold");
-    expect(offPathChoices(DEAL, "lead").map((c) => c.category)).not.toContain("open");
+    expect(offPathChoices(DEAL, "on_hold").map((c) => c.key)).not.toContain(
+      "on_hold"
+    );
+    expect(offPathChoices(DEAL, "lead").map((c) => c.category)).not.toContain(
+      "open"
+    );
     expect(offPathChoices(null, "lead")).toEqual([]);
   });
 });
