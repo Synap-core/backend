@@ -55,6 +55,7 @@
  * for `generate_media` purely by declaring it.
  */
 
+import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { CatalogCacheEntry } from "./catalog-cache-query.js";
@@ -65,6 +66,8 @@ export interface IntentProviderCandidate {
   name: string;
   description: string | null;
   version: string | null;
+  /** The signed listing's digest, when the entry carries one. */
+  listingSha256: string | null;
 }
 
 /**
@@ -130,6 +133,7 @@ export function selectIntentProviders(input: {
       name: entry.name,
       description: entry.description,
       version: entry.version,
+      listingSha256: entry.listing?.sha256 ?? null,
     });
   }
   return { candidates, unreadable };
@@ -174,8 +178,11 @@ export const GAP_INSTALL_FAILED_NOT_RUN =
 
 /**
  * File ONE `capability.install` proposal for a gap, using the SAME pending-row
- * shape `runMarketInstall` produces (`data.slug` + `data.kind`), so the existing
- * approve executor applies it with no new executor and no new proposal type.
+ * shape `runMarketInstall` produces (`data.slug` + `data.kind` + `data.source`
+ * + `data.listingSha256`), so the existing approve executor applies it with no
+ * new executor and no new proposal type — and pins it to the listing proposed.
+ * Candidates come from the official catalog only (the catalog cache's default
+ * read in `resolveIntentGap`), so the source is always the official one.
  *
  * Only the FIRST candidate is proposed — a review queue is for a decision, not a
  * menu. The rest ride along in `data.alternatives` so the reviewer can re-point
@@ -221,6 +228,8 @@ export async function proposeIntentGapInstall(input: {
         slug: chosen.slug,
         kind: "capability",
         version: chosen.version ?? null,
+        source: OFFICIAL_SOURCE_ID,
+        listingSha256: chosen.listingSha256,
         params: {},
         // Why this proposal exists, so the reviewer sees the GAP not just an
         // install request. `intent` is the join key Phase 4 was asked to close.
