@@ -372,6 +372,44 @@ describe("judge rung — the session room is part of the material", () => {
     );
   });
 
+  it("ONE long message among short ones reaches the judge WHOLE — no per-message cut", async () => {
+    // The live case: gate outputs posted as one ~1.7k-char room message, then
+    // evaluate — the judge got an 800-char fragment and answered unmeasured.
+    h.channelId = "ch-1";
+    const gateOutput = `GATE-HEAD vitest run\n${"✓ passes\n".repeat(190)}GATE-TAIL 42 passed`;
+    expect(gateOutput.length).toBeGreaterThan(1_700);
+    h.roomRows = [
+      { authorType: "ai_agent", content: gateOutput },
+      { authorType: "human", content: "post the gate output here" },
+      { authorType: "ai_agent", content: "running the gates now" },
+    ];
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    const { material } = h.judgeCalls[0]!;
+    expect(material).toContain(`[agent] ${gateOutput}`);
+    expect(material).not.toContain("[clipped:");
+    expect(material).not.toContain("CLIPPED MATERIAL");
+  });
+
+  it("…and still whole when the material is rebuilt for an IS capped at 8000", async () => {
+    h.channelId = "ch-1";
+    h.isCap = LEGACY_IS_MATERIAL_MAX;
+    h.bodies.set("k/audit.md", "x".repeat(30_000));
+    const gateOutput = `GATE-HEAD ${"y".repeat(1_700)} GATE-TAIL`;
+    h.roomRows = [
+      { authorType: "ai_agent", content: gateOutput },
+      { authorType: "human", content: "post the gate output here" },
+    ];
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(2);
+    const retried = h.judgeCalls[1]!.material;
+    expect(retried.length).toBeLessThanOrEqual(LEGACY_IS_MATERIAL_MAX);
+    // The long DOCUMENT is what gets cut; the room's one message is not.
+    expect(retried).toContain(`[agent] ${gateOutput}`);
+    expect(retried.startsWith("NOTE: CLIPPED MATERIAL — 1 section below")).toBe(
+      true
+    );
+  });
+
   it("a room the owner cannot read is stated as NOT READABLE, and the judge still runs", async () => {
     h.channelId = "someone-elses-room";
     h.roomRefused = true;
@@ -471,17 +509,69 @@ describe("buildJudgeMaterial — fair budget", () => {
     expect(material).not.toContain("[clipped:");
   });
 
-  it("room messages cut on read count as a clipped section", () => {
+  it("a room of 20 long messages stays bounded, and every message's cut is marked", () => {
+    const msgs = Array.from({ length: 20 }, (_, i) => ({
+      author: "agent",
+      text: `msg-${i} ${"z".repeat(3_000)}`,
+    }));
     const material = buildJudgeMaterial(S, [], undefined, [], {
       status: "ok",
-      messages: [
-        { author: "agent", text: "short…[clipped: 9 chars omitted]…" },
-      ],
-      clippedMessages: 1,
+      messages: msgs,
     });
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(
       material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
     ).toBe(true);
+    // The whole room fits a readable slice each: all 20, each clipped and
+    // saying so.
+    expect((material.match(/\[agent\] msg-\d+ /g) ?? []).length).toBe(20);
+    expect(
+      (material.match(/…\[clipped: \d+ chars omitted\]…/g) ?? []).length
+    ).toBe(20);
+  });
+
+  it("a room too crowded for a readable slice each drops its OLDEST messages, marked", () => {
+    const msgs = Array.from({ length: 20 }, (_, i) => ({
+      author: "agent",
+      text: `msg-${i} ${"z".repeat(3_000)}`,
+    }));
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [
+        { kind: "document", title: "A", text: "x".repeat(30_000) },
+        { kind: "document", title: "B", text: "y".repeat(30_000) },
+      ],
+      { status: "ok", messages: msgs }
+    );
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    const roomPart = material.slice(material.indexOf("SESSION ROOM"));
+    expect(roomPart).toContain("msg-19 ");
+    expect(roomPart).not.toContain("msg-0 ");
+    // Kept messages are clipped (head + tail) and say so; the dropped ones
+    // are named by ONE mark that opens the room.
+    const kept = (roomPart.match(/\[agent\] msg-\d+ /g) ?? []).length;
+    const marks = (roomPart.match(/…\[clipped: \d+ chars omitted\]…/g) ?? [])
+      .length;
+    expect(kept).toBeGreaterThan(1);
+    expect(kept).toBeLessThan(20);
+    expect(marks).toBe(kept + 1);
+    expect(roomPart).toMatch(
+      /\(latest 20 messages, oldest first\):\n…\[clipped: \d+ chars omitted\]…\n\[agent\] msg-\d+ /
+    );
+  });
+
+  it("a room message clipped by the split counts as a clipped section", () => {
+    const material = buildJudgeMaterial(S, [], undefined, [], {
+      status: "ok",
+      messages: [{ author: "agent", text: "w".repeat(40_000) }],
+    });
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+    expect(material).toMatch(/\[clipped: \d+ chars omitted\]/);
   });
 
   it("an over-long goal cuts the WHOLE material, marked, within the cap", () => {
