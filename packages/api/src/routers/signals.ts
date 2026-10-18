@@ -68,15 +68,10 @@ import {
   eq,
   inArray,
   or,
-  ne,
-  gte,
-  drizzleSql,
   focusSessions,
   projects,
-  automations,
-  automationRuns,
 } from "@synap/database";
-import { foldRuleRuns } from "../services/signals/rule-runs.js";
+import { readRuleRuns } from "../services/signals/read-rule-runs.js";
 import { createLogger } from "@synap-core/core";
 import {
   humanizeToken,
@@ -789,27 +784,18 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     );
   });
   // Rules whose runs opened no session — the second Happening population.
-  const rules = await readRuleRuns(ctx, input, now);
+  const rules = await readScopedRuleRuns(ctx, input, now);
   signals.push(...rules.signals);
   signals.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
   return { signals, truncated: truncated || rules.truncated };
 }
 
-/** Rule runs the Happening read scans inside the window, newest first. */
-const RULE_RUN_SCAN_LIMIT = 500;
-
 /**
- * RULE RUNS working now — runs started inside the SAME working window as
- * sessions (`SESSION_WORKING_WINDOW_MS`), or still in flight, of rules whose
- * run opened NO session (a run that did is already its live-session row).
- * Skipped runs (dedup, daily cap, precondition) did no work and are out.
- * Folded one row per rule (`foldRuleRuns`) so a 300-run sync burst is ONE
- * row. Read floor: the `automationRuns` VisibilityRule under the page's
- * workspace lens. Pod/workspace scopes only — a run carries no project,
- * track or session column, so under those it is not guessed into the
+ * Rule runs (`readRuleRuns`) at pod/workspace scope only — a run carries no
+ * project, track or session column, so under those it is not guessed into the
  * container (the same rule the Happened data events follow).
  */
-async function readRuleRuns(
+function readScopedRuleRuns(
   ctx: SignalsCtx,
   input: SignalScopeInput,
   now: Date
@@ -820,40 +806,9 @@ async function readRuleRuns(
     input.sessionId ||
     input.profileSlug
   ) {
-    return { signals: [], truncated: false };
+    return Promise.resolve({ signals: [], truncated: false });
   }
-  const since = new Date(now.getTime() - SESSION_WORKING_WINDOW_MS);
-  const rows = await db
-    .select({
-      automationId: automationRuns.automationId,
-      automationName: automations.name,
-      status: automationRuns.status,
-      startedAt: automationRuns.startedAt,
-    })
-    .from(automationRuns)
-    .innerJoin(automations, eq(automations.id, automationRuns.automationId))
-    .where(
-      and(
-        scopedDb(AccessContext.from(ctx).withLens(input.workspaceId)).predicate(
-          automationRuns
-        ),
-        or(
-          gte(automationRuns.startedAt, since),
-          eq(automationRuns.status, "running")
-        ),
-        ne(automationRuns.status, "skipped"),
-        drizzleSql`NOT EXISTS (
-          SELECT 1 FROM focus_sessions fs
-          WHERE fs.metadata->>'automationRunId' = ${automationRuns.id}::text
-        )`
-      )
-    )
-    .orderBy(desc(automationRuns.startedAt))
-    .limit(RULE_RUN_SCAN_LIMIT + 1);
-  return {
-    signals: foldRuleRuns(rows.slice(0, RULE_RUN_SCAN_LIMIT), now),
-    truncated: rows.length > RULE_RUN_SCAN_LIMIT,
-  };
+  return readRuleRuns(AccessContext.from(ctx), input.workspaceId, now);
 }
 
 // ── Produced ────────────────────────────────────────────────────────────────
