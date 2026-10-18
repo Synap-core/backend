@@ -28,6 +28,7 @@ import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
+import type { NeedsYouBucket } from "../needs-you/buckets.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -1801,6 +1802,81 @@ export function resolveNeedsYouItemCount(
   if (nouns) return `${n} ${n === 1 ? nouns[0] : nouns[1]}`;
   const noun = humanizeToken(key).toLowerCase();
   return `${n} ${n === 1 ? noun : pluralizeFallback(noun)}`;
+}
+
+/**
+ * The GLYPH of a needs-you row's REASON (`needsYouReasonOf`,
+ * `@synap-core/types/needs-you`) — what KIND of ask a row is, read before its
+ * title (ui-composition §1: state is a mark). Lucide names, as
+ * {@link BLOCKED_REASON_ICONS}: relay and the browser each bind name → glyph.
+ *
+ * It EXTENDS the blocker table (an owed slot keeps its blocker's glyph) with
+ * the reasons that are not blockers. A sibling table, never new rows in
+ * `BLOCKED_REASON_ICONS`: that key set IS the closed `BLOCKED_REASONS`, pinned
+ * by the api parity tripwire (`blocked-reason-vocabulary-parity.test.ts`).
+ * TONE is not part of it: the row's unit state keeps the colour.
+ */
+export const NEEDS_YOU_REASON_ICONS: Readonly<Record<string, string>> = {
+  ...BLOCKED_REASON_ICONS,
+  /** A question an agent or a capture asks the person. */
+  ask: "MessageCircle",
+  /** A session's work waiting to be looked at and accepted. */
+  review: "Eye",
+  /** Failed work — a run or an automation that broke. */
+  failure: "TriangleAlert",
+  /** An owed slot that recorded no reason. */
+  owed: "CircleDot",
+};
+
+/** The glyph NAME for a needs-you reason; unknown/absent ⇒ the fallback mark. */
+export function resolveNeedsYouReasonIcon(
+  reason: string | null | undefined
+): string {
+  if (!reason) return BLOCKED_REASON_FALLBACK_ICON;
+  return (
+    NEEDS_YOU_REASON_ICONS[reason.trim().toLowerCase()] ??
+    BLOCKED_REASON_FALLBACK_ICON
+  );
+}
+
+/**
+ * The reason mark's spoken name (its tooltip and accessible label). A blocker
+ * keeps its chip label ("Credential missing"); the person's own choice reads
+ * "Decision" — "Human decision" is the chip's wording beside an agent's
+ * blockers, redundant on an Inbox row that is always the person's.
+ */
+export const NEEDS_YOU_REASON_LABELS: Readonly<Record<string, string>> = {
+  ...BLOCKED_REASON_LABELS,
+  decision: "Decision",
+  ask: "Question",
+  review: "Review",
+  failure: "Failed",
+  owed: "Owed",
+};
+
+export function resolveNeedsYouReasonLabel(
+  reason: string | null | undefined
+): string {
+  if (!reason) return "";
+  const key = reason.trim().toLowerCase();
+  return NEEDS_YOU_REASON_LABELS[key] ?? humanizeToken(key);
+}
+
+/**
+ * The Inbox's four FILTERS (`NEEDS_YOU_BUCKETS`, founder decision 3A,
+ * 2026-10-19) — a closed classification of needs-you rows, plural because a
+ * filter names a population. The rule that files a row is `needsYouBucketOf`.
+ */
+export const NEEDS_YOU_BUCKET_LABELS: Readonly<Record<NeedsYouBucket, string>> =
+  {
+    decision: "Decisions",
+    question: "Questions",
+    routine: "Routine changes",
+    broken: "Broken",
+  };
+
+export function resolveNeedsYouBucketLabel(bucket: NeedsYouBucket): string {
+  return NEEDS_YOU_BUCKET_LABELS[bucket] ?? humanizeToken(bucket);
 }
 
 /**
