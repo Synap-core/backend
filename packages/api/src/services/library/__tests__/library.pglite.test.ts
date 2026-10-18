@@ -1485,7 +1485,7 @@ describe("search rows follow the Library", () => {
   });
 });
 
-describe("4B — an agent PROPOSES Library organisation; approval applies it through the same code", () => {
+describe("an agent PROPOSES Library organisation; approval applies it through the same code", () => {
   const AGENT = "agent-org-1";
   type GateOpts = Record<string, unknown> & { data: Record<string, unknown> };
   function recordingGate() {

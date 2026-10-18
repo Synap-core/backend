@@ -125,7 +125,7 @@ describe("library.* refuses an agent on every write", () => {
   });
 });
 
-describe("4B — an agent PROPOSES organisation; content and consents stay the person's", () => {
+describe("an agent PROPOSES organisation; content and consents stay the person's", () => {
   it("an agent's cancelReadWith is FORBIDDEN (the consent is the person's)", async () => {
     for (const extra of [
       { agentUserId: "agent-1" },

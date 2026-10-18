@@ -39,7 +39,9 @@ type Database = typeof defaultDb;
  * (`scope-conditions.ts`); every by-id read and decision door checks it.
  */
 export function isForeignLibraryProposal(
-  proposal: { targetType?: string | null; subjectUserId?: string | null },
+  // Both keys REQUIRED: a row loaded without them would read as "not a
+  // Library proposal" and pass — a select that forgets one must not compile.
+  proposal: { targetType: string | null; subjectUserId: string | null },
   userId: string
 ): boolean {
   return proposal.targetType === "library" && proposal.subjectUserId !== userId;
@@ -47,7 +49,7 @@ export function isForeignLibraryProposal(
 
 /** Throw NOT_FOUND for a Library proposal that is not `userId`'s (see above). */
 export function assertNotForeignLibraryProposal(
-  proposal: { targetType?: string | null; subjectUserId?: string | null },
+  proposal: { targetType: string | null; subjectUserId: string | null },
   userId: string
 ): void {
   if (isForeignLibraryProposal(proposal, userId)) {
