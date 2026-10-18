@@ -76,7 +76,6 @@ export function effectiveApplicationConnectionRequestStatus(
   return expiresAt > new Date() ? status : "expired";
 }
 
-
 /** Post-approval window for the requester browser to finish identity link. */
 const POST_APPROVAL_COMPLETION_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -116,10 +115,7 @@ export class FederatedApplicationConnectionService {
       .set({ status: "expired" })
       .where(
         and(
-          eq(
-            federatedApplicationConnectionRequests.clientId,
-            input.clientId
-          ),
+          eq(federatedApplicationConnectionRequests.clientId, input.clientId),
           eq(
             federatedApplicationConnectionRequests.requestedOrigin,
             input.requestedOrigin
@@ -172,6 +168,8 @@ export class FederatedApplicationConnectionService {
   /**
    * Pod Admin's native local session binds the requester. This is idempotent
    * for the same local user so a page refresh cannot strand the handoff.
+   * `firstRedeem` is true only for the call that moved the request out of
+   * `awaiting_local_auth`, so concurrent redeems agree on which one asked.
    */
   async redeemRequest(input: {
     requestId: string;
@@ -201,7 +199,7 @@ export class FederatedApplicationConnectionService {
           )
         )
         .returning();
-      if (redeemed) return redeemed;
+      if (redeemed) return { request: redeemed, firstRedeem: true };
 
       const existing =
         await tx.query.federatedApplicationConnectionRequests.findFirst({
@@ -233,7 +231,7 @@ export class FederatedApplicationConnectionService {
               input.requestId
             ),
           });
-        if (request) return request;
+        if (request) return { request, firstRedeem: false };
       }
       throw new Error(
         "Application connection request has already been redeemed"
