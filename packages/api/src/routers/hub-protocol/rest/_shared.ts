@@ -327,6 +327,8 @@ export async function resolveProposalId(
           userVisibleWhere(proposals.workspaceId, userId),
           authoredByUser(userId)
         ),
+        // A Library proposal resolves for its person only.
+        drizzleSql`(${proposals.targetType} IS DISTINCT FROM 'library' OR ${proposals.subjectUserId} = ${userId})`,
         drizzleSql`${proposals.id}::text LIKE ${`${raw}%`}`
       )
     )

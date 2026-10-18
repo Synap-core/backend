@@ -2101,3 +2101,53 @@ describe("the queue carries keepRead / withVideo for an explicit reader only", (
     ]);
   });
 });
+
+describe("the sweep's read of a held consent runs with the person's \"with video\" choice", () => {
+  const TT = "https://www.tiktok.com/@a/video/7";
+  const held = (withVideo: boolean, at = NOW) => ({
+    status: "over_budget" as const,
+    suggestedActions: [],
+    requestedReader: APIFY,
+    requestedAt: at.toISOString(),
+    heldFrom: "needs_file",
+    ...(withVideo ? { requestedWithVideo: true } : {}),
+  });
+
+  it("remembered → the reader is asked with withVideo; not remembered → without", async () => {
+    const withV = await stageLink(TT, {}, held(true));
+    const without = await stageLink(`${TT}8`, {}, held(false));
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      summarize: async () => null,
+    });
+    await read(withV, deps);
+    await read(without, deps);
+    expect(calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true, withVideo: true },
+      { reader: APIFY, allowBilled: true, interactive: true },
+    ]);
+  });
+
+  it("still waiting (over budget again): the choice stays with the consent, its date unchanged", async () => {
+    const tapped = new Date(NOW.getTime() - 86_400_000);
+    const id = await stageLink(TT, {}, held(true, tapped));
+    const over = makeDeps({ perDay: 0, readers: async () => [APIFY_OFFER] });
+    expect(await read(id, over.deps)).toMatchObject({ status: "over_budget" });
+    expect((await readOf(id))!).toMatchObject({
+      requestedWithVideo: true,
+      requestedAt: tapped.toISOString(),
+    });
+  });
+
+  it("an ENDED consent forgets the choice too (never run)", async () => {
+    const id = await stageLink(
+      TT,
+      {},
+      held(true, new Date(NOW.getTime() - 9 * 86_400_000))
+    );
+    const { deps, calls } = makeDeps({ readers: async () => [APIFY_OFFER] });
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(0);
+    expect((await readOf(id))!).not.toHaveProperty("requestedWithVideo");
+  });
+});

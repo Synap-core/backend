@@ -53,6 +53,8 @@ export interface StoredReadConsent {
   requestedReader?: string;
   requestedAt?: string;
   heldFrom?: LibraryReadStatus;
+  /** The "with video" choice given with the consent (ends with it). */
+  requestedWithVideo?: true;
 }
 
 function parsedAt(at: string | undefined): number | null {
@@ -83,6 +85,7 @@ export function libraryReadConsentOf(
     readerId: stored.requestedReader,
     givenAt: new Date(at).toISOString(),
     expiresAt: new Date(ends).toISOString(),
+    ...(stored.requestedWithVideo ? { withVideo: true as const } : {}),
   };
 }
 
@@ -125,7 +128,7 @@ export function heldFromStatus(prev: {
  * is kept (a `not_read` retry is then read by the pod's own ladder only).
  */
 const FORGOTTEN_READ = drizzleSql`(
-  (${documents.metadata} -> 'importRead') - 'requestedReader' - 'requestedAt' - 'heldFrom'
+  (${documents.metadata} -> 'importRead') - 'requestedReader' - 'requestedAt' - 'heldFrom' - 'requestedWithVideo'
   || CASE WHEN ${documents.metadata} #>> '{importRead,status}' = 'over_budget'
        THEN jsonb_build_object('status',
          CASE WHEN ${documents.metadata} #>> '{importRead,heldFrom}' IN (${drizzleSql.join(

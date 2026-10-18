@@ -57,6 +57,8 @@ export interface StoredLibraryRead extends LibraryItemRead {
   requestedAt?: string;
   /** The waiting status the item had before it was held for the consent (restored when it ends). */
   heldFrom?: LibraryReadStatus;
+  /** The person's "with video" choice on that tap; it ends with the consent. */
+  requestedWithVideo?: true;
   /**
    * A BILLED read that succeeded, held until the item's read is written
    * (media copy, transcript, summary still to come). The same reader run
@@ -130,6 +132,9 @@ export function readStoredLibraryRead(
       ...(requestedReader ? { requestedReader } : {}),
       ...(requestedAt ? { requestedAt } : {}),
       ...(heldFrom ? { heldFrom } : {}),
+      ...(bag.requestedWithVideo === true
+        ? { requestedWithVideo: true as const }
+        : {}),
       ...(attempts !== undefined ? { attempts } : {}),
       ...(transientFailures !== undefined ? { transientFailures } : {}),
       // Re-parsed where it is used (`resumableRead`), never trusted here.

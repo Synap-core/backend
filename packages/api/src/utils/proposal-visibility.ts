@@ -32,6 +32,30 @@ import { proposalSessionIds } from "../services/proposals/session-content-redact
 type Database = typeof defaultDb;
 
 /**
+ * A LIBRARY proposal (`library/organize`, an agent's idea for organising one
+ * person's Library) belongs to that person alone — its subject. Anyone else,
+ * pod admins included, is told it does not exist (NOT_FOUND): it names their
+ * groups and kept items. The SAME rule `proposals.list` applies
+ * (`scope-conditions.ts`); every by-id read and decision door checks it.
+ */
+export function isForeignLibraryProposal(
+  proposal: { targetType?: string | null; subjectUserId?: string | null },
+  userId: string
+): boolean {
+  return proposal.targetType === "library" && proposal.subjectUserId !== userId;
+}
+
+/** Throw NOT_FOUND for a Library proposal that is not `userId`'s (see above). */
+export function assertNotForeignLibraryProposal(
+  proposal: { targetType?: string | null; subjectUserId?: string | null },
+  userId: string
+): void {
+  if (isForeignLibraryProposal(proposal, userId)) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+  }
+}
+
+/**
  * Throw unless `userId` may see the proposal `proposalId`.
  * NOT_FOUND if the proposal does not exist; FORBIDDEN if it exists but the user
  * is not permitted. Returns void on success.
@@ -45,12 +69,20 @@ export async function assertProposalVisibleTo(
 
   const proposal = await database.query.proposals.findFirst({
     where: eq(proposals.id, proposalId),
-    columns: { workspaceId: true, data: true, agentUserId: true },
+    columns: {
+      workspaceId: true,
+      data: true,
+      agentUserId: true,
+      targetType: true,
+      subjectUserId: true,
+    },
   });
 
   if (!proposal) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
   }
+  // Before the pod-admin bypass: a Library is one person's.
+  assertNotForeignLibraryProposal(proposal, userId);
 
   // Pod admins may view ANY proposal on their pod. The pod-admin surface is
   // pod-scoped authority, and a pod-wide proposal (workspaceId NULL) has no
@@ -137,9 +169,12 @@ export async function visibleProposalIds(
       workspaceId: proposals.workspaceId,
       data: proposals.data,
       agentUserId: proposals.agentUserId,
+      targetType: proposals.targetType,
+      subjectUserId: proposals.subjectUserId,
     })
     .from(proposals)
-    .where(inArray(proposals.id, ids));
+    .where(inArray(proposals.id, ids))
+    .then((all) => all.filter((r) => !isForeignLibraryProposal(r, userId)));
   if (rows.length === 0) return visible;
   if (await isPodAdmin(userId)) {
     for (const r of rows) visible.add(r.id);

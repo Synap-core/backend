@@ -1102,3 +1102,74 @@ describe("missingMedia — old posts whose expired pictures were skipped", () =>
     });
   });
 });
+
+describe('the "with video" choice waits WITH the consent (and ends with it)', () => {
+  const TIKTOK_OFFER: UrlReaderOffer = { ...APIFY, options: ["withVideo"] };
+  const offers = (url: string) =>
+    url.includes("tiktok")
+      ? [TIKTOK_OFFER]
+      : url.includes("instagram")
+        ? [APIFY]
+        : [BUILTIN];
+
+  it("held over budget: remembered only where the reader declares it; a new tap replaces it; cancel ends it", async () => {
+    const tt = await item({
+      url: "https://www.tiktok.com/@a/video/9",
+      status: "needs_file",
+    });
+    const ig = await item({
+      url: "https://www.instagram.com/p/v9",
+      status: "needs_file",
+    });
+    const { deps } = fakeDeps({ offers, usedToday: async () => 200 });
+    expect(
+      await libraryReadWith({
+        userId: USER,
+        itemIds: [tt, ig],
+        readerId: APIFY.readerId,
+        withVideo: true,
+        deps,
+      })
+    ).toMatchObject({ queued: 0, overBudget: 2 });
+    expect(await readOf(tt)).toMatchObject({
+      status: "over_budget",
+      requestedReader: APIFY.readerId,
+      requestedWithVideo: true,
+    });
+    expect(await readOf(ig)).not.toHaveProperty("requestedWithVideo");
+    // The value reaches the item view: the consent says "with video".
+    await q(
+      `update documents set metadata = jsonb_set(metadata, '{importRead,requestedAt}', to_jsonb($2::text)) where id = $1`,
+      [tt, new Date().toISOString()]
+    );
+    const { items } = await listLibraryItems({ userId: USER, input: {} });
+    expect(items.find((i) => i.id === tt)!.read.consent).toMatchObject({
+      readerId: APIFY.readerId,
+      withVideo: true,
+    });
+    // A new tap without the choice replaces it.
+    await libraryReadWith({
+      userId: USER,
+      itemIds: [tt],
+      readerId: APIFY.readerId,
+      deps,
+    });
+    expect(await readOf(tt)).not.toHaveProperty("requestedWithVideo");
+    // Set again, then cancel: the choice goes with the consent.
+    await libraryReadWith({
+      userId: USER,
+      itemIds: [tt],
+      readerId: APIFY.readerId,
+      withVideo: true,
+      deps,
+    });
+    expect((await readOf(tt)).requestedWithVideo).toBe(true);
+    await libraryCancelReadWith({
+      userId: USER,
+      itemIds: [tt],
+      notify: () => undefined,
+    });
+    expect(await readOf(tt)).not.toHaveProperty("requestedWithVideo");
+    expect(await readOf(tt)).not.toHaveProperty("requestedReader");
+  });
+});

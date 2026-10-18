@@ -265,6 +265,9 @@ export function toLibraryItemView(row: {
         ? { requestedReader: stored.requestedReader }
         : {}),
       ...(stored.requestedAt ? { requestedAt: stored.requestedAt } : {}),
+      ...(stored.requestedWithVideo
+        ? { requestedWithVideo: true as const }
+        : {}),
       status: read.status,
     },
     new Date()

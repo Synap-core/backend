@@ -3,6 +3,9 @@
  * organisation (`library/organize`) is listable for the person it was filed
  * for, through the REAL `list` procedure on PGlite; another person's is not
  * (the visibility floor still applies), and the filter keeps other targets out.
+ * Every BY-ID door (get, source, approve, revise, reject, reopen, withdraw,
+ * revert, batch approve/reject, the shared visibility gates) answers NOT_FOUND
+ * to anyone but that person — a POD ADMIN included.
  *
  * What this CANNOT see: production Postgres constraints (tables are generated
  * from the Drizzle definitions with no FKs, NOT NULL or enums).
@@ -75,6 +78,16 @@ beforeAll(async () => {
     `insert into users (id, email, user_type) values ($1, 'v@test', 'human'), ($2, 'o@test', 'human'), ($3, 'a@test', 'agent')`,
     [VIEWER, OTHER, AGENT]
   );
+  // OTHER is a POD ADMIN: the Library floor holds even for them.
+  const podAdminWs = randomUUID();
+  await q(
+    `insert into workspaces (id, name, owner_id, system_slug) values ($1, 'Pod admin', $2, 'pod-admin')`,
+    [podAdminWs, OTHER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'admin')`,
+    [randomUUID(), podAdminWs, OTHER]
+  );
   const rows: Array<[string, string, string, string]> = [
     [MINE, "library", "organize", VIEWER],
     [THEIRS, "library", "organize", OTHER],
@@ -89,11 +102,15 @@ beforeAll(async () => {
         targetType,
         randomUUID(),
         proposalType,
+        // As the gate stores it: `sourceId` = the HUMAN the agent acts for.
         JSON.stringify({
-          ops: [{ op: "group.build", groupId: randomUUID() }],
-          groups: [],
-          items: [],
-          summary: "Build group",
+          sourceId: owner,
+          data: {
+            ops: [{ op: "group.build", groupId: randomUUID() }],
+            groups: [],
+            items: [],
+            summary: "Build group",
+          },
         }),
         AGENT,
         owner,
@@ -116,5 +133,71 @@ describe("proposals.list — targetType library", () => {
     expect(new Set(all.items.map((r) => r.id))).toEqual(
       new Set([MINE, ENTITY])
     );
+  });
+});
+
+describe("by-id proposal doors — a Library proposal is its person's alone", () => {
+  const as = (userId: string) =>
+    proposalsRouter.createCaller({
+      db,
+      authenticated: true,
+      userId,
+    } as never) as unknown as Record<
+      string,
+      (input: unknown) => Promise<unknown>
+    >;
+
+  it("the shared gates: assertProposalVisibleTo NOT_FOUND for a pod admin, ok for the person; the batch gate drops it", async () => {
+    const { assertProposalVisibleTo, visibleProposalIds } =
+      await import("../../utils/proposal-visibility.js");
+    await expect(assertProposalVisibleTo(MINE, OTHER)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(
+      assertProposalVisibleTo(MINE, VIEWER)
+    ).resolves.toBeUndefined();
+    // CONTROL: the pod admin still sees a non-library pod-wide proposal.
+    await expect(
+      assertProposalVisibleTo(ENTITY, OTHER)
+    ).resolves.toBeUndefined();
+    expect(
+      [...(await visibleProposalIds([MINE, THEIRS, ENTITY], OTHER))].sort()
+    ).toEqual([THEIRS, ENTITY].sort());
+  });
+
+  it("get / source / approve / revise / reject / reopen / withdraw / revert / rejectItem / restoreItem → NOT_FOUND for anyone else", async () => {
+    const other = as(OTHER);
+    const calls: Array<[string, unknown]> = [
+      ["get", { proposalId: MINE }],
+      ["source", { proposalId: MINE }],
+      ["approve", { proposalId: MINE }],
+      ["revise", { proposalId: MINE, data: { summary: "x" } }],
+      ["reject", { proposalId: MINE }],
+      ["reopen", { proposalId: MINE }],
+      ["withdraw", { proposalId: MINE }],
+      ["revert", { proposalId: MINE }],
+      ["rejectItem", { proposalId: MINE, itemRef: "$op0" }],
+      ["restoreItem", { proposalId: MINE, itemRef: "$op0" }],
+    ];
+    for (const [door, input] of calls) {
+      await expect(other[door]!(input), door).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    }
+    // The person themselves reaches the proposal.
+    await expect(as(VIEWER).get!({ proposalId: MINE })).resolves.toBeTruthy();
+  });
+
+  it("batch approve / reject record NOT_FOUND per item and change nothing", async () => {
+    const other = as(OTHER);
+    const approved = (await other.batchApprove!({ proposalIds: [MINE] })) as {
+      results: Array<{ success: boolean; error?: string }>;
+    };
+    expect(approved.results[0]).toMatchObject({ success: false });
+    await other.batchReject!({ proposalIds: [MINE] }).catch(() => undefined);
+    const status = (
+      await q(`select status from proposals where id = $1`, [MINE])
+    ).rows[0] as { status: string };
+    expect(status.status).toBe("pending");
   });
 });

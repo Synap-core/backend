@@ -148,6 +148,8 @@ interface ReadJob {
    * tap, the remembered tap's date for the sweep's retry of it.
    */
   consentAt?: string;
+  /** The person's "with video" choice for `reader` (a fresh tap's, or the remembered one). */
+  withVideo?: boolean;
   force?: boolean;
   now: Date;
   title: string;
@@ -317,6 +319,8 @@ async function finishUnread(
         ? {
             requestedReader: reader,
             requestedAt: job.consentAt ?? now.toISOString(),
+            // The choice waits with the consent and ends with it.
+            ...(job.withVideo ? { requestedWithVideo: true as const } : {}),
             ...(heldFromStatus(prev) ? { heldFrom: heldFromStatus(prev) } : {}),
           }
         : {}),
@@ -503,6 +507,11 @@ export async function lightReadLibraryItem(args: {
   // was copied in `readContent`; nothing of its text is written.
   const keepsRead = !!args.reader && !!args.keepRead && prev.status === "read";
   const consentAt = args.reader ? now.toISOString() : prev.requestedAt;
+  // A fresh tap carries its own choice; the sweep's retry reads the one
+  // remembered with the consent.
+  const withVideo = args.reader
+    ? args.withVideo === true
+    : reader !== undefined && prev.requestedWithVideo === true;
   if (!args.force && !args.reader && everRead && isFinal(prev, item)) {
     return { itemId, status: "skipped" };
   }
@@ -517,6 +526,7 @@ export async function lightReadLibraryItem(args: {
     prev,
     ...(reader ? { reader } : {}),
     ...(reader && consentAt ? { consentAt } : {}),
+    ...(reader && withVideo ? { withVideo: true } : {}),
     ...(args.force ? { force: true } : {}),
     now,
     title: item.title || row.title,
@@ -542,7 +552,7 @@ export async function lightReadLibraryItem(args: {
       deps,
       ...(reader ? { reader } : {}),
       ...(prev.readCheckpoint ? { checkpoint: prev.readCheckpoint } : {}),
-      ...(args.reader && args.withVideo ? { withVideo: true } : {}),
+      ...(reader && withVideo ? { withVideo: true } : {}),
       // Media only: no speech-to-text for a read whose text is kept.
       ...(keepsRead ? { mediaOnly: true } : {}),
     });

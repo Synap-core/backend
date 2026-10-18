@@ -458,6 +458,8 @@ export async function libraryReadWith(args: {
   const due: ReadWithJob[] = [];
   let overBudget = 0;
   const held: string[] = [];
+  /** Held items whose consent carries the "with video" choice. */
+  const heldWithVideo: string[] = [];
   for (const row of rows) {
     const url = urlOf(row);
     if (!url) {
@@ -479,7 +481,11 @@ export async function libraryReadWith(args: {
       }
       if (room <= 0) {
         overBudget++;
-        held.push(row.id);
+        if (args.withVideo && offer.options?.includes("withVideo")) {
+          heldWithVideo.push(row.id);
+        } else {
+          held.push(row.id);
+        }
         continue;
       }
       room--;
@@ -496,13 +502,18 @@ export async function libraryReadWith(args: {
         : {}),
     });
   }
-  if (held.length > 0) {
+  for (const [ids, withVideo] of [
+    [held, false],
+    [heldWithVideo, true],
+  ] as const) {
+    if (ids.length === 0) continue;
     await holdOverBudget(
       database,
       args.userId,
-      held,
+      ids,
       args.readerId,
-      deps.now()
+      deps.now(),
+      withVideo
     );
   }
   const queued = due.length > 0 ? await deps.enqueue(due) : 0;
@@ -537,7 +548,9 @@ async function holdOverBudget(
   userId: string,
   ids: readonly string[],
   readerId: string,
-  at: Date
+  at: Date,
+  /** The tap's "with video" choice (only for a reader that declares it). */
+  withVideo: boolean
 ): Promise<void> {
   const patch = JSON.stringify({
     status: "over_budget",
@@ -545,6 +558,10 @@ async function holdOverBudget(
     // The tap's date: the consent ends `SYNAP_LIBRARY_READ_CONSENT_DAYS` later.
     requestedAt: at.toISOString(),
   });
+  // The choice is the tap's: set with it, or cleared (a new tap replaces it).
+  const video = withVideo
+    ? drizzleSql`|| '{"requestedWithVideo":true}'::jsonb`
+    : drizzleSql``;
   // `heldFrom`: the waiting status the item goes back to when the consent
   // ends or is cancelled (kept from an earlier hold; else its status now).
   const heldFrom = drizzleSql`COALESCE(
@@ -553,7 +570,7 @@ async function holdOverBudget(
   await database
     .update(documents)
     .set({
-      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) || ${patch}::jsonb || jsonb_strip_nulls(jsonb_build_object('heldFrom', ${heldFrom})))`,
+      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', (COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) - 'requestedWithVideo') || ${patch}::jsonb || jsonb_strip_nulls(jsonb_build_object('heldFrom', ${heldFrom})) ${video})`,
     })
     .where(
       and(
