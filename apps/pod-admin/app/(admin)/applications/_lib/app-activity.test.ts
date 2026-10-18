@@ -58,6 +58,17 @@ describe("appActivityLine", () => {
     ).toBe("Revoked — 3 keys stopped working");
   });
 
+  it("says what happened to a sign-in app", () => {
+    expect(line("application_connection.request.completed")).toBe(
+      "Asked to sign in"
+    );
+    expect(line("application_connection.approve.completed")).toBe("Approved");
+    expect(line("application_connection.reject.completed")).toBe("Turned down");
+    expect(line("application_connection.revoke.completed")).toBe(
+      "Access revoked"
+    );
+  });
+
   it("falls back to the event type, humanized", () => {
     expect(line("apiKey.update.completed")).toBe("H(apiKey update)");
     expect(line("api_keys.revoke.completed", null)).toBe("H(api_keys revoke)");

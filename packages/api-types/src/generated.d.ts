@@ -12201,6 +12201,8 @@ export interface OAuthConsentContext {
 	/** Where the code will actually be delivered — shown so the human can judge. */
 	redirectHost: string;
 	scopes: string[];
+	/** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
+	registeredAt: Date;
 }
 /**
  * API Keys Router
@@ -17704,6 +17706,8 @@ export interface OpenTarget {
 	id: string;
 	displayName: string | null;
 	workspaceId: string | null;
+	/** When the object last changed; null when its table does not record it. */
+	updatedAt: Date | null;
 	profileSlug?: string;
 	/** Whether `type` names a surface the browser can open. */
 	openable: boolean;
@@ -37893,6 +37897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					email: string;
 					linkedAt: Date;
 				}[];
+				requestIds: string[];
 				lastUsedAt: Date | null;
 				peopleCount: number;
 				issuerUrl: string;

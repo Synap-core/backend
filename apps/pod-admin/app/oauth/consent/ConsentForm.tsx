@@ -5,6 +5,7 @@ import { ReceiverShell } from "../../_lib/receiver-shell";
 import { Button, CardBody, CardHeader, Spinner } from "@heroui/react";
 import { Check, Plug, ShieldCheck, X } from "lucide-react";
 
+import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 
 /**
@@ -135,6 +136,12 @@ export function ConsentForm({
           <>
             <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
               <Row label="Application" value={context.data.clientName} />
+              {/* Any client can register itself a minute before asking — a
+                    fresh registration for a familiar name is worth a pause. */}
+              <Row
+                label="Registered"
+                value={formatRelative(context.data.registeredAt)}
+              />
               {/* The host the authorization code is actually delivered to —
                     the single most useful signal for spotting a bad request,
                     and the one field a user must read IN FULL. NOT rendered

@@ -24,7 +24,7 @@ import {
   bounceSummary,
 } from "../open-model";
 import { labelForOpenType, type KnownOpenType } from "../open-params";
-import { isUuid } from "../../../lib/format";
+import { formatRelative, isUuid } from "../../../lib/format";
 import { OpenLoading, OpenObject } from "../open-shell";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
@@ -54,6 +54,13 @@ export function BounceView({ type, id }: { type: KnownOpenType; id: string }) {
 
   if (lookup && resolved.isLoading) return <OpenLoading />;
 
+  const facts = [
+    ...(spaceName ? [{ label: "Space", value: spaceName }] : []),
+    ...(receipt?.updatedAt
+      ? [{ label: "Updated", value: formatRelative(receipt.updatedAt) }]
+      : []),
+  ];
+
   const noun = labelForOpenType(type);
   return (
     <OpenObject
@@ -71,7 +78,7 @@ export function BounceView({ type, id }: { type: KnownOpenType; id: string }) {
           />
         ),
       }}
-      facts={spaceName ? [{ label: "Space", value: spaceName }] : undefined}
+      facts={facts.length > 0 ? facts : undefined}
       advanced={
         receipt ? { ids: [{ label: `${noun} id`, value: id }] } : undefined
       }

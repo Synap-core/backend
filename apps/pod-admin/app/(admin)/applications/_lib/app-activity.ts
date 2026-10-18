@@ -2,7 +2,9 @@
  * An app's Activity rows in words. A key app's lifecycle is recorded on the
  * app (`app.{request,approve,issue_key,revoke,rename,remove_for_good}`,
  * `services/app-connect`) and on its keys; a Claude/MCP client's on its
- * client id (each consent, and the admin revoke). Anything else falls back to
+ * client id (each consent, and the admin revoke); a sign-in app's on its
+ * connection and its asks (`application_connection.{request,approve,reject,
+ * revoke}`, `applicationConnections`). Anything else falls back to
  * its event type, humanized — the same fallback a computer's rows use.
  */
 
@@ -41,6 +43,18 @@ export function appActivityLine(
           : "Renamed";
       case "remove_for_good":
         return "Removed for good";
+    }
+  }
+  if (subject === "application_connection") {
+    switch (action) {
+      case "request":
+        return "Asked to sign in";
+      case "approve":
+        return "Approved";
+      case "reject":
+        return "Turned down";
+      case "revoke":
+        return "Access revoked";
     }
   }
   if (subject === "api_keys" && action === "revoke" && data.oauthClientId)
