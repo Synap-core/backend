@@ -7951,7 +7951,17 @@ export interface UrlReaderOffer {
 	proposalId?: string;
 	/** the reader that produced the item's current read */
 	current?: boolean;
+	/**
+	 * Per-tap choices this reader DECLARES (its verb takes the matching
+	 * parameter), e.g. `["withVideo"]`. Absent = none. A choice the reader does
+	 * not declare is never sent to it (`library.readWith` drops it).
+	 */
+	options?: ReaderOption[];
 }
+declare const READER_OPTIONS: readonly [
+	"withVideo"
+];
+export type ReaderOption = (typeof READER_OPTIONS)[number];
 declare const LIBRARY_READ_STATUSES: readonly [
 	"read",
 	"not_read",
@@ -8014,6 +8024,26 @@ export interface LibraryItemRead {
 	 * item a billed reader gave up on. Absent = the last try did not fail.
 	 */
 	failure?: LibraryReadFailure;
+	/**
+	 * The person's "Read with X" waits on this item (its read was over today's
+	 * budget, or failed and waits for its retry): the reader they chose and when
+	 * that consent ENDS. Projected by the pod's item views
+	 * (`library.list` / `group` / `search`), never by {@link readLibraryItemRead}
+	 * (the end depends on the pod's setting). After `expiresAt` the pod never
+	 * runs it: the item goes back to waiting for a reader and the choice is
+	 * forgotten. `library.cancelReadWith` ends it at once. Absent = no
+	 * remembered choice (or it already ended).
+	 */
+	consent?: LibraryReadConsent;
+}
+/** A remembered "Read with X" that waits to run (see {@link LibraryItemRead.consent}). */
+export interface LibraryReadConsent {
+	/** The reader id the person chose (`library.readers` offer id). */
+	readerId: string;
+	/** When the person tapped (ISO). */
+	givenAt: string;
+	/** When the consent ends (ISO): `givenAt` + the pod's consent days. */
+	expiresAt: string;
 }
 /** A failed read's class, as kept on the item. */
 export interface LibraryReadFailure {
@@ -8101,6 +8131,14 @@ export interface LibraryItemView extends ImportItemView {
 	 * not a weak read, or not known (the lookup failed — never guessed false).
 	 */
 	readerAvailable?: boolean;
+	/**
+	 * The item's picture was never kept because its signed CDN link (old
+	 * Instagram / TikTok posts) had already EXPIRED: the pod skipped it quietly
+	 * — no failure, no error mark; draw the platform tile. Re-reading the post
+	 * with a reader brings fresh pictures (`library.readWith` with
+	 * `missingMedia: true`, or this item's id). Absent = not skipped.
+	 */
+	mediaExpired?: true;
 }
 export interface LibraryGroupView {
 	id: string;
@@ -8145,6 +8183,12 @@ export interface LibraryHealth {
 	/** Age in days of the oldest such waiting item, null when none waits. */
 	oldestWaitDays: number | null;
 }
+/** Result of `library.propose`: always a proposal for an agent — nothing changed yet. */
+export interface LibraryProposeResult {
+	status: "proposed";
+	proposalId: string;
+	reviewUrl?: string;
+}
 export interface LibraryAddResult {
 	runId: string;
 	staged: Array<{
@@ -8183,11 +8227,27 @@ export type LibraryReaderOffer = UrlReaderOffer & {
 export interface LibraryReadersResult {
 	offers: LibraryReaderOffer[];
 	/**
-	 * The waiting items with a link that were looked at (a group's, or the
-	 * whole Library's with `waiting: true`; at most 1 000, oldest first).
-	 * Absent for one item.
+	 * The items with a link that were looked at: a group's or the whole
+	 * Library's WAITING items (`groupId` / `waiting`), or the items missing
+	 * their pictures (`missingMedia`); at most 1 000, oldest first. Absent for
+	 * one item.
 	 */
 	waiting?: number;
+	/**
+	 * `missingMedia` only: those items by the platform of their link (a
+	 * `@synap-core/types/service-marks` id: `instagram`, `tiktok`), most first —
+	 * the "<platform>" of "Get pictures for N old <platform> posts". Items of
+	 * another site are counted in `waiting`, not here.
+	 */
+	platforms?: Array<{
+		serviceId: string;
+		count: number;
+	}>;
+}
+/** Result of `library.cancelReadWith`. */
+export interface LibraryCancelReadWithResult {
+	/** Items whose waiting consent was ended (0 = none held one). */
+	cancelled: number;
 }
 /** Result of `library.retryMedia`: the failed copies queued to be tried again (0 = none failed). */
 export interface LibraryRetryMediaResult {
@@ -8205,6 +8265,11 @@ export interface LibraryReadWithResult {
 	overBudget: number;
 	/** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
 	skipped: number;
+	/**
+	 * When `overBudget > 0`: when the consent the tap gave for those waiting
+	 * items ends (ISO) — "waits for tomorrow's reading budget, until <date>".
+	 */
+	consentExpiresAt?: string;
 }
 export interface LibraryRunActionResult {
 	proposalId: string;
@@ -21778,7 +21843,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21832,7 +21897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -22531,7 +22596,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22585,7 +22650,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -22632,7 +22697,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22686,7 +22751,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -22749,7 +22814,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "error" | "skipped" | "success";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22803,7 +22868,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -23069,7 +23134,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				workspaceId?: string | null | undefined;
-				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "whiteboard" | undefined;
+				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "library" | "whiteboard" | undefined;
 				targetId?: string | undefined;
 				subject?: {
 					kind: "entity" | "document";
@@ -23260,7 +23325,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
-				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "whiteboard" | undefined;
+				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "library" | "whiteboard" | undefined;
 				threadId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
@@ -36490,7 +36555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cursor?: string | undefined;
 				limit?: number | undefined;
 				groupId?: string | undefined;
-				status?: "read" | "unreadable" | "needs_file" | "title_only" | "not_read" | "over_budget" | undefined;
+				status?: "read" | "unreadable" | "not_read" | "over_budget" | "needs_file" | "title_only" | undefined;
 				archived?: boolean | undefined;
 				workspaceId?: string | undefined;
 				projectId?: string | undefined;
@@ -36557,6 +36622,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				itemId?: string | undefined;
 				groupId?: string | undefined;
 				waiting?: true | undefined;
+				missingMedia?: true | undefined;
 			};
 			output: LibraryReadersResult;
 			meta: object;
@@ -36567,8 +36633,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				itemIds?: string[] | undefined;
 				groupId?: string | undefined;
 				waiting?: true | undefined;
+				missingMedia?: true | undefined;
+				withVideo?: boolean | undefined;
 			};
 			output: LibraryReadWithResult;
+			meta: object;
+		}>;
+		cancelReadWith: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				itemIds?: string[] | undefined;
+				groupId?: string | undefined;
+				waiting?: true | undefined;
+			};
+			output: LibraryCancelReadWithResult;
 			meta: object;
 		}>;
 		retryMedia: import("@trpc/server").TRPCMutationProcedure<{
@@ -36576,6 +36653,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				itemId: string;
 			};
 			output: LibraryRetryMediaResult;
+			meta: object;
+		}>;
+		propose: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				ops: unknown[];
+				reasoning?: string | undefined;
+			};
+			output: LibraryProposeResult;
 			meta: object;
 		}>;
 		health: import("@trpc/server").TRPCQueryProcedure<{
