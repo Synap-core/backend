@@ -44,12 +44,17 @@ import {
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
-import { COMMON_STOPWORDS, QUESTION_WORDS } from "../retrieval/stopwords.js";
+import {
+  COMMON_STOPWORDS,
+  CONVERSATIONAL_WORDS,
+  QUESTION_WORDS,
+} from "../retrieval/stopwords.js";
 
 /** Words that never count toward the procedural lane's matched-term floor. */
 const PROCEDURAL_IGNORED_TERMS: ReadonlySet<string> = new Set([
   ...COMMON_STOPWORDS,
   ...QUESTION_WORDS,
+  ...CONVERSATIONAL_WORDS,
 ]);
 import { structuredLookup } from "./structured.js";
 import { searchLibraryForAsk } from "../library/ask-lane.js";

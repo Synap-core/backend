@@ -332,6 +332,11 @@ export class KnowledgeKeysRepository {
      * one line: a single shared common word ("model", "project") no longer
      * pulls an unrelated runbook into a business question, which is exactly
      * how six engineering notes answered the GRP business-model ask.
+     *
+     * RANKING with options: most DISTINCT terms matched first, then
+     * `ts_rank` normalised by document length (flag 1). Plain `ts_rank`
+     * rewards a term recurring and ignores length, so a long note repeating
+     * three of the query's words outranked a short runbook matching all six.
      */
     options?: {
       minMatchedTerms?: number;
@@ -368,17 +373,19 @@ export class KnowledgeKeysRepository {
       sql`${sql.raw("to_tsvector('simple', value)")} @@ ${tsquery}`,
     ];
 
-    const required = Math.min(options?.minMatchedTerms ?? 1, safeTerms.length);
-    if (required > 1) {
-      // Count DISTINCT query terms the row matches. Terms are the sanitized
-      // alphanumerics above — same trust basis as the `sql.raw` tsquery.
-      const matched = safeTerms
+    // Count DISTINCT query terms the row matches. Terms are the sanitized
+    // alphanumerics above — same trust basis as the `sql.raw` tsquery.
+    const matched = sql.raw(
+      `(${safeTerms
         .map(
           (t) =>
             `(to_tsvector('simple', value) @@ to_tsquery('simple', '${t}:*'::text))::int`
         )
-        .join(" + ");
-      conditions.push(sql`${sql.raw(`(${matched})`)} >= ${required}`);
+        .join(" + ")})`
+    );
+    const required = Math.min(options?.minMatchedTerms ?? 1, safeTerms.length);
+    if (required > 1) {
+      conditions.push(sql`${matched} >= ${required}`);
     }
 
     const ws = wsCondition(workspaceId);
@@ -397,11 +404,13 @@ export class KnowledgeKeysRepository {
         author: knowledgeKeys.author,
         createdAt: knowledgeKeys.createdAt,
         updatedAt: knowledgeKeys.updatedAt,
-        rank: sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery})`,
+        rank: options
+          ? sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery}, 1)`
+          : sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery})`,
       })
       .from(knowledgeKeys)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy((r) => desc(r.rank))
+      .orderBy((r) => (options ? [desc(matched), desc(r.rank)] : desc(r.rank)))
       .limit(limit);
 
     return rows.map((r: any) => parseRow(r));
