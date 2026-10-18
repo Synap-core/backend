@@ -130,6 +130,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
+      # pnpm 10 no longer ships node-gyp, and node-pty (apps/api, in
+      # onlyBuiltDependencies) compiles from source on linux: without this the
+      # install fails with "node-gyp: not found" (red since the pnpm 10 bump).
+      - name: Install node-gyp
+        run: npm install -g node-gyp@11.5.0
+
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
