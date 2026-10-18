@@ -499,9 +499,7 @@ export function resolveHolderAccess(input: HolderAccessInput): HolderAccess {
         : HOLDER_NO_ACCESS_SENTENCE;
   else if (full) what = GRANT_FULL_ACCESS_SENTENCE;
   else {
-    const verbs = [
-      `Reads ${phrase(readAll ? "all" : (readLabels ?? "none"))}`,
-    ];
+    const verbs = [`Reads ${phrase(readAll ? "all" : (readLabels ?? "none"))}`];
     if (change)
       verbs.push(`changes ${phrase(changeAll ? "all" : changeLabels!)}`);
     if (approve)

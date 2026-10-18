@@ -32,6 +32,7 @@ import {
   podVisibleWorkspaceWhere,
 } from "../../../utils/user-visible-where.js";
 import { authoredByUser } from "../../../services/agent-identity-service.js";
+import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -327,6 +328,8 @@ export async function resolveProposalId(
           userVisibleWhere(proposals.workspaceId, userId),
           authoredByUser(userId)
         ),
+        // A Library proposal resolves for its person only.
+        ownLibraryProposalWhere(userId),
         drizzleSql`${proposals.id}::text LIKE ${`${raw}%`}`
       )
     )

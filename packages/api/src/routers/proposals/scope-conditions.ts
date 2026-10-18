@@ -76,13 +76,23 @@ import { authoredByUser } from "../../services/agent-identity-service.js";
  * (services/activity/list-activity.ts): personal proposals owner-gated there.
  */
 export function proposalUserFloor(userId: string): SQL {
-  const floor = or(
-    userVisibleWhere(proposals.workspaceId, userId),
-    authoredByUser(userId)
+  const floor = and(
+    or(userVisibleWhere(proposals.workspaceId, userId), authoredByUser(userId)),
+    ownLibraryProposalWhere(userId)
   ) as SQL;
   // W1 — the calling key's grant (`proposal` subject), narrow-only.
   const grant = grantReadPredicate(proposals);
   return grant ? (and(floor, grant) as SQL) : floor;
+}
+
+/**
+ * SQL twin of `isForeignLibraryProposal` (`utils/proposal-visibility.ts`): a
+ * Library proposal (`library/organize`) is visible to its subject only —
+ * every other proposal passes. In the user floor, so every list door built on
+ * it (tRPC list/groups, Hub `listProposals`) carries it.
+ */
+export function ownLibraryProposalWhere(userId: string): SQL {
+  return drizzleSql`(${proposals.targetType} IS DISTINCT FROM 'library' OR ${proposals.subjectUserId} = ${userId})`;
 }
 
 /** The subset of `list`/`groups` input both procedures scope identically on. */
@@ -122,11 +132,19 @@ export function buildProposalScopeConditions(
 ): SQL[] {
   const conditions: SQL[] = [];
 
+  // A Library is ONE person's: an agent's proposal to organise it
+  // (`library/organize`, pod-wide — no workspace) names their groups and
+  // items, so it lists for the person it was filed for only, whatever lens.
+  // Folded into the lens condition (one condition per filter stays true).
+  const ownLibrary = ownLibraryProposalWhere(userId);
   if (input.workspaceId === null) {
-    conditions.push(isNull(proposals.workspaceId));
+    conditions.push(and(isNull(proposals.workspaceId), ownLibrary) as SQL);
   } else if (typeof input.workspaceId === "string") {
-    conditions.push(eq(proposals.workspaceId, input.workspaceId));
+    conditions.push(
+      and(eq(proposals.workspaceId, input.workspaceId), ownLibrary) as SQL
+    );
   } else {
+    // The user floor already carries it.
     conditions.push(proposalUserFloor(userId));
   }
 

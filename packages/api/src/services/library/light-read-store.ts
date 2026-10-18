@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import {
   carryRunLibraryActions,
+  LIBRARY_READ_STATUSES,
   readLibraryItemRead,
   type LibraryItemRead,
   type LibraryReadBlocked,
@@ -48,6 +49,18 @@ export interface StoredLibraryRead extends LibraryItemRead {
    * it, so a retry never silently falls back to the free reader.
    */
   requestedReader?: string;
+  /**
+   * When the person gave that choice (ISO): the consent ENDS
+   * `SYNAP_LIBRARY_READ_CONSENT_DAYS` later (`read-consent.ts`). A retry keeps
+   * the tap's date — a consent is never renewed by the pod itself.
+   */
+  requestedAt?: string;
+  /** The waiting status the item had before it was held for the consent (restored when it ends). */
+  heldFrom?: LibraryReadStatus;
+  /** The person's "with video" choice on that tap; it ends with the consent. */
+  requestedWithVideo?: true;
+  /** "Get the pictures" (`missingMedia`) on that tap: a read the item has is kept. */
+  requestedKeepRead?: true;
   /**
    * A BILLED read that succeeded, held until the item's read is written
    * (media copy, transcript, summary still to come). The same reader run
@@ -100,6 +113,13 @@ export function readStoredLibraryRead(
   const aiAt = str("aiAt");
   const lastError = str("lastError");
   const requestedReader = str("requestedReader");
+  const requestedAt = str("requestedAt");
+  const heldFromRaw = str("heldFrom");
+  const heldFrom = (LIBRARY_READ_STATUSES as readonly string[]).includes(
+    heldFromRaw ?? ""
+  )
+    ? (heldFromRaw as LibraryReadStatus)
+    : undefined;
   const attempts = num("attempts");
   const transientFailures = num("transientFailures");
   const readCheckpoint = obj("readCheckpoint");
@@ -112,6 +132,14 @@ export function readStoredLibraryRead(
       ...(aiAt ? { aiAt } : {}),
       ...(lastError ? { lastError } : {}),
       ...(requestedReader ? { requestedReader } : {}),
+      ...(requestedAt ? { requestedAt } : {}),
+      ...(heldFrom ? { heldFrom } : {}),
+      ...(bag.requestedWithVideo === true
+        ? { requestedWithVideo: true as const }
+        : {}),
+      ...(bag.requestedKeepRead === true
+        ? { requestedKeepRead: true as const }
+        : {}),
       ...(attempts !== undefined ? { attempts } : {}),
       ...(transientFailures !== undefined ? { transientFailures } : {}),
       // Re-parsed where it is used (`resumableRead`), never trusted here.
@@ -202,7 +230,16 @@ export async function writeRead(
    * singletonKey does not dedupe on a standard pg-boss v10 queue, so two jobs
    * of one item can overlap.
    */
-  yieldToRead = false
+  yieldToRead = false,
+  guard: {
+    /**
+     * `next` re-stores a consent the job read from the item at this
+     * `requestedAt` (the sweep's retry of a remembered tap): it is written
+     * only while the item still holds that same consent. One the person
+     * cancelled (or that ended) while the job ran is never brought back.
+     */
+    rememberedConsentAt?: string;
+  } = {}
 ): Promise<boolean> {
   return database.transaction(async (tx) => {
     const [locked] = await tx
@@ -217,8 +254,13 @@ export async function writeRead(
     const previous = Array.isArray(current.suggestedActions)
       ? current.suggestedActions
       : [];
+    const consentGone =
+      guard.rememberedConsentAt !== undefined &&
+      next.requestedReader !== undefined &&
+      (current.requestedReader !== next.requestedReader ||
+        current.requestedAt !== guard.rememberedConsentAt);
     const merged: StoredLibraryRead = {
-      ...next,
+      ...(consentGone ? withoutConsent(next) : next),
       suggestedActions: carryRunLibraryActions(previous, next.suggestedActions),
       ...(current.aiAt ? { aiAt: current.aiAt } : {}),
       // A billed read still to be finished survives a retry; any final
@@ -236,6 +278,21 @@ export async function writeRead(
       .where(eq(documents.id, itemId));
     return true;
   });
+}
+
+/** `next` without the remembered consent (its reader, date and choices). */
+function withoutConsent(
+  next: Omit<StoredLibraryRead, "aiAt">
+): Omit<StoredLibraryRead, "aiAt"> {
+  const {
+    requestedReader: _reader,
+    requestedAt: _at,
+    heldFrom: _heldFrom,
+    requestedWithVideo: _video,
+    requestedKeepRead: _keep,
+    ...rest
+  } = next;
+  return rest;
 }
 
 /**

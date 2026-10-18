@@ -44,6 +44,7 @@ import { registerPlaybookStageGateExecutors } from "./executors/playbook-stage-g
 import { registerTrackExecutors } from "./executors/track.js";
 import { registerLinkExecutors } from "./executors/link.js";
 import { registerProjectFilingExecutors } from "./executors/project-filing.js";
+import { registerLibraryExecutors } from "./executors/library.js";
 import { registerShareExecutors } from "../../services/sharing/share-executors.js";
 import { registerCellExecutors } from "./executors/cell.js";
 import { registerWorkspaceExecutors } from "./executors/workspace.js";
@@ -93,6 +94,7 @@ export function registerApproveExecutors(): void {
   registerTrackExecutors();
   registerLinkExecutors();
   registerProjectFilingExecutors();
+  registerLibraryExecutors();
   // `share/create` (share + publish, Sites W2/W5a). Idempotent: `routers/shares.ts`
   // also registers it at module load; this line makes approval coverage
   // independent of that import chain.

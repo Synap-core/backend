@@ -3,7 +3,10 @@
  * Each row names the wrong rule it rules out.
  */
 import { describe, expect, it } from "vitest";
-import { nounInSentence, resolveObjectNounPlural } from "../vocabulary/index.js";
+import {
+  nounInSentence,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
 import {
   agentCapabilitiesToDraft,
   GRANT_FULL_ACCESS_SENTENCE,
@@ -128,7 +131,9 @@ describe("resolveHolderAccess — keys", () => {
     expect(h.tiers.approve).toBeNull();
     // A bare kind covers delete.
     expect(h.danger).toEqual({ full: false, approves: false, deletes: true });
-    expect(h.sentence).toBe(`Reads ${inSentence(NOTES)}, changes ${inSentence(NOTES)} in Sales.`);
+    expect(h.sentence).toBe(
+      `Reads ${inSentence(NOTES)}, changes ${inSentence(NOTES)} in Sales.`
+    );
     expect(h.where).toEqual({
       anywhere: false,
       spaces: [{ id: "ws-sales", name: "Sales" }],
@@ -159,7 +164,9 @@ describe("resolveHolderAccess — keys", () => {
     expect(named.tiers.approve).toBe(PROPOSALS);
     expect(named.danger.approves).toBe(true);
     expect(named.danger.full).toBe(false);
-    expect(named.sentence).toBe(`Reads nothing, approves ${inSentence(PROPOSALS)}.`);
+    expect(named.sentence).toBe(
+      `Reads nothing, approves ${inSentence(PROPOSALS)}.`
+    );
   });
 
   it("`*` is full, approving included, in red", () => {
