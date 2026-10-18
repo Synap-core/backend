@@ -48,10 +48,11 @@ jobs:
       # compares the CP publish schema against the pod apply schema by READING
       # the CP source — the two schemas live in different pnpm workspaces, so
       # neither can import the other. It resolves the CP checkout as a SIBLING
-      # of this one (`<backend>/../synap-control-plane-api`) and ASSERTS it
-      # exists, deliberately: a guard that skips when its input is missing is
-      # how the two schemas silently drifted the first time. So CI must provide
-      # the sibling — the test must never be taught to skip.
+      # of this one (`<backend>/../synap-control-plane-api`) and, in CI,
+      # ASSERTS it exists, deliberately: a guard that skips when its input is
+      # missing is how the two schemas silently drifted the first time. So CI
+      # must provide the sibling — the test never skips in CI (only a developer
+      # machine with no CP clone skips, with the reason printed).
       #
       # NOTE the two steps. `actions/checkout` refuses any `path:` that resolves
       # outside $GITHUB_WORKSPACE ("Repository path … is not under …"), and the
