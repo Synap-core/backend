@@ -9,6 +9,9 @@
  *              click anywhere else on the row opens the same page.
  *   phone:     icon · name · one secondary line · status pill, the row opens.
  *
+ * An optional `action` is the row's one act: the table's last column and the
+ * phone row's trailing button. Pressing it never opens the row.
+ *
  * Every row carries `data-row-id`, so `useFocusRow` (`?focus=<id>`) lands on
  * it in either layout. The caller draws loading, empty and error around it.
  */
@@ -50,6 +53,11 @@ export interface ResponsiveTableProps<Row> {
     sub?: (row: Row) => ReactNode;
   };
   columns: TableColumn<Row>[];
+  /** The row's one act, if it has one now. */
+  action?: {
+    width: string;
+    cell: (row: Row) => ReactNode;
+  };
   /** The phone row's icon, secondary line and pill. */
   phone: (row: Row) => {
     Icon: LucideIcon;
@@ -61,7 +69,7 @@ export interface ResponsiveTableProps<Row> {
 export function ResponsiveTable<Row>(props: ResponsiveTableProps<Row>) {
   const wide = useMediaQuery(MD_UP);
   const router = useRouter();
-  const { rows, rowKey, rowId, href, name, phone } = props;
+  const { rows, rowKey, rowId, href, name, action, phone } = props;
 
   if (!wide) {
     return (
@@ -81,6 +89,7 @@ export function ResponsiveTable<Row>(props: ResponsiveTableProps<Row>) {
                 status={p.status}
                 onSelect={() => router.push(href(row))}
                 wrap
+                actions={action?.cell(row)}
               />
             </div>
           );
@@ -93,6 +102,7 @@ export function ResponsiveTable<Row>(props: ResponsiveTableProps<Row>) {
     gridTemplateColumns: [
       name.width,
       ...props.columns.map((c) => c.width),
+      ...(action ? [action.width] : []),
     ].join(" "),
   };
   return (
@@ -108,6 +118,11 @@ export function ResponsiveTable<Row>(props: ResponsiveTableProps<Row>) {
             {c.header}
           </div>
         ))}
+        {action && (
+          <div role="columnheader">
+            <span className="sr-only">Action</span>
+          </div>
+        )}
       </div>
       <div role="rowgroup" className="divide-y divide-foreground/[0.05]">
         {rows.map((row) => {
@@ -145,6 +160,16 @@ export function ResponsiveTable<Row>(props: ResponsiveTableProps<Row>) {
                   {c.cell(row)}
                 </div>
               ))}
+              {action && (
+                // The act is its own press, not a press on the row.
+                <div
+                  role="cell"
+                  className="flex justify-end"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {action.cell(row)}
+                </div>
+              )}
             </div>
           );
         })}
