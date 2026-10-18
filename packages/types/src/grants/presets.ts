@@ -124,6 +124,8 @@ export const AI_GATE_VERBS: readonly string[] = [
   "entity.*.transition",
   "facet.attach",
   "facet.detach",
+  // Propose how to organise the person's Library (always a proposal).
+  "library.organize",
   "playbook.promote",
   "playbook.run",
   "proactive.recap",

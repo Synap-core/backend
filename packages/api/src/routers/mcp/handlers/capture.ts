@@ -1427,7 +1427,66 @@ const captureHandler: McpToolHandler = async (
   });
 };
 
+/**
+ * `synap_organize_library` — an agent PROPOSES how to organise the person's
+ * Library (never adds to it: content goes to `synap_capture`). No `ops` →
+ * the Library's groups (ids to name); `ops` → ONE governed proposal
+ * (`library/organize`, always a proposal for an agent).
+ */
+const organizeLibraryHandler = async (
+  ctx: McpToolContext
+): Promise<CallToolResult> => {
+  const { toolName, args, apiKeyScopes, userId } = ctx;
+  if (args.ops === undefined) {
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const { adoptImportGroups, readLibraryGroups } =
+      await import("../../../services/library/groups.js");
+    await adoptImportGroups({ userId });
+    const { groups, ungrouped, archived } = await readLibraryGroups({ userId });
+    return ok({
+      groups: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        ...(g.note ? { note: g.note } : {}),
+        items: g.counts.items,
+        newSinceBuilt: g.counts.newSinceBuilt,
+        ...(g.builtAt ? { builtAt: g.builtAt } : {}),
+        ...(g.pendingBuildProposalId
+          ? { pendingBuildProposalId: g.pendingBuildProposalId }
+          : {}),
+      })),
+      ungrouped,
+      archived,
+    });
+  }
+  requireScope(apiKeyScopes, "mcp.write", toolName);
+  const { LibraryProposeInputSchema, proposeLibraryOrganize } =
+    await import("../../../services/library/organize.js");
+  const parsed = LibraryProposeInputSchema.safeParse({
+    ops: args.ops,
+    ...(typeof args.reasoning === "string"
+      ? { reasoning: args.reasoning }
+      : {}),
+  });
+  if (!parsed.success) {
+    return ok({
+      error:
+        "ops must be 1-50 of: group.create {name, note?, itemIds?}, group.items {groupId, add?, remove?}, group.update {groupId, name?, note?, workspaceId?}, group.build {groupId}.",
+      issues: parsed.error.issues.slice(0, 5),
+    });
+  }
+  return ok(
+    await proposeLibraryOrganize({
+      userId,
+      caller: { agentUserId: ctx.agentUserId ?? null, keyType: ctx.keyType },
+      ops: parsed.data.ops,
+      ...(parsed.data.reasoning ? { reasoning: parsed.data.reasoning } : {}),
+    })
+  );
+};
+
 export const captureHandlers: McpHandlerMap = {
   synap_capture: captureHandler,
   synap_capture_graph: captureHandler,
+  synap_organize_library: organizeLibraryHandler,
 };

@@ -149,6 +149,8 @@ import {
 } from "../groups.js";
 import { libraryHealth, searchLibrary } from "../search.js";
 import { buildLibraryGroup, readNowLibraryItem } from "../build.js";
+import { applyLibraryOrganize, proposeLibraryOrganize } from "../organize.js";
+import { buildProposalSummary } from "../../../utils/permission-check.js";
 import type { UrlRead } from "@synap-core/types/url-read";
 
 const USER = "user-library-1";
@@ -1480,5 +1482,224 @@ describe("search rows follow the Library", () => {
       ops: [{ op: "item.restore", itemIds: [id] }],
     });
     expect(h.searchJobs).toEqual([{ operation: "upsert", documentId: id }]);
+  });
+});
+
+describe("4B — an agent PROPOSES Library organisation; approval applies it through the same code", () => {
+  const AGENT = "agent-org-1";
+  type GateOpts = Record<string, unknown> & { data: Record<string, unknown> };
+  function recordingGate() {
+    const calls: GateOpts[] = [];
+    const gate = (async (opts: GateOpts) => {
+      calls.push(opts);
+      return {
+        granted: false,
+        proposalId: "11111111-2222-4333-8444-555555555555",
+        proposalType: "organize",
+        summary: "",
+        reasoning: "",
+        reviewPath: "/open/p",
+        reviewUrl: "https://pod.test/open/p",
+      };
+    }) as never;
+    return { gate, calls };
+  }
+  const groupCount = async () =>
+    (await q<{ n: number }>(`select count(*)::int as n from library_groups`))
+      .rows[0]!.n;
+
+  /** Store the proposal the gate would have filed, then approve it for real. */
+  async function approveStored(data: Record<string, unknown>) {
+    const id = crypto.randomUUID();
+    const stored = {
+      requestId: id,
+      targetType: "library",
+      changeType: "organize",
+      data,
+    };
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, status, data, subject_user_id, agent_user_id)
+       values ($1, 'library', $5, 'organize', 'pending', $2::jsonb, $3, $4)`,
+      [id, JSON.stringify(stored), USER, AGENT, USER]
+    );
+    const { approveLibraryOrganize } =
+      await import("../../../routers/proposals/executors/library.js");
+    const res = await approveLibraryOrganize({
+      proposal: {
+        id,
+        targetType: "library",
+        targetId: id,
+        proposalType: "organize",
+        workspaceId: null,
+        agentUserId: AGENT,
+        subjectUserId: USER,
+        data: stored,
+      },
+      payload: stored,
+      userId: USER,
+      input: { proposalId: id },
+      ctx: {},
+      deps: {
+        reportProposalOutcome: () => undefined,
+        emitProposalReviewed: () => undefined,
+      },
+    } as never);
+    const status = (
+      await q<{ status: string }>(
+        `select status from proposals where id = $1`,
+        [id]
+      )
+    ).rows[0]!.status;
+    return { res, status };
+  }
+
+  it("files ONE governed proposal (forcePropose, library/organize) and changes NOTHING; approval creates the group with its items", async () => {
+    const kept = await keep(["https://example.com/a", "https://example.com/b"]);
+    const ids = kept.staged.map((s) => s.itemId);
+    const { gate, calls } = recordingGate();
+    const res = await proposeLibraryOrganize({
+      userId: USER,
+      caller: { agentUserId: AGENT },
+      ops: [
+        {
+          op: "group.create",
+          name: "Reading list",
+          note: "Weekend",
+          itemIds: ids,
+        },
+      ],
+      reasoning: "Two articles on the same topic",
+      gate,
+    });
+    expect(res).toEqual({
+      status: "proposed",
+      proposalId: "11111111-2222-4333-8444-555555555555",
+      reviewUrl: "https://pod.test/open/p",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      userId: USER,
+      agentUserId: AGENT,
+      subjectType: "library",
+      action: "organize",
+      forcePropose: true,
+      source: "intelligence",
+      reasoning: "Two articles on the same topic",
+    });
+    const data = calls[0]!.data;
+    expect(data.items).toHaveLength(2);
+    expect(data.summary).toBe('Create group "Reading list" with 2 items');
+    expect(buildProposalSummary("library", "organize", data)).toBe(
+      'Organize Library: Create group "Reading list" with 2 items'
+    );
+    // Nothing applied before approval.
+    expect(await groupCount()).toBe(0);
+
+    const { res: applied, status } = await approveStored(data);
+    expect(status).toBe("approved");
+    expect(applied).toMatchObject({
+      success: true,
+      effect: { applied: "verified", subject: "library_groups" },
+    });
+    const { groups } = await readLibraryGroups({ userId: USER });
+    expect(groups.map((g) => [g.name, g.note, g.counts.items])).toEqual([
+      ["Reading list", "Weekend", 2],
+    ]);
+  });
+
+  it("group.items / group.update (note) on an existing group apply through curate on approval", async () => {
+    const kept = await keep(["https://example.com/c", "https://example.com/d"]);
+    const [c, d] = kept.staged.map((s) => s.itemId) as [string, string];
+    const groupId = await newGroup("Recipes", [c]);
+    const { gate, calls } = recordingGate();
+    await proposeLibraryOrganize({
+      userId: USER,
+      caller: { keyType: "is_internal" },
+      ops: [
+        { op: "group.items", groupId, add: [d], remove: [c] },
+        { op: "group.update", groupId, note: "Only mains" },
+      ],
+      gate,
+    });
+    expect(calls[0]!.data.summary).toBe(
+      'Add 1 item to "Recipes", Remove 1 item from "Recipes"; Update group "Recipes": set its note'
+    );
+    const before = (await readLibraryGroups({ userId: USER })).groups[0]!;
+    expect(before.note ?? null).toBeNull();
+    await approveStored(calls[0]!.data);
+    const { items } = await listLibraryItems({
+      userId: USER,
+      input: { groupId },
+    });
+    expect(items.map((i) => i.id)).toEqual([d]);
+    expect((await readLibraryGroups({ userId: USER })).groups[0]!.note).toBe(
+      "Only mains"
+    );
+  });
+
+  it("a build request runs the SAME Build on approval (its bundle goes to review as always)", async () => {
+    const kept = await keep(["https://example.com/e"]);
+    const groupId = await newGroup(
+      "To build",
+      kept.staged.map((s) => s.itemId)
+    );
+    const submitted: SubmitCaptureGraphInput[] = [];
+    const out = await applyLibraryOrganize({
+      ownerUserId: USER,
+      ops: [{ op: "group.build", groupId }],
+      depsFor: () => buildDeps(submitted),
+    });
+    expect(out.curate).toBeNull();
+    expect(out.builds).toHaveLength(1);
+    expect(out.builds[0]!.result.status).toBe("proposed");
+    expect(submitted).toHaveLength(1);
+  });
+
+  it("refuses: a person (they organise directly), a group or item that is not theirs; the gate is never asked", async () => {
+    const theirs = await keep(["https://example.com/x"], { userId: OTHER });
+    const { gate, calls } = recordingGate();
+    await expect(
+      proposeLibraryOrganize({
+        userId: USER,
+        caller: {},
+        ops: [{ op: "group.create", name: "Mine" }],
+        gate,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      proposeLibraryOrganize({
+        userId: USER,
+        caller: { agentUserId: AGENT },
+        ops: [
+          {
+            op: "group.create",
+            name: "Steal",
+            itemIds: [theirs.staged[0]!.itemId],
+          },
+        ],
+        gate,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      proposeLibraryOrganize({
+        userId: USER,
+        caller: { agentUserId: AGENT },
+        ops: [{ op: "group.build", groupId: crypto.randomUUID() }],
+        gate,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(calls).toEqual([]);
+  });
+
+  it("a gate that would EXECUTE for an agent is refused, never applied", async () => {
+    await expect(
+      proposeLibraryOrganize({
+        userId: USER,
+        caller: { agentUserId: AGENT },
+        ops: [{ op: "group.create", name: "Auto" }],
+        gate: (async () => ({ granted: true })) as never,
+      })
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    expect(await groupCount()).toBe(0);
   });
 });

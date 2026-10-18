@@ -2832,6 +2832,16 @@ export function buildProposalSummary(
     });
     return `${head} to the latest template`;
   }
+  // An agent's Library organisation (`library/organize`): the door wrote the
+  // one-line summary from the ops and the names it resolved.
+  if (
+    subjectType === "library" &&
+    action === "organize" &&
+    typeof data.summary === "string" &&
+    data.summary.trim()
+  ) {
+    return `${buildObjectActionTitle({ action, objectKind: "library" })}: ${data.summary.trim()}`;
+  }
   // focus_session lifecycle close — human-readable "Complete session …"
   if (
     subjectType === "focus_session" &&
@@ -3167,8 +3177,7 @@ export function buildProposalResponseFields(opts: {
   return {
     summary,
     reasoning:
-      opts.reasoning ??
-      defaultApprovalSentence(opts.action, opts.subjectType),
+      opts.reasoning ?? defaultApprovalSentence(opts.action, opts.subjectType),
     reviewPath: openPath(opts.proposalId),
     reviewUrl: openLink(opts.proposalId),
   };

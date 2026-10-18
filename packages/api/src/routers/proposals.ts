@@ -220,6 +220,10 @@ const LIST_TARGET_TYPES = [
   "automation",
   "playbook",
   "skill",
+  // An agent's Library organisation (`library/organize`): the Library lists
+  // its pending ones (proposalType "organize"); the visibility floor below
+  // still applies, so a person sees only their own.
+  "library",
 ] as const;
 
 /**

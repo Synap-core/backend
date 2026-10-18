@@ -122,12 +122,19 @@ export function buildProposalScopeConditions(
 ): SQL[] {
   const conditions: SQL[] = [];
 
+  // A Library is ONE person's: an agent's proposal to organise it
+  // (`library/organize`, pod-wide — no workspace) names their groups and
+  // items, so it lists for the person it was filed for only, whatever lens.
+  // Folded into the lens condition (one condition per filter stays true).
+  const ownLibrary = drizzleSql`(${proposals.targetType} IS DISTINCT FROM 'library' OR ${proposals.subjectUserId} = ${userId})`;
   if (input.workspaceId === null) {
-    conditions.push(isNull(proposals.workspaceId));
+    conditions.push(and(isNull(proposals.workspaceId), ownLibrary) as SQL);
   } else if (typeof input.workspaceId === "string") {
-    conditions.push(eq(proposals.workspaceId, input.workspaceId));
+    conditions.push(
+      and(eq(proposals.workspaceId, input.workspaceId), ownLibrary) as SQL
+    );
   } else {
-    conditions.push(proposalUserFloor(userId));
+    conditions.push(and(proposalUserFloor(userId), ownLibrary) as SQL);
   }
 
   if (input.targetType) {

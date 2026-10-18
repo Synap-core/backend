@@ -125,6 +125,42 @@ describe("library.* refuses an agent on every write", () => {
   });
 });
 
+describe("4B — an agent PROPOSES organisation; content and consents stay the person's", () => {
+  it("an agent's cancelReadWith is FORBIDDEN (the consent is the person's)", async () => {
+    for (const extra of [
+      { agentUserId: "agent-1" },
+      { keyType: "is_internal" },
+    ]) {
+      await expect(
+        caller(extra).cancelReadWith({ waiting: true })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+  });
+
+  it("a PERSON calling propose is refused — they organise directly", async () => {
+    await expect(
+      caller().propose({ ops: [{ op: "group.build", groupId: ID }] })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      cause: { reasonCode: "PERSON_USE_CURATE" },
+    });
+    expect(h.ran).toEqual([]);
+  });
+
+  it("propose accepts ONLY organisation ops (an item add or delete is not an op)", async () => {
+    for (const op of [
+      { op: "item.delete", itemIds: [ID] },
+      { op: "item.archive", itemIds: [ID] },
+      { op: "group.merge", fromId: ID, intoId: ID },
+      { op: "add", items: [{ kind: "url", url: "https://x.test" }] },
+    ]) {
+      await expect(
+        caller({ agentUserId: "agent-1" }).propose({ ops: [op] } as never)
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+  });
+});
+
 describe("library.build while the last bundle waits", () => {
   it("is a CONFLICT that names the waiting bundle", async () => {
     h.buildResult = {

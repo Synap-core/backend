@@ -7,7 +7,41 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OpenAPIHono } from "@hono/zod-openapi";
 
-const h = vi.hoisted(() => ({ added: [] as unknown[] }));
+const h = vi.hoisted(() => ({
+  added: [] as unknown[],
+  proposed: [] as unknown[],
+  group: "00000000-0000-4000-8000-0000000000aa",
+}));
+
+vi.mock("../../../services/library/organize.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../services/library/organize.js")
+    >();
+  return {
+    ...actual,
+    // The real refusal of a person, then a recorded proposal for an agent.
+    proposeLibraryOrganize: async (
+      args: Parameters<typeof actual.proposeLibraryOrganize>[0]
+    ) => {
+      h.proposed.push(args);
+      return actual.proposeLibraryOrganize({
+        ...args,
+        database: {
+          select: () => ({
+            from: () => ({ where: async () => [{ id: h.group, name: "G" }] }),
+          }),
+        } as never,
+        gate: (async () => ({
+          granted: false,
+          proposalId: "p-1",
+          reviewUrl: "https://pod/open/p-1",
+        })) as never,
+      });
+    },
+  };
+});
+const GROUP = h.group;
 
 vi.mock("../../../services/library/add.js", () => ({
   addToLibrary: async (args: unknown) => {
@@ -71,5 +105,49 @@ describe("POST /library/add", () => {
       userId: "person-1",
       request: { readNow: false },
     });
+  });
+});
+
+describe("POST /library/propose — an agent proposes organisation", () => {
+  const propose = (app: OpenAPIHono, body: unknown) =>
+    app.request("/library/propose", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  it("an agent key gets a PROPOSAL (nothing applied), with its identity threaded", async () => {
+    const res = await propose(appAs({ agentUserId: "agent-1" }), {
+      ops: [{ op: "group.build", groupId: GROUP }],
+      reasoning: "ready",
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: "proposed",
+      proposalId: "p-1",
+      reviewUrl: "https://pod/open/p-1",
+    });
+    expect(h.proposed[0]).toMatchObject({
+      userId: "person-1",
+      caller: { agentUserId: "agent-1" },
+      ops: [{ op: "group.build", groupId: GROUP }],
+    });
+  });
+
+  it("a person is refused (400: they organise directly); a content op is not an op (400)", async () => {
+    expect(
+      (
+        await propose(appAs({}), {
+          ops: [{ op: "group.build", groupId: GROUP }],
+        })
+      ).status
+    ).toBe(400);
+    expect(
+      (
+        await propose(appAs({ agentUserId: "agent-1" }), {
+          ops: [{ op: "item.delete", itemIds: [GROUP] }],
+        })
+      ).status
+    ).toBe(400);
   });
 });

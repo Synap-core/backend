@@ -234,6 +234,11 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("project.file_entities", "past")).toBe("Filed");
     expect(resolveActionLabel("unfile_entities", "imperative")).toBe("Unfile");
     expect(resolveActionLabel("unfile_entities", "past")).toBe("Unfiled");
+    expect(resolveActionLabel("organize", "imperative")).toBe("Organize");
+    expect(resolveActionLabel("library.organize", "past")).toBe("Organized");
+    expect(
+      buildObjectActionTitle({ action: "organize", objectKind: "library" })
+    ).toBe("Organize Library");
   });
 
   it("keeps imperative and past DISTINCT (they were an accidental fork)", () => {

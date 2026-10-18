@@ -367,6 +367,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     present: "Files",
   },
   unfile_entities: { imperative: "Unfile", past: "Unfiled" },
+  // An agent's proposal to organise the person's Library (`library/organize`:
+  // groups, their items, notes, target space, a build request).
+  organize: { imperative: "Organize", past: "Organized" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
   // these keys resolve the full proposal types. They are NOT bare "approve":

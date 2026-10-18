@@ -2031,6 +2031,11 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "focus_session/update": "reversible", // a criteria change is floored (2.1)
   "link/create": "reversible",
   "link/delete": "disruptive", // destroy (and un-filing)
+  // An agent's proposal to ORGANISE the person's Library (groups, membership,
+  // notes, target space, a build request). Always `forcePropose`d by its door
+  // (founder 2026-10-18: an agent only PROPOSES Library organisation); classed
+  // disruptive so no `@reversible` class rule can widen it either.
+  "library/organize": "disruptive",
   "playbook/archive": "disruptive", // destroy
   "playbook/create": "disruptive", // struct (2.09)
   "playbook/promote": "disruptive", // struct (2.09)
@@ -2239,6 +2244,7 @@ export const GATE_WRITE_DOORS = {
   "focus_session/create": "gate",
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",
+  "library/organize": "gate",
   "link/create": "gate",
   // Removing an edge — today only `project --uses--> workspace` (MCP
   // `synap_project_use_workspace {remove:true}`), replayed on approval by
