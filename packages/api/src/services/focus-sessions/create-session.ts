@@ -29,6 +29,7 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { canUserSeeChannel } from "../../utils/channel-visibility.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
@@ -475,6 +476,37 @@ export async function createFocusSession(
     if (existing) return { status: "created", session: existing };
   }
 
+  // If `templateId` is a real Playbook id, this session IS a playbook run: wire
+  // the canonical `playbookId` + a `playbook_runs` ledger row so it surfaces in
+  // the runs feed. Writing ONLY the deprecated `templateId` (legacy behavior, kept
+  // below for compat) produced disconnected "ghost" sessions that ran forever with
+  // no ledger row. A non-UUID / free-text templateId resolves to no playbook →
+  // unchanged legacy behavior. (Guard the UUID first — comparing a uuid column to
+  // free text throws in Postgres.)
+  //
+  // Read through the access layer at the user floor (no workspace lens: a
+  // focused lens would hide the pod-wide playbooks a workspace session runs).
+  // A UUID that names no playbook the caller can see is REFUSED, before the
+  // dedup and the membrane: starting ad-hoc instead read as "following a
+  // playbook" to the agent that named it, while nothing was followed.
+  const namedPlaybookId =
+    templateId && UUID_RE.test(templateId) ? templateId : null;
+  const playbook = namedPlaybookId
+    ? ((await scopedDb(AccessContext.agent({ userId, agentUserId })).findFirst<
+        typeof playbooks.$inferSelect
+      >(playbooks, {
+        where: eq(playbooks.id, namedPlaybookId),
+      })) ?? null)
+    : null;
+  if (namedPlaybookId && !playbook) {
+    throw Object.assign(
+      new Error(
+        `templateId ${templateId} names no playbook you can see. Call list_playbooks for the ids you can start from, or pass templateId: null to start without one.`
+      ),
+      { code: "BAD_REQUEST" }
+    );
+  }
+
   // PROJECT LENS — derived from the context this door already holds, rather
   // than waited for. Before this, `projectId` was whatever the caller passed and
   // essentially nobody passed one (measured: 10% of sessions). The ladder's
@@ -588,20 +620,6 @@ export async function createFocusSession(
   // the receipt minted its own random id that no row ever had (live receipt
   // 91191f04, 2026-09-14). The dedup hash strips `id`, so retries still dedup.
   const sessionId = randomUUID();
-
-  // If `templateId` is a real Playbook id, this session IS a playbook run: wire
-  // the canonical `playbookId` + a `playbook_runs` ledger row so it surfaces in
-  // the runs feed. Writing ONLY the deprecated `templateId` (legacy behavior, kept
-  // below for compat) produced disconnected "ghost" sessions that ran forever with
-  // no ledger row. A non-UUID / free-text templateId resolves to no playbook →
-  // unchanged legacy behavior. (Guard the UUID first — comparing a uuid column to
-  // free text throws in Postgres.)
-  const playbook =
-    templateId && UUID_RE.test(templateId)
-      ? ((await db.query.playbooks.findFirst({
-          where: eq(playbooks.id, templateId),
-        })) ?? null)
-      : null;
 
   // TRACK PARAMS (0274) — resolved BEFORE the membrane so a mistyped answer
   // refuses its author rather than landing in a human's queue. Only when no
