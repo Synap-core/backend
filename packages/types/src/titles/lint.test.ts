@@ -149,6 +149,18 @@ describe("lintTitle", () => {
     expect(isCleanTitle("Lesson: grants deny by default")).toBe(true);
   });
 
+  it("lets a research record carry the date its convention asks for", () => {
+    const dated = "anime.js evaluated as a Synap integration (2026-10-13)";
+    expect(lintTitle(dated, { kind: "research" })).toEqual([]);
+    expect(lintTitle(dated, { kind: "RESEARCH " })).toEqual([]);
+    for (const kind of ["knowledge", "review", "note", undefined]) {
+      expect(codes(dated, kind)).toEqual(["date_stamp"]);
+    }
+    expect(codes("Status 2026-10-13 verified live", "research")).toEqual([
+      "status_word",
+    ]);
+  });
+
   it("only applies the three-word floor to notes, items, tasks and sessions", () => {
     expect(codes("Billing", "knowledge")).not.toContain("too_short");
     expect(codes("Billing", "task")).toContain("too_short");

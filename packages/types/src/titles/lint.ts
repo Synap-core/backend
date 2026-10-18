@@ -58,6 +58,14 @@ export interface LintTitleOptions {
 
 /** Kinds whose title may not be one or two words (a bare label says nothing). */
 const NEEDS_THREE_WORDS = new Set(["note", "item", "task", "session"]);
+/**
+ * Kinds whose record is a dated snapshot: a research record is an
+ * investigation as of the day it ran, with no period property of its own, so
+ * the date in its title names its period ("<Product> evaluated as a Synap
+ * integration (2026-10-13)"). Kinds that carry their period in a property (a
+ * review's `cycle`, a metric's `as-of-date`) do not need it in the title.
+ */
+const DATED_KINDS = new Set(["research"]);
 
 // A word inside a hyphenated compound ("deployed-agent", "live-reload") is part
 // of a name, not a status — hence the hyphen-aware edges.
@@ -251,7 +259,7 @@ export function lintTitle(
     );
   }
 
-  if (DATE_STAMP.test(text)) {
+  if (DATE_STAMP.test(text) && !(kind && DATED_KINDS.has(kind))) {
     note(
       "date_stamp",
       "The title carries a date. The date is already on the record; drop it unless it names a period."
