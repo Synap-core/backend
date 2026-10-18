@@ -102,17 +102,34 @@ const NOT_PLAN_CODES = new Set([
 const DATE_STAMP =
   /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b|\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i;
 
+const FILE_NAME =
+  /[\p{L}\p{N}_./\\-]*\.(ts|tsx|js|jsx|mjs|cjs|json|md|mdx|sql|ya?ml|py|css|html|sh|toml)\b/giu;
+/**
+ * `<Name>.js` is how JavaScript libraries are named (Node.js, three.js,
+ * anime.js), so one plain word before `.js` names a product, not a file. A
+ * file reference gives itself away by shape: a path, a code-style stem
+ * (kebab, snake, dotted) or any other code extension. A one-word `.js` file
+ * (`index.js`) is indistinguishable from a library of that name and passes.
+ */
+const PRODUCT_JS = /^[\p{L}\p{N}]+\.js$/iu;
+
+function namesAFile(text: string): boolean {
+  for (const [token] of text.matchAll(FILE_NAME)) {
+    if (!PRODUCT_JS.test(token)) return true;
+  }
+  return false;
+}
+
 /** Each machinery pattern, with the words a writer recognises it by. */
-const MACHINERY: ReadonlyArray<readonly [RegExp, string]> = [
+const MACHINERY: ReadonlyArray<
+  readonly [{ test(text: string): boolean }, string]
+> = [
   [/`/, "backticks"],
   [/\*\*/, "markdown bold"],
   [/\[\[/, "a wiki link"],
   [URL_LIKE, "a URL"],
   [/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b/i, "a hash or id"],
-  [
-    /\.(ts|tsx|js|jsx|mjs|cjs|json|md|mdx|sql|ya?ml|py|css|html|sh|toml)\b/i,
-    "a file name",
-  ],
+  [{ test: namesAFile }, "a file name"],
   [/\w\.\w+:\d+\b/, "a line number"],
 ];
 
@@ -200,7 +217,7 @@ export function lintTitle(
     defect("emoji", "Remove the emoji from the title.");
   }
 
-  const machinery = MACHINERY.filter(([re]) => re.test(text)).map(
+  const machinery = MACHINERY.filter(([rule]) => rule.test(text)).map(
     ([, label]) => label
   );
   if (machinery.length) {
