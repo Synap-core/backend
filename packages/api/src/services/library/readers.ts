@@ -64,7 +64,9 @@ import { missingMediaSql } from "../media-copy/library-media-skip.js";
 import { normalizeServiceId } from "@synap-core/types/service-marks";
 import {
   cancelLibraryReadConsents,
+  consentLiveSql,
   libraryReadConsentEndsAt,
+  restorableStatusSql,
 } from "./read-consent.js";
 
 /** Read statuses a list's "Read N waiting with X" acts on. */
@@ -229,6 +231,29 @@ async function waitingRows(
     .limit(LIBRARY_READERS_SCAN_MAX);
 }
 
+/**
+ * Items of a group (or of the whole Library) holding a LIVE "Read with X"
+ * consent, archived excluded — what `cancelReadWith` with that scope ends.
+ */
+async function consentedCount(
+  database: LibraryDb,
+  userId: string,
+  groupId?: string
+): Promise<number> {
+  const [row] = await database
+    .select({ n: drizzleSql<number>`count(*)::int` })
+    .from(documents)
+    .where(
+      and(
+        libraryItemsWhere(userId),
+        ...(groupId ? [inGroupSql(groupId)] : []),
+        drizzleSql`NOT ${isArchivedSql}`,
+        consentLiveSql()
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
 /** The offer id that produced a stored read (`builtin:<rung>` → `builtin`). */
 function readerIdOfStamp(metadata: unknown): string | null {
   const stamp = readStoredLibraryRead(metadata).read.reader;
@@ -338,7 +363,13 @@ export async function libraryReaders(args: {
   const offers = [...byReader.values()].sort(
     (a, b) => (b.count ?? 0) - (a.count ?? 0)
   );
-  if (!args.missingMedia) return { offers, waiting: rows.length };
+  if (!args.missingMedia) {
+    return {
+      offers,
+      waiting: rows.length,
+      consented: await consentedCount(database, args.userId, args.groupId),
+    };
+  }
   const byPlatform = new Map<string, number>();
   for (const row of rows) {
     const p = platformOf(urlOf(row)!);
@@ -513,7 +544,10 @@ export async function libraryReadWith(args: {
       ids,
       args.readerId,
       deps.now(),
-      withVideo
+      {
+        withVideo,
+        keepRead: !!args.missingMedia,
+      }
     );
   }
   const queued = due.length > 0 ? await deps.enqueue(due) : 0;
@@ -539,9 +573,9 @@ export async function libraryReadWith(args: {
  * `over_budget` with the reader they chose (`requestedReader`), so the mark
  * says it at once and the hourly sweep reads them with THAT reader once the
  * budget has room — "It waits for tomorrow's reading budget" is then true. An
- * item already `read` keeps its read untouched (never masked by a wait).
- * Everything else on the stored read (why it was blocked, who read it, its
- * chips) is kept.
+ * item already `read` waits too, but KEEPS its status and read (never masked
+ * by a wait): only the consent is set beside it. Everything else on the
+ * stored read (why it was blocked, who read it, its chips) is kept.
  */
 async function holdOverBudget(
   database: LibraryDb,
@@ -549,36 +583,36 @@ async function holdOverBudget(
   ids: readonly string[],
   readerId: string,
   at: Date,
-  /** The tap's "with video" choice (only for a reader that declares it). */
-  withVideo: boolean
+  choices: {
+    /** The tap's "with video" choice (only for a reader that declares it). */
+    withVideo: boolean;
+    /** "Get the pictures" (`missingMedia`): the item's read is kept. */
+    keepRead: boolean;
+  }
 ): Promise<void> {
-  const patch = JSON.stringify({
-    status: "over_budget",
+  const consent = JSON.stringify({
     requestedReader: readerId,
     // The tap's date: the consent ends `SYNAP_LIBRARY_READ_CONSENT_DAYS` later.
     requestedAt: at.toISOString(),
   });
-  // The choice is the tap's: set with it, or cleared (a new tap replaces it).
-  const video = withVideo
-    ? drizzleSql`|| '{"requestedWithVideo":true}'::jsonb`
-    : drizzleSql``;
-  // `heldFrom`: the waiting status the item goes back to when the consent
-  // ends or is cancelled (kept from an earlier hold; else its status now).
+  const status = drizzleSql`CASE WHEN ${readStatusSql} = 'read' THEN '{}'::jsonb ELSE '{"status":"over_budget"}'::jsonb END`;
+  // The choices are the tap's: set with it, or cleared (a new tap replaces them).
+  const chosen = JSON.stringify({
+    ...(choices.withVideo ? { requestedWithVideo: true } : {}),
+    ...(choices.keepRead ? { requestedKeepRead: true } : {}),
+  });
+  // `heldFrom`: the status the item goes back to when the consent ends or is
+  // cancelled — its read, or the waiting state it was in (kept from an
+  // earlier hold; else its status now).
   const heldFrom = drizzleSql`COALESCE(
     ${documents.metadata} #>> '{importRead,heldFrom}',
-    CASE WHEN ${readStatusSql} IN ('needs_file', 'title_only', 'unreadable') THEN ${readStatusSql} END)`;
+    CASE WHEN ${restorableStatusSql(readStatusSql)} THEN ${readStatusSql} END)`;
   await database
     .update(documents)
     .set({
-      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', (COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) - 'requestedWithVideo') || ${patch}::jsonb || jsonb_strip_nulls(jsonb_build_object('heldFrom', ${heldFrom})) ${video})`,
+      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', (COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) - 'requestedWithVideo' - 'requestedKeepRead') || ${status} || ${consent}::jsonb || jsonb_strip_nulls(jsonb_build_object('heldFrom', ${heldFrom})) || ${chosen}::jsonb)`,
     })
-    .where(
-      and(
-        libraryItemsWhere(userId),
-        inArray(documents.id, [...ids]),
-        drizzleSql`COALESCE(${documents.metadata} #>> '{importRead,status}', 'not_read') <> 'read'`
-      )
-    );
+    .where(and(libraryItemsWhere(userId), inArray(documents.id, [...ids])));
 }
 
 /**

@@ -59,6 +59,8 @@ export interface StoredLibraryRead extends LibraryItemRead {
   heldFrom?: LibraryReadStatus;
   /** The person's "with video" choice on that tap; it ends with the consent. */
   requestedWithVideo?: true;
+  /** "Get the pictures" (`missingMedia`) on that tap: a read the item has is kept. */
+  requestedKeepRead?: true;
   /**
    * A BILLED read that succeeded, held until the item's read is written
    * (media copy, transcript, summary still to come). The same reader run
@@ -134,6 +136,9 @@ export function readStoredLibraryRead(
       ...(heldFrom ? { heldFrom } : {}),
       ...(bag.requestedWithVideo === true
         ? { requestedWithVideo: true as const }
+        : {}),
+      ...(bag.requestedKeepRead === true
+        ? { requestedKeepRead: true as const }
         : {}),
       ...(attempts !== undefined ? { attempts } : {}),
       ...(transientFailures !== undefined ? { transientFailures } : {}),
@@ -225,7 +230,16 @@ export async function writeRead(
    * singletonKey does not dedupe on a standard pg-boss v10 queue, so two jobs
    * of one item can overlap.
    */
-  yieldToRead = false
+  yieldToRead = false,
+  guard: {
+    /**
+     * `next` re-stores a consent the job read from the item at this
+     * `requestedAt` (the sweep's retry of a remembered tap): it is written
+     * only while the item still holds that same consent. One the person
+     * cancelled (or that ended) while the job ran is never brought back.
+     */
+    rememberedConsentAt?: string;
+  } = {}
 ): Promise<boolean> {
   return database.transaction(async (tx) => {
     const [locked] = await tx
@@ -240,8 +254,13 @@ export async function writeRead(
     const previous = Array.isArray(current.suggestedActions)
       ? current.suggestedActions
       : [];
+    const consentGone =
+      guard.rememberedConsentAt !== undefined &&
+      next.requestedReader !== undefined &&
+      (current.requestedReader !== next.requestedReader ||
+        current.requestedAt !== guard.rememberedConsentAt);
     const merged: StoredLibraryRead = {
-      ...next,
+      ...(consentGone ? withoutConsent(next) : next),
       suggestedActions: carryRunLibraryActions(previous, next.suggestedActions),
       ...(current.aiAt ? { aiAt: current.aiAt } : {}),
       // A billed read still to be finished survives a retry; any final
@@ -259,6 +278,21 @@ export async function writeRead(
       .where(eq(documents.id, itemId));
     return true;
   });
+}
+
+/** `next` without the remembered consent (its reader, date and choices). */
+function withoutConsent(
+  next: Omit<StoredLibraryRead, "aiAt">
+): Omit<StoredLibraryRead, "aiAt"> {
+  const {
+    requestedReader: _reader,
+    requestedAt: _at,
+    heldFrom: _heldFrom,
+    requestedWithVideo: _video,
+    requestedKeepRead: _keep,
+    ...rest
+  } = next;
+  return rest;
 }
 
 /**

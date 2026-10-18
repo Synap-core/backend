@@ -5,7 +5,9 @@
  * The tap is the person's consent to run that reader (on their account) for
  * that item. The pod remembers it on the item (`importRead.requestedReader`,
  * `requestedAt`, and `heldFrom` — the waiting status the item had before the
- * tap) so the hourly sweep can read it once the budget has room. A consent is
+ * tap) so the hourly sweep can read it once the budget has room. An item
+ * that already HAS a read (a re-read, "Get the pictures") keeps it: status
+ * `read`, the consent beside it. A consent is
  * not open-ended:
  *   - it EXPIRES after {@link libraryReadConsentDays} days
  *     (env `SYNAP_LIBRARY_READ_CONSENT_DAYS`, default 7): the sweep forgets it
@@ -13,9 +15,9 @@
  *     expired one never runs it ({@link isLibraryReadConsentLive});
  *   - the person may CANCEL it (`library.cancelReadWith`,
  *     {@link cancelLibraryReadConsents}).
- * Either way the item goes back to its honest waiting state — the status it
- * had before the tap (`heldFrom`), else "needs a reader" (`needs_file`) — and
- * nothing is read or billed. A consent with no readable `requestedAt` (stored
+ * Either way the item goes back to the status it had before the tap
+ * (`heldFrom`; a `read` item simply stays read), else "needs a reader"
+ * (`needs_file`) — and nothing is read or billed. A consent with no readable `requestedAt` (stored
  * before consents were dated) counts as expired: a bill needs a dated consent.
  */
 
@@ -30,11 +32,22 @@ import { inGroupSql, libraryItemsWhere, type LibraryDb } from "./read-model.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The statuses an item waits in for a reader (`heldFrom` may only be one of them). */
-const WAITING_FOR_READER: readonly LibraryReadStatus[] = [
+/**
+ * The statuses a held item goes back to when its consent ends (`heldFrom` may
+ * only be one of them): those it waits in for a reader. (A `read` item is
+ * never held as `over_budget`: it waits WITH its read, status unchanged.)
+ */
+export const LIBRARY_CONSENT_RESTORE_STATUSES: readonly LibraryReadStatus[] = [
   "needs_file",
   "title_only",
   "unreadable",
+];
+
+/** The statuses an item holding a consent waits in (see {@link libraryReadConsentOf}). */
+const CONSENT_WAITS_IN: readonly LibraryReadStatus[] = [
+  "over_budget",
+  "not_read",
+  "read",
 ];
 
 /** Days a "Read with X" consent lasts (env `SYNAP_LIBRARY_READ_CONSENT_DAYS`, 1–365). */
@@ -55,6 +68,8 @@ export interface StoredReadConsent {
   heldFrom?: LibraryReadStatus;
   /** The "with video" choice given with the consent (ends with it). */
   requestedWithVideo?: true;
+  /** "Get the pictures" (`missingMedia`): a read the item has is kept (ends with it). */
+  requestedKeepRead?: true;
 }
 
 function parsedAt(at: string | undefined): number | null {
@@ -65,8 +80,8 @@ function parsedAt(at: string | undefined): number | null {
 
 /**
  * PURE: the live consent on a stored read, or undefined (none, undated, or
- * ended at `now`). Only an item still WAITING for that read (`over_budget`,
- * `not_read`) carries one.
+ * ended at `now`). Only an item still waiting for that read carries one:
+ * `over_budget`, `not_read`, or `read` (a re-read waiting beside its read).
  */
 export function libraryReadConsentOf(
   stored: StoredReadConsent & { status: LibraryReadStatus },
@@ -74,9 +89,7 @@ export function libraryReadConsentOf(
   days: number = libraryReadConsentDays()
 ): LibraryReadConsent | undefined {
   if (!stored.requestedReader) return undefined;
-  if (stored.status !== "over_budget" && stored.status !== "not_read") {
-    return undefined;
-  }
+  if (!CONSENT_WAITS_IN.includes(stored.status)) return undefined;
   const at = parsedAt(stored.requestedAt);
   if (at === null) return undefined;
   const ends = at + days * DAY_MS;
@@ -116,25 +129,36 @@ export function heldFromStatus(prev: {
   status: LibraryReadStatus;
   heldFrom?: LibraryReadStatus;
 }): LibraryReadStatus | undefined {
-  if (prev.heldFrom && WAITING_FOR_READER.includes(prev.heldFrom)) {
+  if (
+    prev.heldFrom &&
+    LIBRARY_CONSENT_RESTORE_STATUSES.includes(prev.heldFrom)
+  ) {
     return prev.heldFrom;
   }
-  return WAITING_FOR_READER.includes(prev.status) ? prev.status : undefined;
+  return LIBRARY_CONSENT_RESTORE_STATUSES.includes(prev.status)
+    ? prev.status
+    : undefined;
+}
+
+/** SQL: `heldFrom` is one of {@link LIBRARY_CONSENT_RESTORE_STATUSES}. */
+export function restorableStatusSql(status: SQL): SQL {
+  return drizzleSql`${status} IN (${drizzleSql.join(
+    LIBRARY_CONSENT_RESTORE_STATUSES.map((s) => drizzleSql`${s}`),
+    drizzleSql`, `
+  )})`;
 }
 
 /**
  * SQL: `importRead` with its consent forgotten. An `over_budget` item goes
- * back to `heldFrom` (a waiting status), else `needs_file`; any other status
- * is kept (a `not_read` retry is then read by the pod's own ladder only).
+ * back to `heldFrom` (the status it had before the hold), else `needs_file`;
+ * any other status is kept (a `not_read` retry is then read by the pod's own
+ * ladder only).
  */
 const FORGOTTEN_READ = drizzleSql`(
-  (${documents.metadata} -> 'importRead') - 'requestedReader' - 'requestedAt' - 'heldFrom' - 'requestedWithVideo'
+  (${documents.metadata} -> 'importRead') - 'requestedReader' - 'requestedAt' - 'heldFrom' - 'requestedWithVideo' - 'requestedKeepRead'
   || CASE WHEN ${documents.metadata} #>> '{importRead,status}' = 'over_budget'
        THEN jsonb_build_object('status',
-         CASE WHEN ${documents.metadata} #>> '{importRead,heldFrom}' IN (${drizzleSql.join(
-           WAITING_FOR_READER.map((s) => drizzleSql`${s}`),
-           drizzleSql`, `
-         )})
+         CASE WHEN ${restorableStatusSql(drizzleSql`${documents.metadata} #>> '{importRead,heldFrom}'`)}
            THEN ${documents.metadata} #>> '{importRead,heldFrom}'
            ELSE 'needs_file' END)
        ELSE '{}'::jsonb END)`;
@@ -149,6 +173,18 @@ const CONSENT_AT = drizzleSql`(CASE WHEN ${documents.metadata} #>> '{importRead,
 /** SQL: this row's consent has ended (or was never dated). */
 export function consentEndedSql(days: number): SQL {
   return drizzleSql`(${HOLDS_CONSENT} AND ${CONSENT_AT} <= now() - make_interval(days => ${days}))`;
+}
+
+/**
+ * SQL twin of {@link libraryReadConsentOf}: the row holds a LIVE consent — a
+ * remembered reader, the item still waiting for that read, dated and not
+ * ended. What `read.consent` shows, counted.
+ */
+export function consentLiveSql(days: number = libraryReadConsentDays()): SQL {
+  return drizzleSql`(${HOLDS_CONSENT} AND ${documents.metadata} #>> '{importRead,status}' IN (${drizzleSql.join(
+    CONSENT_WAITS_IN.map((s) => drizzleSql`${s}`),
+    drizzleSql`, `
+  )}) AND ${CONSENT_AT} > now() - make_interval(days => ${days}))`;
 }
 
 async function forget(

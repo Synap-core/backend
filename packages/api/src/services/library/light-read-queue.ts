@@ -370,7 +370,9 @@ export async function sweepLibraryLightReads(
   //    batch and starve everyone else.
   const room = LIGHT_READ_SWEEP_BATCH - due.length;
   if (room > 0) {
-    const overBudget = drizzleSql`${documents.metadata} #>> '{importRead,status}' = 'over_budget'`;
+    // Held: over today's budget, or a re-read waiting beside a read (live
+    // consents only: the ended ones were forgotten in step 0).
+    const overBudget = drizzleSql`(${documents.metadata} #>> '{importRead,status}' = 'over_budget' OR (${documents.metadata} #>> '{importRead,status}' = 'read' AND ${documents.metadata} -> 'importRead' ? 'requestedReader'))`;
     const holders = await database
       .selectDistinct({ userId: documents.userId })
       .from(documents)

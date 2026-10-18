@@ -588,6 +588,14 @@ export interface LibraryReadersResult {
    * another site are counted in `waiting`, not here.
    */
   platforms?: Array<{ serviceId: string; count: number }>;
+  /**
+   * `groupId` / `waiting` only: the items of that scope (the group's, or the
+   * whole Library's; archived excluded) that hold a LIVE "Read with X" consent
+   * — waiting for tomorrow's budget or a retry, each showing `read.consent`.
+   * What `library.cancelReadWith` with the same scope ends: "Cancel 37
+   * waiting reads". 0 when none.
+   */
+  consented?: number;
 }
 
 /**

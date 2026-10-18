@@ -92,6 +92,7 @@ import { LibraryActionError, runLibraryAction } from "../run-action.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
 import { keepLibraryPageHtml, readLibraryPageMeta } from "../page-html.js";
 import { scoreGroupSuggestions } from "../suggest-groups.js";
+import { libraryCancelReadWith } from "../readers.js";
 import { toLibraryItemView } from "../read-model.js";
 import { stageImportItems } from "../../imports/stage.js";
 import type { ImportSessionRow } from "../../imports/session.js";
@@ -2149,5 +2150,178 @@ describe("the sweep's read of a held consent runs with the person's \"with video
     expect(await read(id, deps)).toMatchObject({ status: "skipped" });
     expect(calls.readUrl).toBe(0);
     expect((await readOf(id))!).not.toHaveProperty("requestedWithVideo");
+  });
+});
+
+describe("a re-read waiting BESIDE a read: the sweep's run keeps or replaces the read, then the consent ends", () => {
+  const live = () => new Date(NOW.getTime() - 86_400_000).toISOString();
+  const readWithConsent = (extra: Record<string, unknown> = {}) => ({
+    status: "read" as const,
+    summary: "the kept summary",
+    suggestedActions: [],
+    textKey: "kept/text2",
+    reader: STAMP("builtin:article"),
+    requestedReader: APIFY,
+    requestedAt: live(),
+    ...extra,
+  });
+
+  it('"Get the pictures" (remembered keepRead): media copied, the read stays, the consent is forgotten (never re-run)', async () => {
+    const ig = await stageLink(
+      IG,
+      {},
+      readWithConsent({ requestedKeepRead: true })
+    );
+    h.objects.set("kept/text2", Buffer.from("the kept text"));
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url, opts) => {
+        calls.readOpts.push(opts);
+        return doorRead(url, {
+          via: APIFY_STAMP,
+          text: "a NEW caption",
+          media: [
+            { url: "https://cdn.ig.test/n.jpg", kind: "image", order: 0 },
+          ],
+        });
+      },
+    });
+    deps.copyMedia = recordingCopy(calls);
+    // The sweep's job: no reader, no force — the remembered consent runs.
+    expect(await read(ig, deps)).toMatchObject({ status: "read" });
+    expect(calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true },
+    ]);
+    expect(calls.copied).toEqual([
+      { itemId: ig, urls: ["https://cdn.ig.test/n.jpg"] },
+    ]);
+    expect(calls.summarize).toBe(0);
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      textKey: "kept/text2",
+    });
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(r).not.toHaveProperty("requestedKeepRead");
+    // Nothing left to run: the next job keeps the final read.
+    expect(await read(ig, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readOpts).toHaveLength(1);
+  });
+
+  it("a remembered re-read that did not read: the read stays, the attempt is noted, the consent ends", async () => {
+    const ig = await stageLink(IG, {}, readWithConsent());
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        return {
+          status: "blocked",
+          sourceUrl: u,
+          via: APIFY_STAMP,
+          blocked: { reason: "private" },
+        };
+      },
+    });
+    await read(ig, deps);
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      lastAttempt: { readerId: APIFY },
+    });
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(await read(ig, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(1);
+  });
+
+  it("the sweep picks a read item holding a LIVE consent (the person's budget has room)", async () => {
+    const waiting = await stageItem({
+      item: { source: { kind: "url", url: "https://www.instagram.com/p/rr" } },
+      ageMinutes: 30,
+      read: { ...readWithConsent(), requestedAt: new Date().toISOString() },
+    });
+    await stageItem({
+      item: { source: { kind: "url", url: "https://www.instagram.com/p/r0" } },
+      ageMinutes: 30,
+      read: { status: "read", suggestedActions: [] },
+    });
+    const sent: string[] = [];
+    await sweepLibraryLightReads({
+      database: db as never,
+      send: async (_q: string, data: { itemId: string }) =>
+        void sent.push(data.itemId),
+      perDay: 5,
+    });
+    expect(sent).toEqual([waiting]);
+  });
+});
+
+describe("a consent the person cancelled while the sweep's run was in flight stays cancelled", () => {
+  it("the run ends waiting (a retry): the cancelled consent is NOT written back", async () => {
+    const tapped = new Date(NOW.getTime() - 86_400_000).toISOString();
+    const ig = await stageLink(
+      IG,
+      {},
+      {
+        status: "over_budget",
+        suggestedActions: [],
+        requestedReader: APIFY,
+        requestedAt: tapped,
+        heldFrom: "needs_file",
+      }
+    );
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        // The person taps Cancel while the vendor runs.
+        await libraryCancelReadWith({
+          userId: USER,
+          itemIds: [ig],
+          notify: () => undefined,
+        });
+        return {
+          status: "failed",
+          sourceUrl: u,
+          via: APIFY_STAMP,
+          error: "Apify answered 503",
+          errorClass: "unavailable",
+        };
+      },
+    });
+    expect(await read(ig, deps)).toMatchObject({ status: "not_read" });
+    expect(calls.readUrl).toBe(1);
+    const r = (await readOf(ig))!;
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(r).not.toHaveProperty("requestedAt");
+    // CONTROL: without a cancel, the same run keeps the consent (tap's date).
+    const kept = await stageLink(
+      `${IG}x`,
+      {},
+      {
+        status: "over_budget",
+        suggestedActions: [],
+        requestedReader: APIFY,
+        requestedAt: tapped,
+        heldFrom: "needs_file",
+      }
+    );
+    const plain = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => ({
+        status: "failed",
+        sourceUrl: u,
+        via: APIFY_STAMP,
+        error: "Apify answered 503",
+        errorClass: "unavailable",
+      }),
+    });
+    await read(kept, plain.deps);
+    expect((await readOf(kept))!).toMatchObject({
+      status: "not_read",
+      requestedReader: APIFY,
+      requestedAt: tapped,
+    });
   });
 });

@@ -344,6 +344,7 @@ describe("library.readers — a group's waiting items", () => {
         { ...BUILTIN, count: 1 },
       ],
       waiting: 4,
+      consented: 0,
     });
     expect(lookups).toHaveLength(4);
   });
@@ -436,6 +437,7 @@ describe("the whole Library's waiting items (`waiting: true`)", () => {
           { ...BUILTIN, count: 1 },
         ],
         waiting: 3,
+        consented: 0,
       }
     );
     expect(loads).toEqual([
@@ -614,7 +616,7 @@ async function readOf(id: string): Promise<Record<string, unknown>> {
 }
 
 describe("library.readWith — what today's budget cannot hold WAITS with the choice", () => {
-  it("over budget → marked over_budget with the reader (the sweep reads it); a read item keeps its read", async () => {
+  it("over budget → marked over_budget with the reader (the sweep reads it); a read item waits BESIDE its read", async () => {
     const waiting = await item({
       url: "https://www.instagram.com/p/wait",
       status: "needs_file",
@@ -655,10 +657,14 @@ describe("library.readWith — what today's budget cannot hold WAITS with the ch
       blocked: { reason: "needs_reader" },
       suggestedActions: [{ id: "date-0" }],
     });
+    // Never masked by the wait: still `read` with its read, the consent
+    // beside it (the result's "waits" is true for it too).
     expect(await readOf(read)).toEqual({
       status: "read",
       summary: "kept",
       suggestedActions: [],
+      requestedReader: APIFY.readerId,
+      requestedAt: NOW.toISOString(),
     });
   });
 
@@ -1171,5 +1177,128 @@ describe('the "with video" choice waits WITH the consent (and ends with it)', ()
     });
     expect(await readOf(tt)).not.toHaveProperty("requestedWithVideo");
     expect(await readOf(tt)).not.toHaveProperty("requestedReader");
+  });
+});
+
+describe("a re-read of a READ item waits beside its read; consents are counted", () => {
+  const consent = (at: string) => ({
+    requestedReader: APIFY.readerId,
+    requestedAt: at,
+  });
+
+  it('"Get the pictures" over budget: the read item keeps its read, holds the consent with keepRead; cancel ends it, the read stays', async () => {
+    const ig = await item({
+      url: "https://www.instagram.com/p/old-read",
+      status: "read",
+      read: { summary: "kept text" },
+    });
+    await patchMeta(ig, {
+      importMediaSkipped: {
+        reason: "expired",
+        sourceUrl: "https://scontent.cdninstagram.com/x.jpg?oe=5F000000",
+        expiredAt: "2020-07-04T00:00:00.000Z",
+        at: NOW.toISOString(),
+      },
+    });
+    const { deps, sent } = fakeDeps({ usedToday: async () => 200 });
+    expect(
+      await libraryReadWith({
+        userId: USER,
+        missingMedia: true,
+        readerId: APIFY.readerId,
+        deps,
+      })
+    ).toEqual({
+      queued: 0,
+      overBudget: 1,
+      skipped: 0,
+      consentExpiresAt: CONSENT_END,
+    });
+    expect(sent).toEqual([]);
+    expect(await readOf(ig)).toEqual({
+      status: "read",
+      summary: "kept text",
+      suggestedActions: [],
+      requestedReader: APIFY.readerId,
+      requestedAt: NOW.toISOString(),
+      requestedKeepRead: true,
+    });
+    await libraryCancelReadWith({
+      userId: USER,
+      itemIds: [ig],
+      notify: () => undefined,
+    });
+    expect(await readOf(ig)).toEqual({
+      status: "read",
+      summary: "kept text",
+      suggestedActions: [],
+    });
+  });
+
+  it("readers counts the scope's LIVE consents — exactly the items whose view shows read.consent; cancel ends that many", async () => {
+    const now = Date.now();
+    const live = new Date(now - 86_400_000).toISOString();
+    const g = await group();
+    const inGroup = await item({
+      url: "https://www.instagram.com/p/c1",
+      status: "over_budget",
+      groupIds: [g],
+      read: consent(live),
+    });
+    const beside = await item({
+      url: "https://www.instagram.com/p/c2",
+      status: "read",
+      groupIds: [g],
+      read: { summary: "s", ...consent(live) },
+    });
+    const loose = await item({
+      url: "https://www.instagram.com/p/c3",
+      status: "not_read",
+      read: consent(live),
+    });
+    // Not counted: ended, undated, archived, another person's, no consent.
+    await item({
+      url: "https://www.instagram.com/p/c4",
+      status: "over_budget",
+      groupIds: [g],
+      read: consent(new Date(now - 8 * 86_400_000).toISOString()),
+    });
+    await item({
+      url: "https://www.instagram.com/p/c5",
+      status: "over_budget",
+      read: { requestedReader: APIFY.readerId },
+    });
+    await item({
+      url: "https://www.instagram.com/p/c6",
+      status: "over_budget",
+      archived: true,
+      read: consent(live),
+    });
+    await item({
+      userId: OTHER,
+      url: "https://www.instagram.com/p/c7",
+      status: "over_budget",
+      read: consent(live),
+    });
+    await item({ url: "https://www.instagram.com/p/c8", status: "needs_file" });
+    const { deps } = fakeDeps();
+    const all = await libraryReaders({ userId: USER, waiting: true, deps });
+    const inG = await libraryReaders({ userId: USER, groupId: g, deps });
+    // The count is the set the item views mark (the value arrives).
+    const { items } = await listLibraryItems({ userId: USER, input: {} });
+    const marked = items.filter((i) => i.read.consent).map((i) => i.id);
+    expect(marked.sort()).toEqual([inGroup, beside, loose].sort());
+    expect(all.consented).toBe(3);
+    expect(inG.consented).toBe(2);
+    const quiet = () => undefined;
+    expect(
+      await libraryCancelReadWith({ userId: USER, groupId: g, notify: quiet })
+    ).toMatchObject({ cancelled: expect.any(Number) });
+    expect(
+      (await libraryReaders({ userId: USER, groupId: g, deps })).consented
+    ).toBe(0);
+    expect(
+      (await libraryReaders({ userId: USER, waiting: true, deps })).consented
+    ).toBe(1);
   });
 });
