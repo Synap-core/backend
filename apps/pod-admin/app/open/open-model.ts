@@ -29,6 +29,8 @@ export interface ResolvedOpen {
   id: string;
   displayName: string | null;
   workspaceId: string | null;
+  /** When the object last changed; null when its table does not record it. */
+  updatedAt: Date | null;
   openable: boolean;
   /** Address parameters the link must carry (only runs: `flowType`). */
   params?: Record<string, string>;
@@ -97,7 +99,11 @@ export function bounceAddressParams(
 export function bounceReceipt(
   linkType: string,
   resolved: ResolvedOpen | undefined
-): { title: string; workspaceId: string | null } | null {
+): {
+  title: string;
+  workspaceId: string | null;
+  updatedAt: Date | null;
+} | null {
   if (!resolved || resolved.type !== linkType) return null;
   const title = resolved.displayName?.trim();
   if (!title) return null;
@@ -105,6 +111,7 @@ export function bounceReceipt(
     title,
     // A space IS the scope — it has no space of its own to name.
     workspaceId: linkType === "workspace" ? null : resolved.workspaceId,
+    updatedAt: resolved.updatedAt,
   };
 }
 

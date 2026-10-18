@@ -51,6 +51,7 @@ describe("diagnose.resolveOpen", () => {
       id: ID,
       displayName: "Weekly digest",
       workspaceId: "ws-1",
+      updatedAt: new Date("2026-10-17T09:00:00Z"),
     });
     const out = await caller.resolveOpen({ id: ID });
     expect(out).toEqual({
@@ -58,6 +59,7 @@ describe("diagnose.resolveOpen", () => {
       id: ID,
       displayName: "Weekly digest",
       workspaceId: "ws-1",
+      updatedAt: new Date("2026-10-17T09:00:00Z"),
       openable: true,
       params: { flowType: "playbook" },
     });
@@ -72,6 +74,7 @@ describe("diagnose.resolveOpen", () => {
       id: ID,
       displayName: null,
       workspaceId: null,
+      updatedAt: null,
       openable: false,
     });
   });

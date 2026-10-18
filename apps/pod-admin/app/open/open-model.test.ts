@@ -11,12 +11,14 @@ import {
 
 const ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const WS = "11111111-2222-4333-8444-555555555555";
+const UPDATED = new Date("2026-10-17T09:00:00Z");
 
 const resolved = (over: Partial<ResolvedOpen>): ResolvedOpen => ({
   type: "document",
   id: ID,
   displayName: "Q3 plan",
   workspaceId: WS,
+  updatedAt: UPDATED,
   openable: true,
   ...over,
 });
@@ -26,7 +28,14 @@ describe("bounceReceipt — diagnose.resolveOpen names the bounced object", () =
     expect(bounceReceipt("document", resolved({}))).toEqual({
       title: "Q3 plan",
       workspaceId: WS,
+      updatedAt: UPDATED,
     });
+  });
+
+  it("says nothing of when for a kind that does not record it", () => {
+    expect(
+      bounceReceipt("document", resolved({ updatedAt: null }))?.updatedAt
+    ).toBeNull();
   });
 
   it("refuses a name for a DIFFERENT kind (a wrong name is worse than none)", () => {

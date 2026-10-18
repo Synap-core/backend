@@ -91,6 +91,7 @@ describe("GET /resolve/:id", () => {
       id: ID,
       displayName: null,
       workspaceId: null,
+      updatedAt: null,
       openable: false,
     });
   });
@@ -117,6 +118,18 @@ describe("GET /resolve/:id", () => {
       expect(body).toMatchObject({ type: kind, id: ID, openable: true });
     }
   );
+
+  it("carries when the object last changed", async () => {
+    setResolved({
+      kind: "entity",
+      id: ID,
+      displayName: "Acme",
+      workspaceId: null,
+      updatedAt: new Date("2026-10-17T09:00:00Z"),
+    });
+    const { body } = await get();
+    expect(body).toMatchObject({ updatedAt: "2026-10-17T09:00:00.000Z" });
+  });
 
   it("a kind with no browser door is reported, not linked", async () => {
     setResolved({ kind: "external_send", id: ID });

@@ -224,7 +224,8 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(workspaces, []);
     mockDb.__push(views, []);
     mockDb.__push(documents, []);
-    mockDb.__push(entities, [{ title: "Acme", type: "company" }]);
+    const updatedAt = new Date("2026-10-17T09:00:00Z");
+    mockDb.__push(entities, [{ title: "Acme", type: "company", updatedAt }]);
     const result = await resolveObjectKind(ID, USER_ID);
     expect(result).toMatchObject({
       kind: "entity",
@@ -233,6 +234,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
       // consumer must never need a second per-kind lookup to print a title.
       displayName: "Acme",
       profileSlug: "company",
+      updatedAt,
     });
   });
 
@@ -245,7 +247,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
-    mockDb.__push(workspaces, [{ name: "Foundation" }]);
+    mockDb.__push(workspaces, [{ name: "Foundation", updatedAt: null }]);
     const result = await resolveObjectKind(ID, USER_ID);
     expect(result).toMatchObject({
       kind: "workspace",
@@ -254,6 +256,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
       // A workspace IS its own workspace lens — carried so a consumer that
       // routes on `workspaceId` does not have to special-case this kind.
       workspaceId: ID,
+      updatedAt: null,
     });
   });
 
