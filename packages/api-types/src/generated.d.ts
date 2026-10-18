@@ -8044,6 +8044,11 @@ export interface LibraryReadConsent {
 	givenAt: string;
 	/** When the consent ends (ISO): `givenAt` + the pod's consent days. */
 	expiresAt: string;
+	/**
+	 * The person also chose "with video" (`ReaderOption` `withVideo`) on that
+	 * tap: the waiting read downloads the video too. Absent = without.
+	 */
+	withVideo?: true;
 }
 /** A failed read's class, as kept on the item. */
 export interface LibraryReadFailure {
