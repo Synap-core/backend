@@ -937,9 +937,10 @@ function loopPlaybookNames(definition: Bag): string[] {
 
 /**
  * See `assertNoTakeover`: a template's automations and playbooks land in the
- * space it builds or composes onto, where the applier matches them BY NAME
- * (an automation also by its `key`) and rewrites the match — an automation's
- * whole graph, a playbook's untouched fields plus its source link and grants.
+ * space it builds or composes onto, where the applier matches them BY NAME,
+ * case-insensitively (an automation also by its `key`), and rewrites the
+ * match — an automation's whole graph, a playbook's untouched fields plus its
+ * source link and grants.
  * Which space that is gets decided while the template installs, so the check
  * runs against every live space the installing person belongs to (closed,
  * never a guess), except the space this same package already holds
@@ -952,7 +953,9 @@ async function assertNoNamedClash(
   target: { userId: string; packageSlug: string }
 ): Promise<void> {
   const autos = bagsOf(definition.automations);
-  const autoNames = autos.flatMap((a) => textOf(a.name) ?? []);
+  const autoNames = [
+    ...new Set(autos.flatMap((a) => textOf(a.name)?.toLowerCase() ?? [])),
+  ];
   const autoKeys = autos.flatMap((a) => textOf(a.key) ?? []);
   const playbookNames = [
     ...new Set(
@@ -983,7 +986,10 @@ async function assertNoNamedClash(
         and(
           or(
             autoNames.length > 0
-              ? inArray(automationsTable.name, autoNames)
+              ? inArray(
+                  drizzleSql<string>`lower(${automationsTable.name})`,
+                  autoNames
+                )
               : undefined,
             autoKeys.length > 0
               ? inArray(

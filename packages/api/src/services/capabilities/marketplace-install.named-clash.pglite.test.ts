@@ -224,6 +224,18 @@ describe("a template's automations and playbooks, by name, on PGlite", () => {
     expect(h.applyTemplate).not.toHaveBeenCalled();
   });
 
+  it("refuses an automation of the same name in another case", async () => {
+    const ws = await space();
+    await q(`insert into automations (workspace_id, name) values ($1, $2)`, [
+      ws,
+      "daily DIGEST",
+    ]);
+    expect((await outcome()).refused).toContain(
+      'an automation called "daily DIGEST"'
+    );
+    expect(h.applyTemplate).not.toHaveBeenCalled();
+  });
+
   it("refuses an automation carrying the template's key under another name", async () => {
     const ws = await space();
     await q(
