@@ -114,7 +114,34 @@ export interface LibraryItemRead {
    * item a billed reader gave up on. Absent = the last try did not fail.
    */
   failure?: LibraryReadFailure;
+  /**
+   * The person's "Read with X" waits on this item (its read was over today's
+   * budget, or failed and waits for its retry): the reader they chose and when
+   * that consent ENDS. Projected by the pod's item views
+   * (`library.list` / `group` / `search`), never by {@link readLibraryItemRead}
+   * (the end depends on the pod's setting). After `expiresAt` the pod never
+   * runs it: the item goes back to waiting for a reader and the choice is
+   * forgotten. `library.cancelReadWith` ends it at once. Absent = no
+   * remembered choice (or it already ended).
+   */
+  consent?: LibraryReadConsent;
 }
+
+/** A remembered "Read with X" that waits to run (see {@link LibraryItemRead.consent}). */
+export interface LibraryReadConsent {
+  /** The reader id the person chose (`library.readers` offer id). */
+  readerId: string;
+  /** When the person tapped (ISO). */
+  givenAt: string;
+  /** When the consent ends (ISO): `givenAt` + the pod's consent days. */
+  expiresAt: string;
+}
+
+/**
+ * Days a "Read with X" consent for an item waiting on the budget (or a retry)
+ * lasts by default (pod env `SYNAP_LIBRARY_READ_CONSENT_DAYS`).
+ */
+export const LIBRARY_READ_CONSENT_DAYS_DEFAULT = 7;
 
 /** A failed read's class, as kept on the item. */
 export interface LibraryReadFailure {
@@ -270,6 +297,14 @@ export interface LibraryItemView extends ImportItemView {
    * not a weak read, or not known (the lookup failed — never guessed false).
    */
   readerAvailable?: boolean;
+  /**
+   * The item's picture was never kept because its signed CDN link (old
+   * Instagram / TikTok posts) had already EXPIRED: the pod skipped it quietly
+   * — no failure, no error mark; draw the platform tile. Re-reading the post
+   * with a reader brings fresh pictures (`library.readWith` with
+   * `missingMedia: true`, or this item's id). Absent = not skipped.
+   */
+  mediaExpired?: true;
 }
 
 export interface LibraryGroupView {
@@ -377,6 +412,84 @@ export const LIBRARY_CURATE_OPS = [
   "group.unarchive",
 ] as const satisfies ReadonlyArray<LibraryCurateOp["op"]>;
 
+// ── Agent proposals: organise what is already kept ─────────────────────────
+
+/**
+ * What an AGENT may PROPOSE about the Library — its ORGANISATION, never its
+ * content (founder rule, 2026-10-18: nothing an agent SENDS lands in the
+ * Library; an agent may PROPOSE how to organise what is already there). Every
+ * op is filed as a governed proposal (`library/organize`, always propose for
+ * an agent) and applied on approval by the SAME code as the person's own
+ * `library.curate` / `library.build`.
+ *   - `group.create`  a new group, optionally with existing items and a note;
+ *   - `group.items`   add / remove existing items of an existing group;
+ *   - `group.update`  rename, set the note, or set the space Build files into
+ *                     (`workspaceId`, `null` clears it);
+ *   - `group.build`   ask for an existing group to be built (approval runs
+ *                     Build, whose bundle is then reviewed as always).
+ * Adding or uploading items is NOT here: an agent's content goes to
+ * `synap_capture`.
+ */
+export type LibraryOrganizeOp =
+  | { op: "group.create"; name: string; note?: string; itemIds?: string[] }
+  | { op: "group.items"; groupId: string; add?: string[]; remove?: string[] }
+  | {
+      op: "group.update";
+      groupId: string;
+      name?: string;
+      note?: string;
+      workspaceId?: string | null;
+    }
+  | { op: "group.build"; groupId: string };
+
+export const LIBRARY_ORGANIZE_OPS = [
+  "group.create",
+  "group.items",
+  "group.update",
+  "group.build",
+] as const satisfies ReadonlyArray<LibraryOrganizeOp["op"]>;
+
+/** Ops one organise proposal holds at most. */
+export const LIBRARY_ORGANIZE_OPS_MAX = 50;
+
+/**
+ * The governed door an organise proposal is filed under:
+ * `proposals.targetType = "library"`, `proposals.proposalType = "organize"`
+ * (event key `library.organize`).
+ */
+export const LIBRARY_ORGANIZE_DOOR = {
+  subjectType: "library",
+  action: "organize",
+} as const;
+
+/** Input of `library.propose` (tRPC) / `POST /library/propose` (Hub REST) — agents only. */
+export interface LibraryProposeRequest {
+  ops: LibraryOrganizeOp[];
+  /** Why — shown on the proposal card. */
+  reasoning?: string;
+}
+
+/** Result of `library.propose`: always a proposal for an agent — nothing changed yet. */
+export interface LibraryProposeResult {
+  status: "proposed";
+  proposalId: string;
+  reviewUrl?: string;
+}
+
+/**
+ * `proposals.data` of a `library/organize` proposal — what the card renders.
+ * `ops` is what approval applies (re-validated then, owner-floored on the
+ * proposal's subject); `groups` / `items` are the names and titles the
+ * referenced EXISTING groups and items had when it was filed (display only).
+ */
+export interface LibraryOrganizeProposalData {
+  ops: LibraryOrganizeOp[];
+  groups: Array<{ id: string; name: string }>;
+  items: Array<{ id: string; title: string }>;
+  /** One line, e.g. `Create group "Recipes" with 4 items`. */
+  summary: string;
+}
+
 // ── Requests and results ────────────────────────────────────────────────────
 
 export interface LibraryAddRequest {
@@ -437,22 +550,81 @@ export interface LibraryGroupsResult {
  */
 export type LibraryReaderOffer = UrlReaderOffer & { count?: number };
 
+/**
+ * Input of `library.readers` — exactly ONE of:
+ *   - `itemId`       one item's live offers (`current` on the one that read it);
+ *   - `groupId`      a group's WAITING items, one offer per reader with `count`;
+ *   - `waiting`      every waiting item of the person's Library, same shape;
+ *   - `missingMedia` every item whose pictures were never kept because their
+ *                    signed CDN link had expired (`LibraryItemView.mediaExpired`):
+ *                    "Get pictures for N old <platform> posts with X".
+ */
+export interface LibraryReadersRequest {
+  itemId?: string;
+  groupId?: string;
+  waiting?: true;
+  missingMedia?: true;
+}
+
 /** Result of `library.readers` — live, never stored. */
 export interface LibraryReadersResult {
   offers: LibraryReaderOffer[];
   /**
-   * The waiting items with a link that were looked at (a group's, or the
-   * whole Library's with `waiting: true`; at most 1 000, oldest first).
-   * Absent for one item.
+   * The items with a link that were looked at: a group's or the whole
+   * Library's WAITING items (`groupId` / `waiting`), or the items missing
+   * their pictures (`missingMedia`); at most 1 000, oldest first. Absent for
+   * one item.
    */
   waiting?: number;
+  /**
+   * `missingMedia` only: those items by the platform of their link (a
+   * `@synap-core/types/service-marks` id: `instagram`, `tiktok`), most first —
+   * the "<platform>" of "Get pictures for N old <platform> posts". Items of
+   * another site are counted in `waiting`, not here.
+   */
+  platforms?: Array<{ serviceId: string; count: number }>;
 }
 
-/** Input of `library.readWith`: items or a group's waiting items, one reader. */
+/**
+ * Input of `library.readWith`: exactly ONE scope — `itemIds`, a group's
+ * waiting items (`groupId`), every waiting item (`waiting`), or every item
+ * missing its expired pictures (`missingMedia`) — and one reader.
+ */
 export interface LibraryReadWithRequest {
   itemIds?: string[];
   groupId?: string;
+  waiting?: true;
+  /**
+   * Re-read the items whose pictures expired, to KEEP their pictures: an item
+   * that already has a read keeps its read text; only the media is added.
+   * Billed, budgeted and leased like any "Read with X".
+   */
+  missingMedia?: true;
   readerId: string;
+  /**
+   * Also download the video file (`ReaderOption` `withVideo`). Sent only to a
+   * reader whose offer lists it in `options`; ignored for any other reader.
+   * Off by default — the vendor may bill more per item.
+   */
+  withVideo?: boolean;
+}
+
+/**
+ * Input of `library.cancelReadWith` (person only): end the remembered
+ * "Read with X" consent of exactly ONE scope — `itemIds`, a group's items
+ * (`groupId`), or every item that holds one (`waiting: true`). The items go
+ * back to waiting for a reader; nothing is read, nothing is billed.
+ */
+export interface LibraryCancelReadWithRequest {
+  itemIds?: string[];
+  groupId?: string;
+  waiting?: true;
+}
+
+/** Result of `library.cancelReadWith`. */
+export interface LibraryCancelReadWithResult {
+  /** Items whose waiting consent was ended (0 = none held one). */
+  cancelled: number;
 }
 
 /** Result of `library.retryMedia`: the failed copies queued to be tried again (0 = none failed). */
@@ -472,6 +644,11 @@ export interface LibraryReadWithResult {
   overBudget: number;
   /** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
   skipped: number;
+  /**
+   * When `overBudget > 0`: when the consent the tap gave for those waiting
+   * items ends (ISO) — "waits for tomorrow's reading budget, until <date>".
+   */
+  consentExpiresAt?: string;
 }
 
 export interface LibraryRunActionResult {

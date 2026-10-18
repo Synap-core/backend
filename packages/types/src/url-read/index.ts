@@ -698,6 +698,69 @@ export interface UrlReaderOffer {
   proposalId?: string;
   /** the reader that produced the item's current read */
   current?: boolean;
+  /**
+   * Per-tap choices this reader DECLARES (its verb takes the matching
+   * parameter), e.g. `["withVideo"]`. Absent = none. A choice the reader does
+   * not declare is never sent to it (`library.readWith` drops it).
+   */
+  options?: ReaderOption[];
+}
+
+/**
+ * The per-tap reader choices the pod knows. Each is a boolean PARAMETER of the
+ * reader's verb, named exactly so; a reader offers it by declaring it.
+ *   - `withVideo`: also download the post's video file (TikTok: the actor's
+ *     `shouldDownloadVideos`). Off unless the person picks it; the vendor may
+ *     bill more per item.
+ */
+export const READER_OPTIONS = ["withVideo"] as const;
+export type ReaderOption = (typeof READER_OPTIONS)[number];
+
+/** Is `v` a known reader option? */
+export function isReaderOption(v: unknown): v is ReaderOption {
+  return (
+    typeof v === "string" && (READER_OPTIONS as readonly string[]).includes(v)
+  );
+}
+
+// ─────────────────────────── signed media links ───────────────────────────
+
+/**
+ * Social CDNs sign their media links with an expiry built into the URL:
+ *   - Instagram / Facebook (`*.cdninstagram.com`, `*.fbcdn.net`): `oe=` = the
+ *     expiry as a HEX unix epoch (seconds);
+ *   - TikTok (`*.tiktokcdn.com`, `*.tiktokcdn-us.com`, … any `tiktokcdn*`
+ *     host): `x-expires=` (else `expires=`) = the expiry as a DECIMAL unix
+ *     epoch (seconds).
+ * Returns that expiry in epoch MILLISECONDS, or `null` when the URL is not
+ * such a link or carries no readable expiry (then nothing is known: fetch it).
+ */
+export function signedMediaUrlExpiresAt(url: string): number | null {
+  const u = parseHttpUrl(url);
+  if (!u) return null;
+  const host = u.hostname.toLowerCase();
+  const q = u.searchParams;
+  if (/(^|\.)(cdninstagram\.com|fbcdn\.net)$/.test(host)) {
+    const oe = q.get("oe");
+    if (!oe || !/^[0-9a-f]{1,12}$/i.test(oe)) return null;
+    return parseInt(oe, 16) * 1000;
+  }
+  if (/(^|\.)tiktokcdn[a-z0-9-]*\.com$/.test(host)) {
+    const raw = q.get("x-expires") ?? q.get("expires");
+    if (!raw || !/^[0-9]{1,12}$/.test(raw)) return null;
+    return Number(raw) * 1000;
+  }
+  return null;
+}
+
+/**
+ * Has this signed CDN link already expired at `nowMs`? `false` for any link
+ * whose expiry is not known ({@link signedMediaUrlExpiresAt} null): an
+ * unknown link is tried, never skipped.
+ */
+export function isExpiredSignedMediaUrl(url: string, nowMs: number): boolean {
+  const at = signedMediaUrlExpiresAt(url);
+  return at !== null && at <= nowMs;
 }
 
 // ───────────────────────────── helpers ─────────────────────────────
