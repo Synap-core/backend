@@ -817,3 +817,41 @@ describe("movingSpaceChips counts the subjectless rows in All (homes A7)", () =>
     expect(chips).toEqual([{ workspaceId: "dev", title: "dev", count: null }]);
   });
 });
+
+describe("a title stored escaped (`&amp;`) reads as text", () => {
+  // Rows written before every write door decoded still hold `&amp;`; the
+  // lens decodes where it builds a title, so they display right without a
+  // backfill. The plain title is the discriminator: decoding must not touch it.
+  it("a moving row's title", () => {
+    const row = (title: string) =>
+      movingNowRowModel({
+        entityId: "e1",
+        title,
+        profileSlug: "devplane_feature",
+        workspaceId: "w1",
+        status: null,
+        category: null,
+        work: [],
+      }).row.title;
+    expect(row("Doors &amp; Surface Spec")).toBe("Doors & Surface Spec");
+    expect(row("Doors & Surface Spec")).toBe("Doors & Surface Spec");
+  });
+
+  it("a space card's headline", () => {
+    const m = spaceIntentCardModel(
+      space({
+        produces: [
+          kind({
+            headline: {
+              entityId: "e1",
+              title: "Q&amp;A pipeline",
+              status: null,
+              reason: "recent",
+            },
+          }),
+        ],
+      })
+    );
+    expect(m.headline?.text).toBe("Q&A pipeline");
+  });
+});

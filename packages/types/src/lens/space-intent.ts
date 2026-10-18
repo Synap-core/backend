@@ -25,6 +25,7 @@ import {
   resolveObjectNounPlural,
   resolveStatusLabel,
 } from "../vocabulary/index.js";
+import { decodeHtmlEntities } from "../text/html-entities.js";
 import { formatKpiFraction, type LensKpiFact } from "./header.js";
 import { lensIntentDoorText } from "./intent.js";
 import type { LensBeingWorked, LensRow } from "./rows.js";
@@ -219,7 +220,9 @@ function headlineOf(space: SpaceIntentInput): SpaceHeadlineModel | null {
       resolveStatusLabel(h.status))
     : null;
   const text = [
-    h.title?.trim() || resolveObjectNoun(kind.profileSlug),
+    // A row stored before the write doors decoded (`&amp;`) reads as `&`.
+    decodeHtmlEntities(h.title ?? "").trim() ||
+      resolveObjectNoun(kind.profileSlug),
     statusLabel,
     // A recent move says nothing the status does not; the others name why.
     h.reason === "recent" ? null : resolveStatusLabel(h.reason),
@@ -483,7 +486,11 @@ export function movingNowRowModel(
       cls: asksYou ? "blocking" : liveLine ? "happening" : "happened",
       state,
       objectKind: item.profileSlug ?? "entity",
-      title: item.title?.trim() || kindWord || resolveObjectNoun("entity"),
+      // A row stored before the write doors decoded (`&amp;`) reads as `&`.
+      title:
+        decodeHtmlEntities(item.title ?? "").trim() ||
+        kindWord ||
+        resolveObjectNoun("entity"),
       reason: [kindWord, statusWord].filter(Boolean).join(" · ") || null,
       repeat: null,
       source,
