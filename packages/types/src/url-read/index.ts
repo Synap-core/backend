@@ -754,13 +754,21 @@ export function signedMediaUrlExpiresAt(url: string): number | null {
 }
 
 /**
- * Has this signed CDN link already expired at `nowMs`? `false` for any link
- * whose expiry is not known ({@link signedMediaUrlExpiresAt} null): an
- * unknown link is tried, never skipped.
+ * How long past its signed expiry a link must be before it is called expired:
+ * a pod clock running ahead must never skip a link that still works (a link
+ * close to its end is fetched; at worst that fetch fails and says so).
+ */
+export const SIGNED_MEDIA_EXPIRY_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * Has this signed CDN link expired at `nowMs` (more than
+ * {@link SIGNED_MEDIA_EXPIRY_GRACE_MS} ago)? `false` for any link whose expiry
+ * is not known ({@link signedMediaUrlExpiresAt} null): an unknown link is
+ * tried, never skipped.
  */
 export function isExpiredSignedMediaUrl(url: string, nowMs: number): boolean {
   const at = signedMediaUrlExpiresAt(url);
-  return at !== null && at <= nowMs;
+  return at !== null && at + SIGNED_MEDIA_EXPIRY_GRACE_MS <= nowMs;
 }
 
 // ───────────────────────────── helpers ─────────────────────────────

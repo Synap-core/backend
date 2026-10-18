@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isExpiredSignedMediaUrl,
+  SIGNED_MEDIA_EXPIRY_GRACE_MS,
   signedMediaUrlExpiresAt,
   URL_READ_MEDIA_MAX,
   isValidUrlPattern,
@@ -571,8 +572,15 @@ describe("signed media links: the expiry built into the URL", () => {
     expect(
       signedMediaUrlExpiresAt(`https://x.fbcdn.net/a.jpg?oe=${at.toString(16)}`)
     ).toBe(at * 1000);
-    expect(isExpiredSignedMediaUrl(url, at * 1000 + 1)).toBe(true);
-    expect(isExpiredSignedMediaUrl(url, at * 1000 - 1)).toBe(false);
+    // Expired only once past the clock-skew grace: a pod clock running a
+    // few minutes ahead never skips a link that still works.
+    expect(
+      isExpiredSignedMediaUrl(url, at * 1000 + SIGNED_MEDIA_EXPIRY_GRACE_MS)
+    ).toBe(true);
+    expect(
+      isExpiredSignedMediaUrl(url, at * 1000 + SIGNED_MEDIA_EXPIRY_GRACE_MS - 1)
+    ).toBe(false);
+    expect(isExpiredSignedMediaUrl(url, at * 1000 + 1)).toBe(false);
   });
   it("TikTok: x-expires (else expires) is a DECIMAL epoch on any tiktokcdn* host", () => {
     expect(
