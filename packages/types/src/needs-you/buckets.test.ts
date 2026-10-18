@@ -13,6 +13,7 @@ import {
   NEEDS_YOU_BUCKET_LABELS,
   resolveNeedsYouReasonIcon,
   resolveNeedsYouReasonLabel,
+  resolveNeedsYouItemCount,
 } from "../vocabulary/index.js";
 import {
   NEEDS_YOU_BUCKETS,
@@ -270,6 +271,11 @@ describe("the reason glyph", () => {
       "blocking"
     );
     expect(row.reasonKind).toBe("failure");
+  });
+
+  it("counts a routine batch in its own noun (never \"2 routines\")", () => {
+    expect(resolveNeedsYouItemCount("routine", 1)).toBe("1 routine change");
+    expect(resolveNeedsYouItemCount("routine", 14)).toBe("14 routine changes");
   });
 
   it("names every filter", () => {

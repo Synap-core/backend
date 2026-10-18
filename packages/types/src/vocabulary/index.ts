@@ -1787,6 +1787,8 @@ export const NEEDS_YOU_ITEM_NOUNS: Readonly<
   ask: ["ask", "asks"],
   review: ["review", "reviews"],
   owed: ["thing", "things"],
+  /** The Inbox's routine bucket — a batch of reversible routine changes (`needsYouBuckets`). */
+  routine: ["routine change", "routine changes"],
 };
 
 /**
