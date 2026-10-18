@@ -332,7 +332,9 @@ export function pickNangoConnection(
  * Resolve the broker + the acting user's connection for one `nango://` call, or
  * the dispatch failure that explains why not. A broker fault and a failed list
  * are `unavailable` — never "no connection", which would send the user to
- * reconnect an account that is fine. Exported for test.
+ * reconnect an account that is fine. A pinned connection whose credential is
+ * dead is the one `auth` failure here: the user must reconnect it. Exported
+ * for test.
  */
 export async function resolveNangoCall(
   userId: string,
@@ -372,6 +374,21 @@ export async function resolveNangoCall(
       providerConfigKey,
       accountHint
     );
+    if (!byId.ok && byId.reason === "needs_reauth") {
+      // The connection exists and its credential is dead: a reconnect, never a
+      // retry. Carries the connection so the health mirror can mark it.
+      return {
+        ok: false,
+        result: {
+          success: false,
+          status: 424,
+          errorCode: "bad_request",
+          errorClass: "auth",
+          connectionId: accountHint,
+          error: `Your "${providerConfigKey}" connection needs to be reconnected — its credential could not be refreshed (${byId.error}).${CONNECT_AFFORDANCE}`,
+        },
+      };
+    }
     if (!byId.ok) {
       return {
         ok: false,
