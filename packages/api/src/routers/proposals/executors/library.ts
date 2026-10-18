@@ -4,9 +4,10 @@ import { ProposalStatus } from "@synap/database/schema";
 import {
   applyLibraryOrganize,
   LibraryOrganizeOpSchema,
+  markOrganizeProposalApproved,
   OrganizeApprovalTaken,
-  organizeApprovalClaim,
   organizeProposalStatus,
+  releaseOrganizeApproval,
 } from "../../../services/library/organize.js";
 import {
   registerProposalExecutor,
@@ -30,7 +31,7 @@ import { reportApproved } from "./shared.js";
  * ONCE, whatever door approves it (approve, batch, Hub REST — all reach this
  * executor; dispatch itself is not status-guarded): the pending → approved
  * transition is ONE conditional UPDATE taken inside the curate transaction
- * (`organizeApprovalClaim`). A second approval racing the first matches
+ * (`markOrganizeProposalApproved`). A second approval racing the first matches
  * nothing and answers `alreadyApproved`; a proposal decided otherwise
  * (rejected, withdrawn…) applies nothing.
  */
@@ -60,13 +61,18 @@ export async function approveLibraryOrganize(
     );
   }
 
+  const claimedAt = new Date();
   let applied: Awaited<ReturnType<typeof applyLibraryOrganize>>;
   try {
     applied = await apply({
       ownerUserId,
       proposalId: input.proposalId,
       ops: parsed.data,
-      claim: organizeApprovalClaim(input.proposalId, userId),
+      claim: {
+        take: (tx) =>
+          markOrganizeProposalApproved(tx, input.proposalId, userId, claimedAt),
+        release: () => releaseOrganizeApproval(input.proposalId, claimedAt),
+      },
       depsFor: (run) =>
         defaultImportBuildDeps({
           userId: ownerUserId,

@@ -347,53 +347,59 @@ export interface OrganizeApprovalClaim {
 
 /**
  * THE once-only door of an organise approval: ONE conditional UPDATE
- * (`status IN (pending, approval_failed)` → approved, RETURNING). Two approvals
- * racing (approve, batch, REST, tRPC — every door reaches this executor) both
- * try it; the row lock makes the second wait for the first to commit, and it
- * then matches nothing. Released only by the run that took it (`updated_at`
- * compare-and-set) and only from `approved`.
+ * (`status IN (pending, approval_failed)` → approved, RETURNING), run inside
+ * the curate transaction. Two approvals racing (approve, batch, REST, tRPC —
+ * every door reaches the executor) both try it; the row lock makes the second
+ * wait for the first to commit, and it then matches nothing (false). `at` is
+ * the claim's stamp: {@link releaseOrganizeApproval} gives back only this one.
  */
-export function organizeApprovalClaim(
+export async function markOrganizeProposalApproved(
+  tx: LibraryDb,
   proposalId: string,
   approverUserId: string,
+  at: Date
+): Promise<boolean> {
+  const rows = await tx
+    .update(proposals)
+    .set({
+      status: ProposalStatus.APPROVED,
+      reviewedBy: approverUserId,
+      reviewedAt: at,
+      updatedAt: at,
+    })
+    .where(
+      and(
+        eq(proposals.id, proposalId),
+        inArray(proposals.status, [
+          ProposalStatus.PENDING,
+          ProposalStatus.APPROVAL_FAILED,
+        ])
+      )
+    )
+    .returning({ id: proposals.id });
+  return rows.length > 0;
+}
+
+/**
+ * Give back the claim taken at `at` (a later step threw): approved →
+ * approval_failed, compare-and-set on `updated_at`, so only the run that took
+ * it releases it. The approval may then be retried.
+ */
+export async function releaseOrganizeApproval(
+  proposalId: string,
+  at: Date,
   database: LibraryDb = defaultDb
-): OrganizeApprovalClaim {
-  const at = new Date();
-  return {
-    async take(tx) {
-      const rows = await tx
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          reviewedBy: approverUserId,
-          reviewedAt: at,
-          updatedAt: at,
-        })
-        .where(
-          and(
-            eq(proposals.id, proposalId),
-            inArray(proposals.status, [
-              ProposalStatus.PENDING,
-              ProposalStatus.APPROVAL_FAILED,
-            ])
-          )
-        )
-        .returning({ id: proposals.id });
-      return rows.length > 0;
-    },
-    async release() {
-      await database
-        .update(proposals)
-        .set({ status: ProposalStatus.APPROVAL_FAILED, updatedAt: new Date() })
-        .where(
-          and(
-            eq(proposals.id, proposalId),
-            eq(proposals.status, ProposalStatus.APPROVED),
-            proposalUnchangedSince(at)
-          )
-        );
-    },
-  };
+): Promise<void> {
+  await database
+    .update(proposals)
+    .set({ status: ProposalStatus.APPROVAL_FAILED, updatedAt: new Date() })
+    .where(
+      and(
+        eq(proposals.id, proposalId),
+        eq(proposals.status, ProposalStatus.APPROVED),
+        proposalUnchangedSince(at)
+      )
+    );
 }
 
 /**
