@@ -42,6 +42,7 @@ import {
   LIBRARY_READ_STATUSES,
   type ImportBuildResult,
   type LibraryAddResult,
+  type LibraryCancelReadWithResult,
   type LibraryCurateOp,
   type LibraryCurateResult,
   type LibraryGroupResult,
@@ -79,6 +80,7 @@ import {
 } from "../services/library/build.js";
 import { LIBRARY_READER_DOOR_LIMITS } from "../services/library/door-limits.js";
 import {
+  libraryCancelReadWith,
   libraryReaderAvailability,
   libraryReaders,
   libraryReadWith,
@@ -203,9 +205,12 @@ export const LibraryReadersInputSchema = z
     itemId: uuid.optional(),
     groupId: uuid.optional(),
     waiting: z.literal(true).optional(),
+    /** Items whose pictures were skipped as expired links. */
+    missingMedia: z.literal(true).optional(),
   })
-  .refine((v) => named(v.itemId, v.groupId, v.waiting) === 1, {
-    message: "Name one item, one group, or the waiting items.",
+  .refine((v) => named(v.itemId, v.groupId, v.waiting, v.missingMedia) === 1, {
+    message:
+      "Name one item, one group, the waiting items or the missing pictures.",
   });
 
 /**
@@ -217,8 +222,24 @@ export const LibraryReadWithInputSchema = z
     itemIds: optIds,
     groupId: uuid.optional(),
     waiting: z.literal(true).optional(),
+    /** Re-read items whose pictures expired: a read is kept, media added. */
+    missingMedia: z.literal(true).optional(),
     /** `"builtin"` or a reader verb id, from `library.readers`. */
     readerId: z.string().min(1).max(200),
+    /** Download the video too — only for a reader whose offer declares it. */
+    withVideo: z.boolean().optional(),
+  })
+  .refine((v) => named(v.itemIds, v.groupId, v.waiting, v.missingMedia) === 1, {
+    message:
+      "Name items, one group, the waiting items or the missing pictures.",
+  });
+
+/** `library.cancelReadWith`: items, one group, or every waiting consent. */
+export const LibraryCancelReadWithInputSchema = z
+  .object({
+    itemIds: optIds,
+    groupId: uuid.optional(),
+    waiting: z.literal(true).optional(),
   })
   .refine((v) => named(v.itemIds, v.groupId, v.waiting) === 1, {
     message: "Name items, one group, or the waiting items.",
@@ -452,6 +473,7 @@ export const libraryRouter = router({
         ...(input.itemId ? { itemId: input.itemId } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
         ...(input.waiting ? { waiting: true } : {}),
+        ...(input.missingMedia ? { missingMedia: true } : {}),
       });
     }),
 
@@ -469,6 +491,25 @@ export const libraryRouter = router({
       return libraryReadWith({
         userId,
         readerId: input.readerId,
+        ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
+        ...(input.groupId ? { groupId: input.groupId } : {}),
+        ...(input.waiting ? { waiting: true } : {}),
+        ...(input.missingMedia ? { missingMedia: true } : {}),
+        ...(input.withVideo ? { withVideo: true } : {}),
+      });
+    }),
+
+  /**
+   * End the remembered "Read with X" consent (items waiting on the budget or
+   * a retry): they go back to waiting for a reader. The person only.
+   */
+  cancelReadWith: personProcedure
+    .use(userRateLimitMiddleware(LIBRARY_READER_DOOR_LIMITS.readWith))
+    .input(LibraryCancelReadWithInputSchema)
+    .mutation(async ({ ctx, input }): Promise<LibraryCancelReadWithResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryCancelReadWith({
+        userId,
         ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
         ...(input.waiting ? { waiting: true } : {}),

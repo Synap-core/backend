@@ -81,6 +81,10 @@ interface ReadContentArgs {
   reader?: string;
   /** `importRead.readCheckpoint` as stored (a billed read to resume). */
   checkpoint?: unknown;
+  /** With `reader`: the person chose to download the video too. */
+  withVideo?: boolean;
+  /** The item's read is kept (`keepRead`): copy media, skip speech-to-text. */
+  mediaOnly?: boolean;
 }
 
 /** Read one item's content, by what it is. */
@@ -221,7 +225,12 @@ async function readLink(
   const read = await deps.readUrl(
     url,
     args.reader
-      ? { reader: args.reader, allowBilled: true, interactive: true }
+      ? {
+          reader: args.reader,
+          allowBilled: true,
+          interactive: true,
+          ...(args.withVideo ? { withVideo: true } : {}),
+        }
       : { allowBilled: false }
   );
   if (
@@ -281,7 +290,11 @@ async function readLinkContent(
         "library light read: some media NOT copied (counted on the item)"
       );
     }
-    if (!transcript && read.media.some((m) => m.kind === "video")) {
+    if (
+      !transcript &&
+      !args.mediaOnly &&
+      read.media.some((m) => m.kind === "video")
+    ) {
       const stt = await transcribeCopiedVideo({
         ...args,
         reserve: reserveFor(args),

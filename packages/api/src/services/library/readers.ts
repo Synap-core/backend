@@ -33,6 +33,7 @@ import {
   libraryItemOf,
   libraryItemUrl,
   readLibraryItemRead,
+  type LibraryCancelReadWithResult,
   type LibraryReaderOffer,
   type LibraryReadersResult,
   type LibraryReadWithResult,
@@ -59,6 +60,12 @@ import {
   libraryReadAiUsedToday,
 } from "./read-budget.js";
 import { isAgentCaller } from "./agent-door.js";
+import { missingMediaSql } from "../media-copy/library-media-skip.js";
+import { normalizeServiceId } from "@synap-core/types/service-marks";
+import {
+  cancelLibraryReadConsents,
+  libraryReadConsentEndsAt,
+} from "./read-consent.js";
 
 /** Read statuses a list's "Read N waiting with X" acts on. */
 export const LIBRARY_WAITING_READ_STATUSES = [
@@ -78,18 +85,23 @@ export interface LibraryReadersDeps {
   readerLookup(
     ctx: UrlReadersContext
   ): Promise<(url: string) => UrlReaderOffer[]>;
-  enqueue(
-    items: Array<{
-      userId: string;
-      itemId: string;
-      reader: string;
-      force: true;
-    }>
-  ): Promise<number>;
+  enqueue(items: ReadWithJob[]): Promise<number>;
   /** Items this person had read with AI in the rolling 24h. */
   usedToday(userId: string): Promise<number>;
   perDay(): number;
   now(): Date;
+}
+
+/** One light-read job a "Read with X" tap queues. */
+export interface ReadWithJob {
+  userId: string;
+  itemId: string;
+  reader: string;
+  force: true;
+  /** `missingMedia`: an item that has a read keeps it; only media is added. */
+  keepRead?: true;
+  /** The reader's declared `withVideo` choice, when the person picked it. */
+  withVideo?: true;
 }
 
 interface ReadableRow {
@@ -148,6 +160,43 @@ async function itemRows(
     .select(COLUMNS)
     .from(documents)
     .where(and(libraryItemsWhere(userId), inArray(documents.id, [...ids])));
+}
+
+/**
+ * Items whose picture was skipped as an EXPIRED signed link and that hold no
+ * copy (`missingMediaSql`), not archived, oldest first, at most
+ * {@link LIBRARY_READERS_SCAN_MAX}: "Get pictures for N old posts with X".
+ */
+async function missingMediaRows(
+  database: LibraryDb,
+  userId: string
+): Promise<ReadableRow[]> {
+  return database
+    .select(COLUMNS)
+    .from(documents)
+    .where(
+      and(
+        libraryItemsWhere(userId),
+        drizzleSql`NOT ${isArchivedSql}`,
+        missingMediaSql
+      )
+    )
+    .orderBy(documents.createdAt)
+    .limit(LIBRARY_READERS_SCAN_MAX);
+}
+
+/** The service-marks id of a link's site (`instagram`, `tiktok`, …), or null. */
+function platformOf(url: string): string | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const labels = host.split(".");
+  return labels.length >= 2
+    ? normalizeServiceId(labels[labels.length - 2])
+    : null;
 }
 
 /**
@@ -225,6 +274,8 @@ export async function libraryReaders(args: {
   groupId?: string;
   /** Every waiting item of the person's Library (no group). */
   waiting?: boolean;
+  /** Every item whose expired pictures were never kept. */
+  missingMedia?: boolean;
   /** The caller's identity — an agent's offers stay in the item's lens. */
   caller?: LibraryReadersCaller;
   deps?: Partial<LibraryReadersDeps>;
@@ -250,23 +301,34 @@ export async function libraryReaders(args: {
       ),
     };
   }
-  if (!args.groupId && !args.waiting) {
+  if (!args.groupId && !args.waiting && !args.missingMedia) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Name an item, a group, or the waiting items.",
+      message:
+        "Name an item, a group, the waiting items or the missing pictures.",
     });
   }
-  const rows = (await waitingRows(database, args.userId, args.groupId)).filter(
-    (r) => urlOf(r) !== null
-  );
+  const rows = (
+    args.missingMedia
+      ? await missingMediaRows(database, args.userId)
+      : await waitingRows(database, args.userId, args.groupId)
+  ).filter((r) => urlOf(r) !== null);
   // Throws on a failed lookup — never folded into "no readers".
   const offersOf = await offersByRow(rows, args.userId, args.caller, deps);
   const byReader = new Map<string, LibraryReaderOffer>();
   for (const row of rows) {
     for (const o of offersOf.get(row.id) ?? []) {
       const seen = byReader.get(o.readerId);
-      if (seen) seen.count = (seen.count ?? 0) + 1;
-      else {
+      if (seen) {
+        seen.count = (seen.count ?? 0) + 1;
+        // A choice some of the items' links offer (TikTok's "with video"):
+        // offered for the list; readWith sends it only where declared.
+        for (const opt of o.options ?? []) {
+          if (!seen.options?.includes(opt)) {
+            seen.options = [...(seen.options ?? []), opt];
+          }
+        }
+      } else {
         const { current: _current, ...offer } = o;
         byReader.set(o.readerId, { ...offer, count: 1 });
       }
@@ -276,7 +338,19 @@ export async function libraryReaders(args: {
   const offers = [...byReader.values()].sort(
     (a, b) => (b.count ?? 0) - (a.count ?? 0)
   );
-  return { offers, waiting: rows.length };
+  if (!args.missingMedia) return { offers, waiting: rows.length };
+  const byPlatform = new Map<string, number>();
+  for (const row of rows) {
+    const p = platformOf(urlOf(row)!);
+    if (p) byPlatform.set(p, (byPlatform.get(p) ?? 0) + 1);
+  }
+  return {
+    offers,
+    waiting: rows.length,
+    platforms: [...byPlatform.entries()]
+      .map(([serviceId, count]) => ({ serviceId, count }))
+      .sort((a, b) => b.count - a.count),
+  };
 }
 
 /**
@@ -350,7 +424,11 @@ export async function libraryReadWith(args: {
   groupId?: string;
   /** Every waiting item of the person's Library (no group). */
   waiting?: boolean;
+  /** Every item whose expired pictures were never kept (a read is KEPT; media added). */
+  missingMedia?: boolean;
   readerId: string;
+  /** Also download the video — sent only to a reader that declares `withVideo`. */
+  withVideo?: boolean;
   deps?: Partial<LibraryReadersDeps>;
 }): Promise<LibraryReadWithResult> {
   const database = args.database ?? defaultDb;
@@ -361,12 +439,15 @@ export async function libraryReadWith(args: {
     const ids = [...new Set(args.itemIds)];
     rows = await itemRows(database, args.userId, ids);
     skipped += ids.length - rows.length; // foreign, deleted or unknown
+  } else if (args.missingMedia) {
+    rows = await missingMediaRows(database, args.userId);
   } else if (args.groupId || args.waiting) {
     rows = await waitingRows(database, args.userId, args.groupId);
   } else {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Name items, a group, or the waiting items.",
+      message:
+        "Name items, a group, the waiting items or the missing pictures.",
     });
   }
   // readWith is person-only (the tRPC door refuses an agent first).
@@ -374,12 +455,7 @@ export async function libraryReadWith(args: {
 
   const now = deps.now().getTime();
   let room: number | null = null; // computed on the first billed item
-  const due: Array<{
-    userId: string;
-    itemId: string;
-    reader: string;
-    force: true;
-  }> = [];
+  const due: ReadWithJob[] = [];
   let overBudget = 0;
   const held: string[] = [];
   for (const row of rows) {
@@ -413,10 +489,21 @@ export async function libraryReadWith(args: {
       itemId: row.id,
       reader: args.readerId,
       force: true,
+      ...(args.missingMedia ? { keepRead: true as const } : {}),
+      // A per-tap choice reaches ONLY a reader that declares it.
+      ...(args.withVideo && offer.options?.includes("withVideo")
+        ? { withVideo: true as const }
+        : {}),
     });
   }
   if (held.length > 0) {
-    await holdOverBudget(database, args.userId, held, args.readerId);
+    await holdOverBudget(
+      database,
+      args.userId,
+      held,
+      args.readerId,
+      deps.now()
+    );
   }
   const queued = due.length > 0 ? await deps.enqueue(due) : 0;
   if (due.length > 0 && queued === 0) {
@@ -426,7 +513,14 @@ export async function libraryReadWith(args: {
       message: "The reads could not be queued. Try again in a moment.",
     });
   }
-  return { queued, overBudget, skipped };
+  return {
+    queued,
+    overBudget,
+    skipped,
+    ...(overBudget > 0
+      ? { consentExpiresAt: libraryReadConsentEndsAt(deps.now()) }
+      : {}),
+  };
 }
 
 /**
@@ -442,16 +536,24 @@ async function holdOverBudget(
   database: LibraryDb,
   userId: string,
   ids: readonly string[],
-  readerId: string
+  readerId: string,
+  at: Date
 ): Promise<void> {
   const patch = JSON.stringify({
     status: "over_budget",
     requestedReader: readerId,
+    // The tap's date: the consent ends `SYNAP_LIBRARY_READ_CONSENT_DAYS` later.
+    requestedAt: at.toISOString(),
   });
+  // `heldFrom`: the waiting status the item goes back to when the consent
+  // ends or is cancelled (kept from an earlier hold; else its status now).
+  const heldFrom = drizzleSql`COALESCE(
+    ${documents.metadata} #>> '{importRead,heldFrom}',
+    CASE WHEN ${readStatusSql} IN ('needs_file', 'title_only', 'unreadable') THEN ${readStatusSql} END)`;
   await database
     .update(documents)
     .set({
-      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) || ${patch}::jsonb)`,
+      metadata: drizzleSql`jsonb_set(COALESCE(${documents.metadata}, '{}'::jsonb), '{importRead}', COALESCE(${documents.metadata} -> 'importRead', '{"suggestedActions":[]}'::jsonb) || ${patch}::jsonb || jsonb_strip_nulls(jsonb_build_object('heldFrom', ${heldFrom})))`,
     })
     .where(
       and(
@@ -460,6 +562,56 @@ async function holdOverBudget(
         drizzleSql`COALESCE(${documents.metadata} #>> '{importRead,status}', 'not_read') <> 'read'`
       )
     );
+}
+
+/**
+ * `library.cancelReadWith` — the person ends the remembered "Read with X"
+ * consent of items, of a group's items, or of every item holding one. The
+ * items go back to waiting for a reader (`read-consent.ts`); nothing is read
+ * or billed. Owner-floored (a foreign group is NOT_FOUND; foreign ids are
+ * simply not changed).
+ */
+export async function libraryCancelReadWith(args: {
+  database?: LibraryDb;
+  userId: string;
+  itemIds?: readonly string[];
+  groupId?: string;
+  waiting?: boolean;
+  notify?: (row: { id: string; userId: string; metadata: unknown }) => void;
+}): Promise<LibraryCancelReadWithResult> {
+  const database = args.database ?? defaultDb;
+  if (!args.itemIds?.length && !args.groupId && !args.waiting) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Name items, a group, or the waiting items.",
+    });
+  }
+  if (args.groupId) {
+    await loadLibraryGroup({
+      database,
+      userId: args.userId,
+      groupId: args.groupId,
+    });
+  }
+  const rows = await cancelLibraryReadConsents(database, {
+    userId: args.userId,
+    ...(args.itemIds?.length ? { itemIds: args.itemIds } : {}),
+    ...(args.groupId ? { groupId: args.groupId } : {}),
+  });
+  const notify =
+    args.notify ??
+    ((row: { id: string; userId: string; metadata: unknown }) =>
+      void import("../../utils/event-emit.js").then(
+        ({ emitLibraryItemUpdated }) =>
+          emitLibraryItemUpdated({
+            userId: row.userId,
+            itemId: row.id,
+            metadata: row.metadata,
+            what: "read",
+          })
+      ));
+  for (const row of rows) notify(row);
+  return { cancelled: rows.length };
 }
 
 /** An item already stamped inside the 24h window reuses its unit (read-budget.ts). */

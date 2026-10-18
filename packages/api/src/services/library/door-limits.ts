@@ -17,4 +17,6 @@ export const LIBRARY_READER_DOOR_LIMITS = {
   readers: { name: "library.readers", max: 120, windowMs: 60_000 },
   readWith: { name: "library.readWith", max: 20, windowMs: 60_000 },
   retryMedia: { name: "library.retryMedia", max: 30, windowMs: 60_000 },
+  /** An agent's organise proposals (`library.propose`, `POST /library/propose`). */
+  propose: { name: "library.propose", max: 30, windowMs: 60_000 },
 } as const satisfies Record<string, UserRateLimit>;

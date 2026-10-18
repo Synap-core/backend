@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { documents, drizzleSql, and, eq, isNull } from "@synap/database";
 import {
   carryRunLibraryActions,
+  LIBRARY_READ_STATUSES,
   readLibraryItemRead,
   type LibraryItemRead,
   type LibraryReadBlocked,
@@ -48,6 +49,14 @@ export interface StoredLibraryRead extends LibraryItemRead {
    * it, so a retry never silently falls back to the free reader.
    */
   requestedReader?: string;
+  /**
+   * When the person gave that choice (ISO): the consent ENDS
+   * `SYNAP_LIBRARY_READ_CONSENT_DAYS` later (`read-consent.ts`). A retry keeps
+   * the tap's date — a consent is never renewed by the pod itself.
+   */
+  requestedAt?: string;
+  /** The waiting status the item had before it was held for the consent (restored when it ends). */
+  heldFrom?: LibraryReadStatus;
   /**
    * A BILLED read that succeeded, held until the item's read is written
    * (media copy, transcript, summary still to come). The same reader run
@@ -100,6 +109,13 @@ export function readStoredLibraryRead(
   const aiAt = str("aiAt");
   const lastError = str("lastError");
   const requestedReader = str("requestedReader");
+  const requestedAt = str("requestedAt");
+  const heldFromRaw = str("heldFrom");
+  const heldFrom = (LIBRARY_READ_STATUSES as readonly string[]).includes(
+    heldFromRaw ?? ""
+  )
+    ? (heldFromRaw as LibraryReadStatus)
+    : undefined;
   const attempts = num("attempts");
   const transientFailures = num("transientFailures");
   const readCheckpoint = obj("readCheckpoint");
@@ -112,6 +128,8 @@ export function readStoredLibraryRead(
       ...(aiAt ? { aiAt } : {}),
       ...(lastError ? { lastError } : {}),
       ...(requestedReader ? { requestedReader } : {}),
+      ...(requestedAt ? { requestedAt } : {}),
+      ...(heldFrom ? { heldFrom } : {}),
       ...(attempts !== undefined ? { attempts } : {}),
       ...(transientFailures !== undefined ? { transientFailures } : {}),
       // Re-parsed where it is used (`resumableRead`), never trusted here.

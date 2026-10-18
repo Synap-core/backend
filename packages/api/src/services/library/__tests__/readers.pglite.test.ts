@@ -45,6 +45,7 @@ import type {
 } from "@synap-core/types/imports";
 import { libraryItemMetadata } from "./fixtures.js";
 import {
+  libraryCancelReadWith,
   libraryReaderAvailability,
   libraryReaders,
   libraryReadWith,
@@ -56,6 +57,8 @@ import { listLibraryItems } from "../read-model.js";
 const USER = "user-readers-1";
 const OTHER = "user-readers-2";
 const NOW = new Date("2026-10-15T09:00:00.000Z");
+/** NOW + the default 7 consent days. */
+const CONSENT_END = "2026-10-22T09:00:00.000Z";
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
@@ -454,7 +457,12 @@ describe("the whole Library's waiting items (`waiting: true`)", () => {
     });
     // Oldest first: one unit of room → the first queued, the second waits;
     // the page (not Apify's) and the note (no link) are skipped.
-    expect(res).toEqual({ queued: 1, overBudget: 1, skipped: 2 });
+    expect(res).toEqual({
+      queued: 1,
+      overBudget: 1,
+      skipped: 2,
+      consentExpiresAt: CONSENT_END,
+    });
     expect(sent).toEqual([
       { userId: USER, itemId: inGroup, reader: APIFY.readerId, force: true },
     ]);
@@ -511,7 +519,12 @@ describe("library.readWith", () => {
       readerId: APIFY.readerId,
       deps,
     });
-    expect(res).toEqual({ queued: 3, overBudget: 2, skipped: 1 });
+    expect(res).toEqual({
+      queued: 3,
+      overBudget: 2,
+      skipped: 1,
+      consentExpiresAt: CONSENT_END,
+    });
     expect(sent).toEqual([
       { userId: USER, itemId: ids[0], reader: APIFY.readerId, force: true },
       { userId: USER, itemId: ids[1], reader: APIFY.readerId, force: true },
@@ -623,13 +636,22 @@ describe("library.readWith — what today's budget cannot hold WAITS with the ch
         readerId: APIFY.readerId,
         deps,
       })
-    ).toEqual({ queued: 0, overBudget: 2, skipped: 0 });
+    ).toEqual({
+      queued: 0,
+      overBudget: 2,
+      skipped: 0,
+      consentExpiresAt: CONSENT_END,
+    });
     expect(sent).toEqual([]);
     // The mark changes NOW (the client re-reads on settle) and the sweep has
     // the reader the person chose; why it was blocked and its chips are kept.
     expect(await readOf(waiting)).toMatchObject({
       status: "over_budget",
       requestedReader: APIFY.readerId,
+      // The consent is dated (it ends 7 days later) and remembers where the
+      // item goes back to when it ends.
+      requestedAt: NOW.toISOString(),
+      heldFrom: "needs_file",
       blocked: { reason: "needs_reader" },
       suggestedActions: [{ id: "date-0" }],
     });
@@ -823,5 +845,260 @@ describe("library.retryMedia — the person's Try again on the pictures", () => 
         deps: { enqueue: async () => 0 },
       })
     ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+  });
+});
+
+/** Merge raw keys into an item's metadata (what a writer elsewhere left there). */
+async function patchMeta(id: string, patch: Record<string, unknown>) {
+  await q(
+    `update documents set metadata = metadata || $2::jsonb where id = $1`,
+    [id, JSON.stringify(patch)]
+  );
+}
+
+describe('library.cancelReadWith — the person ends a waiting "Read with X"', () => {
+  const consent = (at: string, heldFrom = "needs_file") => ({
+    requestedReader: APIFY.readerId,
+    requestedAt: at,
+    heldFrom,
+  });
+
+  it("an over-budget item goes back to its waiting status; the reader is forgotten; nothing queued", async () => {
+    const held = await item({
+      url: "https://www.instagram.com/p/h1",
+      status: "over_budget",
+      read: {
+        ...consent(NOW.toISOString(), "unreadable"),
+        blocked: { reason: "private" },
+      },
+    });
+    const retry = await item({
+      url: "https://www.instagram.com/p/h2",
+      status: "not_read",
+      read: consent(NOW.toISOString()),
+    });
+    const plain = await item({
+      url: "https://www.instagram.com/p/h3",
+      status: "needs_file",
+    });
+    const notified: string[] = [];
+    const res = await libraryCancelReadWith({
+      userId: USER,
+      itemIds: [held, retry, plain],
+      notify: (r) => notified.push(r.id),
+    });
+    expect(res).toEqual({ cancelled: 2 });
+    expect(notified.sort()).toEqual([held, retry].sort());
+    const h1 = await readOf(held);
+    expect(h1).toMatchObject({
+      status: "unreadable",
+      blocked: { reason: "private" },
+    });
+    expect(h1).not.toHaveProperty("requestedReader");
+    expect(h1).not.toHaveProperty("requestedAt");
+    expect(h1).not.toHaveProperty("heldFrom");
+    const h2 = await readOf(retry);
+    expect(h2.status).toBe("not_read");
+    expect(h2).not.toHaveProperty("requestedReader");
+    expect((await readOf(plain)).status).toBe("needs_file");
+  });
+
+  it("group and every-waiting scopes; another person's consent is never touched", async () => {
+    const g = await group();
+    const inGroup = await item({
+      url: "https://www.instagram.com/p/g",
+      status: "over_budget",
+      groupIds: [g],
+      read: consent(NOW.toISOString()),
+    });
+    const loose = await item({
+      url: "https://www.instagram.com/p/l",
+      status: "over_budget",
+      read: consent(NOW.toISOString()),
+    });
+    const theirs = await item({
+      userId: OTHER,
+      url: "https://www.instagram.com/p/t",
+      status: "over_budget",
+      read: consent(NOW.toISOString()),
+    });
+    const quiet = () => undefined;
+    expect(
+      await libraryCancelReadWith({ userId: USER, groupId: g, notify: quiet })
+    ).toEqual({ cancelled: 1 });
+    expect((await readOf(inGroup)).status).toBe("needs_file");
+    expect((await readOf(loose)).status).toBe("over_budget");
+    expect(
+      await libraryCancelReadWith({
+        userId: USER,
+        waiting: true,
+        notify: quiet,
+      })
+    ).toEqual({ cancelled: 1 });
+    expect((await readOf(loose)).status).toBe("needs_file");
+    expect(await readOf(theirs)).toMatchObject({
+      status: "over_budget",
+      requestedReader: APIFY.readerId,
+    });
+    await expect(
+      libraryCancelReadWith({ userId: USER, groupId: await group(OTHER) })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(libraryCancelReadWith({ userId: USER })).rejects.toMatchObject(
+      { code: "BAD_REQUEST" }
+    );
+  });
+
+  it("the item view carries the consent and when it ends — and not once it has ended", async () => {
+    const now = Date.now();
+    const live = await item({
+      url: "https://www.instagram.com/p/live",
+      status: "over_budget",
+      read: consent(new Date(now - 2 * 86_400_000).toISOString()),
+    });
+    const ended = await item({
+      url: "https://www.instagram.com/p/ended",
+      status: "over_budget",
+      read: consent(new Date(now - 8 * 86_400_000).toISOString()),
+    });
+    const undated = await item({
+      url: "https://www.instagram.com/p/undated",
+      status: "over_budget",
+      read: { requestedReader: APIFY.readerId },
+    });
+    const { items } = await listLibraryItems({ userId: USER, input: {} });
+    const byId = new Map(items.map((i) => [i.id, i.read]));
+    expect(byId.get(live)!.consent).toEqual({
+      readerId: APIFY.readerId,
+      givenAt: new Date(now - 2 * 86_400_000).toISOString(),
+      expiresAt: new Date(now + 5 * 86_400_000).toISOString(),
+    });
+    expect(byId.get(ended)!.consent).toBeUndefined();
+    expect(byId.get(undated)!.consent).toBeUndefined();
+  });
+});
+
+describe("missingMedia — old posts whose expired pictures were skipped", () => {
+  const SKIP = {
+    importMediaSkipped: {
+      reason: "expired",
+      sourceUrl: "https://scontent.cdninstagram.com/x.jpg?oe=5F000000",
+      expiredAt: "2020-07-04T00:00:00.000Z",
+      at: NOW.toISOString(),
+    },
+  };
+  const TIKTOK: UrlReaderOffer = { ...APIFY, options: ["withVideo"] };
+
+  async function library() {
+    const ig = await item({
+      url: "https://www.instagram.com/p/old1",
+      status: "read",
+      read: { summary: "kept text" },
+    });
+    await patchMeta(ig, SKIP);
+    const tt = await item({
+      url: "https://www.tiktok.com/@a/video/1",
+      status: "needs_file",
+    });
+    await patchMeta(tt, SKIP);
+    // Never in scope: a copy since landed; archived; not skipped; another person's.
+    const copied = await item({
+      url: "https://www.instagram.com/p/c",
+      status: "read",
+    });
+    await patchMeta(copied, {
+      ...SKIP,
+      importMedia: [
+        {
+          documentId: "d",
+          mime: "image/jpeg",
+          sourceUrl: "u",
+          kind: "image",
+          order: 0,
+        },
+      ],
+    });
+    const archived = await item({
+      url: "https://www.instagram.com/p/a",
+      status: "read",
+      archived: true,
+    });
+    await patchMeta(archived, SKIP);
+    await item({ url: "https://www.instagram.com/p/n", status: "read" });
+    const theirs = await item({
+      userId: OTHER,
+      url: "https://www.instagram.com/p/t",
+      status: "read",
+    });
+    await patchMeta(theirs, SKIP);
+    return { ig, tt, copied };
+  }
+  const offers = (url: string) =>
+    url.includes("tiktok")
+      ? [TIKTOK]
+      : url.includes("instagram")
+        ? [APIFY]
+        : [BUILTIN];
+
+  it("readers: one offer per reader with its count, and the platforms", async () => {
+    await library();
+    const { deps } = fakeDeps({ offers });
+    const res = await libraryReaders({
+      userId: USER,
+      missingMedia: true,
+      deps,
+    });
+    expect(res.waiting).toBe(2);
+    // One reader for both links; the TikTok link's "with video" is offered
+    // for the list (readWith sends it only where the link's offer declares it).
+    expect(res.offers).toEqual([
+      { ...APIFY, options: ["withVideo"], count: 2 },
+    ]);
+    expect(res.platforms).toEqual(
+      expect.arrayContaining([
+        { serviceId: "instagram", count: 1 },
+        { serviceId: "tiktok", count: 1 },
+      ])
+    );
+    expect(res.platforms).toHaveLength(2);
+  });
+
+  it("the item view says mediaExpired (no failure mark) until a copy lands", async () => {
+    const { ig, copied } = await library();
+    const { items } = await listLibraryItems({ userId: USER, input: {} });
+    const byId = new Map(items.map((i) => [i.id, i]));
+    expect(byId.get(ig)!.mediaExpired).toBe(true);
+    expect(byId.get(ig)!.mediaFailed).toBeUndefined();
+    expect(byId.get(copied)!.mediaExpired).toBeUndefined();
+  });
+
+  it("readWith: keepRead on every job; withVideo ONLY for the reader that declares it", async () => {
+    const { ig, tt } = await library();
+    const { deps, sent } = fakeDeps({ offers });
+    const res = await libraryReadWith({
+      userId: USER,
+      missingMedia: true,
+      readerId: APIFY.readerId,
+      withVideo: true,
+      deps,
+    });
+    expect(res).toEqual({ queued: 2, overBudget: 0, skipped: 0 });
+    const job = (id: string) =>
+      (sent as Array<Record<string, unknown>>).find((j) => j.itemId === id);
+    // IG's offer declares no options: the choice never reaches it.
+    expect(job(ig)).toEqual({
+      userId: USER,
+      itemId: ig,
+      reader: APIFY.readerId,
+      force: true,
+      keepRead: true,
+    });
+    expect(job(tt)).toEqual({
+      userId: USER,
+      itemId: tt,
+      reader: APIFY.readerId,
+      force: true,
+      keepRead: true,
+      withVideo: true,
+    });
   });
 });

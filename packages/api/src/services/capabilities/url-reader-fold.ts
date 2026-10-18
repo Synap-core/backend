@@ -7,6 +7,8 @@
 
 import {
   bestUrlPatternSpecificity,
+  READER_OPTIONS,
+  type ReaderOption,
   type UrlReaderOffer,
 } from "@synap-core/types/url-read";
 import { normalizeServiceId } from "@synap-core/types/service-marks";
@@ -233,6 +235,9 @@ function verbReaders(
     const serviceId = serviceIdFor(row.containerName, row.name);
     const capabilityId = row.containerId ?? row.id;
     const skillId = backingSkillId(rows, verbId, row, lensWorkspaceId);
+    const options = readerOptionsOf(
+      rows.find((r) => r.id === skillId) ?? (row.kind === "skill" ? row : null)
+    );
     out.push({
       offer: {
         readerId: verbId,
@@ -244,6 +249,7 @@ function verbReaders(
         billing: v.credentialed ? "account" : "none",
         state,
         ...(hint ? { hint } : {}),
+        ...(options.length ? { options } : {}),
       },
       specificity: spec,
       builtin: false,
@@ -252,6 +258,38 @@ function verbReaders(
     });
   }
   return out;
+}
+
+/**
+ * The per-tap choices a reader DECLARES: each `READER_OPTIONS` name its
+ * backing skill takes as a BOOLEAN parameter — in the catalog's type map
+ * (`{ withVideo: "boolean?" }`) or a JSON-Schema bag
+ * (`properties.withVideo.type === "boolean"`). Nothing declared → none: a
+ * choice is never sent to a reader that did not ask for it.
+ */
+export function readerOptionsOf(
+  skillRow: Pick<RegistryCapability, "inputSchema"> | null | undefined
+): ReaderOption[] {
+  const schema = skillRow?.inputSchema;
+  if (!schema || typeof schema !== "object") return [];
+  const props =
+    schema.properties &&
+    typeof schema.properties === "object" &&
+    !Array.isArray(schema.properties)
+      ? (schema.properties as Record<string, unknown>)
+      : null;
+  return READER_OPTIONS.filter((name) => {
+    if (props) {
+      const p = props[name];
+      return (
+        !!p &&
+        typeof p === "object" &&
+        (p as { type?: unknown }).type === "boolean"
+      );
+    }
+    const flat = schema[name];
+    return typeof flat === "string" && /^\s*boolean\??\s*$/.test(flat);
+  });
 }
 
 /**

@@ -36,6 +36,10 @@ import {
   type ItemLeaseHolder,
 } from "./light-read-store.js";
 import {
+  expireLibraryReadConsents,
+  libraryReadConsentDays,
+} from "./read-consent.js";
+import {
   libraryReadAiPerDay,
   libraryReadAiUsedToday,
   type LibraryReadDb,
@@ -120,6 +124,10 @@ export async function enqueueLibraryLightRead(
     reader?: string;
     /** Copy the item's failed media again, nothing else (`library.retryMedia`). */
     media?: "retry";
+    /** With `reader`: keep an existing read, only add media (`missingMedia`). */
+    keepRead?: boolean;
+    /** With `reader`: the reader's declared `withVideo` choice. */
+    withVideo?: boolean;
   }>,
   send?: Send,
   opts: { startAfter?: number } = {}
@@ -147,6 +155,8 @@ export async function enqueueLibraryLightRead(
           ...(item.force ? { force: true } : {}),
           ...(item.reader ? { reader: item.reader } : {}),
           ...(item.media ? { media: item.media } : {}),
+          ...(item.reader && item.keepRead ? { keepRead: true } : {}),
+          ...(item.reader && item.withVideo ? { withVideo: true } : {}),
         },
         {
           singletonKey: `library-${item.media ? "media-retry" : "light-read"}:${item.itemId}`,
@@ -209,6 +219,8 @@ export async function runLibraryLightReadJob(
             itemId: payload.itemId,
             ...(payload.force ? { force: true } : {}),
             reader: holder.reader,
+            ...(payload.keepRead ? { keepRead: true } : {}),
+            ...(payload.withVideo ? { withVideo: true } : {}),
           },
         ],
         opts.send,
@@ -289,6 +301,8 @@ async function runClaimedJob(
     itemId: payload.itemId,
     ...(payload.force ? { force: true } : {}),
     ...(payload.reader ? { reader: payload.reader } : {}),
+    ...(payload.reader && payload.keepRead ? { keepRead: true } : {}),
+    ...(payload.reader && payload.withVideo ? { withVideo: true } : {}),
     deps,
   });
 }
@@ -301,13 +315,25 @@ async function runClaimedJob(
  */
 export async function sweepLibraryLightReads(
   opts: {
-    database?: Pick<typeof DbType, "select" | "selectDistinct">;
+    database?: Pick<typeof DbType, "select" | "selectDistinct" | "update">;
     send?: Send;
     perDay?: number;
+    /** Consent days (`SYNAP_LIBRARY_READ_CONSENT_DAYS`). */
+    consentDays?: number;
   } = {}
-): Promise<{ enqueued: number }> {
+): Promise<{ enqueued: number; consentsEnded: number }> {
   const database =
     opts.database ?? ((await import("@synap/database")).db as never);
+  // 0. A "Read with X" consent that has ENDED is forgotten before anything is
+  //    picked: its item goes back to waiting for a reader, and is never queued
+  //    to run that reader (`read-consent.ts`).
+  const ended = await expireLibraryReadConsents(
+    database,
+    opts.consentDays ?? libraryReadConsentDays()
+  );
+  for (const row of ended) {
+    notifyItem(row);
+  }
   const base = and(
     isNull(documents.deletedAt),
     drizzleSql`${documents.metadata} ? 'importItem'`,
@@ -366,5 +392,22 @@ export async function sweepLibraryLightReads(
       for (const r of held) due.push({ userId: r.userId, itemId: r.id });
     }
   }
-  return { enqueued: await enqueueLibraryLightRead(due, opts.send) };
+  return {
+    enqueued: await enqueueLibraryLightRead(due, opts.send),
+    consentsEnded: ended.length,
+  };
+}
+
+/** Tell the owner an item changed (fire-and-forget, the realtime door). */
+function notifyItem(row: { id: string; userId: string; metadata: unknown }) {
+  void import("../../utils/event-emit.js")
+    .then(({ emitLibraryItemUpdated }) =>
+      emitLibraryItemUpdated({
+        userId: row.userId,
+        itemId: row.id,
+        metadata: row.metadata,
+        what: "read",
+      })
+    )
+    .catch(() => undefined);
 }

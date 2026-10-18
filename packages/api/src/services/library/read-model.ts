@@ -38,6 +38,11 @@ import {
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
 import { readItemCuration, toItemView } from "../imports/read-model.js";
+import {
+  libraryReadConsentOf,
+  type StoredReadConsent,
+} from "./read-consent.js";
+import { mediaSkippedExpired } from "../media-copy/library-media-skip.js";
 
 export type LibraryDb = typeof defaultDb;
 
@@ -254,9 +259,14 @@ export function toLibraryItemView(row: {
     ?.intakeSource as { sessionId?: string | null } | undefined;
   const groupIds = c.groupIds ?? [];
   const media = readLibraryItemMedia(row.metadata);
+  const read = readLibraryItemRead(row.metadata, base.contentStatus);
+  const consent = libraryReadConsentOf(
+    { ...storedConsentOf(row.metadata), status: read.status },
+    new Date()
+  );
   return {
     ...base,
-    read: readLibraryItemRead(row.metadata, base.contentStatus),
+    read: consent ? { ...read, consent } : read,
     groupIds,
     suggestedGroupIds: (c.suggestedGroupIds ?? []).filter(
       (g) => !groupIds.includes(g) && !(c.dismissedGroupIds ?? []).includes(g)
@@ -270,6 +280,24 @@ export function toLibraryItemView(row: {
     ...(media.failedAt ? { mediaFailedAt: media.failedAt } : {}),
     ...(media.failedReasons.length
       ? { mediaFailedReasons: media.failedReasons }
+      : {}),
+    ...(media.media.length === 0 && mediaSkippedExpired(row.metadata)
+      ? { mediaExpired: true as const }
+      : {}),
+  };
+}
+
+/** The consent fields of the stored `importRead` (strings only). */
+function storedConsentOf(metadata: unknown): StoredReadConsent {
+  const r = (metadata as Record<string, unknown> | null)?.importRead;
+  if (!r || typeof r !== "object") return {};
+  const bag = r as Record<string, unknown>;
+  return {
+    ...(typeof bag.requestedReader === "string" && bag.requestedReader
+      ? { requestedReader: bag.requestedReader }
+      : {}),
+    ...(typeof bag.requestedAt === "string"
+      ? { requestedAt: bag.requestedAt }
       : {}),
   };
 }

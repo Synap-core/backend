@@ -55,6 +55,11 @@ import {
   type GroupProfile,
 } from "./suggest-groups.js";
 import type { LibraryReadDb } from "./read-budget.js";
+import {
+  forgetLibraryReadConsent,
+  heldFromStatus,
+  isLibraryReadConsentLive,
+} from "./read-consent.js";
 import type { LightReadDeps } from "./light-read-deps.js";
 import type { Got } from "./light-read-map.js";
 import { loadRow, readContent } from "./light-read-content.js";
@@ -138,6 +143,11 @@ interface ReadJob {
   item: ImportItemMetadata;
   prev: StoredLibraryRead;
   reader?: string;
+  /**
+   * When the person gave the consent `reader` runs on (ISO): now for a fresh
+   * tap, the remembered tap's date for the sweep's retry of it.
+   */
+  consentAt?: string;
   force?: boolean;
   now: Date;
   title: string;
@@ -303,7 +313,13 @@ async function finishUnread(
         : {}),
       ...(retry ? { failure: retry.failure } : {}),
       ...(got.error ? { lastError: got.error.slice(0, 500) } : {}),
-      ...(reader && waiting ? { requestedReader: reader } : {}),
+      ...(reader && waiting
+        ? {
+            requestedReader: reader,
+            requestedAt: job.consentAt ?? now.toISOString(),
+            ...(heldFromStatus(prev) ? { heldFrom: heldFromStatus(prev) } : {}),
+          }
+        : {}),
       ...(status !== "not_read" && status !== "over_budget"
         ? { readAt: now.toISOString() }
         : {}),
@@ -445,6 +461,13 @@ export async function lightReadLibraryItem(args: {
    * (one budget unit), and is interactive. Absent = automatic (free only).
    */
   reader?: string;
+  /**
+   * With `reader`: an item that already has a read KEEPS it — the read's
+   * media is copied, its text is not written (`missingMedia`).
+   */
+  keepRead?: boolean;
+  /** With `reader`: download the video too (the reader declares `withVideo`). */
+  withVideo?: boolean;
   deps: LightReadDeps;
 }): Promise<LightReadResult> {
   const { database, userId, itemId, deps } = args;
@@ -458,11 +481,28 @@ export async function lightReadLibraryItem(args: {
   );
   // An explicit read, or the retry of one (the sweep's job carries no reader:
   // the reader the person chose is remembered on the item).
-  const reader =
-    args.reader ??
-    (typeof prev.requestedReader === "string" && prev.requestedReader
-      ? prev.requestedReader
-      : undefined);
+  const now = deps.now();
+  // A remembered consent runs only while it lasts (`read-consent.ts`): an
+  // ended one is forgotten here and NEVER run — the item goes back to waiting
+  // for a reader, nothing is billed.
+  if (
+    !args.reader &&
+    prev.requestedReader &&
+    !isLibraryReadConsentLive(prev, now)
+  ) {
+    const forgot = await forgetLibraryReadConsent(database, userId, itemId);
+    if (forgot) deps.notify?.({ userId, itemId, metadata: meta });
+    logger.info(
+      { itemId, reader: prev.requestedReader },
+      "library light read: the person's consent for this reader has ended — not run, forgotten"
+    );
+    return { itemId, status: "skipped" };
+  }
+  const reader = args.reader ?? prev.requestedReader;
+  // "Get the pictures": the item's read stays as it is — the reader's media
+  // was copied in `readContent`; nothing of its text is written.
+  const keepsRead = !!args.reader && !!args.keepRead && prev.status === "read";
+  const consentAt = args.reader ? now.toISOString() : prev.requestedAt;
   if (!args.force && !args.reader && everRead && isFinal(prev, item)) {
     return { itemId, status: "skipped" };
   }
@@ -476,8 +516,9 @@ export async function lightReadLibraryItem(args: {
     item,
     prev,
     ...(reader ? { reader } : {}),
+    ...(reader && consentAt ? { consentAt } : {}),
     ...(args.force ? { force: true } : {}),
-    now: deps.now(),
+    now,
     title: item.title || row.title,
     cardText: [card?.title, card?.description]
       .filter((t): t is string => !!t?.trim())
@@ -501,6 +542,9 @@ export async function lightReadLibraryItem(args: {
       deps,
       ...(reader ? { reader } : {}),
       ...(prev.readCheckpoint ? { checkpoint: prev.readCheckpoint } : {}),
+      ...(args.reader && args.withVideo ? { withVideo: true } : {}),
+      // Media only: no speech-to-text for a read whose text is kept.
+      ...(keepsRead ? { mediaOnly: true } : {}),
     });
   } catch (err) {
     // A reader that threw (storage, the IS transport, the reader lookup) is a
@@ -515,9 +559,11 @@ export async function lightReadLibraryItem(args: {
     };
   }
   const result =
-    got.kind === "text"
-      ? await finishRead(job, got)
-      : await finishUnread(job, got);
+    got.kind === "text" && keepsRead
+      ? { itemId, status: "read" as const, usedAi: got.usedAi }
+      : got.kind === "text"
+        ? await finishRead(job, got)
+        : await finishUnread(job, got);
   if (result.status !== "skipped") {
     deps.notify?.({ userId, itemId, metadata: meta });
   }

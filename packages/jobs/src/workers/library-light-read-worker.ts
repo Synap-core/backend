@@ -48,6 +48,17 @@ export interface LibraryLightReadPayload {
    * no read budget is spent.
    */
   media?: "retry";
+  /**
+   * With `reader`: an item that already HAS a read keeps it — only the media
+   * this read returns is copied (`library.readWith({ missingMedia: true })`,
+   * the pictures of an old post whose links expired).
+   */
+  keepRead?: boolean;
+  /**
+   * With `reader`: the person's per-tap choice to download the video too
+   * (`withVideo`). Set only when the reader declares it.
+   */
+  withVideo?: boolean;
 }
 
 /**

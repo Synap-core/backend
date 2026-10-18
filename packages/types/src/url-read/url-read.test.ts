@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isExpiredSignedMediaUrl,
+  signedMediaUrlExpiresAt,
   URL_READ_MEDIA_MAX,
   isValidUrlPattern,
   matchUrlPattern,
@@ -558,5 +560,50 @@ describe("isBroadUrlPattern — reaches past one registrable domain", () => {
     // Not even grammar: a host needs two labels.
     expect(isBroadUrlPattern("*.com")).toBe(false);
     expect(isValidUrlPattern("*.com")).toBe(false);
+  });
+});
+
+describe("signed media links: the expiry built into the URL", () => {
+  const at = Date.UTC(2026, 8, 1) / 1000; // 2026-09-01 in epoch seconds
+  it("Instagram / Facebook: oe= is a HEX epoch", () => {
+    const url = `https://scontent-cdg4-1.cdninstagram.com/v/a.jpg?stp=1&oe=${at.toString(16).toUpperCase()}`;
+    expect(signedMediaUrlExpiresAt(url)).toBe(at * 1000);
+    expect(
+      signedMediaUrlExpiresAt(`https://x.fbcdn.net/a.jpg?oe=${at.toString(16)}`)
+    ).toBe(at * 1000);
+    expect(isExpiredSignedMediaUrl(url, at * 1000 + 1)).toBe(true);
+    expect(isExpiredSignedMediaUrl(url, at * 1000 - 1)).toBe(false);
+  });
+  it("TikTok: x-expires (else expires) is a DECIMAL epoch on any tiktokcdn* host", () => {
+    expect(
+      signedMediaUrlExpiresAt(
+        `https://p16-sign-va.tiktokcdn.com/c.jpeg?x-expires=${at}`
+      )
+    ).toBe(at * 1000);
+    expect(
+      signedMediaUrlExpiresAt(
+        `https://p77.tiktokcdn-us.com/c.jpeg?expires=${at}`
+      )
+    ).toBe(at * 1000);
+  });
+  it("unknown is never expired: another host, no param, a malformed value", () => {
+    expect(
+      signedMediaUrlExpiresAt(
+        `https://cdn.example.com/a.jpg?oe=${at.toString(16)}`
+      )
+    ).toBeNull();
+    expect(
+      signedMediaUrlExpiresAt("https://scontent.cdninstagram.com/a.jpg")
+    ).toBeNull();
+    expect(
+      signedMediaUrlExpiresAt("https://scontent.cdninstagram.com/a.jpg?oe=zz")
+    ).toBeNull();
+    expect(
+      signedMediaUrlExpiresAt("https://evilcdninstagram.com/a.jpg?oe=1")
+    ).toBeNull();
+    expect(signedMediaUrlExpiresAt("not a url")).toBeNull();
+    expect(
+      isExpiredSignedMediaUrl("https://cdn.example.com/a.jpg", Date.now())
+    ).toBe(false);
   });
 });
