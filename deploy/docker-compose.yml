@@ -115,6 +115,11 @@ x-backend-env: &backend-env
   SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY: ${SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY:-}
   SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: ${SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES:-}
   SYNAP_LIBRARY_READ_AI_PER_DAY: ${SYNAP_LIBRARY_READ_AI_PER_DAY:-}
+  # Request budget per signed-in person (15-minute window) and per client
+  # address across every budget. Empty = the code's default
+  # (apps/api/src/middleware/rate-limit-classes.ts): 3000, and five times that.
+  RATE_LIMIT_CRUD_SESSION_MAX: ${RATE_LIMIT_CRUD_SESSION_MAX:-}
+  RATE_LIMIT_CRUD_IP_CEILING: ${RATE_LIMIT_CRUD_IP_CEILING:-}
   # Mirrored only so the backend can introspect its own courier (SMTP) config
   # in /api/provision/status. Kratos reads this directly via its own service env
   # block below — the backend never sends mail itself; it just reports status.

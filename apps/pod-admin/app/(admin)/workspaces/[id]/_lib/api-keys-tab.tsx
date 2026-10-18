@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * API Keys tab — workspace-scoped keys.
- * Uses trpc.apiKeys.adminListAll filtered by workspaceId.
+ * API Keys tab — the keys held by this space's members
+ * (`apiKeys.adminListAll({ workspaceId })` filters by membership); a key made
+ * here is confined to this space.
  */
 
 import {
@@ -102,8 +103,8 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     [keysQuery.data]
   );
 
-  // ?focus=<keyId> — the receiver for a workspace-scoped key, which the
-  // pod-wide Trust & Keys list filters out. `data-row-id` is on each KeyRow.
+  // ?focus=<keyId> — the receiver for a key confined to this space (Keys
+  // rows and ⌘K open it here, `keyHref`). `data-row-id` is on each KeyRow.
   useFocusRow({ ready: !keysQuery.isLoading });
   const active = useMemo(() => keys.filter((k) => k.isActive), [keys]);
   const revoked = useMemo(() => keys.filter((k) => !k.isActive), [keys]);

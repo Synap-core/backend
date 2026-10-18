@@ -187,8 +187,8 @@ What changes for an operator when a pod updates past a release. Newest first.
   `RATE_LIMIT_CRUD_SESSION_MAX` (default `3000` per 15-minute window, per
   person) and `RATE_LIMIT_CRUD_IP_CEILING` (default `15000`, five times the
   person budget: every request from one address, whatever budget it spends).
-  The stock `docker-compose.yml` does not pass them to the container, so on a
-  standard deploy the defaults apply.
+  Leave them unset for the defaults, or set them on the pod
+  (`synap config set RATE_LIMIT_CRUD_SESSION_MAX=6000 && synap apply`).
 - **Migration 0327** (split `source` into `provenance` and `leadSource`) runs
   automatically during `synap update`; nothing to do.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old

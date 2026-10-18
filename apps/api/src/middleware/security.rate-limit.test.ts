@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildCrudIpCeilingKey,
   buildRateLimitKey,
@@ -287,6 +287,38 @@ describe("the address-wide crud ceiling", () => {
     ) {
       expect(cfg.crud.sessionMax).toBe(3000);
       expect(cfg.crud.ipCeiling).toBe(15000);
+    }
+  });
+
+  // The compose file passes these through as `${VAR:-}`, so an unset variable
+  // reaches the process as "" — that must mean the default, never 0 or NaN.
+  it("treats an empty variable as unset", () => {
+    vi.stubEnv("RATE_LIMIT_CRUD_SESSION_MAX", "");
+    vi.stubEnv("RATE_LIMIT_CRUD_IP_CEILING", "");
+    try {
+      const cfg = getRateLimitClassConfig();
+      expect(cfg.crud.sessionMax).toBe(3000);
+      expect(cfg.crud.ipCeiling).toBe(15000);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("reads both variables when set", () => {
+    vi.stubEnv("RATE_LIMIT_CRUD_SESSION_MAX", "100");
+    vi.stubEnv("RATE_LIMIT_CRUD_IP_CEILING", "");
+    try {
+      const cfg = getRateLimitClassConfig();
+      expect(cfg.crud.sessionMax).toBe(100);
+      expect(cfg.crud.ipCeiling).toBe(500);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    vi.stubEnv("RATE_LIMIT_CRUD_IP_CEILING", "7000");
+    try {
+      expect(getRateLimitClassConfig().crud.ipCeiling).toBe(7000);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
