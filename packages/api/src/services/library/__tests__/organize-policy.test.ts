@@ -1,10 +1,10 @@
 /**
- * An agent's Library organisation (`library/organize`) is ALWAYS a proposal:
- * the door passes `forcePropose`, and the pure engine's rung 2.1 sits above
- * every widening — an auto rule naming the door, an `autoApproveFor` entry, a
- * session posture. Driven through the REAL engine (`decideAgentPolicy`) with
- * the flag the door sends; the door's own call is pinned in
- * `library.pglite.test.ts` (4B).
+ * An agent's Library organisation (`library/organize`) is ALWAYS a proposal,
+ * twice over: the door passes `forcePropose` (rung 2.1), and the event key is
+ * a HUMAN GATE (rung 2.05) — both above every widening: an auto rule naming
+ * the door, an `autoApproveFor` entry, a session posture. Driven through the
+ * REAL engine (`decideAgentPolicy`); the door's own call is pinned in
+ * `library.pglite.test.ts`.
  *
  * NOT covered here: the gate's RBAC / key-grant rungs (permission-check
  * suites), and the AI preset grant (ai-preset tripwire, which also checks the
@@ -15,6 +15,7 @@ import {
   GATE_WRITE_DOORS,
   REVERSIBILITY_DOOR_CLASS,
   decideAgentPolicy,
+  nonWidenableFloorFor,
 } from "@synap/governance-policy";
 import { LIBRARY_ORGANIZE_DOOR } from "@synap-core/types/imports";
 
@@ -47,12 +48,21 @@ describe("library/organize — always a proposal for an agent", () => {
     }
   });
 
-  it("CONTROL: without the door's flag, an auto rule WOULD execute it — the flag is what holds", () => {
-    const v = decideAgentPolicy({
-      ...base,
-      governanceRuleVerdict: "auto",
-      governanceRuleNamesWrite: true,
-    } as never);
-    expect(v.verdict).toBe("execute");
+  it("without the door's flag too: a human gate no rule, whitelist or default widens", () => {
+    for (const widen of [
+      {},
+      {
+        governanceRuleVerdict: "auto" as const,
+        governanceRuleNamesWrite: true,
+      },
+      { autoApproveFor: ["library.organize", "*"] },
+    ]) {
+      expect(
+        decideAgentPolicy({ ...base, ...widen } as never),
+        JSON.stringify(widen)
+      ).toMatchObject({ verdict: "propose", reasonCode: "HUMAN_GATE" });
+    }
+    // "Make a rule from this" is refused for it.
+    expect(nonWidenableFloorFor("library.organize")).toBe("HUMAN_GATE");
   });
 });

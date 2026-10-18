@@ -654,6 +654,12 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // The update pack is the same shape (one review over N items) and is
   // `forcePropose`d at its one door; flooring it keeps a rule inert here too.
   "entity.update_pack" satisfies GateEventKey,
+  // An agent's proposal to organise a person's Library (founder 2026-10-18:
+  // an agent only PROPOSES Library organisation). Its door also passes
+  // `forcePropose`; flooring the key here keeps any rule, whitelist or future
+  // door that forgets the flag from executing it, and refuses "Make a rule
+  // from this" for it.
+  "library.organize" satisfies GateEventKey,
   // D7 — the pod owner's consent to a trusted issuer's (the Control Plane's)
   // request for scopes beyond its pinned grant. Its whole value is that a
   // person said yes: filed directly at boot (`syncTrustedIssuerScopeRequest`),
