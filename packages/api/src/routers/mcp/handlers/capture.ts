@@ -36,6 +36,7 @@ import {
   resolveProjectPlacement,
 } from "@synap/database";
 import { logger } from "../../hub-protocol/rest/_shared.js";
+import { toolError } from "../tool-errors.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
@@ -1469,12 +1470,18 @@ const organizeLibraryHandler = async (
       : {}),
   });
   if (!parsed.success) {
-    return ok({
-      error:
-        "ops must be 1-50 of: group.create {name, note?, itemIds?}, group.items {groupId, add?, remove?}, group.update {groupId, name?, note?, workspaceId?}, group.build {groupId}.",
-      issues: parsed.error.issues.slice(0, 5),
-    });
+    const issue = parsed.error.issues[0];
+    return toolError(
+      `Tool '${toolName}': ops must be 1-50 of: group.create {name, note?, itemIds?}, group.items {groupId, add?, remove?}, group.update {groupId, name?, note?, workspaceId?}, group.build {groupId}${issue ? ` — ${issue.path.join(".") || "ops"}: ${issue.message}` : ""}.`
+    );
   }
+  // The same per-person limit as tRPC `library.propose` / Hub `POST /library/propose`.
+  const [{ assertUserRateLimit }, { LIBRARY_READER_DOOR_LIMITS }] =
+    await Promise.all([
+      import("../../../middleware/ai-rate-limit.js"),
+      import("../../../services/library/door-limits.js"),
+    ]);
+  assertUserRateLimit(userId, LIBRARY_READER_DOOR_LIMITS.propose);
   return ok(
     await proposeLibraryOrganize({
       userId,
