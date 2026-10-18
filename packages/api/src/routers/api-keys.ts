@@ -304,8 +304,9 @@ export const apiKeysRouter = router({
   /**
    * Admin: list all API keys on the pod (pod-admin only).
    * When `workspaceId` is set, filters to keys whose owner is a member of that workspace.
-   * Note: API keys don't have a direct workspace_id column — workspace association is
-   * inferred via the owner's workspace memberships.
+   * Each row also carries the key's own `workspaceId` — set only on a key
+   * confined to one space (`createForWorkspace`) — so a surface can tell a
+   * space key from a pod-wide one without guessing from the owner.
    */
   adminListAll: podAdminProcedure
     .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
@@ -339,6 +340,8 @@ export const apiKeysRouter = router({
         keyType: key.keyType,
         hubId: key.hubId,
         linkedUserId: key.linkedUserId,
+        /** The space the key is confined to (`createForWorkspace`); null = pod-wide. */
+        workspaceId: key.workspaceId,
         scope: key.scope,
         isActive: key.isActive,
         expiresAt: key.expiresAt,

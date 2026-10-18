@@ -7,7 +7,7 @@
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { computerHref } from "../../../../lib/console-nav";
+import { computerHref, navHref } from "../../../../lib/console-nav";
 import { DAY_MS } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 import { appHref } from "../../applications/_lib/app-inventory";
@@ -33,6 +33,8 @@ export interface UnifiedKey {
   keyType?: string | null;
   hubId?: string | null;
   linkedUserId?: string | null;
+  /** The space the key is confined to; null = pod-wide. */
+  workspaceId?: string | null;
   scope?: string[] | string | null;
   isActive: boolean;
   expiresAt?: Date | string | null;
@@ -120,6 +122,18 @@ export function holderHref(k: UnifiedKey): string | null {
     return appHref("key", k.holder.appId);
   }
   return null;
+}
+
+/**
+ * Where a key row opens: its holder's page first; a key confined to one space
+ * with no holder page opens on that space's keys tab, focused on the key.
+ * null = nothing to open — the row stays a row.
+ */
+export function keyHref(k: UnifiedKey): string | null {
+  const holder = holderHref(k);
+  if (holder) return holder;
+  if (!k.workspaceId) return null;
+  return `${navHref("spaces")}/${encodeURIComponent(k.workspaceId)}?tab=api-keys&focus=${encodeURIComponent(k.id)}`;
 }
 
 export function keyStatus(apiKey: {

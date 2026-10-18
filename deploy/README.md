@@ -166,6 +166,34 @@ notification per update, and a managed pod's owner also gets one email from
 the Control Plane. `SYNAP_UPDATE_CHANNEL` in `.env` remains only the default
 for an operator typing a bare `synap update`.
 
+### Upgrade notes
+
+What changes for an operator when a pod updates past a release. Newest first.
+
+#### Pod Console (2026-10)
+
+- **Outbound catalog fetch.** Every pod now reads the Synap marketplace
+  catalog every 10 minutes (and once at boot): from `CONTROL_PLANE_URL` when
+  set, else anonymously from `https://api.synap.live` — no cookie, key or
+  identity is sent. To opt out, set `SYNAP_CATALOG_SOURCE=off`
+  (`synap config set SYNAP_CATALOG_SOURCE=off && synap apply`); the pod then
+  stops fetching Synap's catalog, and the console cannot switch it back on. A
+  source the owner added (below) has its own switch.
+- **Marketplace sources.** An owner can add other catalogs beside Synap's.
+  What a source serves and what the pod checks: `docs/marketplace-source.md`.
+- **Rate limits for signed-in people.** The API now gives each signed-in
+  person their own request budget instead of sharing the per-address one. Two
+  new variables tune it, read by the API process:
+  `RATE_LIMIT_CRUD_SESSION_MAX` (default `3000` per 15-minute window, per
+  person) and `RATE_LIMIT_CRUD_IP_CEILING` (default `15000`, five times the
+  person budget: every request from one address, whatever budget it spends).
+  The stock `docker-compose.yml` does not pass them to the container, so on a
+  standard deploy the defaults apply.
+- **Migration 0327** (split `source` into `provenance` and `leadSource`) runs
+  automatically during `synap update`; nothing to do.
+- **Console URL.** The Apps page moved from `/origins` to `/applications`. Old
+  links and bookmarks redirect.
+
 ## ✉️ Email (Kratos courier)
 
 Recovery codes and verification emails are sent by Kratos through

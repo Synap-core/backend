@@ -33,7 +33,7 @@
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -50,6 +50,11 @@ import type { CatalogCacheEntry } from "./catalog-cache-query.js";
 // folds. `import type` is erased at compile time, so it costs nothing.
 import type { RegistryCapability } from "./capability-registry.js";
 import { stripComments } from "../../../../../scripts/strip-comments.mjs";
+import {
+  BACKEND_ROOT,
+  siblingCheckout,
+  siblingSkipReason,
+} from "../../../../../scripts/sibling-checkout.mjs";
 
 /**
  * Vendor names a hardcoded provider map would have to contain, matched as WHOLE
@@ -71,20 +76,25 @@ import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 const VENDOR_PATTERN =
   /(?<![A-Za-z0-9_$])(remotion|hyperframes|gmail|notion|airtable|slack|hubspot|fal)(?![A-Za-z0-9_$])/i;
 
-const HERE = dirname(fileURLToPath(import.meta.url));
 /**
- * The MONOREPO root (`…/Code/synap`). This file spans three packages (api +
- * database in synap-backend, workspace-templates in synap-app) because the
- * thing it guards is a CHAIN across them — a link that breaks in any one
+ * Where each repo of the chain is checked out. This file spans three packages
+ * (api + database in synap-backend, workspace-templates in synap-app) because
+ * the thing it guards is a CHAIN across them — a link that breaks in any one
  * package is invisible from the others.
  *
- * ⚠️ Resolved to the MONOREPO, not to synap-backend: a relative path that lands
- * one level short silently produces a `synap-backend/packages/...` path for
- * every synap-app entry, and the scan then ENOENTs on the first one — which
- * reads as "the chain is broken" rather than "I built the wrong path". The
- * non-vacuity assertion below is what proves the paths are real.
+ * ⚠️ Each link is resolved against ITS OWN repo root, never a guessed monorepo
+ * parent: a path built one level short (or from a worktree, or a checkout named
+ * `backend`) silently ENOENTs on every entry, which reads as "the chain is
+ * broken" rather than "I built the wrong path". The non-vacuity assertion below
+ * is what proves the paths are real. synap-app is a sibling checkout CI does
+ * not provide, so its link is checked wherever that checkout exists and skipped
+ * with the reason printed where it does not.
  */
-const REPO = resolve(HERE, "../../../../../..");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOTS = {
+  "synap-backend": BACKEND_ROOT,
+  "synap-app": siblingCheckout("synap-app"),
+} as const;
 
 /** A registry row with the given verbs — the ONLY shape the fold reads. */
 function cap(
@@ -439,47 +449,68 @@ describe("TRIPWIRE — the declared-intent sink is wired end to end", () => {
    * are present at once, and derives its own file list (no hand-maintained DOORS
    * array — a new link joins the scan by existing).
    */
-  const LINKS: Array<{ file: string; must: string; what: string }> = [
+  const LINKS: Array<{
+    repo: keyof typeof REPO_ROOTS;
+    file: string;
+    must: string;
+    what: string;
+  }> = [
     {
-      file: "/synap-backend/packages/database/src/utils/create-workspace-from-definition.ts",
+      repo: "synap-backend",
+      file: "packages/database/src/utils/create-workspace-from-definition.ts",
       must: "settings.taskIntents = definition.taskIntents",
       what: "the pod persists the declaration to settings",
     },
     {
-      file: "/synap-backend/packages/database/src/utils/create-workspace-from-definition.ts",
+      repo: "synap-backend",
+      file: "packages/database/src/utils/create-workspace-from-definition.ts",
       must: "taskIntents: z.array(z.string()).optional()",
       what: "the door's zod accepts the field (a strict zod would reject it)",
     },
     {
-      file: "/synap-backend/packages/database/src/schema/workspaces.ts",
+      repo: "synap-backend",
+      file: "packages/database/src/schema/workspaces.ts",
       must: "taskIntents?: string[]",
       what: "WorkspaceSettings declares the key the resolver reads",
     },
     {
-      file: "/synap-app/packages/workspace-templates/src/define.ts",
+      repo: "synap-app",
+      file: "packages/workspace-templates/src/define.ts",
       must: "taskIntents: tpl.taskIntents",
       what: "the converter forwards it (both doors: workspace + package)",
     },
   ];
+  /** The links whose repo is checked out here, read once. */
+  const READ = LINKS.flatMap((link) => {
+    const root = REPO_ROOTS[link.repo];
+    if (root === null) return [];
+    return [{ ...link, text: readFileSync(join(root, link.file), "utf8") }];
+  });
+  if (REPO_ROOTS["synap-app"] === null) {
+    console.warn(siblingSkipReason("synap-app", "intent-chain"));
+  }
 
   it("NON-VACUITY: every scanned file exists and was actually read", () => {
     // A missing file makes readFileSync throw, but a file that exists with the
     // wrong path shape would silently satisfy nothing — assert the scan found a
-    // plausible number of REAL files with content.
+    // plausible number of REAL files with content. The backend links are
+    // always present, so the scan can never shrink to nothing.
     expect(LINKS.length).toBeGreaterThanOrEqual(4);
-    for (const link of LINKS) {
-      const text = readFileSync(join(REPO, link.file), "utf8");
+    expect(
+      READ.filter((l) => l.repo === "synap-backend").length
+    ).toBeGreaterThanOrEqual(3);
+    for (const link of READ) {
       expect(
-        text.length,
-        `${link.file} is suspiciously short — the scan may be reading the wrong path`
+        link.text.length,
+        `${link.repo}/${link.file} is suspiciously short — the scan may be reading the wrong path`
       ).toBeGreaterThan(500);
     }
   });
 
   it("no link in the declaration → settings → resolver chain is missing", () => {
-    const missing = LINKS.filter(
-      (l) => !readFileSync(join(REPO, l.file), "utf8").includes(l.must)
-    ).map((l) => `${l.file}: ${l.what} (expected \`${l.must}\`)`);
+    const missing = READ.filter((l) => !l.text.includes(l.must)).map(
+      (l) => `${l.repo}/${l.file}: ${l.what} (expected \`${l.must}\`)`
+    );
     expect(
       missing,
       "The declared-intent chain is broken. Phase 3 reads settings.taskIntents " +
@@ -491,10 +522,7 @@ describe("TRIPWIRE — the declared-intent sink is wired end to end", () => {
 
   it("the resolver reads the SAME key it persists (no silent rename)", () => {
     const resolver = readFileSync(
-      join(
-        REPO,
-        "/synap-backend/packages/api/src/services/capabilities/capability-intent-index.ts"
-      ),
+      join(HERE, "capability-intent-index.ts"),
       "utf8"
     );
     expect(resolver).toContain("taskIntents");

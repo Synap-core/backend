@@ -189,6 +189,9 @@ describe("classifyProposal", () => {
       "routers/skills.ts",
       "services/capabilities/execute-capability.ts",
       "services/capabilities/marketplace-install.ts",
+      // Files the SAME `capability.install` row as marketplace-install for a
+      // workspace's intent gap — an install request, not a run.
+      "services/capabilities/propose-intent-gap-install.ts",
     ]);
 
     for (const site of sites) {

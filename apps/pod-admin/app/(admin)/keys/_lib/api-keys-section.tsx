@@ -50,7 +50,7 @@ import { formatRelative, shortId } from "../../../../lib/format";
 import {
   CATEGORY_LABEL,
   categorize,
-  holderHref,
+  keyHref,
   holderName,
   keyStatus,
   normalizeScopes,
@@ -212,7 +212,6 @@ export function ApiKeysSection() {
   const allKeys = useMemo<UnifiedKey[]>(() => {
     const map = new Map<string, UnifiedKey>();
     for (const k of (operatorKeys.data as UnifiedKey[] | undefined) ?? []) {
-      if (k.hubId?.startsWith("workspace:")) continue;
       map.set(k.id, k);
     }
     for (const k of (systemKeys.data as UnifiedKey[] | undefined) ?? []) {
@@ -453,8 +452,8 @@ function KeyRow({
 }) {
   const router = useRouter();
   // A computer's or app's key opens its holder's page (what holds it, what it
-  // reaches, how to revoke it).
-  const holderPage = holderHref(apiKey);
+  // reaches, how to revoke it); a space key with neither opens its space.
+  const holderPage = keyHref(apiKey);
   const status = keyStatus(apiKey);
   const scopes = normalizeScopes(apiKey.scope);
   const lastUsed = apiKey.lastUsedAt

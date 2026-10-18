@@ -84,13 +84,26 @@ import { playbookRowToPackagePlaybook } from "../services/workspace-to-package-d
 import { createInputSchema } from "../routers/playbooks.js";
 import type { LoopDefinition } from "@synap/playbooks";
 import type { Context } from "../types/context.js";
+import {
+  siblingCheckout,
+  siblingSkipReason,
+} from "../../../../scripts/sibling-checkout.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");
+const SYNAP_APP = siblingCheckout("synap-app");
 const WT_DEFINE = join(
-  here,
-  "../../../../../synap-app/packages/workspace-templates/src/define.ts"
+  SYNAP_APP ?? "<no synap-app checkout>",
+  "packages/workspace-templates/src/define.ts"
 );
+/**
+ * The cases that drive the REAL template need the synap-app checkout, which CI
+ * does not provide (a LOCAL guard, like provenance-writers). Without it they
+ * skip with the reason printed; the source-scan cases still run.
+ */
+if (!SYNAP_APP)
+  console.warn(siblingSkipReason("synap-app", "playbook-round-trip"));
+const withTemplate = it.runIf(SYNAP_APP !== null);
 
 const GRANT_STAGE_KEYS = [
   "identify",
@@ -132,14 +145,17 @@ const lastCreate = () =>
 describe("playbook definition round trip — grants.yaml Grant Process", () => {
   beforeEach(() => createPlaybookMock.mockClear());
 
-  it("the source template itself is a 6-step project method (non-vacuity)", async () => {
-    expectMethod(
-      grantProcess((await grantsPackage()).playbooks),
-      "grants.yaml"
-    );
-  });
+  withTemplate(
+    "the source template itself is a 6-step project method (non-vacuity)",
+    async () => {
+      expectMethod(
+        grantProcess((await grantsPackage()).playbooks),
+        "grants.yaml"
+      );
+    }
+  );
 
-  it("Hub /packages/apply → applier → playbooks.create", async () => {
+  withTemplate("Hub /packages/apply → applier → playbooks.create", async () => {
     const parsed = PackageApplySchema.parse(await grantsPackage());
     expectMethod(grantProcess(parsed.playbooks), "Hub parse");
     const gp = grantProcess(parsed.playbooks);
@@ -181,31 +197,34 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
     expect(exec).toMatch(/layerTwoBody:\s*(?:innerDefinition|definition)\b/);
   });
 
-  it("tRPC createFromDefinition → body builder → loop applier → playbooks.create", async () => {
-    const def = await grantsWorkspaceDefinition();
-    const inputSchema = (
-      definitionEngineProcedures.createFromDefinition as unknown as {
-        _def: { inputs: Array<{ parse: (v: unknown) => unknown }> };
-      }
-    )._def.inputs[0]!;
-    const parsed = inputSchema.parse({ definition: def }) as {
-      definition: Parameters<typeof buildPostWorkspaceBodyFromDefinition>[0];
-    };
-    expectMethod(grantProcess(parsed.definition.playbooks), "tRPC parse");
-    const body = buildPostWorkspaceBodyFromDefinition(parsed.definition, WS);
-    const loop = body.loops![0]!.definition as unknown as LoopDefinition;
-    expectMethod(grantProcess(loop.playbooks), "body builder");
-    await createLoopFromDefinition({ ...loop, triggers: [] }, {}, {
-      userId: USER,
-      workspaceId: WS,
-    } as unknown as Context);
-    const gpCall = createPlaybookMock.mock.calls
-      .map((c) => c[0] as Record<string, unknown>)
-      .find((c) => c.name === "Grant Process");
-    expectMethod(gpCall!, "loop applier create");
-  });
+  withTemplate(
+    "tRPC createFromDefinition → body builder → loop applier → playbooks.create",
+    async () => {
+      const def = await grantsWorkspaceDefinition();
+      const inputSchema = (
+        definitionEngineProcedures.createFromDefinition as unknown as {
+          _def: { inputs: Array<{ parse: (v: unknown) => unknown }> };
+        }
+      )._def.inputs[0]!;
+      const parsed = inputSchema.parse({ definition: def }) as {
+        definition: Parameters<typeof buildPostWorkspaceBodyFromDefinition>[0];
+      };
+      expectMethod(grantProcess(parsed.definition.playbooks), "tRPC parse");
+      const body = buildPostWorkspaceBodyFromDefinition(parsed.definition, WS);
+      const loop = body.loops![0]!.definition as unknown as LoopDefinition;
+      expectMethod(grantProcess(loop.playbooks), "body builder");
+      await createLoopFromDefinition({ ...loop, triggers: [] }, {}, {
+        userId: USER,
+        workspaceId: WS,
+      } as unknown as Context);
+      const gpCall = createPlaybookMock.mock.calls
+        .map((c) => c[0] as Record<string, unknown>)
+        .find((c) => c.name === "Grant Process");
+      expectMethod(gpCall!, "loop applier create");
+    }
+  );
 
-  it("Hub /capabilities playbook parse", async () => {
+  withTemplate("Hub /capabilities playbook parse", async () => {
     const gp = grantProcess((await grantsPackage()).playbooks);
     expectMethod(
       PlaybookDefSchema.parse(gp) as Record<string, unknown>,
@@ -213,7 +232,7 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
     );
   });
 
-  it("Hub /loops → loop applier → playbooks.create", async () => {
+  withTemplate("Hub /loops → loop applier → playbooks.create", async () => {
     const gp = grantProcess((await grantsPackage()).playbooks);
     // A loop authors grants as RESOLVED `{kind, id}` pairs (a template's grant
     // NAMES go through the package door, which resolves them) — so the name
@@ -237,77 +256,86 @@ describe("playbook definition round trip — grants.yaml Grant Process", () => {
     expectMethod(lastCreate(), "/loops applier create");
   });
 
-  it("Hub POST /playbooks (+ MCP create_playbook) → shared door → playbooks.create", async () => {
-    // The single-playbook AGENT authoring door. Its body `.pick`s the ONE
-    // schema (2026-09-28); the hand copy it replaced stripped params/criteria.
-    const gp = grantProcess((await grantsPackage()).playbooks);
-    const body = CreatePlaybookBodySchema.parse({
-      ...gp,
-      workspaceId: "33333333-3333-4333-8333-333333333333",
-    });
-    expectMethod(body as Record<string, unknown>, "POST /playbooks parse");
-    await createPlaybookDoor(
-      { userId: USER, scopes: ["hub-protocol.write"] },
-      {
-        workspaceId: body.workspaceId,
-        name: body.name,
-        goalTemplate: body.goalTemplate,
-        stages: body.stages as never,
-        scope: body.scope,
-        params: body.params,
-        criteria: body.criteria,
-      }
-    );
-    expectMethod(lastCreate(), "POST /playbooks door create");
-    expect(lastCreate().params, "POST /playbooks: params").toEqual(gp.params);
-  });
+  withTemplate(
+    "Hub POST /playbooks (+ MCP create_playbook) → shared door → playbooks.create",
+    async () => {
+      // The single-playbook AGENT authoring door. Its body `.pick`s the ONE
+      // schema (2026-09-28); the hand copy it replaced stripped params/criteria.
+      const gp = grantProcess((await grantsPackage()).playbooks);
+      const body = CreatePlaybookBodySchema.parse({
+        ...gp,
+        workspaceId: "33333333-3333-4333-8333-333333333333",
+      });
+      expectMethod(body as Record<string, unknown>, "POST /playbooks parse");
+      await createPlaybookDoor(
+        { userId: USER, scopes: ["hub-protocol.write"] },
+        {
+          workspaceId: body.workspaceId,
+          name: body.name,
+          goalTemplate: body.goalTemplate,
+          stages: body.stages as never,
+          scope: body.scope,
+          params: body.params,
+          criteria: body.criteria,
+        }
+      );
+      expectMethod(lastCreate(), "POST /playbooks door create");
+      expect(lastCreate().params, "POST /playbooks: params").toEqual(gp.params);
+    }
+  );
 
-  it("the router's own create input keeps them (playbooks.create)", async () => {
-    const gp = grantProcess((await grantsPackage()).playbooks);
-    expectMethod(
-      createInputSchema.parse(gp) as Record<string, unknown>,
-      "playbooks.create input"
-    );
-  });
+  withTemplate(
+    "the router's own create input keeps them (playbooks.create)",
+    async () => {
+      const gp = grantProcess((await grantsPackage()).playbooks);
+      expectMethod(
+        createInputSchema.parse(gp) as Record<string, unknown>,
+        "playbooks.create input"
+      );
+    }
+  );
 
-  it("--from-project export → re-install parse keeps scope + stages", async () => {
-    // Install once through the Hub door, take what reached playbooks.create as
-    // the stored row, export it, and push the export back through the door.
-    const parsed = PackageApplySchema.parse(await grantsPackage());
-    await applyPackagePostWorkspace({
-      workspaceId: WS,
-      userId: USER,
-      body: { playbooks: [grantProcess(parsed.playbooks)] },
-    } as never);
-    const row = lastCreate();
-    const exported = playbookRowToPackagePlaybook(
-      {
-        name: row.name as string,
-        description: (row.description as string) ?? null,
-        goalTemplate: row.goalTemplate as string,
-        params: row.params ?? [],
-        executor: (row.executor as string) ?? "is-agent",
-        inputStrategy: row.inputStrategy ?? { kind: "none" },
-        channelSpec: row.channelSpec ?? {},
-        schedule: row.schedule ?? null,
-        subjectProfile: row.subjectProfile ?? null,
-        status: (row.status as string) ?? "active",
-        scope: (row.scope as string) ?? null,
-        stages: row.stages ?? [],
-        criteria: row.criteria ?? [],
-        expectedOutputs: row.expectedOutputs ?? [],
-        metadata: row.metadata ?? {},
-      },
-      undefined
-    );
-    const reparsed = PackageApplySchema.parse({
-      _meta: { slug: "exported" },
-      workspaceName: "x",
-      profiles: [],
-      playbooks: [exported],
-    });
-    expectMethod(grantProcess(reparsed.playbooks), "export → re-install");
-  });
+  withTemplate(
+    "--from-project export → re-install parse keeps scope + stages",
+    async () => {
+      // Install once through the Hub door, take what reached playbooks.create as
+      // the stored row, export it, and push the export back through the door.
+      const parsed = PackageApplySchema.parse(await grantsPackage());
+      await applyPackagePostWorkspace({
+        workspaceId: WS,
+        userId: USER,
+        body: { playbooks: [grantProcess(parsed.playbooks)] },
+      } as never);
+      const row = lastCreate();
+      const exported = playbookRowToPackagePlaybook(
+        {
+          name: row.name as string,
+          description: (row.description as string) ?? null,
+          goalTemplate: row.goalTemplate as string,
+          params: row.params ?? [],
+          executor: (row.executor as string) ?? "is-agent",
+          inputStrategy: row.inputStrategy ?? { kind: "none" },
+          channelSpec: row.channelSpec ?? {},
+          schedule: row.schedule ?? null,
+          subjectProfile: row.subjectProfile ?? null,
+          status: (row.status as string) ?? "active",
+          scope: (row.scope as string) ?? null,
+          stages: row.stages ?? [],
+          criteria: row.criteria ?? [],
+          expectedOutputs: row.expectedOutputs ?? [],
+          metadata: row.metadata ?? {},
+        },
+        undefined
+      );
+      const reparsed = PackageApplySchema.parse({
+        _meta: { slug: "exported" },
+        workspaceName: "x",
+        profiles: [],
+        playbooks: [exported],
+      });
+      expectMethod(grantProcess(reparsed.playbooks), "export → re-install");
+    }
+  );
 
   it("every door that extends the ONE schema is exercised here (derived set)", () => {
     const EXERCISED = new Set([

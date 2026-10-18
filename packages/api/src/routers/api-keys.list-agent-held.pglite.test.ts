@@ -45,6 +45,12 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   checkPermissionOrPropose: vi.fn(async () => ({ granted: true })),
 }));
 
+// The pod-admin gate is pinned in its own tests; here one admin passes it.
+vi.mock("../utils/workspace-role.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isPodAdmin: vi.fn(async (userId: string) => userId === "pod-admin-1"),
+}));
+
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
@@ -221,5 +227,22 @@ describe("apiKeys.list — who holds each key", () => {
     const keys = await caller(HUMAN).list();
     // HUMAN / AGENT were never inserted as users in this file's fixtures.
     expect(keys.find((k) => k.id === OWN_KEY)?.holder).toBeNull();
+  });
+});
+
+describe("apiKeys.adminListAll — a space key says which space", () => {
+  // Rules out: the console guessing a key's space from a `hubId` convention
+  // nothing mints, while the real `api_keys.workspace_id` never reached it.
+  it("carries the key's own workspaceId, null for a pod-wide key", async () => {
+    const SPACE = randomUUID();
+    const SPACE_KEY = randomUUID();
+    await addKey(SPACE_KEY, HUMAN, null);
+    await h.client!.query(
+      `update api_keys set workspace_id = $2 where id = $1`,
+      [SPACE_KEY, SPACE]
+    );
+    const keys = await caller("pod-admin-1").adminListAll();
+    expect(keys.find((k) => k.id === SPACE_KEY)?.workspaceId).toBe(SPACE);
+    expect(keys.find((k) => k.id === OWN_KEY)?.workspaceId).toBeNull();
   });
 });
