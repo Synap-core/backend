@@ -18,7 +18,11 @@
  */
 
 import { trpc } from "../../../lib/trpc";
-import { bounceReceipt, bounceSummary } from "../open-model";
+import {
+  bounceAddressParams,
+  bounceReceipt,
+  bounceSummary,
+} from "../open-model";
 import { labelForOpenType, type KnownOpenType } from "../open-params";
 import { isUuid } from "../../../lib/format";
 import { OpenLoading, OpenObject } from "../open-shell";
@@ -59,7 +63,13 @@ export function BounceView({ type, id }: { type: KnownOpenType; id: string }) {
           receipt?.title ?? `This ${noun.toLowerCase()} opens in the Synap app`,
         summary: bounceSummary(),
         status: { kind: "unknown", label: "Opens in app" },
-        primaryAction: <OpenInAppLink type={type} id={id} />,
+        primaryAction: (
+          <OpenInAppLink
+            type={type}
+            id={id}
+            params={bounceAddressParams(type, resolved.data)}
+          />
+        ),
       }}
       facts={spaceName ? [{ label: "Space", value: spaceName }] : undefined}
       advanced={

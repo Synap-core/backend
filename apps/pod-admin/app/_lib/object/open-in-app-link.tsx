@@ -10,10 +10,19 @@ import { openIn } from "../../../lib/open-in";
  * `objectInApp` even for hosted kinds: the web page IS the host, so the
  * sub-action must name the app.
  */
-export function OpenInAppLink({ type, id }: { type: string; id: string }) {
+export function OpenInAppLink({
+  type,
+  id,
+  params,
+}: {
+  type: string;
+  id: string;
+  /** Address parameters the app needs to find it (a run's `flowType`). */
+  params?: Record<string, string>;
+}) {
   return (
     <ExitLink
-      exit={openIn({ kind: "objectInApp", objectKind: type, id })}
+      exit={openIn({ kind: "objectInApp", objectKind: type, id, params })}
       label="Open in app"
     />
   );
