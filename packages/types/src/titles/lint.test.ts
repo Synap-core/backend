@@ -94,6 +94,41 @@ describe("lintTitle", () => {
     expect(isCleanTitle(title, { kind })).toBe(false);
   });
 
+  /**
+   * A product named like a file (anime.js) against a real file reference.
+   * Each row rules out a candidate rule: "skip the check on name kinds"
+   * (company, tool…) fails the research, question, unknown-kind and
+   * `auth.ts`-on-company rows; "allow any `.js`" fails the dotted, kebab and
+   * path rows; "any one-word stem is a name" fails `theme.css`.
+   */
+  const FILE_NAME_ROWS: Array<[string, string | undefined, boolean]> = [
+    ["anime.js", "company", false],
+    ["Next.js", "company", false],
+    ["anime.js", undefined, false],
+    ["anime.js evaluated as a Synap integration", "research", false],
+    ["Should the map move to three.js?", "question", false],
+    ["Node.js 22 drops the old loader hooks", "knowledge", false],
+    ["p5.js sketches render on the canvas", "note", false],
+    ["Socket.IO reconnects drop the room", "knowledge", false],
+    ["auth.ts", "company", true],
+    ["src/foo.js", "company", true],
+    ["capture.ts fallback cuts titles", "knowledge", true],
+    ["package.json drift breaks the build", "knowledge", true],
+    ["vite.config.js sets the wrong root", "knowledge", true],
+    ["create-session.js refuses long titles", "knowledge", true],
+    ["theme.css overrides the spacing tokens", "knowledge", true],
+  ];
+
+  it.each(FILE_NAME_ROWS)(
+    "file name check on %j (kind %s) flags: %s",
+    (title, kind, flagged) => {
+      const machinery = lintTitle(title, { kind }).find(
+        (i) => i.code === "machinery"
+      );
+      expect(Boolean(machinery?.message.includes("a file name"))).toBe(flagged);
+    }
+  );
+
   it("gives a question more room than a name", () => {
     const q = `Should ${"the relay ".repeat(9)}show it?`;
     expect(q.length).toBeGreaterThan(TITLE_SOFT_MAX);
@@ -112,6 +147,18 @@ describe("lintTitle", () => {
     ]);
     expect(issues.every((i) => i.severity === "note")).toBe(true);
     expect(isCleanTitle("Lesson: grants deny by default")).toBe(true);
+  });
+
+  it("lets a research record carry the date its convention asks for", () => {
+    const dated = "anime.js evaluated as a Synap integration (2026-10-13)";
+    expect(lintTitle(dated, { kind: "research" })).toEqual([]);
+    expect(lintTitle(dated, { kind: "RESEARCH " })).toEqual([]);
+    for (const kind of ["knowledge", "review", "note", undefined]) {
+      expect(codes(dated, kind)).toEqual(["date_stamp"]);
+    }
+    expect(codes("Status 2026-10-13 verified live", "research")).toEqual([
+      "status_word",
+    ]);
   });
 
   it("only applies the three-word floor to notes, items, tasks and sessions", () => {
