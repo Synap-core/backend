@@ -155,6 +155,11 @@ jobs:
       # hand-listed, and both scans assert non-vacuity: an empty scan FAILS rather
       # than silently passing. See ci/README.md.
       - name: CI/CD conformance gate
+        # check.mjs resolves `yaml` from the workspace root (two levels up),
+        # which in CI is the runner's work dir with no node_modules. pnpm's
+        # hidden hoist dir holds yaml (a transitive dep, 2.9.1 in the lockfile).
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules/.pnpm/node_modules
         run: node ci/scripts/check.mjs --quiet
 
       - name: Lint
