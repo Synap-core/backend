@@ -89,7 +89,7 @@ export function PodAdminsSection({
       hint="People who can sign in to this console"
       actions={
         admins.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {admins.length} {admins.length === 1 ? "admin" : "admins"}
           </span>
         ) : null

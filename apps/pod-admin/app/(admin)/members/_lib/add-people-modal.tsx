@@ -161,7 +161,7 @@ export function AddPeopleModal({
           <h2 className="text-[15px] font-medium text-foreground">
             Add people
           </h2>
-          <p className="text-[12px] text-foreground/55">
+          <p className="text-[12px] text-foreground/65">
             {results
               ? "Share these invite links with the recipient."
               : "Invite links are valid for 7 days."}
@@ -176,7 +176,7 @@ export function AddPeopleModal({
                 return (
                   <div key={r.token} className="flex flex-col gap-1.5">
                     {r.workspaceName ? (
-                      <span className="text-[11px] font-medium text-foreground/55">
+                      <span className="text-[11px] font-medium text-foreground/65">
                         {r.workspaceName}
                       </span>
                     ) : null}
@@ -260,14 +260,14 @@ export function AddPeopleModal({
                       type="button"
                       onClick={() => setScope(s)}
                       disabled={sending}
-                      className={`flex-1 rounded py-1.5 text-[12px] font-medium transition-colors ${scope === s ? "bg-foreground/[0.08] text-foreground" : "text-foreground/50 hover:text-foreground/70"}`}
+                      className={`flex-1 rounded py-1.5 text-[12px] font-medium transition-colors ${scope === s ? "bg-foreground/[0.08] text-foreground" : "text-foreground/65 hover:text-foreground/70"}`}
                     >
                       {s === "pod" ? "Pod-wide" : "Specific workspaces"}
                     </button>
                   ))}
                 </div>
                 {scope === "pod" && (
-                  <p className="text-[11.5px] text-foreground/45">
+                  <p className="text-[11.5px] text-foreground/65">
                     Person joins all existing workspaces. Admins can also sign
                     in to the Pod Console.
                   </p>
@@ -282,7 +282,7 @@ export function AddPeopleModal({
                   {wsQuery.isLoading ? (
                     <div className="h-20 rounded-md bg-foreground/[0.04] shimmer-pulse" />
                   ) : userWorkspaces.length === 0 ? (
-                    <p className="text-[12px] text-foreground/45">
+                    <p className="text-[12px] text-foreground/65">
                       No workspaces found.
                     </p>
                   ) : (

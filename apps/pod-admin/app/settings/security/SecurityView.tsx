@@ -566,7 +566,7 @@ function PasswordCard({
           onRetry={() => void start()}
         />
       ) : !hasPasswordNode ? (
-        <p className="text-[12.5px] text-foreground/55">
+        <p className="text-[12.5px] text-foreground/65">
           Passwords aren&apos;t enabled on this pod.
         </p>
       ) : (

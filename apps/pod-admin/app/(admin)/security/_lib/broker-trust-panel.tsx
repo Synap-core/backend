@@ -219,7 +219,7 @@ function Shell({
             <StatusPill kind={status.kind} label={status.label} />
           )}
         </div>
-        <p className="text-[11.5px] text-foreground/55">{body}</p>
+        <p className="text-[11.5px] text-foreground/65">{body}</p>
       </div>
       <div className="flex items-center gap-1.5">
         {action}

@@ -80,6 +80,11 @@ export interface ResolvedObject {
    */
   displayName?: string | null;
   workspaceId?: string | null;
+  /**
+   * When the matched row last changed, where its table records it (runs and
+   * agents do not; the correlationId fallbacks match no row).
+   */
+  updatedAt?: Date | null;
   /** `entities.type` — the profile slug. Only the `entity` probe sets it. */
   profileSlug?: string | null;
   /**
@@ -179,6 +184,7 @@ export async function resolveObjectKind(
             targetType: proposals.targetType,
             targetId: proposals.targetId,
             workspaceId: proposals.workspaceId,
+            updatedAt: proposals.updatedAt,
           })
           .from(proposals)
           .where(
@@ -204,6 +210,7 @@ export async function resolveObjectKind(
         return {
           displayName: `Proposal (${r.targetType}:${target}…)`,
           workspaceId: r.workspaceId ?? null,
+          updatedAt: r.updatedAt ?? null,
         };
       },
     },
@@ -215,6 +222,7 @@ export async function resolveObjectKind(
             title: focusSessions.title,
             goal: focusSessions.goal,
             workspaceId: focusSessions.workspaceId,
+            updatedAt: focusSessions.updatedAt,
           })
           .from(focusSessions)
           .where(
@@ -231,6 +239,7 @@ export async function resolveObjectKind(
         return {
           displayName: resolveSessionTitle(r) || null,
           workspaceId: r.workspaceId ?? null,
+          updatedAt: r.updatedAt ?? null,
         };
       },
     },
@@ -241,6 +250,7 @@ export async function resolveObjectKind(
           .select({
             name: capabilities.name,
             workspaceId: capabilities.workspaceId,
+            updatedAt: capabilities.updatedAt,
           })
           .from(capabilities)
           .where(
@@ -255,6 +265,7 @@ export async function resolveObjectKind(
             subKind: "capability" as const,
             displayName: capabilityRow.name ?? null,
             workspaceId: capabilityRow.workspaceId ?? null,
+            updatedAt: capabilityRow.updatedAt ?? null,
           };
 
         // A `capability.run`/`capability/run` proposal's skillId is a `skills`
@@ -264,7 +275,11 @@ export async function resolveObjectKind(
         // explains all three identically); `subKind` records WHICH table
         // matched, because a consumer that ROUTES needs the distinction.
         const [skillRow] = await db
-          .select({ name: skills.name, workspaceId: skills.workspaceId })
+          .select({
+            name: skills.name,
+            workspaceId: skills.workspaceId,
+            updatedAt: skills.updatedAt,
+          })
           .from(skills)
           .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
           .limit(1);
@@ -273,10 +288,15 @@ export async function resolveObjectKind(
             subKind: "skill" as const,
             displayName: skillRow.name ?? null,
             workspaceId: skillRow.workspaceId ?? null,
+            updatedAt: skillRow.updatedAt ?? null,
           };
 
         const [toolRow] = await db
-          .select({ name: tools.name, workspaceId: tools.workspaceId })
+          .select({
+            name: tools.name,
+            workspaceId: tools.workspaceId,
+            updatedAt: tools.updatedAt,
+          })
           .from(tools)
           .where(
             and(eq(tools.id, id), userVisibleWhere(tools.workspaceId, userId))
@@ -287,6 +307,7 @@ export async function resolveObjectKind(
           subKind: "tool" as const,
           displayName: toolRow.name ?? null,
           workspaceId: toolRow.workspaceId ?? null,
+          updatedAt: toolRow.updatedAt ?? null,
         };
       },
     },
@@ -345,7 +366,7 @@ export async function resolveObjectKind(
       kind: "workspace",
       run: async () => {
         const [r] = await db
-          .select({ name: workspaces.name })
+          .select({ name: workspaces.name, updatedAt: workspaces.updatedAt })
           .from(workspaces)
           // The canonical three-branch workspace floor (member ∪ owner ∪
           // pod-visible) applied to the workspace's OWN id column — the same
@@ -359,7 +380,13 @@ export async function resolveObjectKind(
             visibleWorkspaceWhere(id, userId)
           )
           .limit(1);
-        return r ? { displayName: r.name ?? null, workspaceId: id } : null;
+        return r
+          ? {
+              displayName: r.name ?? null,
+              workspaceId: id,
+              updatedAt: r.updatedAt ?? null,
+            }
+          : null;
       },
     },
     {
@@ -369,6 +396,7 @@ export async function resolveObjectKind(
           .select({
             name: automations.name,
             workspaceId: automations.workspaceId,
+            updatedAt: automations.updatedAt,
           })
           .from(automations)
           // The registered `automations` VisibilityRule (access/registry.ts):
@@ -383,7 +411,11 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r
-          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          ? {
+              displayName: r.name ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
           : null;
       },
     },
@@ -391,7 +423,11 @@ export async function resolveObjectKind(
       kind: "playbook",
       run: async () => {
         const [r] = await db
-          .select({ name: playbooks.name, workspaceId: playbooks.workspaceId })
+          .select({
+            name: playbooks.name,
+            workspaceId: playbooks.workspaceId,
+            updatedAt: playbooks.updatedAt,
+          })
           .from(playbooks)
           // The registered `playbooks` VisibilityRule: `workspace`, NULL =
           // pod-wide config — the same floor as `playbook_run` above.
@@ -403,7 +439,11 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r
-          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          ? {
+              displayName: r.name ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
           : null;
       },
     },
@@ -411,7 +451,11 @@ export async function resolveObjectKind(
       kind: "project",
       run: async () => {
         const [r] = await db
-          .select({ name: projects.name, workspaceId: projects.workspaceId })
+          .select({
+            name: projects.name,
+            workspaceId: projects.workspaceId,
+            updatedAt: projects.updatedAt,
+          })
           .from(projects)
           // THE project predicate (access/project-visibility.ts) — the one the
           // registered `projects` VisibilityRule uses: workspace rows follow
@@ -426,7 +470,11 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r
-          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          ? {
+              displayName: r.name ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
           : null;
       },
     },
@@ -434,7 +482,11 @@ export async function resolveObjectKind(
       kind: "channel",
       run: async () => {
         const [r] = await db
-          .select({ title: channels.title, workspaceId: channels.workspaceId })
+          .select({
+            title: channels.title,
+            workspaceId: channels.workspaceId,
+            updatedAt: channels.updatedAt,
+          })
           .from(channels)
           // THE channel read floor (utils/channel-visibility.ts — own /
           // explicit member / shared-type in an accessible workspace, AND the
@@ -444,7 +496,11 @@ export async function resolveObjectKind(
           .where(and(eq(channels.id, id), channelVisibilityWhere(userId)))
           .limit(1);
         return r
-          ? { displayName: r.title ?? null, workspaceId: r.workspaceId ?? null }
+          ? {
+              displayName: r.title ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
           : null;
       },
     },
@@ -452,7 +508,11 @@ export async function resolveObjectKind(
       kind: "view",
       run: async () => {
         const [r] = await db
-          .select({ name: views.name, workspaceId: views.workspaceId })
+          .select({
+            name: views.name,
+            workspaceId: views.workspaceId,
+            updatedAt: views.updatedAt,
+          })
           .from(views)
           // Mirror the canonical views floor (viewVisibleWhere in views.ts):
           // pod-personal (owner) OR workspace-membership. Views carry no
@@ -466,7 +526,11 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r
-          ? { displayName: r.name ?? null, workspaceId: r.workspaceId ?? null }
+          ? {
+              displayName: r.name ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
           : null;
       },
     },
@@ -477,6 +541,7 @@ export async function resolveObjectKind(
           .select({
             title: documents.title,
             workspaceId: documents.workspaceId,
+            updatedAt: documents.updatedAt,
           })
           .from(documents)
           // Canonical DATA-table floor (registry documents rule) — NO
@@ -498,7 +563,11 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r
-          ? { displayName: r.title ?? null, workspaceId: r.workspaceId ?? null }
+          ? {
+              displayName: r.title ?? null,
+              workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
+            }
           : null;
       },
     },
@@ -510,6 +579,7 @@ export async function resolveObjectKind(
             title: entities.title,
             type: entities.type,
             workspaceId: entities.workspaceId,
+            updatedAt: entities.updatedAt,
           })
           .from(entities)
           .where(
@@ -528,6 +598,7 @@ export async function resolveObjectKind(
           ? {
               displayName: r.title ?? null,
               workspaceId: r.workspaceId ?? null,
+              updatedAt: r.updatedAt ?? null,
               profileSlug: r.type ?? null,
             }
           : null;

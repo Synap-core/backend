@@ -344,7 +344,7 @@ function EntitiesInner() {
         actions={
           pageCount > 1 ? (
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-foreground/55">
+              <span className="text-[11px] text-foreground/65">
                 Page {currentPage} / {pageCount}
               </span>
               <Button
@@ -533,7 +533,7 @@ function EntityTableRow({
             <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
             <span className="truncate text-[12.5px] text-foreground">
               {item.title ?? (
-                <span className="text-foreground/40 italic">Untitled</span>
+                <span className="text-foreground/65 italic">Untitled</span>
               )}
             </span>
           </div>

@@ -78,7 +78,7 @@ export function ServiceGroupCard({
         <span className="flex-1 text-[13px] font-semibold text-foreground truncate">
           {group.name}
         </span>
-        <span className="shrink-0 inline-flex items-center rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] text-foreground/55">
+        <span className="shrink-0 inline-flex items-center rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[11px] text-foreground/65">
           {group.connections.length}{" "}
           {group.connections.length === 1 ? "connection" : "connections"}
         </span>
@@ -108,7 +108,7 @@ export function ServiceGroupCard({
             <button
               type="button"
               onClick={onAddToService}
-              className="flex items-center gap-1.5 text-[11.5px] text-foreground/45 hover:text-foreground/70 transition-colors"
+              className="flex items-center gap-1.5 text-[11.5px] text-foreground/65 hover:text-foreground/70 transition-colors"
             >
               <Plus className="h-3 w-3" />
               Add to this service
@@ -186,7 +186,7 @@ function ServiceConnectionRow({
         <span className="text-[12.5px] font-medium text-foreground">
           {meta.label}
         </span>
-        <code className="font-mono text-[10px] text-foreground/40 truncate">
+        <code className="font-mono text-[10px] text-foreground/65 truncate">
           {truncatedUrl}
         </code>
         {isWebhookOut && conn.events && conn.events.length > 0 && (
@@ -194,13 +194,13 @@ function ServiceConnectionRow({
             {conn.events.slice(0, 3).map((e) => (
               <span
                 key={e}
-                className="rounded-full bg-foreground/[0.06] px-1.5 py-0.5 text-[9.5px] text-foreground/50"
+                className="rounded-full bg-foreground/[0.06] px-1.5 py-0.5 text-[9.5px] text-foreground/65"
               >
                 {e}
               </span>
             ))}
             {conn.events.length > 3 && (
-              <span className="text-[9.5px] text-foreground/35">
+              <span className="text-[9.5px] text-foreground/65">
                 +{conn.events.length - 3} more
               </span>
             )}

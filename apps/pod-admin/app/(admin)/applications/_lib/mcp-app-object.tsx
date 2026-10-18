@@ -9,10 +9,12 @@
  * a person connects it again by consenting, the same act as the first time.
  */
 
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import { formatRelative } from "../../../../lib/format";
 import { trpc } from "../../../../lib/trpc";
 import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
+import { SubjectActivity } from "../../../_lib/object/subject-activity";
 import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
 import type { DangerAction } from "../../../_lib/object/danger-zone";
 import { mcpReach, mcpState, statePill } from "./app-inventory";
@@ -24,6 +26,7 @@ import {
   appFailure,
 } from "./app-object-parts";
 import { SectionCard } from "../../components/section-card";
+import { appActivityLine } from "./app-activity";
 import { ViaChip } from "./via-chip";
 
 export function McpAppObject({
@@ -112,47 +115,62 @@ export function McpAppObject({
       },
       { label: "Registered", value: formatRelative(client.createdAt) },
     ],
-    children: (
-      <>
-        {revoke.error && (
-          <ErrorNote
-            message="We couldn't revoke this app. Nothing changed — try again."
-            detail={errorDetail(revoke.error)}
-          />
-        )}
-
-        <SectionCard variant="flat" title="Identity">
-          <CopyableId label="Client id" value={client.clientId} />
-          <ExactValues label="Redirect URIs" values={client.redirectUris} />
-        </SectionCard>
-
-        <SectionCard
-          variant="flat"
-          title="What it can reach"
-          hint={`${reach}, as an agent: the pod's agent rules decide which of its changes wait for review.`}
-        >
-          <ExactValues label="Scopes" values={client.scopes} />
-        </SectionCard>
-
-        <SectionCard
-          variant="flat"
-          title="Who uses it"
-          hint="Each person who approved it on the consent screen holds a key of their own."
-        >
-          <PeopleList
-            people={client.people.map((p) => ({
-              ...p,
-              note: p.active ? "Connected" : "No live key",
-            }))}
-            empty="No one has connected it."
-          />
-        </SectionCard>
-
-        <SectionCard variant="flat" title="Keys">
-          <KeyList keys={client.keys} empty="No key was minted for it." />
-        </SectionCard>
-      </>
+    children: revoke.error && (
+      <ErrorNote
+        message="We couldn't revoke this app. Nothing changed — try again."
+        detail={errorDetail(revoke.error)}
+      />
     ),
+    tabs: [
+      {
+        key: "overview",
+        label: "Overview",
+        content: (
+          <div className="flex flex-col gap-6">
+            <SectionCard variant="flat" title="Identity">
+              <CopyableId label="Client id" value={client.clientId} />
+              <ExactValues label="Redirect URIs" values={client.redirectUris} />
+            </SectionCard>
+
+            <SectionCard
+              variant="flat"
+              title="What it can reach"
+              hint={`${reach}, as an agent: the pod's agent rules decide which of its changes wait for review.`}
+            >
+              <ExactValues label="Scopes" values={client.scopes} />
+            </SectionCard>
+
+            <SectionCard
+              variant="flat"
+              title="Who uses it"
+              hint="Each person who approved it on the consent screen holds a key of their own."
+            >
+              <PeopleList
+                people={client.people.map((p) => ({
+                  ...p,
+                  note: p.active ? "Connected" : "No live key",
+                }))}
+                empty="No one has connected it."
+              />
+            </SectionCard>
+
+            <SectionCard variant="flat" title="Keys">
+              <KeyList keys={client.keys} empty="No key was minted for it." />
+            </SectionCard>
+          </div>
+        ),
+      },
+      {
+        key: "activity",
+        label: "Activity",
+        content: (
+          <SubjectActivity
+            subjectIds={[client.clientId, ...client.keys.map((k) => k.id)]}
+            line={(e) => appActivityLine(e, humanizeToken)}
+          />
+        ),
+      },
+    ],
     advanced: {
       ids: [{ label: "Client id", value: client.clientId }],
       raw: { ...client, keys: undefined },

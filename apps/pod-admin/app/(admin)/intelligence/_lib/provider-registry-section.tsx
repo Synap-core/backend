@@ -178,7 +178,7 @@ export function AIProvidersSection() {
         actions={
           <div className="flex items-center gap-2">
             {rows.length > 0 && (
-              <span className="text-[11px] tabular text-foreground/55">
+              <span className="text-[11px] tabular text-foreground/65">
                 {rows.length} provider{rows.length !== 1 ? "s" : ""}
               </span>
             )}
@@ -236,7 +236,7 @@ export function AIProvidersSection() {
                       <span className="truncate text-[12.5px] font-medium text-foreground">
                         {p.name}
                       </span>
-                      <span className="shrink-0 rounded-sm bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] tabular text-foreground/50">
+                      <span className="shrink-0 rounded-sm bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] tabular text-foreground/65">
                         #{p.priority}
                       </span>
                       {p.hasApiKey && (
@@ -245,7 +245,7 @@ export function AIProvidersSection() {
                         </Tooltip>
                       )}
                     </div>
-                    <span className="truncate text-[11px] text-foreground/45">
+                    <span className="truncate text-[11px] text-foreground/65">
                       {p.providerId} · {p.baseUrl.replace(/^https?:\/\//, "")}
                     </span>
                     {p.models.length > 0 && (
@@ -253,13 +253,13 @@ export function AIProvidersSection() {
                         {p.models.slice(0, 3).map((m) => (
                           <span
                             key={m.id}
-                            className="rounded-sm bg-foreground/[0.05] px-1 py-0.5 text-[10px] text-foreground/40"
+                            className="rounded-sm bg-foreground/[0.05] px-1 py-0.5 text-[10px] text-foreground/65"
                           >
                             {m.id}
                           </span>
                         ))}
                         {p.models.length > 3 && (
-                          <span className="text-[10px] text-foreground/35">
+                          <span className="text-[10px] text-foreground/65">
                             +{p.models.length - 3}
                           </span>
                         )}
@@ -467,7 +467,7 @@ function ProviderFormModal({
           <span className="text-[14px] font-medium text-foreground">
             {initial ? "Edit provider" : "Add provider"}
           </span>
-          <span className="text-[11.5px] text-foreground/55">
+          <span className="text-[11.5px] text-foreground/65">
             {initial
               ? "Changes are synced to the IS immediately."
               : "Register a new OpenAI-compatible provider."}

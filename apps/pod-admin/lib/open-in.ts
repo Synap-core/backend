@@ -120,7 +120,13 @@ export type ExitTarget =
    * renderer and still wants an "open this in the app" sub-action — asking for
    * `kind: "object"` there would just return the page you are already on.
    */
-  | { kind: "objectInApp"; objectKind: string; id: string }
+  | {
+      kind: "objectInApp";
+      objectKind: string;
+      id: string;
+      /** Address parameters the app needs to find it (a run's `flowType`). */
+      params?: Record<string, string>;
+    }
   /** A page in the landing site's account area. */
   | { kind: "account"; page: AccountPage }
   /** A documentation page: `synap.live/guides/<slug>`. */
@@ -242,11 +248,16 @@ function desktop(href: string, phone: PhoneExit): Exit {
   return { href, isDesktopLink: true, fallback: DESKTOP_FALLBACK, phone };
 }
 
-/** `synap://open/<kind>/<id>[?view=]` — the object grammar both apps read. */
-function objectLink(objectKind: string, id: string, view?: ObjectNavView) {
+/** `synap://open/<kind>/<id>[?view=|?flowType=]` — the object grammar both apps read. */
+function objectLink(
+  objectKind: string,
+  id: string,
+  query?: Record<string, string>
+) {
   const href = `synap://open/${encodeURIComponent(objectKind)}/${encodeURIComponent(id)}`;
+  const search = query ? new URLSearchParams(query).toString() : "";
   return desktop(
-    view ? `${href}?view=${encodeURIComponent(view)}` : href,
+    search ? `${href}?${search}` : href,
     RELAY_OPENABLE_KINDS.has(objectKind)
       ? { opens: "relay" }
       : withWeb(objectWebAlternative(objectKind, id))
@@ -282,11 +293,15 @@ export function openIn(target: ExitTarget): Exit {
       // capability, playbook — has no web renderer. Be honest about it.
       // (`automation` / `session` are hosted since D6; a caller that means
       // "in the desktop app" asks for `objectInApp`.)
-      return objectLink(target.objectKind, target.id, target.view);
+      return objectLink(
+        target.objectKind,
+        target.id,
+        target.view ? { view: target.view } : undefined
+      );
     }
 
     case "objectInApp":
-      return objectLink(target.objectKind, target.id);
+      return objectLink(target.objectKind, target.id, target.params);
 
     case "settings":
       // Receiver verified: `useDeepLinkHandler.ts` routes `open/app/<id>/<seg>`

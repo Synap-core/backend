@@ -56,7 +56,7 @@ export function SecretsSection() {
             <p className="text-[13.5px] font-medium text-foreground">
               Managed via env files
             </p>
-            <p className="text-[12px] text-foreground/55">
+            <p className="text-[12px] text-foreground/65">
               Pod-level secrets (database password, MinIO credentials, OAuth
               client secrets, internal hub keys) are managed at deploy time
               through environment variables. They are deliberately not exposed

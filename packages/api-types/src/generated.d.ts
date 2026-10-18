@@ -12201,6 +12201,8 @@ export interface OAuthConsentContext {
 	/** Where the code will actually be delivered — shown so the human can judge. */
 	redirectHost: string;
 	scopes: string[];
+	/** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
+	registeredAt: Date;
 }
 /**
  * API Keys Router
@@ -17704,6 +17706,8 @@ export interface OpenTarget {
 	id: string;
 	displayName: string | null;
 	workspaceId: string | null;
+	/** When the object last changed; null when its table does not record it. */
+	updatedAt: Date | null;
 	profileSlug?: string;
 	/** Whether `type` names a surface the browser can open. */
 	openable: boolean;
@@ -21858,7 +21862,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21912,7 +21916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21929,7 +21933,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22611,7 +22615,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22665,13 +22669,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -22712,7 +22716,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22766,7 +22770,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -22783,7 +22787,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22829,7 +22833,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22883,13 +22887,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -24611,6 +24615,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
 				linkedUserId: string | null;
+				workspaceId: string | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;
@@ -37892,6 +37897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					email: string;
 					linkedAt: Date;
 				}[];
+				requestIds: string[];
 				lastUsedAt: Date | null;
 				peopleCount: number;
 				issuerUrl: string;

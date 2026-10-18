@@ -80,7 +80,7 @@ export function SectionCard({
             {title}
           </h3>
           {hint && (
-            <p className="text-[11.5px] text-foreground/55 truncate">{hint}</p>
+            <p className="text-[11.5px] text-foreground/65 truncate">{hint}</p>
           )}
         </div>
         {actions && (

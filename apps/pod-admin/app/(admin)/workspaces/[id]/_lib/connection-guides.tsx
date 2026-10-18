@@ -34,7 +34,7 @@ export function LabeledSnippet({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-[11px] uppercase tracking-wider text-foreground/45">
+      <p className="text-[11px] uppercase tracking-wider text-foreground/65">
         {label}
       </p>
       <Snippet
@@ -65,7 +65,7 @@ export function Collapsible({
       <button
         type="button"
         onClick={onToggle}
-        className="flex items-center gap-1 text-[12px] font-medium text-foreground/55 hover:text-foreground transition-colors text-left"
+        className="flex items-center gap-1 text-[12px] font-medium text-foreground/65 hover:text-foreground transition-colors text-left"
       >
         <span>{open ? "▾" : "▸"}</span>
         {label}
@@ -108,7 +108,7 @@ export function RestGuide({
       <SaveOnceBanner />
       <LabeledSnippet label="API key" value={createdKey.plaintext} />
       <LabeledSnippet label="Base URL" value={`${podUrl}/trpc`} />
-      <p className="text-[11.5px] text-foreground/55">
+      <p className="text-[11.5px] text-foreground/65">
         Scopes granted:{" "}
         <span className="font-mono">{createdKey.scopes.join(", ")}</span>
       </p>
@@ -145,7 +145,7 @@ export function HubGuide({
       <SaveOnceBanner />
       <LabeledSnippet label="API key" value={createdKey.plaintext} />
       <LabeledSnippet label="Hub base URL" value={`${podUrl}/api/hub`} />
-      <p className="text-[11.5px] text-foreground/55">
+      <p className="text-[11.5px] text-foreground/65">
         Full API reference:{" "}
         <code className="font-mono text-[11px]">
           {podUrl}/api/hub/openapi.json
@@ -193,21 +193,21 @@ if (sig !== expected) throw new Error('Invalid signature');`;
       </div>
       <LabeledSnippet label="Endpoint" value={createdWebhook.url} />
       <div className="flex flex-col gap-1">
-        <p className="text-[11px] uppercase tracking-wider text-foreground/45">
+        <p className="text-[11px] uppercase tracking-wider text-foreground/65">
           Subscribed events
         </p>
         <div className="flex flex-wrap gap-1">
           {createdWebhook.events.map((e) => (
             <span
               key={e}
-              className="rounded-full bg-foreground/[0.06] px-2 py-0.5 font-mono text-[10px] text-foreground/55"
+              className="rounded-full bg-foreground/[0.06] px-2 py-0.5 font-mono text-[10px] text-foreground/65"
             >
               {e}
             </span>
           ))}
         </div>
       </div>
-      <p className="text-[11.5px] text-foreground/55">
+      <p className="text-[11.5px] text-foreground/65">
         Payload schema:{" "}
         <code className="font-mono text-[11px]">
           {"{ event, workspaceId, payload, timestamp }"}

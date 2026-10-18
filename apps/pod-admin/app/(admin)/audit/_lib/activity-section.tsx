@@ -409,7 +409,7 @@ function EventDrawer({
           </dl>
 
           <div className="mt-4">
-            <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
+            <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/65">
               Data
             </p>
             <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
@@ -419,7 +419,7 @@ function EventDrawer({
 
           {event.metadata && (
             <div className="mt-4">
-              <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
+              <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/65">
                 Metadata
               </p>
               <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
@@ -436,7 +436,7 @@ function EventDrawer({
 function Field({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-[10.5px] uppercase tracking-wide text-foreground/45">
+      <dt className="text-[10.5px] uppercase tracking-wide text-foreground/65">
         {k}
       </dt>
       <dd

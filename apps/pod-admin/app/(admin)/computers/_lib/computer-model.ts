@@ -15,6 +15,7 @@
 
 import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
 import { DAY_MS } from "../../../../lib/format";
+import type { SubjectEventLike } from "../../../_lib/object/subject-activity";
 import type { StatusKind } from "../../components/status-pill";
 
 export type ComputerKeyState =
@@ -310,19 +311,12 @@ export function revokeImpact(c: ComputerLike): {
 
 // ─── Activity ────────────────────────────────────────────────────────
 
-/** The slice of an `events.search` row the Activity tab reads. */
-export interface ComputerEventLike {
-  eventType: string;
-  userId: string;
-  data: unknown;
-}
-
 /**
  * One activity row in words. The computer's own acts (`machines.*`) carry a
  * `data.kind`; anything else falls back to its event type, humanized.
  */
 export function activityLine(
-  e: ComputerEventLike,
+  e: SubjectEventLike,
   humanize: (token: string) => string
 ): string {
   const data = (e.data ?? {}) as Record<string, unknown>;

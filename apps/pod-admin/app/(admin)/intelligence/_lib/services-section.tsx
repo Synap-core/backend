@@ -47,7 +47,7 @@ export function IntelligenceServicesSection() {
       hint="Registered IS instances that respond to /health"
       actions={
         rows.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {rows.length} instances
           </span>
         ) : null

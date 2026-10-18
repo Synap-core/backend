@@ -61,7 +61,7 @@ function ConnectionRequestErrorContent() {
             <Settings2 size={19} />
           </span>
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/65">
               Pod connection
             </p>
             <h1 className="mt-1 text-xl font-semibold tracking-tight">

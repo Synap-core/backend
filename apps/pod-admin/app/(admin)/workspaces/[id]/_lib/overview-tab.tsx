@@ -67,7 +67,7 @@ export function OverviewTab({ ws }: { ws: Workspace }) {
       <SectionCard title="Details">
         <div className="flex flex-col gap-3 pt-1">
           {ws.description ? (
-            <p className="text-[12.5px] text-foreground/55 pb-1">
+            <p className="text-[12.5px] text-foreground/65 pb-1">
               {ws.description}
             </p>
           ) : null}
@@ -91,23 +91,23 @@ export function OverviewTab({ ws }: { ws: Workspace }) {
 
       <SectionCard title="Owner">
         {membersQuery.isLoading ? (
-          <p className="text-[12px] text-foreground/55 py-2">Loading…</p>
+          <p className="text-[12px] text-foreground/65 py-2">Loading…</p>
         ) : owner ? (
           <div className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2 mt-1">
             <div className="flex min-w-0 flex-col">
               <span className="truncate text-[12.5px] font-medium text-foreground">
                 {owner.user.name ?? owner.user.email}
               </span>
-              <span className="truncate font-mono text-[10.5px] text-foreground/40">
+              <span className="truncate font-mono text-[10.5px] text-foreground/65">
                 {owner.user.email}
               </span>
             </div>
-            <span className="shrink-0 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/55">
+            <span className="shrink-0 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10.5px] text-foreground/65">
               owner
             </span>
           </div>
         ) : (
-          <p className="text-[12px] text-foreground/55 py-2">
+          <p className="text-[12px] text-foreground/65 py-2">
             No human owner found.
           </p>
         )}

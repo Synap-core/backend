@@ -312,11 +312,13 @@ function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
     // keeps for a stale session.
     case "cancelled":
       return ["cancelled", "stale"];
+    // `waiting_on_you` — W2 calm: the reaper found the run quiet, its session
+    // owing the person.
     case "running":
     case "completed":
     case "failed":
     case "proposed":
-    case "waiting_on_you": // W2 calm: the reaper found the run quiet, its session owing the person.
+    case "waiting_on_you":
       return [status];
     case "skipped":
     case "blocked_by_policy":

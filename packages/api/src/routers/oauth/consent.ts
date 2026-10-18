@@ -160,6 +160,8 @@ export interface OAuthConsentContext {
   /** Where the code will actually be delivered — shown so the human can judge. */
   redirectHost: string;
   scopes: string[];
+  /** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
+  registeredAt: Date;
 }
 
 /**
@@ -176,6 +178,7 @@ export async function getOAuthConsentContext(
     redirectUri: req.redirectUri,
     redirectHost: new URL(req.redirectUri).host,
     scopes: req.grantedScopes,
+    registeredAt: req.client.createdAt,
   };
 }
 

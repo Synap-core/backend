@@ -143,7 +143,7 @@ function SectionDisclosure({
         <span id={id} className="text-sm font-medium text-foreground/70">
           {label}
         </span>
-        <span className="flex items-center gap-2 text-xs text-foreground/50">
+        <span className="flex items-center gap-2 text-xs text-foreground/65">
           {count}
           <ChevronDown
             size={15}
@@ -319,7 +319,7 @@ export default function MyConnectionsPage() {
             {resolveObjectNounPlural("application")}
           </h2>
           {apps ? (
-            <span className="text-xs text-foreground/50">
+            <span className="text-xs text-foreground/65">
               {activeApps.length}
             </span>
           ) : null}
@@ -341,7 +341,7 @@ export default function MyConnectionsPage() {
             </Button>
           </div>
         ) : apps === null ? (
-          <div className="flex items-center gap-3 px-1 py-3 text-sm text-foreground/55">
+          <div className="flex items-center gap-3 px-1 py-3 text-sm text-foreground/65">
             <Spinner size="sm" /> Loading your apps
           </div>
         ) : activeApps.length === 0 ? (
@@ -382,7 +382,7 @@ export default function MyConnectionsPage() {
           >
             Active
           </h2>
-          <span className="text-xs text-foreground/50">{active.length}</span>
+          <span className="text-xs text-foreground/65">{active.length}</span>
         </div>
         {active.length === 0 ? (
           <EmptyState />
@@ -514,7 +514,7 @@ function KeyCard({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="break-words text-sm font-medium">{apiKey.keyName}</p>
-            <p className="mt-1 text-xs text-foreground/55">
+            <p className="mt-1 text-xs text-foreground/65">
               {holder ? `${holder} · ` : null}
               {connectionLabel(apiKey.hubId)} ·{" "}
               <span className="font-mono">{apiKey.keyPrefix}…</span>
@@ -531,7 +531,7 @@ function KeyCard({
         </div>
 
         {apiKey.isActive ? <KeyAccessLine apiKey={apiKey} /> : null}
-        <p className="text-xs text-foreground/55">{meta}</p>
+        <p className="text-xs text-foreground/65">{meta}</p>
 
         {onRevoke ? (
           <div className="pt-1">
@@ -582,7 +582,7 @@ function KeyAccessLine({ apiKey }: { apiKey: ConnectionKey }) {
 function EmptyState() {
   return (
     <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
-      <div className="flex items-center gap-3 text-sm text-foreground/55">
+      <div className="flex items-center gap-3 text-sm text-foreground/65">
         <Plug size={17} className="shrink-0" />
         You have no active connections yet.
       </div>
@@ -640,7 +640,7 @@ function AppCard({
                 {app.name}
               </Link>
             </p>
-            <p className="mt-1 text-xs text-foreground/55">
+            <p className="mt-1 text-xs text-foreground/65">
               <span className="font-mono">{app.public_id}</span>
             </p>
           </div>
@@ -659,7 +659,7 @@ function AppCard({
         <p className="text-xs text-foreground/70">
           {appHolderAccess(app).sentence}
         </p>
-        <p className="text-xs text-foreground/55">{meta}</p>
+        <p className="text-xs text-foreground/65">{meta}</p>
 
         {onRevoke ? (
           <div className="relative z-10 pt-1">
@@ -684,7 +684,7 @@ function AppCard({
 function AppEmptyState() {
   return (
     <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
-      <div className="flex items-start gap-3 text-sm text-foreground/55">
+      <div className="flex items-start gap-3 text-sm text-foreground/65">
         <SquareCode size={17} className="mt-0.5 shrink-0" />
         <span>
           You have no apps yet. Add a{" "}

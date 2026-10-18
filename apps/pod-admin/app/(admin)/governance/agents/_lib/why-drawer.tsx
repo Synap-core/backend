@@ -205,7 +205,7 @@ function AgentWhy({
               <p className="pl-6 text-[12px] text-foreground/70">
                 Decided by: {resolveGovernanceRungLabel(p.answer.rung)}
               </p>
-              <p className="pl-6 text-[11.5px] text-foreground/50">
+              <p className="pl-6 text-[11.5px] text-foreground/65">
                 {p.answer.reason}
               </p>
               {p.answer.ruleId && (

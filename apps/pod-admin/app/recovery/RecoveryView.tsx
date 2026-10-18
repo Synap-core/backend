@@ -306,10 +306,10 @@ function RecoveryHub() {
                   <span className="text-[13.5px] font-medium text-foreground">
                     {title}
                   </span>
-                  <span className="text-[12px] text-foreground/55">{hint}</span>
+                  <span className="text-[12px] text-foreground/65">{hint}</span>
                 </span>
                 {busy === door ? (
-                  <span className="text-[12px] text-foreground/55">
+                  <span className="text-[12px] text-foreground/65">
                     Opening…
                   </span>
                 ) : null}
@@ -427,7 +427,7 @@ function RedeemForm() {
         variant="flat"
         classNames={{ input: "font-mono tracking-wide" }}
       />
-      <p className="text-[12px] text-foreground/55">
+      <p className="text-[12px] text-foreground/65">
         The code is used up, and your other devices are signed out.
       </p>
       <Button

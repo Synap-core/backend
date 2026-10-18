@@ -301,7 +301,7 @@ function RegisterPanel({
         size="sm"
         radius="md"
         variant="flat"
-        classNames={{ input: "text-foreground/55" }}
+        classNames={{ input: "text-foreground/65" }}
       />
       <Input
         label="Display name"
@@ -462,7 +462,7 @@ function LoginPanel({
         size="sm"
         radius="md"
         variant="flat"
-        classNames={{ input: "text-foreground/55" }}
+        classNames={{ input: "text-foreground/65" }}
       />
       <Input
         label="Password"
@@ -625,7 +625,7 @@ function ErrorBody({
         <h1 className="font-heading text-[20px] font-medium text-foreground">
           Something went wrong
         </h1>
-        <p className="text-[13.5px] text-foreground/55">{message}</p>
+        <p className="text-[13.5px] text-foreground/65">{message}</p>
       </div>
       <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
         Try again
@@ -642,7 +642,7 @@ function NotFoundBody() {
         <h1 className="font-heading text-[20px] font-medium text-foreground">
           Invite not found
         </h1>
-        <p className="text-[13.5px] text-foreground/55">
+        <p className="text-[13.5px] text-foreground/65">
           This invite link is invalid or has already been used.
         </p>
       </div>
@@ -658,7 +658,7 @@ function ExpiredBody() {
         <h1 className="font-heading text-[20px] font-medium text-foreground">
           Invite expired
         </h1>
-        <p className="text-[13.5px] text-foreground/55">
+        <p className="text-[13.5px] text-foreground/65">
           This invite link has expired. Ask the pod admin to send a new one.
         </p>
       </div>
@@ -674,7 +674,7 @@ function DoneBody() {
         <h1 className="font-heading text-[20px] font-medium text-foreground">
           Invite accepted
         </h1>
-        <p className="text-[13.5px] text-foreground/55">Redirecting…</p>
+        <p className="text-[13.5px] text-foreground/65">Redirecting…</p>
       </div>
     </>
   );
@@ -688,7 +688,7 @@ function WrongAccountBody({ inviteEmail }: { inviteEmail: string }) {
         <h1 className="font-heading text-[20px] font-medium text-foreground">
           Wrong account
         </h1>
-        <p className="text-[13.5px] text-foreground/55">
+        <p className="text-[13.5px] text-foreground/65">
           This invite is for{" "}
           <span className="font-medium text-foreground/85">{inviteEmail}</span>.
           Sign out and sign in with that account to accept it.

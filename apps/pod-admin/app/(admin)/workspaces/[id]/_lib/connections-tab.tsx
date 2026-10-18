@@ -294,7 +294,7 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
               endpoint={`${POD_URL}/api/hub/*`}
               auth="Bearer token (API key)"
             />
-            <p className="text-[11.5px] text-foreground/45">
+            <p className="text-[11.5px] text-foreground/65">
               Machine-readable capabilities:{" "}
               <code className="font-mono text-[11px]">
                 {POD_URL}/api/integrations/capabilities
@@ -338,11 +338,11 @@ function HowItWorksRow({
         <span className="text-[12.5px] font-medium text-foreground">
           {title}
         </span>
-        <span className="text-[11.5px] text-foreground/55">{description}</span>
-        <code className="font-mono text-[10.5px] text-foreground/40">
+        <span className="text-[11.5px] text-foreground/65">{description}</span>
+        <code className="font-mono text-[10.5px] text-foreground/65">
           {endpoint}
         </code>
-        <span className="text-[11px] text-foreground/40">Auth: {auth}</span>
+        <span className="text-[11px] text-foreground/65">Auth: {auth}</span>
       </div>
     </div>
   );
