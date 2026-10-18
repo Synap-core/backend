@@ -222,6 +222,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // humanized to "Add" in BOTH moods, so the receipt read "Add to X".
   add: { imperative: "Add", past: "Added" },
   detach: { imperative: "Detach", past: "Detached" },
+  // A Library organise op ("Remove 3 items from …") and a group Build: both
+  // humanized to one word in BOTH moods, so a receipt read "Remove" / "Build".
+  remove: { imperative: "Remove", past: "Removed" },
+  build: { imperative: "Build", past: "Built" },
   install: { imperative: "Install", past: "Installed" },
   enable: { imperative: "Enable", past: "Enabled" },
   disable: { imperative: "Disable", past: "Disabled" },

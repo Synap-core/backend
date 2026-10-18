@@ -234,6 +234,10 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("project.file_entities", "past")).toBe("Filed");
     expect(resolveActionLabel("unfile_entities", "imperative")).toBe("Unfile");
     expect(resolveActionLabel("unfile_entities", "past")).toBe("Unfiled");
+    expect(resolveActionLabel("remove", "imperative")).toBe("Remove");
+    expect(resolveActionLabel("remove", "past")).toBe("Removed");
+    expect(resolveActionLabel("build", "imperative")).toBe("Build");
+    expect(resolveActionLabel("library.build", "past")).toBe("Built");
     expect(resolveActionLabel("organize", "imperative")).toBe("Organize");
     expect(resolveActionLabel("library.organize", "past")).toBe("Organized");
     expect(
