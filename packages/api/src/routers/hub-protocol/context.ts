@@ -37,6 +37,8 @@ export const contextRouter = router({
     .input(
       z.object({
         threadId: z.string().uuid(),
+        /** Newest messages to return (1–100). Omitted ⇒ 50, the long-standing default. */
+        limit: z.number().int().min(1).max(100).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -93,7 +95,7 @@ export const contextRouter = router({
       // Get messages
       const messagesResult = await chatCaller.getMessages({
         threadId: input.threadId,
-        limit: 50,
+        limit: input.limit ?? 50,
       });
 
       // Get recent entities for this user
