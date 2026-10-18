@@ -52,12 +52,13 @@
  * package from a source a person added is installed only as its trust level
  * allows (`decideMarketInstall`): its definition is fetched anonymously from
  * the signed listing and digest-checked (`resolveListedDefinition`), a person
- * confirms code and network reach explicitly, an agent proposes only where
- * that source opted in, a showcase source never installs, and everything it
- * installs is stamped `<sourceId>/<slug>` so it can never converge onto — or
- * be reconciled as — Synap's own package. Nor may it overwrite anything the
- * pod already has under the same name (`assertNoTakeover`), and an approved
- * proposal installs only the exact listing it disclosed (`listingSha256`).
+ * confirms code, network reach and existing connections explicitly, an
+ * agent proposes only where that source opted in, a showcase source never
+ * installs, and everything it installs is stamped `<sourceId>/<slug>` so it
+ * can never converge onto — or be reconciled as — Synap's own package. Nor
+ * may it overwrite anything the pod already has under the same name
+ * (`assertNoTakeover`), and an approved proposal installs only the exact
+ * listing it disclosed (`listingSha256`).
  * The by-key Control Plane fallbacks below are official-only.
  */
 
@@ -67,6 +68,7 @@ import {
   db,
   and,
   eq,
+  ne,
   or,
   isNull,
   inArray,
@@ -79,6 +81,7 @@ import {
   cpCatalogCache,
   mcpServers,
   ProfileScope,
+  playbooks as playbooksTable,
   profiles,
   propertyDefs,
   secrets,
@@ -86,6 +89,8 @@ import {
   tools as toolsTable,
   views,
   widgetDefinitions,
+  workspaceMembers,
+  workspaces,
 } from "@synap/database/schema";
 import type {
   CatalogListing,
@@ -97,7 +102,11 @@ import {
   qualifiedPackageId,
 } from "@synap-core/types/marketplace-source";
 import type { CatalogKind } from "@synap/jobs";
-import type { CapabilityDefinition } from "@synap/playbooks";
+import {
+  resolveComposedPlaybooks,
+  type CapabilityDefinition,
+  type LoopDefinition,
+} from "@synap/playbooks";
 import type { WorkspaceDefinitionInput } from "@synap/database";
 import type { Context } from "../../context.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
@@ -623,28 +632,35 @@ interface CapabilityClaim {
 }
 
 /**
- * One capability a package would apply, as `createCapabilityFromDefinition`
- * will see it: interpolated with the same params (the definition's own
- * `name`/`key`, declared defaults, then the caller's), matched in the scope
- * its rows land in — pod-wide when every skill is pod-scoped, else the space.
+ * A definition as its applier will see it: interpolated with the definition's
+ * own `name`/`key`, its declared param defaults, then the caller's params.
  */
-function capabilityClaim(
-  raw: Bag,
-  params: Record<string, unknown>,
-  workspaceId: ClaimScope
-): CapabilityClaim {
+function interpolated(raw: Bag, params: Record<string, unknown>): Bag {
   const effective: Record<string, unknown> = { name: raw.name, key: raw.key };
   for (const p of bagsOf(raw.params)) {
     const name = textOf(p.name);
     if (name && p.default !== undefined) effective[name] = p.default;
   }
   Object.assign(effective, params);
+  return interpolateDeep(raw, effective);
+}
+
+/**
+ * One capability a package would apply, as `createCapabilityFromDefinition`
+ * will see it (`interpolated`), matched in the scope its rows land in —
+ * pod-wide when every skill is pod-scoped, else the space.
+ */
+function capabilityClaim(
+  raw: Bag,
+  params: Record<string, unknown>,
+  workspaceId: ClaimScope
+): CapabilityClaim {
   const skillScopes = bagsOf(raw.skills).map((sk) => sk.scope ?? "pod");
   const podScoped =
     skillScopes.length > 0 && skillScopes.every((sc) => sc === "pod");
   return {
     raw,
-    def: interpolateDeep(raw, effective),
+    def: interpolated(raw, params),
     scope: podScoped ? null : workspaceId,
   };
 }
@@ -710,6 +726,10 @@ function refuseTakeover(
  * uses, and a published literal `vault://` link (it would hand an existing
  * credential to the package's own tools).
  *
+ * A template's automations and playbooks are matched by name in the space it
+ * lands in, so a name already in one of the person's spaces is refused too
+ * (`assertNoNamedClash`).
+ *
  * A template's profiles reuse the pod-wide kind of the same slug; their new
  * fields land as space overlays, but a declared lifecycle, or options for a
  * field the pod-wide kind already has, would change that kind for every
@@ -723,6 +743,8 @@ async function assertNoTakeover(
     params: Record<string, unknown>;
     workspaceId: string | null;
     userId: string;
+    /** What this install is stamped as (`<source>/<slug>`). */
+    packageSlug: string;
   }
 ): Promise<void> {
   const claims = capabilityClaims(
@@ -885,7 +907,135 @@ async function assertNoTakeover(
     }
   }
 
-  if (kind === "template") await assertNoPodWideKindChange(source, definition);
+  if (kind === "template") {
+    await assertNoNamedClash(source, definition, target);
+    await assertNoPodWideKindChange(source, definition);
+  }
+}
+
+/**
+ * The playbook names a template's inline loops create — or, by the same
+ * case-insensitive name, REUSE (granting the loop's tools to the existing
+ * playbook and pointing its triggers at it). Composed from `basePlaybooks`
+ * exactly as the loop applier does; a loop it cannot compose is read as
+ * written (it then fails to apply, so reading more never under-refuses).
+ */
+function loopPlaybookNames(definition: Bag): string[] {
+  return bagsOf(definition.loops).flatMap((loop) => {
+    const raw = bagOf(loop.definition);
+    if (!raw) return [];
+    const def = interpolated(raw, bagOf(loop.params) ?? {});
+    let playbooks: unknown[];
+    try {
+      playbooks = resolveComposedPlaybooks(def as unknown as LoopDefinition);
+    } catch {
+      playbooks = bagsOf(def.playbooks);
+    }
+    return bagsOf(playbooks).flatMap((pb) => textOf(pb.name) ?? []);
+  });
+}
+
+/**
+ * See `assertNoTakeover`: a template's automations and playbooks land in the
+ * space it builds or composes onto, where the applier matches them BY NAME
+ * (an automation also by its `key`) and rewrites the match — an automation's
+ * whole graph, a playbook's untouched fields plus its source link and grants.
+ * Which space that is gets decided while the template installs, so the check
+ * runs against every live space the installing person belongs to (closed,
+ * never a guess), except the space this same package already holds
+ * (`package_slug`, its own earlier install). A playbook this package itself
+ * installed elsewhere (its `marketSource` stamp, as a pack does) is its own.
+ */
+async function assertNoNamedClash(
+  source: CatalogSource,
+  definition: Bag,
+  target: { userId: string; packageSlug: string }
+): Promise<void> {
+  const autos = bagsOf(definition.automations);
+  const autoNames = autos.flatMap((a) => textOf(a.name) ?? []);
+  const autoKeys = autos.flatMap((a) => textOf(a.key) ?? []);
+  const playbookNames = [
+    ...new Set(
+      [
+        ...bagsOf(definition.playbooks).flatMap((p) => textOf(p.name) ?? []),
+        ...loopPlaybookNames(definition),
+      ].map((n) => n.toLowerCase())
+    ),
+  ];
+  if (autoNames.length + autoKeys.length + playbookNames.length === 0) return;
+
+  const notThisPackage = and(
+    eq(workspaceMembers.userId, target.userId),
+    isNull(workspaces.archivedAt),
+    drizzleSql`${workspaces.packageSlug} is distinct from ${target.packageSlug}`
+  );
+
+  if (autoNames.length + autoKeys.length > 0) {
+    const [hit] = await db
+      .select({ name: automationsTable.name })
+      .from(automationsTable)
+      .innerJoin(workspaces, eq(workspaces.id, automationsTable.workspaceId))
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, automationsTable.workspaceId)
+      )
+      .where(
+        and(
+          or(
+            autoNames.length > 0
+              ? inArray(automationsTable.name, autoNames)
+              : undefined,
+            autoKeys.length > 0
+              ? inArray(
+                  drizzleSql<string>`${automationsTable.metadata}->>'templateKey'`,
+                  autoKeys
+                )
+              : undefined
+          ),
+          notThisPackage
+        )
+      )
+      .limit(1);
+    if (hit) {
+      refuseTakeover(
+        source,
+        "an automation called",
+        hit.name,
+        "is already in one of your spaces"
+      );
+    }
+  }
+
+  if (playbookNames.length > 0) {
+    const [hit] = await db
+      .select({ name: playbooksTable.name })
+      .from(playbooksTable)
+      .innerJoin(workspaces, eq(workspaces.id, playbooksTable.workspaceId))
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, playbooksTable.workspaceId)
+      )
+      .where(
+        and(
+          inArray(
+            drizzleSql<string>`lower(${playbooksTable.name})`,
+            playbookNames
+          ),
+          ne(playbooksTable.status, "archived"),
+          drizzleSql`${playbooksTable.metadata}->'marketSource'->>'packageSlug' is distinct from ${target.packageSlug}`,
+          notThisPackage
+        )
+      )
+      .limit(1);
+    if (hit) {
+      refuseTakeover(
+        source,
+        "a playbook called",
+        hit.name,
+        "is already in one of your spaces"
+      );
+    }
+  }
 }
 
 /** See `assertNoTakeover`: a template may not change a pod-wide kind. */
@@ -1031,6 +1181,7 @@ export async function applyMarketInstall(
       params: input.params ?? {},
       workspaceId: input.workspaceId,
       userId: input.userId,
+      packageSlug: pslug,
     });
   }
   const supplied = input.definition ?? listed;
@@ -1817,7 +1968,8 @@ export interface RunMarketInstallInput {
   definition?: Record<string, unknown>;
   /**
    * A person's explicit confirms for a package from a TRUSTED added source
-   * that runs code or reaches the network (the console's extra confirm).
+   * that runs code, reaches the network or uses a connection the pod already
+   * has (the console's extra confirms).
    */
   acknowledge?: MarketAcknowledgement;
   userId: string;
@@ -1838,8 +1990,8 @@ export type MarketInstallOutcome =
  * (`decideMarketInstall`):
  *   - official: an agent ALWAYS proposes (P2.1-A / D3) — never auto-provisions,
  *     whatever the outer capability gate let through; a person installs.
- *   - trusted: a person installs after confirming code / network reach; an
- *     agent proposes only where the source opted in, else it is refused.
+ *   - trusted: a person installs after confirming code / network reach /
+ *     existing connections; an agent proposes only where the source opted in, else it is refused.
  *   - showcase: never installs — the publisher's site does.
  */
 export async function runMarketInstall(
@@ -1881,7 +2033,7 @@ export async function runMarketInstall(
 
   // An added source: fetch + verify once, and disclose what it brings BEFORE
   // a proposal is filed or anything is written. A person must have confirmed
-  // code and network reach explicitly.
+  // code, network reach and the use of existing connections explicitly.
   let verifiedDefinition: Record<string, unknown> | undefined;
   let notices: string[] = [];
   if (!source.official) {

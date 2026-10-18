@@ -18693,19 +18693,24 @@ export type BrandResolution = {
 /**
  * Market risk disclosure — what a package brings that a person should see
  * before it runs on their pod: CODE (cells, code skills), NETWORK reach (the
- * hosts it names) and CONNECTORS (credentials, providers, MCP servers). Read
- * off the definition the install will apply. Pure.
+ * hosts it names), CONNECTORS (credentials, providers, MCP servers) and, among
+ * those, the pod's EXISTING provider connections it would use (a `nango://`
+ * ref or a `providerConfigKey` binds a tool to the connection the pod already
+ * has for that provider — the owner's own Gmail, say). Read off the definition
+ * the install will apply. Pure.
  *
  * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
  * template's nested cells and capabilities are found as well as a lone cell's.
  * It discloses what the definition DECLARES — it is not a sandbox and does not
  * promise the absence of anything it did not find. The walk is bounded; a
  * definition too large or too deep to read to the end is reported `incomplete`
- * and then FAILS CLOSED: code and network reach are both treated as present.
+ * and then FAILS CLOSED: code, network reach and existing connections are all
+ * treated as present.
  *
  * A package from a TRUSTED third-party source needs an extra, explicit
- * confirm for code and for network reach (`requiredAcknowledgements`); the
- * install door refuses without it (marketplace-install.ts).
+ * confirm for code, for network reach and for using existing connections
+ * (`requiredAcknowledgements`); the install door refuses without it
+ * (marketplace-install.ts).
  */
 export interface MarketRisks {
 	/** Names of the parts that carry code (a cell's renderer, a code skill). */
@@ -18715,9 +18720,15 @@ export interface MarketRisks {
 	/** Credentials, providers and servers it asks to connect. */
 	connectors: string[];
 	/**
+	 * The services whose EXISTING connection on this pod it would use, by name
+	 * (`Gmail`): every `nango://<provider>` ref and `providerConfigKey` it
+	 * carries. Those bind to the connection the pod already has, not a new one.
+	 */
+	connections: string[];
+	/**
 	 * Set (true) only when the walk ran out of budget before it read the whole
-	 * definition, so the lists above may be missing entries. Code and network
-	 * reach then count as present (`requiredAcknowledgements`).
+	 * definition, so the lists above may be missing entries. Code, network reach
+	 * and existing connections then count as present (`requiredAcknowledgements`).
 	 */
 	incomplete?: true;
 }
@@ -18812,6 +18823,7 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 	requires: {
 		code: boolean;
 		network: boolean;
+		connectors: boolean;
 	};
 }
 /**
@@ -45511,6 +45523,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				acknowledge?: {
 					code?: boolean | undefined;
 					network?: boolean | undefined;
+					connectors?: boolean | undefined;
 				} | undefined;
 			};
 			output: MarketInstallOutcome;
@@ -45561,6 +45574,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					signed: boolean;
 					keyFingerprint: string | null;
 					conflict: string | null;
+					previousKeyFingerprint: string | null;
 				};
 				meta: object;
 			}>;

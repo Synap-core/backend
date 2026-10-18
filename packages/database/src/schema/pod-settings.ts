@@ -184,6 +184,20 @@ export interface MarketplaceSourceStatus {
   pendingFingerprint?: string | null;
 }
 
+/**
+ * What a pod remembers about a removed source's id: the key it was pinned to.
+ * Everything that source installed stays stamped `<id>/<slug>`, so a later
+ * source declaring the same id under a DIFFERENT key is added blocked on the
+ * key-change review (`marketplace.sources.confirm`) — it never silently
+ * inherits those spaces. Written with the remove, under the same lock; dropped
+ * when the id is added again (the pinned key then carries the memory).
+ */
+export interface MarketplaceSourceTombstone {
+  publicKey: string;
+  keyFingerprint: string;
+  removedAt: string;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   intelligenceDefaults?: PodIntelligenceDefaults;
@@ -194,6 +208,7 @@ export interface PodSettingsBlob {
   marketplaceSources?: MarketplaceSourceSetting[];
   marketplaceOfficialSource?: MarketplaceOfficialSourceSetting;
   marketplaceSourceStatus?: Record<string, MarketplaceSourceStatus>;
+  marketplaceSourceTombstones?: Record<string, MarketplaceSourceTombstone>;
   [k: string]: unknown;
 }
 

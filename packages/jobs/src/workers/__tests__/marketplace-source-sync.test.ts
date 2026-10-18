@@ -578,6 +578,37 @@ describe("only public addresses (SSRF)", () => {
     expect(err?.code).toBe("ENOTPUBLIC");
   });
 
+  it("a NAME that resolves to loopback (real DNS for `localhost`) is refused before any socket opens", async () => {
+    const { createServer } = await import("node:net");
+    const { request } = await import("node:https");
+    let connections = 0;
+    const server = createServer((socket) => {
+      connections++;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const { port } = server.address() as { port: number };
+    try {
+      await expect(
+        publicOnlyFetch(
+          `https://localhost:${port}/synap-index.json`,
+          anonymousGetInit()
+        )
+      ).rejects.toMatchObject({ code: "ENOTPUBLIC" });
+      expect(connections).toBe(0);
+      // Control: the same address with the default lookup does connect, so
+      // the zero above is the guard, not a server nobody could reach.
+      await new Promise<void>((resolve) => {
+        const req = request(`https://localhost:${port}/`, () => resolve());
+        req.on("error", () => resolve());
+        req.end();
+      });
+      expect(connections).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("the default fetch refuses an internal IP literal before connecting", async () => {
     for (const url of [
       "https://127.0.0.1/synap-index.json",
