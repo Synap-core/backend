@@ -267,6 +267,7 @@ export class FacetRepository extends BaseRepository<
         // merge, team bridge, materializer): ONE announcement per new role.
         await notifyFacetAttached({
           facet,
+          profileSlug: profile.slug,
           userId,
           context: data.emitContext,
         });
@@ -341,11 +342,12 @@ export class FacetRepository extends BaseRepository<
    */
   async emitAttachCompletedEvent(
     facet: EntityFacet,
+    profileSlug: string,
     userId: string,
     context?: FacetAttachContext
   ): Promise<void> {
     await this.emitCompleted("create", facet, userId);
-    await notifyFacetAttached({ facet, userId, context });
+    await notifyFacetAttached({ facet, profileSlug, userId, context });
   }
 
   /** BaseRepository contract — delegates to `attach()` (the real name). */

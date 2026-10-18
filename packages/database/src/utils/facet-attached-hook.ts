@@ -52,10 +52,24 @@ export interface FacetAttachContext {
 
 export interface FacetAttachedEvent {
   facet: EntityFacet;
+  /**
+   * The role-profile's slug, resolved by the NOTIFIER on its own connection
+   * (the door has the profile in hand). Required so the emitter never has to
+   * look it up: the announcement can run INSIDE the caller's transaction (the
+   * team-person bridge attaches under `pg_advisory_xact_lock`), and an awaited
+   * read on another pool connection there deadlocks a single-session database
+   * (PGlite / pglite-socket serves only the open transaction) — the fresh
+   * desktop pod wedged at boot this way.
+   */
+  profileSlug: string;
   userId: string;
   context?: FacetAttachContext;
 }
 
+/**
+ * Must not await any read outside the notifier's connection — everything it
+ * needs rides the event (see `profileSlug`).
+ */
 type FacetAttachedEmitter = (event: FacetAttachedEvent) => void | Promise<void>;
 
 let emitter: FacetAttachedEmitter | null = null;
