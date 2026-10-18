@@ -208,7 +208,7 @@ vi.mock("@synap-core/core", () => ({
 // Import AFTER the mocks are registered.
 import { oauthApp } from "./routes.js";
 import { computeS256Challenge } from "./protocol.js";
-import { decideOAuthAuthorization } from "./consent.js";
+import { decideOAuthAuthorization, getOAuthConsentContext } from "./consent.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const POD_ADMIN = "https://pod-admin.test.synap.live";
@@ -480,6 +480,27 @@ describe("GET /authorize", () => {
 });
 
 // ─── Consent ─────────────────────────────────────────────────────────────────
+
+describe("consent context", () => {
+  it("says when the client registered itself", async () => {
+    const { body: client } = await register();
+    const registeredAt = new Date("2026-10-17T09:00:00Z");
+    store.clients.get(client.client_id)!.createdAt = registeredAt;
+    const context = await getOAuthConsentContext({
+      clientId: client.client_id,
+      redirectUri: CALLBACK,
+      responseType: "code",
+      codeChallenge: CHALLENGE,
+      codeChallengeMethod: "S256",
+      state: null,
+    });
+    expect(context).toMatchObject({
+      clientName: "Claude",
+      redirectHost: "claude.ai",
+      registeredAt,
+    });
+  });
+});
 
 describe("consent decision", () => {
   it("Deny returns access_denied to the client and mints NO code", async () => {
