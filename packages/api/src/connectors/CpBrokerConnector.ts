@@ -209,6 +209,15 @@ export class CpBrokerConnector implements ConnectionBroker {
     if (sent.ok && sent.status === 404) return { ok: true, connection: null };
     if (!sent.ok || sent.status !== 200) {
       const f = this.failure(sent);
+      // The CP read the connection and Nango could not refresh its credential:
+      // only a by-id read can say so, and it means reconnect, not retry.
+      if (
+        f.reason === "unreachable" &&
+        sent.ok &&
+        sent.json?.reason === "needs_reauth"
+      ) {
+        return { ok: false, reason: "needs_reauth", error: f.error };
+      }
       // A by-id read is never paged, so `truncated` cannot describe it.
       return {
         ok: false,

@@ -5,16 +5,8 @@ on:
   # of the broken releases (an artifact was published from node 22.22.3 while
   # this workflow pins node 20) — so there must be a CI button to press instead.
   workflow_dispatch:
-  push:
-    branches: [main]
-    # Repo-root-relative. These were once prefixed `synap-backend/` from a
-    # monorepo layout that no longer exists — with that prefix the filter could
-    # never match and this workflow never fired, which is how publishing ended
-    # up being done by hand.
-    paths:
-      - "packages/types/src/**"
-      - "packages/api/src/routers/**"
-      - "packages/api/src/root.ts"
+  # The automatic `push: main` trigger (paths filter) was removed 2026-10-18:
+  # a package publish is a decision, run with this button when one is wanted.
 
 # Publishing is not idempotent at the transport layer: killing a run mid-publish
 # can leave a version half-uploaded. Serialise publishes; never cancel.

@@ -9,6 +9,8 @@
  *    matching ONE content term of a multi-term query drops out;
  *  - a row matching two content terms stays;
  *  - a single-content-term query still needs only that term;
+ *  - a short row matching every term outranks a long row repeating three
+ *    of them (rank by distinct terms matched, then length-normalised density);
  *  - omitted options ⇒ the old any-term behaviour (the keyword door unchanged).
  */
 import { describe, it, expect, beforeAll } from "vitest";
@@ -50,6 +52,16 @@ beforeAll(async () => {
     ["eng:registry", "Deploy the model registry behind the backend gateway"],
     ["eng:pglite", "PGlite traps when a data model column has no default"],
     ["biz:grp", "GRP business model: revenue from subscriptions and services"],
+    [
+      "design:flows",
+      "Before changing a desktop page, check its user flows in the Design app.",
+    ],
+    [
+      "notes:long",
+      "Users check pages. The user checked the page, then the user changed the page again. ".repeat(
+        10
+      ),
+    ],
   ]) {
     await pg.query(
       `insert into knowledge_keys (key, namespace, slug, value) values ($1,$2,$3,$4)`,
@@ -82,6 +94,16 @@ describe("knowledge_keys searchFullText — matched-term floor", () => {
       ignoreTerms: IGNORE,
     });
     expect(keys(rows)).toEqual(["eng:registry"]);
+  });
+
+  it("a short runbook matching every term outranks a long note repeating three", async () => {
+    const rows = await repo.searchFullText(
+      "changing desktop page check user flows",
+      undefined,
+      10,
+      { minMatchedTerms: 2, ignoreTerms: IGNORE }
+    );
+    expect(rows.map((r) => r.key)).toEqual(["design:flows", "notes:long"]);
   });
 
   it("omitted options keep the any-term behaviour", async () => {
