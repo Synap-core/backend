@@ -229,7 +229,14 @@ describe("focusSessions.get returns the continuation packet", () => {
     expect(c.aiCanDo).toEqual({
       status: "ok",
       total: 1,
-      items: [{ label: "Draft brief", kind: "document" }],
+      items: [
+        {
+          label: "Draft brief",
+          kind: "document",
+          noun: "Document",
+          glyph: "▤",
+        },
+      ],
     });
     expect(c.blockers).toMatchObject({
       status: "ok",
