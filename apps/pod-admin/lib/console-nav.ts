@@ -421,8 +421,8 @@ export interface SearchDestination {
 /**
  * ⌘K categories → the page that receives them. Two routes are decided by the
  * row, not the category, and stay at the call site: a PENDING issuer goes to
- * Review (`pendingIssuerHref`), and a workspace-scoped API key goes to its
- * workspace's API-keys tab (the pod-wide Keys list skips workspace keys).
+ * Review (`pendingIssuerHref`), and an API key opens where its Keys row opens
+ * (`keyHref`: its holder's page, or the space it is confined to).
  */
 export const SEARCH_DESTINATION: Readonly<
   Record<SearchCategory, SearchDestination>

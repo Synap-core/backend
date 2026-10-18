@@ -74,6 +74,7 @@ import {
   type SearchCategory,
 } from "../../../lib/console-nav";
 import { formatRelative } from "../../../lib/format";
+import { keyHref } from "../keys/_lib/key-model";
 import { trpc } from "../../../lib/trpc";
 import { useConsoleRole } from "./side-nav-role";
 
@@ -350,26 +351,20 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     }
     matches.push(...bucket);
 
-    // API keys — routed BY SCOPE. The pod-wide Keys list skips every
-    // workspace-scoped key (`hubId` `workspace:<id>`), so linking one there
-    // lands the operator on a page that filters it out; those go to the
-    // workspace's own API-keys tab instead.
+    // API keys — opened where a Keys row opens (`keyHref`: the holder's page,
+    // else the space a key is confined to); a pod-wide key with no holder
+    // page is focused on the Keys list.
     bucket = [];
     const keyItems = apiKeysQuery.data ?? [];
     for (const k of keyItems) {
       const hay = `${k.keyName} ${k.keyPrefix}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
-      const scopedWorkspaceId = k.hubId?.startsWith("workspace:")
-        ? k.hubId.slice("workspace:".length)
-        : null;
       bucket.push({
         id: k.id,
         category: "api-key",
         primary: k.keyName,
         secondary: `${k.keyPrefix}… · ${k.isActive ? "active" : "revoked"}`,
-        href: scopedWorkspaceId
-          ? `/workspaces/${encodeURIComponent(scopedWorkspaceId)}?tab=api-keys&focus=${encodeURIComponent(k.id)}`
-          : SEARCH_DESTINATION["api-key"].href(k.id),
+        href: keyHref(k) ?? SEARCH_DESTINATION["api-key"].href(k.id),
       });
       if (bucket.length >= cap) break;
     }
