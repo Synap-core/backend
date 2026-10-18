@@ -4,7 +4,9 @@
  * pages under `/open` only fetch and draw.
  */
 
+import type { AppRouter } from "@synap-core/api-types";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import type { inferRouterInputs } from "@trpc/server";
 import { shortDescription } from "../_lib/object/object-summaries";
 import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
 
@@ -28,6 +30,59 @@ export interface ResolvedOpen {
   displayName: string | null;
   workspaceId: string | null;
   openable: boolean;
+  /** Address parameters the link must carry (only runs: `flowType`). */
+  params?: Record<string, string>;
+}
+
+type RunFlowType = inferRouterInputs<AppRouter>["runs"]["get"]["flowType"];
+
+/**
+ * `runs.get`'s flow types, as a runtime list. Keyed by the router's own type,
+ * so a member added or removed there fails the typecheck here.
+ */
+const RUN_FLOW_TYPES = Object.keys({
+  automation: true,
+  playbook: true,
+  capture: true,
+  capability: true,
+  session: true,
+  chat: true,
+  agent_write: true,
+} satisfies Record<RunFlowType, true>);
+
+/**
+ * The address parameters a kind's link may carry, each with the values it
+ * accepts. A run is addressed by `{flowType, id}`: without `flowType` the app
+ * opens it as an automation run. Anything else the resolver sends is dropped.
+ */
+const ADDRESS_PARAMS: ReadonlyMap<
+  string,
+  ReadonlyMap<string, readonly string[]>
+> = new Map([["run", new Map([["flowType", RUN_FLOW_TYPES]])]]);
+
+/** The allowlisted subset of `params` for `type`, or undefined when empty. */
+export function openAddressParams(
+  type: string,
+  params: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  const allowed = ADDRESS_PARAMS.get(type);
+  if (!allowed || !params) return undefined;
+  const kept = Object.entries(params).filter(
+    ([key, value]) => allowed.get(key)?.includes(value) ?? false
+  );
+  return kept.length > 0 ? Object.fromEntries(kept) : undefined;
+}
+
+/**
+ * The address parameters a bounce card's app link carries — the resolver's,
+ * and only when it agrees on the kind (same rule as `bounceReceipt`).
+ */
+export function bounceAddressParams(
+  linkType: string,
+  resolved: ResolvedOpen | undefined
+): Record<string, string> | undefined {
+  if (!resolved || resolved.type !== linkType) return undefined;
+  return openAddressParams(linkType, resolved.params);
 }
 
 /**
@@ -68,7 +123,9 @@ export function openPathForResolved(resolved: ResolvedOpen): string | null {
   const id = encodeURIComponent(resolved.id);
   if (resolved.type === "proposal") return `/proposal/${id}`;
   if (!OPEN_TYPES.has(resolved.type)) return null;
-  return `/open/${resolved.type}/${id}`;
+  const params = openAddressParams(resolved.type, resolved.params);
+  const query = params ? `?${new URLSearchParams(params)}` : "";
+  return `/open/${resolved.type}/${id}${query}`;
 }
 
 /** The property an entity's summary line is read from, first match wins. */
