@@ -32,7 +32,8 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # ~1.5x a measured full run (15.5 min, run 39176917085).
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -137,29 +138,35 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The built API boots against the migrated CI Postgres and answers. Until
+      # 2026-10-19 both steps were continue-on-error and the server had in fact
+      # exited at boot (no KRATOS_PUBLIC_URL) on every run, unnoticed. Ory is
+      # never called by these probes; the URL only satisfies the boot check.
       - name: Start API server for smoke tests
         run: |
           DATABASE_URL=postgresql://postgres:postgres@localhost:5432/synap_test \
           NODE_ENV=test \
           PORT=4000 \
           SKIP_SECRET_VALIDATION=true \
-          node apps/api/dist/index.js &
+          KRATOS_PUBLIC_URL=http://localhost:4433 \
+          KRATOS_ADMIN_URL=http://localhost:4434 \
+          node apps/api/dist/index.js > "$RUNNER_TEMP/api.log" 2>&1 &
           echo "SERVER_PID=$!" >> $GITHUB_ENV
-          # Wait for server to be healthy (up to 30s)
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
               echo "Server healthy after ${i}s"
-              break
+              exit 0
             fi
             sleep 1
           done
-        continue-on-error: true
+          echo "::error::API server not healthy after 60s"
+          tail -n 80 "$RUNNER_TEMP/api.log"
+          exit 1
 
       - name: Smoke test
         run: |
           bash -n scripts/smoke-test.sh
-          BASE_URL=http://localhost:4000 bash scripts/smoke-test.sh || echo "Smoke tests failed (non-blocking)"
-        continue-on-error: true
+          bash scripts/smoke-test.sh || { tail -n 80 "$RUNNER_TEMP/api.log"; exit 1; }
         env:
           BASE_URL: http://localhost:4000
 
@@ -211,7 +218,9 @@ jobs:
       - name: Test
         # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
         timeout-minutes: 60
-        run: pnpm test --filter='!@synap-core/core'
+        # --continue: turbo otherwise stops at the first red package and hides
+        # every later package's result.
+        run: pnpm test --continue --filter='!@synap-core/core'
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
