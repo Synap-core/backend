@@ -132,6 +132,7 @@ import {
   logger,
   rejectAgentReviewer,
   resolveActingContext,
+  resolveRowActingContext,
   type HubHono,
   readJsonBody,
 } from "./_shared.js";
@@ -1327,7 +1328,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    *
    * Write-gate pattern (mirrors artifacts.ts PATCH):
    *   1. Load the row by id alone (never trust a caller-supplied workspaceId for scoping).
-   *   2. Verify the caller's membership in the LOADED ROW's workspace via resolveActingContext.
+   *   2. Authorize against the LOADED ROW via resolveRowActingContext: workspace
+   *      membership, or the owner floor for a pod-personal row.
    *   3. Gate through checkPermissionOrPropose — the membrane decides approve vs propose.
    *   4. Execute the raw DB update only after gate approval.
    */
@@ -1372,11 +1374,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
 
-      // Step 2: verify the caller's membership in the row's workspace.
-      // workspaceId is nullable since Phase 4 (project-scoped sessions). Pass
-      // undefined when null so resolveActingContext falls back to pod-level auth.
-      const acting = await resolveActingContext(c, {
-        workspaceId: existing.workspaceId ?? undefined,
+      // Step 2: membership in the row's workspace; a pod-personal row
+      // (workspaceId null since Phase 4) is floored on its owner instead.
+      const acting = await resolveRowActingContext(c, existing, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
@@ -2098,10 +2099,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
 
-      // Project-scoped sessions have null workspaceId — resolveActingContext
-      // falls back to pod-level owner floor (same as PATCH).
-      const acting = await resolveActingContext(c, {
-        workspaceId: existing.workspaceId ?? undefined,
+      // Project-scoped sessions have null workspaceId — floored on the
+      // session's owner (same as PATCH).
+      const acting = await resolveRowActingContext(c, existing, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
@@ -2222,8 +2223,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!existing) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
-      const acting = await resolveActingContext(c, {
-        workspaceId: existing.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, existing, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
@@ -2580,8 +2581,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
       if (!session)
         return c.json({ error: `Focus session ${id} not found` }, 404);
-      const acting = await resolveActingContext(c, {
-        workspaceId: session.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
@@ -2634,8 +2635,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
       if (!session)
         return c.json({ error: `Focus session ${id} not found` }, 404);
-      const acting = await resolveActingContext(c, {
-        workspaceId: session.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
@@ -2676,8 +2677,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * produced), so an owner floor would refuse the ledger write the door exists
    * to make. The tRPC door is the HUMAN surface, where the caller IS the owner
    * and anything else is a cross-user write. Membership is still a real floor —
-   * `resolveActingContext` binds to the ROW's workspace, never a body-supplied
-   * one — and the ledger row records who produced it either way. Tightening
+   * `resolveRowActingContext` binds to the ROW's workspace, never a body-supplied
+   * one — and the ledger row records who produced it either way. A pod-personal
+   * session has no workspace to be a member of: there the floor IS the owner. Tightening
    * this to an owner floor is a decision about the whole hub session surface
    * (`/used`, PATCH, `/complete-run` all share it), not about this handler.
    *
@@ -2729,8 +2731,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!session) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
-      const acting = await resolveActingContext(c, {
-        workspaceId: session.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
@@ -2825,8 +2827,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         if (!session) {
           return c.json({ error: `Focus session ${id} not found` }, 404);
         }
-        const acting = await resolveActingContext(c, {
-          workspaceId: session.workspaceId ?? undefined,
+        const acting = await resolveRowActingContext(c, session, {
+          notFound: `Focus session ${id} not found`,
         });
         if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
@@ -3123,12 +3125,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!session) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
-      const acting = await resolveActingContext(c, {
-        workspaceId: session.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
-      // MEMBERSHIP FLOOR on the FALLBACK lens. `resolveActingContext` above
+      // MEMBERSHIP FLOOR on the FALLBACK lens. `resolveRowActingContext` above
       // membership-checks the SESSION's workspace, but the body's
       // `workspaceId` is bare request input and was never checked: a caller
       // could file the row into a workspace they do not belong to, and the
@@ -3212,8 +3214,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: `Focus session ${sessionId} not found` }, 404);
       }
 
-      const acting = await resolveActingContext(c, {
-        workspaceId: session.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${sessionId} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
