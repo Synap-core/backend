@@ -1,20 +1,27 @@
 /**
  * Market risk disclosure — what a package brings that a person should see
  * before it runs on their pod: CODE (cells, code skills), NETWORK reach (the
- * hosts it names) and CONNECTORS (credentials, providers, MCP servers). Read
- * off the definition the install will apply. Pure.
+ * hosts it names), CONNECTORS (credentials, providers, MCP servers) and, among
+ * those, the pod's EXISTING provider connections it would use (a `nango://`
+ * ref or a `providerConfigKey` binds a tool to the connection the pod already
+ * has for that provider — the owner's own Gmail, say). Read off the definition
+ * the install will apply. Pure.
  *
  * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
  * template's nested cells and capabilities are found as well as a lone cell's.
  * It discloses what the definition DECLARES — it is not a sandbox and does not
  * promise the absence of anything it did not find. The walk is bounded; a
  * definition too large or too deep to read to the end is reported `incomplete`
- * and then FAILS CLOSED: code and network reach are both treated as present.
+ * and then FAILS CLOSED: code, network reach and existing connections are all
+ * treated as present.
  *
  * A package from a TRUSTED third-party source needs an extra, explicit
- * confirm for code and for network reach (`requiredAcknowledgements`); the
- * install door refuses without it (marketplace-install.ts).
+ * confirm for code, for network reach and for using existing connections
+ * (`requiredAcknowledgements`); the install door refuses without it
+ * (marketplace-install.ts).
  */
+
+import { resolveServiceName } from "@synap-core/types/service-marks";
 
 export interface MarketRisks {
   /** Names of the parts that carry code (a cell's renderer, a code skill). */
@@ -24,9 +31,15 @@ export interface MarketRisks {
   /** Credentials, providers and servers it asks to connect. */
   connectors: string[];
   /**
+   * The services whose EXISTING connection on this pod it would use, by name
+   * (`Gmail`): every `nango://<provider>` ref and `providerConfigKey` it
+   * carries. Those bind to the connection the pod already has, not a new one.
+   */
+  connections: string[];
+  /**
    * Set (true) only when the walk ran out of budget before it read the whole
-   * definition, so the lists above may be missing entries. Code and network
-   * reach then count as present (`requiredAcknowledgements`).
+   * definition, so the lists above may be missing entries. Code, network reach
+   * and existing connections then count as present (`requiredAcknowledgements`).
    */
   incomplete?: true;
 }
@@ -39,6 +52,7 @@ export const INCOMPLETE_RISK_NOTICE =
 export interface MarketAcknowledgement {
   code?: boolean;
   network?: boolean;
+  connectors?: boolean;
 }
 
 const MAX_NODES = 50_000;
@@ -67,6 +81,8 @@ function label(node: Bag | null): string {
   return "package";
 }
 
+const NANGO_REF = /^nango:\/\/(.+)$/i;
+
 function hostOf(value: string): string | null {
   if (!/^(https?|wss?):\/\//i.test(value)) return null;
   try {
@@ -81,6 +97,11 @@ export function assessMarketRisks(definition: unknown): MarketRisks {
   const code = new Set<string>();
   const hosts = new Set<string>();
   const connectors = new Set<string>();
+  const connections = new Set<string>();
+  const addConnection = (provider: string) => {
+    const name = resolveServiceName(provider.trim());
+    if (name) connections.add(name);
+  };
   let nodes = 0;
   let incomplete = false;
 
@@ -92,6 +113,8 @@ export function assessMarketRisks(definition: unknown): MarketRisks {
     if (typeof value === "string") {
       const host = hostOf(value);
       if (host) hosts.add(host);
+      const provider = NANGO_REF.exec(value.trim())?.[1];
+      if (provider) addConnection(provider);
       return;
     }
     if (Array.isArray(value)) {
@@ -117,6 +140,12 @@ export function assessMarketRisks(definition: unknown): MarketRisks {
         child.trim()
       ) {
         connectors.add(child.trim());
+      } else if (
+        key === "providerConfigKey" &&
+        typeof child === "string" &&
+        child.trim()
+      ) {
+        addConnection(child);
       } else if (key === "vault" && Array.isArray(child)) {
         for (const item of child) {
           if (isBag(item)) connectors.add(`secret: ${label(item)}`);
@@ -135,6 +164,7 @@ export function assessMarketRisks(definition: unknown): MarketRisks {
     code: [...code].sort(),
     networkHosts: [...hosts].sort(),
     connectors: [...connectors].sort(),
+    connections: [...connections].sort(),
     ...(incomplete ? { incomplete: true as const } : {}),
   };
 }
@@ -146,7 +176,15 @@ export function requiredAcknowledgements(
   return {
     code: risks.incomplete || risks.code.length > 0,
     network: risks.incomplete || risks.networkHosts.length > 0,
+    connectors: risks.incomplete || risks.connections.length > 0,
   };
+}
+
+/** "Gmail" / "Gmail and Slack" / "Gmail, Notion and Slack". */
+function joinNames(names: string[]): string {
+  return names.length < 2
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** The confirms still missing, as plain sentences (empty = nothing missing). */
@@ -170,6 +208,13 @@ export function missingAcknowledgements(
         : "It may reach the network — confirm that you accept that."
     );
   }
+  if (need.connectors && given?.connectors !== true) {
+    missing.push(
+      risks.connections.length > 0
+        ? `It can use your existing ${joinNames(risks.connections)} connection${risks.connections.length === 1 ? "" : "s"} — confirm that you accept that.`
+        : "It may use connections this pod already has — confirm that you accept that."
+    );
+  }
   if (missing.length > 0 && risks.incomplete) {
     missing.unshift(INCOMPLETE_RISK_NOTICE);
   }
@@ -186,6 +231,11 @@ export function riskNotices(risks: MarketRisks): string[] {
   }
   if (risks.connectors.length > 0) {
     out.push(`Connects: ${risks.connectors.join(", ")}.`);
+  }
+  if (risks.connections.length > 0) {
+    out.push(
+      `Uses your existing ${joinNames(risks.connections)} connection${risks.connections.length === 1 ? "" : "s"}.`
+    );
   }
   return out;
 }

@@ -19,6 +19,7 @@ describe("assessMarketRisks", () => {
       code: ["Bar chart"],
       networkHosts: ["api.acme.test", "cdn.acme.test"],
       connectors: [],
+      connections: [],
     });
   });
 
@@ -68,6 +69,7 @@ describe("assessMarketRisks", () => {
     expect(requiredAcknowledgements(risks)).toEqual({
       code: false,
       network: false,
+      connectors: false,
     });
     expect(missingAcknowledgements(risks, undefined)).toEqual([]);
     expect(riskNotices(risks)).toEqual([]);
@@ -79,7 +81,7 @@ describe("assessMarketRisks", () => {
     expect(() => assessMarketRisks(deep)).not.toThrow();
   });
 
-  it("fails CLOSED when the walk runs out of budget: code and network both required", () => {
+  it("fails CLOSED when the walk runs out of budget: code, network and connections all required", () => {
     // Too deep: the code at the bottom is never reached.
     let deep: Record<string, unknown> = { code: "steal()" };
     for (let i = 0; i < 100; i++) deep = { child: deep };
@@ -91,14 +93,20 @@ describe("assessMarketRisks", () => {
       expect(requiredAcknowledgements(risks)).toEqual({
         code: true,
         network: true,
+        connectors: true,
       });
       expect(missingAcknowledgements(risks, undefined)).toEqual([
         INCOMPLETE_RISK_NOTICE,
         "It may run code — confirm that you accept that.",
         "It may reach the network — confirm that you accept that.",
+        "It may use connections this pod already has — confirm that you accept that.",
       ]);
       expect(
-        missingAcknowledgements(risks, { code: true, network: true })
+        missingAcknowledgements(risks, {
+          code: true,
+          network: true,
+          connectors: true,
+        })
       ).toEqual([]);
       expect(riskNotices(risks)[0]).toBe(INCOMPLETE_RISK_NOTICE);
     }
@@ -130,5 +138,50 @@ describe("acknowledgements", () => {
 
   it("names the risks in the reviewer's notice", () => {
     expect(riskNotices(risks)).toEqual(["Runs code: c.", "Can reach: a.test."]);
+  });
+});
+
+describe("existing connections", () => {
+  // A third-party tool bound by `nango://` gets the connection the pod already
+  // has for that provider — the owner's own Gmail — so it is named and needs
+  // its own confirm.
+  const risks = assessMarketRisks({
+    key: "mailer",
+    tools: [
+      { name: "send", credentialRef: "nango://google-mail" },
+      { name: "post", config: { providerConfigKey: "slack" } },
+      { name: "own", credentialRef: "token" },
+    ],
+  });
+
+  it("names each service whose existing connection it would use", () => {
+    expect(risks.connections).toEqual(["Gmail", "Slack"]);
+    expect(requiredAcknowledgements(risks)).toEqual({
+      code: false,
+      network: false,
+      connectors: true,
+    });
+  });
+
+  it("asks for the connections confirm until it is given", () => {
+    expect(missingAcknowledgements(risks, undefined)).toEqual([
+      "It can use your existing Gmail and Slack connections — confirm that you accept that.",
+    ]);
+    expect(missingAcknowledgements(risks, { connectors: true })).toEqual([]);
+  });
+
+  it("tells a reviewer in the proposal's notices", () => {
+    expect(riskNotices(risks)).toContain(
+      "Uses your existing Gmail and Slack connections."
+    );
+  });
+
+  it("a package's own secret is not an existing connection", () => {
+    const own = assessMarketRisks({
+      vault: [{ ref: "token", name: "Acme key" }],
+      tools: [{ name: "call", credentialRef: "token" }],
+    });
+    expect(own.connections).toEqual([]);
+    expect(requiredAcknowledgements(own).connectors).toBe(false);
   });
 });

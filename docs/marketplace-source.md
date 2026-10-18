@@ -162,13 +162,24 @@ re-approve") until its admin compares the new fingerprint and approves it, so
 announce the change first. An index that names a key it is not signed by is a
 bad signature, not a key change: pods keep your last verified copy.
 
+### Your id stays yours after a pod removes you
+
+When a pod admin removes your source, the pod remembers the key your id was
+pinned to. Everything you installed there stays stamped `acme/<slug>`, so if
+the id is added again — by you or by anyone else serving an index that names
+`acme` — under a **different** key, the source is added in the "key changed —
+re-approve" state above: nothing installs from it, and no space stamped
+`acme/…` takes an update from it, until the admin compares the new
+fingerprint and approves it. Under the same key the re-add is silent. An
+unsigned index can never take an id a signed source had.
+
 ## Trust levels — what a pod admin can choose
 
-| Level                     | Who installs                                                                                                                                                                                                                                                                          | What the pod checks                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Official** (Synap only) | A person; an agent's install becomes a proposal.                                                                                                                                                                                                                                      | Synap's catalog is the pod's configured Control Plane over TLS (see below).                                                                               |
-| **Trusted**               | A person, after a preflight that names the code, network reach and connectors a package brings, with an explicit confirm for code and for network reach. An agent is refused — unless the admin turned on agent proposals for this source; then it files a proposal a person reviews. | Signed index under the pinned key, not expired; definition digest and content version.                                                                    |
-| **Showcase only**         | Nobody on the pod. Install opens your `installUrl` / `homepageUrl`.                                                                                                                                                                                                                   | The listing only. The pod never fetches a showcase definition. A showcase may be unsigned; if it is signed, the key is pinned and checked like any other. |
+| Level                     | Who installs                                                                                                                                                                                                                                                                                                                                                     | What the pod checks                                                                                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Official** (Synap only) | A person; an agent's install becomes a proposal.                                                                                                                                                                                                                                                                                                                 | Synap's catalog is the pod's configured Control Plane over TLS (see below).                                                                               |
+| **Trusted**               | A person, after a preflight that names the code, network reach and connectors a package brings, with an explicit confirm for code, for network reach and for using a connection the pod already has (below). An agent is refused — unless the admin turned on agent proposals for this source; then it files a proposal a person reviews, which names all three. | Signed index under the pinned key, not expired; definition digest and content version.                                                                    |
+| **Showcase only**         | Nobody on the pod. Install opens your `installUrl` / `homepageUrl`.                                                                                                                                                                                                                                                                                              | The listing only. The pod never fetches a showcase definition. A showcase may be unsigned; if it is signed, the key is pinned and checked like any other. |
 
 Only a person signed in to the Pod Console who administers the pod can add a
 source, change its trust, re-approve its key, switch it off or remove it.
@@ -186,6 +197,25 @@ or when it links a secret by a literal `vault://` reference. A template may
 reuse a pod-wide kind (`person`, `deal`, …) and add fields to it in its own
 space, but not give that kind a lifecycle or new options for a field it
 already has: that would change it for every space.
+
+A template's automations (by name, or by `key`) and playbooks (by name,
+case-insensitive — including those its inline loops create) are matched in
+the space it lands in, and a match would be rewritten. Which space that is
+is decided while it installs, so the pod checks every live space of the
+person installing: a name already in any of them refuses the install. The
+space your own earlier install created, and playbooks your package installed,
+are yours and update normally. Name your automations and playbooks so they
+are unlikely to collide (`Acme — Daily digest`).
+
+### Existing connections
+
+A tool whose credential is `nango://<provider>` (or that names a
+`providerConfigKey`) does not bring its own credential: it uses the
+connection the pod **already has** for that provider — the owner's own Gmail,
+say. A package that declares one needs its own confirm, worded with the
+service's name ("I accept that it can use my existing Gmail connection."),
+and an agent's proposal names it for the reviewer. A tool that uses a secret
+your package declares itself (`vault[]`) needs no such confirm.
 
 When an agent proposes one of your packages, the proposal records the listing
 digest (`sha256`) the reviewer was shown. Approval installs only that exact

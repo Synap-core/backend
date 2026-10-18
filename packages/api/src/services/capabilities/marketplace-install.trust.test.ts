@@ -5,8 +5,9 @@
  * stand-ins. Every refusal also proves nothing was fetched or installed.
  *
  *   official  — a person installs; an agent proposes (unchanged);
- *   trusted   — a person installs after confirming code / network reach; an
- *               agent is REFUSED unless the source opted in, then proposes;
+ *   trusted   — a person installs after confirming code / network reach /
+ *               existing connections; an agent is REFUSED unless the source
+ *               opted in, then proposes with those named for the reviewer;
  *   showcase  — never installs, for anyone, and is never fetched;
  *   blocked   — a key change, a lapsed index or a switched-off source refuses;
  *   integrity — a definition that does not match its signed digest or its
@@ -15,7 +16,8 @@
  *   identity  — what an added source installs is stamped `<source>/<slug>`
  *               and may not take over anything the pod already has: a
  *               capability key, a tool (by credential or name), an MCP server,
- *               a skill, a secret, or a pod-wide kind's lifecycle / options;
+ *               a skill, a secret, a pod-wide kind's lifecycle / options, or a
+ *               template automation / playbook matched by name in a space;
  *   approval  — an approved proposal installs only the listing it disclosed.
  */
 
@@ -24,9 +26,11 @@ import { createHash } from "node:crypto";
 import type * as Database from "@synap/database";
 import type * as SourceFetch from "@synap/jobs/workers/marketplace-source-fetch.js";
 import {
+  automations,
   cpCatalogCache,
   capabilities as capabilitiesTable,
   mcpServers,
+  playbooks,
   profiles,
   propertyDefs,
   secrets,
@@ -107,6 +111,7 @@ vi.mock("@synap/database", async (importOriginal) => {
             table = t;
             return chain;
           },
+          innerJoin: () => chain,
           where: () => chain,
           limit: async () => rows(),
         };
@@ -189,7 +194,7 @@ function serve(body: Buffer) {
 
 const PERSON = { userId: "user-1", workspaceId: null };
 const AGENT = { ...PERSON, agentUserId: "agent-1" };
-const ACK = { code: true, network: true };
+const ACK = { code: true, network: true, connectors: true };
 
 beforeEach(() => {
   h.installCell.mockClear();
@@ -437,6 +442,36 @@ describe("takeover — an added source only ADDS", () => {
     expect((await installCap()).status).toBe("installed");
   });
 
+  it("a nango:// tool would use the pod's existing connection: refused until the person accepts that", async () => {
+    const err = (await installCap({
+      acknowledge: { code: true, network: true },
+    }).catch((e) => e)) as {
+      code: string;
+      message: string;
+      cause: { code: string };
+    };
+    expect(err.code).toBe("PRECONDITION_FAILED");
+    expect(err.cause.code).toBe("MARKET_ACK_REQUIRED");
+    expect(err.message).toBe(
+      "It can use your existing Gmail connection — confirm that you accept that."
+    );
+  });
+
+  it("an agent's proposal names the existing connection for the reviewer", async () => {
+    useSource({ agentsMayPropose: true });
+    expect((await installCap({ agentUserId: "agent-1" })).status).toBe(
+      "proposed"
+    );
+    const filed = h.propose.mock.calls[0]![0] as {
+      data: { risks: string[] };
+      notificationDescription: string;
+    };
+    expect(filed.data.risks).toContain("Uses your existing Gmail connection.");
+    expect(filed.notificationDescription).toContain(
+      "Uses your existing Gmail connection."
+    );
+  });
+
   const clashes: Array<[string, unknown, Record<string, unknown>]> = [
     ["a capability key", capabilitiesTable, { key: "acme-mail" }],
     ["an MCP server slug", mcpServers, { slug: "acme-mcp" }],
@@ -517,6 +552,77 @@ describe("takeover — an added source only ADDS", () => {
         })
       )
     ).toEqual({ code: "CONFLICT", cause: "MARKET_CAPABILITY_TAKEOVER" });
+  });
+
+  describe("a template's automations and playbooks, matched by name in a space", () => {
+    const installCrm = () =>
+      runMarketInstall({
+        kind: "template",
+        slug: "crm",
+        source: "acme",
+        ...PERSON,
+        acknowledge: ACK,
+      });
+    const TEMPLATE = {
+      workspaceName: "CRM",
+      automations: [
+        {
+          name: "Daily digest",
+          key: "crm.digest",
+          triggerType: "cron",
+          triggerConfig: {},
+        },
+      ],
+      playbooks: [{ name: "Weekly review" }],
+      loops: [
+        {
+          definition: {
+            key: "follow-up",
+            name: "Follow up",
+            params: [{ name: "who", default: "Leads" }],
+            playbooks: [{ ref: "a", name: "Chase {{who}}", goalTemplate: "x" }],
+          },
+        },
+      ],
+    };
+
+    beforeEach(() => listFromAcme("template", "crm", TEMPLATE));
+
+    const named: Array<[string, unknown, string]> = [
+      ["an automation", automations, "Daily digest"],
+      ["a playbook", playbooks, "Weekly review"],
+      ["a playbook an inline loop creates", playbooks, "Chase Leads"],
+    ];
+    for (const [label, table, name] of named) {
+      it(`refuses ${label} whose name is already in one of the person's spaces, naming it`, async () => {
+        h.existing.set(table, [{ name }]);
+        const err = (await installCrm().catch((e) => e)) as {
+          code: string;
+          message: string;
+          cause: { code: string };
+        };
+        expect(err.code).toBe("CONFLICT");
+        expect(err.cause.code).toBe("MARKET_CAPABILITY_TAKEOVER");
+        expect(err.message).toContain(`"${name}"`);
+        expect(err.message).toContain("is already in one of your spaces");
+      });
+    }
+
+    it("the approval path refuses the same clash", async () => {
+      h.existing.set(automations, [{ name: "Daily digest" }]);
+      expect(
+        await refusal(
+          applyMarketInstall({
+            kind: "template",
+            slug: "crm",
+            source: "acme",
+            ...PERSON,
+            proposedListingSha256: (h.row!.listing as { sha256: string })
+              .sha256,
+          })
+        )
+      ).toEqual({ code: "CONFLICT", cause: "MARKET_CAPABILITY_TAKEOVER" });
+    });
   });
 
   it("a template may not give a pod-wide kind a lifecycle or new options for its fields", async () => {
