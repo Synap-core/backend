@@ -108,6 +108,31 @@ jobs:
              "${GITHUB_WORKSPACE}/../synap-control-plane-api"
           test -f "${GITHUB_WORKSPACE}/../synap-control-plane-api/src/routes/packages.ts"
 
+      # The same rule for synap-app. ~50 cross-repo tripwires and mirror tests
+      # (the official catalog in workspace-templates, design-tokens, the
+      # PlaybookParamType run-form mirror, the one-writer/one-frame scans)
+      # resolve the monorepo as the PARENT of this checkout and read
+      # `synap-app/…` and `synap-backend/…` there. Absent, they fail their
+      # non-vacuity floors — which is correct; so CI lays the monorepo out:
+      # app-bases checked out as `../synap-app`, and this checkout reachable as
+      # `../synap-backend` (a symlink; the runner names it after the repo,
+      # `backend`). Same token as above (the App is scoped to app-bases; a
+      # CROSS_REPO_TOKEN fallback needs Contents: read on it too).
+      - name: Checkout synap-app (cross-repo tripwires)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Synap-core/app-bases
+          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
+          path: .app-checkout
+
+      - name: Lay out the monorepo beside this checkout
+        run: |
+          set -euo pipefail
+          mv "${GITHUB_WORKSPACE}/.app-checkout" "${GITHUB_WORKSPACE}/../synap-app"
+          ln -sfn "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/../synap-backend"
+          test -d "${GITHUB_WORKSPACE}/../synap-app/packages/workspace-templates/src"
+          test -f "${GITHUB_WORKSPACE}/../synap-backend/packages/api/package.json"
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
