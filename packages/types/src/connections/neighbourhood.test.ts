@@ -17,6 +17,7 @@ import {
   VIA_EDGE_ROLES,
   deriveNodeNeighbourhood,
   isProvenanceEdge,
+  resolveNodeEdgeLabel,
   zoneOf,
   type NodeNeighbourhood,
   type NodeZone,
@@ -298,6 +299,42 @@ describe("deriveNodeNeighbourhood — discriminating rows", () => {
         })
       )
     ).toBe("workingOnIt");
+  });
+});
+
+describe("deriveNodeNeighbourhood — a session ABOUT the focus", () => {
+  // The wire shape graph-service's connectionsToNeighbors emits for a
+  // focus_session connection: edgeType = the connection's `label`, which
+  // relations.ts sets to the session's TITLE — the same string as `name`.
+  const wire = edge({
+    id: "s1",
+    kind: "session",
+    name: "Build: pinned surfaces",
+    edgeType: "Build: pinned surfaces",
+    direction: "incoming",
+    via: "session",
+  });
+
+  it("labels the tie, never the session's own title", () => {
+    const nb = deriveNodeNeighbourhood(FOCUS, [wire]);
+    const [item] = nb.workingOnIt.items;
+    expect(item?.title).toBe("Build: pinned surfaces");
+    expect(item?.label).toBe("Subject of");
+    expect(item?.label).not.toBe(item?.title);
+  });
+
+  it("the single-edge door gives a canvas host the same words", () => {
+    expect(resolveNodeEdgeLabel(wire).label).toBe("Subject of");
+    expect(resolveNodeEdgeLabel({ ...wire, edgeType: "" }).label).toBe(
+      "Subject of"
+    );
+    expect(
+      resolveNodeEdgeLabel({
+        edgeType: "",
+        direction: "outgoing",
+        via: "links",
+      }).label
+    ).toBe("Also linked");
   });
 });
 
