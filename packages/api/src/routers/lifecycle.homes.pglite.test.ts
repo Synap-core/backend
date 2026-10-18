@@ -122,10 +122,17 @@ vi.mock("./signals.js", () => ({
     h.countCalls.push(input as never);
     return {
       total: 5,
+      truncated: true,
       bySpace: new Map(
         input.spaces.map((s) => [
           s.workspaceId,
           s.workspaceId === h.failSpaceCount ? null : 2,
+        ])
+      ),
+      bySpaceTruncated: new Map(
+        input.spaces.map((s) => [
+          s.workspaceId,
+          s.workspaceId === h.failSpaceCount ? null : false,
         ])
       ),
       byKind: new Map(
@@ -520,6 +527,8 @@ describe("lifecycle.home", () => {
     try {
       const home = await caller().home();
       expect(home.needsYou.total).toBe(5);
+      // The floor flag reaches the wire: a capped total says "5+", not "5".
+      expect(home.needsYou.truncated).toBe(true);
       // Pod-level needs-you reaches the wire (X3): a client tells "in no
       // space" apart from "a space's count is missing".
       expect(home.needsYou.podLevel).toBe(4);
@@ -528,6 +537,11 @@ describe("lifecycle.home", () => {
       );
       expect(by.get(DEV)).toBe(2);
       expect(by.get(MISC)).toBeNull();
+      const flags = new Map(
+        home.needsYou.bySpace.map((b) => [b.workspaceId, b.truncated])
+      );
+      expect(flags.get(DEV)).toBe(false);
+      expect(flags.get(MISC)).toBeNull();
       const dev = home.spaces.find((s) => s.workspaceId === DEV)!;
       expect(dev.produces[0]!.needsYou).toBe(3);
       // One read, asked for every listed space and its produced kinds.
