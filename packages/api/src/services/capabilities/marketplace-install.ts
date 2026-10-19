@@ -138,6 +138,11 @@ import {
 import { officialCatalogCondition } from "./catalog-cache-query.js";
 import { interpolateDeep } from "../_shared/interpolate.js";
 import { createLogger } from "@synap-core/core";
+import {
+  provisionInstalledToolWebhooks,
+  type InstalledToolWebhook,
+} from "../webhooks/provision-inbound-webhook.js";
+import { requireUserId } from "../../utils/user-scoped.js";
 import { capabilityElementOf, skillElementOf } from "./package-element.js";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -528,14 +533,20 @@ export const capabilityInstallParamsSchema = z.record(z.string(), z.unknown());
  * wins, else a seed templateKey or a catalog slug) — this shared step normalizes
  * the two collection fields the applier iterates unguarded and threads
  * install-time `params` into the governed `createCapabilityFromDefinition`.
+ *
+ * It then provisions the inbound webhook of every installed tool a provider
+ * calls back (`provisionInstalledToolWebhooks`) and returns each URL with the
+ * one manual step on the provider's side, so every install door shows it. Only
+ * here: a reconcile or a package dependency re-applies the definition without
+ * minting a URL nobody is shown.
  */
 export async function applyCapabilityDefinition(
   definition: unknown,
   params: Record<string, unknown> | undefined,
   ctx: Context,
   opts: CreateCapabilityOptions = {}
-): Promise<CreateCapabilityResult> {
-  return createCapabilityFromDefinition(
+): Promise<CreateCapabilityResult & { webhooks: InstalledToolWebhook[] }> {
+  const result = await createCapabilityFromDefinition(
     // A CP capability PACKAGE arrives wrapped (`{capability:{…}}`): unwrap it
     // here, where every door converges (`capabilityElementOf`).
     // Inline defs are structurally validated by the door's schema (or `z.any()`);
@@ -549,6 +560,11 @@ export async function applyCapabilityDefinition(
     ctx,
     opts
   );
+  const webhooks = await provisionInstalledToolWebhooks(
+    result.created.tools,
+    requireUserId(ctx.userId)
+  );
+  return { ...result, webhooks };
 }
 
 export interface ApplyMarketInstallInput {
@@ -1081,6 +1097,7 @@ export async function applyMarketInstall(
       kind: "capability",
       key: result.capabilityKey,
       created: result.created,
+      webhooks: result.webhooks,
     };
   }
 

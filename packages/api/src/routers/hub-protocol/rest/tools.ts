@@ -20,6 +20,7 @@
  *   PATCH  /tools/:id                         — update a tool (proposal-gated; resets approval on exec-defining field changes)
  *   POST   /tools/:id/approve                 — approve/revoke tool execution (owner/pod-admin gated)
  *   POST   /tools/:id/auth-binding            — set a tool's dynamic auth binding (owner/pod-admin gated)
+ *   POST   /tools/:id/webhook                 — mint/return the tool's inbound webhook URL (write-gated)
  *   GET    /tools/:id/credentials             — list bound credentials for a tool (owner-gated)
  *   POST   /tools/:id/credentials             — bind a credential to a principal/entity (owner-gated)
  *   DELETE /tools/:id/credentials/:linkId     — unbind a credential (owner-gated)
@@ -112,6 +113,18 @@ const UpdateToolResponseSchema = z.object({
   proposalId: z.string().nullable(),
 });
 
+const ProvisionWebhookRequestSchema = z.object({
+  rotate: z.boolean().optional(),
+});
+
+const ProvisionWebhookResponseSchema = z.object({
+  provider: z.string(),
+  url: z.string(),
+  rotated: z.boolean(),
+  missingConfig: z.array(z.string()),
+  setupStep: z.string().nullable(),
+});
+
 const SetAuthBindingResponseSchema = z.object({
   tool: ToolWireSchema,
 });
@@ -195,6 +208,34 @@ export function registerToolsRoutes(app: HubHono): void {
       },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/tools/{id}/webhook",
+    tags: ["Tools"],
+    summary: "Mint or return a tool's inbound webhook URL",
+    description:
+      "For a tool whose provider calls the pod at /api/webhooks/<provider>/:token " +
+      "(postiz, cal.com, fireflies, mailgun): returns the full URL, minting the " +
+      "token on first call. Idempotent; `rotate:true` replaces the token. " +
+      "Gated on write access to the tool's own row. The URL carries a secret: " +
+      "show it to the person, never log it. Requires hub-protocol.write scope.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: ProvisionWebhookRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "The webhook URL",
+        schema: ProvisionWebhookResponseSchema,
+      },
+      400: { description: "Not a webhook tool", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      412: { description: "Pod has no PUBLIC_URL", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -521,6 +562,48 @@ export function registerToolsRoutes(app: HubHono): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       logger.error({ err, id }, "tools get failed");
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
+    }
+  });
+
+  // ── POST /tools/:id/webhook ────────────────────────────────────────────────
+  // Thin door over toolsRouter.provisionWebhook (→ provisionInboundWebhook: the
+  // visibility floor, the write gate on the loaded row and the mint run there).
+  app.post("/tools/:id/webhook", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
+
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ProvisionWebhookRequestSchema.safeParse(jsonRead.body);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[]
+      );
+      const caller = toolsRouter.createCaller(ctx as never);
+      const result = await caller.provisionWebhook({
+        id,
+        rotate: parsed.data.rotate,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err, id }, "tools webhook provision failed");
       return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });

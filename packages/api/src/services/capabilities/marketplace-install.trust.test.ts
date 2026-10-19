@@ -61,7 +61,7 @@ vi.mock("../workspace-creation-service.js", () => ({
 vi.mock("./create-from-definition.js", () => ({
   createCapabilityFromDefinition: vi.fn(async () => ({
     capabilityKey: "x",
-    created: true,
+    created: { tools: [] },
   })),
   loadCapabilityTemplate: vi.fn(),
 }));
