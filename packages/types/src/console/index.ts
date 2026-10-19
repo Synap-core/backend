@@ -103,6 +103,13 @@ export const CONSOLE_PAGES = {
     focus: false,
     verb: "manage",
   },
+  /** The console's sign-in page (public): where a person links Synap Cloud once. */
+  signIn: {
+    path: "/login",
+    audience: "member",
+    focus: false,
+    verb: "manage",
+  },
   /** Every way back into an account (public). */
   recovery: {
     path: "/recovery",
