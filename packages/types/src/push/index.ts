@@ -510,3 +510,192 @@ export function pushEnvelope(
     ...(opts.quickAnswer ? { categoryId: opts.quickAnswer.category } : {}),
   };
 }
+
+// ─── Phones ─────────────────────────────────────────────────────────────────
+
+/**
+ * A phone's push row (`messaging_accounts`, provider `expo`), by status:
+ *   `connected`    — gets pushes.
+ *   `disconnected` — the app signed out, Expo said the token is dead, or it
+ *                    went unused for {@link PUSH_DEVICE_STOP_DAYS}. The next
+ *                    registration from that phone turns it back on.
+ *   `revoked`      — the person turned it off from ANOTHER device. A plain
+ *                    re-registration leaves it off; only a re-enable sent by
+ *                    that phone itself turns it back on.
+ */
+export const PUSH_DEVICE_STATUSES = [
+  "connected",
+  "disconnected",
+  "revoked",
+] as const;
+export type PushDeviceStatus = (typeof PUSH_DEVICE_STATUSES)[number];
+
+/** A phone unused this long reads "Not seen lately". */
+export const PUSH_DEVICE_NOT_SEEN_DAYS = 30;
+/** A phone unused this long stops getting pushes (`disconnected`). */
+export const PUSH_DEVICE_STOP_DAYS = 90;
+
+/** One row of `notifCenter.listDevices` (dates are ISO strings over JSON). */
+export interface PushDeviceRow {
+  id: string;
+  /** The name the phone reported (`Constants.deviceName`), if any. */
+  name: string | null;
+  platform: string | null;
+  appVersion: string | null;
+  status: string;
+  /**
+   * The last time the app registered. `null` for a phone whose app does not
+   * register on every launch: its last registration says nothing about use,
+   * so it is never shown as last seen and never stopped for being unused.
+   */
+  lastSeenAt: Date | string | null;
+  createdAt: Date | string;
+  revokedAt: Date | string | null;
+  /** True only when the caller passed this phone's own token. */
+  isThisDevice: boolean;
+}
+
+/** What a phone row shows, in order of how much it needs the person. */
+export type PushDeviceState = "on" | "not-seen" | "off" | "turned-off";
+/** The status pill's tone (the console's `StatusKind` names). */
+export type PushDeviceTone = "healthy" | "stale" | "unknown";
+
+export interface PushDeviceView {
+  id: string;
+  label: string;
+  /** "iOS" / "Android", or null when the phone did not say. */
+  platform: string | null;
+  appVersion: string | null;
+  state: PushDeviceState;
+  tone: PushDeviceTone;
+  statusLabel: string;
+  /** One plain sentence: what this state means for the person. */
+  explain: string;
+  lastSeenAt: Date | null;
+  addedAt: Date | null;
+  /** Whether "Stop notifications" applies (everything but already turned off). */
+  canTurnOff: boolean;
+  isThisDevice: boolean;
+}
+
+const PLATFORM_WORDS: Readonly<Record<string, string>> = {
+  ios: "iOS",
+  android: "Android",
+};
+
+const STATE_COPY: Readonly<
+  Record<
+    PushDeviceState,
+    { tone: PushDeviceTone; statusLabel: string; explain: string }
+  >
+> = {
+  on: {
+    tone: "healthy",
+    statusLabel: "On",
+    explain: "Gets your notifications.",
+  },
+  "not-seen": {
+    tone: "stale",
+    statusLabel: "Not seen lately",
+    explain: `Not used in over ${PUSH_DEVICE_NOT_SEEN_DAYS} days. Notifications to it stop after ${PUSH_DEVICE_STOP_DAYS} days without use, and start again when it opens the app.`,
+  },
+  off: {
+    tone: "unknown",
+    statusLabel: "Off",
+    explain:
+      "Gets no notifications. They start again the next time it opens the app signed in.",
+  },
+  "turned-off": {
+    tone: "unknown",
+    statusLabel: "Turned off",
+    explain:
+      "Turned off from another device. Only this phone can turn notifications back on, from its own settings.",
+  },
+};
+
+/** The words every surface uses around a phone. */
+export const PUSH_DEVICE_COPY = {
+  turnOffAction: "Stop notifications",
+  turnOffTitle: (label: string) => `Stop notifications to ${label}?`,
+  turnOffConsequence:
+    "This phone stops getting notifications from this pod right away, and stays off when the app opens again. To get them back, turn notifications on from that phone.",
+  /** Shown ON a phone that was turned off from elsewhere. */
+  thisDeviceTurnedOff: {
+    title: "Notifications are off for this phone",
+    body: "They were turned off from another device.",
+    action: "Turn back on",
+  },
+  empty:
+    "No phone gets your notifications yet. Sign in to the Synap app on your phone and allow notifications.",
+} as const;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function toDate(v: Date | string | null | undefined): Date | null {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * The state a row reads as. An unknown status (a newer pod) reads as `off`:
+ * the quiet answer, never a promise that pushes arrive.
+ */
+export function pushDeviceState(
+  row: Pick<PushDeviceRow, "status" | "lastSeenAt">,
+  now: Date = new Date()
+): PushDeviceState {
+  if (row.status === "revoked") return "turned-off";
+  if (row.status !== "connected") return "off";
+  const seen = toDate(row.lastSeenAt);
+  return seen &&
+    now.getTime() - seen.getTime() > PUSH_DEVICE_NOT_SEEN_DAYS * DAY_MS
+    ? "not-seen"
+    : "on";
+}
+
+/** One phone, ready to render. Dates stay dates: each surface formats them. */
+export function pushDeviceView(
+  row: PushDeviceRow,
+  now: Date = new Date()
+): PushDeviceView {
+  const state = pushDeviceState(row, now);
+  const platform = row.platform
+    ? (PLATFORM_WORDS[row.platform] ?? humanizeToken(row.platform))
+    : null;
+  const name = row.name?.trim();
+  return {
+    id: row.id,
+    label: name || (platform ? `${platform} device` : "Phone"),
+    platform,
+    appVersion: row.appVersion?.trim() || null,
+    state,
+    ...STATE_COPY[state],
+    lastSeenAt: toDate(row.lastSeenAt),
+    addedAt: toDate(row.createdAt),
+    canTurnOff: state !== "turned-off",
+    isThisDevice: row.isThisDevice,
+  };
+}
+
+const STATE_ORDER: Readonly<Record<PushDeviceState, number>> = {
+  on: 0,
+  "not-seen": 1,
+  off: 2,
+  "turned-off": 3,
+};
+
+/**
+ * List order: this phone first, then phones that get pushes, then the rest;
+ * within a state, the most recently seen (else added) first.
+ */
+export function comparePushDevices(
+  a: PushDeviceView,
+  b: PushDeviceView
+): number {
+  if (a.isThisDevice !== b.isThisDevice) return a.isThisDevice ? -1 : 1;
+  const byState = STATE_ORDER[a.state] - STATE_ORDER[b.state];
+  if (byState !== 0) return byState;
+  const at = (v: PushDeviceView) => (v.lastSeenAt ?? v.addedAt)?.getTime() ?? 0;
+  return at(b) - at(a);
+}
