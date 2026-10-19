@@ -83,10 +83,45 @@ describe("verifyKeysStatement", () => {
     ).toMatchObject({ ok: false, reason: "bad_signature" });
   });
 
-  it("refuses an expired statement unless the operator allows expired files", () => {
+  it("refuses an expired statement unless the operator allows expired files, over a version floor", () => {
     const b = statement({ expires: at(-1) });
     expect(verify(b, ROOT)).toMatchObject({ ok: false, reason: "expired" });
-    expect(verify(b, ROOT, { allowExpired: true }).ok).toBe(true);
+    expect(verify(b, ROOT, { allowExpired: true, lastVersion: 4 }).ok).toBe(
+      true
+    );
+    expect(verify(b, ROOT, { allowExpired: true, lastVersion: 3 }).ok).toBe(
+      true
+    );
+  });
+
+  it("allowing expired files never brings back a retired key: no floor, or an older statement, is refused", () => {
+    const retired = keypair();
+    const old = statement({
+      version: 2,
+      expires: at(-30),
+      keys: [{ publicKey: retired.publicKey, notAfter: at(-40) }],
+    });
+    // A fresh pod (no floor yet) is not air-gapped trust: refused as expired.
+    expect(verify(old, ROOT, { allowExpired: true })).toMatchObject({
+      ok: false,
+      reason: "expired",
+    });
+    expect(
+      verify(old, ROOT, { allowExpired: true, lastVersion: null })
+    ).toMatchObject({ ok: false, reason: "expired" });
+    // Below the floor: the replay is refused, whatever the flag says.
+    expect(verify(old, ROOT, { allowExpired: true, lastVersion: 3 }).ok).toBe(
+      false
+    );
+    // At the floor, the expired key of the CURRENT statement stays usable.
+    const current = statement({
+      version: 3,
+      expires: at(-1),
+      keys: [{ publicKey: CATALOG.publicKey, notAfter: at(-2) }],
+    });
+    const v = verify(current, ROOT, { allowExpired: true, lastVersion: 3 });
+    expect(v.ok && v.keys).toEqual([CATALOG.publicKey]);
+    expect(verify(current, ROOT, { allowExpired: true }).ok).toBe(false);
   });
 
   it("refuses a statement valid for more than a year", () => {

@@ -418,6 +418,12 @@ export interface VerifyKeysStatementInput {
   rootKeys: readonly string[];
   /** `version` of the last statement this pod accepted. */
   lastVersion?: number | null;
+  /**
+   * `SYNAP_CATALOG_ALLOW_EXPIRED` (air-gapped pods). Honoured only over a
+   * `lastVersion` floor, for a statement at or above it: past expiry, only
+   * the freshness floor still keeps a retired key out, so with no floor an
+   * expired statement is refused like any other.
+   */
   allowExpired?: boolean;
   now: Date;
 }
@@ -426,8 +432,9 @@ export interface VerifyKeysStatementInput {
  * Verify the keys statement that names Synap's online catalog keys. Pure.
  *   1. size cap and shape (`catalogKeysStatementSchema`);
  *   2. signature — over the exact bytes, by ANY root key compiled in;
- *   3. expiry — refused once past `expires`, and when `expires` is more than
- *      `CATALOG_KEYS_MAX_LIFETIME_DAYS` ahead;
+ *   3. expiry — refused once past `expires` (unless `allowExpired` over a
+ *      `lastVersion` floor the statement meets), and when `expires` is more
+ *      than `CATALOG_KEYS_MAX_LIFETIME_DAYS` ahead;
  *   4. freshness — `version` never moves back (an older statement, still
  *      signed and unexpired, cannot be replayed to bring back a retired key);
  *   5. the keys — only those whose `notAfter` is still ahead and at most
@@ -477,7 +484,13 @@ export function verifyKeysStatement(
   }
   const now = input.now.getTime();
   const expires = new Date(statement.expires).getTime();
-  if (expires <= now && !input.allowExpired) {
+  // An expired statement (or key) is only ever taken over a freshness floor:
+  // without one, a replayed old statement could bring back a retired key.
+  const allowExpired =
+    input.allowExpired === true &&
+    typeof input.lastVersion === "number" &&
+    statement.version >= input.lastVersion;
+  if (expires <= now && !allowExpired) {
     return fail(
       "expired",
       `The catalog keys statement expired on ${statement.expires}.`
@@ -502,7 +515,7 @@ export function verifyKeysStatement(
     .filter((k) => {
       const notAfter = new Date(k.notAfter).getTime();
       return (
-        (notAfter > now || input.allowExpired) &&
+        (notAfter > now || allowExpired) &&
         notAfter - now <= CATALOG_KEY_MAX_LIFETIME_DAYS * DAY_MS
       );
     })
