@@ -3257,7 +3257,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "human" | "automation" | "playbook";
+			data: "human" | "agent" | "playbook" | "automation";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3272,7 +3272,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "human" | "automation" | "playbook";
+			$type: "human" | "agent" | "playbook" | "automation";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3378,7 +3378,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3546,6 +3546,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
+			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3557,7 +3558,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -3840,7 +3840,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "evidence" | "capability" | "judge";
+			data: "human" | "capability" | "evidence" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4637,7 +4637,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "archived" | "draft";
+			data: "active" | "archived" | "draft" | "paused";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -15372,6 +15372,18 @@ export interface NotificationDef {
 	actions?: NotificationActionDef[];
 	/** Auto-dismiss after ms. 0 = persistent. */
 	ttl?: number;
+	/**
+	 * SERVER expiry, in ms. Declared ⇒ `NotificationService.create()` stamps
+	 * `expiresAt = now + expiresAfterMs` (unless the producer passes its own),
+	 * and the daily `notification-cleanup` worker dismisses the row once it
+	 * passes — read or not. Omit ⇒ the row never expires.
+	 *
+	 * Not `ttl`: no server code reads `ttl` (its finite values are toast-length,
+	 * 4–6 s), so stamping it would expire those rows the next day. Declare this
+	 * on news that goes stale on its own — a failed update a week later, a
+	 * closed session's flag — never on an ask.
+	 */
+	expiresAfterMs?: number;
 	/** Group notifications sharing the same resolved groupBy field */
 	groupBy?: string;
 	/**
@@ -21862,7 +21874,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21916,7 +21928,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21933,7 +21945,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22615,7 +22627,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22669,13 +22681,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -22716,7 +22728,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22770,7 +22782,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -22787,7 +22799,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22833,7 +22845,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "success" | "error" | "skipped";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22887,13 +22899,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "pending" | "error" | "running" | "complete" | undefined;
+							status?: "running" | "error" | "pending" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "direct" | "mention" | null;
+					routedSource: "orchestrator" | "mention" | "direct" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -37120,7 +37132,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "low" | "normal" | "high" | "urgent";
+					priority: "normal" | "low" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -44051,9 +44063,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				needsYou: {
 					total: number | null;
+					truncated: boolean | null;
 					bySpace: {
 						workspaceId: string;
 						count: number | null;
+						truncated: boolean | null;
 					}[];
 					podLevel: number | null;
 				};
