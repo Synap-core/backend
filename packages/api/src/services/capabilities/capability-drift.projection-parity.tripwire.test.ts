@@ -138,7 +138,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(10);
+    ).toBe(11);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -165,8 +165,9 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       def: { timeoutSeconds: 60 },
       live: { timeoutSeconds: 30 },
     },
-    // The applier writes TWO keys of this bag (`projectSkillMetadata`:
-    // `allowedHosts` and `readOnly`), so the perturbation must move BOTH — a
+    // The applier writes THREE keys of this bag (`projectSkillMetadata`:
+    // `allowedHosts`, `readOnly`, `writeBack`), so the perturbation moves them
+    // all — a
     // `marketSource` difference is DB state and must NOT be drift (asserted
     // separately below).
     //
@@ -185,7 +186,15 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     // one mirrors what the applier writes, that one is what fails on a drop.
     metadata: {
       def: {
-        metadata: { allowedHosts: ["api.vendor.com"], readOnly: true },
+        metadata: {
+          allowedHosts: ["api.vendor.com"],
+          readOnly: true,
+          writeBack: {
+            entityParam: "postEntityId",
+            kind: "post",
+            properties: { "postiz-post-id": "postId" },
+          },
+        },
       },
       live: { metadata: { allowedHosts: [], readOnly: false } },
     },
@@ -253,8 +262,8 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     ).toEqual([]);
   });
 
-  // The `metadata` entry is NARROWED to the two definition-owned keys
-  // (`allowedHosts`, `readOnly`), so it needs its own pins: the comparator must
+  // The `metadata` entry is NARROWED to the definition-owned keys
+  // (`allowedHosts`, `readOnly`, `writeBack`), so it needs its own pins: the comparator must
   // be blind to DB-owned keys (else every boot re-applies), and the applier's
   // projection must in fact write only those keys (else the marker asserts a
   // convergence nobody checked — the durable-lie shape).
@@ -308,6 +317,49 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
         capabilityDefinitionDrift([live], { skills: [def] }).drifted,
         "a readOnly-only difference must be drift — if it is not, the projection has stopped reading the key and no pod will ever receive it"
       ).toEqual(["exa_search"]);
+    });
+
+    it("a writeBack-only difference is drift, and the projection installs it", () => {
+      // Same discriminating shape as the readOnly pin above, for the third
+      // definition-owned key. Before v11 the applier dropped `writeBack` on
+      // install AND update, so `postiz_schedule_post` reached no pod with it.
+      const writeBack = {
+        entityParam: "postEntityId",
+        kind: "post",
+        properties: { "postiz-post-id": "postId" },
+      };
+      const def = {
+        name: "postiz_schedule_post",
+        metadata: { readOnly: false, writeBack },
+      };
+      const live = {
+        name: "postiz_schedule_post",
+        metadata: { readOnly: false },
+      };
+      expect(
+        capabilityDefinitionDrift([live], { skills: [def] }).drifted,
+        "a writeBack-only difference must be drift — if it is not, no installed pod ever receives the declaration"
+      ).toEqual(["postiz_schedule_post"]);
+      // Fresh install (the applier's create branch passes `null`) and update.
+      expect(projectSkillMetadata(null, def.metadata)).toEqual({
+        readOnly: false,
+        writeBack,
+      });
+      const converged = projectSkillMetadata(
+        { ...live.metadata, runCount: 3 },
+        def.metadata
+      );
+      expect(converged).toEqual({ readOnly: false, writeBack, runCount: 3 });
+      expect(
+        capabilityDefinitionDrift([{ ...live, metadata: converged }], {
+          skills: [def],
+        }).drifted,
+        "one apply converges it — no re-apply loop"
+      ).toEqual([]);
+      // A malformed declaration is never persisted as if it worked.
+      expect(
+        projectSkillMetadata(null, { writeBack: { kind: "post" } })
+      ).toBeUndefined();
     });
 
     it("the applier's projection writes ONLY the definition-owned keys, preserving the rest", () => {

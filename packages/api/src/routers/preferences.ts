@@ -79,6 +79,24 @@ export const preferencesRouter = router({
     ),
 
   /**
+   * Stamp "Home was on screen until now" — call it when Home LEAVES the
+   * screen (unmount, window hidden). `lifecycle.home` then returns it as
+   * `homeLastSeenAt` on every device, so "while you were away" follows the
+   * person. Server time, owner row only (0333). Returns the stamp written.
+   */
+  markHomeSeen: protectedProcedure.mutation(async ({ ctx }) => {
+    const now = new Date();
+    await ctx.db
+      .insert(userPreferences)
+      .values({ userId: ctx.userId, homeLastSeenAt: now, updatedAt: now })
+      .onConflictDoUpdate({
+        target: userPreferences.userId,
+        set: { homeLastSeenAt: now, updatedAt: now },
+      });
+    return { homeLastSeenAt: now.toISOString() };
+  }),
+
+  /**
    * Get user preferences
    */
   get: protectedProcedure.query(async ({ ctx }) => {

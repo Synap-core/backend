@@ -27,7 +27,12 @@ import {
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import { decodeHtmlEntities } from "../text/html-entities.js";
-import { formatKpiFraction, lensCountDoorText, type LensKpiFact } from "./header.js";
+import {
+  formatFloorCount,
+  formatKpiFraction,
+  lensCountDoorText,
+  type LensKpiFact,
+} from "./header.js";
 import { lensIntentDoorText } from "./intent.js";
 import type { LensBeingWorked, LensRow } from "./rows.js";
 import type { LensSource } from "./scope.js";
@@ -378,8 +383,13 @@ export function homeNeedsYouModel(
   );
   const parts = needsYou.bySpace
     .filter(
-      (b): b is { workspaceId: string; count: number; truncated?: boolean | null } =>
-        typeof b.count === "number" && b.count > 0
+      (
+        b
+      ): b is {
+        workspaceId: string;
+        count: number;
+        truncated?: boolean | null;
+      } => typeof b.count === "number" && b.count > 0
     )
     .map((b) => {
       const floor = b.truncated === true;
@@ -388,7 +398,7 @@ export function homeNeedsYouModel(
         label: labelOf.get(b.workspaceId) ?? "",
         count: b.count,
         floor,
-        countText: floor ? `${b.count}+` : `${b.count}`,
+        countText: formatFloorCount(b.count, floor),
       };
     })
     .filter((p) => p.label !== "")

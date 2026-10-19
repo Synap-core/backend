@@ -33,6 +33,7 @@
 import { randomUUID } from "crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { storage } from "@synap/storage";
+import { resolveDocumentTitle } from "@synap-core/markdown-core/sections";
 import { checksumMatchesContent, fileChecksum } from "@synap/storage/checksum";
 import type { db } from "../client-pg.js";
 import {
@@ -436,6 +437,10 @@ export interface CreateDocumentWithContentInput {
   ownerUserId: string;
   /** `null`/absent = pod-wide. */
   workspaceId?: string | null;
+  /**
+   * The document's NAME, its one title. Blank = not given: a markdown body's
+   * leading `# ` heading becomes the name, else "Untitled".
+   */
   title: string;
   /** `documents.type` (a free text column: markdown, html, code, …). */
   type: string;
@@ -446,11 +451,46 @@ export interface CreateDocumentWithContentInput {
   language?: string;
   metadata?: Record<string, unknown>;
   provenance: DocumentCreateProvenance;
+  /**
+   * A raw SOURCE kept byte for byte (an intake source: a re-structure replays
+   * it, so a dropped first line would be a lost capture). The one-title rule
+   * does not touch it; readers still skip the duplicate heading in read mode.
+   */
+  verbatim?: boolean;
 }
 
 /** Storage extension for a document type (`markdown` → `md`). */
 function extensionFor(type: string): string {
   return type === "markdown" ? "md" : type;
+}
+
+/**
+ * The one title and the body to store (founder 2026-10-19: a document's name
+ * is its one title). A MARKDOWN body that opens with a heading equal to the
+ * name is stored without it; with no name, its leading `# ` becomes the name.
+ * The rule is markdown-core's `resolveDocumentTitle` — never a second copy.
+ * Any other body (html, code, plain text) — or a raw source kept `verbatim` —
+ * is stored as given.
+ */
+export function namedDocumentBody(input: {
+  title: string;
+  /** `documents.type`; only `markdown` has headings to read. */
+  type: string;
+  content: string;
+  /** See `CreateDocumentWithContentInput.verbatim`. */
+  verbatim?: boolean;
+}): { title: string; content: string } {
+  if (input.type !== "markdown" || input.verbatim) {
+    return {
+      title: input.title.trim() ? input.title : "Untitled",
+      content: input.content,
+    };
+  }
+  const named = resolveDocumentTitle({
+    title: input.title,
+    content: input.content,
+  });
+  return { title: named.title ?? "Untitled", content: named.content };
 }
 
 /**
@@ -467,6 +507,8 @@ function extensionFor(type: string): string {
  *      v1 author derived from provenance (`initialVersionAuthor` — an agent's
  *      document is authored `ai`), via `DocumentRepository.create`, which also
  *      emits `document.create.completed`.
+ * Before the upload, a markdown body is put under its one title
+ * (`namedDocumentBody`): every creator gets the rule without knowing it.
  *
  * Why not create-then-claim: on a document with no version rows the claim door
  * would cut a phantom empty pre-image checkpoint — a history step nobody wrote.
@@ -485,19 +527,20 @@ export async function createDocumentWithContent(
   input: CreateDocumentWithContentInput
 ): Promise<CreatedDocument> {
   const id = input.id ?? randomUUID();
+  const { title, content } = namedDocumentBody(input);
   const key = storage.buildPath(
     input.ownerUserId,
     "document",
     id,
     input.extension ?? extensionFor(input.type)
   );
-  const stored = await storage.upload(key, input.content, {
+  const stored = await storage.upload(key, content, {
     contentType: input.mimeType,
   });
   const doc = await new DocumentRepository(dbOrTx, eventRepo).create(
     {
       id,
-      title: input.title,
+      title,
       // The DB column is free text; "html" is stored verbatim, as before.
       type: input.type as CreateDocumentInput["type"],
       language: input.language,
@@ -508,7 +551,7 @@ export async function createDocumentWithContent(
       metadata: input.metadata,
       userId: input.ownerUserId,
       workspaceId: input.workspaceId ?? null,
-      content: input.content,
+      content,
       createdByKind: input.provenance.createdByKind,
       createdByUserId: input.provenance.createdByUserId ?? input.ownerUserId,
       agentUserId: input.provenance.agentUserId,

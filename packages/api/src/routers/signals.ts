@@ -1282,6 +1282,8 @@ export interface NeedsYouByScope {
   bySpaceTruncated: Map<string, boolean | null>;
   /** workspaceId → profileSlug → count. */
   byKind: Map<string, Map<string, number | null>>;
+  /** workspaceId → profileSlug → the same floor flag; null when the count is. */
+  byKindTruncated: Map<string, Map<string, boolean | null>>;
   /**
    * Needs-you that lives in NO space (`narrowAttention` with
    * `workspaceId: null`): no-workspace rows, unfinished captures and pending
@@ -1291,6 +1293,8 @@ export interface NeedsYouByScope {
    * rows in spaces the caller did not ask about count in neither.
    */
   podLevel: number | null;
+  /** `podLevel` is a floor; null when `podLevel` is (not measured). */
+  podLevelTruncated: boolean | null;
   /** Attention reads made — 1 when grouped, more when it fell back. */
   attentionReads: number;
 }
@@ -1376,6 +1380,32 @@ function attentionIsComplete(a: Attention): boolean {
   );
 }
 
+/** One scope's count and its floor flag; null = that scope's read failed. */
+type ScopeCount = { needsYou: number; truncated: boolean } | null;
+
+/** The per-kind number and floor flag, split for the wire (null stays null). */
+function kindMaps(
+  spaces: ReadonlyArray<{
+    workspaceId: string;
+    kinds: ReadonlyArray<readonly [string, ScopeCount]>;
+  }>
+): Pick<NeedsYouByScope, "byKind" | "byKindTruncated"> {
+  return {
+    byKind: new Map(
+      spaces.map((s) => [
+        s.workspaceId,
+        new Map(s.kinds.map(([slug, c]) => [slug, c?.needsYou ?? null])),
+      ])
+    ),
+    byKindTruncated: new Map(
+      spaces.map((s) => [
+        s.workspaceId,
+        new Map(s.kinds.map(([slug, c]) => [slug, c?.truncated ?? null])),
+      ])
+    ),
+  };
+}
+
 /**
  * NEEDS-YOU FOR MANY SCOPES IN ONE ATTENTION READ (the homes): the floor
  * (narrowed to the project) read ONCE, then every space and (space, kind)
@@ -1420,12 +1450,10 @@ export async function countNeedsYouByScope(
               async (slug) =>
                 [
                   slug,
-                  (
-                    await countScope({
-                      workspaceId: s.workspaceId,
-                      profileSlug: slug,
-                    })
-                  )?.needsYou ?? null,
+                  await countScope({
+                    workspaceId: s.workspaceId,
+                    profileSlug: slug,
+                  }),
                 ] as const
             )
           ),
@@ -1441,8 +1469,9 @@ export async function countNeedsYouByScope(
       bySpaceTruncated: new Map(
         spaces.map((s) => [s.workspaceId, s.count?.truncated ?? null])
       ),
-      byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
+      ...kindMaps(spaces),
       podLevel: null,
+      podLevelTruncated: null,
       attentionReads,
     };
   };
@@ -1532,22 +1561,21 @@ export async function countNeedsYouByScope(
           if (kind === "per-scope")
             return [
               slug,
-              (
-                await countScope({
-                  workspaceId: s.workspaceId,
-                  profileSlug: slug,
-                })
-              )?.needsYou ?? null,
+              await countScope({
+                workspaceId: s.workspaceId,
+                profileSlug: slug,
+              }),
             ] as const;
+          const c = countOf(
+            narrowAttention(floor, {
+              workspaceId: s.workspaceId,
+              kindClusters: kind.clusters,
+              kindSessionIds: kind.sessionIds,
+            })
+          );
           return [
             slug,
-            countOf(
-              narrowAttention(floor, {
-                workspaceId: s.workspaceId,
-                kindClusters: kind.clusters,
-                kindSessionIds: kind.sessionIds,
-              })
-            ).needsYou,
+            { needsYou: c.needsYou, truncated: c.truncated },
           ] as const;
         })
       );
@@ -1562,6 +1590,7 @@ export async function countNeedsYouByScope(
     })
   );
   const whole = countOf(floor);
+  const podLevel = countOf(narrowAttention(floor, { workspaceId: null }));
   return {
     total: whole.needsYou,
     truncated: whole.truncated,
@@ -1571,8 +1600,9 @@ export async function countNeedsYouByScope(
     bySpaceTruncated: new Map(
       spaces.map((s) => [s.workspaceId, s.count?.truncated ?? null])
     ),
-    byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
-    podLevel: countOf(narrowAttention(floor, { workspaceId: null })).needsYou,
+    ...kindMaps(spaces),
+    podLevel: podLevel.needsYou,
+    podLevelTruncated: podLevel.truncated,
     attentionReads,
   };
 }

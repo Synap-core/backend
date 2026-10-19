@@ -44,6 +44,7 @@ import {
   entityFacets,
   profiles,
   projects,
+  userPreferences,
   workspaces,
 } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -57,7 +58,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
-  sentenceCaseLabel,
+  sentenceCasePlural,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
@@ -117,6 +118,8 @@ export interface ProducedKind {
     unset?: number;
   }>;
   needsYou: number | null;
+  /** `needsYou` is a floor (a scan hit its cap); null when it is null. */
+  needsYouTruncated: boolean | null;
   beingWorked: number | null;
   headline: {
     entityId: string;
@@ -137,6 +140,12 @@ export interface SpaceIntent {
 
 export interface HomeRead {
   spaces: SpaceIntent[];
+  /**
+   * When this person last had Home on screen, ANY device (ISO; null = never
+   * stamped) — the brief's "while you were away" window. Written by
+   * `preferences.markHomeSeen` when Home leaves the screen.
+   */
+  homeLastSeenAt: string | null;
   needsYou: {
     total: number | null;
     /** `total` is a floor (a scan hit its cap); null when `total` is. */
@@ -148,6 +157,8 @@ export interface HomeRead {
     }>;
     /** In no space (pod-level rows + unfinished captures); null = unmeasured. */
     podLevel: number | null;
+    /** `podLevel` is a floor; null when `podLevel` is. */
+    podLevelTruncated: boolean | null;
   };
 }
 
@@ -215,8 +226,10 @@ export type NeedsYouByScopeRead = (scopes: {
   bySpace: Map<string, number | null>;
   bySpaceTruncated: Map<string, boolean | null>;
   byKind: Map<string, Map<string, number | null>>;
+  byKindTruncated: Map<string, Map<string, boolean | null>>;
   /** Needs-you in NO space (+ captures); null = not measured. */
   podLevel: number | null;
+  podLevelTruncated: boolean | null;
 }>;
 
 const readerOf = (ctx: HomesCtx) => ({
@@ -491,7 +504,7 @@ async function profileWords(
       label: r.displayName,
       // Sentence case at the door: a stored plural is whatever its author
       // typed ("decisions"), and it renders beside "Features".
-      plural: sentenceCaseLabel(
+      plural: sentenceCasePlural(
         r.plural?.trim() || resolveObjectNounPlural(r.displayName)
       ),
     });
@@ -522,6 +535,7 @@ async function readProducedKind(
     /** The open sessions that ASK YOU (`asksYouSessionIds`); null = unknown. */
     asksYou: ReadonlySet<string> | null;
     needsYou: number | null;
+    needsYouTruncated: boolean | null;
     memo: BoardLensMemo;
   }
 ): Promise<ProducedKind | null> {
@@ -700,6 +714,7 @@ async function readProducedKind(
     windowDays: HOME_WINDOW_DAYS,
     columns,
     needsYou: input.needsYou,
+    needsYouTruncated: input.needsYouTruncated,
     beingWorked,
     headline,
   };
@@ -711,6 +726,14 @@ async function readProducedKind(
 export const HOME_KIND_CONCURRENCY = 6;
 
 /** `fn` over `items`, at most `limit` at once, results in input order. */
+/** The person's own Home last-seen stamp (the `user` access rule floors it). */
+async function readHomeLastSeen(ctx: HomesCtx): Promise<string | null> {
+  const row = await scopedDb(AccessContext.from(ctx)).findFirst<
+    typeof userPreferences.$inferSelect
+  >(userPreferences, {});
+  return row?.homeLastSeenAt ? row.homeLastSeenAt.toISOString() : null;
+}
+
 async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,
@@ -785,7 +808,7 @@ export async function readHome(
     );
     return { work, asks };
   };
-  const [words, open, needs] = await Promise.all([
+  const [words, open, needs, lastSeen] = await Promise.all([
     profileWords([...new Set(intents.flatMap((i) => i.produces))]),
     settle("open work", openWorkAndAsks),
     // ONE attention read for every scope on the page (null per failed scope).
@@ -798,6 +821,9 @@ export async function readHome(
         })),
       })
     ),
+    // Not settled: a failed read must not read as "never seen" (the brief
+    // would count today as if this were a first visit).
+    readHomeLastSeen(ctx),
   ]);
   const total = needs?.total ?? null;
   const truncated = needs?.truncated ?? null;
@@ -825,6 +851,9 @@ export async function readHome(
       openWork: open?.work ?? null,
       asksYou: open?.asks ?? null,
       needsYou: byKind[pair.idx]!.get(pair.profileSlug) ?? null,
+      needsYouTruncated:
+        needs?.byKindTruncated.get(pair.i.space.id)?.get(pair.profileSlug) ??
+        null,
       memo,
     })
   );
@@ -851,11 +880,13 @@ export async function readHome(
   );
   return {
     spaces: out,
+    homeLastSeenAt: lastSeen,
     needsYou: {
       total,
       truncated,
       bySpace,
       podLevel: needs?.podLevel ?? null,
+      podLevelTruncated: needs?.podLevelTruncated ?? null,
     },
   };
 }

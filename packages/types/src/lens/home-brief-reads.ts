@@ -24,6 +24,7 @@ import {
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import { resolveSessionTitle } from "../focus-sessions/title.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
+import type { LensRow } from "./rows.js";
 
 /** "Your next three moves". */
 export const HOME_MOVES_CAP = 3;
@@ -49,7 +50,10 @@ function bucketCount(
 export interface HomeBriefReads {
   lastSeen: string | null;
   /** The pod's needs-you page, filed by the shared buckets. */
-  needsYou: BriefRead<{ counts: Record<NeedsYouBucket, number>; capped: boolean }>;
+  needsYou: BriefRead<{
+    counts: Record<NeedsYouBucket, number>;
+    capped: boolean;
+  }>;
   /** `outputs.landed` since the window start (actor: agents). */
   produced: BriefRead<{
     items: readonly unknown[];
@@ -78,6 +82,49 @@ export function liveSessionCount(moving: MovingRead): number {
     for (const w of item.work) if (w.live) live.add(w.sessionId);
   for (const w of moving.unattached) if (w.live) live.add(w.sessionId);
   return live.size;
+}
+
+/** An ISO instant, or null (junk or not a date) — one reading of a stored stamp. */
+export function parseHomeInstant(
+  raw: string | null | undefined
+): string | null {
+  if (!raw) return null;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? new Date(at).toISOString() : null;
+}
+
+/** Where a resolved "last seen" came from. */
+export type HomeLastSeenSource = "pod" | "device" | "none";
+
+export type HomeLastSeenRead =
+  | { status: "loading" }
+  | { status: "ready"; lastSeen: string | null; source: HomeLastSeenSource };
+
+/**
+ * Home's "last seen", POD first (`lifecycle.home.homeLastSeenAt`, stamped by
+ * `preferences.markHomeSeen` — it follows the person across devices); the
+ * device's own stamp is only the answer while the pod has none (a person
+ * from before the pod kept it) or cannot be read (offline). A FAILED pod read
+ * is never "first visit": with no device stamp either it resolves to `null`
+ * (the brief counts today, worded as today — never a guessed window).
+ * While the pod has not answered the window is `loading`, so a reader that
+ * waits never counts over the device's possibly-stale window first.
+ */
+export function resolveHomeLastSeen(
+  pod: BriefRead<string | null>,
+  device: BriefRead<string | null>
+): HomeLastSeenRead {
+  if (pod.status === "loading") return { status: "loading" };
+  if (pod.status === "ready") {
+    const fromPod = parseHomeInstant(pod.data);
+    if (fromPod) return { status: "ready", lastSeen: fromPod, source: "pod" };
+  }
+  if (device.status === "loading") return { status: "loading" };
+  const fromDevice =
+    device.status === "ready" ? parseHomeInstant(device.data) : null;
+  return fromDevice
+    ? { status: "ready", lastSeen: fromDevice, source: "device" }
+    : { status: "ready", lastSeen: null, source: "none" };
 }
 
 /** The instant "finished" is counted from: the last visit, else today's start. */
@@ -275,4 +322,30 @@ export function projectStandRows<P extends ProjectLite>(
         a.i - b.i
     )
     .map(({ r }) => r);
+}
+
+/**
+ * A "Where your projects stand" row as the lens kit draws it — the SAME row
+ * on Home (capped) and on every projects index ("Show all N"), desktop and
+ * phone. A project with something waiting on the person is `blocking`, else
+ * `happening`; the row IS the project, so its door is the project's place.
+ */
+export function projectStandLensRow<P extends ProjectLite>(
+  row: ProjectStandRow<P>
+): LensRow {
+  const { project, state, nextLine } = row;
+  return {
+    key: project.id,
+    cls: (state.owedFromYou ?? 0) > 0 ? "blocking" : "happening",
+    state,
+    objectKind: "project",
+    title: project.name,
+    reason: nextLine,
+    repeat: null,
+    source: null,
+    occurredAt: null,
+    verb: null,
+    door: { kind: "project", id: project.id },
+    count: 1,
+  };
 }

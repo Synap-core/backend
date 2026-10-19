@@ -185,21 +185,22 @@ export const podEdgeCorsMiddleware: MiddlewareHandler = async (c, next) => {
   return next();
 };
 
-// HTTP Cache Headers — allow short browser caching for GET (query) requests,
-// no caching for POST (mutation) requests. Simple single-instance optimization.
+// HTTP Cache Headers — pod data is live: nothing is HTTP-cached unless the
+// route says so itself. A route that sets its own Cache-Control (an immutable
+// asset, a document body) keeps it. The old GET default
+// (`private, max-age=60, stale-while-revalidate=30`) made every tRPC query a
+// cached GET, so a read right after a write served the pre-write body from
+// the HTTP cache (desktop main-process fetch, phone, web) — the 2026-10-19
+// day-one walk showed a kept note as "not saved yet". Client caches (React
+// Query) own freshness; the HTTP cache must not second-guess them.
 export const httpCacheHeadersMiddleware: MiddlewareHandler = async (
   c,
   next
 ) => {
   await next();
   if (c.req.method === "GET") {
-    // Allow private (browser-only) caching for 60 seconds on read requests.
-    // stale-while-revalidate lets the browser use a stale response while fetching fresh data.
     if (!c.res.headers.has("Cache-Control")) {
-      c.header(
-        "Cache-Control",
-        "private, max-age=60, stale-while-revalidate=30"
-      );
+      c.header("Cache-Control", "no-store");
     }
   } else {
     c.header("Cache-Control", "no-store");

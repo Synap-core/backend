@@ -220,7 +220,7 @@ export function spaceSkillSlugCandidates(slug: string): string[] {
  * match. Authoring tools only WARN on it: refusing would break installed
  * templates, and the IS degrades an oversized skill safely anyway.
  */
-export const SPACE_ALWAYS_SKILL_BUDGET_TOKENS = 2_500;
+export const SPACE_ALWAYS_SKILL_BUDGET_TOKENS = 2_000;
 
 /**
  * Chars → tokens, ~4 chars per token. MIRROR of the IS `estimateTokens`

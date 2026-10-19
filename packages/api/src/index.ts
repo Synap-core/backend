@@ -344,6 +344,7 @@ export { runInboundAttachmentIngest } from "./services/connectors/ingest-inbound
 export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";
 export { backfillEntityMediaCopies } from "./services/media-copy/backfill-media-copy.js";
 export { backfillLibraryItemMedia } from "./services/media-copy/backfill-library-media.js";
+export { backfillDocumentTitleHeadings } from "./services/document-title/backfill-title-heading.js";
 export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy-reactor.js";
 export {
   runEventSync,

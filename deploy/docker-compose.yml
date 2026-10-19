@@ -7,6 +7,11 @@
 x-backend-env: &backend-env
   NODE_ENV: production
   PORT: 4000
+  # The release id this pod runs (the update engine pins it in deploy/.env).
+  # /api/provision/status reports it as podVersion; without it every pod
+  # reported null, so the CP offered — and ordered — the release already
+  # running (2026-10-19).
+  BACKEND_VERSION: ${BACKEND_VERSION:-}
   DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
   ADMIN_EMAIL: ${ADMIN_EMAIL:-}
   PROVISIONING_TOKEN: ${PROVISIONING_TOKEN:-}

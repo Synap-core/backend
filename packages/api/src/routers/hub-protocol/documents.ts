@@ -20,6 +20,7 @@ import {
   DocumentRepository,
   eventRepository,
   createDocumentWithContent,
+  namedDocumentBody,
   documents,
   and,
   eq,
@@ -110,6 +111,17 @@ export const documentsRouter = router({
       // `entities/create.ts` for the full rationale.
       const decodedTitle = decodeHtmlEntities(input.title);
       if (decodedTitle !== input.title) input.title = decodedTitle;
+      // ONE TITLE (founder 2026-10-19): a body opening with a heading equal
+      // to the name is stored without it. Applied BEFORE the gate, so the
+      // content a person reviews is the content that lands; the create door
+      // applies the same rule again (a no-op by then).
+      if (!input.url) {
+        input.content = namedDocumentBody({
+          title: input.title,
+          type: input.type,
+          content: input.content,
+        }).content;
+      }
       const userId = ctx.userId!;
       const documentId = randomUUID();
       const actingAgent = await actingAgentUserId(ctx, input.agentUserId);

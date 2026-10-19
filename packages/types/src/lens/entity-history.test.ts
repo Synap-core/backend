@@ -118,12 +118,23 @@ describe("entity history", () => {
       },
     };
     const text = (profileSlug?: string) =>
-      dataLineText(entityHappened({ events: [update], profileSlug }, OPTS)[0]!.lines[0] as never);
+      dataLineText(
+        entityHappened({ events: [update], profileSlug }, OPTS)[0]!
+          .lines[0] as never
+      );
     expect(text()).toBe("Updated entity"); // the defect, without the host's kind
     expect(text("lead")).toBe("Updated lead");
     // An event that names its own kind keeps it.
-    const created: LoggedEvent = { ...update, id: "c1", type: "entities.create.completed", data: { profileSlug: "company" } };
-    const named = entityHappened({ events: [created], profileSlug: "lead" }, OPTS)[0]!.lines[0];
+    const created: LoggedEvent = {
+      ...update,
+      id: "c1",
+      type: "entities.create.completed",
+      data: { profileSlug: "company" },
+    };
+    const named = entityHappened(
+      { events: [created], profileSlug: "lead" },
+      OPTS
+    )[0]!.lines[0];
     expect(dataLineText(named as never)).toBe("Created company");
   });
 });

@@ -108,7 +108,10 @@ function itemTime(item: HappenedItem): number {
  * kind. Its door stays an entity door (that is how the thing opens); only the
  * noun changes. Anything already named by the event keeps its name.
  */
-function namedByOwnKind(item: HappenedItem | null, ownKind: string | null): HappenedItem | null {
+function namedByOwnKind(
+  item: HappenedItem | null,
+  ownKind: string | null
+): HappenedItem | null {
   if (!item || !ownKind || item.kind !== "data" || item.event.line) return item;
   if (item.event.objectKind !== "entity") return item;
   return { ...item, event: { ...item.event, objectKind: ownKind } };

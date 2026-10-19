@@ -251,7 +251,8 @@ export const documentsRouter = router({
       const document = await createDocumentWithContent(db, eventRepository, {
         ownerUserId: userId,
         workspaceId,
-        title: input.title || "Untitled",
+        // No name → the door takes a markdown body's leading `# `, else "Untitled".
+        title: input.title ?? "",
         type: docType,
         language: input.language || undefined,
         content: input.content,

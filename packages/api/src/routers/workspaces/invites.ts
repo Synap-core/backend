@@ -29,7 +29,6 @@ import {
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   notAnAppAgent,
-  podCpAuthHeaders,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
@@ -50,6 +49,8 @@ import {
   logger,
   notifyCpInviteSync,
   notifyCpInviteLifecycle,
+  sendCpInviteEmail,
+  type CpInviteEmailResult,
 } from "./helpers.js";
 
 export const inviteProcedures = {
@@ -540,24 +541,25 @@ export const inviteProcedures = {
         workspaceNameForSync = ws?.name ?? "Synap Workspace";
       }
 
-      // Notify CP to send invite email (fire-and-forget)
+      // Ask the CP to email the invite and KEEP its answer: the inviter must
+      // learn when the email did not go (a refusal is not "sent").
       const cpUrl = config.server.controlPlaneUrl;
+      let email: CpInviteEmailResult = {
+        sent: false,
+        reason:
+          "This pod is not connected to a Control Plane, so no invite email was sent.",
+      };
       if (cpUrl) {
         const inviter = await db.query.users.findFirst({
           where: eq(users.id, ctx.userId),
           columns: { name: true },
         });
-        const inviterName = inviter?.name ?? "A Synap user";
-
-        const podSubdomain =
-          process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
         const body: Record<string, string> = {
           type: input.type,
           email: input.email,
-          inviterName,
+          inviterName: inviter?.name ?? "A Synap user",
           role: input.role,
           inviteToken: invite.token,
-          podSubdomain,
           clientHint: "auto",
         };
         const backendOrigin =
@@ -568,25 +570,7 @@ export const inviteProcedures = {
         if (workspaceNameForSync) {
           body.workspaceName = workspaceNameForSync;
         }
-
-        podCpAuthHeaders({
-          purpose: "invites",
-          legacy: "internal-key",
-          controlPlaneUrl: cpUrl,
-        })
-          .then((auth) =>
-            fetch(`${cpUrl}/internal/invite-email`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...(auth?.headers ?? {}),
-              },
-              body: JSON.stringify(body),
-            })
-          )
-          .catch((err) =>
-            logger.warn({ err }, "Failed to send invite email (non-fatal)")
-          );
+        email = await sendCpInviteEmail(cpUrl, body);
       }
 
       void notifyCpInviteSync({
@@ -604,7 +588,9 @@ export const inviteProcedures = {
         id: invite.id,
         token: invite.token,
         expiresAt: invite.expiresAt,
-        emailSent: !!cpUrl,
+        emailSent: email.sent,
+        // Why no email went — null when it did. The invite link still works.
+        emailError: email.sent ? null : email.reason,
       };
     }),
 

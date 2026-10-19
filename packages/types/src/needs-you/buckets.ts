@@ -33,10 +33,7 @@
  */
 
 import { FAILURE_NOTIFICATION_TYPES } from "../lens/classes.js";
-import {
-  isSwipeSafe,
-  type ProposalIntentInput,
-} from "../proposals/intent.js";
+import { isSwipeSafe, type ProposalIntentInput } from "../proposals/intent.js";
 
 /** The four Inbox filters, in the order the filter control lists them. */
 export const NEEDS_YOU_BUCKETS = [
@@ -109,7 +106,9 @@ export function needsYouBucketOf<T extends BucketableSignal>(
   if (isFailureSignal(signal)) return "broken";
   if (signal.kind === "proposal-cluster") {
     const intent = needsYouProposalId(signal) ? opts.intentOf?.(signal) : null;
-    const single = !(Number.isFinite(signal.count) && signal.count > 1);
+    // Exactly one, or not single: a NaN / missing / null count (an untyped
+    // wire row, an older pod) must not read as single — fails closed.
+    const single = signal.count === 1;
     return single && intent && isSwipeSafe(intent) ? "routine" : "decision";
   }
   if (signal.kind === "access-request") return "decision";
@@ -235,4 +234,81 @@ export function needsYouReasonOf(signal: BucketableSignal): string {
     default:
       return "ask";
   }
+}
+
+// ── The Inbox's filter control and its routine batch ────────────────────────
+//
+// Moved here from browser `needs-you-triage-model.ts` (lane F2, 2026-10-19) so
+// the desktop Inbox and relay's `/blocked` offer the SAME filters and batch
+// the SAME rows — two surfaces, one rule (founder decision 3A).
+
+/** What the filter control can show: every row, or one bucket. */
+export type NeedsYouFilter = "all" | NeedsYouBucket;
+
+/** Every filter, in the order the control lists them (All first). */
+export const NEEDS_YOU_FILTERS: readonly NeedsYouFilter[] = [
+  "all",
+  ...NEEDS_YOU_BUCKETS,
+];
+
+/** An address value as a filter, or `all` (an unknown value never hides rows). */
+export function readNeedsYouFilter(value: unknown): NeedsYouFilter {
+  return typeof value === "string" &&
+    (NEEDS_YOU_FILTERS as readonly string[]).includes(value)
+    ? (value as NeedsYouFilter)
+    : "all";
+}
+
+/** The filters worth offering: All, then each bucket that has rows (zero is omitted). */
+export function needsYouFilters(
+  counts: Record<NeedsYouBucket, number>
+): NeedsYouFilter[] {
+  return ["all", ...NEEDS_YOU_BUCKETS.filter((b) => counts[b] > 0)];
+}
+
+/**
+ * The filter actually shown: the chosen one while it still has rows, else
+ * All — a filter emptied by the reader's own decisions (or an address naming
+ * an empty bucket) falls back to the whole list, never to a blank page.
+ */
+export function effectiveNeedsYouFilter(
+  chosen: NeedsYouFilter,
+  counts: Record<NeedsYouBucket, number>
+): NeedsYouFilter {
+  return needsYouFilters(counts).includes(chosen) ? chosen : "all";
+}
+
+/**
+ * At this many routine changes, All folds them into ONE batch row; fewer are
+ * rows like any other (a "batch of one" is a row with an extra click).
+ */
+export const ROUTINE_BATCH_MIN = 2;
+
+export interface NeedsYouFilterView<R> {
+  /** Rows drawn one by one, in order. */
+  rows: R[];
+  /**
+   * The routine changes drawn as ONE batch row (empty ⇒ no batch row): in
+   * All at {@link ROUTINE_BATCH_MIN} or more, and always under Routine.
+   */
+  batch: R[];
+}
+
+/**
+ * One filter over rows already filed and ordered (`needsYouBuckets`): the
+ * bucket's rows, and — the only batch — the routine changes. Pure.
+ */
+export function needsYouFilterView<R extends { bucket: NeedsYouBucket }>(
+  rows: readonly R[],
+  filter: NeedsYouFilter
+): NeedsYouFilterView<R> {
+  if (filter === "routine") {
+    return { rows: [], batch: rows.filter((r) => r.bucket === "routine") };
+  }
+  if (filter !== "all") {
+    return { rows: rows.filter((r) => r.bucket === filter), batch: [] };
+  }
+  const routine = rows.filter((r) => r.bucket === "routine");
+  if (routine.length < ROUTINE_BATCH_MIN) return { rows: [...rows], batch: [] };
+  return { rows: rows.filter((r) => r.bucket !== "routine"), batch: routine };
 }

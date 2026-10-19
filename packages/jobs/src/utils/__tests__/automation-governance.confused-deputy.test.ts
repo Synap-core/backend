@@ -97,10 +97,14 @@ vi.mock("@synap/events", () => ({ emitSideEffects: emitSideEffectsMock }));
 vi.mock("../realtime-broadcast.js", () => ({
   broadcastNotification: broadcastMock,
 }));
-vi.mock("@synap-core/core", () => ({
+// Partial: the real @synap/database (importOriginal below) needs the rest of
+// core (e.g. ConflictError); only the logger is silenced.
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
-vi.mock("@synap/governance-policy", () => ({
+vi.mock("@synap/governance-policy", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   requiredPermissionFor: vi.fn(() => "write"),
 }));
 

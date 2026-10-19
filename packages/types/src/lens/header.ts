@@ -292,6 +292,17 @@ export function lensNextMove(
  */
 export const LENS_UNKNOWN_COUNT = "\u2013";
 
+/**
+ * THE count formatter for a count that may be a floor: "3", "100+". A capped
+ * read (the scan stopped at its limit) says so with a trailing "+", never a
+ * bare N that reads as exact (ui-composition §11 "one number, one source").
+ * Every "N+" in this package goes through here; hosts reuse it rather than
+ * writing `${n}+` again.
+ */
+export function formatFloorCount(count: number, floor = false): string {
+  return floor ? `${count}+` : `${count}`;
+}
+
 /** The strip's words for one lens-section count door. */
 export function lensCountDoorText(
   section: "blocking" | "happening" | "produced",
@@ -300,7 +311,7 @@ export function lensCountDoorText(
   floor = false
 ): string {
   const n =
-    count === null ? LENS_UNKNOWN_COUNT : floor ? `${count}+` : count;
+    count === null ? LENS_UNKNOWN_COUNT : formatFloorCount(count, floor);
   if (section === "blocking")
     return `${n} ${count === 1 && !floor ? "needs" : "need"} you`;
   if (section === "produced") return `${n} delivered`;

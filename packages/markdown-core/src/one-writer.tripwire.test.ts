@@ -56,6 +56,8 @@ const SKIP_DIRS = new Set([
   "generated",
   "__tests__",
   "__fixtures__",
+  // the Design app's gitignored build output — a built bundle, never source.
+  "storybook-static",
 ]);
 
 function walk(dir: string, out: string[]): void {
@@ -65,7 +67,8 @@ function walk(dir: string, out: string[]): void {
     if (statSync(full).isDirectory()) walk(full, out);
     else if (
       /\.(ts|tsx|mjs|js)$/.test(name) &&
-      !/\.(test|spec)\.|\.d\.ts$|\.tripwire\./.test(name)
+      // A story is fixture data (a sample document a reviewer reads), like a test.
+      !/\.(test|spec|stories)\.|\.d\.ts$|\.tripwire\./.test(name)
     )
       out.push(full);
   }

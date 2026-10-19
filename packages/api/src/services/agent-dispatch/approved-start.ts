@@ -19,6 +19,7 @@
 import { createLogger } from "@synap-core/core";
 import { db, and, eq, drizzleSql, playbookRuns } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
@@ -96,6 +97,9 @@ export async function recordApprovedAgentStart(p: {
           reason: "run is not a proposed external-agent start",
         };
       }
+      // A failed child of an automation run: settle the parent from it, as
+      // every terminal writer must (tripwire playbook-run-terminal-settles-parent).
+      await settleParentAutomationRunFromChild({ playbookRunId: runId });
       await postSessionNotice(
         failedRun[0]!.sessionId,
         `Could not hand this run to an agent: ${error}`,

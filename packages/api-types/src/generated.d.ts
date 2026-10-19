@@ -13523,6 +13523,61 @@ export interface CreateCapabilityResult {
 	};
 	proposals: string[];
 }
+declare const INBOUND_WEBHOOK_PROVIDERS: {
+	readonly calcom: {
+		readonly toolName: "cal_com";
+		readonly metadataKey: "calcom";
+		readonly requiredConfig: readonly [
+			"secretVaultRef"
+		];
+		readonly setupStep: null;
+	};
+	readonly fireflies: {
+		readonly toolName: "fireflies";
+		readonly metadataKey: "fireflies";
+		readonly requiredConfig: readonly [
+		];
+		readonly setupStep: null;
+	};
+	readonly mailgun: {
+		readonly toolName: "mailgun";
+		readonly metadataKey: "mailgun";
+		readonly requiredConfig: readonly [
+			"secretVaultRef"
+		];
+		readonly setupStep: null;
+	};
+	readonly postiz: {
+		readonly toolName: "postiz";
+		readonly metadataKey: "postiz";
+		readonly requiredConfig: readonly [
+		];
+		readonly setupStep: "In Postiz, open Settings \u2192 Webhooks \u2192 Add a webhook, paste this URL, choose All integrations, and save.";
+	};
+};
+/** The route path segment: `POST /api/webhooks/<provider>/:token`. */
+export type InboundWebhookProvider = keyof typeof INBOUND_WEBHOOK_PROVIDERS;
+export interface ProvisionedInboundWebhook {
+	provider: InboundWebhookProvider;
+	/** `<PUBLIC_URL origin>/api/webhooks/<provider>/<token>`. */
+	url: string;
+	/** True when an existing token was replaced. */
+	rotated: boolean;
+	/** Keys the route still needs before it accepts a delivery. */
+	missingConfig: string[];
+	/** The manual step on the provider's side, or null when unchecked. */
+	setupStep: string | null;
+}
+/** One installed tool's webhook, as a capability install reports it. */
+export type InstalledToolWebhook = ({
+	tool: string;
+	toolId: string;
+} & ProvisionedInboundWebhook) | {
+	tool: string;
+	toolId: string;
+	provider: InboundWebhookProvider;
+	error: string;
+};
 export interface CapabilityShadow {
 	type: "skill" | "tool";
 	id: string;
@@ -28220,7 +28275,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				definition?: any;
 				params?: Record<string, unknown> | undefined;
 			};
-			output: CreateCapabilityResult;
+			output: CreateCapabilityResult & {
+				webhooks: InstalledToolWebhook[];
+			};
 			meta: object;
 		}>;
 		uninstall: import("@trpc/server").TRPCMutationProcedure<{
@@ -29556,6 +29613,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				token: string;
 				expiresAt: Date;
 				emailSent: boolean;
+				emailError: string | null;
 			};
 			meta: object;
 		}>;
@@ -31148,6 +31206,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		markHomeSeen: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				homeLastSeenAt: string;
+			};
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
@@ -31168,6 +31233,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				onboardingCompleted: boolean;
 				onboardingStep: string | null;
+				homeLastSeenAt: Date | null;
 			} | {
 				userId: string;
 				theme: "system";
@@ -32853,6 +32919,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ok: boolean;
 			};
+			meta: object;
+		}>;
+		provisionWebhook: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				rotate?: boolean | undefined;
+			};
+			output: ProvisionedInboundWebhook;
 			meta: object;
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
@@ -44219,6 +44293,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							unset?: number | undefined;
 						}[];
 						needsYou: number | null;
+						needsYouTruncated: boolean | null;
 						beingWorked: number | null;
 						headline: {
 							entityId: string;
@@ -44228,6 +44303,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | null;
 					}[];
 				}[];
+				homeLastSeenAt: string | null;
 				needsYou: {
 					total: number | null;
 					truncated: boolean | null;
@@ -44237,6 +44313,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						truncated: boolean | null;
 					}[];
 					podLevel: number | null;
+					podLevelTruncated: boolean | null;
 				};
 			};
 			meta: object;
@@ -44769,6 +44846,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					completedCriteria?: string[] | undefined;
 					firstValueAt?: string | undefined;
 				} | undefined;
+			};
+			output: {
+				id: string;
+				userId: string;
+				lens: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | {
+					kind: "project";
+					projectId: string;
+				} | {
+					kind: "project_workspace";
+					projectId: string;
+					workspaceId: string;
+				};
+				lensKey: string;
+				templateVersion: string;
+				status: OnboardingJourneyStatus;
+				progress: OnboardingJourneyProgressRecord;
+				evidence: OnboardingJourneyEvidenceRecord;
+				offeredAt: string;
+				startedAt: string | null;
+				pausedAt: string | null;
+				completedAt: string | null;
+				dismissedAt: string | null;
+				createdAt: string;
+				updatedAt: string;
+			} | null;
+			meta: object;
+		}>;
+		recordValues: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				lens: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | {
+					kind: "project";
+					projectId: string;
+				} | {
+					kind: "project_workspace";
+					projectId: string;
+					workspaceId: string;
+				};
+				values: Record<string, unknown>;
+				templateVersion?: string | undefined;
 			};
 			output: {
 				id: string;

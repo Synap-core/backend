@@ -18,6 +18,12 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
+// The first exec boots PGlite (WASM) inside beforeAll: ~5 s alone, past the
+// default 10 s hook timeout on a CI runner testing every package in parallel
+// (CI run 39259878520: "Hook timed out in 10000ms"). Same allowance as the
+// database package's PGlite suites.
+vi.setConfig({ hookTimeout: 120_000 });
+
 const h = vi.hoisted(() => {
   // `@synap-core/core` validates config on import; the pool is never used.
   process.env.DATABASE_URL ??= "postgresql://unused@localhost:5432/unused";

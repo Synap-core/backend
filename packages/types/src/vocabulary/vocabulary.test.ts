@@ -7,8 +7,10 @@ import {
   STATUS_LABELS,
   humanizeToken,
   sentenceCaseLabel,
+  sentenceCasePlural,
   nounInSentence,
   pluralizeNoun,
+  countedNoun,
   resolveActionLabel,
   resolveActionProgressive,
   resolveActionPresent,
@@ -146,6 +148,16 @@ describe("sentenceCaseLabel", () => {
     expect(sentenceCaseLabel("works_at")).toBe("Works at");
     expect(sentenceCaseLabel("worksAt")).toBe("Works at");
     expect(sentenceCaseLabel("")).toBe("");
+  });
+});
+
+describe("countedNoun", () => {
+  it("is singular at exactly 1 and plural otherwise, by the pluralizeNoun rule", () => {
+    expect(countedNoun(1, "item")).toBe("1 item");
+    expect(countedNoun(3, "item")).toBe("3 items");
+    expect(countedNoun(0, "item")).toBe("0 items");
+    expect(countedNoun(2, "analysis")).toBe("2 analyses");
+    expect(countedNoun(4, "research")).toBe("4 research");
   });
 });
 
@@ -1554,5 +1566,59 @@ describe("buildObjectActionTitle — the name slot names, never restates", () =>
         objectName: "Acme",
       })
     ).toBe('Create Task "Acme"');
+  });
+
+  // Real names the FIRST rule dropped or edited (review R1 #3, measured on
+  // dist). Every row here was wrong under that rule — so each one rules it
+  // out; the drops above still hold under the narrow one.
+  it.each([
+    ["create", "document", "report.pdf"], // a file name, not a dotted id
+    ["create", "link", "synap.live"], // a domain
+    ["create", "company", "example.com"],
+    ["create", "person", "j.doe"], // a handle
+    ["create", "document", "meeting_notes"], // snake, but a document's name
+    ["create", "project", "Cafe2024"], // hex-shaped words, not hashes
+    ["create", "project", "fab2025"],
+    ["create", "project", "decade2025"],
+    ["create", "task", "Create landing page"], // a name may start with a verb
+    ["update", "task", "Update pricing page"],
+    ["create", "task", "Create Task list for Q4"], // the head + more words
+  ])("KEEPS %s %s %j as written", (action, objectKind, objectName) => {
+    const title = buildObjectActionTitle({ action, objectKind, objectName });
+    expect(title.endsWith(`"${objectName}"`)).toBe(true);
+  });
+
+  it("still drops a dotted ACTION id (`entity.create`) — the dotted rule kept its job", () => {
+    expect(
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "note",
+        objectName: "entity.create",
+      })
+    ).toBe("Update Note");
+  });
+});
+
+describe("sentenceCasePlural — a kind's plural, words not a slug", () => {
+  // Each hyphen/camel row rules out sentenceCaseLabel's slug branch, which
+  // read these as tokens ("Follow ups", review R1 #6); the plain rows pin
+  // the shared sentence-case rule.
+  it.each([
+    ["follow-ups", "Follow-ups"],
+    ["Check-ins", "Check-ins"],
+    ["to-dos", "To-dos"],
+    ["T-shirts", "T-shirts"],
+    ["eBooks", "eBooks"],
+    ["decisions", "Decisions"],
+    ["User Stories", "User stories"],
+    ["UI designs", "UI designs"],
+    ["  MCP servers ", "MCP servers"],
+    ["", ""],
+  ])("%j → %j", (plural, expected) => {
+    expect(sentenceCasePlural(plural)).toBe(expected);
+  });
+
+  it("sentenceCaseLabel keeps humanizing a TOKEN label (its job is unchanged)", () => {
+    expect(sentenceCaseLabel("works_at")).toBe("Works at");
   });
 });

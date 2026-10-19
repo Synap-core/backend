@@ -718,6 +718,85 @@ async function saveJourney(input: {
   });
 }
 
+/**
+ * STATUS-NEUTRAL values write: merge `values` into `progress.values` one level
+ * deep (a key replaces its old value; other keys stay) and NEVER touch the
+ * journey's status, current step, completed steps, evidence or timestamps.
+ * Every other door moves the status (start → active, pause → paused, …), so a
+ * fact learned off-journey — the first-run answer, "day one seen" — could not
+ * be recorded on an absent / offered / dismissed / completed journey, and
+ * lived on one device only.
+ *
+ * No row yet ⇒ one is created in the table's default status, `offered` — the
+ * state of a journey nobody has started; it does not start one.
+ */
+async function recordJourneyValues(input: {
+  userId: string;
+  lens: OnboardingLens;
+  templateVersion?: string;
+  values: Record<string, unknown>;
+}) {
+  const db = await getDb();
+  const workspaceContext = await assertLensAccess(input.userId, input.lens);
+  const templateVersion = resolveTemplateVersion(
+    input.templateVersion,
+    workspaceContext
+  );
+  const refs = lensReferences(input.lens);
+  const journeyKey = [input.userId, lensKey(input.lens), templateVersion].join(
+    ":"
+  );
+
+  return db.transaction(async (tx) => {
+    // The same serialization as `saveJourney`: a values write never races a
+    // status move into a lost update.
+    await tx.execute(
+      drizzleSql`select pg_advisory_xact_lock(hashtext(${journeyKey}))`
+    );
+    const [existing] = await tx
+      .select()
+      .from(onboardingJourneys)
+      .where(
+        and(
+          eq(onboardingJourneys.userId, input.userId),
+          eq(onboardingJourneys.lensKey, lensKey(input.lens)),
+          eq(onboardingJourneys.templateVersion, templateVersion)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const now = new Date();
+
+    if (existing) {
+      const progress: OnboardingJourneyProgressRecord = {
+        ...existing.progress,
+        values: { ...(existing.progress?.values ?? {}), ...input.values },
+      };
+      const [saved] = await tx
+        .update(onboardingJourneys)
+        .set({ progress, updatedAt: now })
+        .where(eq(onboardingJourneys.id, existing.id))
+        .returning();
+      return serializeJourney(saved);
+    }
+
+    const [saved] = await tx
+      .insert(onboardingJourneys)
+      .values({
+        userId: input.userId,
+        lensKind: input.lens.kind,
+        lensKey: lensKey(input.lens),
+        ...refs,
+        templateVersion,
+        status: "offered",
+        progress: { completedActionIds: [], values: { ...input.values } },
+        updatedAt: now,
+      })
+      .returning();
+    return serializeJourney(saved);
+  });
+}
+
 export const onboardingRouter = router({
   resolveContext: podProcedure
     .input(journeyIdentitySchema)
@@ -953,6 +1032,30 @@ export const onboardingRouter = router({
    * offered journey becomes active. From settings, the journey's lifecycle and
    * current step are never touched, so recording a tool never reopens onboarding.
    */
+  /**
+   * Record values on the journey WITHOUT moving it (`recordJourneyValues`):
+   * `progress.values` merged one level deep; status, step and evidence
+   * untouched; an absent journey is created `offered`. For facts learned off
+   * the journey — the first-run answer, "day one seen" — that must reach
+   * every device.
+   */
+  recordValues: podProcedure
+    .input(
+      journeyIdentitySchema.extend({
+        values: z
+          .record(z.string().min(1).max(200), z.unknown())
+          .refine((v) => Object.keys(v).length > 0, "values is empty"),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      recordJourneyValues({
+        userId: ctx.userId,
+        lens: input.lens,
+        templateVersion: input.templateVersion,
+        values: input.values,
+      })
+    ),
+
   recordTools: podProcedure
     .input(
       z.object({

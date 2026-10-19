@@ -88,10 +88,12 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
 };
 
 describe("capabilityVerbAllowsRuleWiden", () => {
-  it("refuses to widen the three Postiz publish verbs and leaves gmail_send alone", () => {
+  it("refuses to widen the Postiz publish verbs and leaves gmail_send and the media upload alone", () => {
     expect(capabilityVerbAllowsRuleWiden("postiz_publish")).toBe(false);
     expect(capabilityVerbAllowsRuleWiden("postiz_schedule")).toBe(false);
     expect(capabilityVerbAllowsRuleWiden("postiz_draft")).toBe(false);
+    expect(capabilityVerbAllowsRuleWiden("postiz_schedule_post")).toBe(false);
+    expect(capabilityVerbAllowsRuleWiden("postiz_upload_from_url")).toBe(true);
     expect(capabilityVerbAllowsRuleWiden("gmail_send")).toBe(true);
     expect(capabilityVerbAllowsRuleWiden(null)).toBe(true);
   });
