@@ -25,15 +25,25 @@
  * already Published — nothing is written and `moveStatus` answers `unchanged`.
  */
 import { z } from "zod";
-import { db, and, eq, isNull, drizzleSql, entities } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  isNull,
+  drizzleSql,
+  entities,
+  profileSlugScopeCondition,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { moveStatus } from "../lifecycle/move-status.js";
 
 const logger = createLogger({ module: "postiz-published" });
 
 /** The Content OS contract (content-os.yaml `post`). */
 export const POSTIZ_POST_ID_PROPERTY = "postiz-post-id";
+const POST_KIND = "post";
 const PUBLISHED_STATUS = "Published";
 
 const postizWebhookPost = z
@@ -69,6 +79,11 @@ export async function recordPostizPublished(args: {
 }): Promise<PostizPublishedResult> {
   let updated = 0;
   let unmatched = 0;
+  const isPost = await profileSlugScopeCondition(
+    db,
+    POST_KIND,
+    await resolveFacetVisibilityScope(args.ownerUserId, undefined)
+  );
   for (const item of args.payload) {
     if (item.state && item.state !== "PUBLISHED") continue;
     const posts = await db
@@ -80,7 +95,7 @@ export async function recordPostizPublished(args: {
       .from(entities)
       .where(
         and(
-          eq(entities.type, "post"),
+          isPost,
           isNull(entities.deletedAt),
           drizzleSql`${entities.properties}->>${POSTIZ_POST_ID_PROPERTY} = ${item.id}`,
           entityWriteVisibleWhere(args.ownerUserId),

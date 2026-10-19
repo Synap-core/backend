@@ -9,8 +9,9 @@
  * it stopped watching. Recording the id therefore cannot be the agent's next
  * step; it belongs to the run itself.
  *
- * DECLARED, not coded: the skill carries (catalog-authored, converged by the
- * `metadata` skill projection)
+ * DECLARED, not coded: the skill carries (catalog-authored; the applier's
+ * `projectSkillMetadata` installs it and the drift comparator converges it —
+ * `declaredWriteBack` in capability-drift.ts is the one parser for both)
  *
  *   metadata.writeBack = {
  *     entityParam: "postEntityId",          // the run parameter naming the object
@@ -20,8 +21,11 @@
  *
  * BOUNDS — what the declaration cannot widen:
  *  - the object is the one the RUN'S OWN parameters name (shown on the
- *    proposal the person approved), of the declared kind, and inside the
- *    runner's WRITE floor (`entityWriteVisibleWhere`);
+ *    proposal the person approved), of the declared kind, and inside the WRITE
+ *    floor (`entityWriteVisibleWhere`) of the identity the run EXECUTED as —
+ *    on an approved proposal that is the approving person, whose connection
+ *    the provider act itself used: the write-back is part of the act they
+ *    approved, under the same identity;
  *  - only scalar values are written, only to the declared properties, and
  *    NEVER to the kind's lifecycle property (a status moves through
  *    `moveStatus`, never here).
@@ -30,7 +34,6 @@
  * delivered run into an error (a retry would send twice). It is REPORTED on
  * the run result instead (`writeBack`), which the approved proposal stores.
  */
-import { z } from "zod";
 import {
   db,
   and,
@@ -38,15 +41,12 @@ import {
   isNull,
   drizzleSql,
   entities,
+  profileSlugScopeCondition,
   ProfileResolutionService,
 } from "@synap/database";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
-
-const writeBackSchema = z.object({
-  entityParam: z.string().min(1),
-  kind: z.string().min(1),
-  properties: z.record(z.string().min(1), z.string().min(1)),
-});
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import { declaredWriteBack } from "./capability-drift.js";
 
 export type VerbWriteBackReport =
   | { status: "recorded"; entityId: string; properties: Record<string, unknown> }
@@ -69,16 +69,22 @@ export async function applyVerbWriteBack(args: {
   metadata: unknown;
   parameters: Record<string, unknown> | undefined;
   result: unknown;
+  /** The identity the run executed as. */
   userId: string;
 }): Promise<VerbWriteBackReport | null> {
-  const declared = writeBackSchema.safeParse(
-    (args.metadata as Record<string, unknown> | null)?.writeBack
+  const spec = declaredWriteBack(
+    args.metadata as Record<string, unknown> | null
   );
-  if (!declared.success) return null;
-  const spec = declared.data;
+  if (!spec) return null;
   const entityId = args.parameters?.[spec.entityParam];
   if (typeof entityId !== "string" || entityId.length === 0) return null;
 
+  // The kind-aware scope door: a declared role matches its wearers too.
+  const kindScope = await profileSlugScopeCondition(
+    db,
+    spec.kind,
+    await resolveFacetVisibilityScope(args.userId, undefined)
+  );
   const [target] = await db
     .select({
       id: entities.id,
@@ -89,7 +95,7 @@ export async function applyVerbWriteBack(args: {
     .where(
       and(
         eq(entities.id, entityId),
-        eq(entities.type, spec.kind),
+        kindScope,
         isNull(entities.deletedAt),
         entityWriteVisibleWhere(args.userId)
       )
