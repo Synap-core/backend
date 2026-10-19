@@ -55,6 +55,15 @@
 
     # Presigned S3 path — same sandbox CSP as the TLS block (see there).
     handle /synap-storage/* {
+        # MinIO CVE-2026-41145 / CVE-2026-40344 (high, never fixed in the free
+        # builds): an upload declaring an UNSIGNED trailer is written without
+        # checking its signature, so anyone holding a presigned URL (which
+        # carries the access key) could write any object. Our clients never
+        # send that mode; refuse it at the edge, as the advisories advise.
+        @minio_unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER
+        @minio_snowball header X-Amz-Meta-Snowball-Auto-Extract *
+        respond @minio_unsigned_trailer 403
+        respond @minio_snowball 403
         header Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
         reverse_proxy minio:9000
     }
@@ -150,6 +159,15 @@
     # `sandbox` gives the response an opaque origin and no script; <img>/<video>
     # embeds are unaffected (a CSP on a subresource response does not apply).
     handle /synap-storage/* {
+        # MinIO CVE-2026-41145 / CVE-2026-40344 (high, never fixed in the free
+        # builds): an upload declaring an UNSIGNED trailer is written without
+        # checking its signature, so anyone holding a presigned URL (which
+        # carries the access key) could write any object. Our clients never
+        # send that mode; refuse it at the edge, as the advisories advise.
+        @minio_unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER
+        @minio_snowball header X-Amz-Meta-Snowball-Auto-Extract *
+        respond @minio_unsigned_trailer 403
+        respond @minio_snowball 403
         header Content-Security-Policy "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
         reverse_proxy minio:9000
     }
