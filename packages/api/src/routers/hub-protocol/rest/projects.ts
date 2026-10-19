@@ -777,6 +777,9 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Create a project
   app.post("/projects", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const parsedBody = CreateProjectSchema.safeParse(
       await c.req.json().catch(() => null)
@@ -891,6 +894,9 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Update a project
   app.patch("/projects/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
@@ -927,6 +933,9 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Delete a project
   app.delete("/projects/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;

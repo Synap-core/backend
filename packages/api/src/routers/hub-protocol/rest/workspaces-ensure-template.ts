@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { type HubHono, httpStatusForTrpcError } from "./_shared.js";
+import { type HubHono, hasScope, httpStatusForTrpcError } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { workspaceCatalogRouter } from "../../workspaces.js";
@@ -38,6 +38,15 @@ export function registerWorkspacesEnsureTemplateRoutes(app: HubHono): void {
         { error: "Invalid body", details: parsed.error.issues },
         400
       );
+    }
+    // `install: true` creates a workspace (a write); without it the door only
+    // reports whether the template is installed (a read). Neither checked a
+    // scope before.
+    const needed = parsed.data.install
+      ? "hub-protocol.write"
+      : "hub-protocol.read";
+    if (!hasScope(c.get("scopes") ?? [], needed)) {
+      return c.json({ error: `Missing scope: ${needed}` }, 403);
     }
 
     const ctx = await createHubProtocolCallerContext(

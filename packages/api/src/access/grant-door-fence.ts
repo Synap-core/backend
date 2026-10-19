@@ -244,6 +244,14 @@ export const GRANT_DOOR_UNSUPPORTED =
  *    .userId`), so one row streams every event of the person — every
  *    workspace, project and kind — to the URL it names. The handlers write the
  *    table directly; they never pass the gate.
+ *  - `/calendar/feed` (+ `/rotate`): mints a bearer URL whose `.ics` read
+ *    carries NO key and so no grant — it serves every calendar entity the
+ *    person can read (`calendar-feed.ts` `loadOwnedCalendarEntities`), every
+ *    workspace. The credentialless `/calendar/feed/<token>.ics` read is not
+ *    matched (it skips auth; no grant reaches it).
+ *  - `/agents/sync`: rewrites the pod's agent roster for an intelligence
+ *    service and creates agent users owned by the pod owner — direct writes,
+ *    no gate. Its caller is the IS's `is_internal` key (full, unbounded `*`).
  *
  * Only a key whose grant is UNBOUNDED full access (`*`, no narrowing) may use
  * them. Note this is stricter than `isFencedGrant`: a `*` scope pinned to one
@@ -252,6 +260,8 @@ export const GRANT_DOOR_UNSUPPORTED =
  */
 export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
   /^\/webhooks(?:\/.*)?$/,
+  /^\/calendar\/feed(?:\/rotate)?\/?$/,
+  /^\/agents\/sync\/?$/,
 ];
 
 export const GRANT_OWNER_WIDE_UNSUPPORTED =

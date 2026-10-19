@@ -172,6 +172,12 @@ describe("owner-wide doors (webhooks)", () => {
     ["/webhooks/abc", true],
     ["/webhooks/abc/deliveries", true],
     ["/webhooksx", false],
+    ["/calendar/feed", true],
+    ["/calendar/feed/rotate", true],
+    // The credentialless .ics read skips auth — no grant ever reaches it.
+    ["/calendar/feed/abcdef.ics", false],
+    ["/agents/sync", true],
+    ["/agents", false],
     ["/entities", false],
   ] as const)("%s is owner-wide → %s", (path, ownerWide) => {
     expect(ownerWideDoorAllowed(path, STAR_ONE_WS)).toBe(!ownerWide);

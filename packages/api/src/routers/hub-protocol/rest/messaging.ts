@@ -46,7 +46,8 @@ import {
   trpcErrorResponses,
 } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { logger, type HubHono } from "./_shared.js";
+import { logger, type HubHono, type HubVariables } from "./_shared.js";
+import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 
@@ -178,6 +179,21 @@ const MessagingInboundResponseSchema = z
     deduped: z.boolean(),
   })
   .openapi("MessagingInboundResponse");
+
+/**
+ * Every messaging write needs `hub-protocol.write`. These doors send external
+ * messages, overwrite the connector credentials, delete accounts and channels —
+ * a read-only key reached all of them (only `/messaging/inbound` checked).
+ */
+function writeScopeDenied(
+  c: Context<{ Variables: HubVariables }>
+): Response | null {
+  if (hasScope(c.get("scopes") as string[], "hub-protocol.write")) return null;
+  return c.json(
+    { error: "Insufficient scope: hub-protocol.write required" },
+    403
+  );
+}
 
 export function registerMessagingRoutes(app: HubHono): void {
   registerOpenApi(app, {
@@ -433,6 +449,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const connector = await getMessagingConnector();
       if (!connector)
         return c.json({ error: "Messaging connector not configured" }, 503);
@@ -612,6 +630,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const userId = c.get("userId") as string;
       const ws = await db.query.workspaces.findFirst({
         columns: { settings: true },
@@ -682,6 +702,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const userId = c.get("userId") as string;
       const { dsn, apiKey, webhookSecret } = c.req.valid("json");
       await upsertServiceSecret(
@@ -731,6 +753,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const connector = await getMessagingConnector();
       if (!connector)
         return c.json({ error: "Messaging connector not configured" }, 503);
@@ -1062,6 +1086,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const userId = c.get("userId") as string;
       const {
         entityId,
@@ -1166,6 +1192,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const userId = c.get("userId") as string;
       const { channelId } = c.req.valid("param");
       try {
@@ -1228,6 +1256,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const { channelId } = c.req.valid("param");
       try {
         const [updated] = await db
@@ -1507,6 +1537,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const { threadId } = c.req.valid("param");
       const { accountId, workspaceId, sessionId } = c.req.valid("json");
       const agentUserId = c.get("agentUserId");
@@ -1610,6 +1642,8 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const denied = writeScopeDenied(c);
+      if (denied) return denied as never;
       const userId = c.get("userId") as string;
       const { threadId } = c.req.valid("param");
       const { accountId, body } = c.req.valid("json");
