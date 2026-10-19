@@ -37,6 +37,8 @@ import {
 import { runFlowTypeOf, type RunFlowType } from "../../../open/open-model";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
+import { ContentBody } from "../content/content-block";
+import { prepareContent } from "../content/markdown-model";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
 
@@ -212,8 +214,8 @@ export function RunDetailBody({
         </section>
       )}
       {/* A run's room is where its story was told (a chat turn's
-          conversation, a rule's run channel). It opens in the app;
-          `ExitLink` carries the install fallback with it. */}
+          conversation, a rule's run channel). It reads on its own console
+          page; replying stays in the app. */}
       {run.channelId && (
         <ExitLink
           exit={openIn({
@@ -221,13 +223,16 @@ export function RunDetailBody({
             objectKind: "channel",
             id: run.channelId,
           })}
-          label="Open the conversation in app"
+          label="Read the conversation"
         />
       )}
+      {/* A summary is markdown, often with object markers (an agent's
+          "[[entity:…|Ana]]"): drawn by the one renderer, each marker a link
+          to its page. */}
       {!run.error && run.summary?.trim() && (
-        <p className="text-[12.5px] leading-relaxed text-foreground/80">
-          {run.summary.trim()}
-        </p>
+        <ContentBody
+          prepared={prepareContent(run.summary.trim(), "markdown")}
+        />
       )}
 
       <section className="flex flex-col gap-2">

@@ -2,7 +2,8 @@
  * `/open/:type/:id` param parser — keeps the page dumb.
  *
  * Host types are the kinds this surface renders itself: `entity`, `view`,
- * and the operational kinds a link must land on from any device —
+ * `document` (its body, read-only) and `channel` (its recent messages,
+ * read-only), and the operational kinds a link must land on from any device —
  * `automation` (pause), `session` (cancel / run again), `playbook` (archive),
  * `run` (cancel / run again), `capability` (turn its verbs on) and `agent`
  * (disconnect). Authoring stays in the app. Bounce kinds match the Hono
@@ -26,15 +27,15 @@ export const HOST_TYPES = [
   "run",
   "capability",
   "agent",
+  "document",
+  "channel",
 ] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
 /** Known `synap://` bounce kinds that are not hosted on this page. */
 export const BOUNCE_TYPES = [
   "proposal",
-  "document",
   "cell",
-  "channel",
   "project",
   "workspace",
   "settings",

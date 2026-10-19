@@ -26,9 +26,9 @@ describe("parseOpenParams", () => {
   });
 
   it("marks known bounce kinds (safe id) for the app deep link", () => {
-    expect(parseOpenParams("channel", UUID)).toEqual({
+    expect(parseOpenParams("project", UUID)).toEqual({
       status: "bounce",
-      type: "channel",
+      type: "project",
       id: UUID,
     });
     expect(parseOpenParams("proposal", UUID)).toEqual({

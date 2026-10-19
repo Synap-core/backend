@@ -42,7 +42,13 @@ vi.mock("../utils/document-edit-access.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    loadReadableDocument: vi.fn(async () => ({ id: "doc-1", type: h.type })),
+    loadReadableDocument: vi.fn(async () => ({
+      id: "doc-1",
+      type: h.type,
+      contentRevision: 3,
+      workingState: "AAEC//8=",
+      workingStateRevision: 3,
+    })),
     canEditDocument: vi.fn(async () => ({ allowed: true, reason: null })),
   };
 });
@@ -77,5 +83,13 @@ describe("documents.get — format", () => {
       caller.get({ documentId: "doc-1", format: "readable" })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     h.type = "markdown";
+  });
+});
+
+describe("documents.get — the row it returns", () => {
+  it("never carries the Yjs working-state dump: no reader needs it", async () => {
+    const out = await caller.get({ documentId: "doc-1" });
+    expect(out.document).not.toHaveProperty("workingState");
+    expect(out.document).toMatchObject({ id: "doc-1", contentRevision: 3 });
   });
 });

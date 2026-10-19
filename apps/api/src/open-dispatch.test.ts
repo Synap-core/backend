@@ -111,7 +111,7 @@ describe("podAdminBrowserUrl (the bounce page's 'View in browser')", () => {
       `${ADMIN}/open/${ID}`
     );
     expect(podAdminBrowserUrl(undefined, "proposals", ADMIN)).toBeUndefined();
-    expect(podAdminBrowserUrl("channel", ID, ADMIN)).toBeUndefined();
+    expect(podAdminBrowserUrl("project", ID, ADMIN)).toBeUndefined();
   });
 
   it("no pod-admin → no escape link", () => {
@@ -209,6 +209,41 @@ describe("dispatchOpen — playbook / run / capability / agent are web-hosted", 
   );
 });
 
+describe("dispatchOpen — document / channel read on the web", () => {
+  it.each(["document", "channel"])(
+    "%s + human + admin → pod-admin /open/%s/",
+    (type) => {
+      expect(
+        dispatchOpen({ type, id: ID, userAgent: HUMAN, adminBase: ADMIN })
+      ).toEqual({ action: "redirect", url: `${ADMIN}/open/${type}/${ID}` });
+    }
+  );
+
+  it.each(["document", "channel"])(
+    "%s + Discordbot → bounce (bodies never reach an unfurler)",
+    (type) => {
+      expect(
+        dispatchOpen({ type, id: ID, userAgent: DISCORDBOT, adminBase: ADMIN })
+      ).toEqual({ action: "bounce", deep: `synap://open/${type}/${ID}` });
+    }
+  );
+
+  it.each(["document", "channel"])(
+    "%s + ?client=mobile → bounce to relay",
+    (type) => {
+      expect(
+        dispatchOpen({
+          type,
+          id: ID,
+          userAgent: HUMAN,
+          adminBase: ADMIN,
+          client: "mobile",
+        })
+      ).toEqual({ action: "bounce", deep: `synap://open/${type}/${ID}` });
+    }
+  );
+});
+
 describe("dispatchOpen — a run keeps its ?flowType=", () => {
   it("human → the web page WITH the flow type", () => {
     expect(
@@ -273,13 +308,13 @@ describe("dispatchOpen — a run keeps its ?flowType=", () => {
     ).toEqual({ action: "redirect", url: `${ADMIN}/open/entity/${ID}` });
     expect(
       dispatchOpen({
-        type: "channel",
+        type: "project",
         id: ID,
         userAgent: HUMAN,
         adminBase: ADMIN,
         flowType: "playbook",
       })
-    ).toEqual({ action: "bounce", deep: `synap://open/channel/${ID}` });
+    ).toEqual({ action: "bounce", deep: `synap://open/project/${ID}` });
   });
 
   it("the bounce page's browser link keeps it too", () => {
@@ -405,17 +440,17 @@ describe("dispatchOpen", () => {
     });
   });
 
-  it("channel + human + admin → bounce (not 302)", () => {
+  it("project + human + admin → bounce (not 302)", () => {
     expect(
       dispatchOpen({
-        type: "channel",
+        type: "project",
         id: ID,
         userAgent: HUMAN,
         adminBase: ADMIN,
       })
     ).toEqual({
       action: "bounce",
-      deep: `synap://open/channel/${ID}`,
+      deep: `synap://open/project/${ID}`,
     });
   });
 

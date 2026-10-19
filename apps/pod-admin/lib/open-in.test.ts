@@ -26,6 +26,8 @@ describe("openIn — web-hosted objects", () => {
     "run",
     "capability",
     "agent",
+    "document",
+    "channel",
   ])("hosts %s on /open", (objectKind) => {
     const exit = openIn({ kind: "object", objectKind, id: ID });
     expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
@@ -57,7 +59,7 @@ describe("openIn — web-hosted objects", () => {
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
-  it.each(["workspace", "channel", "document", "cell", "skill", "tool"])(
+  it.each(["workspace", "project", "cell", "skill", "tool"])(
     "%s bounces to the desktop app with a download fallback",
     (objectKind) => {
       const exit = openIn({ kind: "object", objectKind, id: ID });
@@ -222,7 +224,7 @@ describe("placeExit — the device decides what a hand-off shows", () => {
   });
 
   it.each([
-    ["a channel", { kind: "object", objectKind: "channel", id: ID }],
+    ["a cell", { kind: "object", objectKind: "cell", id: ID }],
     ["a desktop app", { kind: "app", appId: "marketplace" }],
     [
       "a Settings section with no web twin",
