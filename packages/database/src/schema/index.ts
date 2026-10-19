@@ -230,6 +230,7 @@ export * from "./capability-template-cache.js";
 // future catalog-provider federation (P2.4-B / P2.10.2). The old
 // capability_template_cache stays in place unchanged — cutover is a later wave.
 export * from "./cp-catalog-cache.js";
+export * from "./official-catalog-digests.js";
 
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)

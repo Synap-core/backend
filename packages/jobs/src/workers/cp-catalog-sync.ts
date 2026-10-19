@@ -63,6 +63,10 @@ import {
 } from "@synap-core/types/marketplace-source";
 import { mergePackageSearchTags } from "./package-search-tokens.js";
 import { syncThirdPartySource } from "./marketplace-source-sync.js";
+import {
+  checkOfficialCatalogSignature,
+  reportUnverifiedOfficialRows,
+} from "./official-catalog-signature.js";
 
 const logger = createLogger({ module: "cp-catalog-sync" });
 
@@ -172,16 +176,6 @@ export const DEFAULT_CATALOG_SOURCE = "https://api.synap.live";
 export const OFFICIAL_SOURCE_NAME = "Synap";
 
 /**
- * Synap's catalog signing key (raw ed25519, base64), compiled in. NULL today:
- * the Control Plane does not serve a signed `synap-index.json` yet, so the
- * official source is trusted the way it always was — it IS the configured
- * Control Plane URL, over TLS. When the CP signs its index, this constant gets
- * the key and the official source moves to the same verified format as every
- * other source (docs/marketplace-source.md).
- */
-export const SYNAP_CATALOG_PUBLIC_KEY: string | null = null;
-
-/**
  * The official catalog's base URL — the pod's Control Plane when set, else
  * Synap's public catalog. It is also the official rows' cache key, so it is
  * resolved even while the catalog is switched off (the rows stay readable).
@@ -213,7 +207,11 @@ export interface CatalogSource {
   enabled: boolean;
   /** Official only: switched off by `SYNAP_CATALOG_SOURCE=off` — the console cannot turn it on. */
   lockedOff: boolean;
-  /** The pinned signing key; null for the official source today and an unsigned showcase. */
+  /**
+   * The pinned signing key; null for an unsigned showcase and for the
+   * official source, whose index is checked against the release's root keys
+   * through a keys statement (`official-catalog-signature.ts`).
+   */
   publicKey: string | null;
   keyFingerprint: string | null;
   /** Trusted only: agents may propose installs from it. */
@@ -242,7 +240,7 @@ export function describeCatalogSources(
     official: true,
     enabled: !envOff && (snapshot?.official?.enabled ?? true),
     lockedOff: envOff,
-    publicKey: SYNAP_CATALOG_PUBLIC_KEY,
+    publicKey: null,
     keyFingerprint: null,
     agentsMayPropose: true,
     addedBy: null,
@@ -835,6 +833,31 @@ async function afterOfficialSync(): Promise<void> {
 }
 
 /**
+ * The official source's sync: its signed index is checked first (so the
+ * digests the converge reads are the freshest verified ones), then every
+ * kind is synced from the Control Plane's endpoints as before, the cached
+ * rows are compared with the verified index (report only: logged, counted),
+ * and the installed capabilities are converged — which skips anything the
+ * signature rule does not admit (`reconcileChangedCapabilityTemplates`).
+ */
+async function syncOfficialSource(
+  source: CatalogSource,
+  snapshot: Pick<MarketplaceSourcesSnapshot, "officialSignature"> | null
+): Promise<void> {
+  const signature = await checkOfficialCatalogSignature(
+    source.url,
+    snapshot?.officialSignature ?? null
+  );
+  for (const kind of CATALOG_KINDS) {
+    await syncOne(source.cacheKey, kind);
+  }
+  if (signature?.lastOkAt) {
+    await reportUnverifiedOfficialRows(source.cacheKey, signature);
+  }
+  await afterOfficialSync();
+}
+
+/**
  * Called by the cron scheduler (every 10 min) and once on startup. Refreshes
  * cp_catalog_cache for every configured source × every kind. Each (source,
  * kind) pair is independent: one failing never blocks the others. After the
@@ -861,10 +884,7 @@ export async function handleCpCatalogSync(): Promise<void> {
 
   for (const source of sources) {
     if (source.official) {
-      for (const kind of CATALOG_KINDS) {
-        await syncOne(source.cacheKey, kind);
-      }
-      await afterOfficialSync();
+      await syncOfficialSource(source, snapshot);
     } else {
       await syncThirdPartySource(source, snapshot?.status[source.id]);
     }
@@ -886,8 +906,7 @@ export async function syncCatalogSourceNow(sourceId: string): Promise<void> {
     throw new Error(`The "${source.name}" source is switched off.`);
   }
   if (source.official) {
-    for (const kind of CATALOG_KINDS) await syncOne(source.cacheKey, kind);
-    await afterOfficialSync();
+    await syncOfficialSource(source, snapshot);
     return;
   }
   await syncThirdPartySource(source, snapshot.status[source.id]);
