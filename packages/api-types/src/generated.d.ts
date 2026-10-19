@@ -15278,6 +15278,25 @@ export interface EffectivePushCategory extends PushCategoryPolicy {
 	/** `true` when the person set it; `false` when it is the default. */
 	explicit: boolean;
 }
+/** One row of `notifCenter.listDevices` (dates are ISO strings over JSON). */
+export interface PushDeviceRow {
+	id: string;
+	/** The name the phone reported (`Constants.deviceName`), if any. */
+	name: string | null;
+	platform: string | null;
+	appVersion: string | null;
+	status: string;
+	/**
+	 * The last time the app registered. `null` for a phone whose app does not
+	 * register on every launch: its last registration says nothing about use,
+	 * so it is never shown as last seen and never stopped for being unused.
+	 */
+	lastSeenAt: Date | string | null;
+	createdAt: Date | string;
+	revokedAt: Date | string | null;
+	/** True only when the caller passed this phone's own token. */
+	isThisDevice: boolean;
+}
 declare const CONNECTION_NOTIFY_LEVELS: readonly [
 	"everything",
 	"problems",
@@ -15522,6 +15541,7 @@ export interface NotificationCatalogue {
 	withheldProducerlessCount: number;
 }
 export type PreferenceScope = "pod" | "workspace";
+export type RegisteredDeviceStatus = "connected" | "revoked";
 export interface LibraryKeepAliveSettings {
 	/** Quiet archive, weekly "Build one group" and resurfacing. Default false (opt-in). */
 	enabled: boolean;
@@ -37296,8 +37316,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				platform: "android" | "ios";
 				deviceName?: string | undefined;
 				appVersion?: string | undefined;
+				reenable?: boolean | undefined;
+				everyLaunch?: boolean | undefined;
 			};
 			output: {
+				id: string;
+				status: RegisteredDeviceStatus;
 				success: boolean;
 			};
 			meta: object;
@@ -37312,16 +37336,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		listDevices: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+		revokeDevice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
 			output: {
 				id: string;
-				status: string;
-				metadata: Record<string, unknown>;
-				createdAt: Date;
-				updatedAt: Date;
-				displayName: string;
-			}[];
+				status: "revoked";
+			};
+			meta: object;
+		}>;
+		listDevices: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				token?: string | undefined;
+			} | undefined;
+			output: PushDeviceRow[];
 			meta: object;
 		}>;
 		requestHandoff: import("@trpc/server").TRPCMutationProcedure<{

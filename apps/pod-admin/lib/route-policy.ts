@@ -72,6 +72,11 @@ export function isSelfService(path: string): boolean {
     // (`loadManageableMachine`), so this grants no reach.
     path === "/my-computers" ||
     path.startsWith("/my-computers/") ||
+    // Your OWN push settings and phones. `notifCenter.pushPrefs` /
+    // `setPushPrefs` / `listDevices` / `revokeDevice` are floored on the
+    // caller's `userId` (another person's phone answers NOT_FOUND, pod admins
+    // included), so this grants no reach.
+    path === "/my-notifications" ||
     // Your OWN sign-in methods and recovery codes. Every call behind it is
     // scoped to the caller's account; the one owner-only control (Synap Cloud
     // trust) is re-checked by the pod (`PUT /api/account-recovery/cloud-trust`).

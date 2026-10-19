@@ -31,6 +31,12 @@ import {
   API_RETRY_OPTIONS,
   circuitBreakerRegistry,
 } from "@synap/shared-utils";
+import { getBoss } from "@synap/events";
+import {
+  PUSH_RECEIPTS_DELAY_SECONDS,
+  PUSH_RECEIPTS_QUEUE,
+  type PushReceiptsPayload,
+} from "@synap/jobs/workers/push-devices.js";
 import { MessagingAccountService } from "../services/messaging-account-service.js";
 
 const logger = createLogger({ module: "expo-push" });
@@ -84,22 +90,42 @@ function pushCircuitBreaker() {
 }
 
 /**
- * The caller's CONNECTED expo device tokens. A row is floored on `user_id`, so
- * this can only ever read the recipient's own devices. A `disconnected` row
- * (revoked by the user, or killed by a `DeviceNotRegistered` ticket) is
- * deliberately excluded rather than deleted, so the unique index still absorbs
- * a later re-register on that device.
+ * The caller's CONNECTED expo devices. A row is floored on `user_id`, so this
+ * can only ever read the recipient's own devices. A `disconnected` or
+ * `revoked` row is deliberately excluded rather than deleted, so the unique
+ * index still absorbs a later re-register on that device.
  */
-async function connectedPushTokens(userId: string): Promise<string[]> {
+async function connectedPushDevices(
+  userId: string
+): Promise<Array<{ id: string; token: string }>> {
   const rows = await db.query.messagingAccounts.findMany({
     where: and(
       eq(messagingAccounts.userId, userId),
       eq(messagingAccounts.provider, MESSAGING_ACCOUNT_PROVIDER_EXPO),
       eq(messagingAccounts.status, "connected")
     ),
-    columns: { externalId: true },
+    columns: { id: true, externalId: true },
   });
-  return rows.map((r) => r.externalId);
+  return rows.map((r) => ({ id: r.id, token: r.externalId }));
+}
+
+/**
+ * Queue the receipt check for this send's accepted tickets: most dead tokens
+ * are only reported in the receipt (`@synap/jobs` `push-devices.ts`). A failed
+ * enqueue is logged — the next send queues its own check.
+ */
+async function queueReceiptCheck(payload: PushReceiptsPayload): Promise<void> {
+  if (payload.tickets.length === 0) return;
+  try {
+    await getBoss().send(PUSH_RECEIPTS_QUEUE, payload, {
+      startAfter: PUSH_RECEIPTS_DELAY_SECONDS,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, userId: payload.userId },
+      "Failed to queue the Expo receipt check (non-fatal)"
+    );
+  }
 }
 
 /** POST one batch, returning its tickets in request order. */
@@ -159,15 +185,15 @@ export async function sendExpoPush(
 ): Promise<{ sent: number; revoked: number; failed: number }> {
   const outcome = { sent: 0, revoked: 0, failed: 0 };
 
-  let tokens: string[];
+  let devices: Array<{ id: string; token: string }>;
   try {
-    tokens = await connectedPushTokens(input.userId);
+    devices = await connectedPushDevices(input.userId);
   } catch (err) {
     logger.error({ err, userId: input.userId }, "Failed to load push devices");
     return outcome;
   }
 
-  if (tokens.length === 0) {
+  if (devices.length === 0) {
     // The ordinary case for a user who has never opened the mobile app. Not a
     // warning — `"os"` is a default channel for most notification types, so
     // most sends legitimately land here.
@@ -181,18 +207,26 @@ export async function sendExpoPush(
   const breaker = pushCircuitBreaker();
   if (breaker.getStats().state === "open") {
     logger.warn(
-      { userId: input.userId, devices: tokens.length },
+      { userId: input.userId, devices: devices.length },
       "Expo push circuit open — skipping push (notification already persisted)"
     );
-    outcome.failed = tokens.length;
+    outcome.failed = devices.length;
     return outcome;
   }
 
-  for (let i = 0; i < tokens.length; i += EXPO_MAX_BATCH) {
-    const batch = tokens.slice(i, i + EXPO_MAX_BATCH);
+  const receipts: PushReceiptsPayload = { userId: input.userId, tickets: [] };
+
+  for (let i = 0; i < devices.length; i += EXPO_MAX_BATCH) {
+    const batch = devices.slice(i, i + EXPO_MAX_BATCH);
 
     const result = await withRetryResult(
-      () => breaker.execute(() => postBatch(batch, input)),
+      () =>
+        breaker.execute(() =>
+          postBatch(
+            batch.map((d) => d.token),
+            input
+          )
+        ),
       API_RETRY_OPTIONS
     );
 
@@ -208,10 +242,13 @@ export async function sendExpoPush(
     // Tickets come back positionally, one per message sent.
     for (let t = 0; t < batch.length; t++) {
       const ticket = result.data[t];
-      const token = batch[t]!;
+      const device = batch[t]!;
 
       if (ticket?.status === "ok") {
         outcome.sent++;
+        if (ticket.id) {
+          receipts.tickets.push({ ticketId: ticket.id, deviceId: device.id });
+        }
         continue;
       }
 
@@ -225,7 +262,7 @@ export async function sendExpoPush(
         const revoked = await MessagingAccountService.setStatusForUser({
           userId: input.userId,
           provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
-          externalId: token,
+          externalId: device.token,
           status: "disconnected",
         }).catch((err) => {
           logger.warn({ err }, "Failed to revoke dead push token (non-fatal)");
@@ -250,5 +287,6 @@ export async function sendExpoPush(
     }
   }
 
+  await queueReceiptCheck(receipts);
   return outcome;
 }

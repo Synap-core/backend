@@ -15,6 +15,12 @@ import {
   pushEnvelope,
   quickAnswerFor,
   quickAnswerPushBody,
+  PUSH_DEVICE_COPY,
+  PUSH_DEVICE_NOT_SEEN_DAYS,
+  comparePushDevices,
+  pushDeviceState,
+  pushDeviceView,
+  type PushDeviceRow,
 } from "./index.js";
 
 const slot = { sessionId: "s-1", label: "Tone" };
@@ -312,5 +318,108 @@ describe("quickAnswerPushBody — the push shows what the buttons answer", () =>
       expect(resolvePushCategoryLabel(c).hint).not.toContain("\u2014");
       expect(resolvePushCategoryLabel(c).name).not.toContain("\u2014");
     }
+  });
+});
+
+describe("phones", () => {
+  const NOW = new Date("2026-10-19T12:00:00Z");
+  const daysAgo = (d: number) =>
+    new Date(NOW.getTime() - d * 24 * 60 * 60 * 1000).toISOString();
+  const row = (over: Partial<PushDeviceRow> = {}): PushDeviceRow => ({
+    id: "d1",
+    name: "Ada's iPhone",
+    platform: "ios",
+    appVersion: "1.4.0",
+    status: "connected",
+    lastSeenAt: daysAgo(1),
+    createdAt: daysAgo(200),
+    revokedAt: null,
+    isThisDevice: false,
+    ...over,
+  });
+
+  it("reads each status as its state", () => {
+    expect(pushDeviceState(row(), NOW)).toBe("on");
+    expect(pushDeviceState(row({ status: "disconnected" }), NOW)).toBe("off");
+    expect(pushDeviceState(row({ status: "revoked" }), NOW)).toBe("turned-off");
+  });
+
+  it("an unknown status reads as off, never as getting pushes", () => {
+    expect(pushDeviceState(row({ status: "paused" }), NOW)).toBe("off");
+  });
+
+  it("a connected phone unused past the threshold reads not seen", () => {
+    expect(
+      pushDeviceState(
+        row({ lastSeenAt: daysAgo(PUSH_DEVICE_NOT_SEEN_DAYS) }),
+        NOW
+      )
+    ).toBe("on");
+    expect(
+      pushDeviceState(
+        row({ lastSeenAt: daysAgo(PUSH_DEVICE_NOT_SEEN_DAYS + 1) }),
+        NOW
+      )
+    ).toBe("not-seen");
+  });
+
+  it("a phone with no last-seen time is never called unused", () => {
+    expect(pushDeviceState(row({ lastSeenAt: null }), NOW)).toBe("on");
+  });
+
+  it("names a phone after itself, else its platform", () => {
+    expect(pushDeviceView(row(), NOW).label).toBe("Ada's iPhone");
+    expect(pushDeviceView(row({ name: " " }), NOW).label).toBe("iOS device");
+    expect(
+      pushDeviceView(row({ name: null, platform: "android" }), NOW)
+    ).toMatchObject({ label: "Android device", platform: "Android" });
+    expect(pushDeviceView(row({ name: null, platform: null }), NOW).label).toBe(
+      "Phone"
+    );
+  });
+
+  it("offers Stop notifications on everything but a phone already turned off", () => {
+    expect(pushDeviceView(row(), NOW).canTurnOff).toBe(true);
+    expect(
+      pushDeviceView(row({ status: "disconnected" }), NOW).canTurnOff
+    ).toBe(true);
+    expect(pushDeviceView(row({ status: "revoked" }), NOW).canTurnOff).toBe(
+      false
+    );
+  });
+
+  it("gives each state a tone and plain words", () => {
+    expect(pushDeviceView(row(), NOW)).toMatchObject({
+      tone: "healthy",
+      statusLabel: "On",
+    });
+    expect(pushDeviceView(row({ lastSeenAt: daysAgo(45) }), NOW)).toMatchObject(
+      { tone: "stale", statusLabel: "Not seen lately" }
+    );
+    expect(pushDeviceView(row({ status: "revoked" }), NOW).explain).toMatch(
+      /Only this phone can turn notifications back on/
+    );
+    expect(PUSH_DEVICE_COPY.turnOffTitle("Ada's iPhone")).toBe(
+      "Stop notifications to Ada's iPhone?"
+    );
+  });
+
+  it("orders this phone first, then by state, then most recently seen", () => {
+    const views = [
+      row({ id: "off", status: "disconnected", lastSeenAt: daysAgo(2) }),
+      row({ id: "old", lastSeenAt: daysAgo(10) }),
+      row({ id: "new", lastSeenAt: daysAgo(1) }),
+      row({ id: "me", status: "revoked", isThisDevice: true }),
+      row({ id: "quiet", lastSeenAt: daysAgo(40) }),
+      row({ id: "legacy", lastSeenAt: null, createdAt: daysAgo(5) }),
+    ].map((r) => pushDeviceView(r, NOW));
+    expect(views.sort(comparePushDevices).map((v) => v.id)).toEqual([
+      "me",
+      "new",
+      "legacy",
+      "old",
+      "quiet",
+      "off",
+    ]);
   });
 });

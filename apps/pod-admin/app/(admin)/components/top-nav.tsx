@@ -51,6 +51,7 @@ const ACCOUNT_LINKS: { page: AccountPage; label: string }[] = [
 const PERSONAL_LINKS: { href: string; label: string }[] = [
   { href: "/my-connections", label: "My connections" },
   { href: "/my-computers", label: "My computers" },
+  { href: "/my-notifications", label: "My notifications" },
   { href: "/my-vault", label: "My vault" },
 ];
 
