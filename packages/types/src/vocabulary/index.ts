@@ -425,6 +425,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // these rows `humanizeToken` spells the button right and the receipt wrong
   // ("Answer" for an act already done).
   answer: { imperative: "Answer", past: "Answered" },
+  // An owed slot whose blocker is a choice only the person can make: its
+  // verb says DECIDE, as its reason mark says "Decision" (the row's door is
+  // still the answer's — `LensVerb.action` stays `answer`).
+  decide: { imperative: "Decide", past: "Decided" },
   review: { imperative: "Review", past: "Reviewed" },
   dismiss: { imperative: "Dismiss", past: "Dismissed" },
   // The focus verbs (`lensFocus`, `@synap-core/types/lens`): a criterion the
