@@ -2263,6 +2263,25 @@ runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
 
+// One-title BACKFILL (founder 2026-10-19): documents written before the create
+// door applied the one-title rule lose a leading heading equal to their name,
+// ONCE, as a new revision each (rollback-able). Rides the boot pass beside the
+// media backfills, but outside the pg-boss block so local-mode pods run it too.
+// Stamped on pod_settings (versioned); a later boot is a no-op. Off the boot path.
+void startupHooksSettled
+  .then(async () => {
+    const { backfillDocumentTitleHeadings } = await import("@synap/api");
+    const r = await backfillDocumentTitleHeadings();
+    if (r.status !== "already-complete")
+      apiLogger.info(r, "Document title backfill ran");
+  })
+  .catch((err) =>
+    apiLogger.warn(
+      { err },
+      "Document title backfill failed (non-fatal; resumes next boot)"
+    )
+  );
+
 // Live session updates: the ONE producer of `focus_session:updated` — LISTENs
 // on the migration-0277 row trigger, so every session writer pushes. Never
 // throws; polling is the floor if the LISTEN is down.
