@@ -143,7 +143,16 @@ vi.mock("./signals.js", () => ({
           ),
         ])
       ),
+      byKindTruncated: new Map(
+        input.spaces.map((s) => [
+          s.workspaceId,
+          new Map(
+            s.profileSlugs.map((slug) => [slug, slug === "deal" ? true : null])
+          ),
+        ])
+      ),
       podLevel: 4,
+      podLevelTruncated: false,
       attentionReads: 1,
     };
   },
@@ -167,6 +176,8 @@ vi.mock("../services/runs/session-liveness.js", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { lifecycleRouter } from "./lifecycle.js";
+import { preferencesRouter } from "./preferences.js";
+import { db as pgDb } from "@synap/database";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -544,6 +555,9 @@ describe("lifecycle.home", () => {
       expect(flags.get(MISC)).toBeNull();
       const dev = home.spaces.find((s) => s.workspaceId === DEV)!;
       expect(dev.produces[0]!.needsYou).toBe(3);
+      // The kind's and pod level's floor flags reach the wire too.
+      expect(dev.produces[0]!.needsYouTruncated).toBe(true);
+      expect(home.needsYou.podLevelTruncated).toBe(false);
       // One read, asked for every listed space and its produced kinds.
       expect(h.countCalls).toHaveLength(1);
       const asked = h.countCalls[0] as unknown as {
@@ -724,7 +738,7 @@ describe("lifecycle.home — pod-wide things (homes X1, review #5)", () => {
 
   it("a card counts what its board shows (pod-wide rows included); only OWNED rows make a space produce", async () => {
     await q(
-      `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'decision','Decision','decisions','kind','pod',true)`,
+      `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'decision','Decision','follow-ups','kind','pod',true)`,
       [DECISION]
     );
     await q(
@@ -764,13 +778,14 @@ describe("lifecycle.home — pod-wide things (homes X1, review #5)", () => {
         );
       expect(cardOf(beta)).toBe(2 + 3);
       expect(cardOf(MISC)).toBe(1 + 3);
-      // The stored plural is lower-case ("decisions", as an agent typed it on
-      // a real pod): the card's word is sentence-cased like "Deals".
+      // The stored plural is lower-case and hyphenated ("follow-ups", as a
+      // person typed it): sentence-cased like "Deals", hyphen kept — never
+      // humanized as a slug ("Follow ups").
       expect(
         home.spaces
           .find((s) => s.workspaceId === beta)!
           .produces.find((p) => p.profileSlug === "decision")!.plural
-      ).toBe("Decisions");
+      ).toBe("Follow-ups");
       // Inference reads OWNED rows only: pod-wide decisions never make
       // Gamma (or a Finance / Foundation) a producer of decisions.
       expect(
@@ -1121,5 +1136,36 @@ describe("role-produced work + the access floor (homes review M1 / S7)", () => {
     } finally {
       await q(`update focus_sessions set status = 'closed'`);
     }
+  });
+});
+
+/**
+ * Home's LAST SEEN is pod-side (0333), so "while you were away" follows the
+ * person across devices: `preferences.markHomeSeen` stamps it (server time),
+ * `lifecycle.home` returns it. Driven through both real routers on PGlite.
+ */
+describe("home: last seen, on the pod", () => {
+  const prefs = (userId: string) =>
+    preferencesRouter.createCaller({
+      db: pgDb,
+      authenticated: true,
+      userId,
+      workspaceId: null,
+    } as never);
+
+  it("never stamped → null; markHomeSeen → the next home read returns that stamp", async () => {
+    await q(`delete from user_preferences`);
+    expect((await caller().home()).homeLastSeenAt).toBeNull();
+
+    const before = Date.now();
+    const { homeLastSeenAt } = await prefs(USER).markHomeSeen();
+    expect(Date.parse(homeLastSeenAt)).toBeGreaterThanOrEqual(before);
+    expect((await caller().home()).homeLastSeenAt).toBe(homeLastSeenAt);
+  });
+
+  it("is per person: another user's stamp never reaches this home", async () => {
+    await q(`delete from user_preferences`);
+    await prefs("someone-else").markHomeSeen();
+    expect((await caller().home()).homeLastSeenAt).toBeNull();
   });
 });

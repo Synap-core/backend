@@ -264,8 +264,16 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(row.detail).toBe(
       "Founder wants cost/trade-off data before choosing HDD vs B2"
     );
-    expect(row.verb).toEqual({ action: "answer", label: "Answer" });
+    // Its reason mark says "Decision" (the Inbox), so the button says Decide;
+    // the act stays the answer's door (relay routes on `answer`).
+    expect(row.verb).toEqual({ action: "answer", label: "Decide" });
     expect(resolveUnitState(row.state).state).toBe("needs_you");
+    // Any other owed slot is answered.
+    const credential = lensRowOfNeedsYou(
+      needsYouRows([sig({ id: "c", kind: "owed-slot", blockedReason: "credential" })]).recent[0]!,
+      "blocking"
+    );
+    expect(credential.verb).toEqual({ action: "answer", label: "Answer" });
   });
   it("an unfinished capture: the status word is the chip, the verb fits what it owes, the door is the thread", () => {
     const answer = needsYouRows([

@@ -47,6 +47,7 @@ import { storage } from "@synap/storage";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { bodyWithoutTitleHeading } from "@synap-core/markdown-core/sections";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import {
@@ -412,6 +413,25 @@ function parseOps(ops: unknown): DocumentPatchOp[] {
   return parsed.data;
 }
 
+/**
+ * ONE TITLE (founder 2026-10-19): a whole-body replace that opens with a
+ * heading equal to the document's NAME is stored without it — the name is the
+ * title, printed once. Applied to the ops BEFORE the preview and the gate, so
+ * what a person reviews is what lands (the proposal stores these ops). Never
+ * renames the document, never touches a heading that differs from its name;
+ * section and text ops are the writer's own targeted edits and pass as sent.
+ */
+function withoutTitleHeading(
+  ops: DocumentPatchOp[],
+  title: string
+): DocumentPatchOp[] {
+  return ops.map((op) =>
+    op.op === "replace_all"
+      ? { ...op, content: bodyWithoutTitleHeading(op.content, title) }
+      : op
+  );
+}
+
 function writerOf(input: {
   userId: string;
   agentUserId: string | null;
@@ -439,7 +459,7 @@ function checkpointMessage(
 export async function applyDocumentPatch(
   input: ApplyDocumentPatchInput
 ): Promise<ApplyDocumentPatchResult> {
-  const ops = parseOps(input.ops);
+  const parsedOps = parseOps(input.ops);
   const agentUserId = input.agentUserId ?? null;
   const systemAuthor = agentUserId ? null : (input.systemAuthor ?? null);
 
@@ -448,6 +468,7 @@ export async function applyDocumentPatch(
     await loadEditableDocument(input.userId, input.documentId);
   }
   const doc = await loadPatchDocument(input.documentId);
+  const ops = withoutTitleHeading(parsedOps, doc.title);
 
   // 2. The base the writer read.
   const hasReplaceAll = ops.some((op) => op.op === "replace_all");

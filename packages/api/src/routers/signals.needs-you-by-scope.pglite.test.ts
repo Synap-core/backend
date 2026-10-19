@@ -370,6 +370,8 @@ describe("countNeedsYouByScope", () => {
     // Uncapped: the floor flag is a measured false, not an absent one.
     expect(before.truncated).toBe(false);
     expect(before.bySpaceTruncated.get(W1)).toBe(false);
+    expect(before.byKindTruncated.get(W1)!.get("deal")).toBe(false);
+    expect(before.podLevelTruncated).toBe(false);
     // Fill the notification scan cap (100) in W1 — distinct titles, so the
     // fold cannot shrink them below it.
     await q(
@@ -391,5 +393,41 @@ describe("countNeedsYouByScope", () => {
     // A space whose count failed has no floor flag either.
     expect(grouped.bySpace.get(W3)).toBeNull();
     expect(grouped.bySpaceTruncated.get(W3)).toBeNull();
+    expect(grouped.byKindTruncated.get(W3)!.get("deal")).toBeNull();
+    // The per-scope fallback does not measure pod level: no flag either.
+    expect(grouped.podLevel).toBeNull();
+    expect(grouped.podLevelTruncated).toBeNull();
+
+    // A KIND's count capped: fill the owed-slot scan cap (100) on a deal in
+    // W1. Notifications never follow a kind, so before this the kind was
+    // uncapped while its space was capped — the flag is per scope.
+    expect(grouped.byKindTruncated.get(W1)!.get("deal")).toBe(false);
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, status, origin, subject_entity_id, expected_outputs, metadata, created_at, started_at, updated_at)
+       select gen_random_uuid(),$1,$2,'g'||g,'active','human',$3,$4::jsonb,'{}'::jsonb,now(),now(),now()
+       from generate_series(1,100) g`,
+      [
+        USER,
+        W1,
+        D1,
+        JSON.stringify([
+          {
+            kind: "document",
+            label: "Sign-off",
+            status: "pending",
+            owner: "human",
+            blockedReason: "needs_human",
+            owedSince: new Date().toISOString(),
+          },
+        ]),
+      ]
+    );
+    const kind = await signalsRouter
+      .createCaller(ctx)
+      .count({ workspaceId: W1, profileSlug: "deal" } as never);
+    expect(kind.truncated).toBe(true); // non-vacuity: the kind cap was reached
+    const capped = await countNeedsYouByScope(ctx, SCOPES);
+    expect(capped.byKind.get(W1)!.get("deal")).toBe(kind.needsYou);
+    expect(capped.byKindTruncated.get(W1)!.get("deal")).toBe(true);
   });
 });

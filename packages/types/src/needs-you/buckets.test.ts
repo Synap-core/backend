@@ -55,6 +55,23 @@ const TABLE: Array<[Row, NeedsYouBucket, string]> = [
     "decision",
     "routine = swipe-safe, whatever the cluster size (×N batches N on one sample id)",
   ],
+  // A cluster whose count is not a number (an untyped wire row, an older
+  // pod) is NOT a single: it fails closed to a decision (review R1 #7).
+  [
+    proposal("count-nan", { count: Number.NaN }),
+    "decision",
+    "a non-finite count reads as single (fails open into batch-approve)",
+  ],
+  [
+    proposal("count-missing", { count: undefined as unknown as number }),
+    "decision",
+    "a missing count reads as single",
+  ],
+  [
+    proposal("count-null", { count: null as unknown as number }),
+    "decision",
+    "a null count reads as single",
+  ],
   [
     proposal("no-intent", { intent: undefined }),
     "decision",
@@ -177,7 +194,7 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
     expect(new Set(filed.map((r) => r.signal.id)).size).toBe(rows.length);
     const sum = NEEDS_YOU_BUCKETS.reduce((n, b) => n + counts[b], 0);
     expect(sum).toBe(rows.length);
-    expect(counts).toEqual({ decision: 7, question: 5, routine: 1, broken: 2 });
+    expect(counts).toEqual({ decision: 10, question: 5, routine: 1, broken: 2 });
   });
 
   it("decision, question, broken, then routine — whatever the server order", () => {

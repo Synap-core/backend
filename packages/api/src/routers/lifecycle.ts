@@ -211,6 +211,8 @@ const producedKindWire = z.object({
   ),
   /** `signals.countByProfile` for this space + kind; null = that read failed. */
   needsYou: z.number().nullable(),
+  /** `needsYou` is a floor ("N+"), as `signals.count`'s own flag; null when it is. */
+  needsYouTruncated: z.boolean().nullable(),
   /** Live things someone is on (the board's workedBy rule); null = read failed. */
   beingWorked: z.number().nullable(),
   /** The ONE thing worth naming: needs_you → being_worked → stuck → recent. */
@@ -239,6 +241,12 @@ const spaceIntentWire = z.object({
 const homeWire = z.object({
   /** Producing spaces first (most live things first), then libraries by name. */
   spaces: z.array(spaceIntentWire),
+  /**
+   * When this person last had Home on screen, on ANY device (ISO; null =
+   * never stamped): the brief's "while you were away" window. Stamped by
+   * `preferences.markHomeSeen` when Home leaves the screen.
+   */
+  homeLastSeenAt: z.string().nullable(),
   needsYou: z.object({
     /** `signals.count` on the caller's floor (narrowed to the project). */
     total: z.number().nullable(),
@@ -263,6 +271,8 @@ const homeWire = z.object({
      * not list (a system or agent space) counts in neither.
      */
     podLevel: z.number().nullable(),
+    /** `podLevel` is a floor ("N+"); null when `podLevel` is. */
+    podLevelTruncated: z.boolean().nullable(),
   }),
 });
 

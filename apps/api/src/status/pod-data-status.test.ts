@@ -261,14 +261,19 @@ describe("/health readiness — can a caller use the pod yet?", () => {
   //  - an EMPTY pod is ready (its alarm is `data` + degraded — rules out
   //    folding degraded into not-ready, which would hide the alarm behind a
   //    spinner).
+  //  - hooks that THREW read "failed" even when the data check is ok
+  //    (rules out "settled = ready", the finally-flag that read a broken
+  //    boot as ready — review R1 #4).
   it.each([
-    [false, "ok", "starting"],
-    [false, "unknown", "starting"],
-    [true, "unknown", "unknown"],
-    [true, "ok", "ready"],
-    [true, "empty", "ready"],
-  ] as const)("settled=%s data=%s → %s", (settled, data, expected) => {
-    expect(readinessFor({ status: data }, settled)).toBe(expected);
+    ["running", "ok", "starting"],
+    ["running", "unknown", "starting"],
+    ["settled", "unknown", "unknown"],
+    ["settled", "ok", "ready"],
+    ["settled", "empty", "ready"],
+    ["failed", "ok", "failed"],
+    ["failed", "unknown", "failed"],
+  ] as const)("startup=%s data=%s → %s", (startup, data, expected) => {
+    expect(readinessFor({ status: data }, startup)).toBe(expected);
   });
   it("a timed-out users check after boot is `unknown` end to end", async () => {
     const d = await checkDataHealth({
@@ -280,7 +285,7 @@ describe("/health readiness — can a caller use the pod yet?", () => {
       hasUsers: () => new Promise(() => {}),
     });
     expect(healthStatusFor(d)).toBe("ok"); // liveness unchanged, by design
-    expect(readinessFor(d, true)).toBe("unknown");
+    expect(readinessFor(d, "settled")).toBe("unknown");
   });
 });
 
@@ -312,7 +317,7 @@ describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
     // Readiness rides the body from the SAME data check and the boot-hook
     // flag; HTTP and top-level status stay liveness (consumers gate on them).
     expect(flat(b)).toContain(
-      flat("readiness: readinessFor(data, haveStartupHooksSettled())")
+      flat("readiness: readinessFor(data, startupHooksState())")
     );
     expect(b).toContain('auth: "ory-stack"'); // the stack name keeps its type
     expect(b).not.toMatch(/c\.json\([^)]*,\s*5\d\d\)/); // never a 5xx for data

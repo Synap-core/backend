@@ -48,6 +48,7 @@ import type {
 } from "@synap-core/types";
 import {
   buildFallbackTitle,
+  PROPOSAL_BATCH_MAX,
   PROPOSAL_REJECTION_REASONS,
 } from "@synap-core/types/proposals";
 import {
@@ -3036,7 +3037,7 @@ export const proposalsRouter = router({
   batchApprove: protectedProcedure
     .input(
       z.object({
-        proposalIds: z.array(z.string()).min(1).max(50),
+        proposalIds: z.array(z.string()).min(1).max(PROPOSAL_BATCH_MAX),
         comment: z.string().optional(),
         /**
          * Diff-scoped approval, PER PROPOSAL — `proposalId → the
@@ -3265,7 +3266,7 @@ export const proposalsRouter = router({
   batchReject: protectedProcedure
     .input(
       z.object({
-        proposalIds: z.array(z.string()).min(1).max(50),
+        proposalIds: z.array(z.string()).min(1).max(PROPOSAL_BATCH_MAX),
         reason: z.string().optional(),
         /** Structured rejection taxonomy — Phase 1 reasoned-rejection loop. */
         reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),

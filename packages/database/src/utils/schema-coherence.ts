@@ -691,6 +691,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "url_patterns",
     addedBy: "0330_skills_url_patterns.sql",
   },
+  // Home's last-seen stamp (0333). `lifecycle.home` selects it on every Home
+  // read, so a missing column 500s Home.
+  {
+    table: "user_preferences",
+    column: "home_last_seen_at",
+    addedBy: "0333_user_preferences_home_last_seen.sql",
+  },
 
   // A session's OWN phases (0270). Every session read selects `stages`, so a
   // missing column 500s every session door exactly as `criteria` would.

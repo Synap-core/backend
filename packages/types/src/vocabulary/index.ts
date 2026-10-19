@@ -115,7 +115,26 @@ export function sentenceCaseLabel(label: string): string {
   if (!/\s/.test(trimmed) && /[_-]|[a-z0-9][A-Z]/.test(trimmed)) {
     return humanizeToken(trimmed);
   }
-  return trimmed
+  return sentenceCaseWords(trimmed);
+}
+
+/**
+ * Sentence-case a kind's PLURAL ("decisions" → "Decisions", "User Stories" →
+ * "User stories", "UI designs" stays). A plural is words a person typed,
+ * never a token — so unlike {@link sentenceCaseLabel} there is no slug
+ * branch, and a hyphenated word keeps its hyphen: "follow-ups" →
+ * "Follow-ups", "T-shirts" stays, "eBooks" keeps its deliberate casing. A
+ * slug never reaches here: a nameless profile's plural comes from
+ * {@link resolveObjectNounPlural}.
+ */
+export function sentenceCasePlural(plural: string): string {
+  const trimmed = plural.trim();
+  return trimmed ? sentenceCaseWords(trimmed) : "";
+}
+
+/** The per-word sentence-case rule both doors share (first word capitalized). */
+function sentenceCaseWords(text: string): string {
+  return text
     .split(/\s+/)
     .map((word, i) => {
       const plain = /^[A-Z]?[a-z]*$/.test(word.replace(/[^A-Za-z]/g, ""));
@@ -425,6 +444,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // these rows `humanizeToken` spells the button right and the receipt wrong
   // ("Answer" for an act already done).
   answer: { imperative: "Answer", past: "Answered" },
+  // An owed slot whose blocker is a choice only the person can make: its
+  // verb says DECIDE, as its reason mark says "Decision" (the row's door is
+  // still the answer's — `LensVerb.action` stays `answer`).
+  decide: { imperative: "Decide", past: "Decided" },
   review: { imperative: "Review", past: "Reviewed" },
   dismiss: { imperative: "Dismiss", past: "Dismissed" },
   // The focus verbs (`lensFocus`, `@synap-core/types/lens`): a criterion the
@@ -805,6 +828,17 @@ export function pluralizeNoun(noun: string): string {
   return trimmed ? pluralizeFallback(trimmed) : "";
 }
 
+/**
+ * "<n> <noun>": the noun singular at exactly 1, else its plural by the same
+ * rule as {@link pluralizeNoun} ("1 item", "3 items", "2 analyses"). The one
+ * door for a counted plain noun — never a `n === 1 ? 'item' : 'items'` at a
+ * call site. A KIND's count goes through {@link resolveObjectNounPlural}
+ * instead, which knows the curated plurals ("People").
+ */
+export function countedNoun(n: number, noun: string): string {
+  return `${n} ${n === 1 ? noun.trim() : pluralizeNoun(noun)}`;
+}
+
 function pluralizeFallback(noun: string): string {
   const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
   if (UNCOUNTABLE_NOUNS.has(last)) return noun;
@@ -857,44 +891,51 @@ const UUID_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** `routines_horizon`, `fal_generate_image` — a snake_case slug. */
 const SNAKE_TOKEN = /^[a-z0-9]+(?:_[a-z0-9]+)+$/;
-/** `entity.delete`, `gmail.send` — a dotted machine id. */
+/** `entity.delete`, `gmail.send` — dotted lower-case segments. */
 const DOTTED_TOKEN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
-/** `local-b88d021b7d74`, `b88d021b` — a build tag or a hash (a digit AND a hex letter). */
+/**
+ * `local-b88d021b7d74` — a host build tag; or a bare hash of 12+ hex
+ * characters holding a digit AND a letter. Short hex-shaped words are names
+ * ("Cafe2024", "decade2025").
+ */
 const BUILD_TAG_TOKEN =
-  /^(?:[a-z]+-)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}$/i;
+  /^(?:(?:local|build)-[0-9a-f]{7,}|(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,})$/i;
 
-/** One word shaped like a machine token: a slug, an id, a build tag. */
-function isMachineToken(text: string): boolean {
+/**
+ * One word that is a machine token, not a name. Narrow ON PURPOSE — a false
+ * positive deletes a real name from the title a person approves:
+ *   - a UUID, a build tag (above);
+ *   - a dotted id whose last segment is a known ACTION (`entity.create`,
+ *     `gmail.send`) — so `report.pdf`, `synap.live`, `j.doe` stay names;
+ *   - a snake_case slug only when the object is a Tool, whose identity IS its
+ *     key (`routines_horizon`) — `meeting_notes` names a document.
+ */
+function isMachineToken(text: string, noun: string): boolean {
   if (/\s/.test(text)) return false;
+  if (UUID_TOKEN.test(text) || BUILD_TAG_TOKEN.test(text)) return true;
+  if (DOTTED_TOKEN.test(text)) {
+    return text.slice(text.lastIndexOf(".") + 1) in ACTION_VERBS;
+  }
   return (
-    UUID_TOKEN.test(text) ||
-    SNAKE_TOKEN.test(text) ||
-    DOTTED_TOKEN.test(text) ||
-    BUILD_TAG_TOKEN.test(text)
+    SNAKE_TOKEN.test(text) &&
+    noun !== "" &&
+    noun === resolveObjectNoun("capability")
   );
-}
-
-function startsWithWords(text: string, prefix: string): boolean {
-  if (!prefix) return false;
-  const t = text.toLowerCase();
-  const p = prefix.toLowerCase();
-  return t === p || t.startsWith(`${p} `);
 }
 
 /**
  * The quoted NAME in a title, or "" for none. A name names the object; it
  * never restates the action and is never a machine token. What reaches this
- * slot is often a SUMMARY (a cluster's label falls back to it), so:
- *   - a name that repeats the head or the verb loses the repeat
- *     (`Update Space "Update Space"` → `Update Space`;
- *     `Delete Question "Delete Question \"GRP #3\""` → `… "GRP #3"`);
- *   - what is left is dropped when it is empty, only the noun, or a machine
- *     token (`Run Tool "Run fal_generate_image"` → `Run Tool`,
- *     `Create Tool "routines_horizon"` → `Create Tool`).
- * Any other name is kept as written — except that a name opening with the
- * verb loses that word ("Create onboarding list" under `Create Task` reads
- * `Create Task "onboarding list"`). NOT caught: a kebab slug
- * (`arch-client-intelligence` reads like a hyphenated name).
+ * slot is often a SUMMARY (a cluster's label falls back to it), so it drops:
+ *   - the head, the verb or the noun alone (`Update Space "Update Space"` →
+ *     `Update Space`);
+ *   - the door's own title shape, keeping its name once
+ *     (`Delete Question "Delete Question \"GRP #3\""` → `… "GRP #3"`);
+ *   - the verb followed by a machine token (`Run Tool "Run fal_generate_image"`
+ *     → `Run Tool`), and a machine token (`Create Tool "routines_horizon"`).
+ * Every other name is kept AS WRITTEN — "Create landing page" under
+ * `Create Task` stays whole: a name may start with a verb. NOT caught: a
+ * kebab slug (`arch-client-intelligence` reads like a hyphenated name).
  */
 function nameSlot(
   objectName: string | null | undefined,
@@ -902,23 +943,27 @@ function nameSlot(
   verb: string,
   noun: string
 ): string {
-  let name = (objectName ?? "").trim();
+  const name = (objectName ?? "").trim();
   if (!name) return "";
-  const repeat = startsWithWords(name, head)
-    ? head
-    : startsWithWords(name, verb)
-      ? verb
-      : "";
-  if (repeat) {
-    name = name
-      .slice(repeat.length)
-      .trim()
-      .replace(/^"(.*)"$/, "$1")
-      .trim();
+  const lower = name.toLowerCase();
+  for (const word of [head, verb, noun]) {
+    if (word && lower === word.toLowerCase()) return "";
   }
-  if (!name) return "";
-  if (noun && name.toLowerCase() === noun.toLowerCase()) return "";
-  return isMachineToken(name) ? "" : name;
+  // The door's own output (`Head "name"`) handed back as a name.
+  const quoted = head
+    ? name
+        .slice(head.length)
+        .trim()
+        .match(/^"(.+)"$/)
+    : null;
+  if (quoted && lower.startsWith(`${head.toLowerCase()} `)) {
+    return nameSlot(quoted[1], head, verb, noun);
+  }
+  if (verb && lower.startsWith(`${verb.toLowerCase()} `)) {
+    const rest = name.slice(verb.length).trim();
+    if (isMachineToken(rest, noun)) return "";
+  }
+  return isMachineToken(name, noun) ? "" : name;
 }
 
 /**

@@ -21,6 +21,7 @@
  *     otherwise the waiting clause says "wait on you", never a guessed link.
  */
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
+import { formatFloorCount } from "./header.js";
 
 /** One count the brief reads. `count: null` = the read failed (unknown ≠ 0). */
 export interface HomeBriefCount {
@@ -91,9 +92,9 @@ const known = (c: HomeBriefCount): c is { count: number; floor?: boolean } =>
 const positive = (c: HomeBriefCount): c is { count: number; floor?: boolean } =>
   known(c) && c.count > 0;
 
-/** "3", "100+". */
+/** "3", "100+" — the one floor formatter (`formatFloorCount`). */
 function num(c: { count: number; floor?: boolean }): string {
-  return c.floor ? `${c.count}+` : `${c.count}`;
+  return formatFloorCount(c.count, c.floor === true);
 }
 
 /** Singular only for an exact 1 — "1+ things" is a floor, so plural. */

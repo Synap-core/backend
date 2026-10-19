@@ -335,7 +335,7 @@ app.get("/health", async (c) => {
     status: healthStatusFor(data, authHealth),
     // ready · starting (boot hooks still running) · unknown (data check could
     // not answer). Body-only, like `data`: see readinessFor.
-    readiness: readinessFor(data, haveStartupHooksSettled()),
+    readiness: readinessFor(data, startupHooksState()),
     timestamp: new Date().toISOString(),
     version: "0.2.0-saas",
     // Published `@synap-core/api-types` version this pod's router was built
@@ -2254,14 +2254,33 @@ try {
 // imported here too but CALLED earlier (pre-serve config block above) — ES
 // imports are hoisted, so the binding is available when that block evaluates.
 import {
-  haveStartupHooksSettled,
   runStartupHooks,
   startupHooksSettled,
+  startupHooksState,
   validateCriticalSecrets,
 } from "./startup-hooks.js";
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
+
+// One-title BACKFILL (founder 2026-10-19): documents written before the create
+// door applied the one-title rule lose a leading heading equal to their name,
+// ONCE, as a new revision each (rollback-able). Rides the boot pass beside the
+// media backfills, but outside the pg-boss block so local-mode pods run it too.
+// Stamped on pod_settings (versioned); a later boot is a no-op. Off the boot path.
+void startupHooksSettled
+  .then(async () => {
+    const { backfillDocumentTitleHeadings } = await import("@synap/api");
+    const r = await backfillDocumentTitleHeadings();
+    if (r.status !== "already-complete")
+      apiLogger.info(r, "Document title backfill ran");
+  })
+  .catch((err) =>
+    apiLogger.warn(
+      { err },
+      "Document title backfill failed (non-fatal; resumes next boot)"
+    )
+  );
 
 // Live session updates: the ONE producer of `focus_session:updated` — LISTENs
 // on the migration-0277 row trigger, so every session writer pushes. Never
