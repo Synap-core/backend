@@ -60,6 +60,17 @@ const ALLOWLIST = new Set<string>([
   // + workspace membership. Not proposal-gated entity content, but should be
   // reviewed for governance coverage eventually.
   "rest/vault.ts",
+  // CP→pod OIDC federation push (POST /federation/oidc-config). NO principal
+  // exists to govern: the route is in the hub auth skip-list and runs before
+  // any user/agent identity — its only credential is a single-use assertion
+  // signed by an APPROVED Control Plane issuer (`verifyTrustedIssuerJwt`: CP
+  // scope set, aud = this pod, type `oidc-config-push`, jti once), whose OIDC
+  // `issuer` must equal the signer and whose podOrigin must be this pod. It
+  // writes ONE key of the `pod_settings` singleton (pod infra config, secret
+  // via field-crypto), never entity content. `checkPermissionOrPropose` needs
+  // a userId to evaluate, so routing it through the gate is not possible —
+  // the issuer verification IS its authorization. Same class as setup.ts.
+  "rest/federation.ts",
 ]);
 
 // NOT justified — DEBT made visible on 2026-10-19 when RAW_WRITE learned to
