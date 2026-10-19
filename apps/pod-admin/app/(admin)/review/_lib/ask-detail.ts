@@ -23,11 +23,14 @@ import {
   askFingerprint,
   askOptionChips,
   askOptionForChip,
+  askRowRegion,
   isRefusedAskField,
   validateAnswerAgainstAsk,
   type Ask,
   type AskAnswerValue,
   type AskLookedAtKind,
+  type AskProvideKind,
+  type AskProvideRef,
   type DynamicFormField,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
@@ -166,8 +169,14 @@ export type AskControlView =
   | { mode: "act"; url: string | null; steps: string[] }
   | {
       mode: "provide";
+      kind: AskProvideKind;
       /** What it wants handed over, in words ("A secret: Stripe key"). */
       wants: string;
+      /**
+       * The console hands this kind over (`CONSOLE_PROVIDES`); otherwise the
+       * shared "not answerable here" words below are all it shows.
+       */
+      answerable: boolean;
       title: string;
       body: string;
     }
@@ -222,6 +231,17 @@ function fieldView(f: DynamicFormField): FormFieldView {
   };
 }
 
+/**
+ * The provide kinds the console hands over, declared to the shared row rule
+ * (`askRowRegion`'s `canProvide`). A secret is handed over by picking one the
+ * person already keeps in their vault: the console never takes a new secret.
+ */
+export const CONSOLE_PROVIDES: Readonly<Record<AskProvideKind, boolean>> = {
+  secret: true,
+  connection: true,
+  file: true,
+};
+
 function provideWants(ask: Extract<Ask, { mode: "provide" }>): string {
   const p = ask.provide;
   switch (p.kind) {
@@ -271,7 +291,13 @@ function controlOf(ask: Ask | null): AskControlView {
     case "provide":
       return {
         mode: "provide",
+        kind: ask.provide.kind,
         wants: provideWants(ask),
+        answerable:
+          askRowRegion(ask, {
+            canAnswer: true,
+            canProvide: CONSOLE_PROVIDES,
+          }) !== "none",
         title: ASK_COPY.provideTitle,
         body: ASK_COPY.provideBody,
       };
@@ -379,6 +405,8 @@ export type AskDraft =
   | { type: "confirm"; confirmed: boolean; note?: string }
   | { type: "choose"; key: string; other?: string }
   | { type: "form"; draft: FormDraft }
+  /** A reference to what is handed over — a vault secret, a connection, a file. */
+  | { type: "provide"; ref: AskProvideRef }
   /** A slot with no typed ask: the answer in words. */
   | { type: "text"; text: string };
 
@@ -455,6 +483,8 @@ function valueOf(
         value: { type: "text" },
         text: draft.text.trim() || undefined,
       };
+    case "provide":
+      return { ok: true, value: { type: "provide", ref: draft.ref } };
   }
 }
 
