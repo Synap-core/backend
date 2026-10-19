@@ -13,6 +13,7 @@ import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { userPreferences } from "./schema/user-preferences.js";
+import { REQUIRED_COLUMNS } from "./utils/schema-coherence.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0333 = readFileSync(
@@ -60,6 +61,16 @@ describe("migration 0333 — user_preferences.home_last_seen_at", () => {
       `SELECT home_last_seen_at FROM user_preferences WHERE user_id = 'u-1'`
     );
     expect(row.rows).toEqual([{ home_last_seen_at: null }]);
+  });
+
+  it("boot coherence names the column, attributed to the 0333 file", () => {
+    const mine = REQUIRED_COLUMNS.filter(
+      (c) => c.table === "user_preferences" && c.column === "home_last_seen_at"
+    );
+    expect(mine.map((c) => c.addedBy)).toEqual([
+      "0333_user_preferences_home_last_seen.sql",
+    ]);
+    expect(M0333).toContain("home_last_seen_at");
   });
 
   it("a fresh install gets it from the baseline", async () => {
