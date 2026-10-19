@@ -99,6 +99,7 @@ import {
   safeTokenEqual,
 } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
+import { trpcSessionGate } from "./trpc-session-gate.js";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -962,24 +963,9 @@ if (config.server.localMode) {
 // admin-event-stream.ts.
 mountAdminEventStream(app);
 
-// tRPC routes — apply session auth for all routes except health.* and setup.*
-// system.* procedures enforce their own auth level (protectedProcedure / podAdminProcedure)
-app.use("/trpc/*", async (c, next) => {
-  const path = c.req.path;
-
-  // health.*, setup.*, and invite-preview/accept are always public
-  if (
-    path.includes("health.") ||
-    path.includes("setup.") ||
-    path.includes("workspaces.previewInvite") ||
-    path.includes("workspaces.acceptInviteViaCp")
-  ) {
-    return next();
-  }
-
-  // Everything else requires a valid Kratos session
-  return authMiddleware(c, next);
-});
+// tRPC routes — session auth on every call except the public procedures
+// (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts.
+app.use("/trpc/*", trpcSessionGate(authMiddleware));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
