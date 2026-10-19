@@ -17,9 +17,9 @@
  *     browser cannot even attach one cross-origin after preflight.
  *   - Methods GET, POST, OPTIONS. A preflight is answered here with 204 and
  *     never reaches the rate limiter, auth or a handler.
- *   - `Cache-Control: no-cache` on reads (store, but revalidate every time): the
- *     global GET default (`private, max-age=60, swr=30`) would let a browser
- *     keep showing an UNSHARED page for up to 90 s. Writes keep `no-store`.
+ *   - `Cache-Control: no-cache` on reads (store, but revalidate every time),
+ *     set here explicitly so an UNSHARED page can never be served from a cache
+ *     whatever the global GET default is. Writes keep `no-store`.
  *   - `Set-Cookie` is stripped: a public response never sets ambient state.
  *   - Body ceiling 16 KB on anything with a body, enforced on the STREAM
  *     (`hono/body-limit`), so a chunked upload with no Content-Length is cut
