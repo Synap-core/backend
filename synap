@@ -3972,10 +3972,12 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     if [ "${#UE_SERVICES[@]}" -gt 0 ]; then
         docker compose "${UE_PROFILE_ARGS[@]}" up -d --remove-orphans "${UE_SERVICES[@]}" || failed=1
     fi
-    # kratos.yml is a bind-mounted file and pod-admin takes PUBLIC_URL at
-    # creation: neither change is seen by a plain `up`.
+    # kratos.yml and the Caddyfile are bind-mounted files and pod-admin takes
+    # PUBLIC_URL at creation: none of these changes is seen by a plain `up`.
+    # Without caddy here, an edge rule a release ships (the MinIO upload refusal,
+    # the backend catch-all) reached only freshly installed pods (2026-10-19).
     local svc
-    for svc in kratos pod-admin; do
+    for svc in kratos pod-admin caddy; do
         printf '%s\n' "${UE_SERVICES[@]}" | grep -qx "$svc" || continue
         docker compose up -d --force-recreate "$svc" || failed=1
     done

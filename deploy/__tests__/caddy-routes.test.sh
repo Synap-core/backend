@@ -73,6 +73,23 @@ printf '%s\n' "$tls" | grep -qxF "$(printf '/api/pod-agent/*\tpod-agent:4002')" 
 printf '%s\n' "$http" | grep -qxF "$(printf '*\tbackend:4000')" \
     && ok "self-check: the :80 catch-all to backend:4000 is seen" || bad "self-check: :80 catch-all not found"
 
+# The reverse direction (2026-10-19, lab pod): the TLS block answered a static
+# "Synap Backend API" line for every path it did not list, so backend routes
+# outside /api, /trpc and /mcp (/admin/connect = the Claude connect link, the
+# MCP OAuth endpoints, /setup) were dead on a directly exposed pod while the
+# :80 catch-all served them. Both blocks end in the backend catch-all, and both
+# refuse the paths that are never public before it.
+printf '%s\n' "$tls" | grep -qxF "$(printf '*\tbackend:4000')" \
+    && ok "TLS block forwards unlisted paths to backend:4000 (catch-all)" \
+    || bad "TLS block has no backend catch-all: backend routes it does not list are unreachable on a direct pod"
+for never in '/internal/*' '/metrics'; do
+    for blk in tls http; do
+        eval "rt=\"\$$blk\""
+        printf '%s\n' "$rt" | grep -qxF "$(printf '%s\t404' "$never")" \
+            && ok "$blk block refuses $never" || bad "$blk block lets $never reach the backend"
+    done
+done
+
 while IFS="$(printf '\t')" read -r path up; do
     [ -n "$path" ] || continue
     want="$(printf '%s\t%s' "$path" "$up")"

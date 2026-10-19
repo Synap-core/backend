@@ -218,6 +218,7 @@ grep -q "^tag sha256:f* synap-adopted/backend:ffffffffffff" "$FAKE/log" && ok "h
   && ok "happy: .env pins the release's backend digest + id" || bad "happy: .env pins: $(grep -E 'SYNAP_IMAGE_BACKEND|BACKEND_VERSION' "$DEPLOY/.env")"
 [ "$(grep -c '^BACKEND_VERSION=' "$DEPLOY/.env")" = 1 ] && ok "happy: one BACKEND_VERSION line (legacy line replaced)" || bad "happy: duplicate BACKEND_VERSION"
 grep -q "release-marker $R2" "$DEPLOY/docker-compose.yml" && [ -f "$DEPLOY/added-by-$R2.txt" ] && ok "happy: the release's deploy bundle was installed" || bad "happy: bundle not installed"
+grep -q "up -d --force-recreate caddy" "$FAKE/log" && ok "happy: caddy recreated, so the release's Caddyfile is live" || bad "happy: caddy not recreated: the release's Caddyfile never loads"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && ok "happy: verified pre-update dump taken" || bad "happy: no pre-update dump"
 b=$(grep -n "pg_dump" "$FAKE/log" | head -1 | cut -d: -f1); m=$(grep -n "run --rm backend-migrate" "$FAKE/log" | head -1 | cut -d: -f1)
 p=$(grep -n "^pull " "$FAKE/log" | tail -1 | cut -d: -f1)
