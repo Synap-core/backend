@@ -109,11 +109,15 @@ export interface RecoveryDoors {
   /** The owner lets Synap Cloud recover accounts AND Cloud sign-in is wired. */
   cloud: boolean;
   /**
-   * This pod's admin console origin (`POD_ADMIN_URL`, validated), e.g.
-   * `https://pod-admin.example.org` — no trailing slash. Clients open
-   * `${podAdminUrl}/recovery` (the hub) and `${podAdminUrl}/settings/security`.
+   * THE Pod Console origin (`POD_ADMIN_URL`, validated), e.g.
+   * `https://pod-admin.example.org` — no trailing slash. It is the origin of
+   * EVERY client door into the console, not only recovery: read it with
+   * `publishedConsoleOrigin` and build links with `consoleHref`
+   * (`@synap-core/types/console`), e.g. `/recovery` (the hub),
+   * `/settings/security`, `/review?type=access&focus=<id>`.
    * ABSENT when the pod has no valid admin URL configured: never guessed, and
-   * its absence never fails `/doors`. Older pods omit it too.
+   * its absence never fails `/doors`. Older pods omit it too. No origin → the
+   * client shows no console link.
    */
   podAdminUrl?: string;
 }
