@@ -195,18 +195,21 @@ export function computeAgentScorecard(
 
 /**
  * THE agent read floor: may `userId` read this agent-user's identity and
- * scorecard? Its owner (the person who created it) or a pod admin — an admin
- * answers for every agent on the pod. Shared by `agentScorecard` and the
- * resolver's agent probe so "what is this id?" and "show me this agent" can
- * never disagree. A failed admin read throws (`isPodAdmin`), never reads as
- * "not readable".
+ * scorecard? Its owner (the person who created it) or a pod admin SIGNED IN
+ * as themselves — an admin answers for every agent on the pod, but a key
+ * acting for an admin (an agent's, or their own API key) does not carry that
+ * reach (`isSignedInPerson`, which the router decides). Shared by
+ * `agentScorecard` and the resolver's agent probe so "what is this id?" and
+ * "show me this agent" can never disagree. A failed admin read throws
+ * (`isPodAdmin`), never reads as "not readable".
  */
 export async function agentReadableBy(
   agent: { createdByUserId: string | null },
-  userId: string
+  userId: string,
+  viewer: { signedInPerson: boolean }
 ): Promise<boolean> {
   if (agent.createdByUserId === userId) return true;
-  return isPodAdmin(userId);
+  return viewer.signedInPerson && isPodAdmin(userId);
 }
 
 /** Cap on proposals scanned to build a scorecard (bounds a chatty agent). */
@@ -220,6 +223,8 @@ const SCORECARD_SCAN_LIMIT = 500;
 export async function agentScorecard(params: {
   userId: string;
   agentId: string;
+  /** A person in their own session (`isSignedInPerson`); keys are not. */
+  signedInPerson?: boolean;
 }): Promise<AgentScorecard | { error: string }> {
   const { userId, agentId } = params;
 
@@ -243,7 +248,9 @@ export async function agentScorecard(params: {
   if (
     !agent ||
     agent.userType !== "agent" ||
-    !(await agentReadableBy(agent, userId))
+    !(await agentReadableBy(agent, userId, {
+      signedInPerson: params.signedInPerson === true,
+    }))
   ) {
     return { error: `No agent-user found for id ${agentId}` };
   }

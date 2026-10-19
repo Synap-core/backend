@@ -161,7 +161,9 @@ type ProbeHit = Omit<ResolvedObject, "kind" | "id">;
  */
 export async function resolveObjectKind(
   id: string,
-  userId: string
+  userId: string,
+  /** A person in their own session (`isSignedInPerson`); keys are not. */
+  viewer: { signedInPerson?: boolean } = {}
 ): Promise<ResolvedObject | null> {
   // Every column probed below — row ids AND both correlationId fallbacks — is a
   // Postgres `uuid`. A fragment ("4d3e8f37") reached them as 22P02 and surfaced
@@ -355,7 +357,14 @@ export async function resolveObjectKind(
           .from(users)
           .where(and(eq(users.id, id), eq(users.userType, "agent")))
           .limit(1);
-        if (!r || !(await agentReadableBy(r, userId))) return null;
+        if (
+          !r ||
+          !(await agentReadableBy(r, userId, {
+            signedInPerson: viewer.signedInPerson === true,
+          }))
+        ) {
+          return null;
+        }
         return { displayName: r.name ?? null };
       },
     },

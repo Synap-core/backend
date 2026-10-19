@@ -63,8 +63,9 @@ describe("diagnose.resolveOpen", () => {
       openable: true,
       params: { flowType: "playbook" },
     });
-    // The ctx user is the floor — the client never supplies it.
-    expect(probe.calls).toEqual([[ID, "user-1"]]);
+    // The ctx user is the floor — the client never supplies it. No session
+    // here, so the caller is not a signed-in person (the admin reach is off).
+    expect(probe.calls).toEqual([[ID, "user-1", { signedInPerson: false }]]);
   });
 
   it("not found: the honest `unknown` answer", async () => {

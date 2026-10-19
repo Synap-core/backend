@@ -2,9 +2,11 @@
  * The agent read floor on a REAL Postgres (PGlite): who may read an
  * agent-user's scorecard (`agentScorecard`) and profile (`agentProfile`), and
  * resolve its id
- * (`resolveObjectKind`'s agent probe). Its owner, or a pod admin — an admin
- * answers for every agent on the pod (Pod Console DECISIONS bug 6). Anyone
- * else gets the "no such agent" answer, so neither door confirms it exists.
+ * (`resolveObjectKind`'s agent probe). Its owner, or a pod admin signed in as
+ * themselves — an admin answers for every agent on the pod (Pod Console
+ * DECISIONS bug 6), but a key acting for one (an agent key, their own API
+ * key) does not. Anyone else gets the "no such agent" answer, so neither door
+ * confirms it exists.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -56,6 +58,7 @@ import * as schema from "@synap/database/schema";
 import { agentProfile } from "../agent-profile.js";
 import { agentScorecard } from "../agent-scorecard.js";
 import { resolveObjectKind } from "../resolve-object-kind.js";
+import { diagnoseRouter } from "../../../routers/diagnose.js";
 
 const OWNER = randomUUID();
 const ADMIN = randomUUID();
@@ -149,18 +152,71 @@ describe("the agent read floor: its owner or a pod admin", () => {
   });
 
   it("a pod admin reads another member's agent (scorecard and resolver)", async () => {
-    const card = await agentScorecard({ userId: ADMIN, agentId: AGENT });
+    const person = { signedInPerson: true };
+    const card = await agentScorecard({
+      userId: ADMIN,
+      agentId: AGENT,
+      ...person,
+    });
     expect("error" in card).toBe(false);
     if ("error" in card) return;
     expect(card.agentName).toBe("Probe agent");
     expect(card.counts.total).toBe(2);
-    const profile = await agentProfile({ userId: ADMIN, agentId: AGENT });
+    const profile = await agentProfile({
+      userId: ADMIN,
+      agentId: AGENT,
+      ...person,
+    });
     expect("error" in profile ? profile.error : profile.createdByUserId).toBe(
       OWNER
     );
-    const resolved = await resolveObjectKind(AGENT, ADMIN);
+    const resolved = await resolveObjectKind(AGENT, ADMIN, person);
     expect(resolved?.kind).toBe("agent");
     expect(resolved?.displayName).toBe("Probe agent");
+  });
+
+  it("a key acting for a pod admin is refused — the admin reach is the person's, signed in", async () => {
+    const notFound = { error: `No agent-user found for id ${AGENT}` };
+    expect(await agentScorecard({ userId: ADMIN, agentId: AGENT })).toEqual(
+      notFound
+    );
+    expect(await agentProfile({ userId: ADMIN, agentId: AGENT })).toEqual(
+      notFound
+    );
+    expect(await resolveObjectKind(AGENT, ADMIN)).toBeNull();
+  });
+
+  it("through the tRPC door: the admin's own session reads, an agent key acting for them does not", async () => {
+    const session = { id: "s1", identity: { id: ADMIN } };
+    const asPerson = diagnoseRouter.createCaller({
+      authenticated: true,
+      userId: ADMIN,
+      session,
+    } as never);
+    expect("error" in (await asPerson.agent({ agentId: AGENT }))).toBe(false);
+    expect("error" in (await asPerson.agentProfile({ agentId: AGENT }))).toBe(
+      false
+    );
+    expect((await asPerson.resolveOpen({ id: AGENT })).type).toBe("agent");
+
+    for (const keyCtx of [
+      { agentUserId: randomUUID(), keyType: "agent" },
+      { keyType: "user" },
+    ]) {
+      const asKey = diagnoseRouter.createCaller({
+        authenticated: true,
+        userId: ADMIN,
+        session,
+        ...keyCtx,
+      } as never);
+      expect(await asKey.agent({ agentId: AGENT })).toEqual({
+        error: `No agent-user found for id ${AGENT}`,
+      });
+      expect(await asKey.agentProfile({ agentId: AGENT })).toEqual({
+        error: `No agent-user found for id ${AGENT}`,
+      });
+      expect((await asKey.resolveOpen({ id: AGENT })).type).not.toBe("agent");
+    }
   });
 
   it("a member who is not the owner is refused — as if the agent did not exist", async () => {

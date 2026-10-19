@@ -37,6 +37,8 @@ export interface AgentProfile {
 export async function agentProfile(params: {
   userId: string;
   agentId: string;
+  /** A person in their own session (`isSignedInPerson`); keys are not. */
+  signedInPerson?: boolean;
 }): Promise<AgentProfile | { error: string }> {
   const { userId, agentId } = params;
 
@@ -59,7 +61,9 @@ export async function agentProfile(params: {
   if (
     !agent ||
     agent.userType !== "agent" ||
-    !(await agentReadableBy(agent, userId))
+    !(await agentReadableBy(agent, userId, {
+      signedInPerson: params.signedInPerson === true,
+    }))
   ) {
     return { error: `No agent-user found for id ${agentId}` };
   }

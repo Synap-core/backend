@@ -47,9 +47,11 @@ export interface OpenTarget {
  */
 export async function resolveOpenTarget(
   id: string,
-  userId: string
+  userId: string,
+  /** A person in their own session (`isSignedInPerson`); keys are not. */
+  viewer: { signedInPerson?: boolean } = {}
 ): Promise<OpenTarget> {
-  const resolved = await resolveObjectKind(id, userId);
+  const resolved = await resolveObjectKind(id, userId, viewer);
 
   if (!resolved) {
     return {
