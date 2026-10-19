@@ -103,14 +103,15 @@ describe("resolveHolderAccess — keys", () => {
 
   // Rules out: the tier VALUE ("Notes, People") pasted into the sentence —
   // a list of capitalised labels mid-sentence.
-  it("two kinds in one tier: the value lists labels, the sentence joins nouns with 'and'", () => {
+  it("two kinds in one tier: the value is one phrase ('Notes and people'), the sentence joins nouns with 'and'", () => {
     const h = key({
       source: "grants",
       access: "granted",
       grants: [grant(["entity.note", "entity.person"])],
     });
     const people = resolveObjectNounPlural("person");
-    expect(h.tiers.change).toBe(`${NOTES}, ${people}`);
+    expect(h.tiers.change).toBe(`${NOTES} and ${inSentence(people)}`);
+    expect(h.tiers.change).not.toContain(",");
     expect(h.sentence).toBe(
       `Reads ${inSentence(NOTES)} and ${inSentence(people)}, changes ${inSentence(NOTES)} and ${inSentence(people)}.`
     );
@@ -276,7 +277,7 @@ describe("resolveHolderAccess — agents", () => {
     });
     expect(h.danger.full).toBe(false);
     expect(h.tiers.read).toBe(
-      `${NOTES}, ${resolveObjectNounPlural("document")}`
+      `${NOTES} and ${inSentence(resolveObjectNounPlural("document"))}`
     );
     expect(h.tiers.change).toBe(resolveObjectNounPlural("document"));
     expect(h.where.anywhere).toBe(false);

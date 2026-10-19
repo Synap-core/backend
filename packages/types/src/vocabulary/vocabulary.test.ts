@@ -124,6 +124,11 @@ describe("humanizeToken", () => {
     expect(humanizeToken("profile_url")).toBe("Profile URL");
     expect(humanizeToken("youtube-channel")).toBe("YouTube channel");
     expect(humanizeToken("urlencoded")).toBe("Urlencoded");
+    // Catalog tags that are acronyms (the marketplace's "crm", "os", "grp").
+    expect(humanizeToken("crm")).toBe("CRM");
+    expect(humanizeToken("os")).toBe("OS");
+    expect(humanizeToken("grp")).toBe("GRP");
+    expect(humanizeToken("enterprise-os")).toBe("Enterprise OS");
   });
 });
 
@@ -1280,7 +1285,8 @@ describe("resolveNotificationRoutingRuleLabel", () => {
     // row. They are the discriminating cases: `all` and `mute` would survive a
     // naive humanize, these two would not.
     expect(humanizeToken("in_app")).toBe("In app");
-    expect(humanizeToken("os")).toBe("Os");
+    // `os` humanizes to the acronym ("OS"), still not what the picker means.
+    expect(humanizeToken("os")).toBe("OS");
     expect(resolveNotificationRoutingRuleLabel("in_app")).toBe("In-app only");
     expect(resolveNotificationRoutingRuleLabel("os")).toBe("Push only");
   });

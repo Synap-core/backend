@@ -87,7 +87,7 @@ describe("resolveServiceMark", () => {
   it("an unknown id is humanized, never leaked raw, never a crash", () => {
     const m = resolveServiceMark("acme_crm");
     expect(m.known).toBe(false);
-    expect(m.name).toBe("Acme crm");
+    expect(m.name).toBe("Acme CRM");
     expect(m.path).toBe(GENERIC_SERVICE_PATH);
     expect(m.fill).toBe("currentColor");
     expect(resolveServiceMark(null).name).toBe("");
