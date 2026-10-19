@@ -12,7 +12,7 @@
  * `/forbidden`.
  *
  * The console's origin is never guessed: read it from the pod's public
- * `GET /api/account-recovery/doors` (`RecoveryDoors.podAdminUrl`) through
+ * {@link CONSOLE_DOORS_PATH} (`RecoveryDoors.podAdminUrl`) through
  * {@link publishedConsoleOrigin}. No origin → no console link (hide the verb).
  *
  * Pure + dependency-free — safe in browser, React Native, Node and Next.js.
@@ -96,6 +96,13 @@ export const CONSOLE_PAGES = {
     focus: false,
     verb: "manage",
   },
+  /** The signed-in person's own vault. */
+  myVault: {
+    path: "/my-vault",
+    audience: "member",
+    focus: false,
+    verb: "manage",
+  },
   /** The signed-in person's own sign-in methods and recovery codes. */
   accountSecurity: {
     path: "/settings/security",
@@ -157,6 +164,9 @@ export type ConsoleTarget =
   | { page: "connectionRequest"; id: string };
 
 // ─── The origin ──────────────────────────────────────────────────────────────
+
+/** The pod's public read that publishes the console's origin (`podAdminUrl`). */
+export const CONSOLE_DOORS_PATH = "/api/account-recovery/doors";
 
 /**
  * `/api/account-recovery/doors` body → the console origin (`https://host`,
@@ -314,4 +324,111 @@ export const CONSOLE_LINK_MARK = "↗";
 /** "Review in console" / "Manage in console" / "See all in console". */
 export function consoleVerbLabel(target: ConsoleTarget): string {
   return CONSOLE_VERB_LABEL[consoleVerb(target)];
+}
+
+export interface ConsoleLink {
+  href: string;
+  /** "Review in console" / "Manage in console" / "See all in console". */
+  label: string;
+}
+
+/**
+ * The link to show for a target, or null to show none: no published origin,
+ * a malformed target, or a page this person would be refused (a member
+ * following an admin page lands on /forbidden). An unknown role (`null`) is
+ * treated as a member.
+ */
+export function consoleLink(
+  origin: string | null | undefined,
+  role: ConsoleAudience | null | undefined,
+  target: ConsoleTarget | null | undefined
+): ConsoleLink | null {
+  if (!target || !consoleTargetVisibleTo(target, role ?? "member")) return null;
+  const href = consoleHref(origin, target);
+  return href ? { href, label: consoleVerbLabel(target) } : null;
+}
+
+// ─── Desktop places a console page covers ────────────────────────────────────
+
+/**
+ * The desktop places whose job a console page does, keyed by the desktop path
+ * the `synap://open/app/…` grammar names: `<appId>` or `settings/<section>`.
+ * A host that cannot open the desktop place (a phone, the console itself)
+ * offers this page instead. One table for every host.
+ */
+export const DESKTOP_PLACE_CONSOLE_PAGE = {
+  marketplace: "marketplace",
+  connected: "applications",
+  "settings/extensions": "marketplace",
+  "settings/developer": "keys",
+  "settings/pod": "members",
+  "settings/pod-redundancy": "backups",
+  "settings/connectors": "sources",
+  "settings/ai-governance": "intelligence",
+  "settings/vault": "myVault",
+} as const satisfies Record<string, ConsolePageId>;
+
+export type DesktopPlace = keyof typeof DESKTOP_PLACE_CONSOLE_PAGE;
+
+/**
+ * A desktop path (`marketplace`, `settings/developer`; any case) → the console
+ * page that covers it, or null when none does. Safe on a path read from a link.
+ */
+export function desktopPlaceConsoleTarget(
+  desktopPath: string | null | undefined
+): ConsoleTarget | null {
+  const key = desktopPath
+    ?.trim()
+    .toLowerCase()
+    .replace(/^\/+|\/+$/g, "");
+  if (!key || !hasOwn(DESKTOP_PLACE_CONSOLE_PAGE, key)) return null;
+  return {
+    page: DESKTOP_PLACE_CONSOLE_PAGE[key as DesktopPlace],
+  } as ConsoleTarget;
+}
+
+// ─── Who is a pod admin ──────────────────────────────────────────────────────
+
+/** The pod's administrators' system space (`workspaces.systemSlug`). */
+export const POD_ADMIN_SYSTEM_SLUG = "pod-admin";
+
+/** The roles in that space that make a person a pod admin. */
+export const POD_ADMIN_ROLES = ["owner", "admin"] as const;
+
+/** A row of the person's own workspace list, as `workspaces.list` returns it. */
+export interface PodAdminMembershipRow {
+  role?: string | null;
+  systemSlug?: string | null;
+  /** Older pods carry the system slug in settings only. */
+  settings?: unknown;
+}
+
+function systemSlugOf(row: PodAdminMembershipRow): string | null {
+  if (typeof row.systemSlug === "string") return row.systemSlug;
+  const settings = row.settings;
+  if (!settings || typeof settings !== "object") return null;
+  const slug = (settings as { systemSlug?: unknown }).systemSlug;
+  return typeof slug === "string" ? slug : null;
+}
+
+/**
+ * The pod's own rule (`isPodAdmin`): an owner or admin of the pod-admin system
+ * space is a pod admin.
+ */
+export function isPodAdminMembership(row: PodAdminMembershipRow): boolean {
+  return (
+    systemSlugOf(row) === POD_ADMIN_SYSTEM_SLUG &&
+    (POD_ADMIN_ROLES as readonly string[]).includes(row.role ?? "")
+  );
+}
+
+/**
+ * The person's console role from their own workspace list; null while the
+ * list is not read (a caller treats it as a member).
+ */
+export function consoleRoleFromWorkspaces(
+  rows: readonly PodAdminMembershipRow[] | null | undefined
+): ConsoleAudience | null {
+  if (!rows) return null;
+  return rows.some(isPodAdminMembership) ? "admin" : "member";
 }

@@ -9,6 +9,10 @@
  *     system workspace (the gate for pod-wide / null-workspace rows).
  */
 
+import {
+  POD_ADMIN_ROLES,
+  POD_ADMIN_SYSTEM_SLUG,
+} from "@synap-core/types/console";
 import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray } from "@synap/database";
@@ -58,11 +62,13 @@ export async function requirePodAdmin(userId: string) {
  * of erroring). Returns false when the pod-admin workspace is missing. A FAILED
  * read (either query throwing) propagates — it never folds into `false`;
  * `assertPodAdmin` (trpc.ts) and the governance gate's rung-2.07 check both
- * rely on that.
+ * rely on that. The slug and roles are `@synap-core/types/console`'s, so a
+ * client that reads the person's role from their workspace list applies the
+ * same rule.
  */
 export async function isPodAdmin(userId: string): Promise<boolean> {
   const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.systemSlug, "pod-admin"),
+    where: eq(workspaces.systemSlug, POD_ADMIN_SYSTEM_SLUG),
     columns: { id: true },
   });
   if (!podAdminWorkspace) return false;
@@ -70,7 +76,7 @@ export async function isPodAdmin(userId: string): Promise<boolean> {
     where: and(
       eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
       eq(workspaceMembers.userId, userId),
-      inArray(workspaceMembers.role, ["admin", "owner"])
+      inArray(workspaceMembers.role, [...POD_ADMIN_ROLES])
     ),
     columns: { role: true },
   });

@@ -1036,10 +1036,18 @@ export {
 export {
   PROVIDE_SECRET_GRANT_MINUTES,
   provideSecretAccessLine,
-  provideNeedsAccountConfirm,
+  provideGrantNote,
+  provideExpectedGranteeId,
+  provideAccountChoices,
+  providePrePickedAccount,
+  provideFileAccepts,
+  provideAcceptAttribute,
   type ProvideSecretGrant,
   type ProvideSecretGrantRefusal,
+  type ProvideSecretGrantOffer,
+  type ProvideConnectUnavailableReason,
   type ProvideConnectionRowLite,
+  type ProvideAccountChoice,
 } from "./provide.js";
 
 /** The Ask card's shared surface rules and copy — see `./card.ts`. */

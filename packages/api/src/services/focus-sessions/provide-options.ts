@@ -14,7 +14,7 @@
  *   - connection → the connections the person can use for THIS service (their
  *                  own, or pod-wide), each with its account hint, whether a new
  *                  one can be started here (`provide-connect.ts`), and whether
- *                  reusing one must confirm the account (P4).
+ *                  reusing one must confirm the account (several accounts).
  *   - file       → where an upload lands (`resolveProvideFileLanding`).
  */
 
@@ -41,10 +41,10 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import {
   askFingerprint,
   effectiveSlotAsk,
-  provideNeedsAccountConfirm,
   PROVIDE_SECRET_GRANT_MINUTES,
   type AskProvide,
-  type ProvideSecretGrantRefusal,
+  type ProvideConnectUnavailableReason,
+  type ProvideSecretGrantOffer,
 } from "@synap-core/types/ask";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { canWriteWorkspace } from "../../routers/file-upload.js";
@@ -148,7 +148,7 @@ export function describeProvideRefusal(
   );
 }
 
-// ── Where a file lands (P3) ─────────────────────────────────────────────────
+// ── Where a file lands ─────────────────────────────────────────────────────
 
 export type ProvideFileLanding =
   | {
@@ -248,15 +248,7 @@ export type ProvideOptions = {
         name: string;
         rows: ProvideSecretRow[];
         /** What handing one over lets the asking agent do. */
-        grant:
-          | {
-              status: "will_grant";
-              /** Sent back on the answer as `expectedGranteeId`. */
-              agentUserId: string;
-              agentName: string;
-              minutes: number;
-            }
-          | { status: "no_grant"; reason: ProvideSecretGrantRefusal };
+        grant: ProvideSecretGrantOffer;
       };
     }
   | {
@@ -268,9 +260,9 @@ export type ProvideOptions = {
         providerId: string | null;
         connectable: boolean;
         /** Why a new connection can't start here (`connectable` false). */
-        unavailable: "no_broker" | "not_offered" | "unreadable" | null;
+        unavailable: ProvideConnectUnavailableReason | null;
         rows: ProvideConnectionRow[];
-        /** P4 — several accounts: the person confirms which one. */
+        /** Several accounts: the person confirms which one before it goes. */
         confirmAccount: boolean;
       };
     }
@@ -332,7 +324,7 @@ export async function readProvideOptions(
           connectable: provider.status === "ok",
           unavailable: provider.status === "ok" ? null : provider.status,
           rows,
-          confirmAccount: provideNeedsAccountConfirm(rows),
+          confirmAccount: rows.length > 1,
         },
       };
     }
