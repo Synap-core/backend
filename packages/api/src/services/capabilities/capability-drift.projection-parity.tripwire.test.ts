@@ -351,10 +351,9 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       );
       expect(converged).toEqual({ readOnly: false, writeBack, runCount: 3 });
       expect(
-        capabilityDefinitionDrift(
-          [{ ...live, metadata: converged }],
-          { skills: [def] }
-        ).drifted,
+        capabilityDefinitionDrift([{ ...live, metadata: converged }], {
+          skills: [def],
+        }).drifted,
         "one apply converges it — no re-apply loop"
       ).toEqual([]);
       // A malformed declaration is never persisted as if it worked.
