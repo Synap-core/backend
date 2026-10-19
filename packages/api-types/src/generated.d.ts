@@ -19026,6 +19026,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			})[];
 			meta: object;
 		}>;
+		adminSubjectActivity: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				subjectIds: string[];
+				appId?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: EventRecord[];
+			meta: object;
+		}>;
 		listByCorrelationId: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				correlationId: string;
