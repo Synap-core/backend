@@ -330,12 +330,15 @@ export function reportProposalOutcome(params: {
  * Resolve the user's messaging account for a given platform (linkedin / gmail /
  * whatsapp / telegram / slack). Reads the `messaging_accounts` table. Returns
  * null when no account is connected for that platform.
+ *
+ * `externalId` is the PROVIDER's account id (e.g. the Unipile `account_id`) —
+ * the one a connector sends with; `id` is only the pod's row id.
  */
-async function resolveMessagingAccountForPlatform(
+export async function resolveMessagingAccountForPlatform(
   database: typeof db,
   userId: string,
   platform?: string
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; externalId: string } | null> {
   if (!platform) return null;
   await import("@synap/database/schema");
   const acct = await database.query.messagingAccounts.findFirst({
@@ -346,7 +349,7 @@ async function resolveMessagingAccountForPlatform(
         // the proposal's `data.platform` which matches the same value.
         eq(fields.provider, platform)
       ),
-    columns: { id: true },
+    columns: { id: true, externalId: true },
   });
   return acct ?? null;
 }

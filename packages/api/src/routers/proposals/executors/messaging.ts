@@ -68,7 +68,10 @@ export function registerMessagingExecutors(): void {
               "No messaging account found for this platform — connect one first",
           });
         }
-        accountId = msgAccount.id;
+        // The provider's account id — connectors hand it straight to the
+        // provider (`sendMessage(externalAccountId, …)`); the pod row id is
+        // unknown there.
+        accountId = msgAccount.externalId;
       }
 
       // Guard: only execute if not already approved (external sends are irreversible).
