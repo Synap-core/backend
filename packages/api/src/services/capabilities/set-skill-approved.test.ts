@@ -41,6 +41,9 @@ vi.mock("@synap/database", () => ({
   eq: (...a: unknown[]) => a,
   skills: { id: "id" },
   links: {},
+  // No acting agent: these rows are a human's enable (the agent refusal is
+  // pinned in hub-protocol/rest/approve-doors.agent.test.ts).
+  getActingAgentUserId: () => undefined,
 }));
 vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),

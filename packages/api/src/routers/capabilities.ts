@@ -1032,6 +1032,7 @@ export const capabilitiesRouter = router({
         userId: requireUserId(ctx.userId),
         skillId: input.skillId,
         approved: input.enabled,
+        agentUserId: ctx.agentUserId,
       });
       return { success: true };
     }),

@@ -36,6 +36,7 @@ import { auditLog } from "../utils/audit-log.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { execFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
+import { refuseAgentApprover } from "../services/capabilities/set-skill-approved.js";
 import { emitSideEffects } from "@synap/events";
 import { isFormToolMetadata } from "../services/forms/form-definition.js";
 
@@ -386,6 +387,8 @@ export const toolsRouter = router({
   setApproved: protectedProcedure
     .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
+      // Approval is the human step — refuse an acting agent first.
+      refuseAgentApprover(ctx.agentUserId);
       const userId = requireUserId(ctx.userId);
       const existing = await db.query.tools.findFirst({
         where: eq(tools.id, input.id),

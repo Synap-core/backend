@@ -35,6 +35,7 @@ import { authoredByUser } from "../../../services/agent-identity-service.js";
 import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { isAgentCaller } from "../../../services/library/agent-door.js";
 
 /**
  * Module-scoped pino logger.
@@ -175,6 +176,37 @@ export function rejectAgentReviewer(
   return c.json(
     {
       error: `An agent credential cannot ${action} proposals — ${action} is human review. ${Verb} from a human session.`,
+    },
+    403
+  );
+}
+
+/**
+ * SECURITY — reject a non-proposal APPROVAL (turning a skill verb or a tool
+ * ON: `/skills/:id/approve`, `/tools/:id/approve`) performed by an agent
+ * caller. The sibling of `rejectAgentReviewer`, for the same reason: the
+ * agent-key remap makes `userId` the human owner, so the owner-role check
+ * behind these doors passes for the agent and it could approve its OWN draft
+ * skill. "An agent caller" is the existing definition `isAgentCaller`
+ * (`services/library/agent-door.ts`): an agent key OR the Intelligence
+ * Service's internal key — no first-party IS flow approves a skill or tool.
+ * The canonical procedures refuse an acting agent too (`refuseAgentApprover`);
+ * this door answers first, before any read.
+ */
+export function rejectAgentApprover(
+  c: Context<{ Variables: HubVariables }>,
+  what: "skill" | "tool"
+): Response | null {
+  const agentUserId = c.get("agentUserId");
+  const keyType = c.get("keyType") as string | undefined;
+  if (!isAgentCaller({ agentUserId, keyType })) return null;
+  logger.warn(
+    { agentUserId, keyType, id: c.req.param("id"), what },
+    "agent credential attempted to approve — blocked (human approval required)"
+  );
+  return c.json(
+    {
+      error: `An agent credential cannot approve a ${what} — approval is the human step. Approve from a human session.`,
     },
     403
   );
