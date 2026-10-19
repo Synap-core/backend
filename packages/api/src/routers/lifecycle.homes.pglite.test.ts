@@ -143,7 +143,16 @@ vi.mock("./signals.js", () => ({
           ),
         ])
       ),
+      byKindTruncated: new Map(
+        input.spaces.map((s) => [
+          s.workspaceId,
+          new Map(
+            s.profileSlugs.map((slug) => [slug, slug === "deal" ? true : null])
+          ),
+        ])
+      ),
       podLevel: 4,
+      podLevelTruncated: false,
       attentionReads: 1,
     };
   },
@@ -544,6 +553,9 @@ describe("lifecycle.home", () => {
       expect(flags.get(MISC)).toBeNull();
       const dev = home.spaces.find((s) => s.workspaceId === DEV)!;
       expect(dev.produces[0]!.needsYou).toBe(3);
+      // The kind's and pod level's floor flags reach the wire too.
+      expect(dev.produces[0]!.needsYouTruncated).toBe(true);
+      expect(home.needsYou.podLevelTruncated).toBe(false);
       // One read, asked for every listed space and its produced kinds.
       expect(h.countCalls).toHaveLength(1);
       const asked = h.countCalls[0] as unknown as {

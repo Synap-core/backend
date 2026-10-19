@@ -117,6 +117,8 @@ export interface ProducedKind {
     unset?: number;
   }>;
   needsYou: number | null;
+  /** `needsYou` is a floor (a scan hit its cap); null when it is null. */
+  needsYouTruncated: boolean | null;
   beingWorked: number | null;
   headline: {
     entityId: string;
@@ -148,6 +150,8 @@ export interface HomeRead {
     }>;
     /** In no space (pod-level rows + unfinished captures); null = unmeasured. */
     podLevel: number | null;
+    /** `podLevel` is a floor; null when `podLevel` is. */
+    podLevelTruncated: boolean | null;
   };
 }
 
@@ -215,8 +219,10 @@ export type NeedsYouByScopeRead = (scopes: {
   bySpace: Map<string, number | null>;
   bySpaceTruncated: Map<string, boolean | null>;
   byKind: Map<string, Map<string, number | null>>;
+  byKindTruncated: Map<string, Map<string, boolean | null>>;
   /** Needs-you in NO space (+ captures); null = not measured. */
   podLevel: number | null;
+  podLevelTruncated: boolean | null;
 }>;
 
 const readerOf = (ctx: HomesCtx) => ({
@@ -522,6 +528,7 @@ async function readProducedKind(
     /** The open sessions that ASK YOU (`asksYouSessionIds`); null = unknown. */
     asksYou: ReadonlySet<string> | null;
     needsYou: number | null;
+    needsYouTruncated: boolean | null;
     memo: BoardLensMemo;
   }
 ): Promise<ProducedKind | null> {
@@ -700,6 +707,7 @@ async function readProducedKind(
     windowDays: HOME_WINDOW_DAYS,
     columns,
     needsYou: input.needsYou,
+    needsYouTruncated: input.needsYouTruncated,
     beingWorked,
     headline,
   };
@@ -825,6 +833,9 @@ export async function readHome(
       openWork: open?.work ?? null,
       asksYou: open?.asks ?? null,
       needsYou: byKind[pair.idx]!.get(pair.profileSlug) ?? null,
+      needsYouTruncated:
+        needs?.byKindTruncated.get(pair.i.space.id)?.get(pair.profileSlug) ??
+        null,
       memo,
     })
   );
@@ -856,6 +867,7 @@ export async function readHome(
       truncated,
       bySpace,
       podLevel: needs?.podLevel ?? null,
+      podLevelTruncated: needs?.podLevelTruncated ?? null,
     },
   };
 }

@@ -211,6 +211,8 @@ const producedKindWire = z.object({
   ),
   /** `signals.countByProfile` for this space + kind; null = that read failed. */
   needsYou: z.number().nullable(),
+  /** `needsYou` is a floor ("N+"), as `signals.count`'s own flag; null when it is. */
+  needsYouTruncated: z.boolean().nullable(),
   /** Live things someone is on (the board's workedBy rule); null = read failed. */
   beingWorked: z.number().nullable(),
   /** The ONE thing worth naming: needs_you → being_worked → stuck → recent. */
@@ -263,6 +265,8 @@ const homeWire = z.object({
      * not list (a system or agent space) counts in neither.
      */
     podLevel: z.number().nullable(),
+    /** `podLevel` is a floor ("N+"); null when `podLevel` is. */
+    podLevelTruncated: z.boolean().nullable(),
   }),
 });
 
