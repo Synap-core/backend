@@ -25,6 +25,7 @@ import {
   db,
   and,
   eq,
+  inArray,
   notifications,
   podSettings,
   drizzleSql,
@@ -36,6 +37,20 @@ const logger = createLogger({ module: "pod-update-outcome" });
 
 const notificationType = "pod.update_failed";
 export const POD_UPDATE_FAILED_NOTIFICATION_TYPE = notificationType;
+/**
+ * The failed ROLLBACK: an ask (needs-you, never expires), not news. Spelled
+ * as `type:` so the producer tripwire (`notification-producer-allowlist`)
+ * sees this file produce it.
+ */
+const rollbackFailed = { type: "pod.update_rollback_failed" } as const;
+export const POD_UPDATE_ROLLBACK_FAILED_NOTIFICATION_TYPE = rollbackFailed.type;
+
+/** Which notice an outcome is: a failed rollback asks; the rest is news. */
+export function podUpdateOutcomeNotificationType(status: string): string {
+  return status === "rollback_failed"
+    ? POD_UPDATE_ROLLBACK_FAILED_NOTIFICATION_TYPE
+    : POD_UPDATE_FAILED_NOTIFICATION_TYPE;
+}
 
 export interface PodUpdateOutcomeInput {
   updateId: string;
@@ -148,7 +163,10 @@ const defaultDeps: PodUpdateOutcomeDeps = {
         where: and(
           eq(notifications.sourceType, "system"),
           eq(notifications.sourceId, sourceId),
-          eq(notifications.type, POD_UPDATE_FAILED_NOTIFICATION_TYPE)
+          inArray(notifications.type, [
+            POD_UPDATE_FAILED_NOTIFICATION_TYPE,
+            POD_UPDATE_ROLLBACK_FAILED_NOTIFICATION_TYPE,
+          ])
         ),
         columns: { userId: true },
       }),
@@ -205,7 +223,7 @@ export async function notifyPodUpdateOutcome(
     for (const userId of recipients) {
       if (already.has(userId)) continue;
       const id = await deps.create({
-        type: POD_UPDATE_FAILED_NOTIFICATION_TYPE,
+        type: podUpdateOutcomeNotificationType(outcome.status),
         userId,
         workspaceId: null,
         sourceType: "system",

@@ -19,11 +19,14 @@ vi.mock("../../services/capabilities/pod-owner.js", () => ({
 
 const {
   notifyPodUpdateOutcome,
+  POD_UPDATE_ROLLBACK_FAILED_NOTIFICATION_TYPE,
   describePodUpdateOutcome,
   humanizePodVersion,
   POD_UPDATE_FAILED_NOTIFICATION_TYPE,
 } = await import("../pod-update-outcome.js");
-const { getNotificationDef } = await import("../registry.js");
+const { getNotificationDef, needsYouRole } = await import("../registry.js");
+const { countNeedsYou } =
+  await import("../../services/signals/needs-you-union.js");
 
 const ROLLED_BACK = {
   updateId: "u-1",
@@ -124,5 +127,66 @@ describe("pod.update_failed", () => {
     expect(d.headline).toMatch(/needs attention/);
     expect(d.detail).not.toMatch(/restored|safe/);
     expect(describePodUpdateOutcome(ROLLED_BACK)!.detail).toMatch(/restored/);
+  });
+});
+
+/**
+ * A failed ROLLBACK is an ask ("needs attention · run synap doctor"): the pod
+ * may be half-upgraded. It must count in needs-you and never expire, while a
+ * rolled-back or plain failed update stays news. The discriminator is the
+ * rolled-back row: one rule for the whole type passes either half alone.
+ */
+describe("a failed rollback asks; a rolled-back update is news", () => {
+  async function sentFor(status: string) {
+    const sent: Array<{ type: string }> = [];
+    const { deps } = fakeDeps(["owner"]);
+    await notifyPodUpdateOutcome({ ...ROLLED_BACK, status }, {
+      ...deps,
+      create: async (input: { type: string }) => {
+        sent.push(input);
+        return "n-1";
+      },
+    } as never);
+    expect(sent).toHaveLength(1);
+    return sent[0]!.type;
+  }
+  const counted = (type: string) =>
+    countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [
+        {
+          id: "n-1",
+          type,
+          title: "Update to v2",
+          category: "system",
+          sourceType: "system",
+          sourceId: "pod-update:u-1",
+          createdAt: new Date("2026-10-19T10:00:00Z"),
+        },
+      ],
+      notificationsTruncated: false,
+      owedSlots: [],
+      owedTruncated: false,
+      openQuestionSessionIds: new Set(),
+    }).needsYou;
+
+  it("rollback_failed → its own type: counted, never expires", async () => {
+    const type = await sentFor("rollback_failed");
+    expect(type).toBe(POD_UPDATE_ROLLBACK_FAILED_NOTIFICATION_TYPE);
+    expect(getNotificationDef(type)).toBeTruthy(); // create() would skip it
+    expect(needsYouRole(type)).toBe("item");
+    expect(getNotificationDef(type)!.expiresAfterMs).toBeUndefined();
+    expect(counted(type)).toBe(1);
+  });
+
+  it("rolled_back and failed stay news: not counted, they expire", async () => {
+    for (const status of ["rolled_back", "failed"]) {
+      const type = await sentFor(status);
+      expect(type).toBe(POD_UPDATE_FAILED_NOTIFICATION_TYPE);
+      expect(counted(type)).toBe(0);
+      expect(getNotificationDef(type)!.expiresAfterMs).toBeGreaterThan(0);
+    }
   });
 });

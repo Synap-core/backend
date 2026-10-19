@@ -874,11 +874,29 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{detail}}",
     defaultChannels: ["in_app"],
     ttl: 0,
-    // News, not an ask: the engine already rolled back (or says what state
-    // the pod is in) and nothing waits on the person — it never counts in
-    // needs-you, and it goes stale (a later update supersedes it).
+    // News, not an ask: the engine rolled back (or the update failed before
+    // changing anything) and nothing waits on the person — it never counts in
+    // needs-you, and it goes stale (a later update supersedes it). A FAILED
+    // ROLLBACK is the ask, and has its own type below.
     needsYou: "informational",
     expiresAfterMs: STALE_NEWS_EXPIRY_MS,
+  },
+  {
+    // The ONE update outcome that is an ASK, not news: the update failed AND
+    // the automatic rollback did not complete, so the pod may be half-upgraded
+    // and only a person on the host can fix it ("Run `synap doctor`"). A
+    // type of its own so the registry row can say so: the default needs-you
+    // role (it counts until read) and no expiry — it is never stale while the
+    // pod is broken. Same producer and copy as `pod.update_failed`.
+    type: "pod.update_rollback_failed",
+    category: "system",
+    label: "Update Rollback Failed",
+    icon: "alert-triangle",
+    priority: "high",
+    titleTemplate: "Update to {{version}} {{headline}}",
+    bodyTemplate: "{{detail}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
   },
   {
     type: "system.capability_update_available",
