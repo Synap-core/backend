@@ -122,3 +122,17 @@ Backend branch `claude/clever-pascal-4v8992`, plus the same branch in browser, r
 - About 14 more tests hard-code sibling-repo paths. Move them to `scripts/sibling-checkout.mjs`.
 - Six icon-only buttons at `/40` fail the 3:1 non-text contrast bar (list in the wave-4 report).
 - pod-admin's own `eslint.config.js` can't parse `import type`; lint from the repo root works.
+
+## Decisions taken (owner, 2026-10-19)
+
+All recommendations were taken except A1, where the owner chose **all four kinds now** (playbook, run,
+capability enable and agent), which A4 = yes makes possible.
+
+| Topic           | Decision                                                                                                                                                                                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Link in         | L1 per-action wording · L2 admins only · L3 keep the desktop twins and add the link · L4 one console sign-in per phone · L5 share the pod session with desktop tabs · L6 read `/doors.podAdminUrl` · L7 route what relay can · L8 "Review in console ↗"          |
+| Provide asks    | P0 fix D3 (vault is server-encrypted) · P1 console sends new secrets to the app · P2 session-scoped 60-minute grant, refused when the agent is unknown · P3 project home space · P4 confirm the account when several                                             |
+| Notifications   | N1 `/my-notifications` · N2 admins don't see members' phones · N3 off until re-enabled on that phone · N4 30/90 days · N5 quiet hours later                                                                                                                      |
+| Web `/open`     | A1 all four now · A2 forward `?flowType=` · A3 enable verbs from the web, `opensIn` per action · A4 admins read members' agents · A5 "See this space here"                                                                                                       |
+| Catalog signing | B1 S1 now, S2 later · B2 two offline roots signing a short-lived catalog key, plus an operator override · B3 freeze installs and updates, keep listing · B4 `SYNAP_CATALOG_ALLOW_EXPIRED` env-only · B5 founders hold the roots; schedule the Control Plane side |
+| Small calls     | S1 space keys tab lists keys confined to the space · S2 admin-only activity read · S3 stamp automations with their package · S4 "Pod Console" everywhere · S5 relay billing opens Credits                                                                        |
