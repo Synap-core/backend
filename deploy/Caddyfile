@@ -44,6 +44,10 @@
     handle /internal/* {
         respond 404
     }
+    # Unauthenticated Prometheus text; the scraper reads backend:4000 directly.
+    handle /metrics {
+        respond 404
+    }
 
     # The routes below mirror the TLS block (a tunnelled pod is served ONLY by
     # this block). Every TLS `handle` path must reach the same upstream here —
@@ -222,9 +226,23 @@
         respond "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/><title>Synap Data Pod</title><style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:42rem;margin:0 auto;padding:2.5rem 1.25rem;color:#18181b;background:#f4f4f5;line-height:1.5}h1{font-size:1.5rem;margin:0 0 .5rem}a{color:#b45309}code{font-size:.875em;background:#e4e4e7;padding:.1rem .35rem;border-radius:.25rem}.card{background:#fafafa;border:1px solid #e4e4e7;border-radius:.75rem;padding:1.25rem 1.5rem;margin-top:1.25rem}</style></head><body><h1>Synap Data Pod</h1><p>This hostname is serving your pod (API, auth, realtime). The <strong>operator console</strong> is at the pod-admin subdomain.</p><div class='card'><p style='margin:.75rem 0 0;font-size:.875rem;color:#52525b'>Health: <a href='/health'>/health</a> · API: <code>/trpc</code>, <code>/api/*</code></p></div></body></html>" 200
     }
 
-    # Default: API info (paths that matched nothing above)
+    # Never public, on either ingress: `/internal/*` (see the :80 block) and the
+    # backend's unauthenticated Prometheus text (scraped on the compose network).
+    handle /internal/* {
+        respond 404
+    }
+    handle /metrics {
+        respond 404
+    }
+
+    # Everything else goes to backend, exactly like the :80 block. This was a
+    # static "Synap Backend API" answer, so every path the backend mounts
+    # outside /api, /trpc and /mcp was dead on a directly exposed pod while
+    # working on a tunnelled one: /admin/connect (the Claude connect link),
+    # the MCP OAuth endpoints, /setup, /v1 (2026-10-19, lab pod).
+    # caddy-routes.test.sh pins this catch-all.
     handle {
-        respond "Synap Backend API - https://docs.synap.live" 200
+        reverse_proxy backend:4000
     }
 
     # Security headers
