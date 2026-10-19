@@ -20,7 +20,8 @@ const QUIET: HomeBriefInput = {
   failed: ZERO,
   working: ZERO,
 };
-const brief = (over: Partial<HomeBriefInput>) => homeBrief({ ...QUIET, ...over });
+const brief = (over: Partial<HomeBriefInput>) =>
+  homeBrief({ ...QUIET, ...over });
 const text = (over: Partial<HomeBriefInput>) => homeBriefText(brief(over));
 
 describe("homeBrief — one sentence, every noun a door", () => {
@@ -47,22 +48,26 @@ describe("homeBrief — one sentence, every noun a door", () => {
   });
 
   it("produced: a zero clause is dropped, never '0 things' (rules out: print every count)", () => {
-    expect(text({ produced: ZERO, failed: { count: 2 } })).toBe("2 runs failed.");
+    expect(text({ produced: ZERO, failed: { count: 2 } })).toBe(
+      "2 runs failed."
+    );
   });
 
   it("produced: with no last visit the window is today (rules out: 'while you were away' on a first open)", () => {
-    expect(text({ since: "today", produced: { count: 1 } })).toBe("Today your agents finished 1 thing.");
+    expect(text({ since: "today", produced: { count: 1 } })).toBe(
+      "Today your agents finished 1 thing."
+    );
   });
 
   it("waiting: one decision is singular; decisions and questions join (rules out: always plural)", () => {
-    expect(text({ decisions: { count: 1 }, projectsHeldUp: { count: 1 } })).toBe(
-      "1 decision is holding up 1 project."
-    );
+    expect(
+      text({ decisions: { count: 1 }, projectsHeldUp: { count: 1 } })
+    ).toBe("1 decision is holding up 1 project.");
     expect(text({ decisions: { count: 2 }, questions: { count: 1 } })).toBe(
       "2 decisions and 1 question wait on you."
     );
-    const doors = brief({ decisions: { count: 2 }, questions: { count: 1 } }).clauses[0]!.segments
-      .filter((s) => s.door)
+    const doors = brief({ decisions: { count: 2 }, questions: { count: 1 } })
+      .clauses[0]!.segments.filter((s) => s.door)
       .map((s) => s.door);
     expect(doors).toEqual([
       { kind: "inbox", bucket: "decision" },
@@ -71,14 +76,21 @@ describe("homeBrief — one sentence, every noun a door", () => {
   });
 
   it("waiting: an UNKNOWN project count never invents a link (rules out: 'holding up – projects')", () => {
-    expect(text({ questions: { count: 1 }, projectsHeldUp: { count: null } })).toBe("1 question waits on you.");
+    expect(
+      text({ questions: { count: 1 }, projectsHeldUp: { count: null } })
+    ).toBe("1 question waits on you.");
   });
 
   it("a capped count reads N+ and is plural (rules out: a bare capped number)", () => {
-    expect(text({ decisions: { count: 100, floor: true }, projectsHeldUp: { count: 4 } })).toBe(
-      "100+ decisions are holding up 4 projects."
+    expect(
+      text({
+        decisions: { count: 100, floor: true },
+        projectsHeldUp: { count: 4 },
+      })
+    ).toBe("100+ decisions are holding up 4 projects.");
+    expect(text({ decisions: { count: 1, floor: true } })).toBe(
+      "1+ decisions wait on you."
     );
-    expect(text({ decisions: { count: 1, floor: true } })).toBe("1+ decisions wait on you.");
   });
 
   it("working: agents on it now open the moving list", () => {
@@ -100,7 +112,10 @@ describe("homeBrief — one sentence, every noun a door", () => {
     expect(b.unknown).toBe(true);
     expect(b.reassure).toBeNull();
     // With something to say it is a brief, still flagged partial.
-    const partial = brief({ produced: { count: 3 }, decisions: { count: null } });
+    const partial = brief({
+      produced: { count: 3 },
+      decisions: { count: null },
+    });
     expect(partial.answer).toBe("brief");
     expect(partial.unknown).toBe(true);
   });

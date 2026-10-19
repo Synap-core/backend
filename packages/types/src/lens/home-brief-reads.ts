@@ -50,7 +50,10 @@ function bucketCount(
 export interface HomeBriefReads {
   lastSeen: string | null;
   /** The pod's needs-you page, filed by the shared buckets. */
-  needsYou: BriefRead<{ counts: Record<NeedsYouBucket, number>; capped: boolean }>;
+  needsYou: BriefRead<{
+    counts: Record<NeedsYouBucket, number>;
+    capped: boolean;
+  }>;
   /** `outputs.landed` since the window start (actor: agents). */
   produced: BriefRead<{
     items: readonly unknown[];
@@ -82,7 +85,9 @@ export function liveSessionCount(moving: MovingRead): number {
 }
 
 /** An ISO instant, or null (junk or not a date) — one reading of a stored stamp. */
-export function parseHomeInstant(raw: string | null | undefined): string | null {
+export function parseHomeInstant(
+  raw: string | null | undefined
+): string | null {
   if (!raw) return null;
   const at = Date.parse(raw);
   return Number.isFinite(at) ? new Date(at).toISOString() : null;

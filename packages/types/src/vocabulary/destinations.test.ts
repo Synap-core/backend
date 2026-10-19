@@ -29,8 +29,12 @@ describe("destination words (2A)", () => {
   });
 
   it("a destination that lists objects says their registry plural (never a second word)", () => {
-    expect(DESTINATION_LABELS.projects).toBe(resolveObjectNounPlural("project"));
-    expect(DESTINATION_LABELS.spaces).toBe(resolveObjectNounPlural("workspace"));
+    expect(DESTINATION_LABELS.projects).toBe(
+      resolveObjectNounPlural("project")
+    );
+    expect(DESTINATION_LABELS.spaces).toBe(
+      resolveObjectNounPlural("workspace")
+    );
     expect(DESTINATION_LABELS.agents).toBe(resolveObjectNounPlural("agent"));
     // Work keeps the vocabulary's word (the manifest's name for `sessions`).
     expect(DESTINATION_LABELS.work).toBe(resolveObjectNoun("work"));

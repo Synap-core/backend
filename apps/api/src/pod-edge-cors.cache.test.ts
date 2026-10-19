@@ -4,7 +4,8 @@ import { Hono, type MiddlewareHandler } from "hono";
 let httpCacheHeadersMiddleware: MiddlewareHandler;
 beforeAll(async () => {
   // pod-edge-cors pulls the config, which needs a database URL to load.
-  process.env.DATABASE_URL ??= "postgresql://synap:test@localhost:5432/synap_test";
+  process.env.DATABASE_URL ??=
+    "postgresql://synap:test@localhost:5432/synap_test";
   ({ httpCacheHeadersMiddleware } = await import("./pod-edge-cors.js"));
 }, 120_000);
 
@@ -33,11 +34,15 @@ describe("httpCacheHeadersMiddleware", () => {
 
   it("a route that sets its own Cache-Control keeps it", async () => {
     const res = await app().request("/asset");
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=600, immutable");
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, max-age=600, immutable"
+    );
   });
 
   it("writes are never cached", async () => {
-    const res = await app().request("/trpc/onboarding.recordValues", { method: "POST" });
+    const res = await app().request("/trpc/onboarding.recordValues", {
+      method: "POST",
+    });
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 });

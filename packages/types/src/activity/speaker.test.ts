@@ -40,7 +40,7 @@ describe("which actor spoke", () => {
     expect(resolveMessageSpeaker(reply, lookup)).toBeUndefined();
     // A reply that recorded no agent at all (the a2ai worker) is the same.
     expect(
-      resolveMessageSpeaker({ role: "assistant", userId: "owner-1" }, lookup),
+      resolveMessageSpeaker({ role: "assistant", userId: "owner-1" }, lookup)
     ).toBeUndefined();
   });
 
@@ -83,16 +83,26 @@ describe("which actor spoke", () => {
 
   it("an agent is the author when authorType or role says so", () => {
     expect(isAgentSpokenMessage({ authorType: "ai_agent" })).toBe(true);
-    expect(isAgentSpokenMessage({ authorType: "bot", role: "system" })).toBe(true);
+    expect(isAgentSpokenMessage({ authorType: "bot", role: "system" })).toBe(
+      true
+    );
     // Relay's transcript carries only `role`.
     expect(isAgentSpokenMessage({ role: "assistant" })).toBe(true);
-    expect(isAgentSpokenMessage({ role: "user", authorType: "human" })).toBe(false);
-    expect(isAgentSpokenMessage({ role: "user", authorType: "external" })).toBe(false);
+    expect(isAgentSpokenMessage({ role: "user", authorType: "human" })).toBe(
+      false
+    );
+    expect(isAgentSpokenMessage({ role: "user", authorType: "external" })).toBe(
+      false
+    );
   });
 
   it("a bot notice whose userId is 'system' or the owner names no one", () => {
     expect(
-      messageSpeakerIds({ role: "assistant", authorType: "bot", userId: "system" }),
+      messageSpeakerIds({
+        role: "assistant",
+        authorType: "bot",
+        userId: "system",
+      })
     ).toEqual([]);
   });
 });

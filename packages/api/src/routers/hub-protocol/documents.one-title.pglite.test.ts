@@ -208,7 +208,11 @@ describe("hub documents.createDocument — one title", () => {
 
   it("an HTML document is stored as sent (only markdown has headings to read)", async () => {
     const html = "# Launch plan\n<p>x</p>";
-    const res = await hubCreate({ title: "Launch plan", content: html, type: "html" });
+    const res = await hubCreate({
+      title: "Launch plan",
+      content: html,
+      type: "html",
+    });
     expect((await stored(res.documentId!)).body).toBe(html);
   });
 });

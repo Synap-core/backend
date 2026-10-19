@@ -36,7 +36,10 @@ vi.mock("@synap/events", () => ({
   getBoss: () => ({ send: bossSend }),
 }));
 
-vi.mock("@synap-core/core", () => ({
+// Partial: the real @synap/database (importOriginal below) needs the rest of
+// core (e.g. ConflictError); only the logger is silenced.
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

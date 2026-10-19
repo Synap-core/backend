@@ -215,7 +215,9 @@ describe("resolveHomeLastSeen — the pod's stamp wins; a failed read is not a f
     });
   });
   it("waits for the pod rather than count over the device window first", () => {
-    expect(resolveHomeLastSeen(loading, ready(DEV))).toEqual({ status: "loading" });
+    expect(resolveHomeLastSeen(loading, ready(DEV))).toEqual({
+      status: "loading",
+    });
   });
   it("a pod that never stamped falls to the device stamp (before the pod kept it)", () => {
     expect(resolveHomeLastSeen(ready(null), ready(DEV))).toEqual({
@@ -233,11 +235,16 @@ describe("resolveHomeLastSeen — the pod's stamp wins; a failed read is not a f
   });
   it("a failed pod read offline-falls back to the device stamp", () => {
     expect(resolveHomeLastSeen(failed, ready(DEV)).status).toBe("ready");
-    expect(resolveHomeLastSeen(failed, ready(DEV))).toMatchObject({ lastSeen: DEV, source: "device" });
+    expect(resolveHomeLastSeen(failed, ready(DEV))).toMatchObject({
+      lastSeen: DEV,
+      source: "device",
+    });
   });
   it("waits for the device read only when the pod could not answer for itself", () => {
     expect(resolveHomeLastSeen(failed, loading)).toEqual({ status: "loading" });
-    expect(resolveHomeLastSeen(ready(POD), loading)).toMatchObject({ source: "pod" });
+    expect(resolveHomeLastSeen(ready(POD), loading)).toMatchObject({
+      source: "pod",
+    });
   });
   it("a junk stamp reads as none, never a wrong window", () => {
     expect(resolveHomeLastSeen(ready("garbage"), ready("nope"))).toMatchObject({

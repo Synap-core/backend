@@ -95,6 +95,11 @@ vi.mock("@synap/database", () => ({
   isNull: (col: unknown) => ({ op: "isNull", col }),
   inArray: (col: unknown, vals: unknown) => ({ op: "inArray", col, vals }),
   drizzleSql: () => ({}),
+  // The ONE pod-visible workspace door the accessible floor reads (d6db364bb).
+  podVisibleWorkspaceWhere: (userId: unknown) => ({
+    op: "podVisibleWorkspace",
+    userId,
+  }),
   automations: {
     id: "id",
     workspaceId: "workspace_id",

@@ -48,7 +48,10 @@ describe("resolveDocumentTitle — the producer", () => {
 
   it("takes the name from a leading `# ` when none is given, and drops it from the body", () => {
     expect(
-      resolveDocumentTitle({ title: "  ", content: "\n\n# Weekly review\nDone." })
+      resolveDocumentTitle({
+        title: "  ",
+        content: "\n\n# Weekly review\nDone.",
+      })
     ).toEqual({ title: "Weekly review", content: "Done." });
     expect(
       resolveDocumentTitle({ content: "# Weekly review\n\nDone." }).title
@@ -61,21 +64,21 @@ describe("resolveDocumentTitle — the producer", () => {
   });
 
   it("drops an equal leading heading of any depth (an agent's `## Name` is still the name twice)", () => {
-    expect(bodyWithoutTitleHeading("## Launch plan\n\nBody", "Launch plan")).toBe(
-      "Body"
-    );
+    expect(
+      bodyWithoutTitleHeading("## Launch plan\n\nBody", "Launch plan")
+    ).toBe("Body");
   });
 
   it("reads a setext heading as a heading", () => {
-    expect(bodyWithoutTitleHeading("Launch plan\n===\n\nBody", "Launch plan")).toBe(
-      "Body"
-    );
+    expect(
+      bodyWithoutTitleHeading("Launch plan\n===\n\nBody", "Launch plan")
+    ).toBe("Body");
   });
 
   it("a body that is only the heading stores as empty", () => {
-    expect(resolveDocumentTitle({ title: "Draft", content: "# Draft\n" }).content).toBe(
-      ""
-    );
+    expect(
+      resolveDocumentTitle({ title: "Draft", content: "# Draft\n" }).content
+    ).toBe("");
   });
 });
 
@@ -104,8 +107,8 @@ describe("bodyWithoutTitleHeading — the reader", () => {
   });
 
   it("a heading directly followed by prose ends at its own line", () => {
-    expect(bodyWithoutTitleHeading("# Launch plan\nShip it.", "Launch plan")).toBe(
-      "Ship it."
-    );
+    expect(
+      bodyWithoutTitleHeading("# Launch plan\nShip it.", "Launch plan")
+    ).toBe("Ship it.");
   });
 });

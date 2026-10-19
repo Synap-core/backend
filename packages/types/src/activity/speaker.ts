@@ -67,7 +67,7 @@ export function messageSpeakerIds(message: SpokenMessage): string[] {
  */
 export function resolveMessageSpeaker<P>(
   message: SpokenMessage,
-  lookup: (id: string) => P | null | undefined,
+  lookup: (id: string) => P | null | undefined
 ): P | undefined {
   for (const id of messageSpeakerIds(message)) {
     const found = lookup(id);

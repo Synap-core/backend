@@ -239,13 +239,19 @@ describe("words (D5: the unit is 'activity')", () => {
   it("a day reads the date ladder's words, whatever locale is passed — never ICU's 'Sept'", () => {
     // en-GB ICU says "Thu 17 Sept"; the ladder says "Sep" (critique L P1-4).
     for (const locale of [undefined, "en-GB", "en-US", "fr-FR"]) {
-      expect(activityDayWords("2026-09-17", "short", locale)).toBe("Thu 17 Sep");
-      expect(activityDayWords("2026-09-17", "long", locale)).toBe("Thursday 17 September 2026");
+      expect(activityDayWords("2026-09-17", "short", locale)).toBe(
+        "Thu 17 Sep"
+      );
+      expect(activityDayWords("2026-09-17", "long", locale)).toBe(
+        "Thursday 17 September 2026"
+      );
       expect(activityMonthWord(8, 2026, locale)).toBe("Sep");
     }
     // Year and month edges.
     expect(activityDayWords("2027-01-01")).toBe("Fri 1 Jan");
-    expect(activityDayWords("2026-12-31", "long")).toBe("Thursday 31 December 2026");
+    expect(activityDayWords("2026-12-31", "long")).toBe(
+      "Thursday 31 December 2026"
+    );
     expect(activityMonthWord(0, 2026)).toBe("Jan");
     expect(activityMonthWord(11, 2026)).toBe("Dec");
   });

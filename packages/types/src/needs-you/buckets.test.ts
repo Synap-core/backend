@@ -194,7 +194,12 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
     expect(new Set(filed.map((r) => r.signal.id)).size).toBe(rows.length);
     const sum = NEEDS_YOU_BUCKETS.reduce((n, b) => n + counts[b], 0);
     expect(sum).toBe(rows.length);
-    expect(counts).toEqual({ decision: 10, question: 5, routine: 1, broken: 2 });
+    expect(counts).toEqual({
+      decision: 10,
+      question: 5,
+      routine: 1,
+      broken: 2,
+    });
   });
 
   it("decision, question, broken, then routine — whatever the server order", () => {
@@ -237,7 +242,10 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
   });
 
   it("does not mutate the page it was handed", () => {
-    const page: Row[] = [proposal("a"), { id: "b", kind: "access-request", count: 1 }];
+    const page: Row[] = [
+      proposal("a"),
+      { id: "b", kind: "access-request", count: 1 },
+    ];
     const before = page.map((r) => r.id);
     needsYouBuckets(page, { intentOf });
     expect(page.map((r) => r.id)).toEqual(before);
@@ -248,9 +256,32 @@ describe("orderNeedsYouSignals — the Inbox order, before grouping", () => {
   it("a session's card lands at its most blocking item; then the rest by the rule", () => {
     const page = [
       // Server order: newest first — a free question leads.
-      { id: "q-free", kind: "owed-slot", count: 1, blockedReason: "credential", groupKey: null, ageBucket: "recent" as const, repeatCount: 1 },
-      { id: "q-s1", kind: "owed-slot", count: 1, blockedReason: "credential", groupKey: "session:s1", ageBucket: "recent" as const, repeatCount: 1 },
-      { id: "d-s1", kind: "access-request", count: 1, groupKey: "session:s1", ageBucket: "recent" as const, repeatCount: 1 },
+      {
+        id: "q-free",
+        kind: "owed-slot",
+        count: 1,
+        blockedReason: "credential",
+        groupKey: null,
+        ageBucket: "recent" as const,
+        repeatCount: 1,
+      },
+      {
+        id: "q-s1",
+        kind: "owed-slot",
+        count: 1,
+        blockedReason: "credential",
+        groupKey: "session:s1",
+        ageBucket: "recent" as const,
+        repeatCount: 1,
+      },
+      {
+        id: "d-s1",
+        kind: "access-request",
+        count: 1,
+        groupKey: "session:s1",
+        ageBucket: "recent" as const,
+        repeatCount: 1,
+      },
     ];
     const ordered = orderNeedsYouSignals(page);
     expect(ordered.map((s) => s.id)).toEqual(["d-s1", "q-s1", "q-free"]);
@@ -266,13 +297,24 @@ describe("the reason glyph", () => {
   const REASONS: Array<[Row, string]> = [
     [proposal("p"), "decision"],
     [{ id: "a", kind: "access-request", count: 1 }, "decision"],
-    [{ id: "o", kind: "owed-slot", count: 1, blockedReason: "Credential" }, "credential"],
+    [
+      { id: "o", kind: "owed-slot", count: 1, blockedReason: "Credential" },
+      "credential",
+    ],
     [{ id: "o2", kind: "owed-slot", count: 1 }, "owed"],
     [{ id: "r", kind: "session-review", count: 1 }, "review"],
     [{ id: "c", kind: "capture", count: 1 }, "ask"],
-    [{ id: "n", kind: "notification", count: 1, notificationType: "x.y" }, "ask"],
     [
-      { id: "f", kind: "notification", count: 1, notificationType: "automation.broken" },
+      { id: "n", kind: "notification", count: 1, notificationType: "x.y" },
+      "ask",
+    ],
+    [
+      {
+        id: "f",
+        kind: "notification",
+        count: 1,
+        notificationType: "automation.broken",
+      },
       "failure",
     ],
   ];
@@ -280,7 +322,9 @@ describe("the reason glyph", () => {
   for (const [row, reason] of REASONS) {
     it(`${row.id} → ${reason}, drawn with an explicit glyph and a label`, () => {
       expect(needsYouReasonOf(row)).toBe(reason);
-      expect(resolveNeedsYouReasonIcon(reason)).not.toBe(BLOCKED_REASON_FALLBACK_ICON);
+      expect(resolveNeedsYouReasonIcon(reason)).not.toBe(
+        BLOCKED_REASON_FALLBACK_ICON
+      );
       expect(resolveNeedsYouReasonLabel(reason)).not.toBe("");
     });
   }
@@ -289,7 +333,9 @@ describe("the reason glyph", () => {
     for (const [k, v] of Object.entries(BLOCKED_REASON_ICONS)) {
       expect(NEEDS_YOU_REASON_ICONS[k]).toBe(v);
     }
-    expect(resolveNeedsYouReasonIcon("not-a-reason")).toBe(BLOCKED_REASON_FALLBACK_ICON);
+    expect(resolveNeedsYouReasonIcon("not-a-reason")).toBe(
+      BLOCKED_REASON_FALLBACK_ICON
+    );
   });
 
   it("reaches the lens row the Inbox draws (reasonKind on lensRowOfNeedsYou)", () => {
@@ -310,7 +356,7 @@ describe("the reason glyph", () => {
     expect(row.reasonKind).toBe("failure");
   });
 
-  it("counts a routine batch in its own noun (never \"2 routines\")", () => {
+  it('counts a routine batch in its own noun (never "2 routines")', () => {
     expect(resolveNeedsYouItemCount("routine", 1)).toBe("1 routine change");
     expect(resolveNeedsYouItemCount("routine", 14)).toBe("14 routine changes");
   });

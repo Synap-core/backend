@@ -270,7 +270,9 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(resolveUnitState(row.state).state).toBe("needs_you");
     // Any other owed slot is answered.
     const credential = lensRowOfNeedsYou(
-      needsYouRows([sig({ id: "c", kind: "owed-slot", blockedReason: "credential" })]).recent[0]!,
+      needsYouRows([
+        sig({ id: "c", kind: "owed-slot", blockedReason: "credential" }),
+      ]).recent[0]!,
       "blocking"
     );
     expect(credential.verb).toEqual({ action: "answer", label: "Answer" });
