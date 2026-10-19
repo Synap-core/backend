@@ -614,14 +614,21 @@ export async function applyPackagePostWorkspace(
       drizzleSql,
       automations: automationsTable,
     } = await import("@synap/database");
+    const { withoutServerOwnedAutomationMetadata, stampInstalledByPackage } =
+      await import("./automations/server-metadata.js");
     const caller = automationsRouter.createCaller(ctx as never);
     const autos: unknown[] = [];
     // The package this apply installs (`_meta.slug`; an added source's is
-    // `<source>/<slug>`), stamped on every automation it creates as
+    // `<source>/<slug>`), stamped on every automation it creates or reuses as
     // `metadata.installedByPackage` — what lets that same package re-install
-    // over its own automations elsewhere (`assertNoNamedClash`).
+    // over its own automations elsewhere (`assertNoNamedClash`). Only this
+    // stamp: the author's metadata never carries the key.
     const installedByPackage = body._meta?.slug;
-    for (const a of body.automations) {
+    for (const definition of body.automations) {
+      const a = {
+        ...definition,
+        metadata: withoutServerOwnedAutomationMetadata(definition.metadata),
+      };
       try {
         const [existing] = await db
           .select({
@@ -662,21 +669,15 @@ export async function applyPackagePostWorkspace(
             // `a.key`) always overrides any author-supplied `metadata.templateKey`.
             metadata: (() => {
               const stamps = existing.metadata as
-                | { templateKey?: string; installedByPackage?: string }
-                | null
-                | undefined;
+                { templateKey?: string } | null | undefined;
               const systemTemplateKey = stamps?.templateKey ?? a.key;
-              // The first package that installed the row keeps it.
-              const installedBy =
-                stamps?.installedByPackage ?? installedByPackage;
-              return a.metadata || systemTemplateKey || installedBy
+              return a.metadata || systemTemplateKey
                 ? {
                     ...(existing.metadata ?? {}),
                     ...a.metadata,
                     ...(systemTemplateKey
                       ? { templateKey: systemTemplateKey }
                       : {}),
-                    ...(installedBy ? { installedByPackage: installedBy } : {}),
                   }
                 : undefined;
             })(),
@@ -685,6 +686,13 @@ export async function applyPackagePostWorkspace(
           // row is untouched until a person approves it.
           const proposalId = (updated as { proposalId?: string } | undefined)
             ?.proposalId;
+          // The first package that installed the row keeps it.
+          if (
+            installedByPackage &&
+            (updated as { status?: string } | undefined)?.status !== "proposed"
+          ) {
+            await stampInstalledByPackage(existing.id, installedByPackage);
+          }
           autos.push(
             (updated as { status?: string } | undefined)?.status === "proposed"
               ? {
@@ -706,14 +714,12 @@ export async function applyPackagePostWorkspace(
           flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
           status: a.status,
           // Preserve author metadata (e.g. `metadata.kind`) alongside the
-          // system stamps — `templateKey` and `installedByPackage` last so
-          // they win over anything the author wrote.
+          // system `templateKey` stamp, last so it wins over the author's.
           metadata:
-            a.metadata || a.key || installedByPackage
+            a.metadata || a.key
               ? {
                   ...a.metadata,
                   ...(a.key ? { templateKey: a.key } : {}),
-                  ...(installedByPackage ? { installedByPackage } : {}),
                 }
               : undefined,
           agentUserId,
@@ -724,6 +730,9 @@ export async function applyPackagePostWorkspace(
           status?: string;
           proposalId?: string | null;
         };
+        if (installedByPackage && created.status !== "proposed" && created.id) {
+          await stampInstalledByPackage(created.id, installedByPackage);
+        }
         autos.push(
           created.status === "proposed"
             ? {
