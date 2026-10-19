@@ -578,7 +578,10 @@ services:
     # (RELEASE.2025-09-07T16-13-09Z, amd64, unmodified, AGPL-3.0), mirrored to
     # our registry. Frozen: it receives no upstream fixes; a maintained
     # replacement is a separate decision.
-    image: ${SYNAP_IMAGE_MINIO:-ghcr.io/synap-core/minio:RELEASE.2025-09-07T16-13-09Z}
+    # Tag 2025-09-07 = RELEASE.2025-09-07T16-13-09Z (same digest); lowercase
+    # because a release pins `ref@sha256:` and the pinning rule (make-manifest
+    # DIGEST, the `synap` update engine) only accepts lowercase references.
+    image: ${SYNAP_IMAGE_MINIO:-ghcr.io/synap-core/minio:2025-09-07}
     restart: always
     command: server /data --console-address ":9001"
     environment:
