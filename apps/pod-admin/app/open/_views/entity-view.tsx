@@ -7,9 +7,13 @@
  * primary facts in view, the rest behind "More fields". Only DECLARED
  * properties are planned — with no schema nothing is dumped, so an undeclared
  * key holding a secret can never leak as a string — and `FieldList` never
- * draws a secret or a bare entity reference.
+ * draws a secret or a bare entity reference. Prose fields (rich text, the
+ * plan's body prose) read in full as content instead of a folded row, and the
+ * entity's body document follows them.
  *
  * `entities.get` re-checks access server-side; no admin role is involved.
+ * The body document is read through `documents.get` on the viewer's own
+ * floor: a body they cannot read says so, and shows nothing.
  */
 
 import { Chip } from "@heroui/react";
@@ -20,6 +24,13 @@ import {
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
+import { proseFields } from "../../_lib/object/field-rows";
+import {
+  ContentBlock,
+  DocumentContentSection,
+} from "../../_lib/object/content/content-block";
+import { prepareContent } from "../../_lib/object/content/markdown-model";
+import { useDocumentContent } from "../../_lib/object/content/use-document-content";
 import { entitySummary, redactSecretProperties } from "../open-model";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
@@ -36,6 +47,8 @@ type EntityPayload = {
     preview?: string | null;
     description?: string | null;
     workspaceId?: string | null;
+    /** The entity's body document, when it has one. */
+    documentId?: string | null;
     properties?: Record<string, unknown> | null;
     updatedAt?: Date | string | null;
     facetSlugs?: string[];
@@ -87,6 +100,9 @@ function roleSlugs(data: EntityPayload): string[] {
 export function EntityView({ id }: { id: string }) {
   const query = trpc.entities.get.useQuery({ id, includeProfile: true });
   useReauthOnUnauthorized(query.error);
+  const body = useDocumentContent(
+    (query.data as EntityPayload | undefined)?.entity?.documentId
+  );
 
   if (query.isLoading) return <OpenLoading label="Loading entity…" />;
   const data = query.data as EntityPayload | undefined;
@@ -120,6 +136,13 @@ export function EntityView({ id }: { id: string }) {
     header: { title },
   });
   const roles = roleSlugs(data);
+  const prose = proseFields(plan);
+  const proseKeys = prose.map((field) => field.key);
+  // The summary's property, when it reads in full below, is not repeated
+  // as the header's one line.
+  const summaryShownBelow =
+    summary.propertySlug !== null && proseKeys.includes(summary.propertySlug);
+  const openInApp = <OpenInAppLink type="entity" id={id} />;
 
   return (
     <OpenObject
@@ -130,8 +153,8 @@ export function EntityView({ id }: { id: string }) {
           : null,
         noun,
         title,
-        summary: summary.text,
-        primaryAction: <OpenInAppLink type="entity" id={id} />,
+        summary: summaryShownBelow ? null : summary.text,
+        primaryAction: openInApp,
       }}
       facts={
         entity.updatedAt
@@ -167,8 +190,26 @@ export function EntityView({ id }: { id: string }) {
       )}
       <FieldList
         plan={plan}
-        omit={summary.propertySlug ? [summary.propertySlug] : undefined}
+        omit={[
+          ...proseKeys,
+          ...(summary.propertySlug ? [summary.propertySlug] : []),
+        ]}
       />
+      {prose.map((field) => (
+        <ContentBlock
+          key={field.key}
+          title={field.label}
+          prepared={prepareContent(field.text, "markdown")}
+          openInApp={openInApp}
+        />
+      ))}
+      {entity.documentId && (
+        <DocumentContentSection
+          title="Content"
+          content={body}
+          openInApp={openInApp}
+        />
+      )}
     </OpenObject>
   );
 }

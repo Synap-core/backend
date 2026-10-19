@@ -112,3 +112,34 @@ export function fieldRows(
     more: rest.slice(promote),
   };
 }
+
+/** A prose field drawn as content (whole, read as markdown) instead of a row. */
+export interface ProseField {
+  key: string;
+  label: string;
+  text: string;
+}
+
+/**
+ * The fields worth reading in full: every rich-text field (markdown, a text
+ * area) and the plan's body prose (`description`, `notes`, …), when they hold
+ * text. A row folds them to one line; the page draws these as content and
+ * passes their keys to `fieldRows`' `omit`, so nothing shows twice.
+ */
+export function proseFields(plan: EntityFieldPlan): ProseField[] {
+  const out: ProseField[] = [];
+  const seen = new Set<string>();
+  const take = (field: PlannedEntityField) => {
+    const { def, value, renderKind } = field;
+    if (seen.has(def.slug)) return;
+    if (renderKind !== "richtext" && renderKind !== "text") return;
+    if (typeof value !== "string" || !value.trim()) return;
+    seen.add(def.slug);
+    out.push({ key: def.slug, label: resolvePropertyLabel(def), text: value });
+  };
+  for (const field of plan.body) take(field);
+  for (const field of [...plan.hero, ...plan.primary, ...plan.secondary]) {
+    if (field.renderKind === "richtext") take(field);
+  }
+  return out;
+}

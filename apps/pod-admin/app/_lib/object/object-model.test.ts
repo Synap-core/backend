@@ -4,7 +4,7 @@ import {
   type EffectivePropertyDef,
 } from "@synap-core/types/property-render";
 import { factsGridClass } from "./facts-grid";
-import { FIELD_LIST_MIN_SHOWN, fieldRows } from "./field-rows";
+import { FIELD_LIST_MIN_SHOWN, fieldRows, proseFields } from "./field-rows";
 import {
   statusKindForTone,
   statusPillFor,
@@ -128,5 +128,47 @@ describe("factsGridClass", () => {
     }
     expect(factsGridClass(4)).toContain("lg:grid-cols-4");
     expect(factsGridClass(3)).not.toContain("lg:");
+  });
+});
+
+describe("proseFields — what reads in full", () => {
+  it("takes body prose and rich text, never a secret or a short fact", () => {
+    const plan = planEntityFields({
+      definitions: [
+        def("title", "string"),
+        def("city", "string"),
+        def("notes", "string"),
+        def("brief", "string", { uiHints: { inputType: "markdown" } }),
+        def("summary", "secret"),
+        def("details", "string", { uiHints: { inputType: "textarea" } }),
+      ],
+      values: {
+        title: "Acme",
+        city: "Lyon",
+        notes: "## Call\n\n- went well",
+        brief: "**Bold** plan",
+        summary: "sk-live-secret",
+        details: "   ",
+      },
+      header: { title: "Acme" },
+    });
+    const prose = proseFields(plan);
+    expect(prose.map((p) => p.key).sort()).toEqual(["brief", "notes"]);
+    expect(prose.find((p) => p.key === "notes")?.text).toBe(
+      "## Call\n\n- went well"
+    );
+    expect(JSON.stringify(prose)).not.toContain("sk-live");
+  });
+
+  it("finds a rich-text field the plan filed as a primary fact", () => {
+    const plan = planEntityFields({
+      definitions: [
+        def("pitch", "string", { uiHints: { inputType: "richtext" } }),
+      ],
+      values: { pitch: "A *better* way" },
+    });
+    expect(proseFields(plan)).toEqual([
+      { key: "pitch", label: expect.any(String), text: "A *better* way" },
+    ]);
   });
 });
