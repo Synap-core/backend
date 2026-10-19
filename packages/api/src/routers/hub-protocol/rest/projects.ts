@@ -23,9 +23,6 @@ import {
   inArray,
   desc,
   drizzleSql,
-  ProjectRepository,
-  EventRepository,
-  sql,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -47,6 +44,7 @@ import {
   type CreateProjectGovernedOutcome,
 } from "../../../services/projects/create-project.js";
 import { updateProjectGoverned } from "../../../services/projects/update-project.js";
+import { deleteProjectGoverned } from "../../../services/projects/delete-project.js";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -56,7 +54,6 @@ import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
 } from "../../../utils/project-workspace.js";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
   accessScopeWhere,
@@ -940,33 +937,24 @@ export function registerProjectsRoutes(app: HubHono): void {
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
 
-    const perm = await checkPermissionOrPropose({
-      userId,
-      subjectType: "project",
-      action: "delete",
-      data: { id },
-    });
-
-    if ("denied" in perm && perm.denied) {
-      return c.json({ error: perm.reason }, 403);
-    }
-    if ("proposalId" in perm) {
-      return jsonGoverned(c, {
-        status: "proposed",
-        proposalId: perm.proposalId,
-        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-      });
-    }
-
-    const eventRepo = new EventRepository(sql);
-    const repo = new ProjectRepository(db, eventRepo);
-
+    // The ONE governed delete (`services/projects/delete-project.ts`), shared
+    // with tRPC `projects.delete`: visibility floor first (a foreign id is 404
+    // before governance), then the gate on the PROJECT's workspace, then the
+    // write + audit + side effects. This door used to give the gate no
+    // workspace and delete by id alone — any write key deleted any project.
     try {
-      await repo.delete(id, userId);
+      const outcome = await deleteProjectGoverned({
+        id,
+        userId,
+        agentUserId: c.get("agentUserId") as string | undefined,
+      });
+      if (outcome.status === "proposed") return jsonGoverned(c, outcome);
       return c.json({ status: "deleted" });
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 404);
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
     }
   });
 }
