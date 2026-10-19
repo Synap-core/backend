@@ -9,6 +9,7 @@ import {
   homeBriefSince,
   homeMoves,
   liveSessionCount,
+  resolveHomeLastSeen,
   projectStandRows,
   type HomeBriefReads,
 } from "./home-brief-reads.js";
@@ -196,5 +197,51 @@ describe("projectStandRows — one row per project, the shared rules decide", ()
         (r) => r.state.unreadable
       )
     ).toBe(true);
+  });
+});
+
+describe("resolveHomeLastSeen — the pod's stamp wins; a failed read is not a first visit", () => {
+  const POD = "2026-10-19T08:00:00.000Z";
+  const DEV = "2026-10-18T19:40:00.000Z";
+  const loading = { status: "loading" as const };
+  const failed = { status: "failed" as const };
+
+  it("uses the pod's stamp over a different device stamp (it follows the person)", () => {
+    expect(resolveHomeLastSeen(ready(POD), ready(DEV))).toEqual({
+      status: "ready",
+      lastSeen: POD,
+      source: "pod",
+    });
+  });
+  it("waits for the pod rather than count over the device window first", () => {
+    expect(resolveHomeLastSeen(loading, ready(DEV))).toEqual({ status: "loading" });
+  });
+  it("a pod that never stamped falls to the device stamp (before the pod kept it)", () => {
+    expect(resolveHomeLastSeen(ready(null), ready(DEV))).toEqual({
+      status: "ready",
+      lastSeen: DEV,
+      source: "device",
+    });
+  });
+  it("a FAILED pod read with no device stamp is 'no last seen' (today), not a window", () => {
+    expect(resolveHomeLastSeen(failed, ready(null))).toEqual({
+      status: "ready",
+      lastSeen: null,
+      source: "none",
+    });
+  });
+  it("a failed pod read offline-falls back to the device stamp", () => {
+    expect(resolveHomeLastSeen(failed, ready(DEV)).status).toBe("ready");
+    expect(resolveHomeLastSeen(failed, ready(DEV))).toMatchObject({ lastSeen: DEV, source: "device" });
+  });
+  it("waits for the device read only when the pod could not answer for itself", () => {
+    expect(resolveHomeLastSeen(failed, loading)).toEqual({ status: "loading" });
+    expect(resolveHomeLastSeen(ready(POD), loading)).toMatchObject({ source: "pod" });
+  });
+  it("a junk stamp reads as none, never a wrong window", () => {
+    expect(resolveHomeLastSeen(ready("garbage"), ready("nope"))).toMatchObject({
+      lastSeen: null,
+      source: "none",
+    });
   });
 });
