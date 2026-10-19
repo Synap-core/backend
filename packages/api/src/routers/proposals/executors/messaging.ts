@@ -68,9 +68,9 @@ export function registerMessagingExecutors(): void {
               "No messaging account found for this platform — connect one first",
           });
         }
-        // The provider's account id — connectors hand it straight to the
-        // provider (`sendMessage(externalAccountId, …)`); the pod row id is
-        // unknown there.
+        // The provider's account id — every connector hands it straight to
+        // the provider as its external account id; the pod row id is unknown
+        // there.
         accountId = msgAccount.externalId;
       }
 

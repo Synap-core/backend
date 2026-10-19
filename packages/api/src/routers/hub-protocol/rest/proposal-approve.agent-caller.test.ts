@@ -170,10 +170,14 @@ describe("the canonical approve floor refuses an agent caller", () => {
     expect(reached).not.toHaveBeenCalled();
   });
 
-  it("proposals.batchApprove with an is_internal ctx → FORBIDDEN, nothing read", async () => {
-    await expect(
-      callerFor({ keyType: "is_internal" }).batchApprove({ proposalIds: [ID] })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  it("proposals.batchApprove with an is_internal ctx → each item FORBIDDEN, nothing read", async () => {
+    const res = (await callerFor({ keyType: "is_internal" }).batchApprove({
+      proposalIds: [ID],
+    })) as { results: Array<Record<string, unknown>> };
+    expect(res.results[0]).toMatchObject({
+      success: false,
+      errorCode: "FORBIDDEN",
+    });
     expect(reached).not.toHaveBeenCalled();
   });
 

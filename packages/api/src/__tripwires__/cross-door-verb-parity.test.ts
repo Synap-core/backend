@@ -268,16 +268,8 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "Same: every MCP write already files its own proposal when governance says propose. An explicit create tool would let an agent forge a proposal detached from any write.",
   },
-  // ── playbook — the CLI has NO playbook surface at all ───────────────────────
-  ...(["list", "get", "create", "update", "run", "archive"] as const).map(
-    (verb) => ({
-      object: "playbook",
-      verb,
-      door: "cli" as Door,
-      reason:
-        "The CLI ships NO playbook surface — a whole primitive is agent-only (MCP) + browser-only (tRPC). Known, not yet justified by a user need; revisit rather than assume.",
-    })
-  ),
+  // ── playbook — CLI: closed (synap-cli ships a `playbook` command; the CLI
+  // root is detected at ROOT granularity, so that closes all six cells) ──────
   // ── playbook — Hub REST ────────────────────────────────────────────────────
   // list / create / run / get shipped on Hub REST (GET /playbooks,
   // POST /playbooks, POST /playbooks/:id/run, GET /playbooks/:id); those gaps

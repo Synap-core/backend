@@ -1465,9 +1465,9 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertMayDecideProposal("approve");
       // Approval is the human step: an agent caller is refused before any read.
       refuseAgentProposalApprover(ctx);
-      assertMayDecideProposal("approve");
       const userId = requireUserId(ctx.userId);
 
       const proposal = await db.query.proposals.findFirst({
@@ -3073,9 +3073,9 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Approval is the human step: an agent caller is refused before any read.
-      refuseAgentProposalApprover(ctx);
       assertMayDecideProposal("approve");
+      // An agent caller is refused PER ITEM (first statement of the loop), so
+      // the batch reports each refusal in its results.
       const userId = requireUserId(ctx.userId);
       /**
        * Per-item outcome. `errorCode` is the tRPC error CODE the failure
@@ -3114,6 +3114,9 @@ export const proposalsRouter = router({
 
       for (const proposalId of input.proposalIds) {
         try {
+          // Approval is the human step: an agent caller (agent key or the IS
+          // internal key) fails each item FORBIDDEN, before the item is read.
+          refuseAgentProposalApprover(ctx);
           const proposal = await db.query.proposals.findFirst({
             where: eq(proposals.id, proposalId),
           });
