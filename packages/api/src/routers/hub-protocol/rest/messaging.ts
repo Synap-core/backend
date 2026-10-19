@@ -49,6 +49,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono, type HubVariables } from "./_shared.js";
 import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 
 // ── Shared response schemas ────────────────────────────────────────────────
@@ -1657,23 +1658,83 @@ export function registerMessagingRoutes(app: HubHono): void {
         ),
         columns: { id: true, externalSource: true },
       });
+      // SECURITY — a thread the pod mirrors must be the caller's to write to
+      // (the channel floor every channel write door uses). Without this an
+      // account-less connector (Discord / Proton enqueue to their bridge and
+      // ignore `accountId`) sent into ANY mirrored thread by id. A thread with
+      // no mirrored channel is floored by the account check below. 404 — no
+      // existence oracle.
+      if (linkedChannel) {
+        const [visible] = await db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(
+            and(
+              eq(channels.id, linkedChannel.id),
+              channelVisibilityWhere(userId)
+            )
+          )
+          .limit(1);
+        if (!visible)
+          return c.json({ error: "Conversation not found" }, 404) as never;
+      }
 
       const connector = await getMessagingConnector(
         linkedChannel?.externalSource ?? undefined
       );
       if (!connector)
         return c.json({ error: "Messaging connector not configured" }, 503);
+      // SECURITY — the caller must OWN the account it sends as. `accountId` is
+      // the provider account (`messaging_accounts.external_id`) and went
+      // straight to the connector: any write key could send as another user's
+      // LinkedIn / WhatsApp / mail account. Same predicate as the sibling read
+      // `GET .../messages`. A connector that sends as no account
+      // (`requiresAccount()` false) ignores the id, so none is demanded.
+      if (connector.requiresAccount()) {
+        const ownAccount = await db.query.messagingAccounts.findFirst({
+          where: and(
+            eq(messagingAccounts.userId, userId),
+            eq(messagingAccounts.externalId, accountId)
+          ),
+          columns: { id: true },
+        });
+        if (!ownAccount)
+          return c.json({ error: "Account not found" }, 404) as never;
+      }
       try {
         // Delegated to the shared dispatcher — one implementation, two doors
-        // (human-direct here, agent-approved via proposals.ts).
-        const { success } = await sendExternalMessage({
+        // (human-direct here, agent-approved via proposals.ts). The acting
+        // agent MUST travel: the dispatcher gates only an agent send
+        // (`gateMessagingSend`), and this door used to drop it, so an agent
+        // key's send went out as an ungoverned owner send.
+        const agentUserId = c.get("agentUserId") as string | undefined;
+        const result = await sendExternalMessage({
           threadId,
           accountId,
           body,
           userId,
+          ...(agentUserId ? { agentUserId } : {}),
         });
-        if (!success)
-          return c.json({ error: "Messaging connector not configured" }, 503);
+        if (result.proposed && result.proposalId) {
+          return jsonGoverned(c, {
+            status: "proposed",
+            proposalId: result.proposalId,
+          }) as never;
+        }
+        if (!result.success) {
+          // The gate's refusal of an agent send (a reason, no failure class)
+          // says why; anything else keeps the door's previous 503.
+          return (
+            result.error && !result.errorClass
+              ? c.json({ error: result.error }, 403)
+              : c.json(
+                  {
+                    error: result.error ?? "Messaging connector not configured",
+                  },
+                  503
+                )
+          ) as never;
+        }
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error({ err, threadId, accountId }, "POST send failed");
