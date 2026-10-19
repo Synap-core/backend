@@ -45,6 +45,8 @@ import {
 } from "../../../services/projects/create-project.js";
 import { updateProjectGoverned } from "../../../services/projects/update-project.js";
 import { deleteProjectGoverned } from "../../../services/projects/delete-project.js";
+import { getWorkspaceRole } from "../../../utils/workspace-role.js";
+import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -456,7 +458,7 @@ export function registerProjectsRoutes(app: HubHono): void {
     // 404 — project must exist.
     const exists = await db.query.projects.findFirst({
       where: eq(projects.id, id),
-      columns: { id: true, name: true },
+      columns: { id: true, name: true, userId: true, workspaceId: true },
     });
     if (!exists) return c.json({ error: "Project not found" }, 404);
 
@@ -474,6 +476,26 @@ export function registerProjectsRoutes(app: HubHono): void {
         { error: "Access denied: you do not own this project." },
         403
       );
+    }
+    // 403 — teardown authority. Visibility above is a READ predicate: it
+    // admits every member of a workspace project (a viewer included), and
+    // this used to be the only check, so any member hard-purged a project
+    // with the pod-wide entities filed into it. The project's creator may
+    // purge it; otherwise a workspace owner/admin — the same rule as
+    // POST /workspaces/:id/purge.
+    if (exists.userId !== userId) {
+      const role = exists.workspaceId
+        ? await getWorkspaceRole(userId, exists.workspaceId)
+        : undefined;
+      if (!isSpaceManageRole(role)) {
+        return c.json(
+          {
+            error:
+              "Access denied: only the project's creator or a workspace owner/admin can purge it.",
+          },
+          403
+        );
+      }
     }
 
     // 400 — confirm must equal the project name exactly.
