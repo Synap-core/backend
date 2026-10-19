@@ -1209,30 +1209,24 @@ export function registerEntitiesRoutes(app: HubHono): void {
       getConfinedWorkspace(c, body.workspaceId ?? null) ?? null;
 
     try {
-      // The CATALOG (for type inference) needs a concrete workspace — listProfiles
-      // requires one — so resolve the user's first accessible workspace when no
-      // lens is pinned. But RECALL keeps the caller's requested lens: a null
-      // workspaceId means user-scoped / pod-wide results, NOT workspace-0 results.
-      // (Catalog from one workspace + pod-wide recall is fine: profile slugs are
-      // largely shared, and a missing slug just means no type-scoped boost.)
-      let catalogWs = workspaceId;
-      if (!catalogWs) {
-        const wsIds = await getUserAccessibleWorkspaceIds(userId);
-        catalogWs = wsIds[0] ?? null;
-      }
-
-      let catalog: ProfileCatalogEntry[] = [];
-      if (catalogWs) {
-        const caller = await getCaller(c, { workspaceId: catalogWs });
-        const { profiles: profileRows } = await caller.profiles.listProfiles({
-          userId,
-          workspaceId: catalogWs,
-        });
-        catalog = profileRows.flatMap((p) => {
-          const entry = toProfileCatalogEntry(p);
-          return entry ? [entry] : [];
-        });
-      }
+      // The CATALOG (for type inference) tracks the caller's lens, like recall.
+      // A workspaceId PINS both (podProcedure checks membership and refuses an
+      // archived one: an explicit choice). Without one the lens stays NULL and
+      // listProfiles reads the caller's POD FLOOR — the union of every readable
+      // workspace's profiles, the same `getAccessibleProfiles(userId, "")` the
+      // knowledge doors use (resolveKnowledgeLens). It used to pin
+      // `getUserAccessibleWorkspaceIds(userId)[0]`, the first row of an
+      // UNORDERED read: an archived space there refused the whole read with a
+      // 403, and otherwise a kind living in any other workspace was unnameable.
+      const caller = await getCaller(c, { workspaceId });
+      const { profiles: profileRows } = await caller.profiles.listProfiles({
+        userId,
+        workspaceId,
+      });
+      const catalog: ProfileCatalogEntry[] = profileRows.flatMap((p) => {
+        const entry = toProfileCatalogEntry(p);
+        return entry ? [entry] : [];
+      });
 
       const result = await retrieve({
         query: body.query,
