@@ -202,6 +202,20 @@ export function needsYouBuckets<T extends BucketableSignal>(
 }
 
 /**
+ * A needs-you page in the Inbox order — the signals only, ready for
+ * `needsYouRows` (which groups and folds but never sorts): a session's card
+ * then lands at its MOST blocking item, the Older fold stays a stable
+ * partition. ONE rule for the desktop Inbox (`triageModel`) and relay's
+ * `/blocked` (founder decision 3A — two surfaces, one order).
+ */
+export function orderNeedsYouSignals<T extends BucketableSignal>(
+  signals: readonly T[],
+  opts: NeedsYouBucketOptions<T> = {}
+): T[] {
+  return needsYouBuckets(signals, opts).rows.map((r) => r.signal);
+}
+
+/**
  * The REASON a row carries as its glyph (decision · ask · review · failure,
  * or the owed slot's own blocker). Its own key set, not `needsYouItemKind`:
  * that one is the session card's COUNT unit and keeps a notification as

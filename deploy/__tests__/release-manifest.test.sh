@@ -26,6 +26,13 @@ for must in SYNAP_IMAGE_BACKEND SYNAP_IMAGE_POD_ADMIN SYNAP_IMAGE_POD_AGENT SYNA
   grep -qx "$must" <<<"$KEYS" || bad "compose does not pin $must"
 done
 
+# Every third-party default must be pinnable: a release writes `<default>@sha256:…`
+# and both make-manifest's DIGEST rule and the pods' `synap` engine accept only a
+# LOWERCASE reference. An uppercase tag (MinIO's RELEASE.…T…Z) passed every
+# gate and failed the v1.1.1 publish at its last step.
+bad_refs="$(grep -oE '\$\{SYNAP_IMAGE_[A-Z0-9_]+:-[^}$]+\}' "$HERE/deploy/docker-compose.yml" | sed -E 's/^\$\{[A-Z0-9_]+:-//; s/\}$//' | grep -vE '^[a-z0-9][a-z0-9._/:-]*$' || true)"
+[ "$(grep -cE '\$\{SYNAP_IMAGE_[A-Z0-9_]+:-[^}$]+\}' "$HERE/deploy/docker-compose.yml")" -ge 5 ] || bad "third-party image defaults: scan found too few"
+[ -z "$bad_refs" ] && ok "every third-party image default is a lowercase, pinnable reference" || bad "image defaults the release cannot pin: $bad_refs"
 # ── 1. generate (all digests given → no registry access) and validate ─────────
 args=()
 for k in $KEYS; do args+=(--image "$k=example.org/$(echo "$k" | tr 'A-Z_' 'a-z-'):t@sha256:$(D a)"); done
