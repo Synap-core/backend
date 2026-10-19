@@ -55,9 +55,11 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     id: "governance",
     surface: "browser",
     since: SINCE,
+    // Founder 2A (2026-10-19): the needs-you list left Work for its own page,
+    // the Inbox (`inbox` app) — the row's successor follows it.
     reason:
-      "Governance app deprecated: it merges into Work (needs-you) and Settings (Agents, Approvals, History). Its System tab is retired outright.",
-    replacedBy: "Work › Needs you; Settings › AI & agents",
+      "Governance app deprecated: it merges into the Inbox (needs-you) and Settings (Agents, Approvals, History). Its System tab is retired outright.",
+    replacedBy: "Inbox; Settings › AI & agents",
     decisionDoc: V1_PLAN_DOC,
   },
   {
