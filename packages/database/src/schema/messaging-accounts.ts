@@ -51,7 +51,10 @@ export const messagingAccounts = pgTable(
     /** Human-readable label shown in the UI (e.g. "John Doe"). */
     displayName: text("display_name").notNull().default(""),
 
-    /** 'connected' | 'reconnection_required' | 'disconnected' */
+    /**
+     * 'connected' | 'reconnection_required' | 'disconnected', plus 'revoked'
+     * for an `expo` phone turned off from another device (see below).
+     */
     status: text("status").notNull().default("connected"),
 
     /** Provider-specific metadata (tokens, scopes, webhook ids, etc.). */
@@ -87,6 +90,7 @@ export const MESSAGING_ACCOUNT_STATUSES = [
   "connected",
   "reconnection_required",
   "disconnected",
+  "revoked",
 ] as const;
 export type MessagingAccountStatus =
   (typeof MESSAGING_ACCOUNT_STATUSES)[number];
@@ -100,10 +104,13 @@ export type MessagingAccountStatus =
  * An `expo` row is a DEVICE, not a social account:
  *   externalId  = the ExponentPushToken[...] (unique per install per device)
  *   displayName = a human device label ("Antoine's iPhone")
- *   metadata    = { platform: 'ios' | 'android', deviceName?, appVersion? }
+ *   metadata    = { platform: 'ios' | 'android', deviceName?, appVersion?,
+ *                   lastSeenAt?, revokedAt? }
  *
- * Revocation flips `status` to 'disconnected' — a dead token is never deleted,
- * so a re-register on the same device reuses the row via the (user, provider,
- * external_id) unique index instead of accumulating duplicates.
+ * A phone that stops getting pushes is never deleted, so a re-register on the
+ * same device reuses the row via the (user, provider, external_id) unique
+ * index instead of accumulating duplicates. It is 'disconnected' (sign-out,
+ * dead token, unused) or 'revoked' (turned off from another device, which
+ * only that phone can undo) — `api/src/notifications/push-devices.ts`.
  */
 export const MESSAGING_ACCOUNT_PROVIDER_EXPO = "expo";
