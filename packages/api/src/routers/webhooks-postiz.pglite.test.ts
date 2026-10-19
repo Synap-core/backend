@@ -150,9 +150,7 @@ async function row(id: string) {
     status: string | null;
     properties: Record<string, unknown>;
     updated_at: Date;
-  }>(`select status, properties, updated_at from entities where id = $1`, [
-    id,
-  ]);
+  }>(`select status, properties, updated_at from entities where id = $1`, [id]);
   return r.rows[0]!;
 }
 
@@ -226,7 +224,10 @@ describe("POST /api/webhooks/postiz/:token", () => {
   it("an unknown token is 404 and touches nothing", async () => {
     const id = await insertPost(OWNER, "pz-unknown-token-case");
     const before = await row(id);
-    const res = await deliver("not-the-token", published("pz-unknown-token-case"));
+    const res = await deliver(
+      "not-the-token",
+      published("pz-unknown-token-case")
+    );
     expect(res.status).toBe(404);
     expect(await row(id)).toEqual(before);
   });

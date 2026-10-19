@@ -345,17 +345,16 @@ export const SKILL_METADATA_READ_ONLY = "readOnly";
  */
 export const SKILL_METADATA_WRITE_BACK = "writeBack";
 
-const writeBackSchema = z
-  .object({
-    /** The run parameter naming the Synap object. */
-    entityParam: z.string().min(1),
-    /** The only kind it may write. */
-    kind: z.string().min(1),
-    /** property ← dot-path into the run result. */
-    properties: z
-      .record(z.string().min(1), z.string().min(1))
-      .refine((p) => Object.keys(p).length > 0),
-  });
+const writeBackSchema = z.object({
+  /** The run parameter naming the Synap object. */
+  entityParam: z.string().min(1),
+  /** The only kind it may write. */
+  kind: z.string().min(1),
+  /** property ← dot-path into the run result. */
+  properties: z
+    .record(z.string().min(1), z.string().min(1))
+    .refine((p) => Object.keys(p).length > 0),
+});
 
 export type DeclaredWriteBack = z.infer<typeof writeBackSchema>;
 
@@ -449,7 +448,11 @@ function declaredMetadataKeys(
   const hosts = declaredAllowedHosts(metadata);
   const readOnly = declaredReadOnly(metadata);
   const writeBack = declaredWriteBack(metadata);
-  if (hosts === undefined && readOnly === undefined && writeBack === undefined) {
+  if (
+    hosts === undefined &&
+    readOnly === undefined &&
+    writeBack === undefined
+  ) {
     return undefined;
   }
   return {

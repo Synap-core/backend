@@ -43,7 +43,10 @@ import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { declareLifecycle, buildStoredConstraints } from "@synap/database";
-import { runResolvedSkill, type ResolvedSkillRow } from "./execute-capability.js";
+import {
+  runResolvedSkill,
+  type ResolvedSkillRow,
+} from "./execute-capability.js";
 
 const OWNER = "owner-1";
 const OTHER = "other-1";
@@ -239,7 +242,11 @@ describe("verb write-back via runResolvedSkill", () => {
     const plain = await run({ verbType: "write" }, post);
     expect((plain as { result: unknown }).result).toEqual({ postId: "pz-000" });
     // postId present on purpose: only the proposed check can stop this write.
-    holder.sandboxResult = { proposed: true, proposalId: "p-1", postId: "pz-x" };
+    holder.sandboxResult = {
+      proposed: true,
+      proposalId: "p-1",
+      postId: "pz-x",
+    };
     await run({ writeBack: WRITE_BACK }, post);
     expect(await props(post)).toEqual({ "post-status": "Review" });
   });
