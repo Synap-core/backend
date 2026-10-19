@@ -9,6 +9,7 @@
 import {
   PUSH_DEVICE_COPY,
   comparePushDevices,
+  pushDeviceFacts,
   pushDeviceView,
   resolvePushCategoryLabel,
   type PushDeviceRow,
@@ -28,22 +29,13 @@ export function phoneViews(
 }
 
 /**
- * The line under a phone's name: platform, app version, when it was last
- * used (or added, for an app that does not report each launch), and — since
- * the pill hides on a narrow screen — its state when it is not plain "On".
+ * The line under a phone's name: the shared facts line (`pushDeviceFacts`,
+ * the phone app's own), led — since the pill hides on a narrow screen — by
+ * its state when it is not plain "On".
  */
 export function phoneSecondary(view: PushDeviceView): string {
-  const seen = view.lastSeenAt
-    ? `seen ${formatRelative(view.lastSeenAt)}`
-    : view.addedAt
-      ? `added ${formatRelative(view.addedAt)}`
-      : null;
-  return [
-    view.state === "on" ? null : view.statusLabel,
-    view.platform,
-    view.appVersion ? `app ${view.appVersion}` : null,
-    seen,
-  ]
+  const facts = pushDeviceFacts(view, (at) => formatRelative(at));
+  return [view.state === "on" ? null : view.statusLabel, facts || null]
     .filter(Boolean)
     .join(" · ");
 }

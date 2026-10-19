@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  ASK_COPY,
   askFingerprint,
   classifyAskRefusal,
   type Ask,
 } from "@synap-core/types/ask";
 import {
-  CONSOLE_PROVIDES,
   OTHER_KEY,
   answerCall,
   askSlotOf,
@@ -174,7 +172,7 @@ describe("askView — one control per mode", () => {
     ).toEqual({ mode: "act", url, steps: ["Open it", "Add the record"] });
   });
 
-  it("provide: every kind is answerable here (declared to askRowRegion), naming what it wants", () => {
+  it("provide: names what it wants handed over", () => {
     expect(
       askView(
         slot({
@@ -186,13 +184,7 @@ describe("askView — one control per mode", () => {
       mode: "provide",
       kind: "secret",
       wants: "A secret: Stripe key",
-      answerable: true,
-      title: ASK_COPY.provideTitle,
-      body: ASK_COPY.provideBody,
     });
-    for (const kind of ["secret", "connection", "file"] as const) {
-      expect(CONSOLE_PROVIDES[kind]).toBe(true);
-    }
     expect(
       askView(
         slot({
@@ -200,7 +192,10 @@ describe("askView — one control per mode", () => {
           provide: { kind: "connection", service: "github" },
         })
       ).control
-    ).toMatchObject({ kind: "connection", answerable: true });
+    ).toMatchObject({
+      kind: "connection",
+      wants: "A connection to GitHub",
+    });
     const file = askView(
       slot({ mode: "provide", provide: { kind: "file", accept: [".pdf"] } })
     ).control;

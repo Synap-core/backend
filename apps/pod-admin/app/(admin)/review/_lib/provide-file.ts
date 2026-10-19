@@ -6,48 +6,22 @@
  *
  * PURE apart from the injected `fetch`. The door decides (it re-checks the
  * write floor, the type and the size); the checks here only spare a round
- * trip and put its refusals in plain words.
+ * trip and put its refusals in plain words. Whether the file is a type the
+ * agent asked for is the shared rule (`provideFileAccepts`).
  */
 
+import { provideFileAccepts } from "@synap-core/types/ask";
 import type { FileLanding } from "./provide-options";
 
 /** The buffered upload door's ceiling (`MAX_FILE_SIZE` on the pod). */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-
-/** The picker's `accept`: the agent's list as the browser reads it. */
-export function acceptAttribute(
-  accept: readonly string[] | null
-): string | undefined {
-  return accept && accept.length > 0 ? accept.join(",") : undefined;
-}
-
-/**
- * Does the file match what the agent asked for? `.pdf` and `pdf` match the
- * extension, `image/png` the type, `image/*` the family. Nothing asked =
- * anything fits.
- */
-export function fileFitsAccept(
-  file: { name: string; type: string },
-  accept: readonly string[] | null
-): boolean {
-  if (!accept || accept.length === 0) return true;
-  const name = file.name.toLowerCase();
-  const type = file.type.toLowerCase();
-  return accept.some((raw) => {
-    const a = raw.trim().toLowerCase();
-    if (!a) return false;
-    if (a.endsWith("/*")) return type.startsWith(a.slice(0, -1));
-    if (a.includes("/")) return type === a;
-    return name.endsWith(a.startsWith(".") ? a : `.${a}`);
-  });
-}
 
 /** Why the picked file can't go, before it is sent; null = it can. */
 export function fileProblem(
   file: { name: string; type: string; size: number },
   accept: readonly string[] | null
 ): string | null {
-  if (!fileFitsAccept(file, accept)) {
+  if (!provideFileAccepts(file, accept)) {
     return `The agent asked for ${accept!.join(", ")}. Pick a file of that type.`;
   }
   if (file.size === 0) return "This file is empty. Pick another one.";
@@ -56,6 +30,13 @@ export function fileProblem(
   }
   return null;
 }
+
+/**
+ * Said with a refused answer after the upload went through: the file is
+ * already saved in the space, and the refusal does not take it back.
+ */
+export const UPLOAD_KEPT_NOTE =
+  "The file you uploaded is still saved in the space.";
 
 /** The door's refusal, in words. */
 export function uploadRefusalWords(status: number): string {

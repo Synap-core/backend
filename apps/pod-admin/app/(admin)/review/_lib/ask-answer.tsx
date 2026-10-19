@@ -61,10 +61,14 @@ import {
   ASK_COPY,
   askFingerprint,
   classifyAskRefusal,
+  provideAcceptAttribute,
   type AskProvideRef,
 } from "@synap-core/types/ask";
 import { POD_URL, trpc } from "../../../../lib/trpc";
-import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import {
+  redirectToLogin,
+  redirectToLoginIfUnauthorized,
+} from "../../../../lib/auth-redirect";
 import {
   formatRelative,
   humanizeBytes,
@@ -119,7 +123,7 @@ import {
   type ConnectWait,
 } from "./provide-connect";
 import {
-  acceptAttribute,
+  UPLOAD_KEPT_NOTE,
   fileProblem,
   uploadProvidedFile,
 } from "./provide-file";
@@ -175,11 +179,12 @@ export function AskAnswer({
     onSettled();
   }
 
-  function refused(err: DoorError) {
+  /** `kept`: said with the refusal when something already went through. */
+  function refused(err: DoorError, kept: string | null = null) {
     if (redirectToLoginIfUnauthorized(err)) return;
     const refusal = classifyAskRefusal(err.message);
     if (refusal.kind === "failed") {
-      setFailure(refusal.message);
+      setFailure(kept ? `${refusal.message} ${kept}` : refusal.message);
       return;
     }
     // Stale is not a failure: re-read, and say so calmly. A changed question
@@ -187,6 +192,7 @@ export function AskAnswer({
     addToast({
       title:
         refusal.kind === "ask_changed" ? ASK_COPY.askChanged : ASK_COPY.movedOn,
+      ...(kept ? { description: kept } : {}),
       color: "default",
     });
     refresh();
@@ -200,22 +206,29 @@ export function AskAnswer({
           ? provideReceipt(call.value.ref.kind, data, Date.now())
           : { title: "Answer sent" }
       ),
-    onError: refused,
+    // A refused file answer leaves the uploaded file where it was saved.
+    onError: (err, call) =>
+      refused(
+        err,
+        call.value?.type === "provide" && call.value.ref.kind === "file"
+          ? UPLOAD_KEPT_NOTE
+          : null
+      ),
   });
   const attest = trpc.focusSessions.attestOutput.useMutation({
     onSuccess: () => settled({ title: "Marked as done" }),
-    onError: refused,
+    onError: (err) => refused(err),
   });
   const handBack = trpc.focusSessions.unblockOutput.useMutation({
     onSuccess: () => settled({ title: "Handed back to the agent" }),
-    onError: refused,
+    onError: (err) => refused(err),
   });
   const askAbout = trpc.focusSessions.askAboutSlot.useMutation({
     onSuccess: () => {
       setAsked(true);
       void utils.focusSessions.get.invalidate({ id: seen.sessionId });
     },
-    onError: refused,
+    onError: (err) => refused(err),
   });
   const busy =
     answer.isPending ||
@@ -241,9 +254,6 @@ export function AskAnswer({
   });
   // A chip whose object only opens in the desktop app: the install hatch,
   // once, under the chips — not once per chip.
-  // A provide this console can't hand over: talking it through is the way on.
-  const unwiredProvide =
-    view.control.mode === "provide" && !view.control.answerable;
   const lookedAtDesktop = view.lookedAt
     .map((item) =>
       openIn({ kind: "object", objectKind: item.kind, id: item.id })
@@ -408,8 +418,7 @@ export function AskAnswer({
           <div>
             <Button
               size="sm"
-              variant={unwiredProvide ? "solid" : "flat"}
-              color={unwiredProvide ? "primary" : "default"}
+              variant="flat"
               startContent={<MessageSquare className="h-3.5 w-3.5" />}
               isLoading={askAbout.isPending}
               isDisabled={busy || staleness === "gone"}
@@ -529,27 +538,7 @@ function Controls(props: ControlsProps) {
         </div>
       );
     case "provide":
-      if (control.answerable) {
-        return <ProvideControl {...props} control={control} />;
-      }
-      return (
-        <div className="flex flex-col gap-2">
-          <Alert color="default" variant="flat" title={control.title}>
-            <span className="flex flex-col gap-1">
-              <span>{control.wants}.</span>
-              <span>{control.body}</span>
-            </span>
-          </Alert>
-          <ExitLink
-            exit={openIn({
-              kind: "objectInApp",
-              objectKind: "session",
-              id: props.slot.sessionId,
-            })}
-            label="Open in app"
-          />
-        </div>
-      );
+      return <ProvideControl {...props} control={control} />;
     case "legacy":
       return <LegacyControl {...props} />;
   }
@@ -1004,7 +993,7 @@ function OpenInAppLink({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** P1: one of the person's EXISTING secrets; a new one is added in the app. */
+/** One of the person's EXISTING secrets; a new one is added in the app. */
 function SecretProvide({
   slot,
   sheet,
@@ -1075,8 +1064,8 @@ function SecretProvide({
 }
 
 /**
- * P4: an account already connected (several → the person confirms which,
- * nothing pre-picked), or a new one. A new one opens the service's sign-in
+ * An account already connected (several → the person confirms which,
+ * nothing pre-picked; a signed-out one can't be picked), or a new one. A new one opens the service's sign-in
  * in a new tab, started with `answerFor`, and waits: the pod answers the
  * slot itself when the connection appears.
  */
@@ -1236,10 +1225,11 @@ function ConnectionProvide({
                 key={c.id}
                 value={c.id}
                 description={c.detail ?? undefined}
+                isDisabled={!c.usable}
                 classNames={RADIO_CARD}
               >
                 <span className="break-all text-[13px] text-foreground">
-                  {c.title}
+                  {c.label}
                 </span>
               </Radio>
             ))}
@@ -1288,7 +1278,7 @@ function ConnectionProvide({
   );
 }
 
-/** P3: upload into the space the pod named; its refusal, plainly. */
+/** Upload into the space the pod named; its refusal, plainly. */
 function FileProvide({
   slot,
   sheet,
@@ -1328,9 +1318,7 @@ function FileProvide({
     });
     setUploading(false);
     if (!result.ok) {
-      if (result.status === 401) {
-        redirectToLoginIfUnauthorized({ data: { code: "UNAUTHORIZED" } });
-      }
+      if (result.status === 401) redirectToLogin();
       setProblem(result.message);
       return;
     }
@@ -1349,7 +1337,7 @@ function FileProvide({
         className="sr-only"
         tabIndex={-1}
         aria-hidden
-        accept={acceptAttribute(sheet.accept)}
+        accept={provideAcceptAttribute(sheet.accept)}
         onChange={(e) => {
           const picked = e.target.files?.[0] ?? null;
           setFile(picked);

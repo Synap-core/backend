@@ -32,9 +32,13 @@
  * an honest "open this on your computer" with a web page when one covers it.
  */
 
+import {
+  consolePath,
+  desktopPlaceConsoleTarget,
+} from "@synap-core/types/console";
 import type { ObjectNavView } from "@synap-core/types/navigation";
 import { HOST_TYPES } from "../app/open/open-params";
-import { navHref, navLabel } from "./console-nav";
+import { NAV_ITEMS, navHref } from "./console-nav";
 
 /**
  * Landing-site origin. A CONSTANT, deliberately.
@@ -203,8 +207,10 @@ export const MOBILE_FALLBACK = {
  * door puts in the link (a session's `?view=room` included). A kind missing
  * here is told "open on your computer" on a phone rather than handed a link
  * that lands on Relay's "not found". The `open/app/<appId>` grammar (desktop
- * apps, Settings sections) is never in it: Relay reads `app` as an App Connect
- * application id, so `open/app/settings/vault` looks for an application.
+ * apps, Settings sections) is not an object kind: Relay reads it as a desktop
+ * place and, for one it has no screen for, says "on your computer" with the
+ * console page that covers it. The console says the same here, one tap
+ * sooner, from the same table (`desktopPlaceWebAlternative`).
  */
 const RELAY_OPENABLE_KINDS: ReadonlySet<string> = new Set([
   "session",
@@ -217,22 +223,28 @@ const RELAY_OPENABLE_KINDS: ReadonlySet<string> = new Set([
   "project",
 ]);
 
-/**
- * Settings sections whose substance pod-admin also serves on the web, so a
- * phone (which cannot reach desktop Settings) is pointed there instead of at
- * nothing. Every other section has no web twin.
- */
-const SETTINGS_WEB_ALTERNATIVE: Partial<
-  Record<BrowserSettingsSection, WebAlternative>
-> = {
-  // `/my-vault` is the personal (self-service) page, open to every member.
-  vault: { href: "/my-vault", label: "My vault" },
-  connectors: { href: navHref("sources"), label: navLabel("sources") },
-  "ai-governance": {
-    href: navHref("intelligence"),
-    label: navLabel("intelligence"),
-  },
+/** Console pages a desktop place can point at that are not in the nav. */
+const SELF_SERVICE_PAGE_LABEL: Readonly<Record<string, string>> = {
+  "/my-vault": "My vault",
 };
+
+/**
+ * The console page that does a desktop place's job (`<appId>` or
+ * `settings/<section>`), from the table every host reads
+ * (`DESKTOP_PLACE_CONSOLE_PAGE`), so a phone, which cannot reach the desktop
+ * place, is pointed there instead of at nothing.
+ */
+function desktopPlaceWebAlternative(
+  desktopPath: string
+): WebAlternative | undefined {
+  const target = desktopPlaceConsoleTarget(desktopPath);
+  const href = target ? consolePath(target) : null;
+  if (!href) return undefined;
+  const label =
+    NAV_ITEMS.find((i) => i.href === href)?.label ??
+    SELF_SERVICE_PAGE_LABEL[href];
+  return label ? { href, label } : undefined;
+}
 
 /**
  * A desktop-only object's page in the console, when it has one. An ADMIN page:
@@ -267,7 +279,6 @@ function objectLink(
   query?: Record<string, string>
 ) {
   const href = `synap://open/${encodeURIComponent(objectKind)}/${encodeURIComponent(id)}`;
-  // An empty `query` adds nothing: `URLSearchParams({})` is "".
   const search = query ? new URLSearchParams(query).toString() : "";
   return desktop(
     search ? `${href}?${search}` : href,
@@ -323,13 +334,14 @@ export function openIn(target: ExitTarget): Exit {
       // `route[0]` to call `navigateToSettings()`.
       return desktop(
         `synap://open/app/settings/${target.section}`,
-        withWeb(SETTINGS_WEB_ALTERNATIVE[target.section])
+        withWeb(desktopPlaceWebAlternative(`settings/${target.section}`))
       );
 
     case "app":
-      return desktop(`synap://open/app/${encodeURIComponent(target.appId)}`, {
-        opens: "nowhere",
-      });
+      return desktop(
+        `synap://open/app/${encodeURIComponent(target.appId)}`,
+        withWeb(desktopPlaceWebAlternative(target.appId))
+      );
 
     case "account":
       return web(`${WEB_BASE}/account/${target.page}`);
@@ -341,7 +353,7 @@ export function openIn(target: ExitTarget): Exit {
 
 /**
  * A marketplace publisher's own page — where a showcase-only listing installs
- * from (Pod Console D11). The one exit to a third-party origin, so it is its
+ * from. The one exit to a third-party origin, so it is its
  * own door: only an https address resolves (the pod already refuses any other
  * scheme in a source's index; this is the second check, at the link), and
  * anything else is `null` — no link at all rather than a `javascript:` one.

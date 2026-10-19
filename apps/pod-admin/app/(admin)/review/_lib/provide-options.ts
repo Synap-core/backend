@@ -4,14 +4,15 @@
  * once it went.
  *
  * PURE. The pod decides which secrets, connections and spaces apply (owner
- * floored, the same floor as the answer door); the words are `ASK_COPY` and
- * `provideSecretAccessLine` from `@synap-core/types/ask`, the ones the desktop
- * and phone apps say. What is left here is the console's arrangement:
+ * floored, the same floor as the answer door); the words and the account rules
+ * are `@synap-core/types/ask`'s, the ones the desktop and phone apps apply.
+ * What is left here is the console's arrangement:
  *
  *   secret     → pick one of the person's EXISTING vault secrets. The console
  *                never takes a new one: that is added in the app.
  *   connection → use an account already connected (with several, the person
- *                confirms which, nothing pre-picked), or connect a new one.
+ *                confirms which, nothing pre-picked; a signed-out one is shown
+ *                but never handed over), or connect a new one.
  *   file       → upload into the space the pod named, or its refusal, plainly.
  */
 
@@ -19,8 +20,13 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import {
   ASK_COPY,
+  provideAccountChoices,
+  provideExpectedGranteeId,
+  provideGrantNote,
+  providePrePickedAccount,
   provideSecretAccessLine,
   type AskProvideKind,
+  type ProvideAccountChoice,
   type ProvideSecretGrant,
 } from "@synap-core/types/ask";
 
@@ -71,37 +77,19 @@ function secretSheet(o: Of<"secret">): SecretSheet {
       type: r.type.replace(/[_-]+/g, " "),
     })),
     initialRef: named.length === 1 ? named[0].ref : null,
-    grantNote:
-      o.secret.grant.status === "will_grant"
-        ? ASK_COPY.provideGrantNote(
-            o.secret.grant.agentName,
-            o.secret.grant.minutes
-          )
-        : ASK_COPY.provideNoGrantNote,
-    expectedGranteeId:
-      o.secret.grant.status === "will_grant"
-        ? o.secret.grant.agentUserId
-        : null,
+    grantNote: provideGrantNote(o.secret.grant),
+    expectedGranteeId: provideExpectedGranteeId(o.secret.grant),
   };
 }
 
 // ─── Connection ──────────────────────────────────────────────────────────────
 
-export interface ConnectionChoice {
-  /** The answer's `connectionId`. */
-  id: string;
-  /** The account when the pod knows it, else the connection's name. */
-  title: string;
-  /** The rest, in words: its name, shared, needs signing in. */
-  detail: string | null;
-  needsReauth: boolean;
-}
-
 export interface ConnectionSheet {
   kind: "connection";
   serviceName: string;
-  choices: ConnectionChoice[];
-  /** Several accounts: the person picks one, nothing is pre-picked (P4). */
+  /** Every account; one that is not `usable` is shown but can't be picked. */
+  choices: ProvideAccountChoice[];
+  /** Several accounts: the person picks one, nothing is pre-picked. */
   confirmAccount: boolean;
   initialId: string | null;
   /** The integration a new connection starts with; null = none here. */
@@ -110,46 +98,19 @@ export interface ConnectionSheet {
   unavailable: string | null;
 }
 
-function unavailableWords(
-  reason: Of<"connection">["connection"]["unavailable"],
-  service: string
-): string | null {
-  switch (reason) {
-    case null:
-      return null;
-    case "no_broker":
-      return "This pod can't connect accounts yet. A pod admin sets that up.";
-    case "not_offered":
-      return `This pod does not offer a ${service} connection yet. A pod admin can add it.`;
-    case "unreadable":
-      return "Couldn't check which connections this pod offers. Try again in a moment.";
-  }
-}
-
 function connectionSheet(o: Of<"connection">): ConnectionSheet {
   const c = o.connection;
-  const choices = c.rows.map((r) => {
-    const hint = r.accountHint?.trim() || null;
-    const detail = [
-      hint && hint !== r.label ? r.label : null,
-      r.podWide ? "Shared with the pod" : null,
-      r.needsReauth ? "Needs signing in again" : null,
-    ].filter((part): part is string => part !== null);
-    return {
-      id: r.id,
-      title: hint ?? r.label,
-      detail: detail.length > 0 ? detail.join(" · ") : null,
-      needsReauth: r.needsReauth,
-    };
-  });
+  const choices = provideAccountChoices(c.rows);
   return {
     kind: "connection",
     serviceName: c.serviceName,
     choices,
     confirmAccount: c.confirmAccount,
-    initialId: c.confirmAccount ? null : (choices[0]?.id ?? null),
+    initialId: providePrePickedAccount(choices, c.confirmAccount)?.id ?? null,
     connectProviderId: c.connectable ? c.providerId : null,
-    unavailable: unavailableWords(c.unavailable, c.serviceName),
+    unavailable: c.unavailable
+      ? ASK_COPY.provideConnectUnavailable(c.unavailable, c.serviceName)
+      : null,
   };
 }
 
@@ -210,7 +171,7 @@ export interface ProvideReceipt {
 
 /**
  * What the person is told once it went. A secret's receipt says who can now
- * read it (P2): the asking agent for the next minutes, in this session, or no
+ * read it: the asking agent for the next minutes, in this session, or no
  * agent yet — the pod's own line, never a guess.
  */
 export function provideReceipt(
