@@ -20,7 +20,7 @@
 
 /**
  * What Synap Cloud (the Kratos `cp` OIDC provider) may do on this pod. Owner
- * set; founder decision R1 (2026-10-04): sign-in by default, recovery opt-in.
+ * set: sign-in by default, recovery opt-in.
  *
  *   off              — "Continue with Synap Cloud" is refused at login.
  *   sign_in          — Cloud signs you in, but a Cloud-only session cannot

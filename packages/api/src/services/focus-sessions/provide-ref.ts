@@ -16,7 +16,9 @@
  *     to hand over", so it is refused like someone else's.
  *   - connection → a live `secrets` row that IS a capability connection
  *     (`capability_id` set), owned by the answerer or pod-wide — the exact
- *     set `listConnections` shows a non-admin member.
+ *     set `listConnections` shows a non-admin member — and whose capability
+ *     is the service the ask named (`capabilitiesForService`, the rule the
+ *     provide sheet lists by).
  *   - file → an entity the answerer can see, through the same
  *     `isOutputRefVisible` floor every session output ref goes through.
  *
@@ -27,8 +29,11 @@
 import { db, and, eq, isNull } from "@synap/database";
 import { secrets, entities } from "@synap/database/schema";
 import type { SlotProvideRef } from "@synap/playbooks";
+import type { AskProvide } from "@synap-core/types/ask";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
 import { isOutputRefVisible } from "./assert-output-ref-visible.js";
+import { capabilitiesForService } from "./provide-connect.js";
 
 export type ProvideRefCheck =
   | {
@@ -41,8 +46,10 @@ export type ProvideRefCheck =
 export async function checkProvideRef(params: {
   userId: string;
   ref: SlotProvideRef;
+  /** What the ask asked for. */
+  asked: AskProvide;
 }): Promise<ProvideRefCheck> {
-  const { userId, ref } = params;
+  const { userId, ref, asked } = params;
   switch (ref.kind) {
     case "secret": {
       const id = vaultSecretIdOf(ref.vaultRef);
@@ -72,13 +79,22 @@ export async function checkProvideRef(params: {
         .from(secrets)
         .where(and(eq(secrets.id, ref.connectionId), isNull(secrets.deletedAt)))
         .limit(1);
-      const usable =
-        !!row &&
-        row.capabilityId != null &&
-        (row.userId === userId || row.isPodWide);
-      return usable
+      const capabilityId = row?.capabilityId ?? null;
+      if (!row || !capabilityId || (row.userId !== userId && !row.isPodWide)) {
+        return refused("That connection is not one you can use.");
+      }
+      if (asked.kind !== "connection") {
+        return refused("This question does not ask for a connection.");
+      }
+      const forService = await capabilitiesForService(
+        [capabilityId],
+        asked.service
+      );
+      return forService.has(capabilityId)
         ? { ok: true, refName: null }
-        : refused("That connection is not one you can use.");
+        : refused(
+            `That connection is not a ${resolveServiceName(asked.service)} connection.`
+          );
     }
     case "file": {
       const visible = await isOutputRefVisible({

@@ -10,7 +10,7 @@
  *     refused answer takes back the read it wrote. The read is redeemable by
  *     that agent only, and not once it expired (the real resolver).
  *   - OPTIONS: what the person can hand over, owner-floored.
- *   - FILE LANDING (P3): the session's space, else the project's home, else
+ *   - FILE LANDING: the session's space, else the project's home, else
  *     refused in words.
  *   - CONNECT-AND-ANSWER: a pending intent is answered once by the new
  *     connection row — through the real reconciler too — and never by someone
@@ -346,6 +346,21 @@ async function seedSecret(p: {
     ]
   );
   return id;
+}
+
+/** A capability whose member tool connects through `provider`. */
+async function serviceCapability(provider: string): Promise<string> {
+  const capabilityId = randomUUID();
+  const toolId = randomUUID();
+  await q(
+    `insert into tools (id, credential_ref, config) values ($1, $2, '{}'::jsonb)`,
+    [toolId, `nango://${provider}`]
+  );
+  await q(
+    `insert into links (id, from_type, from_id, to_type, to_id, link_type) values ($1, 'tool', $2, 'capability', $3, 'member_of')`,
+    [randomUUID(), toolId, capabilityId]
+  );
+  return capabilityId;
 }
 
 const grantsFor = async (secretId: string) =>
@@ -829,7 +844,7 @@ describe("provide asks — the server doors", () => {
     });
   });
 
-  // ── file landing (P3) ───────────────────────────────────────────────────
+  // ── file landing ────────────────────────────────────────────────────────
 
   describe("where a file lands", () => {
     async function space(name: string): Promise<string> {
@@ -912,6 +927,46 @@ describe("provide asks — the server doors", () => {
 
   // ── connect-and-answer ──────────────────────────────────────────────────
 
+  describe("a handed-over connection", () => {
+    const gmailAsk: Ask = {
+      mode: "provide",
+      provide: { kind: "connection", service: "gmail" },
+    };
+    const answerConnection = (sessionId: string, connectionId: string) =>
+      answerSessionSlot({
+        sessionId,
+        userId: OWNER,
+        expectedLabel: LABEL,
+        value: { type: "provide", ref: { kind: "connection", connectionId } },
+      });
+
+    it("answers with the person's own connection for the asked service", async () => {
+      const connectionId = await seedSecret({
+        userId: OWNER,
+        capabilityId: await serviceCapability("google-mail"),
+      });
+      const { sessionId } = await seedSession([slotFor(gmailAsk)]);
+      expect((await answerConnection(sessionId, connectionId)).status).toBe(
+        "answered"
+      );
+    });
+
+    it("refuses a connection for another service, and leaves the slot owed", async () => {
+      const slackConnection = await seedSecret({
+        userId: OWNER,
+        capabilityId: await serviceCapability("slack"),
+      });
+      const { sessionId } = await seedSession([slotFor(gmailAsk)]);
+      const r = await answerConnection(sessionId, slackConnection);
+      expect(r).toMatchObject({
+        status: "ask_invalid",
+        code: "provide_unreachable",
+        message: "That connection is not a Gmail connection.",
+      });
+      expect((await slotOf(sessionId)).answer).toBeUndefined();
+    });
+  });
+
   describe("connect-and-answer", () => {
     const connAsk: Ask = {
       mode: "provide",
@@ -947,8 +1002,12 @@ describe("provide asks — the server doors", () => {
           [sessionId]
         )
       ).rows[0]!.m ?? {};
-    const conn = (userId = OWNER) =>
-      seedSecret({ userId, capabilityId: randomUUID(), accountHint: "c" });
+    const conn = async (userId = OWNER) =>
+      seedSecret({
+        userId,
+        capabilityId: await serviceCapability("google-mail"),
+        accountHint: "c",
+      });
     // Each case counts only the intents it left.
     beforeEach(async () => {
       await q(
@@ -1085,7 +1144,7 @@ describe("provide asks — the server doors", () => {
     });
   });
 
-  // ── which integration is the asked service (S2) ─────────────────────────
+  // ── which integration is the asked service ──────────────────────────────
 
   it("an intent is live from its start (a minute of skew) to 30 minutes after, never from the future", () => {
     const now = Date.parse("2026-10-19T12:00:00.000Z");

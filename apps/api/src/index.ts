@@ -1158,7 +1158,7 @@ app.route("/mcp", mcpHttpApp);
 //   POST /token      (code → an `api_keys` row; PKCE verifier enforced)
 app.route("/", oauthApp);
 // GET /.well-known/synap-pod-jwks — the public half of this pod's identity key
-// (D1). Public + cacheable; the CP trusts only the key registered with it.
+// Public + cacheable; the CP trusts only the key registered with it.
 app.route("/", podIdentityJwksApp);
 
 // External API — Skills invocation (API key auth, scope: skills.invoke)
@@ -1667,7 +1667,7 @@ try {
       // which embeds will not render, stamped with the revision it checked.
       registerDocumentDiagnosticsReactor();
       // Any entity create/update (applied, never proposed): copy the external
-      // images it names into the pod (decision D2) — off the request path.
+      // images it names into the pod — off the request path.
       registerEntityMediaCopyReactor();
 
       if (config.server.localMode) {
@@ -2016,7 +2016,7 @@ try {
             "pg-boss job queue started with all workers registered"
           );
 
-          // Media-copy BACKFILL (D2): entities written before the reactor
+          // Media-copy BACKFILL: entities written before the reactor
           // existed never got a pod copy of their images. Once the startup
           // reconciles have stamped every kind's presentation, enqueue the
           // SAME per-entity copy job for each one that owes media — spread

@@ -54,7 +54,7 @@ describe("parseOpenParams", () => {
     });
   });
 
-  it("hosts automation and session (D6), still uuid-gated", () => {
+  it("hosts automation and session, still uuid-gated", () => {
     expect(parseOpenParams("automation", UUID).status).toBe("host");
     expect(parseOpenParams("Session", UUID)).toEqual({
       status: "host",

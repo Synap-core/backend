@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONSOLE_DOORS_PATH,
+  CONSOLE_PAGES,
+  DESKTOP_PLACE_CONSOLE_PAGE,
+  POD_ADMIN_SYSTEM_SLUG,
   accessRequestConsoleTarget,
+  consoleLink,
+  consoleRoleFromWorkspaces,
+  desktopPlaceConsoleTarget,
+  isPodAdminMembership,
   consoleHref,
   consolePath,
   consoleTargetAudience,
@@ -209,5 +217,96 @@ describe("consoleVerbLabel (per-action wording)", () => {
   it("says See all for a whole list", () => {
     expect(consoleVerbLabel({ page: "keys" })).toBe("See all in console");
     expect(consoleVerbLabel({ page: "home" })).toBe("See all in console");
+  });
+});
+
+describe("consoleLink", () => {
+  it("links a member page for anyone, labelled by its verb", () => {
+    expect(consoleLink(ORIGIN, null, { page: "review" })).toEqual({
+      href: `${ORIGIN}/review`,
+      label: "Review in console",
+    });
+  });
+
+  it("hides an admin page from a member and from an unknown role", () => {
+    expect(consoleLink(ORIGIN, "member", { page: "keys" })).toBeNull();
+    expect(consoleLink(ORIGIN, undefined, { page: "keys" })).toBeNull();
+    expect(consoleLink(ORIGIN, "admin", { page: "keys" })?.href).toBe(
+      `${ORIGIN}/keys`
+    );
+  });
+
+  it("shows nothing without an origin or a target", () => {
+    expect(consoleLink(null, "admin", { page: "keys" })).toBeNull();
+    expect(consoleLink(ORIGIN, "admin", null)).toBeNull();
+  });
+});
+
+describe("the doors path", () => {
+  it("is the pod's public account-recovery read", () => {
+    expect(CONSOLE_DOORS_PATH).toBe("/api/account-recovery/doors");
+  });
+});
+
+describe("DESKTOP_PLACE_CONSOLE_PAGE", () => {
+  it("names only console pages", () => {
+    for (const page of Object.values(DESKTOP_PLACE_CONSOLE_PAGE)) {
+      expect(CONSOLE_PAGES[page], page).toBeDefined();
+    }
+  });
+
+  it("reads a desktop path from a link, any case, slashes trimmed", () => {
+    expect(desktopPlaceConsoleTarget("settings/developer")).toEqual({
+      page: "keys",
+    });
+    expect(desktopPlaceConsoleTarget(" /Settings/Vault/ ")).toEqual({
+      page: "myVault",
+    });
+    expect(desktopPlaceConsoleTarget("marketplace")).toEqual({
+      page: "marketplace",
+    });
+  });
+
+  it("has nothing for a place no console page covers", () => {
+    for (const path of [
+      "settings/subscription",
+      "data",
+      "",
+      null,
+      "toString",
+    ]) {
+      expect(desktopPlaceConsoleTarget(path), String(path)).toBeNull();
+    }
+  });
+});
+
+describe("isPodAdminMembership / consoleRoleFromWorkspaces", () => {
+  it("is an owner or admin of the pod-admin system space", () => {
+    expect(
+      isPodAdminMembership({ systemSlug: POD_ADMIN_SYSTEM_SLUG, role: "owner" })
+    ).toBe(true);
+    expect(
+      isPodAdminMembership({
+        settings: { systemSlug: "pod-admin" },
+        role: "admin",
+      })
+    ).toBe(true);
+    expect(
+      isPodAdminMembership({ systemSlug: "pod-admin", role: "editor" })
+    ).toBe(false);
+    expect(isPodAdminMembership({ systemSlug: "home", role: "owner" })).toBe(
+      false
+    );
+  });
+
+  it("reads the person's role from their workspace list; unknown until read", () => {
+    expect(consoleRoleFromWorkspaces(null)).toBeNull();
+    expect(consoleRoleFromWorkspaces([])).toBe("member");
+    expect(
+      consoleRoleFromWorkspaces([
+        { systemSlug: "home", role: "owner" },
+        { systemSlug: "pod-admin", role: "admin" },
+      ])
+    ).toBe("admin");
   });
 });

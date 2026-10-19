@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MAX_UPLOAD_BYTES,
-  acceptAttribute,
-  fileFitsAccept,
   fileProblem,
   uploadProvidedFile,
   uploadRefusalWords,
@@ -11,25 +9,10 @@ import {
 const pdf = { name: "Invoice.PDF", type: "application/pdf", size: 2048 };
 
 describe("what the agent asked for", () => {
-  it("extensions with or without the dot, exact types, type families", () => {
-    expect(fileFitsAccept(pdf, [".pdf"])).toBe(true);
-    expect(fileFitsAccept(pdf, ["pdf"])).toBe(true);
-    expect(fileFitsAccept(pdf, ["application/pdf"])).toBe(true);
-    expect(fileFitsAccept(pdf, ["image/*"])).toBe(false);
-    expect(
-      fileFitsAccept({ name: "a.png", type: "image/png" }, ["image/*"])
-    ).toBe(true);
-    expect(fileFitsAccept(pdf, null)).toBe(true);
-    expect(fileFitsAccept(pdf, [])).toBe(true);
-  });
-
-  it("the picker's accept", () => {
-    expect(acceptAttribute([".pdf", "image/*"])).toBe(".pdf,image/*");
-    expect(acceptAttribute(null)).toBeUndefined();
-  });
-
   it("problems before sending, in words", () => {
     expect(fileProblem(pdf, [".pdf"])).toBeNull();
+    // A bare token is an extension, as on every surface.
+    expect(fileProblem(pdf, ["pdf"])).toBeNull();
     expect(fileProblem(pdf, [".csv"])).toBe(
       "The agent asked for .csv. Pick a file of that type."
     );

@@ -19,6 +19,7 @@ import {
   PUSH_DEVICE_NOT_SEEN_DAYS,
   comparePushDevices,
   pushDeviceState,
+  pushDeviceFacts,
   pushDeviceView,
   type PushDeviceRow,
 } from "./index.js";
@@ -421,5 +422,49 @@ describe("phones", () => {
       "quiet",
       "off",
     ]);
+  });
+});
+
+describe("pushDeviceFacts", () => {
+  const NOW = new Date("2026-10-19T12:00:00Z");
+  const daysAgo = (d: number) =>
+    new Date(NOW.getTime() - d * 24 * 60 * 60 * 1000).toISOString();
+  const row = (over: Partial<PushDeviceRow> = {}): PushDeviceRow => ({
+    id: "d1",
+    name: "Ada's iPhone",
+    platform: "ios",
+    appVersion: "1.4.0",
+    status: "connected",
+    lastSeenAt: daysAgo(1),
+    createdAt: daysAgo(200),
+    revokedAt: null,
+    isThisDevice: false,
+    ...over,
+  });
+  const ago = (d: Date) =>
+    `${Math.round((NOW.getTime() - d.getTime()) / 86_400_000)}d ago`;
+
+  it("says this phone, platform, app version and when it was last used", () => {
+    expect(
+      pushDeviceFacts(
+        pushDeviceView(
+          row({ isThisDevice: true, lastSeenAt: daysAgo(2) }),
+          NOW
+        ),
+        ago
+      )
+    ).toBe("This phone · iOS · app 1.4.0 · seen 2d ago");
+  });
+
+  it("says when it was added when the app does not report each launch", () => {
+    expect(
+      pushDeviceFacts(
+        pushDeviceView(
+          row({ lastSeenAt: null, appVersion: null, createdAt: daysAgo(5) }),
+          NOW
+        ),
+        ago
+      )
+    ).toBe("iOS · added 5d ago");
   });
 });

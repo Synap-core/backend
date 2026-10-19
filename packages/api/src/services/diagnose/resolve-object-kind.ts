@@ -231,7 +231,7 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(focusSessions.id, id),
-              // The ONE session read rule (decision D1): a session's title is
+              // The ONE session read rule: a session's title is
               // content. Callers are agent doors (Hub resolve, diagnose), so
               // no roster branch — owner-only; anything else is "unknown".
               sessionReadableWhere({ userId })

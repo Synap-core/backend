@@ -1,6 +1,6 @@
 -- 0331_official_catalog_digests
 --
--- Synap's catalog, signed (Pod Console wave 5, decision B1/S1). The Control
+-- Synap's catalog, signed. The Control
 -- Plane serves a signed index of package digests beside its catalog
 -- endpoints; the catalog sync verifies it (offline root key -> keys statement
 -- -> online catalog key -> index) and keeps here what the last VERIFIED index

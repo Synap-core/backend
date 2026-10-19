@@ -6,8 +6,8 @@
  * answer door and the desktop and phone apps apply: whether an answer fits
  * (`validateAnswerAgainstAsk`, which also sends an act to "I did this"),
  * what an act shows (`actView`), the options as
- * chips (`askOptionChips`), the fingerprint the pod checks the answer against
- * (`askFingerprint`), and the copy (`ASK_COPY`). What is left here is the
+ * chips (`askOptionChips`) and the fingerprint the pod checks the answer
+ * against (`askFingerprint`). What is left here is the
  * console's own arrangement: which controls a form field becomes, the
  * field-level hints a web form shows before a round trip, and the call shapes.
  *
@@ -18,12 +18,10 @@
  */
 
 import {
-  ASK_COPY,
   actView,
   askFingerprint,
   askOptionChips,
   askOptionForChip,
-  askRowRegion,
   isRefusedAskField,
   validateAnswerAgainstAsk,
   type Ask,
@@ -172,13 +170,6 @@ export type AskControlView =
       kind: AskProvideKind;
       /** What it wants handed over, in words ("A secret: Stripe key"). */
       wants: string;
-      /**
-       * The console hands this kind over (`CONSOLE_PROVIDES`); otherwise the
-       * shared "not answerable here" words below are all it shows.
-       */
-      answerable: boolean;
-      title: string;
-      body: string;
     }
   /** No typed ask: today's free text, "I did this" and "Not mine". */
   | { mode: "legacy" };
@@ -231,17 +222,6 @@ function fieldView(f: DynamicFormField): FormFieldView {
   };
 }
 
-/**
- * The provide kinds the console hands over, declared to the shared row rule
- * (`askRowRegion`'s `canProvide`). A secret is handed over by picking one the
- * person already keeps in their vault: the console never takes a new secret.
- */
-export const CONSOLE_PROVIDES: Readonly<Record<AskProvideKind, boolean>> = {
-  secret: true,
-  connection: true,
-  file: true,
-};
-
 function provideWants(ask: Extract<Ask, { mode: "provide" }>): string {
   const p = ask.provide;
   switch (p.kind) {
@@ -293,13 +273,6 @@ function controlOf(ask: Ask | null): AskControlView {
         mode: "provide",
         kind: ask.provide.kind,
         wants: provideWants(ask),
-        answerable:
-          askRowRegion(ask, {
-            canAnswer: true,
-            canProvide: CONSOLE_PROVIDES,
-          }) !== "none",
-        title: ASK_COPY.provideTitle,
-        body: ASK_COPY.provideBody,
       };
   }
 }

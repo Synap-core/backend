@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * `/open/automation/:id` — one rule, hosted on the web (D6), in the receiver
+ * `/open/automation/:id` — one rule, hosted on the web, in the receiver
  * card. The page itself is `AutomationObject`, shared with the console's
  * `/rules/[id]`; this file is only the receiver frame around it, where a run
  * row opens that run's own web page.

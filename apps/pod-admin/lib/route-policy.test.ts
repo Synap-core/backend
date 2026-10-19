@@ -104,7 +104,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
   });
 });
 
-describe("member console (D8)", () => {
+describe("member console", () => {
   it.each(["/", "/home", "/review"])("%s opens for any member", (path) => {
     expect(isMemberConsolePath(path)).toBe(true);
     expect(routeAccess(path)).toBe("signed-in");

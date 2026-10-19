@@ -1292,7 +1292,7 @@ export const workspacesRouter = router({
 
 /**
  * The body of `installFromCatalog`, shared with `ensureTemplate` so both reach
- * the ONE template apply (W3: directly — no longer through
+ * the ONE template apply (directly — no longer through
  * `createFromDefinition` via `createCaller`). Resolves the FRESHEST package
  * cache-first via `resolveWorkspaceTemplate` (the SAME resolver the apply's
  * own re-sync reads), parses it through the Hub door's schema (its defaults:
@@ -1364,7 +1364,7 @@ export async function installTemplateFromCatalog(
  * A SEPARATE router (merged into the `workspaces` namespace in `root.ts`).
  * It was split out so `installFromCatalog` could call `workspacesRouter`'s
  * own `createFromDefinition` through `createCaller`; it now calls the ONE
- * template apply directly (W3), and stays split so the generated namespace
+ * template apply directly, and stays split so the generated namespace
  * does not move.
  */
 export const workspaceCatalogRouter = router({

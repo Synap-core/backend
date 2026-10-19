@@ -24,6 +24,7 @@ import {
   type AskOption,
   type AskProvideKind,
   type AskSnapshot,
+  type ProvideConnectUnavailableReason,
 } from "./index.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
@@ -71,6 +72,24 @@ export const ASK_COPY = {
   provideUseExisting: "Use an account you already connected",
   /** Provide, connection: several accounts, so the person picks one. */
   provideWhichAccount: "Which account?",
+  /** Provide, connection: why a new connection can't start from this pod. */
+  provideConnectUnavailable: (
+    reason: ProvideConnectUnavailableReason,
+    service: string
+  ): string => {
+    switch (reason) {
+      case "no_broker":
+        return "This pod can't connect accounts yet. A pod admin sets that up.";
+      case "not_offered":
+        return `This pod does not offer a ${service} connection yet. A pod admin can add it.`;
+      default:
+        return "Couldn't check which connections this pod offers. Try again in a moment.";
+    }
+  },
+  /** Provide, connection: an account every member of the pod can use. */
+  provideAccountShared: "Shared with the pod",
+  /** Provide, connection: an account that is signed out (never handed over). */
+  provideAccountNeedsSignIn: "Needs signing in again",
   /** Provide, connection: the connect flow is open somewhere else. */
   provideWaitingForConnection: (service: string): string =>
     `Finish connecting ${service}. This answers itself when it is done.`,

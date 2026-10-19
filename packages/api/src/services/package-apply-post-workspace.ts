@@ -445,8 +445,8 @@ export interface PackagePostWorkspaceBody {
      * already read at the workspace layer (`packageVersion` on the create), but
      * this local type declared only `slug`, so the cells step below could not
      * see it and every cell installed through THIS door was stamped with the
-     * `widget_definitions.version` column default. B3: door parity with
-     * `market.install({kind:"cell"})`.
+     * `widget_definitions.version` column default. Same stamp as the
+     * `market.install({kind:"cell"})` door.
      */
     version?: string;
   };
@@ -1030,7 +1030,7 @@ export async function applyPackagePostWorkspace(
           packageSlug,
           cellKey: cell.key,
           workspaceId,
-          // B3: same stamp the `market.install({kind:"cell"})` door writes, so
+          // The same stamp the `market.install({kind:"cell"})` door writes, so
           // the two cell-install doors cannot report different versions for the
           // same row. Absent `_meta.version` ⇒ omitted ⇒ omit-is-silence in
           // `defineCell` (never clobbers a stamped version with a default).

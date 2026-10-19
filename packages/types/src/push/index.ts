@@ -699,3 +699,30 @@ export function comparePushDevices(
   const at = (v: PushDeviceView) => (v.lastSeenAt ?? v.addedAt)?.getTime() ?? 0;
   return at(b) - at(a);
 }
+
+/**
+ * A phone's facts line, the parts that are known: "This phone · iOS · app
+ * 1.4.0 · seen 2d ago" (or "added …" for an app that does not report each
+ * launch). Each surface formats the relative time its own way.
+ */
+export function pushDeviceFacts(
+  view: Pick<
+    PushDeviceView,
+    "isThisDevice" | "platform" | "appVersion" | "lastSeenAt" | "addedAt"
+  >,
+  formatRelative: (at: Date) => string
+): string {
+  const seen = view.lastSeenAt
+    ? `seen ${formatRelative(view.lastSeenAt)}`
+    : view.addedAt
+      ? `added ${formatRelative(view.addedAt)}`
+      : null;
+  return [
+    view.isThisDevice ? "This phone" : null,
+    view.platform,
+    view.appVersion ? `app ${view.appVersion}` : null,
+    seen,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+}

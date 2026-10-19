@@ -1,6 +1,6 @@
 /**
  * Marketplace sources — the pod-settings access for the sources a pod admin
- * chose (Pod Console D11). One read for everything the sync and the install
+ * chose. One read for everything the sync and the install
  * door need, one locked read-modify-write for the admin's list, one merge per
  * source for the sync's status.
  *

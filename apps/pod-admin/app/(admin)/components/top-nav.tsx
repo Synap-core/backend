@@ -76,7 +76,7 @@ export function TopNav({
 }: TopNavProps) {
   const role = useConsoleRole();
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
-  // R3: a persistent ⚠ until recovery codes are saved (the Overview card is
+  // A persistent ⚠ until recovery codes are saved (the Overview card is
   // skippable; this mark is not).
   const codesMissing = useRecoveryCodesState() === "not_set";
 

@@ -224,7 +224,7 @@ const CreateBodySchema = z
      */
     params: z.record(z.string(), z.unknown()).optional(),
     /**
-     * What the session must yield (A4) — THE declaration. Written into the
+     * What the session must yield — THE declaration. Written into the
      * same storage as the deprecated `expectedOutputs` / `criteria` aliases
      * (`outcome-declarations.ts`); both may ride one call.
      */
@@ -349,7 +349,7 @@ const UpdateBodySchema = z.object({
   // cannot lose a concurrent attach; the two may be sent together, in which
   // case the wholesale assignment lands first and the append is applied on top.
   addAgentId: z.string().min(1).optional(),
-  // What the session must yield (A4): UPSERTED by key onto the stored lists,
+  // What the session must yield: UPSERTED by key onto the stored lists,
   // then written through `expectedOutputs` / `criteria` below (one merge).
   outcomes: outcomeDeclarationsSchema.optional(),
   // DEPRECATED alias — prefer `outcomes`. Wholesale replace.
@@ -1121,7 +1121,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           database: db,
           userId: acting.userId,
         }),
-        // Same section as MCP `synap_get_session` (A4): the session's
+        // Same section as MCP `synap_get_session`: the session's
         // outcomes projected at read time, or `{status:'unavailable'}` —
         // a failed read is never an empty list. Additive field.
         readSessionOutcomesSection({
@@ -1392,7 +1392,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
 
-      // `outcomes` (A4) → the same two fields, UPSERTED by key onto the
+      // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From
       // here on the patch is an ordinary `expectedOutputs` / `criteria` write:
       // the authority floor, the membrane and the merge all see it.

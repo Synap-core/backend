@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * One session — the ONE body, drawn in two frames (D6): `/open/session/:id`
+ * One session — the ONE body, drawn in two frames: `/open/session/:id`
  * (the receiver card, any reader of the session) and `/sessions/:id` (the
  * console, with a breadcrumb back to the list). The frame owns only the
  * chrome — how loading, a failure and the page itself are wrapped, and where a

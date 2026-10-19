@@ -8,7 +8,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
+import { redirectToLogin } from "../../../../lib/auth-redirect";
 import { parsePodUpdates, type PodUpdatesView } from "./updates-model";
 
 export const POD_UPDATES_KEY = ["pod-updates"] as const;
@@ -27,9 +27,7 @@ export async function readPodUpdatesResponse(
   res: Response
 ): Promise<PodUpdatesView> {
   const body: unknown = await res.json().catch(() => null);
-  if (res.status === 401) {
-    redirectToLoginIfUnauthorized({ data: { code: "UNAUTHORIZED" } });
-  }
+  if (res.status === 401) redirectToLogin();
   if (!res.ok) {
     const error =
       body && typeof body === "object"

@@ -20,10 +20,19 @@
  * metadata write carries the key (`SERVER_OWNED_SESSION_METADATA_KEYS`).
  */
 
-import { db, and, eq, drizzleSql, focusSessions } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  drizzleSql,
+  focusSessions,
+} from "@synap/database";
+import { capabilities, links, tools } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { normalizeServiceId } from "@synap-core/types/service-marks";
 import type { NangoIntegration } from "../../connectors/NangoConnector.js";
+import { providerConfigKeyOf } from "../capabilities/capability-provider-resolution.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { PROVIDE_CONNECT_META_KEY } from "./session-metadata.js";
 
@@ -45,7 +54,7 @@ export interface ProvideConnectIntent {
   startedAt: string;
 }
 
-// ── Which integration is the asked service (S2) ─────────────────────────────
+// ── Which integration is the asked service ──────────────────────────────────
 
 /**
  * Two service ids name the same service: equal once trimmed and lowercased,
@@ -84,6 +93,69 @@ export function matchIntegration(
 export type ProvideProviderResolution =
   | { status: "ok"; providerId: string }
   | { status: "no_broker" | "not_offered" | "unreadable" };
+
+/**
+ * The capabilities among `capabilityIds` that ARE `service`: by their
+ * template key, their name, or the provider of a member tool. What the
+ * provide sheet lists for a service and what the answer door accepts for it.
+ */
+export async function capabilitiesForService(
+  capabilityIds: string[],
+  service: string
+): Promise<Set<string>> {
+  const [caps, edges] = await Promise.all([
+    db
+      .select({
+        id: capabilities.id,
+        name: capabilities.name,
+        templateKey: capabilities.templateKey,
+      })
+      .from(capabilities)
+      .where(inArray(capabilities.id, capabilityIds)),
+    db
+      .select({ capabilityId: links.toId, toolId: links.fromId })
+      .from(links)
+      .where(
+        and(
+          eq(links.fromType, "tool"),
+          eq(links.linkType, "member_of"),
+          eq(links.toType, "capability"),
+          inArray(links.toId, capabilityIds)
+        )
+      ),
+  ]);
+  const memberTools =
+    edges.length === 0
+      ? []
+      : await db
+          .select({
+            id: tools.id,
+            credentialRef: tools.credentialRef,
+            config: tools.config,
+          })
+          .from(tools)
+          .where(
+            inArray(
+              tools.id,
+              edges.map((e) => e.toolId)
+            )
+          );
+  const providerOfTool = new Map(
+    memberTools.map((t) => [t.id, providerConfigKeyOf(t)])
+  );
+  const matching = new Set<string>();
+  for (const c of caps) {
+    if (sameService(c.templateKey, service) || sameService(c.name, service)) {
+      matching.add(c.id);
+    }
+  }
+  for (const e of edges) {
+    if (sameService(providerOfTool.get(e.toolId), service)) {
+      matching.add(e.capabilityId);
+    }
+  }
+  return matching;
+}
 
 /** The integration key a new connection for `service` starts with, here. */
 export async function resolveProvideProvider(

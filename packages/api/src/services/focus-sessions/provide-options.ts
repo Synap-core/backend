@@ -14,45 +14,35 @@
  *   - connection → the connections the person can use for THIS service (their
  *                  own, or pod-wide), each with its account hint, whether a new
  *                  one can be started here (`provide-connect.ts`), and whether
- *                  reusing one must confirm the account (P4).
+ *                  reusing one must confirm the account (several accounts).
  *   - file       → where an upload lands (`resolveProvideFileLanding`).
  */
 
+import { db, and, eq, or, isNull, isNotNull, asc } from "@synap/database";
 import {
-  db,
-  and,
-  eq,
-  or,
-  isNull,
-  isNotNull,
-  inArray,
-  asc,
-} from "@synap/database";
-import {
-  capabilities,
   focusSessions,
-  links,
   projects,
   secrets,
-  tools,
   workspaces,
 } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
   askFingerprint,
   effectiveSlotAsk,
-  provideNeedsAccountConfirm,
   PROVIDE_SECRET_GRANT_MINUTES,
   type AskProvide,
-  type ProvideSecretGrantRefusal,
+  type ProvideConnectUnavailableReason,
+  type ProvideSecretGrantOffer,
 } from "@synap-core/types/ask";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { canWriteWorkspace } from "../../routers/file-upload.js";
-import { providerConfigKeyOf } from "../capabilities/capability-provider-resolution.js";
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { describeAnswerRefusal } from "./session-answer.js";
 import { resolveAskingAgent } from "./provide-secret-grant.js";
-import { resolveProvideProvider, sameService } from "./provide-connect.js";
+import {
+  capabilitiesForService,
+  resolveProvideProvider,
+} from "./provide-connect.js";
 
 // ── The owed provide ask ────────────────────────────────────────────────────
 
@@ -148,7 +138,7 @@ export function describeProvideRefusal(
   );
 }
 
-// ── Where a file lands (P3) ─────────────────────────────────────────────────
+// ── Where a file lands ─────────────────────────────────────────────────────
 
 export type ProvideFileLanding =
   | {
@@ -248,15 +238,7 @@ export type ProvideOptions = {
         name: string;
         rows: ProvideSecretRow[];
         /** What handing one over lets the asking agent do. */
-        grant:
-          | {
-              status: "will_grant";
-              /** Sent back on the answer as `expectedGranteeId`. */
-              agentUserId: string;
-              agentName: string;
-              minutes: number;
-            }
-          | { status: "no_grant"; reason: ProvideSecretGrantRefusal };
+        grant: ProvideSecretGrantOffer;
       };
     }
   | {
@@ -268,9 +250,9 @@ export type ProvideOptions = {
         providerId: string | null;
         connectable: boolean;
         /** Why a new connection can't start here (`connectable` false). */
-        unavailable: "no_broker" | "not_offered" | "unreadable" | null;
+        unavailable: ProvideConnectUnavailableReason | null;
         rows: ProvideConnectionRow[];
-        /** P4 — several accounts: the person confirms which one. */
+        /** Several accounts: the person confirms which one before it goes. */
         confirmAccount: boolean;
       };
     }
@@ -332,7 +314,7 @@ export async function readProvideOptions(
           connectable: provider.status === "ok",
           unavailable: provider.status === "ok" ? null : provider.status,
           rows,
-          confirmAccount: provideNeedsAccountConfirm(rows),
+          confirmAccount: rows.length > 1,
         },
       };
     }
@@ -418,62 +400,4 @@ async function usableConnectionRows(
       isDefault: r.isDefault,
       needsReauth: r.connectionState === "needs_reauth",
     }));
-}
-
-async function capabilitiesForService(
-  capabilityIds: string[],
-  service: string
-): Promise<Set<string>> {
-  const [caps, edges] = await Promise.all([
-    db
-      .select({
-        id: capabilities.id,
-        name: capabilities.name,
-        templateKey: capabilities.templateKey,
-      })
-      .from(capabilities)
-      .where(inArray(capabilities.id, capabilityIds)),
-    db
-      .select({ capabilityId: links.toId, toolId: links.fromId })
-      .from(links)
-      .where(
-        and(
-          eq(links.fromType, "tool"),
-          eq(links.linkType, "member_of"),
-          eq(links.toType, "capability"),
-          inArray(links.toId, capabilityIds)
-        )
-      ),
-  ]);
-  const memberTools =
-    edges.length === 0
-      ? []
-      : await db
-          .select({
-            id: tools.id,
-            credentialRef: tools.credentialRef,
-            config: tools.config,
-          })
-          .from(tools)
-          .where(
-            inArray(
-              tools.id,
-              edges.map((e) => e.toolId)
-            )
-          );
-  const providerOfTool = new Map(
-    memberTools.map((t) => [t.id, providerConfigKeyOf(t)])
-  );
-  const matching = new Set<string>();
-  for (const c of caps) {
-    if (sameService(c.templateKey, service) || sameService(c.name, service)) {
-      matching.add(c.id);
-    }
-  }
-  for (const e of edges) {
-    if (sameService(providerOfTool.get(e.toolId), service)) {
-      matching.add(e.capabilityId);
-    }
-  }
-  return matching;
 }

@@ -53,7 +53,7 @@ const row = (id: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-describe("provideSheet · secret (P1: existing secrets only)", () => {
+describe("provideSheet · secret: the person's existing secrets only", () => {
   it("lists the person's secrets, pre-picks the one named as asked, and says who may read it", () => {
     const sheet = provideSheet(
       secret(
@@ -101,7 +101,7 @@ describe("provideSheet · secret (P1: existing secrets only)", () => {
   });
 });
 
-describe("provideSheet · connection (P4)", () => {
+describe("provideSheet · connection", () => {
   it("one account: pre-picked, its account named, no confirm", () => {
     const sheet = provideSheet(
       connection({ rows: [row("c1", { accountHint: "ops@acme.io" })] })
@@ -112,9 +112,10 @@ describe("provideSheet · connection (P4)", () => {
       choices: [
         {
           id: "c1",
-          title: "ops@acme.io",
+          label: "ops@acme.io",
           detail: "Stripe",
-          needsReauth: false,
+          podWide: false,
+          usable: true,
         },
       ],
       confirmAccount: false,
@@ -134,10 +135,19 @@ describe("provideSheet · connection (P4)", () => {
     expect(sheet).toMatchObject({ confirmAccount: true, initialId: null });
     expect(sheet.kind === "connection" && sheet.choices[1]).toEqual({
       id: "c2",
-      title: "Stripe",
+      label: "Stripe",
       detail: "Shared with the pod · Needs signing in again",
-      needsReauth: true,
+      podWide: true,
+      usable: false,
     });
+  });
+
+  it("one signed-out account: shown, never pre-picked", () => {
+    const sheet = provideSheet(
+      connection({ rows: [row("c1", { needsReauth: true })] })
+    );
+    expect(sheet).toMatchObject({ confirmAccount: false, initialId: null });
+    expect(sheet.kind === "connection" && sheet.choices[0]?.usable).toBe(false);
   });
 
   it("a new connection can't start here: no connect, the reason in words", () => {
@@ -164,7 +174,7 @@ describe("provideSheet · connection (P4)", () => {
   });
 });
 
-describe("provideSheet · file (P3)", () => {
+describe("provideSheet · file", () => {
   it("ready: where it lands, the project it is filed into, the asked types", () => {
     const sheet = provideSheet({
       ...base,
@@ -205,7 +215,7 @@ describe("provideSheet · file (P3)", () => {
   });
 });
 
-describe("provideReceipt (P2)", () => {
+describe("provideReceipt", () => {
   const now = Date.parse("2026-10-19T12:00:00Z");
   it("a secret: who can read it now, in the pod's line", () => {
     expect(

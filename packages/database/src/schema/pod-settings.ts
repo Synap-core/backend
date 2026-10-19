@@ -120,7 +120,7 @@ export interface PodMachineDefaults {
 }
 
 /**
- * A marketplace source a pod admin added (Pod Console D11). Lives on the
+ * A marketplace source a pod admin added. Lives on the
  * singleton `pod_settings.settings.marketplaceSources` — no new table. The
  * built-in Synap source is NOT stored here (it is compiled in, read from
  * `CONTROL_PLANE_URL`); only its on/off switch is (`marketplaceOfficialSource`).

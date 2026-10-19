@@ -23,6 +23,14 @@ export function redirectToLoginIfUnauthorized(
   error: { data?: { code?: string | null } | null } | null | undefined
 ): boolean {
   if (error?.data?.code !== "UNAUTHORIZED") return false;
+  return redirectToLogin();
+}
+
+/**
+ * The same check and redirect, for a 401 from a door outside tRPC (an upload,
+ * a REST read). Returns false on the server, where there is nothing to move.
+ */
+export function redirectToLogin(): boolean {
   if (typeof window === "undefined") return false;
   // Read the address NOW: the check is async and the page may move meanwhile.
   const returnTo = currentPath();

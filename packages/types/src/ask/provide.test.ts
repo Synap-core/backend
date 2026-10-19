@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  ASK_COPY,
   PROVIDE_SECRET_GRANT_MINUTES,
-  provideNeedsAccountConfirm,
+  provideAcceptAttribute,
+  provideAccountChoices,
+  provideExpectedGranteeId,
+  provideFileAccepts,
+  provideGrantNote,
+  providePrePickedAccount,
   provideSecretAccessLine,
   summarizeAnswer,
   type Ask,
+  type ProvideConnectionRowLite,
 } from "./index.js";
 
 const NOW = Date.parse("2026-10-19T09:00:00.000Z");
@@ -106,17 +113,113 @@ describe("provideSecretAccessLine — the receipt says who can read it", () => {
   });
 });
 
-describe("provideNeedsAccountConfirm — P4", () => {
-  it("one account is one tap; several ask which", () => {
-    expect(provideNeedsAccountConfirm([])).toBe(false);
-    expect(provideNeedsAccountConfirm([{ id: "a", accountHint: "x" }])).toBe(
+describe("provideGrantNote: what a secret hand-over will let the agent do", () => {
+  it("names the agent and the minutes when the pod will grant a read", () => {
+    const grant = {
+      status: "will_grant" as const,
+      agentUserId: "agent-1",
+      agentName: "Researcher",
+      minutes: 60,
+    };
+    expect(provideGrantNote(grant)).toBe(
+      "Researcher will be able to read it for 60 minutes, in this session only."
+    );
+    expect(provideExpectedGranteeId(grant)).toBe("agent-1");
+  });
+
+  it("says no agent can read it, and sends no grantee, when none will be granted", () => {
+    const grant = {
+      status: "no_grant" as const,
+      reason: "agent_unknown" as const,
+    };
+    expect(provideGrantNote(grant)).toBe(ASK_COPY.provideNoGrantNote);
+    expect(provideExpectedGranteeId(grant)).toBeNull();
+  });
+});
+
+describe("ASK_COPY.provideConnectUnavailable", () => {
+  it("says why a new connection can't start, per reason", () => {
+    expect(ASK_COPY.provideConnectUnavailable("not_offered", "Notion")).toBe(
+      "This pod does not offer a Notion connection yet. A pod admin can add it."
+    );
+    expect(ASK_COPY.provideConnectUnavailable("no_broker", "Notion")).toMatch(
+      /can't connect accounts yet/
+    );
+    expect(ASK_COPY.provideConnectUnavailable("unreadable", "Notion")).toMatch(
+      /Couldn't check/
+    );
+  });
+});
+
+describe("provideAccountChoices / providePrePickedAccount", () => {
+  const row = (over: Partial<ProvideConnectionRowLite> = {}) => ({
+    id: "c1",
+    label: "Gmail",
+    accountHint: "ada@example.com",
+    podWide: false,
+    needsReauth: false,
+    ...over,
+  });
+
+  it("labels an account by its hint, with the name, shared and sign-in state as detail", () => {
+    expect(
+      provideAccountChoices([row({ podWide: true, needsReauth: true })])
+    ).toEqual([
+      {
+        id: "c1",
+        label: "ada@example.com",
+        detail: "Gmail · Shared with the pod · Needs signing in again",
+        podWide: true,
+        usable: false,
+      },
+    ]);
+    expect(
+      provideAccountChoices([row({ accountHint: "  " })])[0]
+    ).toMatchObject({ label: "Gmail", detail: null, usable: true });
+  });
+
+  it("pre-picks the only account when it is usable", () => {
+    const choices = provideAccountChoices([row()]);
+    expect(providePrePickedAccount(choices, false)?.id).toBe("c1");
+  });
+
+  it("never pre-picks a signed-out account", () => {
+    const choices = provideAccountChoices([row({ needsReauth: true })]);
+    expect(providePrePickedAccount(choices, false)).toBeNull();
+  });
+
+  it("never pre-picks when the person must confirm which account", () => {
+    const choices = provideAccountChoices([row(), row({ id: "c2" })]);
+    expect(providePrePickedAccount(choices, true)).toBeNull();
+    expect(providePrePickedAccount([], false)).toBeNull();
+  });
+});
+
+describe("provideFileAccepts / provideAcceptAttribute", () => {
+  const pdf = { name: "Report.PDF", type: "application/pdf" };
+  const png = { name: "shot.png", type: "image/png" };
+
+  it("treats a bare token as an extension", () => {
+    expect(provideFileAccepts(pdf, ["pdf"])).toBe(true);
+    expect(provideFileAccepts(png, ["pdf"])).toBe(false);
+    expect(provideAcceptAttribute(["pdf", " image/* "])).toBe(".pdf,image/*");
+  });
+
+  it("matches an extension, a media type and a family", () => {
+    expect(provideFileAccepts(pdf, [".pdf"])).toBe(true);
+    expect(provideFileAccepts(pdf, ["application/pdf"])).toBe(true);
+    expect(provideFileAccepts(png, ["image/*"])).toBe(true);
+    expect(provideFileAccepts(pdf, ["image/*"])).toBe(false);
+    expect(provideFileAccepts({ name: "a.png", type: null }, ["image/*"])).toBe(
       false
     );
-    expect(
-      provideNeedsAccountConfirm([
-        { id: "a", accountHint: "x" },
-        { id: "b", accountHint: "y" },
-      ])
-    ).toBe(true);
+  });
+
+  it("lets any file through when nothing usable was asked", () => {
+    expect(provideFileAccepts(pdf, null)).toBe(true);
+    expect(provideFileAccepts(pdf, [])).toBe(true);
+    expect(provideFileAccepts(pdf, ["  "])).toBe(true);
+    expect(provideAcceptAttribute(undefined)).toBeUndefined();
+    expect(provideAcceptAttribute([" "])).toBeUndefined();
   });
 });

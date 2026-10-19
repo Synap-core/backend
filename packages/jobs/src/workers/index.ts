@@ -994,7 +994,7 @@ export async function registerAllWorkers(): Promise<void> {
   await boss.work(CP_CATALOG_SYNC_QUEUE, async () => handleCpCatalogSync());
   logger.info("Registered worker: cp-catalog-sync");
 
-  // Tool demand forwarding (D2): normalized tool keys → CP over the relay JWT.
+  // Tool demand forwarding: normalized tool keys → CP over the relay JWT.
   // Daily cron + a debounced one-off after each applied demand write.
   await boss.work(TOOL_DEMAND_FORWARD_QUEUE, async () => {
     await handleToolDemandForward();

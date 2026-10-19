@@ -13,6 +13,10 @@
 
 import { trpc } from "../../../lib/trpc";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
+import {
+  ResourceRowError,
+  ResourceRowSkeleton,
+} from "../../(admin)/components/resource-row";
 import { SectionCard } from "../../(admin)/components/section-card";
 import { ContentBody } from "../../_lib/object/content/content-block";
 import { prepareContent } from "../../_lib/object/content/markdown-model";
@@ -93,19 +97,14 @@ export function ChannelView({ id }: { id: string }) {
         }
       >
         {messages.isLoading ? (
-          <div
-            role="status"
-            aria-busy="true"
-            aria-label="Loading messages…"
-            className="flex flex-col gap-2"
-          >
-            <div className="h-3 w-1/3 rounded bg-foreground/[0.07] shimmer-pulse" />
-            <div className="h-3 w-full max-w-[65ch] rounded bg-foreground/[0.07] shimmer-pulse" />
+          <div role="status" aria-busy="true" aria-label="Loading messages…">
+            <ResourceRowSkeleton count={2} />
           </div>
         ) : messages.error ? (
-          <p className="text-[12.5px] text-foreground/65">
-            The messages couldn’t be loaded. Try again, or open it in the app.
-          </p>
+          <ResourceRowError
+            message="The messages couldn’t be loaded. Try again, or open it in the app."
+            onRetry={() => void messages.refetch()}
+          />
         ) : transcript.length === 0 ? (
           <p className="text-[12.5px] text-foreground/65">No messages yet.</p>
         ) : (
