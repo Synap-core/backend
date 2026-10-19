@@ -10,8 +10,9 @@
  * Mostly read-only: the acts are the de-escalating ones (pause a rule, cancel
  * a session or a run, disconnect an agent), a session's owner-only run again /
  * revert, archiving a template, and turning a capability's verbs on — each
- * re-gated by its own door. Authoring lives in the Synap app
- * (`synap://open/{type}/{id}`). Known bounce kinds (channel, document, …) never
+ * re-gated by its own door. A document's body and a conversation's latest
+ * messages read here too. Authoring and replying live in the Synap app
+ * (`synap://open/{type}/{id}`). Known bounce kinds (project, cell, …) never
  * pretend to render here.
  *
  * `?flowType=` addresses a run (`{flowType, id}`); the public route forwards

@@ -18,6 +18,8 @@ import { AgentView } from "../../_views/agent-view";
 import { AutomationView } from "../../_views/automation-view";
 import { BounceView } from "../../_views/bounce-view";
 import { CapabilityView } from "../../_views/capability-view";
+import { ChannelView } from "../../_views/channel-view";
+import { DocumentView } from "../../_views/document-view";
 import { EntityView } from "../../_views/entity-view";
 import { PlaybookView } from "../../_views/playbook-view";
 import { RunView } from "../../_views/run-view";
@@ -99,6 +101,10 @@ function OpenSurfaceBody({ parsed, flowType, viewerIsPodAdmin }: SurfaceProps) {
           return (
             <AgentView id={parsed.id} viewerIsPodAdmin={viewerIsPodAdmin} />
           );
+        case "document":
+          return <DocumentView id={parsed.id} />;
+        case "channel":
+          return <ChannelView id={parsed.id} />;
       }
   }
 }

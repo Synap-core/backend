@@ -212,8 +212,8 @@ export function RunDetailBody({
         </section>
       )}
       {/* A run's room is where its story was told (a chat turn's
-          conversation, a rule's run channel). It opens in the app;
-          `ExitLink` carries the install fallback with it. */}
+          conversation, a rule's run channel). It reads on its own console
+          page; replying stays in the app. */}
       {run.channelId && (
         <ExitLink
           exit={openIn({
@@ -221,7 +221,7 @@ export function RunDetailBody({
             objectKind: "channel",
             id: run.channelId,
           })}
-          label="Open the conversation in app"
+          label="Read the conversation"
         />
       )}
       {!run.error && run.summary?.trim() && (

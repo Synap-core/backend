@@ -304,10 +304,10 @@ export function openIn(target: ExitTarget): Exit {
           : "";
         return web(search ? `${path}?${search}` : path);
       }
-      // Everything else — workspace, channel, document, cell, project, skill,
-      // tool — has no web renderer. Be honest about it. (The operational
-      // kinds are hosted; a caller that means "in the desktop app" asks for
-      // `objectInApp`.)
+      // Everything else — workspace, cell, project, skill, tool — has no web
+      // renderer. Be honest about it. (The operational kinds, documents and
+      // channels are hosted; a caller that means "in the desktop app" asks
+      // for `objectInApp`.)
       return objectLink(target.objectKind, target.id, {
         ...target.params,
         ...(target.view ? { view: target.view } : {}),

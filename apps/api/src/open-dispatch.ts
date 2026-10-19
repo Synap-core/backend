@@ -106,7 +106,8 @@ export function inferOpenTypeFromId(id: string): TypedOpenKind | undefined {
  * frozen copy in `open-kinds.lock.tripwire.test.ts`). The operational kinds
  * are hosted so a link lands somewhere useful on any device: their
  * de-escalating acts (pause, cancel, disconnect), a capability's verbs turned
- * on, and a read of the rest. Authoring stays in the app.
+ * on, and a read of the rest. A document's body and a conversation's recent
+ * messages read there too. Authoring and replying stay in the app.
  */
 export const WEB_HOSTED_OPEN_KINDS = [
   "entity",
@@ -117,6 +118,8 @@ export const WEB_HOSTED_OPEN_KINDS = [
   "run",
   "capability",
   "agent",
+  "document",
+  "channel",
 ] as const;
 export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
 

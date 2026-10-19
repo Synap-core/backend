@@ -67,8 +67,8 @@ export function useProposalReview(proposalId: string) {
   );
 
   /* Provenance targets, resolved through the ONE exit door. A session, an
-     automation, a playbook or an agent opens on its web page; a channel or a
-     skill lives in the desktop app. */
+     automation, a playbook, an agent or a conversation opens on its web
+     page; a skill lives in the desktop app. */
   const sourceExits = (source.data?.targets ?? []).map((target) => ({
     target,
     exit: openIn({ kind: "object", objectKind: target.kind, id: target.id }),
