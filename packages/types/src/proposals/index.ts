@@ -22,6 +22,14 @@ export * from "./review-comment.js";
 export * from "./session-start.js";
 // The ONE reading of the verb a proposal row performs (receipts included).
 export * from "./action.js";
+
+/**
+ * The pod's cap on one batch decision (`proposals.batchApprove` /
+ * `batchReject`): the router validates with it and every client slices with
+ * it, so the two can never drift (a client throttling under a raised cap, or
+ * a whole batch refused under a lowered one).
+ */
+export const PROPOSAL_BATCH_MAX = 50;
 import { resolveProposalAction } from "./action.js";
 
 // Re-export database types for proposals

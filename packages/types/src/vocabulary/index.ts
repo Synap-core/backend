@@ -805,6 +805,17 @@ export function pluralizeNoun(noun: string): string {
   return trimmed ? pluralizeFallback(trimmed) : "";
 }
 
+/**
+ * "<n> <noun>": the noun singular at exactly 1, else its plural by the same
+ * rule as {@link pluralizeNoun} ("1 item", "3 items", "2 analyses"). The one
+ * door for a counted plain noun — never a `n === 1 ? 'item' : 'items'` at a
+ * call site. A KIND's count goes through {@link resolveObjectNounPlural}
+ * instead, which knows the curated plurals ("People").
+ */
+export function countedNoun(n: number, noun: string): string {
+  return `${n} ${n === 1 ? noun.trim() : pluralizeNoun(noun)}`;
+}
+
 function pluralizeFallback(noun: string): string {
   const last = noun.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
   if (UNCOUNTABLE_NOUNS.has(last)) return noun;
