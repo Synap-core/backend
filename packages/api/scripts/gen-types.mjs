@@ -3,6 +3,8 @@ import { createHash } from "crypto";
 import { resolve, join } from "path";
 import { writeFileSync, readFileSync } from "fs";
 
+import { sortStringLiteralUnions } from "./sort-literal-unions.mjs";
+
 const ROOT_DIR = resolve(".");
 const API_TYPES_DIR = resolve("../api-types");
 const OUTPUT_FILE = join(API_TYPES_DIR, "src/generated.d.ts");
@@ -37,6 +39,14 @@ try {
 
   // Fix 1: SuperJSON transformer type
   content = content.replace(/transformer:\s*false;/, "transformer: any;");
+
+  // Fix 2: string-literal unions in a stable order. dts-bundle-generator
+  // prints a union in the order the upstream dists happen to hold it, so two
+  // builds of the SAME source (a fresh worktree vs the shared tree's
+  // incremental database dist) disagreed — "agent" | "human" vs "human" |
+  // "agent" — and every push from a stale tree dirtied the file and its hash.
+  // Order is meaningless in a literal union, so sort each run of literals.
+  content = sortStringLiteralUnions(content);
 
   writeFileSync(OUTPUT_FILE, content);
 
