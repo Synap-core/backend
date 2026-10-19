@@ -11,7 +11,7 @@
  *   1. Every glossary row (word) is CLASSIFIED against the vocabulary door
  *      (`@synap-core/types/vocabulary`): aligned (the registry label IS the user
  *      word), derived (template nouns), a destination or Inbox-filter word
- *      (`resolveDestinationLabel` / `resolveInboxFilterLabel`, founder 2A/3A),
+ *      (`resolveDestinationLabel` / `resolveNeedsYouBucketLabel`, founder 2A/3A),
  *      or no-row (with the reason). The heading set is
  *      DERIVED from the file, so a new concept joins by existing and fails until
  *      it is classified.
@@ -38,7 +38,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveDestinationLabel,
-  resolveInboxFilterLabel,
+  resolveNeedsYouBucketLabel,
   resolveObjectLabel,
   resolveObjectNounPlural,
   resolveTemplateNoun,
@@ -82,9 +82,9 @@ const DESTINATION: Record<string, string> = {
   Unfiled: "unfiled",
   "Getting started": "getting_started",
 };
-/** One of the Inbox's filters (founder 3A): the word IS `resolveInboxFilterLabel(key)`. */
-const INBOX_FILTER: Record<string, string> = {
-  Questions: "questions",
+/** One of the Inbox's filters (founder 3A): the word IS `resolveNeedsYouBucketLabel(bucket)`. */
+const INBOX_FILTER: Record<string, "question" | "routine" | "broken"> = {
+  Questions: "question",
   "Routine changes": "routine",
   Broken: "broken",
 };
@@ -153,7 +153,7 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
       expect(resolveDestinationLabel(key), `${word} ↔ ${key}`).toBe(word);
     }
     for (const [word, key] of Object.entries(INBOX_FILTER)) {
-      expect(resolveInboxFilterLabel(key), `${word} ↔ ${key}`).toBe(word);
+      expect(resolveNeedsYouBucketLabel(key), `${word} ↔ ${key}`).toBe(word);
     }
   });
 

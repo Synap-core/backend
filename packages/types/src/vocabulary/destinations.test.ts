@@ -2,18 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   DESTINATIONS,
   DESTINATION_LABELS,
-  INBOX_FILTERS,
-  INBOX_FILTER_LABELS,
   resolveDestinationLabel,
-  resolveInboxFilterLabel,
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "./index.js";
 import { NOT_IN_A_PROJECT } from "../projects/places.js";
 
 /**
- * Founder decisions 2A and 3A (2026-10-19): the shell's destination words and
- * the Inbox's four filters, through the ONE door (`@synap-core/types/vocabulary`).
+ * Founder decision 2A (2026-10-19): the shell's destination words, through the
+ * ONE door (`@synap-core/types/vocabulary`). The Inbox filters' words are
+ * `NEEDS_YOU_BUCKET_LABELS` (needs-you/buckets.test.ts).
  */
 describe("destination words (2A)", () => {
   it("the sidebar reads Home · Inbox · Work · Library · Projects · Spaces · Agents", () => {
@@ -50,22 +48,5 @@ describe("destination words (2A)", () => {
   it("unknown values humanize, never leak", () => {
     expect(resolveDestinationLabel("night_shift")).toBe("Night shift");
     expect(resolveDestinationLabel(undefined)).toBe("");
-  });
-});
-
-describe("Inbox filter words (3A)", () => {
-  it("one list, four filters", () => {
-    expect(INBOX_FILTERS.map(resolveInboxFilterLabel)).toEqual([
-      "Decisions",
-      "Questions",
-      "Routine changes",
-      "Broken",
-    ]);
-    expect(Object.keys(INBOX_FILTER_LABELS)).toEqual([...INBOX_FILTERS]);
-  });
-
-  it("unknown values humanize, never leak", () => {
-    expect(resolveInboxFilterLabel("on_hold")).toBe("On hold");
-    expect(resolveInboxFilterLabel(null)).toBe("");
   });
 });
