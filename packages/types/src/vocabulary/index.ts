@@ -1161,6 +1161,13 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   paused: "Paused",
   draft: "Draft",
   archived: "Archived",
+  // subscription lifecycle (control plane `subscription_status`: active ·
+  // trialing · past_due · cancelled · paused). `active` / `paused` /
+  // `cancelled` resolve from the rows above. Humanized, `trialing` read
+  // "Trialing" and `past_due` read "Past due", which hides what the person
+  // must do — the Subscription page already said "Trial" and "Payment failed".
+  trialing: "Trial",
+  past_due: "Payment failed",
   // session work-state lenses (derived, never stored — a session is "waiting"
   // because an open `blocked_by` edge points at an open session, "ready" when
   // none does, "done" when closed). These are lens names over one row set,
@@ -2326,6 +2333,30 @@ export function resolveAgentReachLabel(
   return (
     (AGENT_REACH_LABELS as Readonly<Record<string, string>>)[reach] ??
     humanizeToken(reach)
+  );
+}
+
+/**
+ * WHO runs a playbook's work — its `executor` (`playbooks.executor`,
+ * `playbook_runs.executor`: `is-agent` | `external-agent` | `hybrid`). The
+ * Processes card, its service row and the playbook dashboard each kept a local
+ * map, and two of them disagreed ("Agent" / "External" beside "Synap agent" /
+ * "External agent"). The longer pair wins: "Agent" alone does not say whose.
+ */
+export const PLAYBOOK_EXECUTOR_LABELS = {
+  "is-agent": "Synap agent",
+  "external-agent": "External agent",
+  hybrid: "Hybrid",
+} as const;
+
+/** An executor's words; an unknown executor humanizes rather than leaks. */
+export function resolvePlaybookExecutorLabel(
+  executor: string | null | undefined
+): string {
+  if (!executor) return "";
+  return (
+    (PLAYBOOK_EXECUTOR_LABELS as Readonly<Record<string, string>>)[executor] ??
+    humanizeToken(executor)
   );
 }
 
