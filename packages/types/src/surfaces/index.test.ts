@@ -28,10 +28,11 @@ describe("DEPRECATED_SURFACES", () => {
     }
   });
 
-  it("contains the specific browser ids the V1 plan marks DEPRECATE", () => {
+  it("contains the specific browser ids the V1 plan marks DEPRECATE, plus 2A's import", () => {
     const browserIds = deprecatedSurfacesFor("browser").map((s) => s.id);
     expect(browserIds.sort()).toEqual(
-      ["activity", "governance", "processors", "work-map"].sort()
+      // `import`: founder 2A (2026-10-19) — the capture Library is Library › Kept.
+      ["activity", "governance", "import", "processors", "work-map"].sort()
     );
   });
 
