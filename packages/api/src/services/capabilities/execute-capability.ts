@@ -118,6 +118,10 @@ import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { isProposedEnvelope } from "./proposed-envelope.js";
+import {
+  applyVerbWriteBack,
+  type VerbWriteBackReport,
+} from "./verb-write-back.js";
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import {
@@ -1386,6 +1390,12 @@ export interface ResolvedSkillRow {
   name: string;
   kind: string | null;
   providerSpec: Parameters<typeof executeProviderVerb>[0] | null;
+  /**
+   * REQUIRED so every loader must select it: it carries the verb's declared
+   * `writeBack` (verb-write-back.ts). An optional field here is how a loader
+   * that forgot the column would silently skip the write-back on its path.
+   */
+  metadata: unknown;
 }
 
 /**
@@ -1469,6 +1479,27 @@ export async function runResolvedSkill(
   const outcome = await runResolvedSkillInner(skill, parameters, ctx);
   if (outcome.kind === "run" && outcomeDidTheWork(outcome.result)) {
     await markSkillProven(skill.id);
+    // Same one place, same reason: both doors (direct run, approved proposal)
+    // record the outside id on the object the run named (verb-write-back.ts).
+    const writeBack = await applyVerbWriteBack({
+      metadata: skill.metadata,
+      parameters,
+      result: outcome.result,
+      userId: ctx.userId,
+    }).catch((err: unknown): VerbWriteBackReport => {
+      logger.error(
+        { err, skillId: skill.id },
+        "verb write-back failed after a delivered run"
+      );
+      return {
+        status: "failed",
+        entityId: null,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    });
+    if (writeBack && outcome.result && typeof outcome.result === "object") {
+      return { ...outcome, result: { ...outcome.result, writeBack } };
+    }
   }
   return outcome;
 }

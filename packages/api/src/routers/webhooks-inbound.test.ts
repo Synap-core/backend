@@ -73,7 +73,11 @@ function chainable(result: unknown) {
   return p;
 }
 
-vi.mock("@synap-core/core", () => ({
+// importOriginal: the router's graph reaches `@synap/database` repositories
+// that read `ConflictError` off this barrel; the total factory collected zero
+// tests on main (2026-10-19).
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -104,7 +108,6 @@ vi.mock("@synap/database", async (importOriginal) => ({
   },
   eq: () => ({}),
   and: () => ({}),
-  drizzleSql: () => ({}),
   workspaces: {},
   tools: {},
   entities: {},

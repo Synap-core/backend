@@ -15,7 +15,8 @@
 # served on the pod origin must never run script, tunnelled or not), and the
 # registration-proof route exists on both (PODPROV-CONTRACT §6.2).
 #
-# NOT covered: matcher-based routes (`@name` / bare `handle {`), header blocks
+# NOT covered: matcher-based routes (`@name`, other than refusing to count one as
+# the catch-all), header blocks
 # other than the CSP above, the pod-admin pair (both are one reverse_proxy), and
 # what a running Caddy actually serves (daemon-free; `caddy adapt` needs a
 # Caddy binary or Docker, neither assumed in CI).
@@ -32,9 +33,18 @@ routes() {
         BEGIN { hdr = ENVIRON["HDR"] }
         $0 ~ hdr { inblk=1; depth=0; next }
         inblk {
-            line=$0; sub(/#.*/, "", line)
+            # Quoted strings first (the site-root HTML holds `#e4e4e7` and CSS
+            # braces), then a comment: `#` at a line start or after a space.
+            line=$0; gsub(/"[^"]*"/, "\"\"", line); sub(/(^|[[:space:]])#.*/, "", line)
             if (depth == 0 && line ~ /^}/) { inblk=0; next }
             if (depth == 0 && match(line, /^[[:space:]]*(handle|handle_path)[[:space:]]+\/[^[:space:]]*[[:space:]]*\{/)) {
+                split(line, f, /[[:space:]]+/); i=1; while (f[i] == "") i++
+                path=f[i+1]; up=""; depth=1; next
+            }
+            # A bare `handle {` is the catch-all ("*"); `handle @m {` is a
+            # matcher route ("@m") and never counts as the catch-all.
+            if (depth == 0 && match(line, /^[[:space:]]*handle[[:space:]]*\{/)) { path="*"; up=""; depth=1; next }
+            if (depth == 0 && match(line, /^[[:space:]]*handle[[:space:]]+@[^[:space:]]+[[:space:]]*\{/)) {
                 split(line, f, /[[:space:]]+/); i=1; while (f[i] == "") i++
                 path=f[i+1]; up=""; depth=1; next
             }
@@ -67,14 +77,47 @@ tls="$(routes "$TLS_HDR")"
 http="$(routes "$HTTP_HDR")"
 
 ntls=$(printf '%s\n' "$tls" | grep -c .)
-[ "$ntls" -ge 12 ] && ok "parsed $ntls path routes from the TLS block" || bad "only $ntls TLS routes parsed (scan went blind)"
+[ "$ntls" -ge 8 ] && ok "parsed $ntls path routes from the TLS block" || bad "only $ntls TLS routes parsed (scan went blind)"
 printf '%s\n' "$tls" | grep -qxF "$(printf '/api/pod-agent/*\tpod-agent:4002')" \
     && ok "self-check: the parser sees the TLS /api/pod-agent/* → pod-agent:4002 route" || bad "self-check: parser misses a known TLS route"
 printf '%s\n' "$http" | grep -qxF "$(printf '*\tbackend:4000')" \
     && ok "self-check: the :80 catch-all to backend:4000 is seen" || bad "self-check: :80 catch-all not found"
 
+# The reverse direction (2026-10-19, lab pod): the TLS block answered a static
+# "Synap Backend API" line for every path it did not list, so backend routes
+# outside /api, /trpc and /mcp (/admin/connect = the Claude connect link, the
+# MCP OAuth endpoints, /setup) were dead on a directly exposed pod while the
+# :80 catch-all served them. Both blocks end in the backend catch-all, and both
+# refuse the paths that are never public before it.
+printf '%s\n' "$tls" | grep -qxF "$(printf '*\tbackend:4000')" \
+    && ok "TLS block forwards unlisted paths to backend:4000 (catch-all)" \
+    || bad "TLS block has no backend catch-all: backend routes it does not list are unreachable on a direct pod"
+# Cleartext (2026-10-19): the :80 blocks served the API in plain HTTP to anyone
+# on a directly exposed pod. Only private (tunnel-connector) clients are served;
+# others are redirected. One rule, both :80 blocks.
+for hdr in '{$DOMAIN}:80 {' '{$POD_ADMIN_DOMAIN}:80 {'; do
+    blk="$(H="$hdr" awk 'index($0, ENVIRON["H"]) == 1 {p=1; next} p && /^}/ {exit} p' "$CADDYFILE")"
+    [ -n "$blk" ] || bad "could not find the ${hdr} block (scan went blind)"
+    grep -qE '^[[:space:]]*not remote_ip private_ranges$' <<<"$blk" \
+      && grep -qE '^[[:space:]]*redir @cleartext_from_outside https://\{host\}\{uri\} 308$' <<<"$blk" \
+      && ok "outside cleartext clients are redirected to HTTPS in ${hdr}" \
+      || bad "${hdr} serves outside clients in cleartext"
+done
+# The MinIO CONSOLE is a full admin UI behind one root key: never routed.
+grep -qE '^[^#]*reverse_proxy[[:space:]]+minio:9001' "$CADDYFILE" \
+  && bad "a route reaches the MinIO console (minio:9001)" || ok "no route reaches the MinIO console"
+
+for never in '/internal/*' '/metrics'; do
+    for blk in tls http; do
+        eval "rt=\"\$$blk\""
+        printf '%s\n' "$rt" | grep -qxF "$(printf '%s\t404' "$never")" \
+            && ok "$blk block refuses $never" || bad "$blk block lets $never reach the backend"
+    done
+done
+
 while IFS="$(printf '\t')" read -r path up; do
     [ -n "$path" ] || continue
+    case "$path" in '*'|@*) continue;; esac   # catch-all + matcher routes: checked above / not covered
     want="$(printf '%s\t%s' "$path" "$up")"
     if printf '%s\n' "$http" | grep -qxF "$want"; then
         ok ":80 routes $path → $up"

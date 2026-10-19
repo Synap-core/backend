@@ -26,6 +26,7 @@
  * `PROJECTED_SKILL_FIELDS`' note on why both halves are pinned by a tripwire.
  */
 
+import { z } from "zod";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import { paramPlaceholderTokens } from "../_shared/interpolate.js";
 import {
@@ -67,6 +68,12 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v11 = v10 + `metadata.writeBack` (the verb's DECLARED write-back — see
+ *      `declaredWriteBack`). Before it the applier dropped the key on install
+ *      AND on update (`projectSkillMetadata` wrote only `allowedHosts` /
+ *      `readOnly`), so `postiz_schedule_post` installed with no write-back and
+ *      a v10 stamp would have certified that container converged. Retiring v10
+ *      stamps makes each container re-diff once and the declaration lands.
  * v10 = v9 with the `url_patterns` projection GATED (`projectUrlPatterns`):
  *      kept only for a `read_webpage` verb declared `readOnly: true`, and a
  *      pattern broader than one registrable domain only from the official
@@ -114,7 +121,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 10;
+export const DRIFT_COMPARATOR_VERSION = 11;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -319,9 +326,46 @@ export const SKILL_METADATA_READ_ONLY = "readOnly";
  *   paying for, with neither able to see the other.
  *
  *   A column has one writer by construction: the applier's `resolveVerbIntent`.
- *   `metadata` keeps exactly the two keys that are genuinely bag-shaped
- *   (`allowedHosts`, `readOnly`) and nothing else.
+ *   `metadata` keeps only keys that are genuinely bag-shaped declarations with
+ *   ONE writer (this applier): `allowedHosts`, `readOnly`, and `writeBack` (a
+ *   nested object the runner reads; nothing else writes it).
  */
+
+/**
+ * The write-back a verb DECLARES (`verb-write-back.ts` applies it), or
+ * `undefined` when it declares none or the declaration is malformed. Same
+ * `undefined`-is-load-bearing contract as `declaredAllowedHosts`.
+ *
+ * Parsed here, by the one schema both the applier and the runner use, so a
+ * declaration the runner would ignore is never persisted as if it worked.
+ *
+ * No re-approval rule (unlike `allowedHosts` / `readOnly`): a write-back adds no
+ * egress and no auto-run. It writes declared, non-lifecycle properties onto the
+ * object the run's own parameters name, inside the runner's write floor.
+ */
+export const SKILL_METADATA_WRITE_BACK = "writeBack";
+
+const writeBackSchema = z.object({
+  /** The run parameter naming the Synap object. */
+  entityParam: z.string().min(1),
+  /** The only kind it may write. */
+  kind: z.string().min(1),
+  /** property ← dot-path into the run result. */
+  properties: z
+    .record(z.string().min(1), z.string().min(1))
+    .refine((p) => Object.keys(p).length > 0),
+});
+
+export type DeclaredWriteBack = z.infer<typeof writeBackSchema>;
+
+export function declaredWriteBack(
+  metadata: Record<string, unknown> | null | undefined
+): DeclaredWriteBack | undefined {
+  const parsed = writeBackSchema.safeParse(
+    (metadata ?? {})[SKILL_METADATA_WRITE_BACK]
+  );
+  return parsed.success ? parsed.data : undefined;
+}
 
 /**
  * The egress allowlist a definition DECLARES, or `undefined` when it declares
@@ -373,29 +417,50 @@ export function declaredReadOnly(
  *
  * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
  * every key of the live bag is preserved byte-identically and ONLY the
- * definition-owned keys (`allowedHosts`, `readOnly`) are ever written. That is
- * what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry that reads just
- * those keys without the stamp overclaiming: the marker asserts exactly what
- * the comparator checked.
+ * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`) are ever
+ * written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
+ * that reads just those keys without the stamp overclaiming: the marker asserts
+ * exactly what the comparator checked.
  *
  * Each key is INDEPENDENTLY skippable — a template declaring only `readOnly`
  * must not blank an `allowedHosts` list set through the tRPC door, and vice
- * versa. Returns `undefined` only when the definition declares NEITHER, so
+ * versa. Returns `undefined` only when the definition declares NONE, so
  * Drizzle's `.set()` skips the key and the live bag is not rewritten at all.
  */
 export function projectSkillMetadata(
   existing: Record<string, unknown> | null | undefined,
   definitionMetadata: Record<string, unknown> | null | undefined
 ): Record<string, unknown> | undefined {
-  const hosts = declaredAllowedHosts(definitionMetadata);
-  const readOnly = declaredReadOnly(definitionMetadata);
-  if (hosts === undefined && readOnly === undefined) {
+  const declared = declaredMetadataKeys(definitionMetadata);
+  if (declared === undefined) return undefined;
+  return { ...((existing ?? {}) as Record<string, unknown>), ...declared };
+}
+
+/**
+ * The definition-owned keys a definition DECLARES, as the bag slice the
+ * applier writes — `undefined` when it declares none. Shared by the applier
+ * (`projectSkillMetadata`) and the comparator (`PROJECTED_SKILL_FIELDS.metadata`)
+ * so a fourth key added here reaches both or neither.
+ */
+function declaredMetadataKeys(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> | undefined {
+  const hosts = declaredAllowedHosts(metadata);
+  const readOnly = declaredReadOnly(metadata);
+  const writeBack = declaredWriteBack(metadata);
+  if (
+    hosts === undefined &&
+    readOnly === undefined &&
+    writeBack === undefined
+  ) {
     return undefined;
   }
   return {
-    ...((existing ?? {}) as Record<string, unknown>),
     ...(hosts !== undefined ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts } : {}),
     ...(readOnly !== undefined ? { [SKILL_METADATA_READ_ONLY]: readOnly } : {}),
+    ...(writeBack !== undefined
+      ? { [SKILL_METADATA_WRITE_BACK]: writeBack }
+      : {}),
   };
 }
 
@@ -516,49 +581,23 @@ export const PROJECTED_SKILL_FIELDS: Record<
   // template never owns, i.e. a re-apply on every boot. Marker coverage ==
   // applier coverage.
   metadata: {
-    expected: (d) => {
-      const hosts = declaredAllowedHosts(d.metadata);
-      const readOnly = declaredReadOnly(d.metadata);
-      // ALL absent → the applier writes nothing, so there is nothing to
-      // converge to and the field is skipped (the shared rule above).
-      if (hosts === undefined && readOnly === undefined) {
-        return undefined;
-      }
-      // Only the DECLARED keys are present. A key the definition omits is not
-      // written by the applier, so it must not appear on either side.
-      return {
-        ...(hosts !== undefined
-          ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts }
-          : {}),
-        ...(readOnly !== undefined
-          ? { [SKILL_METADATA_READ_ONLY]: readOnly }
-          : {}),
-      };
-    },
+    // ALL absent → the applier writes nothing, so there is nothing to converge
+    // to and the field is skipped (the shared rule above). Otherwise only the
+    // DECLARED keys are present: a key the definition omits is not written by
+    // the applier, so it must not appear on either side.
+    expected: (d) => declaredMetadataKeys(d.metadata),
     // Mirrors `expected`'s key set EXACTLY — driven by what the DEFINITION
     // declares, never by what the live bag happens to hold. A template that
     // declares only `readOnly` must not blank (or diff against) an
-    // `allowedHosts` list set through the tRPC door.
+    // `allowedHosts` list set through the tRPC door. A declared key the live
+    // bag lacks (or holds malformed) reads `null`: the drift signal.
     actual: (i, d) => {
-      const hosts =
-        declaredAllowedHosts(d.metadata) === undefined
-          ? undefined
-          : (declaredAllowedHosts(i.metadata) ?? null);
-      const readOnly =
-        declaredReadOnly(d.metadata) === undefined
-          ? undefined
-          : (declaredReadOnly(i.metadata) ?? null);
-      if (hosts === undefined && readOnly === undefined) {
-        return undefined;
-      }
-      return {
-        ...(hosts !== undefined
-          ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts }
-          : {}),
-        ...(readOnly !== undefined
-          ? { [SKILL_METADATA_READ_ONLY]: readOnly }
-          : {}),
-      };
+      const declared = declaredMetadataKeys(d.metadata);
+      if (declared === undefined) return undefined;
+      const live = declaredMetadataKeys(i.metadata) ?? {};
+      return Object.fromEntries(
+        Object.keys(declared).map((k) => [k, live[k] ?? null])
+      );
     },
   },
 };

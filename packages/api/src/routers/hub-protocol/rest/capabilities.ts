@@ -309,6 +309,12 @@ const ApplyCapabilityResponseSchema = z.object({
     automations: z.array(z.record(z.string(), z.unknown())),
   }),
   proposals: z.array(z.string()),
+  /**
+   * Each installed tool a provider calls back: `{tool, toolId, provider, url,
+   * rotated, missingConfig, setupStep}`, or `{tool, toolId, provider, error}`.
+   * The url carries a secret — show it to the person, never log it.
+   */
+  webhooks: z.array(z.record(z.string(), z.unknown())),
 });
 
 /**

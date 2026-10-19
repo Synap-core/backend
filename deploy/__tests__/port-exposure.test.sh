@@ -76,15 +76,20 @@ fi
 # The reverse: the public status reads the CP monitors MUST reach the backend in
 # the TLS site block. Missing there, Caddy's catch-all answers 200 text and the
 # CP backup-staleness monitor reads every pod as "unknown" (2026-10-04).
-# Scope: the first `{$DOMAIN} {` block, `handle <path> {` followed by a backend proxy.
+# Scope: the first `{$DOMAIN} {` block. A path reaches the backend through its
+# own `handle <path>` proxying to backend:4000, or — with no handle of its own —
+# through the bare `handle {` catch-all proxying to backend:4000 (2026-10-19).
 for path in /status/backup /status/release; do
     if awk -v p="$path" '
         /^\{\$DOMAIN\} \{/ { inblk=1; next }
         inblk && /^[^[:space:]#]/ { inblk=0 }
-        inblk && $1=="handle" && $2==p { want=1; next }
+        inblk && $1=="handle" && $2==p { own=1; want=1; next }
+        inblk && $1=="handle" && $2=="{" { bare=1; next }
         want && /reverse_proxy[[:space:]]+backend:4000/ { found=1 }
         want && /^[[:space:]]*\}/ { want=0 }
-        END { exit found ? 0 : 1 }' "$CADDYFILE"; then
+        bare && /reverse_proxy[[:space:]]+backend:4000/ { catchall=1 }
+        bare && /^[[:space:]]*\}/ { bare=0 }
+        END { exit (found || (!own && catchall)) ? 0 : 1 }' "$CADDYFILE"; then
         echo "  ✓ TLS block routes $path to backend"
     else
         echo "  ✗ TLS block does not route $path to backend:4000"; rc=1

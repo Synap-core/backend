@@ -231,6 +231,11 @@ export const PROPOSE_ONLY_CAPABILITY_VERBS = [
   "postiz_draft",
   "postiz_schedule",
   "postiz_publish",
+  // The code verb that uploads media then creates the post (draft | schedule |
+  // now) — the same public send as the three above. `postiz_upload_from_url`
+  // is deliberately NOT here: it stores a file in the Postiz media library and
+  // publishes nothing, so a person may widen it like any other write.
+  "postiz_schedule_post",
 ] as const;
 
 export function capabilityVerbAllowsRuleWiden(

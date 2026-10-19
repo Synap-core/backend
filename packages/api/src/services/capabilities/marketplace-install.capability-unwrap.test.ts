@@ -23,7 +23,8 @@ const { createCapabilityMock } = vi.hoisted(() => ({
   createCapabilityMock: vi.fn(
     async (def: { key?: string }, _params: unknown, _ctx: unknown) => ({
       capabilityKey: def.key ?? "(none)",
-      created: true,
+      // The applier's real shape: `created` is a ledger, not a boolean.
+      created: { tools: [] },
     })
   ),
 }));
@@ -78,7 +79,12 @@ describe("applyMarketInstall — a capability package is unwrapped", () => {
 
     expect(createCapabilityMock).toHaveBeenCalledTimes(1);
     expect(createCapabilityMock.mock.calls[0]![0]).toEqual(SPEC);
-    expect(result).toEqual({ kind: "capability", key: "apify", created: true });
+    expect(result).toEqual({
+      kind: "capability",
+      key: "apify",
+      created: { tools: [] },
+      webhooks: [],
+    });
   });
 
   it("an already-unwrapped definition (the capability feed / cache) is untouched", async () => {

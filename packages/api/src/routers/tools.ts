@@ -39,6 +39,7 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { refuseAgentApprover } from "../services/capabilities/set-skill-approved.js";
 import { emitSideEffects } from "@synap/events";
 import { isFormToolMetadata } from "../services/forms/form-definition.js";
+import { provisionInboundWebhook } from "../services/webhooks/provision-inbound-webhook.js";
 
 /**
  * A PUBLIC FORM is a `tools` row whose `metadata.form` holds its definition,
@@ -678,6 +679,27 @@ export const toolsRouter = router({
    * tools require the owner. Deleting a tool frees its credentialRef under the
    * 0140 unique index; its capability_grants become lazily-dead (no cascade).
    */
+  /**
+   * Mint (or return) this tool's inbound webhook token and its full URL — for
+   * the token-in-path providers (`/api/webhooks/<provider>/:token`). The one
+   * door is `provisionInboundWebhook`; `rotate` replaces the token.
+   */
+  provisionWebhook: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        rotate: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return provisionInboundWebhook({
+        userId,
+        toolId: input.id,
+        rotate: input.rotate,
+      });
+    }),
+
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {

@@ -22,10 +22,10 @@ extract() { awk -v f="$1" '$0 ~ "^"f"\\(\\) \\{" {p=1} p{print} p&&/^}/{exit}' "
 {
   echo 'RED=""; GREEN=""; YELLOW=""; BLUE=""; NC=""'
   grep -E '^_ue_(log|ok|warn|err)\(\) +\{.*\}$' "$HERE/synap"   # one-line loggers
-  for fn in _ue_env_get _ue_manifest_url _ue_fetch _ue_verify_manifest_sig; do
+  for fn in _ue_env_get _ue_manifest_url _ue_fetch _ue_cosign_verify _ue_verify_manifest_sig; do
     extract "$fn"
   done
-  grep -E '^(SYNAP_RELEASE_BASE_URL_DEFAULT|SYNAP_RELEASE_SIGNER_RE|SYNAP_RELEASE_OIDC_ISSUER)=' "$HERE/synap"
+  grep -E '^(SYNAP_RELEASE_BASE_URL_DEFAULT|SYNAP_RELEASE_SIGNER_RE|SYNAP_RELEASE_OIDC_ISSUER|SYNAP_COSIGN_IMAGE)=' "$HERE/synap"
 } > "$TMP/lib.sh"
 grep -q '^_ue_verify_manifest_sig() {' "$TMP/lib.sh" && grep -q '^SYNAP_RELEASE_SIGNER_RE=' "$TMP/lib.sh" \
   && ok "extracted _ue_verify_manifest_sig + identity constants from synap" \
@@ -48,11 +48,29 @@ printf '%s\n' "$@" > "$STUB_COSIGN_ARGS"
 echo "Error: none of the expected identities matched what was in the certificate" >&2
 exit 1
 C
-chmod +x "$TMP/bin/curl" "$TMP/bin/cosign"
-mkdir -p "$TMP/nocosign"; cp "$TMP/bin/curl" "$TMP/nocosign/curl"
-SYS_PATH="/usr/bin:/bin"
-PATH="$TMP/nocosign:$SYS_PATH" command -v cosign >/dev/null 2>&1 \
-  && { bad "a real cosign is on $SYS_PATH — the 'no cosign' case cannot be staged"; exit 1; }
+# A docker that stands in for sigstore's image: records its args, answers like cosign.
+cat > "$TMP/bin/docker" <<'C'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$STUB_COSIGN_ARGS"
+[ "${STUB_COSIGN_RESULT:-ok}" = ok ] && { echo "Verified OK" >&2; exit 0; }
+echo "Error: none of the expected identities matched what was in the certificate" >&2
+exit 1
+C
+chmod +x "$TMP/bin/curl" "$TMP/bin/cosign" "$TMP/bin/docker"
+mkdir -p "$TMP/nocosign" "$TMP/dockeronly"; cp "$TMP/bin/curl" "$TMP/nocosign/curl"
+cp "$TMP/bin/curl" "$TMP/bin/docker" "$TMP/dockeronly/"
+# The system tools, minus any real cosign/docker (a CI runner has /usr/bin/docker),
+# so "neither installed" and "docker only" can be staged anywhere.
+mkdir -p "$TMP/sys"
+for d in /usr/bin /bin; do for f in "$d"/*; do
+  b="${f##*/}"; case "$b" in cosign|docker) continue;; esac
+  [ -e "$TMP/sys/$b" ] || ln -s "$f" "$TMP/sys/$b"
+done; done
+SYS_PATH="$TMP/sys"
+for t in cosign docker; do
+  PATH="$TMP/nocosign:$SYS_PATH" command -v "$t" >/dev/null 2>&1 \
+    && { bad "a real $t is still on the staged PATH — the 'not installed' case cannot be staged"; exit 1; }
+done
 
 echo '{"schema":1,"id":"main-abc1234"}' > "$TMP/rel/channel-fast/release.json"
 
@@ -89,6 +107,18 @@ run nocosign enforce       ; expect "enforce: no cosign → refused"            
 run bin enforce 0          ; expect "enforce: no bundle → refused"                     1 "refused: no signature"
 run bin enforce 1 fail     ; expect "enforce: bad signature → refused"                 1 "refused: the signature does not verify"
 run bin enforce 1 ok       ; expect "enforce: good signature → accepted"               0 "signature verified"
+# No host cosign (nothing installs one on a pod host): sigstore's image through docker.
+run dockeronly enforce 1 ok  ; expect "enforce: no cosign, docker → verified through the pinned image" 0 "signature verified"
+dargs="$(tr '\n' ' ' < "$TMP/args")"
+for want in "run --rm" "ghcr.io/sigstore/cosign/cosign:" "verify-blob" "--certificate-identity-regexp" \
+            "--certificate-oidc-issuer https://token.actions.githubusercontent.com" \
+            "--bundle /release/manifest.json.sigstore.json /release/manifest.json"; do
+  grep -qF -- "$want" <<<"$dargs" && ok "docker cosign called with $want" || bad "docker cosign args lack '$want': $dargs"
+done
+grep -qE ":/release:ro( |$)" <<<"$dargs" && ok "docker cosign mounts the manifest directory read-only" || bad "manifest dir not mounted read-only: $dargs"
+run dockeronly enforce 1 fail; expect "enforce: no cosign, docker, bad signature → refused" 1 "refused: the signature does not verify"
+grep -qE '^SYNAP_COSIGN_IMAGE="ghcr\.io/sigstore/cosign/cosign:v[0-9.]+@sha256:[0-9a-f]{64}"$' "$HERE/synap" \
+  && ok "the cosign image is pinned by digest" || bad "SYNAP_COSIGN_IMAGE is not pinned by a sha256 digest"
 run bin off     1 fail     ; expect "off: skipped"                                     0 "rc=0"
 [ ! -e "$TMP/args" ] && ok "off: cosign is never called" || bad "off still ran cosign"
 # deploy/.env is the founder's switch, like SYNAP_EDGE
