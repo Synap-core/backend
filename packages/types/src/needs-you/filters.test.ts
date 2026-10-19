@@ -45,24 +45,36 @@ describe("needsYouFilterView — the filters and the routine batch", () => {
 
   it("Routine shows the batch, even of one (the filter IS the batch)", () => {
     const one = ROWS.filter((r) => r.key !== "r2");
-    expect(needsYouFilterView(one, "routine")).toEqual({ rows: [], batch: [row("r1", "routine")] });
+    expect(needsYouFilterView(one, "routine")).toEqual({
+      rows: [],
+      batch: [row("r1", "routine")],
+    });
   });
 
   it("a bucket filter narrows and never batches", () => {
-    expect(needsYouFilterView(ROWS, "question")).toEqual({ rows: [row("q1", "question")], batch: [] });
+    expect(needsYouFilterView(ROWS, "question")).toEqual({
+      rows: [row("q1", "question")],
+      batch: [],
+    });
     expect(keys(needsYouFilterView(ROWS, "broken").rows)).toEqual(["b1"]);
   });
 });
 
 describe("needsYouFilters — zero-count filters are omitted", () => {
   it("All, then each bucket with rows, in the control's order", () => {
-    expect(needsYouFilters({ decision: 2, question: 0, routine: 1, broken: 0 })).toEqual([
+    expect(
+      needsYouFilters({ decision: 2, question: 0, routine: 1, broken: 0 })
+    ).toEqual(["all", "decision", "routine"]);
+    expect(
+      needsYouFilters({ decision: 0, question: 0, routine: 0, broken: 0 })
+    ).toEqual(["all"]);
+    expect(NEEDS_YOU_FILTERS).toEqual([
       "all",
       "decision",
+      "question",
       "routine",
+      "broken",
     ]);
-    expect(needsYouFilters({ decision: 0, question: 0, routine: 0, broken: 0 })).toEqual(["all"]);
-    expect(NEEDS_YOU_FILTERS).toEqual(["all", "decision", "question", "routine", "broken"]);
   });
 
   it("an address names a filter; anything else is All (never hides rows)", () => {

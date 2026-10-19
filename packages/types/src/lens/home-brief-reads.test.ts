@@ -275,7 +275,11 @@ describe("projectStandLensRow — ONE project row for Home and every projects in
 
   it("a working or quiet project is happening, with the state passed through unchanged", () => {
     const state = { running: true } as const;
-    const row = projectStandLensRow({ project: { id: "p2", name: "Site" }, state, nextLine: null });
+    const row = projectStandLensRow({
+      project: { id: "p2", name: "Site" },
+      state,
+      nextLine: null,
+    });
     expect(row.cls).toBe("happening");
     expect(row.state).toBe(state);
     expect(row.reason).toBeNull();
